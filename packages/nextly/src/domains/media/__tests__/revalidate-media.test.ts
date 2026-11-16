@@ -12,6 +12,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { container } from "../../../di/container";
 import { NoopRevalidator } from "../../../revalidation/noop-revalidator";
+import { nextlyTags } from "../../../runtime/cache/nextly-tags";
+import { MEDIA_TARGET } from "../../../services/collections/trust-bound";
 import type { CacheRevalidator } from "../../../revalidation/types";
 import {
   revalidateMedia,
@@ -144,6 +146,21 @@ describe("withMediaRevalidationBatch", () => {
     // An empty flush still costs the sink a call, and for the Next adapter that
     // is a `revalidateTag` for a write that never happened.
     expect(intents).toHaveLength(0);
+  });
+
+  it("expires every tag a cached read of the file carries", async () => {
+    const { intents } = captureFlushes();
+
+    await revalidateMedia(["hero"]);
+
+    // A public page's read of one image is tagged with `nextlyTags` over the
+    // media collection and the file's id, so a write to the file has to
+    // expire each of them, or the page keeps the old picture, or keeps
+    // answering a since-uploaded id as missing.
+    const read = nextlyTags(MEDIA_TARGET, "hero");
+    // The control: the read names the file itself, not only the collection.
+    expect(read).toContain("nextly:media:id:hero");
+    expect(allTags(intents)).toEqual(expect.arrayContaining(read));
   });
 
   it("flushes the whole intent when no scope is open", async () => {

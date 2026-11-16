@@ -4,11 +4,9 @@
  *
  * Some writes must commit on their own whatever happens to the work around
  * them: the count of a failed attempt, the spend of a single-use secret. Made
- * inside an open transaction on SQLite, such a write joins it as a savepoint
- * and is undone if it rolls back, so a caller that rolls back after every
- * failure is never counted. On PostgreSQL and MySQL the same write would
- * commit on a connection of its own; it is refused there too, so code that
- * passes there does not fail on SQLite.
+ * inside an open transaction, on any dialect, such a write joins it (as a
+ * savepoint on SQLite and PostgreSQL, flat on MySQL) and is undone if it rolls
+ * back, so a caller that rolls back after every failure is never counted.
  *
  * "Inside an open transaction" is judged for the calling async flow, never for
  * the connection: on SQLite every request shares one connection, and another

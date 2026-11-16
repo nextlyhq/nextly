@@ -212,5 +212,9 @@ export async function validateFieldValues(
   return validateEntryData(values, [...fields] as ValidatableField[], {
     mode: options.mode ?? "create",
     req: options.req,
+    // A loose document's numbers are JSON, not a typed column a fraction
+    // would corrupt: the whole-number floor binds integer columns alone, so
+    // it is not asked here.
+    fractionalNumberStorage: true,
   });
 }

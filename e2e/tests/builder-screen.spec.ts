@@ -12,6 +12,7 @@ import { expect, type Page } from "@playwright/test";
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
+import { canvasFrame } from "./support/canvas-frame";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.homepage] });
@@ -27,7 +28,10 @@ function heading(id: string, text: string) {
 
 async function seed(page: Page, nodes: unknown[]): Promise<void> {
   const stored = await page.request.patch(HOMEPAGE_API, {
-    data: { layout: { formatVersion: 1, kind: "page", nodes } },
+    data: {
+      layout: { formatVersion: 1, kind: "page", nodes },
+      _overwrite: true,
+    },
   });
   expect(stored.ok(), `seeding the homepage layout: ${stored.status()}`).toBe(
     true
@@ -35,7 +39,7 @@ async function seed(page: Page, nodes: unknown[]): Promise<void> {
 }
 
 function block(page: Page, id: string) {
-  return page.locator(`.nx-canvas [data-nx-node="${id}"]`).first();
+  return canvasFrame(page).locator(`.nx-canvas [data-nx-node="${id}"]`).first();
 }
 
 async function openBuilder(page: Page): Promise<void> {
@@ -135,14 +139,32 @@ test.describe("the Page Builder's own screen", () => {
     await recorded;
 
     // Reloaded without saving: the stored page still holds both blocks, and
-    // the screen offers the work the reload would otherwise have lost.
+    // the save chip offers the work the reload would otherwise have lost,
+    // with no banner above the editor saying it a second time.
     await page.reload();
     await expect(block(page, "goes")).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByText(/You have unsaved changes from/)).toBeVisible();
+    const chip = page.getByTestId("save-state-indicator");
+    await expect(chip).toContainText("Unsaved changes");
+    await expect(
+      page
+        .getByRole("status")
+        .filter({ hasText: /You have unsaved changes from/ })
+    ).toHaveCount(0);
 
+    await chip
+      .getByRole("button", { name: "Unsaved changes: restore options" })
+      .click();
+    await expect(page.getByText(/You have unsaved changes from/)).toBeVisible();
     await page.getByRole("button", { name: "Restore", exact: true }).click();
 
     await expect(block(page, "goes")).toHaveCount(0);
     await expect(block(page, "stays")).toBeVisible();
+
+    // Restored as one edit the author can undo: Undo brings the stored page
+    // back, rather than being disabled by a fresh editor.
+    const undo = page.getByRole("button", { name: "Undo" });
+    await expect(undo).toBeEnabled();
+    await undo.click();
+    await expect(block(page, "goes")).toBeVisible();
   });
 });

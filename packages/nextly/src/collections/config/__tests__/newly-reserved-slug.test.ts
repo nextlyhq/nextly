@@ -88,6 +88,7 @@ describe("a slug that became reserved in this version", () => {
     expect([...NEWLY_RESERVED_SLUG_NOTES.keys()]).toEqual([
       "content-releases",
       "background-jobs",
+      "email-deliveries",
     ]);
   });
 });

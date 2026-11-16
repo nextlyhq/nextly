@@ -51,9 +51,9 @@
  * against the real tree rather than assumed: `max-w-full` and `max-w-none`
  * are relative to the parent, so neither sets an absolute width a page
  * container could compete over — "no wider than my container" is true
- * whatever the container's own measure is. `TabsList`'s horizontal-scroll
- * strip in `FormBuilderView.tsx` carries `max-w-full` for exactly that
- * reason and is not a page re-declaring anything. And `SheetContent` /
+ * whatever the container's own measure is. The action strip in
+ * `DocumentActionBar.tsx` carries `max-w-full` for exactly that reason and is
+ * not a page re-declaring anything. And `SheetContent` /
  * text-flow tags (`p`, `span`) are excluded by name: a `Sheet` mounts into a
  * portal and its width governs a slide-out panel, not the page the shell
  * measures — `FormNotificationsTab.tsx`'s notification editor is a fixed
@@ -320,7 +320,10 @@ describe("converted form pages do not set their own measure", () => {
       "packages/admin/src/components/features/settings/UserFieldForm/UserFieldForm.tsx",
       "packages/admin/src/pages/dashboard/settings/index.tsx",
       "packages/admin/src/components/features/webhooks/WebhookForm.tsx",
-      "packages/plugin-form-builder/src/admin/FormBuilderView.tsx",
+      // The form editor's Settings page: its sections, each a `FormSection`,
+      // and the Form section above them.
+      "packages/plugin-form-builder/src/admin/components/builder/FormSettingsTab.tsx",
+      "packages/plugin-form-builder/src/admin/components/builder/FormIdentitySection.tsx",
     ]) {
       expect(population, `${path} is not in the population`).toContain(path);
     }

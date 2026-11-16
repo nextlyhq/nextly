@@ -14,7 +14,40 @@ vi.mock("../../helpers/di", () => ({
   getComponentRegistryFromDI: vi.fn(),
   getFieldGroupMetadataServiceFromDI: vi.fn(),
   getAdapterFromDI: vi.fn(),
+  getLoggerFromDI: vi.fn(),
 }));
+
+// The field lists a list's use counts are read from, answered by each test.
+const readFieldOwners = vi.hoisted(() => vi.fn());
+vi.mock(
+  "../../../domains/collections/services/collection-dependents",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("../../../domains/collections/services/collection-dependents")
+    >()),
+    readFieldOwners,
+  })
+);
+
+// Who is reading, and what their lists let them read. No reader by default,
+// as outside a request; the tests about a reader set one.
+const readAuthenticatedUser = vi.hoisted(() => vi.fn());
+vi.mock("../../helpers/authenticated-user", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../helpers/authenticated-user")
+  >()),
+  readAuthenticatedUser,
+}));
+const readableSlugsOfKind = vi.hoisted(() => vi.fn());
+vi.mock(
+  "../../../services/lib/readable-slug-allowlist",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("../../../services/lib/readable-slug-allowlist")
+    >()),
+    readableSlugsOfKind,
+  })
+);
 
 vi.mock("../../../di/container", () => ({
   container: {
@@ -29,7 +62,9 @@ import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
   getFieldGroupMetadataServiceFromDI,
+  getLoggerFromDI,
 } from "../../helpers/di";
+import { NextlyError } from "../../../errors";
 import { dispatchComponents } from "../component-dispatcher";
 
 type Registry = {
@@ -41,6 +76,7 @@ type Registry = {
   deleteComponent: ReturnType<typeof vi.fn>;
   getComponentBySlug: ReturnType<typeof vi.fn>;
   getAllComponents: ReturnType<typeof vi.fn>;
+  getAllFieldLists: ReturnType<typeof vi.fn>;
   isLocked: ReturnType<typeof vi.fn>;
 };
 
@@ -59,6 +95,8 @@ function makeRegistry(overrides: Partial<Registry> = {}): Registry {
     // Answers "no field group owns that table" so a create reaches the path under test. The
     // handler asks before it emits any DDL, so a double that cannot answer fails the request.
     getAllComponents: vi.fn().mockResolvedValue([]),
+    // No field group stored, so a save's cycle check finds nothing to close a cycle with.
+    getAllFieldLists: vi.fn().mockResolvedValue([]),
     isLocked: vi.fn().mockResolvedValue(false),
     ...overrides,
   };
@@ -88,6 +126,46 @@ function wireRegistry(registry: Registry) {
 beforeEach(() => {
   vi.mocked(getComponentRegistryFromDI).mockReset();
   vi.mocked(getAdapterFromDI).mockReturnValue(undefined);
+});
+
+describe("listComponents, the page the admin asks for", () => {
+  /**
+   * The admin's list asks by 1-based `page`, as every list's shared query builder writes it. Read
+   * as an offset, so the second page is the second page: ignored, every page was the first.
+   */
+  it("reads a 1-based page as the offset of that page", async () => {
+    const listComponents = vi.fn().mockResolvedValue({ data: [], total: 25 });
+    wireRegistry(makeRegistry({ listComponents }));
+
+    const response = (await dispatchComponents(
+      "listComponents",
+      { limit: "10", page: "2" },
+      undefined
+    )) as Response;
+
+    expect(listComponents.mock.calls[0]?.[0]).toMatchObject({
+      limit: 10,
+      offset: 10,
+    });
+    const body = (await response.json()) as {
+      meta: { page: number; hasNext: boolean };
+    };
+    expect(body.meta.page).toBe(2);
+    expect(body.meta.hasNext).toBe(true);
+  });
+
+  it("lets an explicit offset win over a page", async () => {
+    const listComponents = vi.fn().mockResolvedValue({ data: [], total: 0 });
+    wireRegistry(makeRegistry({ listComponents }));
+
+    await dispatchComponents(
+      "listComponents",
+      { limit: "10", page: "3", offset: "5" },
+      undefined
+    );
+
+    expect(listComponents.mock.calls[0]?.[0]?.offset).toBe(5);
+  });
 });
 
 describe("listComponents, the migrationStatus filter", () => {
@@ -188,7 +266,12 @@ describe("dispatchComponents, paginated lists (respondList)", () => {
     expect(response.headers.get("content-type")).toBe("application/json");
     const body = await response.json();
     expect(body).toEqual({
-      items: fakeComponents,
+      // No database adapter here, so no use count can be read: each row says
+      // so with `null` rather than claiming nothing uses it.
+      items: fakeComponents.map(component => ({
+        ...component,
+        placedBy: null,
+      })),
       meta: {
         total: 2,
         page: 1,
@@ -199,6 +282,164 @@ describe("dispatchComponents, paginated lists (respondList)", () => {
       },
     });
     expect(body).not.toHaveProperty("data");
+  });
+});
+
+describe("dispatchComponents, listComponents use counts", () => {
+  const page = [
+    { slug: "card", tableName: "comp_card" },
+    { slug: "seo", tableName: "comp_seo" },
+  ];
+
+  beforeEach(() => {
+    wireRegistry(
+      makeRegistry({
+        listComponents: vi.fn().mockResolvedValue({ data: page, total: 2 }),
+      })
+    );
+    vi.mocked(getAdapterFromDI).mockReturnValue(
+      {} as ReturnType<typeof getAdapterFromDI>
+    );
+  });
+
+  it("gives each row the number of fields that place it, one field group's use of another included", async () => {
+    readFieldOwners.mockResolvedValue([
+      {
+        entityType: "fieldGroup",
+        entitySlug: "card",
+        fields: [{ name: "meta", type: "component", component: "seo" }],
+      },
+      {
+        entityType: "collection",
+        entitySlug: "pages",
+        fields: [
+          { name: "teaser", type: "component", component: "card" },
+          { name: "footer", type: "component", component: "card" },
+        ],
+      },
+    ]);
+    const body = await (
+      (await dispatchComponents("listComponents", {}, undefined)) as Response
+    ).json();
+    expect(body.items).toEqual([
+      { slug: "card", tableName: "comp_card", placedBy: 2 },
+      { slug: "seo", tableName: "comp_seo", placedBy: 1 },
+    ]);
+    expect(readFieldOwners).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows no count to a reader who cannot read every collection and Single", async () => {
+    readFieldOwners.mockResolvedValue([
+      {
+        entityType: "collection",
+        entitySlug: "pages",
+        fields: [{ name: "teaser", type: "component", component: "card" }],
+      },
+      {
+        entityType: "collection",
+        entitySlug: "secret",
+        fields: [{ name: "teaser", type: "component", component: "card" }],
+      },
+    ]);
+    readAuthenticatedUser.mockReturnValue({ id: "u1", role: "editor" });
+    readableSlugsOfKind.mockImplementation(
+      async (_caller: unknown, kind: string) => ({
+        slugs: kind === "collection" ? ["pages"] : [],
+        reachable: true,
+      })
+    );
+    try {
+      const body = await (
+        (await dispatchComponents("listComponents", {}, undefined)) as Response
+      ).json();
+      // A count of what this reader sees would read as the whole: "seo" would
+      // show "not used" though a hidden collection may place it. So none, for
+      // every row alike, whether or not a hidden owner places it.
+      expect(
+        body.items.map((item: { placedBy: unknown }) => item.placedBy)
+      ).toEqual([null, null]);
+    } finally {
+      readAuthenticatedUser.mockReset();
+      readableSlugsOfKind.mockReset();
+    }
+  });
+
+  it("counts every use for a reader who may read every collection and Single", async () => {
+    readFieldOwners.mockResolvedValue([
+      {
+        entityType: "collection",
+        entitySlug: "pages",
+        fields: [{ name: "teaser", type: "component", component: "card" }],
+      },
+    ]);
+    readAuthenticatedUser.mockReturnValue({ id: "u1", role: "admin" });
+    readableSlugsOfKind.mockImplementation(
+      async (_caller: unknown, kind: string) => ({
+        slugs: kind === "collection" ? ["pages"] : [],
+        reachable: true,
+      })
+    );
+    try {
+      const body = await (
+        (await dispatchComponents("listComponents", {}, undefined)) as Response
+      ).json();
+      expect(body.items[0]).toMatchObject({ slug: "card", placedBy: 1 });
+    } finally {
+      readAuthenticatedUser.mockReset();
+      readableSlugsOfKind.mockReset();
+    }
+  });
+
+  it("shows no count, rather than a smaller one, when the reader's Singles cannot be listed", async () => {
+    readFieldOwners.mockResolvedValue([
+      {
+        entityType: "single",
+        entitySlug: "home",
+        fields: [{ name: "teaser", type: "component", component: "card" }],
+      },
+    ]);
+    readAuthenticatedUser.mockReturnValue({ id: "u1", role: "editor" });
+    readableSlugsOfKind.mockImplementation(
+      async (_caller: unknown, kind: string) =>
+        kind === "single"
+          ? { slugs: [], reachable: false }
+          : { slugs: [], reachable: true }
+    );
+    vi.mocked(getLoggerFromDI).mockReturnValue({
+      warn: vi.fn(),
+    } as unknown as ReturnType<typeof getLoggerFromDI>);
+    try {
+      const body = await (
+        (await dispatchComponents("listComponents", {}, undefined)) as Response
+      ).json();
+      expect(body.items[0]).toMatchObject({ slug: "card", placedBy: null });
+    } finally {
+      readAuthenticatedUser.mockReset();
+      readableSlugsOfKind.mockReset();
+    }
+  });
+
+  it("still lists the field groups when the field lists cannot be read, with no count", async () => {
+    readFieldOwners.mockRejectedValue(new Error("registry unreadable"));
+    const warn = vi.fn();
+    vi.mocked(getLoggerFromDI).mockReturnValue({
+      warn,
+    } as unknown as ReturnType<typeof getLoggerFromDI>);
+    const response = (await dispatchComponents(
+      "listComponents",
+      {},
+      undefined
+    )) as Response;
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(
+      body.items.map((item: { placedBy: unknown }) => item.placedBy)
+    ).toEqual([null, null]);
+    // Said in the log, so an unreadable registry is not mistaken for unused groups.
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("use counts could not be read"),
+      { error: "registry unreadable" }
+    );
   });
 });
 
@@ -415,5 +656,145 @@ describe("dispatchComponents, actions (respondAction)", () => {
     });
     expect(body).not.toHaveProperty("data");
     expect(body).not.toHaveProperty("item");
+  });
+});
+
+describe("dispatchComponents, where a field group is used (getComponentUsedBy)", () => {
+  const owners = [
+    {
+      entityType: "fieldGroup",
+      entitySlug: "card",
+      fields: [{ name: "meta", type: "component", component: "seo" }],
+    },
+    {
+      entityType: "collection",
+      entitySlug: "pages",
+      fields: [{ name: "seo", type: "component", component: "seo" }],
+    },
+    {
+      entityType: "single",
+      entitySlug: "home",
+      fields: [{ name: "seo", type: "component", component: "seo" }],
+    },
+  ];
+
+  beforeEach(() => {
+    readFieldOwners.mockReset();
+    vi.mocked(getAdapterFromDI).mockReturnValue(
+      {} as ReturnType<typeof getAdapterFromDI>
+    );
+  });
+
+  it("lists each field that places the field group, and what holds it, as { items, meta }", async () => {
+    wireRegistry(
+      makeRegistry({ getComponent: vi.fn().mockResolvedValue({ slug: "seo" }) })
+    );
+    readFieldOwners.mockResolvedValue(owners);
+    const response = (await dispatchComponents(
+      "getComponentUsedBy",
+      { slug: "seo" },
+      undefined
+    )) as Response;
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.items).toEqual([
+      { entityType: "fieldGroup", entitySlug: "card", fieldPath: "meta" },
+      { entityType: "collection", entitySlug: "pages", fieldPath: "seo" },
+      { entityType: "single", entitySlug: "home", fieldPath: "seo" },
+    ]);
+    expect(body.meta).toMatchObject({ total: 3 });
+  });
+
+  it("names no collection or Single the reader may not read, as their own lists hide them", async () => {
+    wireRegistry(
+      makeRegistry({ getComponent: vi.fn().mockResolvedValue({ slug: "seo" }) })
+    );
+    readFieldOwners.mockResolvedValue(owners);
+    readAuthenticatedUser.mockReturnValue({ id: "u1", role: "editor" });
+    // The reader may read no Single, and of the collections only "posts".
+    readableSlugsOfKind.mockImplementation(
+      async (_caller: unknown, kind: string) => ({
+        slugs: kind === "collection" ? ["posts"] : [],
+        reachable: true,
+      })
+    );
+    try {
+      const body = await (
+        (await dispatchComponents(
+          "getComponentUsedBy",
+          { slug: "seo" },
+          undefined
+        )) as Response
+      ).json();
+      // "pages" and "home" are hidden from this reader's lists, so the answer
+      // names neither; a field group has no per-reader rule and stays.
+      expect(body.items).toEqual([
+        { entityType: "fieldGroup", entitySlug: "card", fieldPath: "meta" },
+      ]);
+      expect(readableSlugsOfKind).toHaveBeenCalledWith(
+        expect.anything(),
+        "collection"
+      );
+      expect(readableSlugsOfKind).toHaveBeenCalledWith(
+        expect.anything(),
+        "single"
+      );
+    } finally {
+      readAuthenticatedUser.mockReset();
+      readableSlugsOfKind.mockReset();
+    }
+  });
+
+  it("refuses, rather than leaving a kind out, when the reader's collections cannot be listed", async () => {
+    wireRegistry(
+      makeRegistry({ getComponent: vi.fn().mockResolvedValue({ slug: "seo" }) })
+    );
+    readFieldOwners.mockResolvedValue(owners);
+    readAuthenticatedUser.mockReturnValue({ id: "u1", role: "editor" });
+    readableSlugsOfKind.mockImplementation(
+      async (_caller: unknown, kind: string) =>
+        kind === "collection"
+          ? { slugs: [], reachable: false }
+          : { slugs: ["home"], reachable: true }
+    );
+    try {
+      // Every collection left out would read as fewer uses, or none.
+      await expect(
+        dispatchComponents("getComponentUsedBy", { slug: "seo" }, undefined)
+      ).rejects.toMatchObject({
+        code: "SERVICE_UNAVAILABLE",
+        logContext: { reason: "field-group-placements-unreadable" },
+      });
+    } finally {
+      readAuthenticatedUser.mockReset();
+      readableSlugsOfKind.mockReset();
+    }
+  });
+
+  it("answers not found for a field group that does not exist, before reading any field list", async () => {
+    wireRegistry(
+      makeRegistry({
+        getComponent: vi
+          .fn()
+          .mockRejectedValue(NextlyError.notFound({ logContext: {} })),
+      })
+    );
+    await expect(
+      dispatchComponents("getComponentUsedBy", { slug: "gone" }, undefined)
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(readFieldOwners).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the field lists cannot be read, rather than answering it is used nowhere", async () => {
+    wireRegistry(
+      makeRegistry({ getComponent: vi.fn().mockResolvedValue({ slug: "seo" }) })
+    );
+    readFieldOwners.mockRejectedValue(new Error("registry unreadable"));
+    await expect(
+      dispatchComponents("getComponentUsedBy", { slug: "seo" }, undefined)
+    ).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+      logContext: { reason: "field-group-placements-unreadable", slug: "seo" },
+    });
   });
 });

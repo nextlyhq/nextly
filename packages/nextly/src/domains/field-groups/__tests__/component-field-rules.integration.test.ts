@@ -249,9 +249,18 @@ describe.each(getConfiguredTestDialects())(
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
         fieldGroups: [
+          // Placed directly in a `note`: its instance is a row of its own, read back into the note.
+          defineFieldGroup({
+            slug: "deep",
+            fields: [text({ name: "heading" }), ...guarded()],
+          }),
           defineFieldGroup({
             slug: "note",
-            fields: [text({ name: "heading" }), ...guarded()],
+            fields: [
+              text({ name: "heading" }),
+              ...guarded(),
+              fieldGroup({ name: "deep", component: "deep" }),
+            ],
           }),
           // Holds a `note`, inside a group, and a field whose rule reads it.
           defineFieldGroup({
@@ -516,6 +525,27 @@ describe.each(getConfiguredTestDialects())(
         }
       );
 
+      it("withholds a field of a field group placed directly in another, as its own rule says", async () => {
+        const id = await seed(`deep-${door}`, {
+          one: {
+            heading: "h",
+            ...guardedValues(`deep-${door}-one`),
+            deep: { heading: "d", ...guardedValues(`deep-${door}-deep`) },
+          },
+        });
+
+        const asEditor = await readVia(door, "editor", id, "byId");
+        const deep = (asEditor.one as Doc).deep as Doc;
+        expect(deep.heading).toBe("d");
+        expect(deep).not.toHaveProperty("secret");
+        expect(typeof deep.label).toBe("string");
+
+        const asAllowed = await readVia(door, "allowed", id, "byId");
+        expect(((asAllowed.one as Doc).deep as Doc).secret).toBe(
+          `secret-deep-${door}-deep`
+        );
+      });
+
       it("withholds, in a create's response, every field-group field the writer may not read", async () => {
         const data = pageData(`w-${door}`);
         const item =
@@ -549,7 +579,11 @@ describe.each(getConfiguredTestDialects())(
       it("withholds a field-group field its reader may not read", async () => {
         await trusted.updateSingle({
           slug: "site",
-          data: { title: "s", one: { heading: "h", ...guardedValues("site") } },
+          data: {
+            title: "s",
+            one: { heading: "h", ...guardedValues("site") },
+            _overwrite: true,
+          },
         } as never);
 
         const read = (await checkedAs("editor").findSingle({
@@ -568,7 +602,11 @@ describe.each(getConfiguredTestDialects())(
       it("answers an update with the stored row, which holds no field-group instance", async () => {
         const result = (await checkedAs("editor").updateSingle({
           slug: "site",
-          data: { title: "s2", one: { heading: "h2", ...guardedValues("w") } },
+          data: {
+            title: "s2",
+            one: { heading: "h2", ...guardedValues("w") },
+            _overwrite: true,
+          },
         } as never)) as unknown as { item: Doc };
         // The response is the stored Single row: its field groups live in
         // their own tables, and the update hooks cannot reshape it (their
@@ -699,7 +737,11 @@ describe.each(getConfiguredTestDialects())(
             tx,
             "drafted",
             id,
-            { title: "d2", one: { heading: "h2", ...guardedValues("held") } },
+            {
+              title: "d2",
+              one: { heading: "h2", ...guardedValues("held") },
+              _overwrite: true,
+            },
             { user: { id: editorId }, overrideAccess: false }
           )
         );

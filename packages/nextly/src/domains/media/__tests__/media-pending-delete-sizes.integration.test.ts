@@ -118,5 +118,47 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(left).toEqual([]);
     });
+
+    // An import can copy a record whose size is recorded by its URL alone.
+    // The finished delete reads the item that stays as it reads its own, so
+    // the size file stays while that item names it.
+    it("keeps a size file recorded by URL alone while another item names it, and removes it with the last", async () => {
+      const upload = async (name: string) =>
+        (
+          await t.nextly.media.upload({
+            file: {
+              data: PNG_1X1,
+              name,
+              mimetype: "image/png",
+              size: PNG_1X1.length,
+            },
+          })
+        ).id;
+      const first = await upload("shared-a.png");
+      const second = await upload("shared-b.png");
+      const small = await getMediaStorage().upload(PNG_1X1, {
+        filename: "shared-small.png",
+        mimeType: "image/png",
+        collection: "media",
+      });
+      for (const id of [first, second]) {
+        await runOn(
+          t.adapter.getDrizzle(),
+          dialect,
+          setRetiredSizes(id, JSON.stringify({ small: { url: small.url } }))
+        );
+      }
+      const finish = async (id: string) => {
+        await deletes().mark([id]);
+        return deletes(PENDING_DELETE_WINDOW_MS + 1_000).finalizeMarked([id]);
+      };
+
+      expect(await finish(first)).toEqual([first]);
+      expect(await rowOf(first)).toBeUndefined();
+      expect(await getMediaStorage().exists(small.path, "media")).toBe(true);
+
+      expect(await finish(second)).toEqual([second]);
+      expect(await getMediaStorage().exists(small.path, "media")).toBe(false);
+    });
   }
 );

@@ -127,8 +127,10 @@ describe("before the arrangement is known", () => {
     // A layout read that has not answered.
     api.get.mockReturnValue(new Promise(() => undefined));
     renderGrid(newClient());
+    // The dashboard's outline holds the grid's place while the arrangement
+    // is out.
     expect(
-      await screen.findByRole("status", { name: /loading your dashboard/i })
+      await screen.findByTestId("widget-grid-loading")
     ).toBeInTheDocument();
     // 🔴 The separating case: both widgets are declared and could be drawn,
     // and drawing the declared set is exactly what a page that did not wait
@@ -145,7 +147,7 @@ describe("before the arrangement is known", () => {
       })
     );
     renderGrid(newClient());
-    await screen.findByRole("status", { name: /loading your dashboard/i });
+    await screen.findByTestId("widget-grid-loading");
     answer(arrangement);
     expect(
       await screen.findByTestId("widget-cell-acme/orders")

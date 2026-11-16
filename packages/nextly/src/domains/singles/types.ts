@@ -13,7 +13,11 @@ import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import type { StatusOption } from "../../lib/status-filter";
 import type { RevalidationIntent } from "../../revalidation/types";
-import type { TrustBound } from "../../services/collections/trust-grant";
+import type {
+  HookExemptRead,
+  TrustBound,
+} from "../../services/collections/trust-grant";
+import type { FieldSources } from "../versions/restored-from";
 
 /**
  * User context for Single operations.
@@ -81,6 +85,19 @@ export interface GetSingleOptions {
    * Single isn't localized. Mirrors the collection read path.
    */
   translationStatus?: boolean;
+
+  /**
+   * The fields to answer with, as a collection read selects them
+   * (`shared/lib/field-selection`): a field named `true` is included, a `false`
+   * entry is ignored, and a selection that includes nothing answers the whole
+   * document. The id and the system timestamps are always answered.
+   *
+   * The read takes only the selected fields' columns (with the system columns)
+   * when nothing else needs the rest: no read hook and no field read rule that
+   * runs for this read. Such a read takes the whole row and only its answer is
+   * narrowed, so a hook or a rule still sees every value.
+   */
+  select?: Record<string, boolean>;
 
   /** User context for access control and hooks. */
   user?: UserContext;
@@ -158,10 +175,41 @@ export interface GetSingleOptions {
    */
   includeWorkingDraft?: boolean;
 
+  /**
+   * Whether a read of a Single with no stored document creates its default
+   * document, as every read always has. `false` answers with no document
+   * instead (`success` with `data` absent) and writes nothing: no row, no
+   * version, no event and no creation hook, so a caller that must not write,
+   * such as a page render, can read without materialising the Single.
+   *
+   * @default true
+   */
+  createIfMissing?: boolean;
+
+  /**
+   * With `createIfMissing: false`, what a read of a Single with no stored
+   * document answers. `"default"` answers the document the read would have
+   * created, built by the same function the creating read uses and passed
+   * through the rest of the read (access, lifecycle, field rules and read
+   * hooks) exactly as the created one would be, while still writing nothing.
+   * Ignored unless `createIfMissing` is `false`: a read that may create the
+   * document answers the created one.
+   *
+   * @experimental
+   */
+  whenAbsent?: "default";
+
   /** Arbitrary data passed to hooks via context. */
   context?: Record<string, unknown>;
   /** The HTTP request behind this operation, when one produced it. */
   request?: Request;
+  /**
+   * A grant waiving this Single's read hooks, issued to the plugin that
+   * declared it: its `beforeOperation`, `beforeRead` and `afterRead` hooks
+   * and its fields' `afterRead` hooks do not run. Effective only for a Single
+   * the grant covers; see `readHooksWaived`. Related rows keep their own.
+   */
+  hookExemptRead?: HookExemptRead;
 }
 
 /**
@@ -182,6 +230,14 @@ export interface UpdateSingleOptions {
    * ordinary write that happens to reproduce an earlier state.
    */
   sourceVersionNo?: number;
+  /**
+   * The fields this write restored, and the version each came from, as server
+   * code states it. A client states it as `_restoredFrom` in the body, read
+   * at the write's boundary when this is absent.
+   *
+   * @experimental
+   */
+  restoredFrom?: FieldSources;
   /**
    * Set when this write restores a recorded save of a working draft: its
    * content was never live, so on a published Single it must be held as the
@@ -242,8 +298,9 @@ export interface UpdateSingleOptions {
  * Options for publishing every language of a Single at once.
  *
  * A deliberate subset of {@link UpdateSingleOptions}: this write persists no
- * caller content and names no locale, so the write-locale, hook-context and
- * version-lineage options an update carries have nothing to act on here.
+ * caller content and names no locale, so the write-locale and
+ * version-lineage options an update carries have nothing to act on here. The
+ * hook context and request do: the publish runs the update hooks a save runs.
  */
 export interface PublishAllSingleLocalesOptions {
   /** User context for access control. */
@@ -277,6 +334,20 @@ export interface PublishAllSingleLocalesOptions {
    * by callers that own their cache strategy — a CLI, seed, or bulk import.
    */
   disableRevalidate?: boolean;
+
+  /** Arbitrary data passed to the update hooks the publish runs. */
+  context?: Record<string, unknown>;
+  /** The HTTP request behind this publish, which its hooks are told about. */
+  request?: Request;
+
+  /**
+   * The request's data: only the version it was made from (`_rev`) and the
+   * overwrite choice (`_overwrite`) are read, as a save's data carries them,
+   * and every language is judged against that version.
+   *
+   * @experimental
+   */
+  data?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -288,6 +359,15 @@ export interface SingleDocument {
 
   /** Last update timestamp */
   updatedAt: Date | string;
+
+  /**
+   * The document's version: changed by every save and by no read, and naming
+   * each language the read or write covered. Opaque — hand it back as it is.
+   *
+   * @experimental An update that hands it back is refused when it is no
+   *   longer the current version (`STALE_VERSION`).
+   */
+  _rev?: string;
 
   /** Additional fields defined by the Single schema */
   [key: string]: unknown;

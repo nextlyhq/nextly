@@ -37,6 +37,8 @@ import {
   isEmailField,
   isPasswordField,
   isCodeField,
+  isIconField,
+  isIconIdShape,
   isRichTextField,
   isNumberField,
   isCheckboxField,
@@ -49,6 +51,7 @@ import {
   isGroupField,
   isJSONField,
 } from "nextly/config";
+import { declaresOwnId } from "nextly/field-catalog";
 import { z } from "zod";
 
 import { RESTRICTED_REFERENCE } from "./form/stored-references";
@@ -330,6 +333,8 @@ function fieldToZodSchema(
     schema = convertPasswordFieldToZod(field);
   } else if (isCodeField(field)) {
     schema = convertCodeFieldToZod(field);
+  } else if (isIconField(field)) {
+    schema = convertIconFieldToZod();
   } else if (isRichTextField(field)) {
     schema = convertRichTextFieldToZod();
   } else if (isNumberField(field)) {
@@ -648,6 +653,20 @@ function convertCodeFieldToZod(field: CodeFieldConfig): z.ZodTypeAny {
   return constrainedStringSchema(field, "");
 }
 
+/**
+ * An icon field holds an icon id, `lucide:star`. The shape is checked with the
+ * predicate the server validates with; whether the set still draws the icon is
+ * not, because a stored id the set has dropped is kept and shown as missing
+ * rather than blocking the save.
+ */
+function convertIconFieldToZod(): z.ZodTypeAny {
+  // Empty passes here so a required field reports "required" (its own
+  // check, added after this one) rather than a malformed id.
+  return z
+    .string()
+    .refine(value => value === "" || isIconIdShape(value), "Not an icon id");
+}
+
 function convertRichTextFieldToZod(): z.ZodTypeAny {
   // Rich text stores as Lexical state (JSON) or HTML string. We accept
   // any non-null payload here; the higher-level required gate (in
@@ -850,10 +869,20 @@ function convertRepeaterFieldToZod(
 ): z.ZodTypeAny {
   // Items are nested field groups; a repeater with no nested fields
   // validates each item as an empty group object.
-  const itemSchema =
-    field.fields && field.fields.length > 0
-      ? generateClientSchema(field.fields as FieldConfig[], options)
+  const rowFields = (field.fields ?? []) as FieldConfig[];
+  const rowSchema: z.ZodObject<Record<string, z.ZodTypeAny>> =
+    rowFields.length > 0
+      ? generateClientSchema(rowFields, options)
       : z.object({});
+
+  // A row's `id` is its saved identity. The object schema would strip it, the
+  // save would send the row without one, and the server could then pair a
+  // moved row with nothing and give it a new id. The value is the system's, so
+  // it is carried rather than judged. A row declaring its own `id` field is
+  // judged by that field's rules, and the system gives it no id.
+  const itemSchema = declaresOwnId(rowFields)
+    ? rowSchema
+    : rowSchema.extend({ id: z.unknown().optional() });
 
   return applyRowBounds(itemSchema, field);
 }

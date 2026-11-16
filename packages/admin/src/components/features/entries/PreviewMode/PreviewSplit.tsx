@@ -82,6 +82,27 @@ export interface PreviewSplitProps {
    * wide enough window removes it entirely.
    */
   preferPreviewWidth?: number | null;
+  /**
+   * Closed, pass the container's height on to what the split holds.
+   *
+   * For a full-height screen inside it, such as a plugin's document view. The
+   * closed split is otherwise no box at all, so the page scrolls as an edit
+   * form does; a screen that fills its box then had no height to fill, and
+   * sized itself to the window instead, a header's height taller than the
+   * area it sat in.
+   */
+  fill?: boolean;
+}
+
+/**
+ * The split's own box. Open, the panel group's definite height. Closed and
+ * asked to fill, the container's height, passed on to a full-height screen
+ * inside. Closed otherwise, no class at all, so the page scrolls as it would
+ * around an edit form.
+ */
+function splitRootClass(open: boolean, fill: boolean): string | undefined {
+  if (open) return "flex h-full min-h-0 flex-1";
+  return fill ? "h-full min-h-0" : undefined;
 }
 
 export function PreviewSplit({
@@ -90,6 +111,7 @@ export function PreviewSplit({
   preview,
   label,
   preferPreviewWidth = null,
+  fill = false,
 }: PreviewSplitProps): JSX.Element {
   /*
    * Generated rather than fixed: the id is what `aria-controls` points at, and
@@ -229,7 +251,7 @@ export function PreviewSplit({
      */
     <div
       ref={container}
-      className={cn(open && "flex h-full min-h-0 flex-1")}
+      className={splitRootClass(open, fill)}
       data-preview-split={open ? "open" : "closed"}
     >
       <div

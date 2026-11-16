@@ -12,6 +12,7 @@
 
 import type { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
+import type { BuilderSaveSetup } from "../../domains/schema/builder-save/collection-save";
 import { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import { SingleMetadataService } from "../../domains/singles/services/single-metadata-service";
 import { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
@@ -50,12 +51,21 @@ export function registerSingleServices(ctx: RegistrationContext): void {
   // others uncovered.
   container.registerSingleton<SingleMetadataService>(
     "singleMetadataService",
-    () =>
-      new SingleMetadataService(
+    () => {
+      const service = new SingleMetadataService(
         container.get<SingleRegistryService>("singleRegistryService"),
         logger,
         adapter
-      )
+      );
+      // A Single's save writes its migration as a collection's does, so its
+      // table is on record for every migration after it.
+      if (container.has("builderSaveSetup")) {
+        service.setBuilderSave(
+          container.get<BuilderSaveSetup>("builderSaveSetup")
+        );
+      }
+      return service;
+    }
   );
 
   container.registerSingleton<SingleEntryService>("singleEntryService", () => {

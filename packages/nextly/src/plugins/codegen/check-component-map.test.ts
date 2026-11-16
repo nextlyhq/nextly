@@ -4,6 +4,7 @@
  * wrote the list on one line or a formatter laid it out a path a line, naming each component
  * missing (with its owner and widget) and each path no longer declared.
  */
+import type { CollectionConfig } from "../../collections/config/define-collection";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -301,6 +302,45 @@ describe("the config a map checks its widgets against", () => {
     ).toEqual({ written: undefined, expected: "../../../nextly.config" });
   });
 
+  it("does not agree when a map listing only a site collection's config-relative view was written for another config", async () => {
+    // Imported through the config's folder: a moved config moves it.
+    const siteCollections = [
+      {
+        slug: "orders",
+        fields: [],
+        admin: {
+          components: {
+            views: { Edit: { Component: "./views/orders#OrderEditor" } },
+          },
+        },
+      },
+    ] as unknown as CollectionConfig[];
+    for (const artifact of buildImportMapArtifacts(
+      [],
+      TYPES,
+      importOf("other.config.ts"),
+      undefined,
+      siteCollections
+    )) {
+      await writeFile(join(root, artifact.path), artifact.code);
+    }
+
+    const found = await checkComponentMapFiles(
+      [],
+      TYPES,
+      root,
+      config(),
+      undefined,
+      siteCollections
+    );
+
+    expect(found.otherConfig).toEqual({
+      written: "../../../other.config",
+      expected: "../../../nextly.config",
+    });
+    expect(componentMapAgrees(found)).toBe(false);
+  });
+
   it("asks for no config import where nothing declares a widget, whose props are all it checks", async () => {
     const pagesOnly = {
       ...shop,
@@ -316,6 +356,28 @@ describe("the config a map checks its widgets against", () => {
     expect(found.otherConfig).toBeUndefined();
     expect(componentMapAgrees(found)).toBe(true);
   });
+
+  // A scaffold's map registers as the whole map, as the generator writes one, so an app made
+  // from it draws a missing component's fallback rather than loading, before it ever regenerates.
+  it.each([
+    ["base", "templates/base/src/types/generated"],
+    ["plugin", "templates/plugin/dev/src/types/generated"],
+  ])(
+    "the %s template's shipped map registers as the whole map",
+    async (_, dir) => {
+      const shipped = fileURLToPath(
+        new URL(`../../../../../${dir}/`, import.meta.url)
+      );
+      const map = await readFile(
+        join(shipped, COMPONENT_IMPORT_MAP_FILENAME),
+        "utf8"
+      );
+      expect(map).toContain(
+        'import { registerComponentMap } from "@nextlyhq/admin";'
+      );
+      expect(map).toContain("registerComponentMap(registered);");
+    }
+  );
 
   // The maps a scaffold ships are written before its layout fixes where its config sits, so they
   // import none; a project made from either must pass the check it is told to run.
@@ -423,5 +485,72 @@ describe("a list read back", () => {
         'export const registeredComponentPaths = ["a#A", other] as const;'
       )
     ).toBeUndefined();
+  });
+});
+
+describe("a plugin collection's own views", () => {
+  it("does not agree when a collection view is added without regenerating", async () => {
+    await generate([shop]);
+    // The same plugin, now replacing a collection's edit screen.
+    const withView = {
+      ...shop,
+      contributes: {
+        ...shop.contributes,
+        collections: [
+          {
+            slug: "orders",
+            fields: [],
+            admin: {
+              components: {
+                views: {
+                  Edit: { Component: "@acme/shop/admin#OrderEditor" },
+                },
+              },
+            },
+          },
+        ],
+      },
+    } as unknown as PluginDefinition;
+
+    const found = await checkComponentMapFiles(
+      [withView],
+      TYPES,
+      root,
+      undefined
+    );
+
+    expect(found.missing.map(each => each.path)).toEqual([
+      "@acme/shop/admin#OrderEditor",
+    ]);
+  });
+});
+
+describe("a site collection's own views", () => {
+  it("does not agree when a site collection names a view the map does not list", async () => {
+    await generate([shop]);
+    const siteCollections = [
+      {
+        slug: "orders",
+        fields: [],
+        admin: {
+          components: {
+            views: { Edit: { Component: "@acme/cards/admin#OrderEditor" } },
+          },
+        },
+      },
+    ] as unknown as CollectionConfig[];
+
+    const found = await checkComponentMapFiles(
+      [shop],
+      TYPES,
+      root,
+      undefined,
+      undefined,
+      siteCollections
+    );
+
+    expect(found.missing.map(each => each.path)).toEqual([
+      "@acme/cards/admin#OrderEditor",
+    ]);
   });
 });

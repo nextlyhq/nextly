@@ -25,7 +25,10 @@ import type {
 } from "../../domains/email/written/document";
 import type { PrincipalRef } from "../../plugins/principals/types";
 import type { EmailProviderType } from "../../schemas/email-providers/types";
-import type { EmailTemplateVersion as TemplateVersion } from "../../schemas/email-templates/types";
+import type {
+  EmailTemplateVariable,
+  EmailTemplateVersion as TemplateVersion,
+} from "../../schemas/email-templates/types";
 
 import type { DirectAPIConfig } from "./shared";
 
@@ -237,8 +240,12 @@ export interface CreateEmailTemplateArgs extends DirectAPIConfig {
     providerId?: string;
     /** Whether this template is active */
     isActive?: boolean;
-    /** Template variables metadata */
-    variables?: { name: string; description: string; required?: boolean }[];
+    /**
+     * Template variables metadata, typed declarations included: the same
+     * shape a save accepts (see EmailTemplateVariable), so a TypeScript
+     * consumer can declare a variable's type, label, example and fields.
+     */
+    variables?: EmailTemplateVariable[];
     /**
      * Default attachments for this template. Merged with per-send
      * attachments at send time; per-send wins on mediaId conflict.
@@ -596,6 +603,15 @@ export interface SendEmailResult {
  * `idempotencyKey` (or a key of its own) on every attempt.
  */
 export type QueueEmailArgs = SendEmailArgs;
+
+/**
+ * @experimental Arguments for cancelling a queued email as a person. A call
+ * that checks access needs `manage-email-deliveries`.
+ */
+export interface CancelQueuedEmailArgs extends DirectAPIConfig {
+  /** The queued email's id, as `queue` answered it. */
+  id: string;
+}
 
 /**
  * @experimental Arguments for `nextly.email.queueWithTemplate()`: every

@@ -28,9 +28,12 @@ import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import { getService } from "../../di";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
+import { NextlyError } from "../../errors/nextly-error";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import { refuseHistoryWriteIfRemovedFromCode } from "../dynamic-collections/services/removed-from-code-writes";
 import type { UserContext } from "../singles/types";
+
+import { DOCUMENT_VERSION_KEY, withDocumentVersion } from "./document-revision";
 
 /**
  * The document kinds a discard is implemented for.
@@ -77,6 +80,18 @@ export interface DiscardWorkingDraftArgs {
   /** The request and context the caller's own read carries, for read hooks. */
   request?: Request;
   context?: Record<string, unknown>;
+  /**
+   * The version the pending change was read at (`_rev`) and the overwrite
+   * choice (`_overwrite`): a discard is judged as a save of the change is.
+   */
+  version?: Readonly<Record<string, unknown>>;
+  /**
+   * Discard the shared part's pending change alone, leaving each language's. Collections only,
+   * where the shared part keeps a draft of its own.
+   *
+   * @experimental
+   */
+  shared?: boolean;
 }
 
 /**
@@ -120,6 +135,20 @@ export async function discardWorkingDraft(
   // access here too, but only because undefined is falsy — so the call site reads
   // as though it might be trusted, and this is the document a caller receives.
   // The live-document read gate beside this one states it for the same reason.
+  // A Single's shared part keeps no draft of its own to discard alone yet: refused, rather than
+  // read as a discard of a language's pending change.
+  if (args.shared === true && args.scopeKind === "single") {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "part",
+          code: "NO_SHARED_DRAFT",
+          message:
+            "A Single's shared part keeps no draft of its own: discard a language's pending change instead.",
+        },
+      ],
+    });
+  }
   const locale = args.locale ? { locale: args.locale } : {};
   // The live-document read runs the read hooks, so they see what the caller's
   // own read would.
@@ -167,6 +196,14 @@ export async function discardWorkingDraft(
   // this request's authorization checks and the delete would otherwise have its
   // brand-new draft removed with both requests reporting success. Deleting when
   // none exists is a no-op, not an error.
+  //
+  // The version the discard left the document at, read on its own
+  // transaction: the live document read above carries the one from before the
+  // discard moved it.
+  let discardedVersion: string | undefined;
+  const onVersion = (version: string | undefined) => {
+    discardedVersion = version;
+  };
   const removed =
     args.scopeKind === "single"
       ? await getService("singleEntryService").discardWorkingDraftCounted({
@@ -176,17 +213,30 @@ export async function discardWorkingDraft(
           locale: args.locale ?? null,
           actor: args.actor,
           user: args.user,
+          version: args.version,
+          onVersion,
         })
       : await getService("collectionsHandler").discardWorkingDraftCounted({
           collectionName: args.slug,
           entryId: args.entryId,
           locale: args.locale ?? null,
+          ...(args.shared === true ? { shared: true } : {}),
           actor: args.actor,
           user: args.user,
           // The update this discard was authorized for, asked again under the
           // lock the delete holds.
           updateUnderLock: { authenticatedScope: args.authenticatedScope },
+          version: args.version,
+          onVersion,
         });
 
+  if (removed > 0 && typeof result.data === "object" && result.data !== null) {
+    const document = { ...(result.data as Record<string, unknown>) };
+    delete document[DOCUMENT_VERSION_KEY];
+    return {
+      document: withDocumentVersion(document, discardedVersion),
+      removed,
+    };
+  }
   return { document: result.data, removed };
 }

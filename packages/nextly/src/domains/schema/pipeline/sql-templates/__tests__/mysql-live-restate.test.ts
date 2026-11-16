@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   mysqlLiveStatements,
   plainMysqlEquivalents,
+  restatedColumn,
 } from "../mysql-live-restate";
 
 const rename = mysqlLiveStatements({
@@ -113,5 +114,67 @@ describe("reading Nextly's own MySQL runs as plain statements", () => {
       "DEALLOCATE PREPARE nextly_ddl",
     ];
     expect(plainMysqlEquivalents(handWritten)).toEqual(handWritten);
+  });
+});
+
+// The statements the existing callers build, pinned as text: the migration-file renderer
+// (`sql-templates/mysql.ts`, through `mysqlLiveStatements`), the companion column widening
+// (`i18n/runtime/companion-io.ts`, a type alone) and the drop guard (`ownership/drop-guard.ts`, which
+// reads a run back through `plainMysqlEquivalents`). A column conversion may leave the character set
+// and collation out of the restatement, and only when it asks to; none of these asks.
+describe("the restatement every existing caller builds", () => {
+  it("restates the character set and collation, byte for byte as before", () => {
+    expect(restatedColumn("dc_posts", "title", { type: "varchar(255)" }))
+      .toMatchInlineSnapshot(`
+        [
+          "SET @nextly_ddl = COALESCE((SELECT IF(EXTRA LIKE '%DEFAULT_GENERATED%' AND (@@SESSION.sql_mode LIKE '%NO_BACKSLASH_ESCAPES%' AND INSTR(REGEXP_REPLACE(CONVERT(COLUMN_DEFAULT USING utf8mb4) COLLATE utf8mb4_bin, CONCAT(CHAR(92 USING utf8mb4), CHAR(92 USING utf8mb4), '(.)'), '$1', 1, 0, 'n'), CHAR(92 USING utf8mb4)) > 0), 'cannot restate dc_posts.title: its default needs backslash escapes', CONCAT('ALTER TABLE \`dc_posts\` MODIFY COLUMN \`title\` ', 'varchar(255)', IF(CHARACTER_SET_NAME IS NULL, '', CONCAT(' CHARACTER SET ', CHARACTER_SET_NAME, ' COLLATE ', COLLATION_NAME)), IF(COALESCE(GENERATION_EXPRESSION, '') = '', '', CONCAT(' GENERATED ALWAYS AS (', GENERATION_EXPRESSION, ')', IF(EXTRA LIKE '%STORED GENERATED%', ' STORED', ' VIRTUAL'))), IF(IS_NULLABLE = 'YES', ' NULL', ' NOT NULL'), IF(COLUMN_DEFAULT IS NULL, '', IF(EXTRA LIKE '%DEFAULT_GENERATED%', IF(LEFT(COLUMN_DEFAULT, 17) = 'CURRENT_TIMESTAMP', CONCAT(' DEFAULT ', COLUMN_DEFAULT), CONCAT(' DEFAULT (', REGEXP_REPLACE(CONVERT(COLUMN_DEFAULT USING utf8mb4) COLLATE utf8mb4_bin, CONCAT(CHAR(92 USING utf8mb4), CHAR(92 USING utf8mb4), '(.)'), '$1', 1, 0, 'n'), ')')), CONCAT(' DEFAULT ', IF(DATA_TYPE = 'bit', COLUMN_DEFAULT, IF(@@SESSION.sql_mode LIKE '%NO_BACKSLASH_ESCAPES%', CONCAT('''', REPLACE(COLUMN_DEFAULT, '''', ''''''), ''''), QUOTE(COLUMN_DEFAULT)))))), IF(EXTRA LIKE '%auto_increment%', ' AUTO_INCREMENT', ''), IF(EXTRA LIKE '%on update %', CONCAT(' ON UPDATE ', REGEXP_SUBSTR(EXTRA, '(?<=on update )[^ ]+')), ''), IF(EXTRA LIKE '%INVISIBLE%', ' INVISIBLE', ''), IF(COLUMN_COMMENT = '', '', CONCAT(' COMMENT ', IF(@@SESSION.sql_mode LIKE '%NO_BACKSLASH_ESCAPES%', CONCAT('''', REPLACE(COLUMN_COMMENT, '''', ''''''), ''''), QUOTE(COLUMN_COMMENT)))))) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'dc_posts' AND COLUMN_NAME = 'title'), 'column dc_posts.title is not in this database')",
+          "PREPARE nextly_ddl FROM @nextly_ddl",
+          "EXECUTE nextly_ddl",
+          "DEALLOCATE PREPARE nextly_ddl",
+        ]
+      `);
+    expect(required).toMatchInlineSnapshot(`
+      [
+        "SET @nextly_ddl = COALESCE((SELECT IF(EXTRA LIKE '%DEFAULT_GENERATED%' AND (@@SESSION.sql_mode LIKE '%NO_BACKSLASH_ESCAPES%' AND INSTR(REGEXP_REPLACE(CONVERT(COLUMN_DEFAULT USING utf8mb4) COLLATE utf8mb4_bin, CONCAT(CHAR(92 USING utf8mb4), CHAR(92 USING utf8mb4), '(.)'), '$1', 1, 0, 'n'), CHAR(92 USING utf8mb4)) > 0), 'cannot restate dc_posts.title2: its default needs backslash escapes', CONCAT('ALTER TABLE \`dc_posts\` MODIFY COLUMN \`title2\` ', COLUMN_TYPE, IF(CHARACTER_SET_NAME IS NULL, '', CONCAT(' CHARACTER SET ', CHARACTER_SET_NAME, ' COLLATE ', COLLATION_NAME)), IF(COALESCE(GENERATION_EXPRESSION, '') = '', '', CONCAT(' GENERATED ALWAYS AS (', GENERATION_EXPRESSION, ')', IF(EXTRA LIKE '%STORED GENERATED%', ' STORED', ' VIRTUAL'))), ' NOT NULL', IF(COLUMN_DEFAULT IS NULL, '', IF(EXTRA LIKE '%DEFAULT_GENERATED%', IF(LEFT(COLUMN_DEFAULT, 17) = 'CURRENT_TIMESTAMP', CONCAT(' DEFAULT ', COLUMN_DEFAULT), CONCAT(' DEFAULT (', REGEXP_REPLACE(CONVERT(COLUMN_DEFAULT USING utf8mb4) COLLATE utf8mb4_bin, CONCAT(CHAR(92 USING utf8mb4), CHAR(92 USING utf8mb4), '(.)'), '$1', 1, 0, 'n'), ')')), CONCAT(' DEFAULT ', IF(DATA_TYPE = 'bit', COLUMN_DEFAULT, IF(@@SESSION.sql_mode LIKE '%NO_BACKSLASH_ESCAPES%', CONCAT('''', REPLACE(COLUMN_DEFAULT, '''', ''''''), ''''), QUOTE(COLUMN_DEFAULT)))))), IF(EXTRA LIKE '%auto_increment%', ' AUTO_INCREMENT', ''), IF(EXTRA LIKE '%on update %', CONCAT(' ON UPDATE ', REGEXP_SUBSTR(EXTRA, '(?<=on update )[^ ]+')), ''), IF(EXTRA LIKE '%INVISIBLE%', ' INVISIBLE', ''), IF(COLUMN_COMMENT = '', '', CONCAT(' COMMENT ', IF(@@SESSION.sql_mode LIKE '%NO_BACKSLASH_ESCAPES%', CONCAT('''', REPLACE(COLUMN_COMMENT, '''', ''''''), ''''), QUOTE(COLUMN_COMMENT)))))) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'dc_posts' AND COLUMN_NAME = 'title2'), 'column dc_posts.title2 is not in this database')",
+        "PREPARE nextly_ddl FROM @nextly_ddl",
+        "EXECUTE nextly_ddl",
+        "DEALLOCATE PREPARE nextly_ddl",
+      ]
+    `);
+    expect(plainMysqlEquivalents(required)).toEqual([
+      "ALTER TABLE `dc_posts` MODIFY COLUMN `title2` text NOT NULL",
+    ]);
+  });
+});
+
+describe("a restatement that leaves out the character set and collation", () => {
+  const CHARACTER_SET_PART =
+    "IF(CHARACTER_SET_NAME IS NULL, '', CONCAT(' CHARACTER SET ', CHARACTER_SET_NAME, ' COLLATE ', COLLATION_NAME)), ";
+
+  it("is the full restatement with only that part taken out, for a type that has no place for it", () => {
+    const full = restatedColumn("dc_posts", "body", {
+      type: "json",
+      nullable: true,
+    });
+    const without = restatedColumn("dc_posts", "body", {
+      type: "json",
+      nullable: true,
+      characterSet: "left-out",
+    });
+    expect(full[0]).toContain(CHARACTER_SET_PART);
+    expect(without[0]).not.toContain("CHARACTER SET");
+    expect(without).toEqual([
+      full[0].replace(CHARACTER_SET_PART, ""),
+      ...full.slice(1),
+    ]);
+  });
+
+  it("restates them when asked to, as when the option is not given", () => {
+    expect(
+      restatedColumn("dc_posts", "body", {
+        type: "text",
+        characterSet: "restated",
+      })
+    ).toEqual(restatedColumn("dc_posts", "body", { type: "text" }));
   });
 });

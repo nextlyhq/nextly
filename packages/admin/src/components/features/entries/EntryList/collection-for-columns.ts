@@ -4,7 +4,10 @@
  *
  * @module components/features/entries/EntryList/collection-for-columns
  */
-import type { CollectionForColumns } from "./EntryTableColumns";
+import {
+  isDefaultColumnField,
+  type CollectionForColumns,
+} from "./EntryTableColumns";
 
 /**
  * Creates a CollectionForColumns object from collection data.
@@ -19,7 +22,11 @@ export function toCollectionForColumns(
         label?: string;
         schemaDefinition?: { fields: Array<{ name?: string; type?: string }> };
         fields?: Array<{ name?: string; type?: string }>;
-        admin?: { defaultColumns?: string[]; useAsTitle?: string };
+        admin?: {
+          defaultColumns?: string[];
+          useAsTitle?: string;
+          disableDelete?: boolean;
+        };
         /**
          * Built-in Draft / Published lifecycle flag (collection-level).
          * Read from the dynamic-collections row or the code-first config.
@@ -52,16 +59,9 @@ export function toCollectionForColumns(
     collection.schemaDefinition?.fields || collection.fields || [];
   const fields = rawFields as CollectionForColumns["fields"];
 
-  // Determine default columns: use admin config or auto-generate from first few fields
-  // Filter to only data fields (those with name property, excluding layout fields)
-  const layoutTypes = ["group", "relationship", "repeater", "component"];
-  const dataFields = rawFields.filter(
-    (f): f is { name: string; type: string } =>
-      typeof f.name === "string" &&
-      f.name.length > 0 &&
-      typeof f.type === "string" &&
-      !layoutTypes.includes(f.type)
-  );
+  // Determine default columns: use admin config or auto-generate from the
+  // first few fields the list would pick by itself (no layout or hidden field).
+  const dataFields = rawFields.filter(isDefaultColumnField);
 
   const defaultColumns =
     collection.admin?.defaultColumns || dataFields.slice(0, 4).map(f => f.name);
@@ -84,6 +84,11 @@ export function toCollectionForColumns(
     // Forwarded so the bulk actions, and the row selection and row Delete that
     // follow them, are withheld from a collection removed from code.
     ...(collection.removedFromCode === true ? { removedFromCode: true } : {}),
+    // Forwarded so the row Delete and the bulk Delete are withheld from a
+    // collection whose entries are deleted through an action of their own.
+    ...(collection.admin?.disableDelete === true
+      ? { disableDelete: true }
+      : {}),
     admin: {
       useAsTitle: collection.admin?.useAsTitle,
       defaultColumns: [

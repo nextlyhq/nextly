@@ -135,15 +135,22 @@ const isViewMode = (value: string): value is "grid" | "list" =>
 
 /**
  * Focuses the entry that stands for an item, in whichever view is showing:
- * a grid tile, or a list row. Both carry the item's id as `data-row-id`. The
- * list draws each item twice, as a card for a narrow table and a row for a
- * wide one, and only the one on screen can take focus, so each is tried in
- * turn. Returns whether one took it.
+ * a grid tile, or a list row. Both carry the item's id as `data-row-id`. A
+ * tile takes focus itself; a list row is not a control, so focus goes to its
+ * way in, the element marked `data-row-entry`. The list draws each item
+ * twice, as a card for a narrow table and a row for a wide one, and only the
+ * one on screen can take focus, so each is tried in turn. Returns whether one
+ * took it.
  */
 function focusMediaEntry(container: HTMLElement | null, id: string): boolean {
   const entries = Array.from(
     container?.querySelectorAll<HTMLElement>("[data-row-id]") ?? []
-  ).filter(element => element.dataset.rowId === id);
+  )
+    .filter(element => element.dataset.rowId === id)
+    .map(
+      element =>
+        element.querySelector<HTMLElement>("[data-row-entry]") ?? element
+    );
   for (const entry of entries) {
     entry.focus();
     if (document.activeElement === entry) return true;
@@ -362,7 +369,10 @@ export function MediaLibrary({
   // a bulk action never reaches an item no longer shown (a used file
   // selected in All media, acted on from Unused). Paging and sorting list
   // the same set, so the selection is kept across them. Cleared as the new
-  // set renders, never a frame later.
+  // set renders, never a frame later. A bulk dialog opened over the old
+  // selection closes with it, as one can be while a search is still
+  // settling: left open, it would act on nothing. A move of one item names
+  // its item, so it stays.
   const selectionScope = JSON.stringify([
     activeFolderId,
     view,
@@ -373,6 +383,8 @@ export function MediaLibrary({
   if (selectedScope !== selectionScope) {
     setSelectedScope(selectionScope);
     setSelectedIds(new Set());
+    setIsBulkDeleteDialogOpen(false);
+    if (moveMediaIds === null) setIsMoveToFolderDialogOpen(false);
   }
 
   // Build query params. Local React state name `pageSize` (admin-

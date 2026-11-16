@@ -1,9 +1,10 @@
 /**
- * `migrate:create` writes no drop of a collection something still depends on.
+ * `migrate:create` writes no drop of a collection, Single or field group
+ * something still depends on.
  *
- * A code-first collection removed from the configuration leaves the latest
- * snapshot holding its table, and the next migration drops it. While a
- * remaining field points at the collection, a plugin or the app declares a
+ * An entity removed from the configuration leaves the latest snapshot holding
+ * its table, and the next migration drops it. While a remaining field points
+ * at the collection or places the field group, a plugin or the app declares a
  * foreign key to its table, or another owner's column or index is on it, that
  * drop would do on every database it is applied to what a delete is refused
  * for. So the generator is refused with the same message a delete gets,
@@ -19,17 +20,27 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import {
   assertNothingDependsOn,
   referencingFields,
   type FieldOwner,
 } from "../../collections/services/collection-dependents";
 import type { RemovedCollectionSeed } from "../../collections/services/collection-dependents-schema";
+import { fieldGroupPlacements } from "../../field-groups/storage/field-group-placements";
 import type { ExtensionSchemaRecord } from "../ownership/dependent-elements";
 import { collectionOwnTables } from "../services/field-column-descriptor";
-import { resolveCollectionTableName } from "../utils/resolve-table-name";
+import {
+  resolveCollectionTableName,
+  resolveComponentTableName,
+} from "../utils/resolve-table-name";
 
-import { COLLECTION_TABLE_PREFIX, type MinimalConfigEntity } from "./generate";
+import {
+  COLLECTION_TABLE_PREFIX,
+  SINGLE_TABLE_PREFIX,
+  type MinimalConfigEntity,
+  type RemovedEntityTables,
+} from "./generate";
 
 /**
  * The collections Nextly provides itself, which a relationship or upload may
@@ -44,8 +55,12 @@ const BUILT_IN_RELATION_TARGETS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Refuse to generate a migration that drops a collection something still
- * depends on, or whose dependents cannot be read.
+ * Refuse to generate a migration that drops a collection, Single or field
+ * group something still depends on, or whose dependents cannot be read.
+ *
+ * A removed field group is judged as a removed collection is, by the fields
+ * that still place it; a removed Single by the keys and elements of other
+ * owners alone, since no field names a Single.
  *
  * A snapshot records tables, not slugs, so a removed collection is known by
  * its table, and a slug cannot be read back from one: a `dbName` makes the
@@ -61,9 +76,9 @@ const BUILT_IN_RELATION_TARGETS: ReadonlySet<string> = new Set([
  * @param input.extensionSchema compiles the extension schema with the removed
  *   collections seeded, so a hook that still extends one of them says what it adds
  */
-export async function assertRemovedCollectionsUnused(input: {
-  /** The collection tables the migration would drop (`removedCollectionTables`). */
-  removedTables: readonly string[];
+export async function assertRemovedEntitiesUnused(input: {
+  /** The entity tables the migration would drop (`removedEntityTables`). */
+  removed: RemovedEntityTables;
   collections: MinimalConfigEntity[];
   singles: MinimalConfigEntity[];
   components: MinimalConfigEntity[];
@@ -72,21 +87,47 @@ export async function assertRemovedCollectionsUnused(input: {
     removed: readonly RemovedCollectionSeed[]
   ) => Promise<ExtensionSchemaRecord | null>;
 }): Promise<void> {
-  const { removedTables } = input;
-  if (removedTables.length === 0) return;
+  const { removed } = input;
+  if (
+    removed.collections.length === 0 &&
+    removed.singles.length === 0 &&
+    removed.fieldGroups.length === 0
+  ) {
+    return;
+  }
 
   const owners = remainingFieldOwners(input);
-  const goneTargets = targetsNoLongerConfigured(owners, input.collections);
-  const removed = namedRemovedCollections(removedTables, goneTargets);
-  // Targets whose table could not be told from their slug: each is one of
-  // the removed collections under a name of its own, or nothing at all.
-  const unplaced = [...goneTargets].filter(
-    slug => !removed.some(collection => collection.namedBy === slug)
+  const collections = namedRemoved(
+    removed.collections,
+    targetsNoLongerConfigured(owners, input.collections),
+    resolveCollectionTableName,
+    COLLECTION_TABLE_PREFIX
   );
+  // A field group is named by the fields that place it, as a collection is by
+  // the fields that point at it; a Single by none, so its slug is read off its
+  // table.
+  const fieldGroups = namedRemoved(
+    removed.fieldGroups,
+    fieldGroupsNoLongerConfigured(owners, input.components),
+    resolveComponentTableName,
+    STORAGE_FORMAT.tablePrefix
+  );
+  const singles = removed.singles.map(tableName => ({
+    slug: tableName.slice(SINGLE_TABLE_PREFIX.length),
+    tableName,
+  }));
+  const seeds: RemovedCollectionSeed[] = [
+    ...collections.named,
+    ...singles.map(single => ({ ...single, kind: "single" as const })),
+    ...fieldGroups.named.map(group => ({
+      ...group,
+      kind: "fieldGroup" as const,
+    })),
+  ];
 
   await assertNothingDependsOn(
     [
-      ...removed.map(collection => ({
+      ...collections.named.map(collection => ({
         slug: collection.slug,
         // A removed collection's fields are gone with its configuration, so
         // its tables are named from its own table alone.
@@ -95,19 +136,59 @@ export async function assertRemovedCollectionsUnused(input: {
         // name read off the table is what the refusal calls it, nothing more.
         fieldSlug: collection.namedBy,
       })),
-      ...unplaced.map(slug => ({ slug, tables: [] })),
+      ...collections.unplaced.map(slug => ({ slug, tables: [] })),
+      // A Single's and a field group's tables are their own and their translation table, as
+      // their deletes ask; the snapshot records neither's translation table, so it is named here.
+      ...singles.map(single => ({
+        kind: "single" as const,
+        slug: single.slug,
+        tables: collectionOwnTables(single.tableName, []),
+      })),
+      ...fieldGroups.named.map(group => ({
+        kind: "fieldGroup" as const,
+        slug: group.slug,
+        tables: collectionOwnTables(group.tableName, []),
+        fieldSlug: group.namedBy,
+      })),
+      ...fieldGroups.unplaced.map(slug => ({
+        kind: "fieldGroup" as const,
+        slug,
+        tables: [],
+      })),
     ],
     {
       fieldOwners: () => Promise.resolve(owners),
-      extensionSchema: () => input.extensionSchema(removed),
+      extensionSchema: () => input.extensionSchema(seeds),
       // No database is read: see the module's note.
       recordedElements: () => Promise.resolve([]),
     },
-    // No field goes with the drop: the removed collections are no longer
+    // No field goes with the drop: the removed entities are no longer
     // configured, so none of their fields is among the owners, and a slug
     // read off a removed table may be a surviving collection's.
     { fieldsGoWith: [] }
   );
+}
+
+/**
+ * The removed tables of one kind, each with the slug it is called by, and the
+ * gone slugs no removed table resolves to: a field naming one points at, or
+ * places, an entity this migration removes under a table of its own, or none.
+ * A gone slug is only asked about where a table of its kind is removed.
+ */
+function namedRemoved(
+  removedTables: readonly string[],
+  goneSlugs: ReadonlySet<string>,
+  tableOf: (slug: string) => string,
+  prefix: string
+): { named: NamedRemovedCollection[]; unplaced: string[] } {
+  if (removedTables.length === 0) return { named: [], unplaced: [] };
+  const named = namedRemovedTables(removedTables, goneSlugs, tableOf, prefix);
+  return {
+    named,
+    unplaced: [...goneSlugs].filter(
+      slug => !named.some(entity => entity.namedBy === slug)
+    ),
+  };
 }
 
 /** Every field list the migration keeps: the configured collections', Singles' and field groups'. */
@@ -151,28 +232,57 @@ interface NamedRemovedCollection extends RemovedCollectionSeed {
 }
 
 /**
- * Each removed table with the slug it is called by: the target whose table
- * it is, where one is, else one read off the table, which no field is
- * matched against.
+ * Each removed table with the slug it is called by: the gone slug whose table
+ * it is, where one is, else one read off the table (the table itself where it
+ * has no prefix), which no field is matched against.
+ *
+ * @param tableOf the table a slug of this kind of entity resolves to
+ * @param prefix the prefix every table of this kind starts with
  */
-function namedRemovedCollections(
+function namedRemovedTables(
   removedTables: readonly string[],
-  goneTargets: ReadonlySet<string>
+  goneSlugs: ReadonlySet<string>,
+  tableOf: (slug: string) => string,
+  prefix: string
 ): NamedRemovedCollection[] {
   const slugOfTable = new Map<string, string>();
-  for (const slug of goneTargets) {
-    const table = resolveCollectionTableName(slug);
+  for (const slug of goneSlugs) {
+    const table = tableOf(slug);
     if (removedTables.includes(table) && !slugOfTable.has(table)) {
       slugOfTable.set(table, slug);
     }
   }
   return removedTables.map(tableName => ({
+    // A field group named through its old `dbName` has no prefix to read a slug from: it is called
+    // by its table.
     slug:
       slugOfTable.get(tableName) ??
-      tableName.slice(COLLECTION_TABLE_PREFIX.length),
+      (tableName.startsWith(prefix)
+        ? tableName.slice(prefix.length)
+        : tableName),
     tableName,
     namedBy: slugOfTable.get(tableName) ?? null,
   }));
+}
+
+/**
+ * The field groups remaining fields place that the configuration no longer
+ * declares: each is placed in a table this migration removes, or in none.
+ */
+function fieldGroupsNoLongerConfigured(
+  owners: readonly FieldOwner[],
+  components: readonly MinimalConfigEntity[]
+): Set<string> {
+  const configured = new Set(components.map(entity => entity.slug));
+  const gone = new Set<string>();
+  for (const owner of owners) {
+    for (const placement of fieldGroupPlacements(owner.fields)) {
+      for (const slug of placement.slugs) {
+        if (!configured.has(slug)) gone.add(slug);
+      }
+    }
+  }
+  return gone;
 }
 
 function ownerOf(

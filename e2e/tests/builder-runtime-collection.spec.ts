@@ -20,6 +20,7 @@ import {
   removeMigrationsOf,
 } from "./support/runtime-collection";
 import { LOCK } from "./support/locks";
+import { canvasFrame } from "./support/canvas-frame";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.dashboard, LOCK.schema] });
@@ -55,7 +56,9 @@ test("opens for a collection the Schema Builder made after boot", async ({
       new RegExp(`/admin/collections/${slug}/${id}/builder\\?field=layout$`)
     );
     await expect(
-      page.locator('.nx-canvas [data-nx-node="runtime-heading"]').first()
+      canvasFrame(page)
+        .locator('.nx-canvas [data-nx-node="runtime-heading"]')
+        .first()
     ).toBeVisible({ timeout: 30_000 });
   }
 });

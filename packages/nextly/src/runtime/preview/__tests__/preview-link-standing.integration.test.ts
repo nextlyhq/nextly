@@ -239,11 +239,16 @@ async function draftSingleWithTargets(t: TestNextly): Promise<void> {
   const { authorId } = await targets(t);
   await t.nextly.updateSingle({
     slug: "site-settings",
-    data: { siteName: "Acme", status: "published" },
+    data: { siteName: "Acme", status: "published", _overwrite: true },
   });
   await t.nextly.updateSingle({
     slug: "site-settings",
-    data: { siteName: "Acme (pending)", owner: authorId, logo: "cover-1" },
+    data: {
+      siteName: "Acme (pending)",
+      owner: authorId,
+      logo: "cover-1",
+      _overwrite: true,
+    },
   });
 }
 
@@ -255,11 +260,16 @@ const shows = (value: unknown, text: string): boolean =>
 async function draftSingle(t: TestNextly): Promise<void> {
   await t.nextly.updateSingle({
     slug: "site-settings",
-    data: { siteName: "Acme", notes: "launch-plan", status: "published" },
+    data: {
+      siteName: "Acme",
+      notes: "launch-plan",
+      status: "published",
+      _overwrite: true,
+    },
   });
   await t.nextly.updateSingle({
     slug: "site-settings",
-    data: { siteName: "Acme (pending)" },
+    data: { siteName: "Acme (pending)", _overwrite: true },
   });
 }
 

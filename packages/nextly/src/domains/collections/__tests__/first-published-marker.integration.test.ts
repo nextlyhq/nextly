@@ -95,7 +95,7 @@ describe("first_published_at", () => {
 
     await h.updateEntry(
       { collectionName: "fpmposts", entryId: id, overrideAccess: true },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
 
     expect((await storedRow(current, id)).first_published_at).toBeTruthy();
@@ -131,7 +131,7 @@ describe("first_published_at", () => {
 
     await h.updateEntry(
       { collectionName: "fpmposts", entryId: id, overrideAccess: true },
-      { status: "draft" }
+      { status: "draft", _overwrite: true }
     );
 
     const after = await storedRow(current, id);
@@ -166,11 +166,11 @@ describe("first_published_at", () => {
 
     await h.updateEntry(
       { collectionName: "fpmposts", entryId: id, overrideAccess: true },
-      { status: "draft" }
+      { status: "draft", _overwrite: true }
     );
     await h.updateEntry(
       { collectionName: "fpmposts", entryId: id, overrideAccess: true },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
 
     expect(String((await storedRow(current, id)).first_published_at)).toBe(
@@ -242,6 +242,7 @@ describe("first_published_at", () => {
         title: "edited",
         firstPublishedAt: new Date("1999-01-01T00:00:00.000Z"),
         first_published_at: new Date("1999-01-01T00:00:00.000Z"),
+        _overwrite: true,
       }
     );
 
@@ -275,6 +276,7 @@ describe("first_published_at", () => {
       collectionName: "fpmposts",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     const after = await storedRow(current, id);
@@ -299,6 +301,7 @@ describe("first_published_at", () => {
       collectionName: "fpmposts",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     const after = await storedRow(current, id);
@@ -340,7 +343,7 @@ describe("first_published_at", () => {
       entries.updateEntryInTransaction(
         tx as never,
         { collectionName: "fpmposts", entryId: id, overrideAccess: true },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       )
     );
 
@@ -368,14 +371,14 @@ describe("first_published_at", () => {
       entries.updateEntryInTransaction(
         tx as never,
         { collectionName: "fpmposts", entryId: id, overrideAccess: true },
-        { status: "draft" }
+        { status: "draft", _overwrite: true }
       )
     );
     await current.adapter.transaction(tx =>
       entries.updateEntryInTransaction(
         tx as never,
         { collectionName: "fpmposts", entryId: id, overrideAccess: true },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       )
     );
 
@@ -416,6 +419,7 @@ describe("first_published_at", () => {
       collectionName: "fpmversioned",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     const versions = (
@@ -476,7 +480,7 @@ describe("first_published_at", () => {
         locale: "es",
         overrideAccess: true,
       },
-      { title: "hola", status: "published" }
+      { title: "hola", status: "published", _overwrite: true }
     );
 
     const row = await storedRow(current, id);
@@ -552,7 +556,7 @@ describe("first_published_at", () => {
     // An update carrying no status accumulates a working draft instead of touching the live row.
     const updated = await h.updateEntry(
       { ...trusted, entryId: id },
-      { title: "edited" }
+      { title: "edited", _overwrite: true }
     );
     assert(isRecord(updated.data), "the update returned no document");
     // The live row is untouched, which is what proves the response above came from the draft
@@ -567,7 +571,7 @@ describe("first_published_at", () => {
     // rebuilds from the stored draft, where JSON has left it a string.
     const resaved = await h.updateEntry(
       { ...trusted, entryId: id },
-      { title: "edited again" }
+      { title: "edited again", _overwrite: true }
     );
     assert(isRecord(resaved.data), "the second update returned no document");
     expect(resaved.data.title).toBe("edited again");
@@ -634,7 +638,7 @@ describe("first_published_at", () => {
         locale: "es",
         overrideAccess: true,
       },
-      { title: "hola", status: "published" }
+      { title: "hola", status: "published", _overwrite: true }
     );
 
     const after = (
@@ -711,7 +715,7 @@ describe("first_published_at", () => {
 
     await singles.update(
       "fpmbanner",
-      { title: "hi", status: "draft" },
+      { title: "hi", status: "draft", _overwrite: true },
       { overrideAccess: true }
     );
     expect(
@@ -720,7 +724,7 @@ describe("first_published_at", () => {
 
     await singles.update(
       "fpmbanner",
-      { title: "hi", status: "published" },
+      { title: "hi", status: "published", _overwrite: true },
       { overrideAccess: true }
     );
 
@@ -751,7 +755,7 @@ describe("first_published_at", () => {
 
     await singles.update(
       "fpmowner",
-      { title: "hi", created_by: "written by the user" },
+      { title: "hi", created_by: "written by the user", _overwrite: true },
       { overrideAccess: true }
     );
 
@@ -782,6 +786,7 @@ describe("first_published_at", () => {
         status: "draft",
         firstPublishedAt: new Date("1999-01-01T00:00:00.000Z"),
         first_published_at: new Date("1999-01-01T00:00:00.000Z"),
+        _overwrite: true,
       },
       { overrideAccess: true }
     );
@@ -792,7 +797,7 @@ describe("first_published_at", () => {
     // And a real marker cannot be overwritten once the Single has been published.
     await singles.update(
       "fpmbanner",
-      { status: "published" },
+      { status: "published", _overwrite: true },
       { overrideAccess: true }
     );
     const stamped = String(
@@ -805,6 +810,7 @@ describe("first_published_at", () => {
         title: "edited",
         firstPublishedAt: new Date("1999-01-01T00:00:00.000Z"),
         first_published_at: new Date("1999-01-01T00:00:00.000Z"),
+        _overwrite: true,
       },
       { overrideAccess: true }
     );
@@ -833,7 +839,7 @@ describe("first_published_at", () => {
 
     await singles.update(
       "fpmbanner",
-      { title: "hi", status: "published" },
+      { title: "hi", status: "published", _overwrite: true },
       { overrideAccess: true }
     );
     const singleId = (await tableRows(current, "single_fpmbanner"))[0]?.id;
@@ -854,7 +860,7 @@ describe("first_published_at", () => {
 
     await singles.update(
       "fpmbanner",
-      { status: "draft" },
+      { status: "draft", _overwrite: true },
       { overrideAccess: true }
     );
     const unpublished = (await tableRows(current, "single_fpmbanner"))[0] ?? {};
@@ -863,7 +869,7 @@ describe("first_published_at", () => {
 
     await singles.update(
       "fpmbanner",
-      { status: "published" },
+      { status: "published", _overwrite: true },
       { overrideAccess: true }
     );
     expect(

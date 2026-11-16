@@ -91,7 +91,7 @@ function save(
 ) {
   return entries.updateEntry(
     { collectionName: COLLECTION, entryId: id, overrideAccess: true, locale },
-    body
+    { ...body, _overwrite: true }
   );
 }
 
@@ -222,22 +222,10 @@ describe.each(getConfiguredTestDialects())(
       expect(await pendingLocales(id)).toEqual(["en"]);
     });
 
-    it("recovers by retyping the live count and saving before publishing; one publish carrying it is still refused", async () => {
+    it("recovers by retyping the live count and saving before publishing", async () => {
       const entries = await boot(dialect);
       const id = await spanishPublishesThirteen(entries);
       expect((await publish(entries, id, "en")).statusCode).toBe(409);
-
-      // Retyping the live value into the publish itself: the check reads the
-      // stored change, so it is still refused, and nothing changes.
-      const inOne = await save(entries, id, "en", {
-        articleCount: 13,
-        status: "published",
-      });
-      expect(inOne.statusCode).toBe(409);
-      expect(await liveValues(entries, id, "en")).toEqual({
-        title: "en title",
-        articleCount: 13,
-      });
 
       // Retyped and saved first, then published: it goes through, and
       // English's own edit goes live with 13.
@@ -250,6 +238,51 @@ describe.each(getConfiguredTestDialects())(
         title: "en edited",
         articleCount: 13,
       });
+    });
+
+    // The change is judged as the publish writes it: the stored change with
+    // the request merged over it. A publish that retypes the live value of
+    // the field the change is behind on writes nothing behind live, so it
+    // goes through in one step. The plausible broken implementation judges
+    // the stored change alone and refuses it.
+    it("publishes an English change behind live in one step when the request retypes the live count", async () => {
+      const entries = await boot(dialect);
+      const id = await spanishPublishesThirteen(entries);
+
+      const published = await save(entries, id, "en", {
+        articleCount: 13,
+        status: "published",
+      });
+
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      expect(await liveValues(entries, id, "en")).toEqual({
+        title: "en edited",
+        articleCount: 13,
+      });
+      expect(await pendingLocales(id)).toEqual([]);
+    });
+
+    // CONTROL: a request carrying a value other than live still writes over
+    // Spanish's publish, so it is refused as the stored change alone is.
+    it("still refuses a one-step publish whose request carries a value other than live", async () => {
+      const entries = await boot(dialect);
+      const id = await spanishPublishesThirteen(entries);
+
+      const refused = await save(entries, id, "en", {
+        articleCount: 14,
+        status: "published",
+      });
+
+      expect(refused.statusCode).toBe(409);
+      expect(refused.publicData).toMatchObject({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      });
+      expect(await liveValues(entries, id, "en")).toEqual({
+        title: "en title",
+        articleCount: 13,
+      });
+      expect(await pendingLocales(id)).toEqual(["en"]);
     });
 
     it("keeps the base where the change began when English saves again after Spanish's publish", async () => {
@@ -280,6 +313,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         overrideAccess: true,
         locale: "en",
+        version: { _overwrite: true },
       });
       expect(taken.success).toBe(true);
       expect(taken.data).toEqual({ taken: ["articleCount"], outOfDate: [] });
@@ -358,6 +392,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: false,
           routeAuthorized: true,
           user: { id: "u1" },
+          version: { _overwrite: true },
         });
 
         expect(result.data, JSON.stringify(result)).toEqual({
@@ -459,6 +494,7 @@ describe.each(getConfiguredTestDialects())(
             entryId: id,
             overrideAccess: true,
             locale: "en",
+            version: { _overwrite: true },
           })
         ).success
       ).toBe(true);
@@ -574,7 +610,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       expect(refused.statusCode).toBe(409);
@@ -591,6 +627,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         overrideAccess: true,
         locale: "en",
+        version: { _overwrite: true },
       });
 
       expect({ statusCode: missing.statusCode, code: missing.code }).toEqual({
@@ -612,7 +649,7 @@ describe.each(getConfiguredTestDialects())(
         (
           await entries.updateEntry(
             { collectionName: "plain", entryId: id, overrideAccess: true },
-            { title: "pending", total: 2 }
+            { title: "pending", total: 2, _overwrite: true }
           )
         ).success
       ).toBe(true);

@@ -21,7 +21,7 @@
  */
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { AnyColumn, AnyRelations, SQL, Table } from "drizzle-orm";
-import { eq, getColumns, inArray } from "drizzle-orm";
+import { count as countAll, eq, getColumns, inArray, sql } from "drizzle-orm";
 
 import { isMissingNamedColumnError } from "../../database/missing-column";
 import type { SupportedDialect } from "../../database/schema-registry";
@@ -38,7 +38,10 @@ import type { SchemaOwner } from "../../domains/schema/extension/types";
 import { NextlyError } from "../../errors/nextly-error";
 import { getNextlyLogger } from "../../observability/logger";
 import { uuidV7 } from "../../utils/uuid-v7";
-import { transactionScope } from "../transaction-scope";
+import {
+  type PluginTransactionMethod,
+  transactionScope,
+} from "../transaction-scope";
 
 import {
   assertContributedColumnAccess,
@@ -48,8 +51,10 @@ import {
   type TableAccessRules,
 } from "./access";
 import { type ContentTarget, contentTarget } from "./content-target";
+import { type Increment, incrementBy, isIncrement } from "./increment";
 import { runInPluginTransactionFlow } from "./plugin-transaction-in-flow";
 import { linkPluginTransaction } from "./plugin-transaction-link";
+import { tableKeyColumn } from "./table-key";
 
 /** What a caller may narrow a read or a write with. */
 export interface PortableWhere<TResult> {
@@ -63,6 +68,25 @@ export interface PortableSelect<TDefinition> {
   offset(count: number): PortableSelect<TDefinition>;
   all(): Promise<InferRow<TDefinition>[]>;
   first(): Promise<InferRow<TDefinition> | null>;
+  /**
+   * @experimental How many rows match the `where`, counted in the database:
+   * no row is read into the process. `orderBy`, `limit` and `offset` are
+   * ignored, as a count has no order and no page, and so is `lock`: a count
+   * locks no row.
+   */
+  count(): Promise<number>;
+  /**
+   * @experimental Read the rows locked until the transaction ends:
+   * `update` (`FOR UPDATE`) keeps any other transaction from changing or
+   * locking them, `share` (`FOR SHARE`) only from changing them. Either reads
+   * the latest committed rows, which on MySQL a plain read inside a
+   * transaction does not: it reads the snapshot its first read took. Meant
+   * for `tx` inside `ctx.db.transaction` or an in-transaction hook; on the
+   * pooled `ctx.db` the lock ends with the statement. SQLite runs one writer
+   * at a time, so there it reads the rows as a plain read does. Refused in a
+   * snapshot transaction, which is read-only.
+   */
+  lock(mode: "update" | "share"): PortableSelect<TDefinition>;
 }
 
 export interface PluginDatabaseDeps {
@@ -108,8 +132,32 @@ export interface PluginDatabaseDeps {
        * (`plugin-transaction-link`).
        */
       adapterTx?: TransactionContext;
-    }) => Promise<R>
+      /**
+       * Hold `effect` until the transaction commits: until the OUTERMOST
+       * transaction commits when this one joined another, dropped when it
+       * rolls back. The adapter's `afterCommit`, called from inside the
+       * transaction, so it knows which transaction the effect waits for.
+       */
+      afterCommit(effect: () => unknown): void;
+    }) => Promise<R>,
+    /** What the caller asked of the transaction; see `PluginDatabase.transaction`. */
+    options?: PluginTransactionOptions
   ) => Promise<R>;
+  /**
+   * The adapter's `withTransactionBounds`: runs work with every outermost
+   * transaction it opens bounded by the database, where the database bounds
+   * one. Absent, `ctx.db.withTransactionBounds` runs the work as given.
+   */
+  withTransactionBounds?: <R>(
+    bounds: PluginTransactionBounds,
+    work: () => Promise<R>
+  ) => Promise<R>;
+  /**
+   * Inside a snapshot transaction: refuse every write through this surface,
+   * so the transaction is read-only on every dialect, SQLite included, where
+   * the database itself would let one through.
+   */
+  readOnly?: boolean;
   /**
    * Called with every statement's promise as it starts, and returns the
    * promise the caller receives. Absent outside a transaction; inside one it
@@ -238,6 +286,31 @@ function nestedTransactionError(): NextlyError {
       "Do the nested work in the same callback, through the handle it was given, so it commits or rolls back with the rest.",
     logContext: { reason: "nested-plugin-transaction" },
   });
+}
+
+/** The handles `PluginDatabaseDeps.transaction` passes its callback. */
+type TransactionHandles = Parameters<
+  Parameters<PluginDatabaseDeps["transaction"]>[0]
+>[0];
+
+/**
+ * The refusal for a write inside a snapshot transaction, which is read-only.
+ */
+function readOnlyTransactionError(): NextlyError {
+  return NextlyError.invalidInput({
+    message:
+      'A ctx.db.transaction opened with { isolation: "snapshot" } is read-only: write in a transaction of your own.',
+    logContext: { reason: "write-in-snapshot-transaction" },
+  });
+}
+
+/** Run `work` unless this surface belongs to a read-only transaction. */
+async function writable<R>(
+  deps: PluginDatabaseDeps,
+  work: () => Promise<R>
+): Promise<R> {
+  if (deps.readOnly === true) throw readOnlyTransactionError();
+  return work();
 }
 
 /**
@@ -422,6 +495,48 @@ function withUpdatedColumns(
   return out;
 }
 
+/** The column kinds an `increment` may add to. */
+const INCREMENTABLE: ReadonlySet<string> = new Set([
+  "integer",
+  "smallint",
+  "bigint",
+  "real",
+  "double",
+  "decimal",
+]);
+
+/**
+ * Turn each `increment(n)` among `values` into `column + n` on `table`'s own
+ * column, so the database adds to the stored value under the row's lock. A
+ * column that is not numeric refuses it, rather than letting each dialect
+ * decide what adding to text means.
+ */
+function withIncrements(
+  definition: TableDefinition,
+  table: unknown,
+  values: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...values };
+  for (const column of definition.columns) {
+    const value = out[column.key];
+    if (!isIncrement(value)) continue;
+    if (!INCREMENTABLE.has(column.kind)) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `${definition.name}.${column.key}`,
+            code: "INVALID",
+            message: `"${column.key}" is a ${column.kind} column; increment() adds only to a numeric one.`,
+          },
+        ],
+      });
+    }
+    const target = (table as Record<string, AnyColumn>)[column.key];
+    out[column.key] = sql`${target} + ${incrementBy(value)}`;
+  }
+  return out;
+}
+
 /** Map an authored row onto the SQL column names the table uses. */
 function toColumns(
   definition: TableDefinition,
@@ -497,6 +612,24 @@ export type PluginInsert<T> =
     : never;
 
 /**
+ * @experimental What `ctx.db.update` may set: any column an insert may
+ * write, and on a numeric column `increment(n)` in place of a value. A key no
+ * write may supply (`col.serial()`, typed `never`) takes no increment either.
+ */
+export type PluginUpdate<T> = {
+  [K in keyof InferInsert<T>]?:
+    | InferInsert<T>[K]
+    | IncrementFor<NonNullable<InferInsert<T>[K]>>;
+};
+
+/** `Increment` where `TValue` is a number, and nothing for a closed key. */
+type IncrementFor<TValue> = [TValue] extends [never]
+  ? never
+  : TValue extends number
+    ? Increment
+    : never;
+
+/**
  * @experimental `ctx.db`: typed, owner-checked access to the tables a plugin
  * declared, its dependencies' tables and the columns it contributed, with one
  * behaviour on every dialect. Every method checks the caller's reach before it
@@ -513,9 +646,14 @@ export interface PluginDatabase {
     definition: T,
     values: PluginInsert<T>
   ): Promise<InferRow<T>>;
+  /**
+   * Update the rows the `where` matches; resolves to how many it changed. A
+   * numeric column may be given `increment(n)` (from `db-operators`) to add
+   * `n` to it in the same statement, so concurrent updates each count.
+   */
   update<T extends TableDefinition>(
     definition: T,
-    set: Partial<InferInsert<T>>
+    set: PluginUpdate<T>
   ): PortableWhere<number>;
   delete<T extends TableDefinition>(definition: T): PortableWhere<number>;
   /**
@@ -535,11 +673,14 @@ export interface PluginDatabase {
    * when it throws, and what `fn` threw reaches the caller as thrown. `tx` is
    * this surface bound to the transaction's own connection on every dialect;
    * write through it, since `ctx.db` itself runs outside the transaction on
-   * PostgreSQL and MySQL. On SQLite a core service or `ctx.settings` called
-   * inside joins it as a savepoint and rolls back with it, its after-commit
-   * effects (hooks, events, revalidation) wait for the commit and never run
-   * on rollback, and deleting media is refused. Keep it short, and never
-   * await network I/O inside it. `tx` lives only as long as `fn`: a statement
+   * PostgreSQL and MySQL. `ctx.settings.set` is refused inside it on every
+   * dialect: write the setting after the transaction. A core service called
+   * inside joins it, on every dialect, and rolls back with it (as a savepoint
+   * on SQLite and PostgreSQL; on MySQL a failed call fails the whole
+   * transaction, even when caught), its after-commit effects (hooks, events,
+   * revalidation) wait for the commit and never run on rollback, and on
+   * SQLite deleting media is refused. Keep it short, and never await network
+   * I/O inside it. `tx` lives only as long as `fn`: a statement
    * `fn` started on it without awaiting is finished before the transaction
    * ends, and once it has ended, `tx` and every builder made from it refuse.
    * A statement still running on `tx` when `fn` settles (one `fn` did not
@@ -548,8 +689,40 @@ export interface PluginDatabase {
    * failed before `fn` settled is `fn`'s to handle: caught, the transaction
    * carries on. When `fn` itself throws, its error is the one the caller
    * receives.
+   *
+   * With `{ isolation: "snapshot" }` the transaction is read-only, and every
+   * read inside it sees the database as it was at its first read, whatever
+   * other transactions commit meanwhile: REPEATABLE READ on PostgreSQL and on
+   * MySQL, where it is already the default, and on SQLite the serial
+   * transaction every one already is. A write through `tx` is refused. For
+   * reading several facts that must describe one moment.
    */
-  transaction<R>(fn: (tx: PluginTransaction) => Promise<R>): Promise<R>;
+  transaction<R>(
+    fn: (tx: PluginTransaction) => Promise<R>,
+    options?: PluginTransactionOptions
+  ): Promise<R>;
+  /**
+   * @experimental Run `work` with every transaction it opens bounded by the
+   * database: `ctx.db.transaction`, and the transactions of the core
+   * services it calls (`ctx.services.collections.withTransaction`, a save).
+   * A statement waiting longer than `lockWaitMs` for a lock another
+   * transaction holds fails, and a transaction left open with no statement
+   * running for longer than `idleMs` is ended by the database, rolled back,
+   * its locks released; its next statement then fails. Both in milliseconds,
+   * each optional; a scope inside another replaces the bounds it names.
+   *
+   * For work a request starts and does not await: a serverless platform
+   * freezes the function once the response is sent, and a transaction such
+   * work had open then would hold its locks, keeping every save and request
+   * that needs them waiting, until the function ran again. Expect the work
+   * to fail now and then, and to be tried again later.
+   *
+   * PostgreSQL applies the bounds. MySQL and SQLite run `work` as given.
+   */
+  withTransactionBounds<R>(
+    bounds: PluginTransactionBounds,
+    work: () => Promise<R>
+  ): Promise<R>;
   /**
    * Relational queries (`db.query.<table>.findMany({ with })`), keyed by
    * FINAL table name and owner-checked like every other method. The
@@ -607,11 +780,37 @@ export interface ContributedColumns<
 }
 
 /**
+ * @experimental The bounds `ctx.db.withTransactionBounds` opens each
+ * transaction with, in milliseconds (see `PluginDatabase.withTransactionBounds`).
+ */
+export interface PluginTransactionBounds {
+  /** How long a statement waits for a lock before it fails. */
+  lockWaitMs?: number;
+  /** How long the transaction may stay open with no statement running. */
+  idleMs?: number;
+}
+
+/**
+ * @experimental What `ctx.db.transaction` may be asked for beyond its default.
+ */
+export interface PluginTransactionOptions {
+  /**
+   * `"snapshot"`: read-only, every read from one snapshot (see
+   * `PluginDatabase.transaction`). Absent, the database's default isolation,
+   * READ COMMITTED on PostgreSQL.
+   */
+  isolation?: "snapshot";
+}
+
+/**
  * @experimental The handle `ctx.db.transaction` passes its work: the same
  * surface as `ctx.db`, bound to the transaction's connection, without a
  * nested `transaction`.
  */
-export type PluginTransaction = Omit<PluginDatabase, "transaction">;
+export type PluginTransaction = Omit<
+  PluginDatabase,
+  "transaction" | "withTransactionBounds"
+>;
 
 /** One table's entry in a relations config: its edges, keyed by relation name. */
 type TableRelations = AnyRelations[string];
@@ -1048,6 +1247,7 @@ interface SelectState {
   readonly orderBy: readonly SQL[];
   readonly limit?: number;
   readonly offset?: number;
+  readonly lock?: "update" | "share";
 }
 
 /**
@@ -1085,6 +1285,109 @@ async function insertForAssignedKey(
       ? await statement.$returningId?.()
       : await statement.returning?.({ [key]: column });
   return rows?.[0]?.[key];
+}
+
+/** The handles one transaction's connection offers this surface. */
+export type PluginTransactionHandles = TransactionHandles;
+
+/**
+ * Run `work` with the surface `deps` describes bound to one transaction's
+ * handles: every statement it runs goes through that transaction, and core
+ * code handed the surface as `{ tx }` writes inside it too.
+ *
+ * The one place a plugin's database is bound to a transaction. Both
+ * `ctx.db.transaction`, which opens its own, and the in-transaction hook phase,
+ * which binds the write's, come through here, so what a plugin may do inside a
+ * transaction cannot differ between the two.
+ */
+export function bindPluginDatabase<T>(
+  deps: PluginDatabaseDeps,
+  tx: PluginTransactionHandles,
+  work: (db: PluginDatabase) => Promise<T>,
+  options: {
+    /** What the plugin called, named by the refusal of a finished handle. */
+    method: PluginTransactionMethod;
+    /** Refuse every write: a snapshot transaction is read-only. */
+    readOnly?: boolean;
+  }
+): Promise<T> {
+  // The same surface, reading the transaction's handles. Built rather
+  // than mutated so a caller holding the outer `ctx.db` cannot
+  // accidentally write outside the transaction.
+  //
+  // BOTH handles, not just `db`. The `query` getter resolves
+  // `relationalDb`, and the pooled one is a different connection on
+  // PostgreSQL and MySQL, from which `tx.query.x.findMany()` could not
+  // see the callback's uncommitted writes. The relational
+  // handle cannot simply be `tx.db` either: that instance is built
+  // without a relations config, and its `query` namespace is empty.
+  // `deps.transaction` supplies a relations-enabled instance bound to
+  // the same connection instead. `tx.relationalDb` is read on every
+  // access to `query` rather than captured, so a supplier that resolves
+  // it lazily — plugin-context does — keeps the relations config current.
+  //
+  // Its own `transaction` refuses. `PluginTransaction` leaves it out of
+  // the type, but a plugin written in JavaScript can still call it, and
+  // the outer `deps.transaction` would open a second transaction: on
+  // PostgreSQL and MySQL that is another pooled connection, outside
+  // this one and blind to its uncommitted writes.
+  //
+  // And it refuses everything once `work` has settled, either way. A
+  // plugin can keep `tx`, a builder made from it or one of its `query`
+  // entries past the callback, and the transaction's handles then point
+  // at a connection the transaction no longer owns — on SQLite the
+  // shared one, outside any transaction; on PostgreSQL and MySQL a
+  // client already back in the pool. Every statement this surface runs
+  // reaches its handle through these two suppliers, so the one check in
+  // them covers every path; it runs before `tx.relationalDb` is read,
+  // since reading it may build a handle on that connection. The scope
+  // closes only after `work`'s promise settles and the statements it
+  // started have finished, so neither work the callback is awaiting nor
+  // work it started and did not await is refused or left to run after
+  // the transaction ends. `scope.run` also decides the outcome: a
+  // statement still in flight when the callback settled that then
+  // fails rejects the transaction, and so rolls it back, even when the
+  // callback itself resolved (see `transactionScope`).
+  const scope = transactionScope(options.method);
+  const scoped = createPluginDatabase({
+    ...deps,
+    // Read through rather than copied: the spread above reads a getter
+    // once, and a reload that commits while this transaction runs
+    // changes the dependencies its operations may reach.
+    get dependsOn() {
+      return deps.dependsOn;
+    },
+    db: () => {
+      scope.assertOpen();
+      return tx.db;
+    },
+    relationalDb: () => {
+      scope.assertOpen();
+      return tx.relationalDb;
+    },
+    transaction: () => Promise.reject(nestedTransactionError()),
+    // This transaction is open already, with the bounds it was opened with:
+    // a scope asked for inside it bounds nothing more.
+    withTransactionBounds: undefined,
+    readOnly: options.readOnly === true,
+    track: scope.track,
+    // A `contributed` write's expiry waits for the commit with the core
+    // work's, so a rolled-back write expires nothing. Both are held by
+    // the transaction itself, so when this one joined an outer one they
+    // wait for the outer commit rather than for this one's end.
+    afterCommit: effect => tx.afterCommit(effect),
+  });
+  if (tx.adapterTx) {
+    linkPluginTransaction(scoped, tx.adapterTx, scope, effect =>
+      tx.afterCommit(effect)
+    );
+  }
+  // Marked as the flow's transaction, so a core write that opens its
+  // own and needs a lock this one holds can join it instead of waiting
+  // on it (see `plugin-transaction-in-flow`).
+  return scope.run(() =>
+    runInPluginTransactionFlow(scoped, () => work(scoped))
+  );
 }
 
 /** Build the database surface one owner sees. */
@@ -1132,12 +1435,40 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
         orderBy: (...columns) => build({ ...state, orderBy: columns }),
         limit: count => build({ ...state, limit: count }),
         offset: count => build({ ...state, offset: count }),
-        all: () => track(selectRows(state), "read"),
+        lock: mode => build({ ...state, lock: mode }),
+        // A locking read is refused where a write is: a read-only transaction
+        // refuses `FOR UPDATE` and `FOR SHARE` on PostgreSQL, so the refusal
+        // is made here, alike on every dialect.
+        all: () =>
+          track(
+            state.lock === undefined
+              ? selectRows(state)
+              : writable(deps, () => selectRows(state)),
+            "read"
+          ),
         async first() {
           const rows = await build({ ...state, limit: 1 }).all();
           return rows[0] ?? null;
         },
+        count: () => track(countRows(state), "read"),
       });
+      // One aggregate statement; PostgreSQL answers a count as a string.
+      const countRows = async (state: SelectState): Promise<number> => {
+        const { table } = resolveTable(definition, deps);
+        const db = deps.db() as {
+          select: (fields: unknown) => {
+            from: (t: unknown) => Record<string, (...a: never[]) => unknown>;
+          };
+        };
+        let query = db.select({ n: countAll() }).from(table);
+        if (state.where) {
+          query = query.where(state.where as never) as typeof query;
+        }
+        const rows = (await (query as unknown as Promise<unknown>)) as {
+          n: unknown;
+        }[];
+        return Number(rows[0]?.n ?? 0);
+      };
       const selectRows = async (
         state: SelectState
       ): Promise<InferRow<typeof definition>[]> => {
@@ -1160,17 +1491,24 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
         if (state.offset !== undefined) {
           query = query.offset(state.offset as never) as typeof query;
         }
+        // SQLite has no row locks, and one writer at a time already keeps
+        // the rows read from changing before the transaction ends.
+        if (state.lock !== undefined && deps.dialect !== "sqlite") {
+          query = query.for(state.lock as never) as typeof query;
+        }
         return (await (query as unknown as Promise<unknown>)) as never;
       };
       return build({ orderBy: [] });
     },
 
     insert(definition, values) {
-      return track(writes.insert(definition, values));
+      return track(writable(deps, () => writes.insert(definition, values)));
     },
 
     insertReturning(definition, values) {
-      return track(writes.insertReturning(definition, values));
+      return track(
+        writable(deps, () => writes.insertReturning(definition, values))
+      );
     },
 
     update(definition, set) {
@@ -1179,9 +1517,10 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
       resolveTable(definition, deps);
       const run = async (condition: SQL): Promise<number> => {
         const { table } = resolveTable(definition, deps);
-        const values = toColumns(
+        const values = withIncrements(
           definition,
-          withUpdatedColumns(definition, set)
+          table,
+          toColumns(definition, withUpdatedColumns(definition, set))
         );
         const result = await (deps.db() as AnyDb)
           .update(table)
@@ -1189,7 +1528,9 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
           .where(condition);
         return affectedRows(result);
       };
-      return { where: condition => track(run(condition)) };
+      return {
+        where: condition => track(writable(deps, () => run(condition))),
+      };
     },
 
     delete(definition) {
@@ -1202,7 +1543,9 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
           .where(condition);
         return affectedRows(result);
       };
-      return { where: condition => track(run(condition)) };
+      return {
+        where: condition => track(writable(deps, () => run(condition))),
+      };
     },
 
     contributed(tableName, columns) {
@@ -1281,91 +1624,42 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
         return row ?? null;
       };
       const set: ContributedColumns<typeof columns>["set"] = (id, values) =>
-        track(write(id, values));
+        track(writable(deps, () => write(id, values)));
       return { get, getMany, set };
     },
 
-    async transaction(fn) {
-      // What core work inside asked to run once this transaction commits
-      // (`LinkedTransaction.afterCommit`). Run below, after `deps.transaction`
-      // has resolved, which it does only once the commit has succeeded; a
-      // rollback rejects first and the effects are dropped with the array.
-      const committed: Array<() => unknown> = [];
-      const result = await deps.transaction(async tx => {
-        // The same surface, reading the transaction's handles. Built rather
-        // than mutated so a caller holding the outer `ctx.db` cannot
-        // accidentally write outside the transaction.
-        //
-        // BOTH handles, not just `db`. The `query` getter resolves
-        // `relationalDb`, and the pooled one is a different connection on
-        // PostgreSQL and MySQL, from which `tx.query.x.findMany()` could not
-        // see the callback's uncommitted writes. The relational
-        // handle cannot simply be `tx.db` either: that instance is built
-        // without a relations config, and its `query` namespace is empty.
-        // `deps.transaction` supplies a relations-enabled instance bound to
-        // the same connection instead. `tx.relationalDb` is read on every
-        // access to `query` rather than captured, so a supplier that resolves
-        // it lazily — plugin-context does — keeps the relations config current.
-        //
-        // Its own `transaction` refuses. `PluginTransaction` leaves it out of
-        // the type, but a plugin written in JavaScript can still call it, and
-        // the outer `deps.transaction` would open a second transaction: on
-        // PostgreSQL and MySQL that is another pooled connection, outside
-        // this one and blind to its uncommitted writes.
-        //
-        // And it refuses everything once `fn` has settled, either way. A
-        // plugin can keep `tx`, a builder made from it or one of its `query`
-        // entries past the callback, and the transaction's handles then point
-        // at a connection the transaction no longer owns — on SQLite the
-        // shared one, outside any transaction; on PostgreSQL and MySQL a
-        // client already back in the pool. Every statement this surface runs
-        // reaches its handle through these two suppliers, so the one check in
-        // them covers every path; it runs before `tx.relationalDb` is read,
-        // since reading it may build a handle on that connection. The scope
-        // closes only after `fn`'s promise settles and the statements it
-        // started have finished, so neither work the callback is awaiting nor
-        // work it started and did not await is refused or left to run after
-        // the transaction ends. `scope.run` also decides the outcome: a
-        // statement still in flight when the callback settled that then
-        // fails rejects the transaction, and so rolls it back, even when the
-        // callback itself resolved (see `transactionScope`).
-        const scope = transactionScope("ctx.db.transaction");
-        const scoped = createPluginDatabase({
-          ...deps,
-          // Read through rather than copied: the spread above reads a getter
-          // once, and a reload that commits while this transaction runs
-          // changes the dependencies its operations may reach.
-          get dependsOn() {
-            return deps.dependsOn;
-          },
-          db: () => {
-            scope.assertOpen();
-            return tx.db;
-          },
-          relationalDb: () => {
-            scope.assertOpen();
-            return tx.relationalDb;
-          },
-          transaction: () => Promise.reject(nestedTransactionError()),
-          track: scope.track,
-          // A `contributed` write's expiry waits for the commit with the core
-          // work's, so a rolled-back write expires nothing.
-          afterCommit: effect => committed.push(effect),
-        });
-        if (tx.adapterTx) {
-          linkPluginTransaction(scoped, tx.adapterTx, scope, effect =>
-            committed.push(effect)
-          );
-        }
-        // Marked as the flow's transaction, so a core write that opens its
-        // own and needs a lock this one holds can join it instead of waiting
-        // on it (see `plugin-transaction-in-flow`).
-        return scope.run(() =>
-          runInPluginTransactionFlow(scoped, () => fn(scoped))
-        );
-      });
-      await runCommitEffects(committed);
-      return result;
+    async transaction(fn, options) {
+      const snapshot = options?.isolation === "snapshot";
+      // The option is handed on only when asked for, so a supplier is called
+      // exactly as before for every ordinary transaction.
+      //
+      // The name carries meaning: the transaction-escape check in the tests
+      // names the code that opened a transaction by the first frame of its
+      // stack outside the adapters, skipping a frame whose function name
+      // matches /transaction/i as a wrapper. Named otherwise, this frame
+      // would stand for every caller of `ctx.db.transaction` at once.
+      const openTransaction = <T>(
+        work: (tx: TransactionHandles) => Promise<T>
+      ) =>
+        snapshot
+          ? deps.transaction(work, { isolation: "snapshot" })
+          : deps.transaction(work);
+      // The surface bound to the transaction, by the one binder the
+      // in-transaction hook phase uses too, so the two cannot drift.
+      return openTransaction(tx =>
+        bindPluginDatabase(deps, tx, fn, {
+          method: "ctx.db.transaction",
+          readOnly: snapshot,
+        })
+      );
+    },
+
+    // The adapter's scope, where the supplier has one; the work as given
+    // where it has none, as on a surface no adapter stands behind.
+    withTransactionBounds(bounds, work) {
+      return deps.withTransactionBounds === undefined
+        ? work()
+        : deps.withTransactionBounds(bounds, work);
     },
 
     // Resolved per access, never cached: the registry invalidates its
@@ -1505,9 +1799,9 @@ function contributedReach(
       },
     });
   }
-  const primary = Object.values(getColumns(runtime as Table)).find(
-    column => column.primary
-  );
+  // Wherever the table declares its key: on the column, or on the table as
+  // SQLite's field-group table does.
+  const primary = tableKeyColumn(runtime as Table);
   if (primary === undefined) {
     throw NextlyError.internal({
       logContext: {
@@ -1636,12 +1930,6 @@ async function whenColumnsExist<T>(
  * read from there; read from the pair, every MySQL write reported -1.
  */
 /**
- * Run a committed transaction's effects in the order they were registered.
- * Each is awaited before the next starts, and one that fails is logged rather
- * than thrown: the transaction has committed, and its caller is owed that
- * result, not an effect's failure in its place.
- */
-/**
  * Expire the cached reads of the entry or Single a `contributed` write to row
  * `id` of `tableName` changed: now, or inside a transaction once it commits.
  * The row's document is found before the commit, on the write's own
@@ -1695,27 +1983,6 @@ async function findAndExpire(
     return;
   }
   await expireContent(target);
-}
-
-async function runCommitEffects(
-  effects: readonly (() => unknown)[]
-): Promise<void> {
-  for (const effect of effects) {
-    try {
-      await effect();
-    } catch (error) {
-      // Guarded too: a logger that throws must not replace the committed
-      // result, or stop the effects after this one.
-      try {
-        getNextlyLogger().error({
-          kind: "after-commit-effect-failed",
-          message: error instanceof Error ? error.message : String(error),
-        });
-      } catch {
-        // Nothing is left to report it to.
-      }
-    }
-  }
 }
 
 function affectedRows(result: unknown): number {

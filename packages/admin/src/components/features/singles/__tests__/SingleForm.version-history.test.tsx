@@ -150,6 +150,18 @@ const schema = {
   ],
 } as unknown as SingleSchema;
 
+/**
+ * The same Single with autosave on: only a Single that keeps recovery points
+ * records any, so a test about what else holds recording off starts here.
+ */
+const schemaWithAutosave = {
+  ...(schema as object),
+  versions: {
+    enabled: true,
+    drafts: { enabled: true, autosave: { enabled: true } },
+  },
+} as unknown as SingleSchema;
+
 const document = {
   id: "homepage",
   updatedAt: "2026-01-01T00:00:00.000Z",
@@ -262,7 +274,11 @@ describe("SingleForm — a published version replaces the document", () => {
     // Reading is not editing, and the recovery point is a write. While the
     // version stands in for the document, no recovery point may be recorded.
     render(
-      <SingleForm schema={schema} document={document} onSubmit={vi.fn()} />
+      <SingleForm
+        schema={schemaWithAutosave}
+        document={document}
+        onSubmit={vi.fn()}
+      />
     );
     await waitFor(() =>
       expect(useDocumentAutosave).toHaveBeenLastCalledWith(

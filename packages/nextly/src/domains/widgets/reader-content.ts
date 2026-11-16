@@ -40,6 +40,7 @@ import {
 import { requireNextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
 import { NextlyError } from "../../errors/nextly-error";
+import { rethrowIfAnyRuleCouldNotRun } from "../../errors/rule-could-not-run";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import { readableSlugsOfKind } from "../../services/lib/readable-slug-allowlist";
 
@@ -167,6 +168,9 @@ export async function readerMayCreateEntry(
     const settled = await Promise.allSettled(
       group.map(slug => mayCreateIn(slug))
     );
+    // A rule that could not run never answered: the request ends with that,
+    // not with its collection counted as refused.
+    rethrowIfAnyRuleCouldNotRun(settled);
     if (settled.some(result => result.status === "fulfilled" && result.value)) {
       return true;
     }

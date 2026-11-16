@@ -50,6 +50,8 @@ const RAW_TEST_ALLOWED = {
     "drives two app instances without the shared cache handlers over HTTP only, through request contexts; it opens no page",
   "e2e/dev-reload/schema-edit.spec.ts":
     "edits a schema file and reads the dev server's answers over HTTP; it opens no page",
+  "e2e/tests/shared-cache.test.ts":
+    "checks the shared-cache lifetime judgement in Node; it opens no page",
   "e2e/tests/canvas/dwelling-canvas.test.ts":
     "checks the canvas's dwell arithmetic in Node; it opens no page",
   "e2e/tests/canvas/oscillation.test.ts":

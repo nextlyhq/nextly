@@ -22,30 +22,42 @@ import {
   isPendingExpiryHandoff,
   takePendingExpiries,
 } from "./expiry-handoff";
-import type { CacheRevalidator, RevalidationIntent } from "./types";
+import type {
+  CacheRevalidator,
+  FlushOutcome,
+  RevalidationIntent,
+} from "./types";
 
 export class HandOffRevalidator implements CacheRevalidator {
-  async flush(intents: RevalidationIntent[]): Promise<void> {
+  /**
+   * Resolves an outcome only for tags no ledger recorded: every tag here goes
+   * out of request, so one the ledger took is as done as this process can make
+   * it, and one it did not is this process's alone (`keptInProcess`).
+   */
+  async flush(intents: RevalidationIntent[]): Promise<FlushOutcome | void> {
+    const own = tagsToExpire(intents);
+    const unrecorded = (): FlushOutcome | void =>
+      own.length > 0 ? { deferredTags: own, keptInProcess: own } : undefined;
     const handoff = expiryHandoff();
     if (isPendingExpiryHandoff(handoff)) {
       // Between a release and the next registration a still-running plugin's
       // write is kept here, for the next ledger to take when it is installed.
       // A process that never had a ledger keeps nothing it could not drain.
       if (ledgerWithdrawn()) {
-        const tags = tagsToExpire(intents);
-        if (tags.length > 0)
-          void handoff.handOff(tags, "a write while no ledger was installed");
+        if (own.length > 0)
+          void handoff.handOff(own, "a write while no ledger was installed");
       }
-      return;
+      return unrecorded();
     }
     // Tags an earlier flush could not hand off are retried with this one's:
     // outside Next.js no request flush drains them.
-    const tags = [
-      ...new Set([...takePendingExpiries(), ...tagsToExpire(intents)]),
-    ];
+    const tags = [...new Set([...takePendingExpiries(), ...own])];
     if (tags.length === 0) return;
     // Bounded, as in a request: a ledger that never answers must not hold a
     // write that has already committed. What it does not take is kept.
-    await handOffWithin(handoff, tags, "a write made outside Next.js");
+    if (await handOffWithin(handoff, tags, "a write made outside Next.js")) {
+      return;
+    }
+    return unrecorded();
   }
 }

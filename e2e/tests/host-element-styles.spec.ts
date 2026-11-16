@@ -24,6 +24,7 @@ import { expect, type Locator, type Page } from "@playwright/test";
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
+import { canvasFrame } from "./support/canvas-frame";
 
 // The canvas test writes the homepage's layout, which other specs share; see
 // support/locks.ts. A lock holds for the whole file.
@@ -103,11 +104,23 @@ function cardTitles(page: Page): Locator {
 async function dashboardStyles(page: Page): Promise<Styles> {
   await page.mouse.move(0, 0);
   await expect(cardTitles(page).first()).toBeVisible({ timeout: 30_000 });
-  const main = page.locator("main");
+  // The admin's own main, by its id: a site page left mounted (hidden) beside
+  // the admin has a `main` of its own, whose paragraph is the site's.
+  const main = page.locator("#nextly-main-content:visible");
   const styles: Styles = {
     heading: await stylesOf(main.getByRole("heading", { level: 1 })),
-    paragraph: await stylesOf(main.locator("p").first()),
-    button: await stylesOf(main.getByRole("button", { name: "Customize" })),
+    // The Content card's summary line: a card on every dashboard, and the
+    // same element in both reads. The first paragraph on the page is not:
+    // another spec finishing a setup step takes the setup card's away.
+    paragraph: await stylesOf(
+      main
+        .getByRole("region", { name: "Content", exact: true })
+        .locator("p")
+        .first()
+    ),
+    button: await stylesOf(
+      page.getByRole("button", { name: "Customize dashboard" })
+    ),
     link: await stylesOf(
       page.getByRole("navigation").getByRole("link", { name: "Dashboard" })
     ),
@@ -154,7 +167,8 @@ test("the admin's dashboard looks the same in a site that styles bare elements",
   ).toBe(true);
 
   // Each card title in the title style of the card type ramp, and wholly
-  // inside its line: the truncating span shows the whole height of the text.
+  // inside its lines: the title's own span, cut to one line under a subtitle
+  // and to two lines without one, shows the whole height of its text.
   // Read once the cards have drawn, which the dashboard does after its data.
   await expect(cardTitles(page).first()).toBeVisible({ timeout: 30_000 });
   const titles = await cardTitles(page).all();
@@ -163,7 +177,7 @@ test("the admin's dashboard looks the same in a site that styles bare elements",
     await expect(title).toHaveCSS("font-size", "14px");
     await expect(title).toHaveCSS("line-height", "20px");
     const fits = await title
-      .locator("span.truncate")
+      .locator(":scope > span")
       .first()
       .evaluate(span => span.scrollHeight <= span.clientHeight);
     expect(fits).toBe(true);
@@ -192,23 +206,20 @@ const HOMEPAGE_API = "/admin/api/singles/homepage";
 /** The homepage form's action that opens the Page Builder. */
 const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
 
-/** A site rule no admin style or block style sets, so only its source decides. */
+/** An element rule in the admin's document, which no block style sets. */
 const SITE_HEADING_RULE = "h2 { text-transform: uppercase; }";
 
-test("the Page Builder's canvas takes the site's element rules, and the rest of the admin does not", async ({
+test("the Page Builder's canvas is a document of its own, which the admin's element rules do not reach", async ({
   page,
 }) => {
-  // The site's rule on every document this page loads, as a site's own
-  // stylesheet is.
-  await page.addInitScript(rule => {
-    document.addEventListener("DOMContentLoaded", () => {
-      const style = document.createElement("style");
-      style.dataset.e2eSiteRule = "";
-      style.textContent = rule;
-      document.head.append(style);
-    });
-  }, SITE_HEADING_RULE);
-
+  /*
+   * The page is drawn in the canvas's own frame, whose document holds the page
+   * and the site's sheet alone: a rule in the admin's document styles the
+   * admin and never the page, the isolation that keeps the admin's theme and
+   * stylesheets off what the author edits. The rule is put in the admin's
+   * document once it has loaded, the way a site's stylesheet loaded into the
+   * admin would be.
+   */
   const heading = "A heading the site styles";
   const stored = await page.request.patch(HOMEPAGE_API, {
     data: {
@@ -224,27 +235,37 @@ test("the Page Builder's canvas takes the site's element rules, and the rest of 
           },
         ],
       },
+      _overwrite: true,
     },
   });
   expect(stored.ok(), `seeding the homepage layout: ${stored.status()}`).toBe(
     true
   );
 
-  // In the canvas: drawn as the site draws an `h2`.
   await gotoAdmin(page, "/singles/homepage");
   await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
-  const canvasHeading = page
+  const canvasHeading = canvasFrame(page)
     .locator(".nx-canvas h2")
     .filter({ hasText: heading })
     .first();
   await expect(canvasHeading).toBeVisible({ timeout: 30_000 });
-  await expect(canvasHeading).toHaveCSS("text-transform", "uppercase");
-
-  // Outside it, on the dashboard of the same admin: the rule is in the
-  // document, and a card title, also an `h2`, is drawn as the admin draws it.
-  await gotoAdmin(page, "");
+  await page.evaluate(rule => {
+    const style = document.createElement("style");
+    style.dataset.e2eSiteRule = "";
+    style.textContent = rule;
+    document.head.append(style);
+  }, SITE_HEADING_RULE);
+  // The control: the rule is in the admin's document and applies there.
   await expect(page.locator("style[data-e2e-site-rule]")).toHaveCount(1);
-  const title = cardTitles(page).first();
-  await expect(title).toBeVisible({ timeout: 30_000 });
-  await expect(title).toHaveCSS("text-transform", "none");
+  expect(
+    await page.evaluate(() => {
+      const probe = document.createElement("h2");
+      document.body.append(probe);
+      const transform = getComputedStyle(probe).textTransform;
+      probe.remove();
+      return transform;
+    })
+  ).toBe("uppercase");
+  // The page in the canvas does not take it.
+  await expect(canvasHeading).toHaveCSS("text-transform", "none");
 });

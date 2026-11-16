@@ -16,24 +16,39 @@ import {
   registerClassUsageMaintenance,
   type ClassUsagePluginContext,
 } from "./class-usage-hook";
+import type { ClassUsageIndexStore } from "./class-usage-maintenance";
+import type { SingleToWalk } from "./host-rewrite/site";
 
-const INDEX = "nx_pb_class_usage";
+/** The name each fake index store tags the calls it passes on with. */
+const INDEX = "class-index";
 /**
- * The COMPONENT index's collection, wired like the plugin wires it.
+ * The COMPONENT index's store, wired like the plugin wires it.
  *
- * Omitting it left the registration with `undefined`, so the re-entry guard
- * excluded a collection that does not exist, the delete loop asked a store for
- * one, and the fake below — keyed on "is this the class index" — answered the
- * component store with the DOCUMENT payload. Every test here then exercised a
- * configuration the plugin never creates.
+ * Both stores pass their calls on to the one recorded `api` below, tagged with
+ * which index they are, so a test reads every write in one place and an index
+ * the hook forgot shows as calls that never happened.
  */
-const COMPONENT_INDEX = "nx_pb_component_usage";
+const COMPONENT_INDEX = "component-index";
+/** The VARIABLE index's store, wired like the plugin wires it. */
+const TOKEN_INDEX = "token-index";
 
-/** A document whose single node applies the given classes. */
+/**
+ * A document whose single node applies the given classes, and uses one
+ * variable, so every index has something to derive from it.
+ */
 const documentUsing = (...classes: string[]) => ({
   formatVersion: 1,
   kind: "page",
-  nodes: [{ id: "n1", type: "core/text", version: 1, props: {}, classes }],
+  nodes: [
+    {
+      id: "n1",
+      type: "core/text",
+      version: 1,
+      props: {},
+      classes,
+      styles: { base: { base: { color: { $token: "color.brand" } } } },
+    },
+  ],
 });
 
 /** A plugin context that records registrations, plus the handler it captured. */
@@ -43,6 +58,8 @@ function harness(
     getCollection?: () => Promise<unknown>;
     draftSplit?: () => Promise<{ eligible: boolean }>;
     locales?: readonly string[];
+    markDirty?: () => Promise<void>;
+    single?: (slug: string) => Promise<SingleToWalk | undefined>;
   } = {}
 ) {
   const registered: string[] = [];
@@ -79,7 +96,9 @@ function harness(
       // EITHER index collection answers as an index, not as a document read.
       // Keying on the class index alone made the component store receive the
       // document payload and read pages as though they were its own rows.
-      a.collection !== INDEX && a.collection !== COMPONENT_INDEX
+      a.collection !== INDEX &&
+      a.collection !== COMPONENT_INDEX &&
+      a.collection !== TOKEN_INDEX
         ? {
             items: [{ id: "p1", content: documentUsing("hero") }],
             meta: { hasNext: false },
@@ -95,17 +114,37 @@ function harness(
     // BOTH variants are read by id above; only `draft` differs between them,
     // and it selects the working-draft overlay. `find` therefore models the
     // INDEX store alone, never a document read.
-    create: vi.fn(async () => ({})),
-    delete: vi.fn(async () => ({})),
+    create: vi.fn(async (_args: Record<string, unknown>) => ({})),
+    delete: vi.fn(async (_args: Record<string, unknown>) => ({})),
+    // A Single with no working draft: the draft read answers its live row,
+    // without the overlay's mark, which the reader declines.
+    findSingle: vi.fn(async (_args: Record<string, unknown>) => ({
+      id: "s1",
+      content: documentUsing("hero"),
+    })),
   };
 
-  registerClassUsageMaintenance({
+  /** An index store passing its calls on to `api`, tagged with its index. */
+  const store = (collection: string): ClassUsageIndexStore => ({
+    find: args => api.find({ ...args, collection }),
+    create: args => api.create({ ...args, collection }),
+    delete: args => api.delete({ ...args, collection }),
+  });
+
+  const reconcile = registerClassUsageMaintenance({
     ctx,
-    indexCollection: INDEX,
-    componentIndexCollection: COMPONENT_INDEX,
+    stores: () => ({
+      classIndex: store(INDEX),
+      componentIndex: store(COMPONENT_INDEX),
+      tokenIndex: store(TOKEN_INDEX),
+    }),
+    single: options.single ?? (async () => undefined),
     draftSplit: options.draftSplit ?? (async () => ({ eligible: false })),
     locales: () => options.locales ?? [],
     limits: () => DEFAULT_LIMITS,
+    ...(options.markDirty === undefined
+      ? {}
+      : { markDirty: options.markDirty }),
   });
 
   const fire = (over: Record<string, unknown> = {}) =>
@@ -131,7 +170,7 @@ function harness(
       ...over,
     });
 
-  return { registered, fire, fireDelete, api, errors };
+  return { registered, fire, fireDelete, api, errors, reconcile };
 }
 
 describe("what maintenance is registered on", () => {
@@ -235,24 +274,10 @@ describe("a document that was deleted", () => {
     expect(api.delete).not.toHaveBeenCalled();
   });
 
-  it("SKIPS its own index collection, whose rows this deletes", async () => {
-    // Every row removed here is itself a delete on the index collection, which
-    // fires this same handler again.
-    const { fireDelete, api } = harness();
-
-    await fireDelete();
-    expect(api.find).toHaveBeenCalled();
-    api.find.mockClear();
-
-    await fireDelete({ collection: INDEX });
-
-    expect(api.find).not.toHaveBeenCalled();
-  });
-
   it("SKIPS a Single, which a wildcard registration also receives", async () => {
-    // Core namespaces a Single's hooks as `single:<slug>`. The index models
-    // Single subjects but a plugin has no supported way to read one, so none
-    // are written and there are none to forget.
+    // Core namespaces a Single's hooks as `single:<slug>`. A Single's one
+    // document is not deleted with an entry's delete, so there is nothing of
+    // it to forget here; the backfill's sweep removes rows of one that is gone.
     const { fireDelete, api } = harness();
 
     await fireDelete();
@@ -309,6 +334,37 @@ describe("a document that was deleted", () => {
   });
 });
 
+describe("the variable index", () => {
+  it("forgets a deleted document in the VARIABLE index too", async () => {
+    const { fireDelete, api } = harness();
+
+    await fireDelete();
+
+    expect(api.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: TOKEN_INDEX,
+        where: expect.objectContaining({ entityKey: { equals: "p1" } }),
+      })
+    );
+  });
+
+  it("records the variables a saved document uses in the VARIABLE index", async () => {
+    const { fire, api } = harness();
+
+    await fire();
+
+    expect(api.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: TOKEN_INDEX,
+        data: expect.objectContaining({
+          entityKey: "p1",
+          tokenId: "color.brand",
+        }),
+      })
+    );
+  });
+});
+
 describe("which writes it acts on", () => {
   it("maintains a collection that declares a blocks field", async () => {
     const { fire, api } = harness();
@@ -331,17 +387,6 @@ describe("which writes it acts on", () => {
     await fire();
 
     expect(draftSplit).not.toHaveBeenCalled();
-    expect(api.findByID).not.toHaveBeenCalled();
-    expect(api.create).not.toHaveBeenCalled();
-  });
-
-  it("SKIPS its own index collection, which it writes", async () => {
-    // Every row this inserts is a create on that collection, which fires this
-    // hook again. Without the guard the first maintained save recurses.
-    const { fire, api } = harness();
-
-    await fire({ collection: INDEX });
-
     expect(api.findByID).not.toHaveBeenCalled();
     expect(api.create).not.toHaveBeenCalled();
   });
@@ -498,25 +543,53 @@ describe("a write inside a caller-owned transaction", () => {
 });
 
 describe("a Single, which a wildcard registration also receives", () => {
-  it("is SKIPPED rather than looked up as a collection", async () => {
+  it("is not looked up as a collection, and does nothing when it holds no blocks", async () => {
     // Core namespaces a Single's hooks as `single:<slug>`, and this plugin
-    // contributes its own site-style Single — so every style save reached this
+    // contributes its own site-style Single — so every style save reaches this
     // handler. Handing that namespace to the collection service answers
-    // not-found, and since failures now raise, every Single save would be
+    // not-found, and since failures raise, every Single save would be
     // reported as a maintenance failure.
-    //
-    // Skipped rather than adapted: a plugin has no supported way to read a
-    // Single's document. The one available path CREATES the row when it is
-    // absent, so reconciling Singles would materialise every Single in the app
-    // as a side effect of asking about them.
-    const { fire, api, errors } = harness();
+    const getCollection = vi.fn(async () => ({}));
+    const { fire, api, errors } = harness({ getCollection });
 
     await expect(
       fire({ collection: "single:site-style" })
     ).resolves.toBeUndefined();
 
+    expect(getCollection).not.toHaveBeenCalled();
+    expect(api.findSingle).not.toHaveBeenCalled();
     expect(api.create).not.toHaveBeenCalled();
     expect(errors).toEqual([]);
+  });
+
+  it("maintains a Single holding blocks, filed under its slug, read without creating it", async () => {
+    const { fire, api } = harness({
+      single: async slug =>
+        slug === "home"
+          ? { slug, fields: [{ type: "blocks", name: "content" }] }
+          : undefined,
+    });
+
+    await fire({ collection: "single:home", data: { id: "s1" } });
+
+    // Every read of the Single declines to create its document.
+    expect(api.findSingle).toHaveBeenCalled();
+    for (const [args] of api.findSingle.mock.calls) {
+      expect(args).toMatchObject({ slug: "home", createIfMissing: false });
+    }
+    expect(api.findByID).not.toHaveBeenCalled();
+    // Its rows name the Single, with no entry id.
+    expect(api.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: INDEX,
+        data: expect.objectContaining({
+          scope: "single",
+          entity: "home",
+          entityKey: "",
+          classId: "hero",
+        }),
+      })
+    );
   });
 
   it("still maintains an ordinary collection whose slug merely contains a colon", async () => {
@@ -527,5 +600,133 @@ describe("a Single, which a wildcard registration also receives", () => {
     await fire({ collection: "my:pages" });
 
     expect(api.create).toHaveBeenCalled();
+  });
+});
+
+describe("a Single whose fields' languages the registry does not say", () => {
+  it("reads a blocks field in a nameless group in every language", async () => {
+    // The component the French document uses appears in no other language:
+    // read as shared, it was never recorded.
+    const { fire, api } = harness({
+      locales: ["en", "fr"],
+      single: async slug => ({
+        slug,
+        fields: [
+          { type: "group", fields: [{ type: "blocks", name: "content" }] },
+        ],
+        localized: true,
+        languagesUnknown: true,
+      }),
+    });
+    api.findSingle.mockImplementation(
+      async (args: Record<string, unknown>) => ({
+        id: "s1",
+        content: documentUsing(args.locale === "fr" ? "fr-only" : "hero"),
+      })
+    );
+
+    await fire({ collection: "single:home", data: { id: "s1" } });
+
+    expect(api.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: INDEX,
+        data: expect.objectContaining({ locale: "fr", classId: "fr-only" }),
+      })
+    );
+  });
+});
+
+describe("reconciling a write made in a caller-owned transaction", () => {
+  it("brings the indexes up to date for the document named", async () => {
+    const { api, reconcile } = harness();
+
+    await reconcile({ slug: "pages", documentId: "p1", nextly: api as never });
+
+    expect(api.findByID).toHaveBeenCalled();
+  });
+
+  it("logs a failure and never raises it, since the write has committed", async () => {
+    const { api, errors, reconcile } = harness({
+      getCollection: () => Promise.reject(new Error("registry unavailable")),
+    });
+
+    await expect(
+      reconcile({ slug: "pages", documentId: "p1", nextly: api as never })
+    ).resolves.toBeUndefined();
+    expect(errors).toHaveLength(1);
+  });
+
+  it("marks the index dirty when the document cannot be reconciled", async () => {
+    const marks: string[] = [];
+    const { api, reconcile } = harness({
+      markDirty: async () => {
+        marks.push("dirty");
+      },
+    });
+    api.findByID.mockRejectedValueOnce(new Error("document unreadable"));
+
+    await expect(
+      reconcile({ slug: "pages", documentId: "p1", nextly: api as never })
+    ).resolves.toBeUndefined();
+    expect(marks).toEqual(["dirty"]);
+  });
+});
+
+describe("marking the index dirty when a write fails", () => {
+  it("marks it when a subject cannot be reconciled, and still raises", async () => {
+    // A failed write leaves this document's rows stale, and no later save of
+    // another document repairs them. Unmarked, health kept calling the index
+    // whole and every count over it read as exact.
+    const marks: string[] = [];
+    const { fire, api } = harness({
+      markDirty: async () => {
+        marks.push("dirty");
+      },
+    });
+    api.findByID.mockRejectedValueOnce(new Error("document unreadable"));
+
+    await expect(fire()).rejects.toThrow(/1 of 1 subject\(s\)/);
+    expect(marks).toEqual(["dirty"]);
+  });
+
+  it("marks it when a deleted document's rows cannot be forgotten", async () => {
+    const marks: string[] = [];
+    const { fireDelete, api } = harness({
+      markDirty: async () => {
+        marks.push("dirty");
+      },
+    });
+    api.find.mockRejectedValue(new Error("index unreachable"));
+
+    await expect(fireDelete()).rejects.toThrow(/could not forget/);
+    expect(marks).toEqual(["dirty"]);
+  });
+
+  it("still raises the write's own failure when the mark cannot be written", async () => {
+    // The caller must still learn the index is stale; a failing mark is
+    // logged beside it rather than replacing it.
+    const { fire, api, errors } = harness({
+      markDirty: async () => {
+        throw new Error("bookkeeping unavailable");
+      },
+    });
+    api.findByID.mockRejectedValueOnce(new Error("document unreadable"));
+
+    await expect(fire()).rejects.toThrow(/1 of 1 subject\(s\)/);
+    expect(JSON.stringify(errors)).toContain("could not be marked dirty");
+  });
+
+  it("CONTROL: marks nothing on a save every subject reconciles", async () => {
+    // A handler that marked on every save would satisfy the cases above and
+    // keep every index dirty for ever.
+    const marks: string[] = [];
+    const { fire } = harness({
+      markDirty: async () => {
+        marks.push("dirty");
+      },
+    });
+
+    await expect(fire()).resolves.toBeUndefined();
+    expect(marks).toEqual([]);
   });
 });

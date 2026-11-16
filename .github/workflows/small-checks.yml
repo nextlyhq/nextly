@@ -13,8 +13,9 @@ name: Small checks
 #   refused (`scripts/ai-credit.mjs`), as the commit-msg hook does before a
 #   commit exists. A title and a description are published the moment they are
 #   written, so an edit to either runs this again.
-# - gitleaks scans the commits a pull request, a push to `main` or the queue
-#   adds, so nothing committed past the pre-commit hook lands unscanned.
+# - gitleaks scans the commits a pull request, a push to `main` or `dev`, or
+#   the queue adds, so nothing committed past the pre-commit hook lands
+#   unscanned.
 # - In the queue, the revision being landed must have been reviewed by a model
 #   from a different family than the one that wrote it
 #   (`scripts/independent-review.mjs`). On a pull request that step is skipped:
@@ -31,7 +32,7 @@ on:
   pull_request_target:
     types: [opened, edited, synchronize, reopened]
   push:
-    branches: [main]
+    branches: [main, dev]
   # The queue merges only what passes its required checks on the queue's own
   # commit, so every check has to run, and judge, there too.
   merge_group:

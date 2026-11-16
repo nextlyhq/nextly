@@ -58,7 +58,10 @@ export function AuthFormCard({
         <CardHeader className="space-y-1 pb-10 pt-8" noBorder>
           <div className="flex items-center justify-start mb-10 transition-opacity duration-300">
             <div className="inline-flex items-center justify-center w-12 h-12 overflow-hidden">
+              {/* The one boxed mark the rail shows, filling the card's logo
+                  square, or the configured logo fitted to it. */}
               <ThemeAwareLogo
+                boxed
                 alt={appName}
                 className="w-full h-full object-contain"
               />

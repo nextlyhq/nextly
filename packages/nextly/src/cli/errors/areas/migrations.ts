@@ -6,11 +6,44 @@
  */
 
 import type { DataLossVerdict } from "../../../domains/schema/migrate/data-loss-consent";
+import { PLAN_CHANGED_AFTER_CONSENT } from "../../../domains/schema/migrate/plan-changed-after-consent";
+import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-column-guard";
+import { UNIQUE_INDEX_NAME_HELD_ADVICE } from "../../../domains/schema/migrate/unique-index-name-advice";
 import { NextlyError } from "../../../errors/nextly-error";
 import { builderMigrationRemedy } from "../../utils/migration-discovery";
 import { CliError, type CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
 import { asSentence, deepestMessage, sentences } from "../messages";
+
+/**
+ * A command's refusal once what the operator agreed to changed before it could act
+ * (`planChangedAfterConsent`). The error's log context names the command and both lists, so the
+ * lines say which command to run again and what changed; without the lists, the command's own
+ * message stands as the why.
+ */
+function planChangedParts(error: NextlyError): CliErrorParts {
+  const context = error.logContext ?? {};
+  const named =
+    typeof context.command === "string"
+      ? `\`${context.command}\``
+      : "the command";
+  const listed = (value: unknown): string | undefined =>
+    Array.isArray(value)
+      ? value.length === 0
+        ? "nothing"
+        : value.map(String).join("; ")
+      : undefined;
+  const agreed = listed(context.agreed);
+  const current = listed(context.current);
+  return {
+    what: `What you agreed to changed before ${named} could act on it, so nothing was changed.`,
+    why:
+      agreed !== undefined && current !== undefined
+        ? `You agreed to: ${agreed}.\nIt would act on now: ${current}.`
+        : error.publicMessage,
+    next: `Run ${named} again to see what it would do now.`,
+  };
+}
 
 /**
  * The lock's refusal, as its three parts.
@@ -38,10 +71,34 @@ function lockRefusal(error: NextlyError): CliErrorParts {
 }
 
 /**
+ * A change that stopped waiting for a busy table, as its three parts.
+ *
+ * `tableBusyError` writes its message as one line of what happened, the lines of why (what the
+ * outcome left, the wait and its holder, the changes applied before it), and one line of what to
+ * do next. Split rather than reworded, so the CLI and the boot log keep one wording.
+ */
+function tableBusyParts(error: NextlyError): CliErrorParts {
+  const lines = error.publicMessage.split("\n");
+  if (lines.length < 3) {
+    return {
+      what: lines[0] ?? error.publicMessage,
+      why: "Another database session held a table the change needed, past its bounds.",
+      next: "Run it again once the holding session ends.",
+    };
+  }
+  return {
+    what: lines[0],
+    why: lines.slice(1, -1).join("\n"),
+    next: lines[lines.length - 1],
+  };
+}
+
+/**
  * A data-loss refusal, as its three parts, in the consent's own wording.
  *
- * The verdict's message is a header ("Deleting data needs consent, and no terminal is attached to
- * ask. This would delete:"), the deletions one per line, then "Nothing was changed. To consent:
+ * The verdict's message is a header ("Deleting data needs consent, and nobody can be asked (no
+ * terminal, CI, or --non-interactive). This would delete:"), the deletions one per line, then
+ * "Nothing was changed. To consent:
  * …". The header's first sentence is what happened, the list and "Nothing was changed." are why,
  * and the consent to give is next.
  */
@@ -99,6 +156,25 @@ const RUN_AGAIN =
  * The refusal of a command whose lock was released before its work ran: "The migrate lock was
  * released without …. Nothing was written; retry once no other schema operation is running."
  */
+/**
+ * A `nextly migrate` refusal over a required column, read from its message: the file and where
+ * it was refused as the What (the file in backticks), the reason and what ran as the Why.
+ */
+function migrationRefusalParts(
+  error: NextlyError,
+  next: string
+): CliErrorParts {
+  const source = String(error.logContext?.source);
+  const message = error.publicMessage;
+  const split = message.indexOf(": ", message.indexOf(" was refused "));
+  const what = split === -1 ? message : message.slice(0, split);
+  return {
+    what: `${what.startsWith(source) ? `\`${source}\`${what.slice(source.length)}` : what}.`,
+    why: split === -1 ? message : message.slice(split + 2),
+    next,
+  };
+}
+
 function lockReleasedParts(error: NextlyError): CliErrorParts {
   const [what, rest] = splitFirst(error.publicMessage);
   const semi = rest.indexOf("; ");
@@ -316,40 +392,26 @@ function coreReasons(list: string): string {
 }
 
 /**
- * A strict core reconcile's refusal: "Core schema reconciliation requires destructive operations:
- * <reasons>. This usually means a Nextly version mismatch. Set NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 to
- * proceed (see release notes)."
+ * A core upgrade's refusal for want of consent: "Bringing Nextly's own tables up to date deletes
+ * data: <deletions>. Nothing was changed. To go ahead, give consent: <consent>. <deprecation>", or
+ * the shared consent's own listing where a consent was given that leaves something out.
  */
 function coreRefusedParts(error: NextlyError): CliErrorParts {
   const message = error.publicMessage;
-  const head = "Core schema reconciliation requires destructive operations: ";
-  const usually = message.lastIndexOf(". This usually means");
-  const set = message.lastIndexOf(" Set NEXTLY_ALLOW_CORE_DESTRUCTIVE");
-  if (!message.startsWith(head) || usually === -1 || set < usually) {
+  const head = "Bringing Nextly's own tables up to date deletes data: ";
+  const nothing = message.indexOf(". Nothing was changed. ");
+  const give = message.indexOf("To go ahead, give consent: ");
+  if (!message.startsWith(head) || nothing === -1 || give < nothing) {
     return {
       what: message,
-      why: "A destructive change to Nextly's own tables is refused without consent.",
-      next: "Set NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 to proceed (see release notes).",
+      why: "A change to Nextly's own tables that deletes data is refused without consent.",
+      next: "Give consent for what it deletes: `--accept-data-loss=<table.column,...>` or `NEXTLY_ACCEPT_DATA_LOSS`.",
     };
   }
   return {
-    what: "Core schema reconciliation requires destructive operations.",
-    why: `${coreReasons(message.slice(head.length, usually))}\n${message.slice(usually + 2, set)}`,
-    next: message.slice(set + 1),
-  };
-}
-
-/** A confirmed core reconcile the operator declined: the destructive changes it named. */
-function coreDeclinedParts(error: NextlyError): CliErrorParts {
-  const message = error.publicMessage;
-  const head =
-    "Core schema reconciliation aborted: destructive operations were not confirmed: ";
-  return {
-    what: "Core schema reconciliation aborted: destructive operations were not confirmed.",
-    why: message.startsWith(head)
-      ? coreReasons(message.slice(head.length).replace(/\.$/, ""))
-      : message,
-    next: "Run `nextly upgrade --reconcile-core` again and confirm each change once you have checked its data is not needed.",
+    what: "Bringing Nextly's own tables up to date deletes data. Nothing was changed.",
+    why: coreReasons(message.slice(head.length, nothing)),
+    next: message.slice(give),
   };
 }
 
@@ -409,9 +471,23 @@ export const MIGRATION_CODES = defineCodes({
       "Another run holds the schema lock, so the command did not start and changed nothing.",
     from: [{ code: "NEXTLY_MIGRATE_LOCK_BUSY", describe: lockRefusal }],
   },
+  TABLE_BUSY: {
+    cause:
+      "A schema change waited for a table another database session was using, past its bounds, and stopped.",
+    from: [{ code: "NEXTLY_TABLE_BUSY", describe: tableBusyParts }],
+  },
+  LOCK_HELD_BY_THIS_PROCESS: {
+    cause:
+      "A write inside a schema change's own SQLite transaction, on another connection to the same database, waited for the lock that transaction holds, so the change stopped without trying again.",
+    // Its message is laid out as a busy table's is (what happened, why, what to do next), so it
+    // splits the same way and keeps one wording.
+    from: [
+      { code: "NEXTLY_LOCK_HELD_BY_THIS_PROCESS", describe: tableBusyParts },
+    ],
+  },
   DATA_LOSS_CONSENT_REQUIRED: {
     cause:
-      "The command would delete data, no consent covers it, and no terminal is attached to ask.",
+      "The command would delete data, no consent covers it, and nobody can be asked (no terminal, CI, or --non-interactive).",
     from: [
       {
         code: "INVALID_INPUT",
@@ -430,6 +506,36 @@ export const MIGRATION_CODES = defineCodes({
         describe: error => dataLossParts(error.publicMessage),
       },
     ],
+  },
+  PLAN_CHANGED_AFTER_CONSENT: {
+    cause:
+      "What the command was agreed to do changed before it could act on it, so it changed nothing.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: PLAN_CHANGED_AFTER_CONSENT,
+        describe: planChangedParts,
+      },
+      {
+        // `nextly migrate` judged what each file deletes from the file as it read it under the
+        // lock, and reads the files again to run them: one edited or added in between is the
+        // judged plan changing before the run could act on it.
+        code: "INVALID_INPUT",
+        reason: "file-changed-after-judgement",
+        describe: error => {
+          const [what, next] = splitFirst(error.publicMessage);
+          return {
+            what,
+            why: "The run judged what each migration file deletes from the file as it read it, and this one was edited or added before it ran, so its deletions were never judged.",
+            next,
+          };
+        },
+      },
+    ],
+  },
+  DATA_LOSS_DECLINED: {
+    cause:
+      "The prompt listing what the command would delete was answered no, so it changed nothing.",
   },
   DATA_LOSS_CONSENT_MALFORMED: {
     cause:
@@ -473,6 +579,130 @@ export const MIGRATION_CODES = defineCodes({
       },
     ],
   },
+  REQUIRED_COLUMN_HAS_NULLS: {
+    cause:
+      "A migration would make a column required while rows of its table hold no value in it.",
+    from: [
+      {
+        // The migrate refusal names its file (`logContext.source`) and whether it came before any
+        // statement or part-way; each column it names is an issue under this code.
+        code: "VALIDATION_ERROR",
+        issue: "REQUIRED_COLUMN_HAS_NULLS",
+        when: error => typeof error.logContext?.source === "string",
+        describe: error =>
+          migrationRefusalParts(
+            error,
+            "Give those rows a value in an earlier statement of the migration, or keep the field optional, then run the command again."
+          ),
+      },
+    ],
+  },
+  REQUIRED_COLUMN_UNCOUNTED: {
+    cause:
+      "The rows in the way of a column becoming required could not be counted, so that change was refused before it ran.",
+    from: [
+      {
+        // Counted at a statement of `nextly migrate`, after earlier statements ran: the refusal
+        // names its file and what of it ran and stayed, which the reading keeps.
+        code: "VALIDATION_ERROR",
+        issue: "REQUIRED_COLUMN_UNCOUNTED",
+        when: error => typeof error.logContext?.source === "string",
+        describe: error =>
+          migrationRefusalParts(
+            error,
+            "Check the database connection and that the table can be read, and what the statements that ran before it left, then run the command again."
+          ),
+      },
+      {
+        // Named through a qualifier that may reach another schema: nothing was counted, and the
+        // fix is the table's unqualified name, not the connection.
+        code: "VALIDATION_ERROR",
+        issue: "REQUIRED_COLUMN_UNCOUNTED",
+        when: error =>
+          error.logContext?.reason === "required-column-qualifier-not-read",
+        describe: error => {
+          const data = error.publicData as
+            | { errors?: Array<{ code?: string; message?: string }> }
+            | undefined;
+          const issue = data?.errors?.find(
+            e => e.code === "REQUIRED_COLUMN_UNCOUNTED"
+          );
+          return {
+            what: "A column could not be made required, because its table is named through a qualifier that may reach another schema.",
+            why: issue?.message ?? error.publicMessage,
+            next: "Write the table's unqualified name in the migration, then run the command again.",
+          };
+        },
+      },
+      {
+        code: "VALIDATION_ERROR",
+        issue: "REQUIRED_COLUMN_UNCOUNTED",
+        describe: error => {
+          const data = error.publicData as
+            | { errors?: Array<{ code?: string; message?: string }> }
+            | undefined;
+          const issue = data?.errors?.find(
+            e => e.code === "REQUIRED_COLUMN_UNCOUNTED"
+          );
+          return {
+            what: "A column could not be made required, because the rows in its way could not be counted.",
+            why: issue?.message ?? error.publicMessage,
+            next: "Check the database connection and that the table can be read, then run the command again.",
+          };
+        },
+      },
+    ],
+  },
+  UNIQUE_COLUMN_HAS_REPEATS: {
+    cause:
+      "A migration, or `nextly migrate`'s own step, would make a column unique while its entries repeat a value.",
+    from: [
+      {
+        // The refusal names what was not applied (`logContext.source`: a migration file or the
+        // run's own step) in its first sentence, then each column, each line ending in the advice.
+        code: "CONFLICT",
+        reason: "unique-column-over-repeats",
+        describe: error => {
+          const [what, rest] = splitFirst(error.publicMessage);
+          const source = String(error.logContext?.source);
+          return {
+            what: what.startsWith(source)
+              ? `\`${source}\`${what.slice(source.length)}`
+              : what,
+            why: rest.split(` ${UNIQUE_REPEATS_ADVICE}`).join("").trim(),
+            next: UNIQUE_REPEATS_ADVICE,
+          };
+        },
+      },
+    ],
+  },
+  UNIQUE_INDEX_NAME_TAKEN: {
+    cause:
+      "`nextly migrate` would make a one-to-one relationship unique under an index name another object already holds.",
+    from: [
+      {
+        // The refusal names the step, then each field with its index name and what holds it.
+        code: "CONFLICT",
+        reason: "unique-index-name-held",
+        describe: error => {
+          const message = error.publicMessage;
+          const split = message.indexOf(": ");
+          const listed =
+            split === -1
+              ? message
+              : message
+                  .slice(split + 2)
+                  .split(` ${UNIQUE_INDEX_NAME_HELD_ADVICE}`)
+                  .join("");
+          return {
+            what: `${split === -1 ? message : message.slice(0, split)}.`,
+            why: listed.trim(),
+            next: UNIQUE_INDEX_NAME_HELD_ADVICE,
+          };
+        },
+      },
+    ],
+  },
   MIGRATION_TAMPERED: {
     cause:
       "A migration recorded as applied has a file that no longer matches its recorded checksum.",
@@ -480,6 +710,14 @@ export const MIGRATION_CODES = defineCodes({
   MIGRATION_MISSING: {
     cause:
       "A migration recorded as applied has no file in the migrations folder.",
+  },
+  OLD_BUILDER_FILE_SNAPSHOT_ADDED: {
+    cause:
+      "A migration file recognised as an old Schema Builder file now has a snapshot beside it, so it would be read as a migration.",
+  },
+  OLD_BUILDER_FILE_VARIANT_ADDED: {
+    cause:
+      "A dialect variant now shares the name of a migration file recognised as an old Schema Builder file, so its ledger rows and the Builder's cannot be told apart.",
   },
   BASELINE_LOCK_RELEASED: {
     cause:
@@ -639,7 +877,7 @@ export const MIGRATION_CODES = defineCodes({
   },
   NEXTLY_CORE_DESTRUCTIVE_REFUSED: {
     cause:
-      "Bringing Nextly's own tables up to date needs a destructive change, which `nextly migrate` makes only with `NEXTLY_ALLOW_CORE_DESTRUCTIVE=1`.",
+      "Bringing Nextly's own tables up to date deletes data, which `nextly migrate` does only with the consent `--accept-data-loss` (or `NEXTLY_ACCEPT_DATA_LOSS`) covering it.",
     from: [
       { code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED", describe: coreRefusedParts },
     ],
@@ -647,13 +885,56 @@ export const MIGRATION_CODES = defineCodes({
   CORE_DESTRUCTIVE_CHANGE_DECLINED: {
     cause:
       "A destructive change to Nextly's own tables was not confirmed at the prompt, so none was made.",
+    retired: {
+      why: "`nextly upgrade --reconcile-core` no longer confirms each destructive change: it lists what it deletes with the data-loss consent and asks once, and a no ends as `DATA_LOSS_DECLINED`.",
+    },
+  },
+  CORE_DESTRUCTIVE_NEEDS_TERMINAL: {
+    cause:
+      "`nextly upgrade --reconcile-core` has a destructive change to Nextly's own tables to confirm, and no terminal is attached to ask, so none was made.",
+    retired: {
+      why: "`nextly upgrade --reconcile-core` now judges what it deletes by the data-loss consent, as `nextly migrate` does: with no terminal it refuses unless `--accept-data-loss` covers each deletion.",
+    },
+  },
+  NEXTLY_CORE_UPGRADE_UNSUPPORTED: {
+    cause:
+      "This version of Nextly cannot bring Nextly's own tables up to date from this database in one step, so it changed nothing.",
     from: [
       {
-        code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
-        when: precondition(message =>
-          message.startsWith("Core schema reconciliation aborted")
-        ),
-        describe: coreDeclinedParts,
+        code: "NEXTLY_CORE_UPGRADE_UNSUPPORTED",
+        describe: error => {
+          const message = error.publicMessage;
+          const run = message.indexOf("Run `npx nextly@");
+          return {
+            what: run === -1 ? message : message.slice(0, run).trim(),
+            why: "drizzle-kit cannot plan this upgrade of Nextly's own tables from the database as it stands.",
+            next:
+              run === -1
+                ? "Upgrade through an earlier release first."
+                : message.slice(run),
+          };
+        },
+      },
+    ],
+  },
+  NEXTLY_CORE_UPGRADE_INCOMPLETE: {
+    cause:
+      "A core upgrade ran, but Nextly's own tables still lack a column or table this version declares.",
+    from: [
+      {
+        code: "NEXTLY_CORE_UPGRADE_INCOMPLETE",
+        describe: error => {
+          const message = error.publicMessage;
+          const run = message.indexOf("Run `npx nextly@");
+          return {
+            what: "The core upgrade ran, but Nextly's own tables are not up to date.",
+            why: run === -1 ? message : message.slice(0, run).trim(),
+            next:
+              run === -1
+                ? "Upgrade through an earlier release first."
+                : message.slice(run),
+          };
+        },
       },
     ],
   },
@@ -791,6 +1072,20 @@ export const MIGRATION_CODES = defineCodes({
           };
         },
       },
+      // A migration whose file's removal was recorded: its down section is
+      // gone with the file.
+      {
+        code: "INVALID_INPUT",
+        reason: "down-file-removed",
+        describe: error => {
+          const [what, next] = splitFirst(error.publicMessage);
+          return {
+            what,
+            why: "`nextly migrate:resolve --removed` recorded its file removed from the folder, so there is no `-- DOWN` section to run.",
+            next,
+          };
+        },
+      },
     ],
   },
   PRODUCTION_ROLLBACK_UNCONFIRMED: {
@@ -860,21 +1155,10 @@ export function resolveModeRequired(given: number): CliError {
     what: "`nextly migrate:resolve` needs exactly one thing to record.",
     why:
       given === 0
-        ? "It was given none of `--applied`, `--rolled-back` and `--failed-cleanup`."
-        : `It was given ${given} of \`--applied\`, \`--rolled-back\` and \`--failed-cleanup\`.`,
-    next: "Provide exactly one of --applied, --rolled-back, or --failed-cleanup.",
+        ? "It was given none of `--applied`, `--rolled-back`, `--failed-cleanup` and `--removed`."
+        : `It was given ${given} of \`--applied\`, \`--rolled-back\`, \`--failed-cleanup\` and \`--removed\`.`,
+    next: "Provide exactly one of --applied, --rolled-back, --failed-cleanup, or --removed.",
   });
-}
-
-/** Builder-written files with no snapshot, as the command that found them reports them. */
-export function builderSnapshotMissing(
-  what: string,
-  files: readonly string[]
-): CliError {
-  return new CliError(
-    "BUILDER_MIGRATION_SNAPSHOT_MISSING",
-    builderSnapshotParts(what, files)
-  );
 }
 
 /** A migration file whose content differs from the hash its snapshot recorded. */

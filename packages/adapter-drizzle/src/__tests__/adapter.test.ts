@@ -468,4 +468,63 @@ describe("DrizzleAdapter", () => {
       ).rejects.toThrow(/forUpdate requires a transaction executor/);
     });
   });
+
+  describe("forShare lock", () => {
+    // The lock strength each select asked for, in order; an unlocked select
+    // records nothing, so the absence of a lock is observable too.
+    class ShareAdapter extends MockAdapter {
+      readonly strengths: string[] = [];
+      override getDrizzle<U = unknown>(): U {
+        const chain: Record<string, unknown> = {};
+        const self = () => chain;
+        chain.select = self;
+        chain.from = self;
+        chain.where = self;
+        chain.orderBy = self;
+        chain.limit = self;
+        chain.offset = self;
+        chain.for = (strength: string) => {
+          this.strengths.push(strength);
+          return chain;
+        };
+        return chain as U;
+      }
+    }
+
+    function shareAdapter(dialect?: "sqlite"): ShareAdapter {
+      class SqliteShareAdapter extends ShareAdapter {
+        override readonly dialect = "sqlite" as const;
+      }
+      const adapter =
+        dialect === "sqlite" ? new SqliteShareAdapter() : new ShareAdapter();
+      adapter.setTableResolver({ getTable: () => ({}) } as never);
+      return adapter;
+    }
+
+    it("rejects forShare on the pooled connection", async () => {
+      await expect(
+        shareAdapter().select("posts", { forShare: true })
+      ).rejects.toThrow(/forShare requires a transaction executor/);
+    });
+
+    it("takes FOR SHARE on a transaction executor, and FOR UPDATE when both are asked", async () => {
+      const adapter = shareAdapter();
+      await adapter.select("posts", { forShare: true }, adapter.getDrizzle());
+      await adapter.select(
+        "posts",
+        { forShare: true, forUpdate: true },
+        adapter.getDrizzle()
+      );
+      await adapter.select("posts", {}, adapter.getDrizzle());
+
+      expect(adapter.strengths).toEqual(["share", "update"]);
+    });
+
+    it("takes no lock on SQLite, which has none", async () => {
+      const adapter = shareAdapter("sqlite");
+      await adapter.select("posts", { forShare: true }, adapter.getDrizzle());
+
+      expect(adapter.strengths).toEqual([]);
+    });
+  });
 });

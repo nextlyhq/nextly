@@ -70,7 +70,9 @@ export type {
 export type {
   TransactionIsolationLevel,
   TransactionOptions,
+  TransactionBounds,
   TransactionContext,
+  TransactionInFlow,
   SessionOptions,
   StatementSession,
 } from "./transaction";
@@ -78,7 +80,12 @@ export type {
 // ============================================================
 // Capability Types
 // ============================================================
-export type { DatabaseCapabilities, PoolStats } from "./capabilities";
+export type {
+  ConnectionEncryption,
+  ConnectionInspection,
+  DatabaseCapabilities,
+  PoolStats,
+} from "./capabilities";
 
 // ============================================================
 // Migration Types

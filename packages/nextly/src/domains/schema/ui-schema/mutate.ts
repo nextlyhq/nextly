@@ -16,6 +16,10 @@ import {
   type UiSchemaManifest,
 } from "../../../schemas/_zod/ui-schema";
 import { assertPluginFieldDeclarations } from "../../../shared/lib/assert-plugin-field-declarations";
+import {
+  assertNoNewSiblingClashes,
+  type SiblingEntityKind,
+} from "../sibling-fields";
 
 import { restorePluginFieldOptions } from "./preserve-plugin-options";
 
@@ -24,6 +28,12 @@ export type ManifestKind = "collections" | "singles" | "components";
 export type ManifestMutation =
   | { type: "upsert"; kind: ManifestKind; entity: unknown }
   | { type: "delete"; kind: ManifestKind; slug: string };
+
+const SIBLING_KIND: Record<ManifestKind, SiblingEntityKind> = {
+  collections: "collection",
+  singles: "single",
+  components: "fieldGroup",
+};
 
 function slugOf(entity: unknown): string | undefined {
   const s = (entity as { slug?: unknown }).slug;
@@ -59,6 +69,13 @@ export function mutateManifest(
     // impossible (an omitted key would silently retain the old value).
     // Structurally-partial entities (missing slug/fields) are already
     // rejected by the Zod re-validation below (NEXTLY_UI_SCHEMA_INVALID).
+    // The manifest is this road's record of the entity, so a pair of sibling fields its stored
+    // entry already holds keeps working and only a pair this write creates is refused.
+    assertNoNewSiblingClashes(
+      { kind: SIBLING_KIND[mutation.kind], slug: slug ?? "" },
+      (mutation.entity as { fields?: unknown }).fields ?? [],
+      idx >= 0 ? ((list[idx] as { fields?: unknown }).fields ?? []) : null
+    );
     if (idx >= 0) list[idx] = mutation.entity;
     else list.push(mutation.entity);
   } else {

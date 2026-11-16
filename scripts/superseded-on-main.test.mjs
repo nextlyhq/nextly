@@ -7,10 +7,12 @@
  * since one leg standing for the others would call such a run tested.
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { load } from "js-yaml";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -78,6 +80,67 @@ describe("the scaffold build's scope on main", () => {
     for (const cancelled of names) {
       const jobs = all.map(job => (job.name === cancelled ? { ...job, conclusion: "cancelled" } : job));
       expect(judge(names, jobs), cancelled).toBe("none");
+    }
+  });
+});
+
+/**
+ * The action's `Ask` step run by bash for one event and ref, with `gh` a stub
+ * that records its arguments and lists no runs. Returns what the step wrote to
+ * its outputs and the `gh` calls it made.
+ */
+const scratch = [];
+afterEach(() => {
+  for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+function ask({ event, ref }) {
+  const dir = mkdtempSync(join(tmpdir(), "superseded-"));
+  scratch.push(dir);
+  const calls = join(dir, "calls");
+  writeFileSync(join(dir, "gh"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\n`);
+  chmodSync(join(dir, "gh"), 0o755);
+  const output = join(dir, "output");
+  writeFileSync(output, "");
+  writeFileSync(calls, "");
+  const action = load(read(".github/actions/superseded-on-main/action.yml"));
+  const step = action.runs.steps.find(entry => entry.id === "ask");
+  const result = spawnSync("bash", ["-c", step.run], {
+    encoding: "utf8",
+    env: {
+      PATH: `${dir}:${process.env.PATH}`,
+      GITHUB_OUTPUT: output,
+      EVENT: event,
+      REF: ref,
+      WORKFLOW: "ci.yml",
+      SUBSTANTIVE_JOB: "Lint",
+      REPO: "nextlyhq/nextly",
+      THIS_RUN: "7",
+      THIS_SHA: "a".repeat(40),
+      GH_TOKEN: "t",
+    },
+  });
+  if (result.status !== 0) throw new Error(`the step failed: ${result.stderr}`);
+  return { outputs: readFileSync(output, "utf8"), calls: readFileSync(calls, "utf8"), stdout: result.stdout };
+}
+
+describe("which pushes superseded-on-main asks about", () => {
+  it("a push to main reads main's runs, and a push to dev reads dev's", () => {
+    for (const branch of ["main", "dev"]) {
+      const { calls, stdout } = ask({ event: "push", ref: `refs/heads/${branch}` });
+      expect(calls, branch).toContain(`runs?branch=${branch}&per_page=100`);
+      expect(stdout, branch).toContain(`could not list runs of ci.yml on ${branch}`);
+    }
+  });
+
+  it("asks nothing for a pull request, a dispatch or a push to any other branch", () => {
+    for (const [event, ref] of [
+      ["pull_request", "refs/pull/1/merge"],
+      ["workflow_dispatch", "refs/heads/dev"],
+      ["push", "refs/heads/feature"],
+    ]) {
+      const { calls, outputs } = ask({ event, ref });
+      expect(calls, `${event} ${ref}`).toBe("");
+      expect(outputs, `${event} ${ref}`).toBe("superseded=false\nlast_tested_sha=\n");
     }
   });
 });

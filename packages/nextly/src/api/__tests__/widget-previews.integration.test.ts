@@ -6,9 +6,7 @@
  * the read answers each reader with the widgets the dashboard would offer
  * them, so a reader lacking a widget's permission is not sent it, its cases
  * included. Anywhere else the answer is byte for byte the router's answer to
- * a path it does not serve, so nothing on the wire says the read exists; and
- * the workspace payload, which decides whether the admin registers the page,
- * says the same thing the read does in each runtime.
+ * a path it does not serve, so nothing on the wire says the read exists.
  *
  * In-memory SQLite: a second person is a stored user, and on PostgreSQL and
  * MySQL a stored user stays behind between runs, so the first one would no
@@ -264,17 +262,6 @@ describe("GET /api/_dev/widget-previews in development", () => {
     const res = await get(PREVIEWS);
     expect(res.status).toBe(401);
   });
-
-  it("tells the admin the page exists in the workspace payload", async () => {
-    const res = await get(
-      ["admin-meta", "workspace"],
-      await keyOf(ownerId!, [`read-${NOTES}`])
-    );
-    expect(res.status).toBe(200);
-    expect(
-      ((await res.json()) as { widgetPreviews?: boolean }).widgetPreviews
-    ).toBe(true);
-  });
 });
 
 describe("GET /api/_dev/widget-previews outside development", () => {
@@ -304,16 +291,5 @@ describe("GET /api/_dev/widget-previews outside development", () => {
     const unknown = await get(UNKNOWN);
     expect(asked.status).toBe(unknown.status);
     expect(await asked.text()).toBe(await unknown.text());
-  });
-
-  it("tells the admin the page does not exist", async () => {
-    const res = await get(
-      ["admin-meta", "workspace"],
-      await keyOf(ownerId!, [`read-${NOTES}`])
-    );
-    expect(res.status).toBe(200);
-    expect(
-      ((await res.json()) as { widgetPreviews?: boolean }).widgetPreviews
-    ).toBe(false);
   });
 });

@@ -1,7 +1,7 @@
 /**
- * The Count card in a browser: set to a collection, it states how many entries
- * the collection holds and splits them into published and draft, each part a
- * link to the list that holds exactly it.
+ * The Count card in a browser: set to a collection and drawing its status
+ * split, it states how many entries the collection holds and splits them into
+ * published and draft, each part a link to the list that holds exactly it.
  *
  * Placed by the test through the layout, set to posts, so the spec reads the
  * card alone rather than the add panel's rows. Other specs add posts to the
@@ -42,10 +42,9 @@ async function placeCount(page: Page): Promise<void> {
           {
             id: "e2e-count",
             widgetId: CARD,
-            // At its largest: the parts it links show only above the small tier.
-            ...(await sizeBoundsOf(page, CARD)).max,
+            ...(await sizeBoundsOf(page, CARD)).default,
             removed: false,
-            config: { collection: "posts" },
+            config: { collection: "posts", show: "split" },
           },
           ...others,
         ],
@@ -81,9 +80,10 @@ async function offBy(
     .getByTestId(`widget-cell-${CARD}`)
     .getByRole("link", { name });
   await expect(part).toBeVisible();
-  const shown = Number(
-    /\d+/.exec((await part.getAttribute("aria-label")) ?? "")?.[0]
-  );
+  // The number says itself in its name; a part of the split, in its text.
+  const said =
+    (await part.getAttribute("aria-label")) ?? (await part.textContent());
+  const shown = Number(/\d+/.exec((said ?? "").replaceAll(",", ""))?.[0]);
   const after = await listed(page, query);
   return before === after ? shown - before : null;
 }
@@ -111,17 +111,17 @@ test("the Count card states a collection's entries and links each part to its li
   // The number is the collection's whole list, every status. Each try renders
   // the dashboard again, so the tries get room beyond the default 5 s.
   await expect
-    .poll(() => offBy(page, /^Entries in .+: \d+$/, "status=all"), {
+    .poll(() => offBy(page, /^Entries in .+: [\d,]+$/, "status=all"), {
       timeout: 30_000,
     })
     .toBe(0);
   await expect
-    .poll(() => offBy(page, /^Published: \d+$/, "status=published"), {
+    .poll(() => offBy(page, /^[\d,]+ published$/, "status=published"), {
       timeout: 30_000,
     })
     .toBe(0);
 
-  const published = card.getByRole("link", { name: /^Published: \d+$/ });
+  const published = card.getByRole("link", { name: /^[\d,]+ published$/ });
 
   // The published part opens the list that holds exactly it.
   await published.click();

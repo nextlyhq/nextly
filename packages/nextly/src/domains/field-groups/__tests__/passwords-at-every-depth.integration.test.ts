@@ -240,6 +240,7 @@ describe.each(getConfiguredTestDialects())(
           data: {
             own: { held: { heading: "o", pin: "own-u2" } },
             lines: [{ held: { heading: "r", pin: "row-u2" } }],
+            _overwrite: true,
           },
         } as never);
         const row = await rawRow("dc_pwentries", id);
@@ -280,6 +281,7 @@ describe.each(getConfiguredTestDialects())(
           data: {
             title: "s",
             own: { held: { heading: "o", pin: "site-pin" } },
+            _overwrite: true,
           },
         } as never);
         const [row] = await t.adapter.select<Doc>("single_pwsite", {});
@@ -408,6 +410,7 @@ describe.each(getConfiguredTestDialects())(
         data: {
           own: { a: "2", pin: "own-es" },
           wrap: { held: { heading: "h", pin: "in-es" } },
+          _overwrite: true,
         },
       } as never);
 
@@ -452,6 +455,7 @@ describe.each(getConfiguredTestDialects())(
               held: { heading: "i", pin: "in-es" },
             },
           },
+          _overwrite: true,
         },
       } as never);
 

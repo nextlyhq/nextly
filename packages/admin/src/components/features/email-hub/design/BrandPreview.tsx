@@ -84,8 +84,9 @@ function RenderedEmail({
       buildSampleData(
         (email.variables ?? []).map(variable => ({
           name: variable.name,
-          description: variable.description ?? "",
-          required: false,
+          // The declaration is its own presentation: the sample data reads
+          // only what the editor shows, never the description.
+          presentation: variable,
         })),
         { isLayoutRow: email.kind === "layout" }
       ),

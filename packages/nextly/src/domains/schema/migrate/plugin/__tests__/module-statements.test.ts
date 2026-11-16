@@ -41,4 +41,49 @@ describe("a module's statements", () => {
     ).toEqual(pluginModuleStatements(m, "postgresql", "up"));
     expect(pluginModuleStatements(m, "postgresql", "up")).toHaveLength(4);
   });
+
+  it("leaves out a BEGIN and COMMIT that wrap the whole module, though they are separate entries", () => {
+    // Judged over the module, as a file is judged over its text: split
+    // entry by entry, each bracket alone would look unpaired.
+    expect(
+      pluginModuleStatements(
+        module(["BEGIN", entries[1], "COMMIT"]),
+        "postgresql",
+        "up"
+      )
+    ).toEqual([entries[1]]);
+  });
+
+  it("keeps every bracket of a module that commits part-way, and splits back to the same", () => {
+    const m = module([
+      "BEGIN",
+      entries[0],
+      "COMMIT",
+      "BEGIN",
+      entries[1],
+      "COMMIT",
+    ]);
+    const statements = pluginModuleStatements(m, "postgresql", "up");
+    expect(statements).toEqual([
+      "BEGIN",
+      entries[0],
+      "COMMIT",
+      "BEGIN",
+      entries[1],
+      "COMMIT",
+    ]);
+    expect(
+      splitSqlStatements(moduleSql(m, "postgresql", "up"), "postgresql")
+    ).toEqual(statements);
+  });
+
+  it("keeps a wrapping pair in a module marked transaction: false, for the refusal there", () => {
+    expect(
+      pluginModuleStatements(
+        { ...module(["BEGIN", entries[1], "COMMIT"]), transaction: false },
+        "postgresql",
+        "up"
+      )
+    ).toEqual(["BEGIN", entries[1], "COMMIT"]);
+  });
 });

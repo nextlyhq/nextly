@@ -14,7 +14,7 @@ import { GroupsChart } from "../../charts/groups-chart";
 import { OverTimeChart } from "../../charts/over-time-chart";
 import { CardFigure } from "../../frame/figure";
 import { CARD_FOOTER_LINK_CLASS } from "../../frame/footer-slot";
-import { CardTierContext, rowsDrawn } from "../../frame/tier";
+import { CardTierContext } from "../../frame/tier";
 import { useCardTitleCount } from "../../frame/title-count";
 import { WidgetCard } from "../../WidgetCard";
 import { Widget } from "..";
@@ -253,11 +253,10 @@ describe("Widget.FooterLink", () => {
 });
 
 describe("Widget.List", () => {
-  it("draws the rows its card holds, and says how many there are in all", () => {
+  it("draws five rows until its reader sets a number, and says how many there are in all", () => {
     atTier("small", list);
     const rows = screen.getAllByTestId("entity-row");
-    // Counted by the rule core's list cards are counted by, at this card's size.
-    expect(rows).toHaveLength(rowsDrawn("small", undefined));
+    expect(rows).toHaveLength(5);
     expect(rows.length).toBeLessThan(orders.length);
     expect(screen.getByRole("link", { name: /View all/ })).toHaveAttribute(
       "href",
@@ -265,11 +264,21 @@ describe("Widget.List", () => {
     );
   });
 
-  it("draws more rows on a larger card", () => {
-    atTier("large", list);
-    expect(screen.getAllByTestId("entity-row")).toHaveLength(
-      rowsDrawn("large", undefined)
-    );
+  it("draws its Number of entries, the same at every tier", () => {
+    // 🔴 Counted by the tier, a small card drew fewer than a large one.
+    for (const tier of ["small", "medium", "large"] as const) {
+      const { unmount } = atTier(
+        tier,
+        <Widget.List {...list.props} limit={10} />
+      );
+      expect(screen.getAllByTestId("entity-row"), tier).toHaveLength(10);
+      unmount();
+    }
+  });
+
+  it("draws every row it has when its Number of entries is more", () => {
+    atTier("medium", <Widget.List {...list.props} limit={20} />);
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(orders.length);
   });
 
   it("gives each row its one action as a link, and no menu", () => {

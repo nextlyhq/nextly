@@ -264,6 +264,26 @@ describe("runCreateAdmin", () => {
     expect(run.connect).not.toHaveBeenCalled();
   });
 
+  it("under --dry-run, names a detail that cannot be had as the refusal, exits 0, and connects to nothing", async () => {
+    const ctx = context();
+    const run = io({ env: { [ADMIN_PASSWORD_ENV]: STRONG } });
+    expect(
+      await runCreateAdmin(
+        { email: "not-an-email", name: "Ada", dryRun: true },
+        ctx,
+        run
+      )
+    ).toBe(0);
+    const info = (ctx.logger.info as ReturnType<typeof vi.fn>).mock.calls.map(
+      call => String(call[0])
+    );
+    expect(
+      info.some(line => line.startsWith("A real run would refuse: "))
+    ).toBe(true);
+    expect(info.at(-1)).toBe("Dry run: nothing was changed.");
+    expect(run.connect).not.toHaveBeenCalled();
+  });
+
   it("reports setup as complete, with a failing code, when an administrator exists", async () => {
     const ctx = context();
     const setup = recordingSetup({
@@ -297,6 +317,7 @@ describe("the registered command", () => {
       c => c.name() === CREATE_ADMIN_COMMAND
     );
     expect(command?.options.map(option => option.long)).toEqual([
+      "--dry-run",
       "--email",
       "--name",
     ]);

@@ -261,7 +261,7 @@ test("a card that needs a setting asks for it, and its button opens the card's s
   );
   await needs.getByRole("button", { name: "Choose collection" }).click();
   // The card's own settings, with focus on the one field it is missing.
-  const sheet = page.getByRole("dialog", { name: /settings/ });
+  const sheet = page.getByTestId("widget-settings-drawer");
   await expect(sheet).toBeVisible();
   await expect(sheet.getByRole("combobox").first()).toBeFocused();
 });

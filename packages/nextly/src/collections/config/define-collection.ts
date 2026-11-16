@@ -36,6 +36,7 @@ import type { BeforeOperationHandler, HookHandler } from "@nextly/hooks/types";
 import type { CollectionAccessControl } from "../../domains/auth/services/access-control-types";
 import type { CollectionDbOptions } from "../../domains/collections/services/collection-db-options";
 import type { PreviewViewportsDeclaration } from "../../domains/collections/services/preview-viewports";
+import { ownAddressOf } from "../../domains/public-addresses/public-address-template";
 import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import type { WebhookEventType } from "../../domains/webhooks/types";
 import type { Workflow } from "../../domains/workflows/types";
@@ -44,6 +45,7 @@ import type { VersionsConfig } from "../../schemas/versions/types";
 import { simplePluralize } from "../../shared/lib/pluralization";
 import type { CollectionFilterRuleInput } from "../../shared/types/rule-filter";
 import type { AuthorableFieldConfig, FieldConfig } from "../fields/types";
+import type { TextFieldConfig } from "../fields/types/text";
 
 import { asDeclaredFields, toTitleCase } from "./declared-config";
 // Import validation conditionally - only in server environments
@@ -369,6 +371,20 @@ export interface CollectionAdminOptions {
    * @default false
    */
   disableCreate?: boolean;
+
+  /**
+   * Hide the admin's own Delete for this collection's entries: in the
+   * editor's menu, on a list row and in the selection bar.
+   *
+   * For collections whose entries are deleted through an action of their
+   * own, which a plugin draws instead, such as one that must first take an
+   * entry out of the documents that use it. Offering the plain Delete there
+   * offers a button the server refuses. The API surface is unaffected; the
+   * server still decides every delete.
+   *
+   * @default false
+   */
+  disableDelete?: boolean;
 
   /**
    * Icon identifier for the collection.
@@ -769,6 +785,53 @@ export interface CollectionConfig {
   fields: FieldConfig[];
 
   /**
+   * @experimental Where each entry is served on the site, as a path template
+   * with `{field}` placeholders: `"/blog/{slug}"`.
+   *
+   * One answer for every reader that needs an entry's public address, read
+   * through `publicAddressOf`. A collection without one is not public yet: it
+   * gets no address, never a guessed one.
+   *
+   * The template starts with `/`, has no trailing `/`, query or fragment, and
+   * names at least one placeholder. Each placeholder is a whole segment
+   * naming a field of the collection (or `id`); a slug of several segments
+   * (`db.slugPaths`) stands under one. Literal segments are spelled as a
+   * browser sends them, and nothing may sit under `/admin`, `/api` or another
+   * path the runtime keeps. A declaration breaking any of these is refused
+   * when the collection is defined.
+   *
+   * @example "/blog/{slug}", "/{slug}", "/docs/{category}/{slug}"
+   */
+  publicAddress?: string;
+
+  /**
+   * @experimental A text field whose value, where an entry has one, is that
+   * entry's own public address, for a collection whose entries are not all
+   * served under one pattern: most at `/features/{slug}`, one at
+   * `/brand-voice`. An entry whose field is empty is served at
+   * `publicAddress`, which this needs.
+   *
+   * The value is judged as a template's result is: an address on this site
+   * from its root (`/brand-voice`), with no other host, query, fragment or
+   * trailing `/`, and nothing under a path the runtime keeps. A save with
+   * any other value is refused on the field. Changing it moves the entry's
+   * address, as changing its slug would.
+   *
+   * @example "address"
+   */
+  publicAddressField?: string;
+
+  /**
+   * @experimental On a collection a plugin contributes: it holds the site's
+   * own content, such as its pages, so a plugin that extends every content
+   * type (`contributes.extend` with a scope) reaches it as it reaches the
+   * site's own collections. A plugin's other collections, such as form
+   * submissions or internal records, are never reached by a scope. Read only
+   * on a plugin's collection; the site's own are reached without it.
+   */
+  siteContent?: boolean;
+
+  /**
    * @experimental Internal/private storage (D30). The collection stays in the
    * merged schema — relatable and accessible via `ctx.services` / `ctx.db.raw` —
    * but is hidden from the content-admin navigation (implies `admin.hidden`).
@@ -859,6 +922,16 @@ export interface CollectionConfig {
    * @default false
    */
   localized?: boolean;
+
+  /**
+   * Require every language to hold its own value for each required translated field before that
+   * language is published. Without it, a language whose required field is empty publishes and
+   * shows the value it falls back to. Applies to a translated collection with Draft/Published.
+   *
+   * @default false
+   * @experimental
+   */
+  requireEveryLanguage?: boolean;
 
   /**
    * Webhook recording policy for this collection. When `false` (or
@@ -1153,6 +1226,32 @@ export type CollectionConfigInput<
   };
 };
 
+/**
+ * `fields`, the one `publicAddressField` names judged on every save as an
+ * entry's own address, before any rule of its own: so a value no visitor
+ * could be served at is refused on the field, in the words the address
+ * itself is judged by.
+ */
+function withOwnAddressRule(
+  fields: FieldConfig[],
+  name: string | undefined
+): FieldConfig[] {
+  if (name === undefined) return fields;
+  return fields.map(field => {
+    if (field.type !== "text" || field.name !== name) return field;
+    const own = field.validate;
+    const text: TextFieldConfig = {
+      ...field,
+      validate: (value, context) => {
+        const address = ownAddressOf(value);
+        if (address.status === "invalid") return address.problem;
+        return own === undefined ? true : own(value, context);
+      },
+    };
+    return text;
+  });
+}
+
 export function defineCollection<
   const Fields extends
     readonly AuthorableFieldConfig[] = AuthorableFieldConfig[],
@@ -1228,10 +1327,10 @@ export function defineCollection<
   }
 
   // Prepend system fields so they appear first in the form
-  const fieldsWithSystem = [
-    ...systemFields,
-    ...asDeclaredFields(config.fields),
-  ];
+  const fieldsWithSystem = withOwnAddressRule(
+    [...systemFields, ...asDeclaredFields(config.fields)],
+    config.publicAddressField
+  );
 
   // ============================================================
   // Apply Defaults

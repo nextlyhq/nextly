@@ -42,6 +42,11 @@ export function usersColumns() {
       withTimezone: false,
     }),
     image: text("image"),
+    // The interface language this person chose for the admin, as a language
+    // tag (`fr`, `pt-BR`); null follows the browser, then English. Kept apart
+    // from any content language. Nullable, so adding it to an existing table
+    // rewrites no row and every existing person keeps today's behaviour.
+    interfaceLanguage: text("interface_language"),
     // Nullable, matching SQLite and MySQL. An invited user has no password
     // until they accept and set one, so the account has to exist without a
     // hash. Loosening a NOT NULL constraint is not data-losing, so drizzle-kit

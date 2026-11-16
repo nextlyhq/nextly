@@ -33,6 +33,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { servedSchemaVersion } from "../../../route-handler/schema-version";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { DynamicCollectionService } from "../services/dynamic-collection-service";
 import { ServiceContainer } from "../../../services/index";
@@ -191,9 +192,15 @@ async function boot(dialect: TestDialect): Promise<{
     collection: POSTS,
     data: { title: "First", subtitle: "One" },
   });
-  await api.updateSingle({ slug: BANNER, data: { title: "First" } });
+  await api.updateSingle({
+    slug: BANNER,
+    data: { title: "First", _overwrite: true },
+  });
   const pub = await api.create({ collection: PUB, data: { title: "Draft" } });
-  await api.updateSingle({ slug: PUB_BANNER, data: { title: "Draft" } });
+  await api.updateSingle({
+    slug: PUB_BANNER,
+    data: { title: "Draft", _overwrite: true },
+  });
   return { key, id: entry.item.id, owner: owner.item.id, pubId: pub.item.id };
 }
 
@@ -360,7 +367,11 @@ const OPERATIONS: Operation[] = [
     kind: "collection",
     run: (_key, id) =>
       viaDirect(() =>
-        direct().update({ collection: POSTS, id, data: { subtitle: "Uno" } })
+        direct().update({
+          collection: POSTS,
+          id,
+          data: { subtitle: "Uno", _overwrite: true },
+        })
       ),
   },
   {
@@ -379,7 +390,10 @@ const OPERATIONS: Operation[] = [
     kind: "single",
     run: () =>
       viaDirect(() =>
-        direct().updateSingle({ slug: BANNER, data: { subtitle: "Uno" } })
+        direct().updateSingle({
+          slug: BANNER,
+          data: { subtitle: "Uno", _overwrite: true },
+        })
       ),
   },
   {
@@ -408,6 +422,7 @@ const OPERATIONS: Operation[] = [
     run: (key, id) =>
       viaRest(key, "PATCH", ["collections", POSTS, "entries", id], {
         subtitle: "Uno",
+        _overwrite: true,
       }),
   },
   {
@@ -424,7 +439,11 @@ const OPERATIONS: Operation[] = [
   {
     name: "REST Single update",
     kind: "single",
-    run: key => viaRest(key, "PATCH", ["singles", BANNER], { subtitle: "Uno" }),
+    run: key =>
+      viaRest(key, "PATCH", ["singles", BANNER], {
+        subtitle: "Uno",
+        _overwrite: true,
+      }),
   },
 ];
 
@@ -509,9 +528,87 @@ async function execute(sql: string): Promise<void> {
   ).executeQuery(sql);
 }
 
+/** Read past the model, which cannot be asked about a table it does not hold. */
+async function query(sql: string): Promise<Array<Record<string, unknown>>> {
+  return (await (
+    t().adapter as unknown as {
+      executeQuery(sql: string): Promise<Array<Record<string, unknown>>>;
+    }
+  ).executeQuery(sql)) as Array<Record<string, unknown>>;
+}
+
+async function rowCount(table: string): Promise<number> {
+  const rows = await query(`SELECT COUNT(*) AS n FROM ${table}`);
+  return Number(rows[0]?.n);
+}
+
+/** The Single's stored titles: one row, unless a write added or changed one. */
+async function bannerTitles(): Promise<string[]> {
+  const rows = await query(`SELECT title FROM ${BANNER_TABLE}`);
+  return rows.map(row => String(row.title));
+}
+
 describe.each(getConfiguredTestDialects())(
   "a read or write the database is not migrated for (%s)",
   dialect => {
+    it("names the field and the whole table when the table's name holds a space or a dot", async () => {
+      // No driver quotes the table in a qualified missing-column message
+      // (`column legacy posts.subtitle`), so the name is cut at its wording's
+      // lead-in rather than at the space or the dot.
+      // A custom `dbName` is prefixed as a slug is (`dc_<dbName>`).
+      const named = [
+        { slug: "um_spaced", dbName: "um legacy posts" },
+        { slug: "um_dotted", dbName: "um_legacy.posts" },
+      ].map(entity => ({ ...entity, table: `dc_${entity.dbName}` }));
+      current = await createTestNextly({
+        dialect,
+        collections: named.map(({ slug, dbName }) =>
+          defineCollection({
+            slug,
+            dbName,
+            fields: [text({ name: "title" }), text({ name: "subtitle" })],
+          })
+        ),
+      });
+      const ids: string[] = [];
+      for (const { slug } of named) {
+        const created = await direct().create({
+          collection: slug,
+          data: { title: "First", subtitle: "One" },
+        });
+        ids.push(created.item.id);
+      }
+      for (const { table } of named) {
+        await execute(
+          `ALTER TABLE ${quoted(dialect, table)} DROP COLUMN ${quoted(dialect, "subtitle")}`
+        );
+      }
+      for (const [i, { slug, table }] of named.entries()) {
+        const answers = [
+          await viaDirect(() =>
+            direct().find({
+              collection: slug,
+              where: { subtitle: { equals: "One" } },
+            })
+          ),
+          await viaDirect(() =>
+            direct().update({
+              collection: slug,
+              id: ids[i],
+              data: { subtitle: "Uno", _overwrite: true },
+            })
+          ),
+        ];
+        for (const answer of answers) {
+          expect.soft(answer, `${table}`).toMatchObject({
+            status: 409,
+            code: "ENTITY_NOT_MIGRATED",
+            data: { reason: "column", slug, table, field: "subtitle" },
+          });
+        }
+      }
+    }, 120_000);
+
     it("names the field whose column is missing, as a skipped migration leaves it", async () => {
       const target = await boot(dialect);
       for (const table of [POSTS_TABLE, BANNER_TABLE]) {
@@ -611,7 +708,7 @@ describe.each(getConfiguredTestDialects())(
               entries.updateEntryInTransaction(
                 tx,
                 { ...params, entryId: target.id },
-                { subtitle: "Uno" }
+                { subtitle: "Uno", _overwrite: true }
               ),
           ],
           [
@@ -681,6 +778,7 @@ describe.each(getConfiguredTestDialects())(
               ).discardWorkingDraft({
                 collectionName: POSTS,
                 entryId: target.id,
+                version: { _overwrite: true },
               }),
           ],
           [
@@ -694,7 +792,10 @@ describe.each(getConfiguredTestDialects())(
                     p: Record<string, unknown>
                   ): Promise<void>;
                 }
-              ).discardWorkingDraft({ slug: BANNER }),
+              ).discardWorkingDraft({
+                slug: BANNER,
+                version: { _overwrite: true },
+              }),
           ],
         ];
       for (const [name, kind, slug, run] of discards) {
@@ -734,7 +835,7 @@ describe.each(getConfiguredTestDialects())(
                   new ServiceContainer(t().adapter),
                   "publishAllLocales",
                   { collectionName: PUB, entryId: target.pubId } as never,
-                  undefined
+                  { _overwrite: true }
                 )
               ),
           ],
@@ -747,7 +848,7 @@ describe.each(getConfiguredTestDialects())(
                 dispatchSingles(
                   "publishAllSingleLocales",
                   { slug: PUB_BANNER } as never,
-                  undefined
+                  { _overwrite: true }
                 )
               ),
           ],
@@ -770,15 +871,20 @@ describe.each(getConfiguredTestDialects())(
     it("refuses a write to an entity this instance has not registered, naming it and its table", async () => {
       const target = await boot(dialect);
       // An instance that started before a migration added the entity holds
-      // no table for it; the database has it.
+      // no table for it; the database has it. It has already followed the
+      // stored schema version, which the retraction below does not move, so
+      // its requests reload nothing.
+      await servedSchemaVersion();
       const registry = t().getService(
         "schemaRegistry" as never
       ) as SchemaRegistry;
       registry.retractDynamicSchema(POSTS_TABLE);
       const writes = OPERATIONS.filter(operation =>
         [
+          "Direct create",
           "Direct update",
           "Direct delete",
+          "REST create",
           "REST update",
           "REST delete",
         ].includes(operation.name)
@@ -790,6 +896,134 @@ describe.each(getConfiguredTestDialects())(
           names: [`"${slug}"`, `"${table}"`, "not registered"],
         };
       });
+
+      // A create inside a caller's transaction, and a batch of them.
+      const entries = entryService();
+      const params = { collectionName: POSTS, overrideAccess: true };
+      expect
+        .soft(
+          await inTransaction(tx =>
+            entries.createEntryInTransaction(tx, params, { title: "Third" })
+          ),
+          "create in a transaction answers ENTITY_NOT_MIGRATED"
+        )
+        .toMatchObject({
+          success: false,
+          code: "ENTITY_NOT_MIGRATED",
+          publicData: { reason: "unregistered", slug: POSTS },
+        });
+      const batch = (await entries.createEntries(params, [
+        { title: "Fourth" },
+        { title: "Fifth" },
+      ])) as { successful?: number; errors?: Array<{ error?: unknown }> };
+      expect.soft(batch.successful, "a batch creates nothing").toBe(0);
+      for (const failure of batch.errors ?? []) {
+        expect
+          .soft(String(failure.error), "each batch item says why")
+          .toContain("not registered");
+      }
+      // A caller's transaction that commits after the refused create, as a
+      // plugin may: the refusal came before the row, so nothing is kept.
+      await t().adapter.transaction(async tx => {
+        const result = await entries.createEntryInTransaction(tx, params, {
+          title: "Sixth",
+        });
+        expect
+          .soft(result.success, "create in a committed transaction")
+          .toBe(false);
+      });
+      // The refusals came before any row: the boot's one entry is all there is.
+      expect(await rowCount(POSTS_TABLE)).toBe(1);
+    }, 120_000);
+
+    // Not on MySQL: transactions in Nextly's MySQL context carry no
+    // savepoints, so a caller that catches the refusal and commits keeps the
+    // entry row there, a known limit on that dialect.
+    it.skipIf(dialect === "mysql")(
+      "keeps no entry row when a create's translation table is unregistered and the caller commits",
+      async () => {
+        // An instance whose registry holds the collection's main table but not
+        // its translation table: the create's first write is allowed and a
+        // later one refused. A caller's transaction that catches the refusal and
+        // commits, as a plugin's may, keeps nothing from the refused create.
+        await boot(dialect);
+        const registry = t().getService(
+          "schemaRegistry" as never
+        ) as SchemaRegistry;
+        registry.retractDynamicSchema(`dc_${PUB}_locales`);
+        const before = await rowCount(`dc_${PUB}`);
+        const entries = entryService();
+        let answer: Record<string, unknown> | undefined;
+        await t().adapter.transaction(async tx => {
+          answer = await entries
+            .createEntryInTransaction(
+              tx,
+              { collectionName: PUB, overrideAccess: true, locale: "en" },
+              { title: "Second" }
+            )
+            .catch((error: unknown) => ({ success: false, error }));
+          // The transaction is still usable after the refused create: a write
+          // after it is kept when the caller commits.
+          await entries.createEntryInTransaction(
+            tx,
+            { collectionName: POSTS, overrideAccess: true },
+            { title: "After" }
+          );
+        });
+        expect(answer?.success).toBe(false);
+        expect(await rowCount(`dc_${PUB}`)).toBe(before);
+        expect(await rowCount(POSTS_TABLE)).toBe(2);
+      },
+      120_000
+    );
+
+    it("refuses a production write to a Single this instance has not registered, and writes nothing", async () => {
+      const target = await boot(dialect);
+      const registry = t().getService(
+        "schemaRegistry" as never
+      ) as SchemaRegistry;
+      vi.stubEnv("NODE_ENV", "production");
+      try {
+        // Followed already, as above, so the retraction is not reloaded away.
+        await servedSchemaVersion();
+        registry.retractDynamicSchema(BANNER_TABLE);
+        const writes = OPERATIONS.filter(operation =>
+          ["Direct updateSingle", "REST Single update"].includes(operation.name)
+        );
+        const expected = (operation: Operation) => {
+          const { kind, slug, table } = entityOf(operation);
+          return {
+            data: { reason: "unregistered", kind, slug, table },
+            names: [`"${slug}"`, `"${table}"`, "not registered"],
+          };
+        };
+        await expectEveryAnswer(writes, target, expected);
+        // A read still recovers the table, and the write after it is still
+        // refused: the instance holds the Single only because a read did.
+        await direct().findSingle({ slug: BANNER });
+        await expectEveryAnswer(writes, target, expected);
+        expect(await bannerTitles()).toEqual(["First"]);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    }, 120_000);
+
+    it("recovers the same Single write in development", async () => {
+      await boot(dialect);
+      const registry = t().getService(
+        "schemaRegistry" as never
+      ) as SchemaRegistry;
+      vi.stubEnv("NODE_ENV", "development");
+      try {
+        registry.retractDynamicSchema(BANNER_TABLE);
+        await direct().updateSingle({
+          slug: BANNER,
+          data: { title: "Second", _overwrite: true },
+        });
+        expect(await bannerTitles()).toEqual(["Second"]);
+      } finally {
+        vi.unstubAllEnvs();
+      }
     }, 120_000);
   }
 );

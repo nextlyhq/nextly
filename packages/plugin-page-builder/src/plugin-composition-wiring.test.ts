@@ -42,6 +42,9 @@ function initContext(renameMap: Record<string, string> = {}) {
       off: vi.fn(),
       onBeforeOperation: vi.fn(),
       offBeforeOperation: vi.fn(),
+      onInTransaction: vi.fn(),
+      offInTransaction: vi.fn(),
+      onCollectionDelete: vi.fn(),
     },
     services: {
       collections: { getCollection: vi.fn(async () => ({})) },
@@ -49,8 +52,21 @@ function initContext(renameMap: Record<string, string> = {}) {
     },
     config: {},
     logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
+    // The plugin's own tables, holding no run: no component is being deleted,
+    // so the fence refuses nothing. Without a table the fence cannot be read,
+    // and every write placing a component is refused. A write that names the
+    // components it places reads them by the run table's index, so the read
+    // is filtered too.
+    dialect: "sqlite",
+    db: { select: () => emptyRead, table: () => ({}) },
   };
 }
+
+/** A read of the plugin's table, however it is narrowed: no rows. */
+const emptyRead = {
+  all: async () => [],
+  where: () => emptyRead,
+};
 
 /** A component document placing the ids given. */
 const places = (...ids: string[]) => ({

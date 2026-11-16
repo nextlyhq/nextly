@@ -34,6 +34,7 @@ import {
   createMockRelationshipService,
   createMockSchema,
   silentLogger,
+  revisionReadingSelect,
 } from "./collection-test-helpers";
 
 vi.mock("../../../di/container", () => ({
@@ -162,6 +163,7 @@ describe("a column contributed to a collection whose table is named by dbName", 
           lockRow: vi.fn().mockResolvedValue(undefined),
           execute: vi.fn().mockResolvedValue([]),
           selectOne: vi.fn().mockResolvedValue(null),
+          select: revisionReadingSelect(),
           insert: txInsert,
           update: txUpdate,
           delete: vi.fn().mockResolvedValue(undefined),
@@ -292,7 +294,12 @@ describe("a column contributed to a collection whose table is named by dbName", 
 
       const result = await service.updateEntry(
         { collectionName: SLUG, entryId: "entry-1", overrideAccess: true },
-        { title: "Updated", searchVector: "a", search_vector: "b" }
+        {
+          title: "Updated",
+          searchVector: "a",
+          search_vector: "b",
+          _overwrite: true,
+        }
       );
 
       expect(result.success).toBe(true);

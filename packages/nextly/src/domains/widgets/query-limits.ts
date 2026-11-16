@@ -22,14 +22,30 @@ export const DEFAULT_WIDGET_LIMIT = 5;
  *
  * Not {@link MAX_WIDGET_LIMIT}: that bounds every widget query, a card's or
  * not, and is the server's clamp. This is a card's: the most its "Number of
- * items" setting offers, and the most its list or table draws. A card asks
+ * entries" setting offers, and the most its list or table draws. A card asks
  * one row above what it draws, to learn whether more exist, which stays
  * within the clamp.
  *
- * Ten, because a list card shows whole rows and never scrolls: past ten rows a
- * card is a page, and "View all" opens the page that list belongs on.
+ * Twenty, the most of the "Number of entries" choices (5, 10 or 20): a card
+ * is as tall as its content and never scrolls, so past twenty rows a card is
+ * a page, and "View all" opens the page that list belongs on.
  */
-export const MAX_WIDGET_ROWS = 10;
+export const MAX_WIDGET_ROWS = 20;
+
+/**
+ * The rows a list card loads and shows for its "Number of entries" setting:
+ * the setting read by {@link effectiveWidgetLimit} (five where it is missing
+ * or garbage), at most {@link MAX_WIDGET_ROWS}. Never the card's size: a card
+ * is as tall as its content, so its rows are what its reader asked for. A
+ * card's `load` asks one more, to learn whether more exist, and the admin
+ * draws and holds the place of this many; one rule for both, so the rows a
+ * load reads and the rows the card draws cannot come to disagree.
+ *
+ * @experimental
+ */
+export function listEntries(limit: unknown): number {
+  return Math.min(effectiveWidgetLimit(limit), MAX_WIDGET_ROWS);
+}
 
 /**
  * How tightly a list card sets its rows: `default`, or `compact`, whose shorter

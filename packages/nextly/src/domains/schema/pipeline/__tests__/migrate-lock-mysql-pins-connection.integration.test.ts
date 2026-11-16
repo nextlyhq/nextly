@@ -6,11 +6,14 @@
  * pooled connection leaves the lock held by the first, idle connection. And a
  * named lock belongs to the whole server, so its name carries the database.
  */
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
 import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createScratchDatabase } from "../../../../__tests__/helpers/fresh-database";
+import { installRegistryResolver } from "../../../../cli/utils/registry-resolver";
+import { loadDialectTables } from "../../../../database/dialect-tables";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -99,6 +102,10 @@ describeMysql("withMigrateLock on MySQL", () => {
     const other = createMySqlAdapter({ url: scratch.url });
     try {
       await other.connect();
+      await loadDialectTables("mysql");
+      // The static resolver every production adapter carries: the lock seeds its row through a
+      // transaction insert, which an adapter refuses for a table its resolver does not hold.
+      installRegistryResolver(other as unknown as DrizzleAdapter);
       const outcome = await withMigrateLock(
         handle.adapter,
         "mysql",

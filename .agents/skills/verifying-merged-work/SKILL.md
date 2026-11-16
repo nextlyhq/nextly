@@ -9,6 +9,11 @@ metadata:
   internal: true
 ---
 
+Pull requests merge into `dev`, which is promoted to `main` once a day when
+green, and releases are cut from `main`. Below, `main` is the branch a pull
+request merged into: read it as `dev` (and `origin/main` as `origin/dev`) for
+an ordinary pull request, and as `main` for a promotion or a Version PR.
+
 ## The decisions in this file are also code
 
 **Run it, do not retype it:**
@@ -42,7 +47,7 @@ integration leg as `success` while the merge commit had them queued.
 inert, and only a superseded one hands its verdict to another run.** The
 `Decide what this commit can affect` job of `ci.yml` and `integration.yml`
 makes that call, and its step summary says which. A run is superseded only
-when a newer push to `main` already has a run of the same workflow that is
+when a newer push to the same branch (`main` or `dev`) already has a run of the same workflow that is
 queued, in progress, or completed as `success` or `failure`
 (`.github/actions/superseded-on-main`). A newer run that was cancelled or timed
 out does not count, and this run then does its own work. A run is inert when
@@ -58,8 +63,8 @@ simply the newest run: that one may itself be skipped, queued or cancelled. It
 is a pass only at `success`. Until a later run reaches a verdict, nothing has
 tested the commit, and a covering run cancelled after this one skipped leaves
 it untested until a later run tests it. `.github/workflows/main-catch-up.yml` makes sure one does:
-every two hours and on each push to `main` it starts CI and Integration on
-`main`'s newest commit when no run has tested it, or when `main`'s last
+every two hours and on each push to `main` or `dev` it starts CI and Integration on
+each branch's newest commit when no run has tested it, or when that branch's last
 verdict is over three hours old even though a run is still queued. Nothing is cancelled by skipping: on
 `main` each commit has a concurrency group of its own, so a `cancelled` job
 still means what it says and still blocks.

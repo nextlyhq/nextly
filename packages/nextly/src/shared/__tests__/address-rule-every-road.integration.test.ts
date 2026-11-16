@@ -175,8 +175,9 @@ async function stateOf(
 }
 
 /**
- * A Builder collection create, as a development server runs it: only there does the save apply
- * its DDL before recording the collection.
+ * A Builder create of a collection, Single or field group, as a development server runs it: only
+ * there does the save apply its DDL before recording the entity. Anywhere else it writes the
+ * migration for `nextly migrate` and records the entity pending, with no table.
  */
 async function inDevelopment<T>(run: () => Promise<T>): Promise<T> {
   // Through `vi.stubEnv`, as the rest of the file sets variables: `NODE_ENV` is typed read-only,
@@ -216,6 +217,9 @@ for (const dialect of getConfiguredTestDialects()) {
       current = await createTestNextly({
         ...config,
         adapter: database.adapter as never,
+        // The app under test's folder, which `migrationFiles` reads: absent,
+        // the instance would write to a temporary folder of its own.
+        basePath: projectRoot,
       });
       return current;
     }
@@ -426,14 +430,16 @@ for (const dialect of getConfiguredTestDialects()) {
 
     describe("a Single", () => {
       const create = (slug: string) =>
-        dispatchSingles(
-          "createSingle",
-          {},
-          {
-            slug,
-            label: "Team updates",
-            fields: BODY,
-          }
+        inDevelopment(() =>
+          dispatchSingles(
+            "createSingle",
+            {},
+            {
+              slug,
+              label: "Team updates",
+              fields: BODY,
+            }
+          )
         );
 
       it("is created through a Builder save under a hyphen, and refused a twin or a refused address", async () => {
@@ -443,7 +449,7 @@ for (const dialect of getConfiguredTestDialects()) {
         expect(await t.adapter.tableExists("single_team_updates")).toBe(true);
         await t.nextly.updateSingle({
           slug: "team-updates",
-          data: { body: "hello" },
+          data: { body: "hello", _overwrite: true },
         });
         const read = await t.nextly.findSingle({ slug: "team-updates" });
         expect((read as { body?: string }).body).toBe("hello");
@@ -470,7 +476,7 @@ for (const dialect of getConfiguredTestDialects()) {
         expect(await t.adapter.tableExists("single_team_updates")).toBe(true);
         await t.nextly.updateSingle({
           slug: "team-updates",
-          data: { body: "hello" },
+          data: { body: "hello", _overwrite: true },
         });
         expect(
           (
@@ -524,21 +530,25 @@ for (const dialect of getConfiguredTestDialects()) {
 
       const roads = {
         "a Builder save": (slug: string) =>
-          dispatchComponents(
-            "createComponent",
-            {},
-            {
-              slug,
-              label: "Team updates",
-              fields: BODY,
-            }
+          inDevelopment(() =>
+            dispatchComponents(
+              "createComponent",
+              {},
+              {
+                slug,
+                label: "Team updates",
+                fields: BODY,
+              }
+            )
           ),
         "the Direct API": (slug: string) =>
-          (current as TestNextly).nextly.fieldGroups.create({
-            slug,
-            label: "Team updates",
-            fields: BODY as never,
-          }),
+          inDevelopment(() =>
+            (current as TestNextly).nextly.fieldGroups.create({
+              slug,
+              label: "Team updates",
+              fields: BODY as never,
+            })
+          ),
       };
 
       for (const [road, create] of Object.entries(roads)) {
@@ -623,20 +633,22 @@ for (const dialect of getConfiguredTestDialects()) {
         }
 
         // Edited in the Builder: a field added to the collection under `admin`, applied as the
-        // Builder's save applies it.
+        // Builder's save applies it, in development, where a save runs its migration.
         const { schemaVersion } = (await new DynamicCollectionRegistryService(
           t.adapter as never,
           consoleLogger
         ).getCollection("admin")) as { schemaVersion?: number };
-        await dispatchCollections(
-          {} as ServiceContainer,
-          "applySchemaChanges",
-          { collectionName: "admin" },
-          {
-            fields: [...BODY, { name: "summary", type: "text" }],
-            confirmed: true,
-            schemaVersion: schemaVersion ?? 1,
-          }
+        await inDevelopment(() =>
+          dispatchCollections(
+            {} as ServiceContainer,
+            "applySchemaChanges",
+            { collectionName: "admin" },
+            {
+              fields: [...BODY, { name: "summary", type: "text" }],
+              confirmed: true,
+              schemaVersion: schemaVersion ?? 1,
+            }
+          )
         );
         const edited = await t.nextly.create({
           collection: "admin",

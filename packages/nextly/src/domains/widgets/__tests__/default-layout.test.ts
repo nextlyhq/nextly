@@ -50,9 +50,9 @@ describe("the base of the default", () => {
       plan({ cards: CORE_DEFAULT_LAYOUT })
     );
     expect(placements.map(p => [p.widgetId, `${p.w}x${p.h}`])).toEqual([
-      ["core/setup", "12x2"],
-      ["core/needs-attention", "8x4"],
-      ["core/upcoming-releases", "4x4"],
+      ["core/setup", "6x4"],
+      ["core/needs-attention", "6x4"],
+      ["core/upcoming-releases", "6x4"],
       ["core/continue", "6x4"],
       ["core/content-table", "6x4"],
       ["core/team-activity", "6x4"],
@@ -61,8 +61,8 @@ describe("the base of the default", () => {
     expect(placements[0]).toEqual({
       id: "core/setup",
       widgetId: "core/setup",
-      w: 12,
-      h: 2,
+      w: 6,
+      h: 4,
       removed: false,
     });
   });
@@ -73,9 +73,9 @@ describe("the base of the default", () => {
       plan({ cards: CORE_DEFAULT_LAYOUT })
     );
     expect(placements.map(p => [p.widgetId, `${p.w}x${p.h}`])).toEqual([
-      ["core/setup", "12x2"],
-      ["core/needs-attention", "8x4"],
-      ["core/upcoming-releases", "4x4"],
+      ["core/setup", "6x4"],
+      ["core/needs-attention", "6x4"],
+      ["core/upcoming-releases", "6x4"],
       ["core/continue", "6x4"],
       ["core/content-table", "6x4"],
       [FORM_SUBMISSIONS, "6x4"],
@@ -221,12 +221,17 @@ describe("whether the default gives Needs attention and Upcoming releases a row 
   const UR = "core/upcoming-releases";
   const card = (widgetId: string, w: number, h = 4) => ({ widgetId, w, h });
 
-  it("is yes for core's own default, the two side by side after the setup row", () => {
+  it("is no for core's own default, whose half-row cards leave no gap to widen into", () => {
+    // Every card of core's default is half the row, so one left out moves the next up beside
+    // its neighbour, and neither of the two is ever drawn wider than stored.
     const placements = defaultLayoutPlacements(
       [...core, widget(FORM_SUBMISSIONS)],
       plan({ cards: CORE_DEFAULT_LAYOUT })
     );
-    expect(pairHasItsOwnRow(placements)).toBe(true);
+    expect(pairHasItsOwnRow(placements)).toBe(false);
+  });
+
+  it("is yes for a site's default that gives the two a row of their own", () => {
     // In either order, wherever the row falls.
     expect(
       pairHasItsOwnRow([

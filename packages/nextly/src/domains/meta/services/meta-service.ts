@@ -92,16 +92,26 @@ export class MetaService extends BaseService {
    * Callers for which "absent" and "present but carrying nothing readable" mean
    * different things must use this instead, because for them the difference
    * decides whether it is safe to proceed.
+   *
+   * With `lock`, on a transaction's `executor`, the row is read locked for
+   * update on PostgreSQL and MySQL (SQLite has one writer), so a caller that
+   * decides from the value and then writes it is not overtaken by another
+   * transaction doing the same. A missing row locks nothing.
    */
   async getEntry<T = unknown>(
     key: string,
-    executor?: unknown
+    executor?: unknown,
+    options: { lock?: boolean } = {}
   ): Promise<MetaEntry<T>> {
-    const rows = await this.on(executor)
+    const query = this.on(executor)
       .select()
       .from(this.table)
       .where(eq(this.table.key, key))
       .limit(1);
+    const rows =
+      options.lock === true && this.dialect !== "sqlite"
+        ? await query.for("update")
+        : await query;
     if (rows.length === 0) return { present: false };
     const raw = rows[0].value as string | null;
     if (raw === null || raw === undefined)
@@ -121,22 +131,28 @@ export class MetaService extends BaseService {
     return entry.present ? entry.value : null;
   }
 
-  async set(key: string, value: unknown): Promise<void> {
+  /**
+   * Store `value` under `key`, on `executor` where given (a transaction's own
+   * Drizzle handle, so the write commits or rolls back with it), else on the
+   * pooled one.
+   */
+  async set(key: string, value: unknown, executor?: unknown): Promise<void> {
     const serialised = JSON.stringify(value);
     const now = new Date();
-    const existing = await this.drizzle
+    const db = this.on(executor);
+    const existing = await db
       .select({ key: this.table.key })
       .from(this.table)
       .where(eq(this.table.key, key))
       .limit(1);
 
     if (existing.length > 0) {
-      await this.drizzle
+      await db
         .update(this.table)
         .set({ value: serialised, updatedAt: now })
         .where(eq(this.table.key, key));
     } else {
-      await this.drizzle
+      await db
         .insert(this.table)
         .values({ key, value: serialised, updatedAt: now });
     }

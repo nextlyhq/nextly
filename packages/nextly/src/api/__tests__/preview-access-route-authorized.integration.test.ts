@@ -93,7 +93,7 @@ describe("assertEntryPreviewable and the gate that may or may not have run", () 
       current!.nextly.update({
         collection: "pages",
         id,
-        data: { title: "edited" },
+        data: { title: "edited", _overwrite: true },
         overrideAccess: false,
         user: DENIED,
       })

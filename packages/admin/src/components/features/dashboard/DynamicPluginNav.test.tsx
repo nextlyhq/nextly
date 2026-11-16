@@ -21,8 +21,11 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 }));
 let mockCanManageSettings = true;
 let mockCollectionCaps: Record<string, { canRead: boolean }> = {};
+/** Which permission slugs the reader holds, for menu items that ask one. */
+let mockHolds: (slug: string) => boolean = () => true;
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({
+    hasPermission: (slug: string) => mockHolds(slug),
     capabilities: {
       canViewCollections: true,
       canManageSettings: mockCanManageSettings,
@@ -34,7 +37,10 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
     },
   }),
 }));
-vi.mock("@admin/hooks/queries", () => ({
+vi.mock("@admin/hooks/queries/useCollections", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("@admin/hooks/queries/useCollections")
+  >()),
   useCollections: () => ({
     data: mockCollections,
     isLoading: mockIsLoading,
@@ -45,6 +51,7 @@ vi.mock("@admin/hooks/queries", () => ({
 import { DynamicPluginNav } from "@admin/components/features/dashboard/DynamicPluginNav";
 import { SidebarProvider } from "@admin/components/layout/sidebar";
 import { useSidebarNavigation } from "@admin/hooks/useSidebarNavigation";
+import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 
 const noop = () => false;
 
@@ -103,6 +110,7 @@ function givePluginWithReadableCollection() {
 }
 
 afterEach(() => {
+  mockHolds = () => true;
   mockBranding = undefined;
   mockCollections = { items: [] };
   mockIsLoading = false;
@@ -484,5 +492,173 @@ describe("DynamicPluginNav collapsed", () => {
     expect(
       screen.queryByRole("menuitem", { name: /installed plugins/i })
     ).toBeNull();
+  });
+
+  /**
+   * A plugin whose own menu item leads to its collection lists it once, by
+   * that item (drawn under the plugin's name in the same panel), not again
+   * among the plugins' collections.
+   */
+  it("leaves out a collection a plugin's menu item already leads to", async () => {
+    givePluginWithReadableCollection();
+    mockCanManageSettings = false;
+    mockBranding = {
+      plugins: [
+        {
+          name: "@acme/p",
+          collections: ["widgets"],
+          menu: [{ label: "Widgets", to: "/admin/collections/widgets" }],
+        },
+      ],
+    } as unknown as AdminBranding;
+
+    const { container } = renderNav({ collapsed: true });
+    fireEvent.mouseEnter(container.querySelector("li")!);
+
+    // The case above, without the menu item, offers it here.
+    expect(screen.queryByRole("menuitem", { name: "Widgets" })).toBeNull();
+  });
+
+  it("keeps a collection whose menu item the reader may not open", async () => {
+    // The item is withheld from this reader, so it hides nothing: their way
+    // to the collection stays the collection's own link.
+    givePluginWithReadableCollection();
+    mockCanManageSettings = false;
+    mockHolds = () => false;
+    mockBranding = {
+      plugins: [
+        {
+          name: "@acme/p",
+          collections: ["widgets"],
+          menu: [
+            {
+              label: "Widgets admin",
+              to: "/admin/collections/widgets",
+              requiredPermission: "manage-widgets",
+            },
+          ],
+        },
+      ],
+    } as unknown as AdminBranding;
+
+    const { container } = renderNav({ collapsed: true });
+    fireEvent.mouseEnter(container.querySelector("li")!);
+
+    expect(
+      await screen.findByRole("menuitem", { name: "Widgets" })
+    ).toHaveAttribute("href", "/admin/collections/widgets");
+  });
+});
+
+/**
+ * A role holding only a plugin's own settings permission can open that
+ * plugin's settings page, whose gate asks that permission, but not the
+ * overview or the plugin's detail page, which ask `manage-settings`. The
+ * panel is its only route to the page.
+ */
+describe("DynamicPluginNav for a plugin's own settings role", () => {
+  const SETTINGS_PERMISSION = "manage-acme-seo-settings";
+  const settingsHref = `/admin/plugins/${pluginSlug("@acme/seo")}/settings`;
+
+  function givePluginWithOwnSettingsPermission(
+    overrides: Record<string, unknown> = {}
+  ) {
+    mockCanManageSettings = false;
+    mockBranding = {
+      plugins: [
+        {
+          name: "@acme/seo",
+          appearance: { label: "SEO" },
+          settings: {
+            component: "@acme/seo/admin#Settings",
+            permission: SETTINGS_PERMISSION,
+          },
+          ...overrides,
+        },
+      ],
+    } as unknown as AdminBranding;
+  }
+
+  it("links a role holding only that permission to the plugin's settings", () => {
+    givePluginWithOwnSettingsPermission();
+    mockHolds = slug => slug === SETTINGS_PERMISSION;
+
+    renderNav();
+
+    expect(screen.getByRole("link", { name: "SEO settings" })).toHaveAttribute(
+      "href",
+      settingsHref
+    );
+    // Still not the overview, which that role cannot open.
+    expect(
+      screen.queryByRole("link", { name: /installed plugins/i })
+    ).toBeNull();
+  });
+
+  it("offers nothing to a role holding neither that permission nor manage-settings", () => {
+    givePluginWithOwnSettingsPermission();
+    mockHolds = () => false;
+
+    const { container } = renderNav();
+
+    expect(screen.queryByRole("link", { name: /settings/i })).toBeNull();
+    expect(container.querySelector("li")).toBeNull();
+  });
+
+  it("leaves a settings manager on the overview, which leads to every plugin's settings", () => {
+    givePluginWithOwnSettingsPermission();
+    mockCanManageSettings = true;
+
+    renderNav();
+
+    expect(
+      screen.getByRole("link", { name: /installed plugins/i })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "SEO settings" })).toBeNull();
+  });
+
+  it("offers no link to a disabled plugin's settings, which do not load", () => {
+    givePluginWithOwnSettingsPermission({ enabled: false });
+    mockHolds = slug => slug === SETTINGS_PERMISSION;
+
+    renderNav();
+
+    expect(screen.queryByRole("link", { name: "SEO settings" })).toBeNull();
+  });
+
+  it("keeps the link while the collections query is still loading", () => {
+    givePluginWithOwnSettingsPermission();
+    mockHolds = slug => slug === SETTINGS_PERMISSION;
+    mockIsLoading = true;
+
+    renderNav();
+
+    expect(screen.getByRole("link", { name: "SEO settings" })).toHaveAttribute(
+      "href",
+      settingsHref
+    );
+  });
+
+  it("marks the link active on the settings page", () => {
+    givePluginWithOwnSettingsPermission();
+    mockHolds = slug => slug === SETTINGS_PERMISSION;
+
+    renderAt(settingsHref);
+
+    expect(screen.getByRole("link", { name: "SEO settings" })).toHaveAttribute(
+      "data-active",
+      "true"
+    );
+  });
+
+  it("lists the link in the collapsed menu", async () => {
+    givePluginWithOwnSettingsPermission();
+    mockHolds = slug => slug === SETTINGS_PERMISSION;
+
+    const { container } = renderNav({ collapsed: true });
+    fireEvent.mouseEnter(container.querySelector("li")!);
+
+    const item = await screen.findByRole("menuitem", { name: "SEO settings" });
+    expect(item).toHaveAttribute("href", settingsHref);
   });
 });

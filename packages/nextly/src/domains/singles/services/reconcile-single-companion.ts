@@ -22,7 +22,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { getSchemaRegistryFromDI } from "../../../dispatcher/helpers/di";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { consoleLogger } from "../../../shared/types";
-import { appLocalization } from "../../i18n/configured-locales";
+import {
+  appLanguageOrder,
+  appLocalization,
+} from "../../i18n/configured-locales";
 import { applyCompanionTransition } from "../../i18n/migration/held-leaving-drops";
 import {
   buildCompanionTransitionStatements,
@@ -34,6 +37,7 @@ import {
   liveCompanionShape,
 } from "../../i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
+import type { BusyTableWait } from "../../schema/services/apply-migration-statements";
 
 /** Everything the companion reconcile needs about the save that triggered it. */
 export interface ReconcileSingleCompanionArgs {
@@ -54,6 +58,11 @@ export interface ReconcileSingleCompanionArgs {
    * beforehand — a copy from columns that were not there fails the whole migration.
    */
   wasStatus: boolean;
+  /**
+   * Seed every language's added `_status` from the entry, for a translation turned on under
+   * `experimental.perLanguageStorage`, where every language was live with the entry until now.
+   */
+  statusFromEntryInEveryLanguage?: boolean;
   adapter: DrizzleAdapter;
   /**
    * Fields joining translation whose companion columns the caller added and filled before the main
@@ -68,6 +77,8 @@ export interface ReconcileSingleCompanionArgs {
    * throwing when they are refused. Left out, each column is dropped right after its copy.
    */
   settleLeaving?: () => Promise<void>;
+  /** A Schema Builder save's wait for a busy table (`applyCompanionTransition`). */
+  busyTable?: BusyTableWait;
 }
 
 export async function reconcileSingleCompanion(
@@ -119,6 +130,7 @@ export async function reconcileSingleCompanion(
     tableName,
     dialect,
     defaultLocale,
+    languageOrder: appLanguageOrder(),
     status,
     wasLocalized,
     isLocalized: localized,
@@ -127,6 +139,7 @@ export async function reconcileSingleCompanion(
     companionExists,
     companionHasStatus,
     wasStatus,
+    statusFromEntryInEveryLanguage: args.statusFromEntryInEveryLanguage,
     joinedBefore: args.joinedBefore,
     renamed: args.renamed,
     holdLeavingDrops: args.settleLeaving !== undefined,
@@ -144,6 +157,7 @@ export async function reconcileSingleCompanion(
     adapter,
     plan,
     settleLeaving: args.settleLeaving,
+    ...(args.busyTable === undefined ? {} : { busyTable: args.busyTable }),
     kind: "single",
     slug,
     tableName,

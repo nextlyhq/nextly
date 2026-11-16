@@ -38,6 +38,7 @@ describe("toPersistedAdmin", () => {
       useAsTitle: "title",
       defaultColumns: ["title"],
       disableCreate: true,
+      disableDelete: true,
       pagination: { defaultLimit: 25, limits: [10, 25, 50] },
     };
 
@@ -50,6 +51,7 @@ describe("toPersistedAdmin", () => {
       useAsTitle: "title",
       defaultColumns: ["title"],
       disableCreate: true,
+      disableDelete: true,
       pagination: { defaultLimit: 25, limits: [10, 25, 50] },
     });
   });

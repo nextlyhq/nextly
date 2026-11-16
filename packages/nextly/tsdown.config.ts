@@ -52,6 +52,11 @@ const serverEntries = [
   // the app's bundle.
   "src/cache-handler.ts",
   "src/cache-handlers.ts",
+  // `nextly/next`: `withNextly()`, which a site's `next.config` calls. Next.js
+  // loads that file in Node while it reads the app's config, before any bundle
+  // exists, so no browser reaches this entry and it may load Next.js's own
+  // server modules.
+  "src/next.ts",
   "src/scripts/load-env.ts",
   "src/api/auth-state.ts",
   "src/api/health.ts",
@@ -139,7 +144,6 @@ const serverEntries = [
 // check reads it as written, and refuses a shape it cannot read.
 const clientEntries = [
   "src/config.ts",
-  "src/next.ts",
   "src/field-group-type.ts",
   // Types only, consumed by the admin's reconcile surface. Contributes no runtime code.
   "src/field-group-reconcile.ts",
@@ -184,6 +188,11 @@ const clientEntries = [
   // every domain it counts -- so the card reaching the vocabulary through it
   // would take all of them, and one writing its own copy would drift.
   "src/domains/widgets/attention-keys.ts",
+  // The admin root entry's export list, as its own entry. The admin's test
+  // holds its built root to it and the component-map generator imports a
+  // moved name from the admin's kit entry by it, so neither keeps a copy; it
+  // imports nothing. Internal: not a public API.
+  "src/plugins/codegen/admin-root-exports.ts",
   // A card's body height and the list rows it holds, as their own entry. The
   // admin draws its grid and frame by these numbers and a widget's server
   // `load` counts its rows by the same formula, so neither keeps a copy; the
@@ -195,6 +204,16 @@ const clientEntries = [
   // the server, so neither keeps a copy; it imports nothing. Internal: not a
   // public API.
   "src/collections/fields/field-label.ts",
+  // The one deprecation notice, said once per process, as its own entry: the
+  // admin's browser code and the server's both tell a deprecated surface's
+  // user through it, so neither keeps its own record of what it already
+  // said; it imports nothing.
+  "src/shared/lib/deprecation-notice.ts",
+  // The one rule for where the admin may send a browser after sign-in, as its
+  // own entry: the server holds a sign-in's destination to it and the admin
+  // its sign-in page's return address, so neither keeps a copy; it imports
+  // nothing. Internal: not a public API.
+  "src/auth/redirect/sanitize-admin-path.ts",
   // Which kind of file a MIME type is, as its own entry: the admin badges an
   // item by it and the library query narrows to a kind by it, so neither
   // keeps a copy; it imports nothing. Internal: not a public API.

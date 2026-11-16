@@ -183,7 +183,10 @@ async function boot(dialect: TestDialect): Promise<Install> {
     data: { slug: "second", title: "Second" },
   });
   // The Single's row, so there is a document to preview.
-  await t.nextly.updateSingle({ slug: "home", data: { title: "Home" } });
+  await t.nextly.updateSingle({
+    slug: "home",
+    data: { title: "Home", _overwrite: true },
+  });
 
   return {
     t,

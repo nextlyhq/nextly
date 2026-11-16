@@ -84,6 +84,19 @@ describe("useEntryBulkActions", () => {
     });
   });
 
+  it("offers no delete on a collection deleted through an action of its own", () => {
+    holding("read-posts", "delete-posts", "publish-posts");
+    const { result } = renderHook(() =>
+      useEntryBulkActions({ ...posts, disableDelete: true })
+    );
+    expect(result.current).toEqual({
+      delete: false,
+      publish: true,
+      unpublish: false,
+      any: true,
+    });
+  });
+
   it("offers nothing without a collection", () => {
     canFor.mockImplementation(() => true);
     const { result } = renderHook(() => useEntryBulkActions(undefined));

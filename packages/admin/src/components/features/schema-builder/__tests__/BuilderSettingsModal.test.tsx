@@ -4,6 +4,7 @@
 // advancedFields list includes `status`; edit mode preserves whatever value
 // was passed via `initialValues`. Tab content rendering is left to BasicsTab /
 // AdvancedTab tests in their own files; this file only verifies the wiring.
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { fireEvent, render, screen } from "@admin/__tests__/utils";
@@ -13,6 +14,8 @@ import {
   type BuilderSettingsValues,
 } from "../BuilderSettingsModal";
 import type { BuilderConfig } from "../builder-config";
+
+import type { StoredHookConfig } from "@admin/types/collection";
 
 const collectionConfig: BuilderConfig = {
   kind: "collection",
@@ -299,5 +302,57 @@ describe("BuilderSettingsModal — shell", () => {
     // order to reference the entity, so it is presented rather than hidden.
     expect(slug).toHaveValue("posts");
     expect(slug).toHaveAttribute("readonly");
+  });
+});
+
+describe("BuilderSettingsModal — a collection's stored hooks", () => {
+  const slugHook: StoredHookConfig = {
+    hookId: "auto-slug",
+    hookType: "beforeChange",
+    enabled: true,
+    config: { sourceField: "title", targetField: "slug" },
+    order: 0,
+  };
+
+  function renderEdit(storedHooks?: readonly StoredHookConfig[]) {
+    render(
+      <BuilderSettingsModal
+        open
+        mode="edit"
+        config={collectionConfig}
+        initialValues={{
+          singularName: "Post",
+          slug: "posts",
+          icon: "Database",
+        }}
+        storedHooks={storedHooks}
+        onCancel={vi.fn()}
+        onSubmit={vi.fn()}
+      />
+    );
+  }
+
+  it("offers no Hooks tab when the collection has none", () => {
+    renderEdit(undefined);
+    expect(screen.queryByRole("tab", { name: /hooks/i })).toBeNull();
+  });
+
+  it("offers no Hooks tab for an empty list", () => {
+    renderEdit([]);
+    expect(screen.queryByRole("tab", { name: /hooks/i })).toBeNull();
+  });
+
+  it("shows the stored hooks, counted, in a tab of their own", async () => {
+    const user = userEvent.setup();
+    renderEdit([slugHook, { ...slugHook, hookId: "audit-fields", order: 1 }]);
+
+    await user.click(screen.getByRole("tab", { name: "Hooks (2)" }));
+
+    expect(
+      screen.getByRole("heading", { name: "Auto-generate Slug" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Set Audit Fields" })
+    ).toBeInTheDocument();
   });
 });

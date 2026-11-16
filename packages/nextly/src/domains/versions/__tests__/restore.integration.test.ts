@@ -4,6 +4,11 @@
  * The unit tests pin the decisions; this pins the thing they cannot — that a
  * snapshot resubmitted through the normal update path actually lands, and that
  * the restore is itself recorded as a version pointing back at its source.
+ *
+ * Each collection and Single here keeps working drafts (`status` with
+ * versions), which a restore writes: one kept without them is refused, as
+ * `restore-writes-drafts.integration.test.ts` shows. The documents are never
+ * published, so their own row is their working draft.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -52,6 +57,7 @@ async function bootPosts(): Promise<TestNextly> {
     collections: [
       defineCollection({
         slug: "posts",
+        status: true,
         versions: true,
         fields: [text({ name: "title" })],
       }),
@@ -73,7 +79,7 @@ describe("restoreVersion (integration)", () => {
 
     await handler.updateEntry(
       { collectionName: "posts", entryId, overrideAccess: true },
-      { title: "Second" }
+      { title: "Second", _overwrite: true }
     );
 
     await restoreVersion({
@@ -82,6 +88,7 @@ describe("restoreVersion (integration)", () => {
       entryId,
       versionNo: 1,
       user: await storedSuperAdmin(current!),
+      version: { _overwrite: true },
     });
 
     const after = await handler.getEntry({
@@ -108,7 +115,7 @@ describe("restoreVersion (integration)", () => {
 
     await handler.updateEntry(
       { collectionName: "posts", entryId, overrideAccess: true },
-      { title: "Second" }
+      { title: "Second", _overwrite: true }
     );
 
     await restoreVersion({
@@ -117,6 +124,7 @@ describe("restoreVersion (integration)", () => {
       entryId,
       versionNo: 1,
       user: await storedSuperAdmin(current!),
+      version: { _overwrite: true },
     });
 
     const history = await versions.list({
@@ -149,7 +157,7 @@ describe("restoreVersion (integration)", () => {
     const entryId = (created.data as { id: string }).id;
     await handler.updateEntry(
       { collectionName: "posts", entryId, overrideAccess: true },
-      { title: "Second" }
+      { title: "Second", _overwrite: true }
     );
 
     await restoreVersion({
@@ -158,6 +166,7 @@ describe("restoreVersion (integration)", () => {
       entryId,
       versionNo: 1,
       user: await storedSuperAdmin(current!),
+      version: { _overwrite: true },
     });
 
     const ref = {
@@ -184,6 +193,7 @@ describe("restoreVersion (integration)", () => {
       collections: [
         defineCollection({
           slug: "posts",
+          status: true,
           versions: { enabled: true, maxPerDoc: 1 },
           fields: [text({ name: "title" })],
         }),
@@ -201,7 +211,7 @@ describe("restoreVersion (integration)", () => {
 
     await handler.updateEntry(
       { collectionName: "posts", entryId, overrideAccess: true },
-      { title: "Second" }
+      { title: "Second", _overwrite: true }
     );
 
     const ref = {
@@ -220,6 +230,7 @@ describe("restoreVersion (integration)", () => {
       entryId,
       versionNo: head!.versionNo!,
       user: await storedSuperAdmin(current!),
+      version: { _overwrite: true },
     });
 
     const history = await versions.list(ref);
@@ -242,7 +253,7 @@ describe("restoreVersion (integration)", () => {
 
     await handler.updateEntry(
       { collectionName: "posts", entryId, overrideAccess: true },
-      { title: "Second" }
+      { title: "Second", _overwrite: true }
     );
 
     await restoreVersion({
@@ -251,6 +262,7 @@ describe("restoreVersion (integration)", () => {
       entryId,
       versionNo: 1,
       user: await storedSuperAdmin(current!),
+      version: { _overwrite: true },
     });
     // Undo the restore by restoring the version it replaced.
     await restoreVersion({
@@ -259,6 +271,7 @@ describe("restoreVersion (integration)", () => {
       entryId,
       versionNo: 2,
       user: await storedSuperAdmin(current!),
+      version: { _overwrite: true },
     });
 
     const after = await handler.getEntry({
@@ -285,6 +298,7 @@ describe("restoreVersion (integration)", () => {
       singles: [
         defineSingle({
           slug: "preferences",
+          status: true,
           versions: true,
           fields: [text({ name: "title" })],
         }),
@@ -295,12 +309,12 @@ describe("restoreVersion (integration)", () => {
 
     await singles.update(
       "preferences",
-      { title: "First" },
+      { title: "First", _overwrite: true },
       { overrideAccess: true }
     );
     await singles.update(
       "preferences",
-      { title: "Second" },
+      { title: "Second", _overwrite: true },
       { overrideAccess: true }
     );
 
@@ -322,6 +336,7 @@ describe("restoreVersion (integration)", () => {
       entryId,
       versionNo: 1,
       user: await storedSuperAdmin(current!),
+      version: { _overwrite: true },
     });
 
     // The pre-restore snapshot holds the content that was live at the restore
@@ -356,19 +371,19 @@ describe("restoreVersion (integration)", () => {
     // Default locale published: main row and the `en` companion published.
     await singles.update(
       "branding",
-      { heading: "EN", status: "published" },
+      { heading: "EN", status: "published", _overwrite: true },
       { overrideAccess: true, locale: "en" }
     );
     // The German translation stays draft: its companion `_status` never leaves
     // draft even though the main row is published.
     await singles.update(
       "branding",
-      { heading: "DE one" },
+      { heading: "DE one", _overwrite: true },
       { overrideAccess: true, locale: "de" }
     );
     await singles.update(
       "branding",
-      { heading: "DE two" },
+      { heading: "DE two", _overwrite: true },
       { overrideAccess: true, locale: "de" }
     );
 
@@ -393,6 +408,7 @@ describe("restoreVersion (integration)", () => {
       entryId: deVersion!.entryId,
       versionNo: deVersion!.versionNo!,
       user: await storedSuperAdmin(current!),
+      version: { _overwrite: true },
     });
 
     const beforeRestore = (await rows()).find(
@@ -401,6 +417,71 @@ describe("restoreVersion (integration)", () => {
     expect(beforeRestore).toBeDefined();
     // The German translation was draft, so its pre-restore snapshot says so.
     expect(beforeRestore?.snapshot.status).toBe("draft");
+  });
+
+  it("restores an untranslated Single stored per language into the language its version was saved in", async () => {
+    // Under per-language storage a Single that is not translated still keeps its translatable
+    // values per language, and a version saved in German holds German's. Restored without its
+    // language, it would land on the default language's row and leave German as it was.
+    current = await createTestNextly({
+      perLanguageStorage: true,
+      singles: [
+        defineSingle({
+          slug: "notice",
+          status: true,
+          versions: true,
+          fields: [text({ name: "heading" })],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const singles =
+      current.getService<SingleEntryService>("singleEntryService");
+    await singles.update(
+      "notice",
+      { heading: "EN", _overwrite: true },
+      { overrideAccess: true, locale: "en" }
+    );
+    await singles.update(
+      "notice",
+      { heading: "DE one", _overwrite: true },
+      { overrideAccess: true, locale: "de" }
+    );
+    await singles.update(
+      "notice",
+      { heading: "DE two", _overwrite: true },
+      { overrideAccess: true, locale: "de" }
+    );
+
+    interface VRow {
+      scopeSlug: string;
+      entryId: string;
+      locale: string | null;
+      versionNo: number | null;
+      snapshot: { heading?: string };
+    }
+    const deOne = (await current.adapter.select<VRow>("nextly_versions")).find(
+      r => r.scopeSlug === "notice" && r.snapshot.heading === "DE one"
+    );
+    expect(deOne?.locale).toBe("de");
+
+    await restoreVersion({
+      scopeKind: "single",
+      slug: "notice",
+      entryId: deOne!.entryId,
+      versionNo: deOne!.versionNo!,
+      user: await storedSuperAdmin(current),
+      version: { _overwrite: true },
+    });
+
+    const headingIn = async (locale: string) =>
+      (
+        (await singles.get("notice", { locale, overrideAccess: true })) as {
+          data?: { heading?: unknown };
+        }
+      ).data?.heading;
+    expect(await headingIn("de")).toBe("DE one");
+    expect(await headingIn("en")).toBe("EN");
   });
 
   it("keeps a component's relationship as a reference id in the pre-restore snapshot", async () => {
@@ -424,6 +505,7 @@ describe("restoreVersion (integration)", () => {
       singles: [
         defineSingle({
           slug: "prefs",
+          status: true,
           versions: true,
           fields: [
             text({ name: "title" }),
@@ -445,12 +527,12 @@ describe("restoreVersion (integration)", () => {
 
     await singles.update(
       "prefs",
-      { title: "one", byline: { author: authorId } },
+      { title: "one", byline: { author: authorId }, _overwrite: true },
       { overrideAccess: true }
     );
     await singles.update(
       "prefs",
-      { title: "two", byline: { author: authorId } },
+      { title: "two", byline: { author: authorId }, _overwrite: true },
       { overrideAccess: true }
     );
 
@@ -474,6 +556,7 @@ describe("restoreVersion (integration)", () => {
       entryId: first!.entryId,
       versionNo: 1,
       user: await storedSuperAdmin(current!),
+      version: { _overwrite: true },
     });
 
     const beforeRestore = (await rows()).find(
@@ -482,5 +565,78 @@ describe("restoreVersion (integration)", () => {
     expect(beforeRestore).toBeDefined();
     // The reference is stored as the author's id, not an expanded { id, name }.
     expect(beforeRestore?.snapshot.byline?.author).toBe(authorId);
+  });
+});
+
+describe("restoreVersion with field groups placed directly in one another", () => {
+  it("puts back the earlier value at every level", async () => {
+    current = await createTestNextly({
+      fieldGroups: [
+        defineFieldGroup({ slug: "rv3", fields: [text({ name: "title" })] }),
+        defineFieldGroup({
+          slug: "rv2",
+          fields: [
+            text({ name: "title" }),
+            fieldGroup({ name: "child", component: "rv3" }),
+          ],
+        }),
+        defineFieldGroup({
+          slug: "rv1",
+          fields: [
+            text({ name: "title" }),
+            fieldGroup({ name: "child", component: "rv2" }),
+          ],
+        }),
+      ],
+      collections: [
+        defineCollection({
+          slug: "rvposts",
+          status: true,
+          versions: true,
+          fields: [
+            text({ name: "title" }),
+            fieldGroup({ name: "top", component: "rv1" }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const chain = (tag: string) => ({
+      title: `${tag}-1`,
+      child: { title: `${tag}-2`, child: { title: `${tag}-3` } },
+    });
+
+    const created = await handler.createEntry(
+      { collectionName: "rvposts", overrideAccess: true },
+      { title: "P", top: chain("first") }
+    );
+    const entryId = (created.data as { id: string }).id;
+    await handler.updateEntry(
+      { collectionName: "rvposts", entryId, overrideAccess: true },
+      { top: chain("second"), _overwrite: true }
+    );
+
+    await restoreVersion({
+      scopeKind: "collection",
+      slug: "rvposts",
+      entryId,
+      versionNo: 1,
+      user: await storedSuperAdmin(current),
+      version: { _overwrite: true },
+    });
+
+    const after = await handler.getEntry({
+      collectionName: "rvposts",
+      entryId,
+      overrideAccess: true,
+      status: "all",
+    });
+    const top = (after.data as { top?: ReturnType<typeof chain> }).top;
+    expect([top?.title, top?.child.title, top?.child.child.title]).toEqual([
+      "first-1",
+      "first-2",
+      "first-3",
+    ]);
   });
 });

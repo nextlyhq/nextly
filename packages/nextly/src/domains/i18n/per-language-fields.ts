@@ -3,7 +3,7 @@
  *
  * @module domains/i18n/per-language-fields
  */
-import { isFieldGroupField } from "../../collections/fields/guards";
+import { directComponentFields } from "../field-groups/direct-component-fields";
 import { fieldGroupSlugList } from "../field-groups/storage/field-group-field-type";
 
 /**
@@ -11,31 +11,71 @@ import { fieldGroupSlugList } from "../field-groups/storage/field-group-field-ty
  * group it references. A stored definition and a code-defined config both
  * carry them.
  */
-type FieldShape = { readonly type: string; readonly name?: string };
+type FieldShape = {
+  readonly type: string;
+  readonly name?: string;
+  /** A container's fields: a group with no name lays them out where it sits. */
+  readonly fields?: readonly FieldShape[];
+};
 
 /**
  * The fields judged per language when every language is published: the
- * translated fields, and each field whose component is translated. A dynamic
- * zone counts when any type it permits is translated. References are read
- * through `fieldGroupSlugList`, so a definition stored under the migrated
- * `fieldGroup` / `fieldGroups` keys counts as the field-group saver sees it.
+ * translated fields, and each field whose component is translated, or holds,
+ * placed directly in it at any depth, a component that is: such a component's
+ * values are rows of its own, stored per language. A dynamic zone counts when
+ * any type it permits does. References are read through `fieldGroupSlugList`,
+ * so a definition stored under the migrated `fieldGroup` / `fieldGroups` keys
+ * counts as the field-group saver sees it. Without `fieldsOf`, only the
+ * components a field names are asked.
  */
 export async function perLanguageFieldNames(
   fieldConfigs: readonly FieldShape[],
   localizedFieldNames: ReadonlySet<string>,
-  isComponentLocalized: (slug: string) => Promise<boolean>
+  isComponentLocalized: (slug: string) => Promise<boolean>,
+  fieldsOf?: (slug: string) => Promise<readonly FieldShape[] | null>
 ): Promise<Set<string>> {
   const names = new Set(localizedFieldNames);
-  for (const field of fieldConfigs) {
-    if (!isFieldGroupField(field)) continue;
-    for (const slug of fieldGroupSlugList(field)) {
-      if (await isComponentLocalized(slug)) {
-        names.add(field.name);
-        break;
-      }
+  // Through groups with no name, which only lay fields out: the field groups in one are stored
+  // where it sits, as those beside it are.
+  for (const field of directComponentFields(fieldConfigs)) {
+    if (field.name === undefined) continue;
+    if (
+      await holdsPerLanguageComponent(
+        fieldGroupSlugList(field),
+        isComponentLocalized,
+        fieldsOf
+      )
+    ) {
+      names.add(field.name);
     }
   }
   return names;
+}
+
+/**
+ * Whether any of `slugs`, or a component placed directly in one of them at any depth, stores its
+ * values per language. Each component is asked once, so one that holds itself ends the walk.
+ */
+async function holdsPerLanguageComponent(
+  slugs: readonly string[],
+  isComponentLocalized: (slug: string) => Promise<boolean>,
+  fieldsOf:
+    | ((slug: string) => Promise<readonly FieldShape[] | null>)
+    | undefined
+): Promise<boolean> {
+  const reached = [...slugs];
+  const asked = new Set<string>();
+  for (const slug of reached) {
+    if (asked.has(slug)) continue;
+    asked.add(slug);
+    if (await isComponentLocalized(slug)) return true;
+    // Those placed directly in it, a group with no name included, are rows of their own.
+    const placed = directComponentFields(
+      (fieldsOf ? await fieldsOf(slug) : null) ?? []
+    );
+    for (const field of placed) reached.push(...fieldGroupSlugList(field));
+  }
+  return false;
 }
 
 /** A field group's definition, as {@link reachesLocalizedFieldGroupIn} reads it. */
@@ -61,10 +101,10 @@ export function reachesLocalizedFieldGroupIn(
   fieldConfigs: readonly FieldShape[],
   groupOf: (slug: string) => FieldGroupDefinition | null | undefined
 ): boolean | { unread: string } {
+  // Those at the top of `fields` and in a group with no name, which only lays them out: the same
+  // walk the per-language question takes.
   const groupsIn = (fields: readonly FieldShape[]): string[] =>
-    fields.flatMap(field =>
-      isFieldGroupField(field) ? fieldGroupSlugList(field) : []
-    );
+    directComponentFields(fields).flatMap(field => fieldGroupSlugList(field));
   // Every group reached so far, in the order it was reached; the ones a group
   // holds join the end as it is looked at.
   const reached = groupsIn(fieldConfigs);

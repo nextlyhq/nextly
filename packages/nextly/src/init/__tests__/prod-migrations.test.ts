@@ -1,4 +1,5 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { CliError } from "../../cli/errors";
 import { NextlyError } from "../../errors";
 import {
   _resetBootMigrationsGateForTest,
@@ -56,6 +57,7 @@ function args(over: Record<string, unknown> = {}) {
       coreChanged: false,
       ran: true,
     })),
+    provisionUserFields: vi.fn(async () => {}),
     ...over,
   };
 }
@@ -112,6 +114,26 @@ describe("runProdMigrationsIfEnabled", () => {
    * than returning `ran: false`, so a catch that rethrew only the refusal let
    * MySQL serve the unmigrated schema this change exists to prevent.
    */
+  it("refuses to start an older build that lacks a migration the database records applied", async () => {
+    process.env.NODE_ENV = "production";
+    const missing = new NextlyError({
+      code: "MIGRATION_MISSING",
+      publicMessage:
+        "The ledger records 1 applied migration this build's migrations folder lacks.",
+    });
+    const a = args({
+      migrateCore: vi.fn(async () => {
+        throw missing;
+      }),
+    });
+
+    await expect(runProdMigrationsIfEnabled(a as never)).rejects.toBe(missing);
+    // The refusal stands: a later boot in this process refuses at once.
+    await expect(runProdMigrationsIfEnabled(a as never)).rejects.toMatchObject({
+      code: "MIGRATION_MISSING",
+    });
+  });
+
   it("refuses when the lock was busy on a dialect that throws instead", async () => {
     process.env.NODE_ENV = "production";
     const a = args({
@@ -214,6 +236,57 @@ describe("runProdMigrationsIfEnabled", () => {
    * database the app can usefully serve, and `nextly migrate` fixes them. Only
    * "we do not know what we are serving" is fatal.
    */
+  it("refuses to start when a busy table outlasted its tries, as for a held schema lock", async () => {
+    process.env.NODE_ENV = "production";
+    const a = args({
+      migrateCore: vi.fn(async () => {
+        throw new NextlyError({
+          code: "NEXTLY_TABLE_BUSY",
+          publicMessage: "`0007_x.sql` stopped: table busy, nothing changed.",
+          logContext: { reason: "table busy" },
+        });
+      }),
+    });
+
+    await expect(runProdMigrationsIfEnabled(a as never)).rejects.toMatchObject({
+      code: "NEXTLY_TABLE_BUSY",
+    });
+  });
+
+  it("hands the core the busy-table bounds the environment sets", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.NEXTLY_LOCK_TIMEOUT = "2";
+    process.env.NEXTLY_LOCK_TIMEOUT_TOTAL = "30";
+    try {
+      const a = args();
+      await runProdMigrationsIfEnabled(a as never);
+      expect(a.migrateCore).toHaveBeenCalledWith(
+        expect.objectContaining({
+          busyTable: expect.objectContaining({
+            bounds: { tryMs: 2_000, totalMs: 30_000 },
+          }),
+        })
+      );
+    } finally {
+      delete process.env.NEXTLY_LOCK_TIMEOUT;
+      delete process.env.NEXTLY_LOCK_TIMEOUT_TOTAL;
+    }
+  });
+
+  it("refuses to start, running nothing, when a busy-table bound is out of its range", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.NEXTLY_LOCK_TIMEOUT = "0";
+    try {
+      const a = args();
+      await expect(
+        runProdMigrationsIfEnabled(a as never)
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      expect(a.migrateCore).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.NEXTLY_LOCK_TIMEOUT;
+    }
+  });
+
   it("still starts when boot migrations fail for any other reason", async () => {
     process.env.NODE_ENV = "production";
     const a = args({
@@ -222,9 +295,31 @@ describe("runProdMigrationsIfEnabled", () => {
       }),
     });
 
-    await expect(
-      runProdMigrationsIfEnabled(a as never)
-    ).resolves.toBeUndefined();
+    await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(false);
+  });
+
+  it("still starts when an applied file was edited, logging the refusal", async () => {
+    // The refusal `nextly migrate` exits 2 on: at boot it stops the
+    // migrations, not the site, as any failed migration does.
+    process.env.NODE_ENV = "production";
+    const errors: string[] = [];
+    const a = args({
+      migrateCore: vi.fn(async () => {
+        throw new CliError("MIGRATION_TAMPERED", {
+          what: "`20261102_000001_add_posts.sql` has changed since it was applied, so `nextly migrate` ran nothing.",
+          why: "edited",
+          next: "restore it",
+        });
+      }),
+    });
+    a.logger.error = (m: string) => {
+      errors.push(m);
+    };
+
+    await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(false);
+    expect(errors.join("\n")).toContain(
+      "20261102_000001_add_posts.sql` has changed since it was applied"
+    );
   });
 
   it("skips unless NODE_ENV=production", async () => {
@@ -249,15 +344,14 @@ describe("runProdMigrationsIfEnabled", () => {
     expect(a.migrateCore.mock.calls[0][0].lockMode).toBe("wait");
   });
 
-  it("refuses a Schema Builder file with no snapshot, as nextly migrate does", async () => {
+  it("refuses a Builder-named file it cannot recognise, as nextly migrate does", async () => {
     // The boot applies the same pending files the CLI does, so it asks for the
-    // same refusal: off, a production boot would apply a Builder-written file
-    // with no snapshot that the command refuses.
+    // same refusal: off, a production boot would run a file the command refuses.
     const a = args();
     await runProdMigrationsIfEnabled(a as never);
-    expect(
-      a.migrateCore.mock.calls[0][0].refuseBuilderFilesWithoutSnapshot
-    ).toBe(true);
+    expect(a.migrateCore.mock.calls[0][0].refuseUnrecognisedBuilderFiles).toBe(
+      true
+    );
   });
 
   it("hands migrateCore a full logger (with .success) so runFileMigrations cannot crash on boot", async () => {
@@ -272,9 +366,7 @@ describe("runProdMigrationsIfEnabled", () => {
         return { applied: 1, coreChanged: false, ran: true };
       }),
     });
-    await expect(
-      runProdMigrationsIfEnabled(a as never)
-    ).resolves.toBeUndefined();
+    await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(true);
     // The boot logger's .error must NOT have fired (no false "failed").
     expect(a.logger.error).not.toHaveBeenCalled();
     // success was routed to the boot logger's info.
@@ -371,9 +463,7 @@ describe("runProdMigrationsIfEnabled", () => {
         throw new Error("boom");
       }),
     });
-    await expect(
-      runProdMigrationsIfEnabled(a as never)
-    ).resolves.toBeUndefined();
+    await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(false);
     expect(a.logger.error).toHaveBeenCalled();
   });
 });

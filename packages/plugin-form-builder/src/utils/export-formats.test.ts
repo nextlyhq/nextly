@@ -96,6 +96,73 @@ describe("exportToCSV", () => {
   });
 });
 
+describe("exportToCSV with choice fields", () => {
+  /** A form whose select stores values that differ from its labels. */
+  function jobForm(): FormDocument {
+    return {
+      ...form(),
+      fields: [
+        { type: "text", name: "name", label: "Full name" },
+        {
+          type: "select",
+          name: "role",
+          label: "Role",
+          options: [
+            { value: "backend-engineer", label: "Backend engineer" },
+            { value: "designer", label: "Product designer" },
+          ],
+        },
+      ],
+    } as unknown as FormDocument;
+  }
+
+  it("heads columns by label and reads a choice by its option's label", () => {
+    const csv = exportToCSV(
+      [
+        submission({
+          id: "s1",
+          data: { name: "Ana", role: "backend-engineer" },
+        }),
+      ],
+      jobForm(),
+      { includeMetadata: false }
+    );
+    expect(csv.replace(/^\uFEFF/, "").split("\r\n")).toEqual([
+      "Full name,Role",
+      "Ana,Backend engineer",
+    ]);
+  });
+
+  it("reads a choice with the label the submission was asked", () => {
+    // Relabelled since: the submission keeps the label it was answered with.
+    const asked = {
+      fields: [
+        {
+          name: "role",
+          label: "Role",
+          type: "select",
+          options: [{ value: "backend-engineer", label: "Backend developer" }],
+        },
+      ],
+      hidden: [],
+    };
+    const csv = exportToCSV(
+      [
+        submission({
+          id: "s1",
+          data: { name: "Ana", role: "backend-engineer" },
+          asked,
+        }),
+      ],
+      jobForm(),
+      { includeMetadata: false }
+    );
+    expect(csv.replace(/^\uFEFF/, "").split("\r\n")[1]).toBe(
+      "Ana,Backend developer"
+    );
+  });
+});
+
 describe("generateExportFilename", () => {
   it("names the file after the form slug, date, and format", () => {
     expect(generateExportFilename("contact", "csv")).toMatch(

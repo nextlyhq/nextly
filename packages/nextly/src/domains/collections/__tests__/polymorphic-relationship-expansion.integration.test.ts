@@ -319,7 +319,7 @@ describeEachDialect("polymorphic relationship expansion", dialect => {
     // other field does.
     await handler.updateEntry(
       { collectionName: "refs", entryId: pageRefId, overrideAccess: true },
-      { name: "renamed", target: populated }
+      { name: "renamed", target: populated, _overwrite: true }
     );
 
     const after = await handler.getEntry({
@@ -387,7 +387,11 @@ describeEachDialect("polymorphic relationship expansion", dialect => {
         entryId: (ref.data as { id: string }).id,
         overrideAccess: true,
       },
-      { name: "renamed", target: (read.data as { target: unknown }).target }
+      {
+        name: "renamed",
+        target: (read.data as { target: unknown }).target,
+        _overwrite: true,
+      }
     );
 
     // The row travelled in; the validator was shown the reference it stands for.

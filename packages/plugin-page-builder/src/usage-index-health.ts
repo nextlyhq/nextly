@@ -20,7 +20,7 @@
  *
  * @module usage-index-health
  */
-import { backfillComplete, type BackfillStateStore } from "./usage-backfill";
+import { backfillComplete } from "./usage-backfill";
 import type { BackfillScope } from "./usage-backfill-scope";
 import type {
   GroupedUsageReader,
@@ -59,11 +59,80 @@ export interface UsageIndexHealth {
    * answer.
    */
   anyUndetermined: boolean;
+  /**
+   * Whether a maintenance write failed since the last run that walked every
+   * scope.
+   *
+   * A save whose index write failed leaves that document's rows stale, and no
+   * later save of another document repairs them. The mark is cleared only by a
+   * backfill run that started after the failure and walked the whole site.
+   *
+   * Optional so a health value built by a caller before this field existed
+   * still type-checks; `readUsageIndexHealth` always sets it.
+   */
+  dirty?: boolean;
+  /**
+   * Whether the backfill still has work that will move this answer: a scope
+   * that exists now not yet walked under the current derivation, or a run
+   * owed since a maintenance write failed.
+   *
+   * Told apart from the rest of "not whole" because only this resolves on its
+   * own. Content the index cannot reach (a blocks-backed Single) or a
+   * document past its walk bound keeps the index a floor however long a
+   * screen waits, and a screen that re-read on a timer would read forever.
+   *
+   * Optional for the reason `dirty` is; absent reads as nothing pending.
+   */
+  backfillPending?: boolean;
 }
 
 /** Whether the index can answer for the whole population it claims to cover. */
 export function indexIsWhole(health: UsageIndexHealth): boolean {
-  return health.coversExistingDocuments && !health.anyUndetermined;
+  return (
+    health.coversExistingDocuments &&
+    !health.anyUndetermined &&
+    health.dirty !== true
+  );
+}
+
+/**
+ * Whether a non-whole index may still become whole without anything else
+ * changing, so a screen showing floors has a reason to ask again. False for a
+ * whole index, and for one only content out of reach keeps from whole.
+ */
+export function indexStillCounting(health: UsageIndexHealth): boolean {
+  return !indexIsWhole(health) && health.backfillPending === true;
+}
+
+/**
+ * Why an index the backfill has nothing left to do for is still not whole,
+ * or undefined where it is whole or still counting. Each is a reason no run
+ * of the backfill can remove, so a caller that would otherwise count again
+ * says it instead:
+ *
+ * - `undetermined`: a document past its walk bound, whose uses are not
+ *   counted at all (`anyUndetermined`);
+ * - `unreachable`: content the index cannot address, such as a blocks field
+ *   nested under a named group (`coversExistingDocuments` false with every
+ *   scope walked).
+ */
+export type UsageCoverageGap = "undetermined" | "unreachable";
+
+export function usageCoverageGap(
+  health: UsageIndexHealth
+): UsageCoverageGap | undefined {
+  if (indexIsWhole(health) || indexStillCounting(health)) return undefined;
+  return health.anyUndetermined ? "undetermined" : "unreachable";
+}
+
+/** The backfill's bookkeeping as health reads it, from one snapshot. */
+export interface UsageProgressReading {
+  /** Whether the recorded run was walked under the derivation in force now. */
+  current: boolean;
+  /** Whether a maintenance write failed since the last finished run. */
+  dirty: boolean;
+  /** The scope keys the current run has walked whole. */
+  completed: ReadonlySet<string>;
 }
 
 /**
@@ -88,8 +157,11 @@ export async function readUsageIndexHealth<TRow extends UsageSubject>(args: {
   backfill?: {
     /** Every scope that exists now. */
     scopes: () => Promise<readonly BackfillScope[]>;
-    /** Where completed scopes are recorded, for the current generation. */
-    state: BackfillStateStore;
+    /**
+     * The run, its progress and the dirty mark, read together from ONE
+     * snapshot, so the progress is the recorded run's and not a newer one's.
+     */
+    progress: () => Promise<UsageProgressReading>;
     /**
      * Whether content exists that this index cannot cover AT ALL.
      *
@@ -97,42 +169,69 @@ export async function readUsageIndexHealth<TRow extends UsageSubject>(args: {
      * the honesty. An unwalked scope becomes walked; unreachable content stays
      * unreachable until the plugin learns to reach it, so a backfill that
      * finished every scope it CAN see must still not claim the index covers the
-     * site.
-     *
-     * Singles are the case today: a plugin has no supported way to read one —
-     * the available path CREATES the row when absent — so `writeTargetOf`
-     * declines every `single:` hook and no scope is enumerated for them. A site
-     * whose homepage is a blocks-backed Single would otherwise have every
-     * collection scope recorded and be told the index is whole, while the
-     * component that homepage renders reads as used by nothing.
+     * site. A blocks field nested under a named group, in a collection or a
+     * Single, is the case today: no row can name where it is stored.
      */
     unreachable: () => Promise<boolean>;
   };
 }): Promise<UsageIndexHealth> {
-  // SEQUENTIAL, and the order is the point rather than a missed optimisation.
-  //
-  // A rebuild writes its `unreadable` markers and THEN records the scope as
-  // complete. Read in parallel, the marker probe can land before a document is
-  // processed while the completion read lands after the row is written — so the
-  // two observations come from either side of that write and combine into
-  // "backfilled, nothing unreadable", which is the one answer that presents an
-  // incomplete index as exact.
-  //
-  // Reading completion first preserves the writer's ordering: if completion is
-  // observed, every marker that scope produced was already written, so the
-  // probe that follows sees them.
-  const covers = await backfillFinished(args.backfill);
+  // The bookkeeping first, then the markers. A walk writes its `unreadable`
+  // markers before it records the scope as done, so a scope seen as done has
+  // its markers already committed, and the read that follows sees them. The
+  // plugin's own service reads both from one snapshot instead.
+  const progress =
+    args.backfill === undefined
+      ? undefined
+      : await backfillReading(args.backfill);
   const markers = await args.read({
     where: args.index.whereUndetermined(),
     groupBy: "entityKey",
   });
+  // Existence, not how many. One unreadable document is enough to make every
+  // count a floor, and `truncated` on this read only means there are more of
+  // them than the cap — which does not change the answer.
+  return usageIndexHealthFrom(progress, markers.buckets.length > 0);
+}
 
+/** What health is decided from: the scopes, the recorded run, and what is out of reach. */
+export interface UsageBackfillReading {
+  /** Every scope that exists now. */
+  scopes: readonly BackfillScope[];
+  /** The run, its progress and the dirty mark, from one snapshot. */
+  progress: UsageProgressReading;
+  /** Whether content exists this index cannot cover at all. */
+  unreachable: boolean;
+}
+
+/** The three backfill facts, each asked once. */
+async function backfillReading(backfill: {
+  scopes: () => Promise<readonly BackfillScope[]>;
+  progress: () => Promise<UsageProgressReading>;
+  unreachable: () => Promise<boolean>;
+}): Promise<UsageBackfillReading> {
+  const [scopes, progress, unreachable] = await Promise.all([
+    backfill.scopes(),
+    backfill.progress(),
+    backfill.unreachable(),
+  ]);
+  return { scopes, progress, unreachable };
+}
+
+/**
+ * Health, from facts already read. `backfill` absent is a caller that cannot
+ * say how far the backfill got: not covered, and no mark known, so not whole,
+ * and no run this can see will change that.
+ */
+export function usageIndexHealthFrom(
+  backfill: UsageBackfillReading | undefined,
+  anyUndetermined: boolean
+): UsageIndexHealth {
+  const progress = backfillFinished(backfill);
   return {
-    coversExistingDocuments: covers,
-    // Existence, not how many. One unreadable document is enough to make every
-    // count a floor, and `truncated` on this read only means there are more of
-    // them than the cap — which does not change the answer.
-    anyUndetermined: markers.buckets.length > 0,
+    coversExistingDocuments: progress.covers,
+    anyUndetermined,
+    dirty: progress.dirty,
+    backfillPending: progress.pending,
   };
 }
 
@@ -145,23 +244,25 @@ export async function readUsageIndexHealth<TRow extends UsageSubject>(args: {
  * locale or drafts and there are scopes nothing has walked while the flag still
  * says the index is whole.
  */
-async function backfillFinished(
-  backfill:
-    | {
-        scopes: () => Promise<readonly BackfillScope[]>;
-        state: BackfillStateStore;
-        unreachable: () => Promise<boolean>;
-      }
-    | undefined
-): Promise<boolean> {
-  if (backfill === undefined) return false;
-  const [scopes, completed, unreachable] = await Promise.all([
-    backfill.scopes(),
-    backfill.state.completed(),
-    backfill.unreachable(),
-  ]);
-  // Both, and neither implies the other. Every scope walked says the work this
-  // index CAN do is done; unreachable content says there is content it cannot
-  // do at all, and a site can be in either state independently.
-  return backfillComplete(scopes, completed) && !unreachable;
+function backfillFinished(backfill: UsageBackfillReading | undefined): {
+  covers: boolean;
+  dirty: boolean;
+  pending: boolean;
+} {
+  if (backfill === undefined) {
+    return { covers: false, dirty: false, pending: false };
+  }
+  const { scopes, progress, unreachable } = backfill;
+  // All three, and none implies another. Every scope walked under the current
+  // derivation says the work this index CAN do is done; unreachable content
+  // says there is content it cannot do at all; a site can be in any mix.
+  const walked =
+    progress.current && backfillComplete(scopes, progress.completed);
+  return {
+    covers: walked && !unreachable,
+    dirty: progress.dirty,
+    // Work the backfill will still do: scopes to walk, or a run owed since a
+    // failed write. Unreachable content is not among it.
+    pending: !walked || progress.dirty,
+  };
 }

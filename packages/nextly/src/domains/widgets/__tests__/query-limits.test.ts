@@ -12,7 +12,9 @@ import { validateWidgetQuery } from "../query";
 import {
   DEFAULT_WIDGET_LIMIT,
   MAX_WIDGET_LIMIT,
+  MAX_WIDGET_ROWS,
   effectiveWidgetLimit,
+  listEntries,
 } from "../query-limits";
 import { clearSources, registerSource } from "../sources";
 
@@ -53,5 +55,43 @@ describe("effectiveWidgetLimit", () => {
       });
       expect(query.limit).toBe(effectiveWidgetLimit(limit));
     }
+  });
+});
+
+describe("listEntries", () => {
+  it('is twenty at most: the most a card\'s "Number of entries" offers', () => {
+    expect(MAX_WIDGET_ROWS).toBe(20);
+  });
+
+  it("is five where the setting is missing or garbage", () => {
+    // A numeric string is not a number: read as missing, never as ten.
+    for (const limit of [undefined, null, Number.NaN, "10", Infinity, {}]) {
+      expect(listEntries(limit)).toBe(5);
+    }
+  });
+
+  it("is the setting itself from one to twenty", () => {
+    expect(listEntries(1)).toBe(1);
+    expect(listEntries(7)).toBe(7);
+    expect(listEntries(10)).toBe(10);
+    expect(listEntries(20)).toBe(20);
+  });
+
+  it("is at least one row, for a setting of zero or less", () => {
+    expect(listEntries(0)).toBe(1);
+    expect(listEntries(-4)).toBe(1);
+  });
+
+  it("is twenty for a setting above twenty, though a query may ask up to fifty", () => {
+    // 🔴 The separating case against reading the setting by `effectiveWidgetLimit` alone,
+    // which answers 25 and 50 here.
+    expect(listEntries(25)).toBe(20);
+    expect(listEntries(MAX_WIDGET_LIMIT + 30)).toBe(20);
+    expect(effectiveWidgetLimit(25)).toBe(25);
+  });
+
+  it("counts whole rows, dropping a fraction", () => {
+    expect(listEntries(7.8)).toBe(7);
+    expect(listEntries(20.5)).toBe(20);
   });
 });

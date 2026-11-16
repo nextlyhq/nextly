@@ -356,7 +356,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "articles" as never,
         id,
-        data: { title: "Fixed" } as never,
+        data: { title: "Fixed", _overwrite: true } as never,
       });
       expect((await t.nextly.releases.readiness({ releaseId })).hard).toEqual(
         []
@@ -448,7 +448,7 @@ describe.each(getConfiguredTestDialects())(
       const author = await mayRelease(t, await seedPlainAuthor(t));
       await t.nextly.updateSingle({
         slug: "banner" as never,
-        data: { headline: "Fine", status: "draft" } as never,
+        data: { headline: "Fine", status: "draft", _overwrite: true } as never,
       });
       const row = await t.adapter.selectOne<{ id: string }>(
         "single_banner",
@@ -490,7 +490,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "dossiers" as never,
         id,
-        data: { guarded: "secret" } as never,
+        data: { guarded: "secret", _overwrite: true } as never,
       });
       const { releaseId, memberIds } = await releaseOf(t, author, [
         { collection: "dossiers", id },
@@ -504,7 +504,7 @@ describe.each(getConfiguredTestDialects())(
         t.nextly.update({
           collection: "dossiers" as never,
           id,
-          data: { status: "published" } as never,
+          data: { status: "published", _overwrite: true } as never,
           overrideAccess: false,
           user: { id: author, email: authorUser.email, roles: [] },
         } as never)
@@ -551,7 +551,7 @@ describe.each(getConfiguredTestDialects())(
           t.nextly.update({
             collection: "bulletins" as never,
             id,
-            data: { status } as never,
+            data: { status, _overwrite: true } as never,
             locale: "*",
             overrideAccess: false,
             user: { id: author, email: authorUser.email, roles: [] },
@@ -589,7 +589,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "dossiers" as never,
         id,
-        data: { guarded: "secret" } as never,
+        data: { guarded: "secret", _overwrite: true } as never,
       });
       const { releaseId, memberIds } = await releaseOf(t, author, [
         { collection: "dossiers", id, action: "unpublish" },
@@ -604,7 +604,7 @@ describe.each(getConfiguredTestDialects())(
         t.nextly.update({
           collection: "dossiers" as never,
           id,
-          data: { status: "draft" } as never,
+          data: { status: "draft", _overwrite: true } as never,
           locale: "*",
           overrideAccess: false,
           user: { id: author, email: authorUser.email, roles: [] },
@@ -643,7 +643,7 @@ describe.each(getConfiguredTestDialects())(
           await t.nextly.update({
             collection: collection as never,
             id,
-            data: { guarded: `secret-${i}` } as never,
+            data: { guarded: `secret-${i}`, _overwrite: true } as never,
           });
           documents.push({ collection, id });
         }
@@ -669,12 +669,12 @@ describe.each(getConfiguredTestDialects())(
       const author = await mayRelease(t, await seedPlainAuthor(t));
       await t.nextly.updateSingle({
         slug: "flags" as never,
-        data: { label: "Live", status: "published" } as never,
+        data: { label: "Live", status: "published", _overwrite: true } as never,
       });
       // A trusted edit holds a change to the guarded field as pending work.
       await t.nextly.updateSingle({
         slug: "flags" as never,
-        data: { guarded: "secret" } as never,
+        data: { guarded: "secret", _overwrite: true } as never,
       });
       const row = await t.adapter.selectOne<{ id: string }>("single_flags", {});
       if (row === null || row === undefined) throw new Error("no flags row");
@@ -737,7 +737,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: "draft" }
+        { status: "draft", _overwrite: true }
       );
       expect(written).toMatchObject({ success: false });
 
@@ -765,7 +765,7 @@ describe.each(getConfiguredTestDialects())(
       const author = await mayRelease(t, await seedPlainAuthor(t));
       await t.nextly.updateSingle({
         slug: "banner" as never,
-        data: { headline: "First", status: "draft" } as never,
+        data: { headline: "First", status: "draft", _overwrite: true } as never,
       });
       const first = await t.adapter.selectOne<{ id: string }>(
         "single_banner",
@@ -789,7 +789,11 @@ describe.each(getConfiguredTestDialects())(
       });
       await t.nextly.updateSingle({
         slug: "banner" as never,
-        data: { headline: "Second", status: "draft" } as never,
+        data: {
+          headline: "Second",
+          status: "draft",
+          _overwrite: true,
+        } as never,
       });
       const second = await t.adapter.selectOne<{ id: string }>(
         "single_banner",

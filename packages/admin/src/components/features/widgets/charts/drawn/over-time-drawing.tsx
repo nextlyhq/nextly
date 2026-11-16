@@ -78,8 +78,8 @@ export interface OverTimeDrawingProps {
   /** What the tooltip says about the interval in view. */
   tooltip: ReactNode;
   /**
-   * The drawing's least height in pixels, the axes included. It fills the card's body above that,
-   * whose height the card's size fixes.
+   * The drawing's least height in pixels, the axes included, from the card's width tier. It fills
+   * the card's body above that, where the card stands beside a taller one in its row.
    */
   minHeight: number;
 }

@@ -15,6 +15,7 @@ import {
   getSession,
   invalidateSessionCache,
   SessionUnavailableError,
+  sessionStanding,
 } from "../session";
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -73,5 +74,28 @@ describe("getSession", () => {
     await expect(getSession()).rejects.toBeInstanceOf(SessionUnavailableError);
     await expect(getSession()).resolves.toEqual({ user: { id: "u1" } });
     expect(mockAuthFetch).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("sessionStanding", () => {
+  const standing = async (user: Record<string, unknown>) => {
+    invalidateSessionCache();
+    mockAuthFetch.mockResolvedValueOnce(jsonResponse(200, { data: { user } }));
+    return sessionStanding();
+  };
+
+  it("is role-less only where the session names its roles and they are none", async () => {
+    expect(await standing({ id: "u1", email: "a@x.com", roleIds: [] })).toEqual(
+      { isAuthenticated: true, hasRole: false, email: "a@x.com" }
+    );
+    expect(
+      (await standing({ id: "u1", email: "a@x.com", roleIds: ["editor"] }))
+        .hasRole
+    ).toBe(true);
+  });
+
+  it("does not call a session that names no roles at all role-less", async () => {
+    // What the app's own determineUser resolves: a person, with no roleIds.
+    expect((await standing({ id: "u1", email: "a@x.com" })).hasRole).toBe(true);
   });
 });

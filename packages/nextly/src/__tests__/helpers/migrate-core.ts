@@ -65,6 +65,11 @@ export async function migrateFresh(
       isConnected: () => true,
       getCapabilities: () => ({ dialect: fresh.dialect }),
       executeQuery: (statement: string) => fresh.exec(statement),
+      // Asked before the run's first write, whether the ledger is there to
+      // read the app's migration history from. A table with no columns is a
+      // table that is not there.
+      tableExists: async (table: string) =>
+        (await fresh.columnsOf(table)).length > 0,
     } as unknown as Parameters<typeof migrateCore>[0]["adapter"],
     migrationsDir,
     logger: silent,

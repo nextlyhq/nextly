@@ -46,10 +46,12 @@ describe("the media usage record and the media library's query", () => {
 
   it("is the control: each is reached once the imports made when a write or a read runs are followed", () => {
     // So a module renamed away, or a walk that resolves nothing, fails here
-    // rather than making the first case pass by finding nothing.
-    const walk = loads(join(SRC, "di/register.ts"), true);
+    // rather than making the first case pass by finding nothing. Each is
+    // reached from the entry that uses it: the rebuild only from the CLI's
+    // `media reindex-usage`, the rest from the registry's writes and reads.
+    const walks = ENTRIES.map(entry => loads(join(SRC, entry), true));
     const missed = LOADED_WHEN_USED.filter(
-      module => !walk.from.has(join(SRC, module))
+      module => !walks.some(walk => walk.from.has(join(SRC, module)))
     );
     expect(missed).toEqual([]);
     // And the walk reads the registry's services at once: the services that

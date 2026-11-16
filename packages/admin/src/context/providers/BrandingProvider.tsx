@@ -10,7 +10,7 @@ import {
 } from "@nextlyhq/ui/color";
 import { useQuery } from "@tanstack/react-query";
 import type React from "react";
-import { createContext, useContext, useEffect, useMemo } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 import {
   ADMIN_META_KEY,
@@ -23,10 +23,11 @@ import { useFaviconInjection } from "../../hooks/useFaviconInjection";
 import { enableDevReload } from "../../lib/api/fetcher";
 import { protectedApi } from "../../lib/api/protectedApi";
 import { publicApi } from "../../lib/api/publicApi";
+import { readConfiguredBranding } from "../../lib/branding/configured-branding";
 import {
-  DEFAULT_MARK_PATHS,
-  DEFAULT_MARK_VIEWBOX,
-} from "../../lib/branding/default-mark";
+  recallBranding,
+  rememberBranding,
+} from "../../lib/device-memory/device-memory";
 import type {
   AdminBranding,
   ResolvedBrandingColors,
@@ -73,7 +74,17 @@ interface BrandingState {
    * as the server stays unreachable.
    */
   isUnavailable: boolean;
+  /**
+   * Asks admin-meta's workspace half again, the half `isUnavailable` reports,
+   * for a reader that offers a way out of its never having answered. While
+   * the request is on its way the half reads as pending again, as on first
+   * load, so a reader that said it failed says it is loading.
+   */
+  retry: () => void;
 }
+
+/** What a reader outside the provider is given to retry: nothing to ask. */
+const NO_RETRY = (): void => {};
 
 const BrandingContext = createContext<BrandingState | undefined>(undefined);
 
@@ -115,6 +126,7 @@ export function useBrandingStatus(): Omit<BrandingState, "branding"> {
   return {
     isPending: state?.isPending ?? false,
     isUnavailable: state?.isUnavailable ?? false,
+    retry: state?.retry ?? NO_RETRY,
     isBrandingUnavailable: state?.isBrandingUnavailable ?? false,
   };
 }
@@ -296,23 +308,55 @@ function useColorInjection(colors: ResolvedBrandingColors | undefined) {
   }, [colors]);
 }
 
-/**
- * Default inline SVG favicon (theme-aware via `prefers-color-scheme`).
- * Used when no `branding.favicon` is configured.
- *
- * Note: uses the OS-level color-scheme preference rather than the in-app
- * theme (`useTheme`) — favicons can't reliably react to JS theme toggles
- * across browsers, so the in-app dark-mode switch won't update the favicon.
- */
-const DEFAULT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${DEFAULT_MARK_VIEWBOX}"><style>path{fill:#000}@media (prefers-color-scheme: dark){path{fill:#fff}}</style>${DEFAULT_MARK_PATHS.map(d => `<path d="${d}"/>`).join("")}</svg>`;
-const DEFAULT_FAVICON_DATA_URL = `data:image/svg+xml;utf8,${encodeURIComponent(DEFAULT_FAVICON_SVG)}`;
-
 // ============================================================================
 // Provider
 // ============================================================================
 
-interface BrandingProviderProps {
+export interface BrandingProviderProps {
   children: React.ReactNode;
+}
+
+/**
+ * Each half carries its own places' contributions: the public half the login
+ * page's, the signed-in half every other place's. Merged place by place, so a
+ * plain merge of the halves does not let signing in take the login page's
+ * away. Nothing when neither half has any.
+ */
+function placesOfBothHalves(
+  publicHalf: AdminBranding | undefined,
+  workspaceHalf: AdminBranding | undefined
+): Pick<AdminBranding, "contributions"> {
+  if (
+    publicHalf?.contributions === undefined &&
+    workspaceHalf?.contributions === undefined
+  ) {
+    return {};
+  }
+  return {
+    contributions: {
+      ...publicHalf?.contributions,
+      ...workspaceHalf?.contributions,
+    },
+  };
+}
+
+/**
+ * Whether the workspace half is still to come, and whether it is unavailable.
+ * Signed out it is never asked for, and reports unavailable, as the refusal
+ * it is no longer sent for would have made it: a reader concludes nothing
+ * from its absence.
+ */
+function workspaceStatus(state: {
+  sessionPending: boolean;
+  signedIn: boolean;
+  queryPending: boolean;
+  refused: boolean;
+}): { pending: boolean; unavailable: boolean } {
+  const signedOut = !state.sessionPending && !state.signedIn;
+  return {
+    pending: !signedOut && state.queryPending,
+    unavailable: signedOut || state.refused,
+  };
 }
 
 export function BrandingProvider({
@@ -354,30 +398,63 @@ export function BrandingProvider({
    * with nothing left to trigger it. A key cannot lose that race, because the
    * new key has no result yet whenever it appears.
    *
-   * `enabled` waits for the session query to SETTLE rather than to succeed. It
-   * stops the anonymous 401 being fired speculatively on every load, and a
-   * session query that itself failed still releases this one — reporting
-   * unavailable, which is true, instead of holding every reader on a skeleton
-   * for a fact that will never arrive.
+   * `enabled` waits for the session query to SETTLE, and then asks only of a
+   * signed-in session. A visitor's request could only be refused, and a
+   * refused query is asked again by every reader that mounts after the
+   * refusal arrived (`retryOnMount`), which the sign-in screen's own
+   * re-renders do. Signed out, or with a session query that itself failed,
+   * the half reports unavailable, which is true, instead of holding every
+   * reader on a skeleton for a fact that will never arrive.
    */
   const { data: session, isPending: sessionPending } = useAuthSession();
   const signedIn = session?.isAuthenticated === true;
 
   const {
     data: workspaceData,
-    isPending: workspacePending,
-    isLoadingError: workspaceUnavailable,
+    isPending: workspaceQueryPending,
+    isLoadingError: workspaceRefused,
+    refetch: refetchWorkspace,
   } = useQuery<AdminBranding>({
     queryKey: [...ADMIN_WORKSPACE_KEY, signedIn],
     queryFn: () => protectedApi.get<AdminBranding>("/admin-meta/workspace"),
     staleTime: 5 * 60 * 1000,
     retry: false,
-    enabled: !sessionPending,
+    // A visitor's screen draws the public half alone; see above.
+    enabled: !sessionPending && signedIn,
   });
+  const { pending: workspacePending, unavailable: workspaceUnavailable } =
+    workspaceStatus({
+      sessionPending,
+      signedIn,
+      queryPending: workspaceQueryPending,
+      refused: workspaceRefused,
+    });
+
+  // What `nextly.config` sets, as the page's first HTML carries it: read once,
+  // before any request answers, so a configured logo is drawn from the first
+  // paint, and it wins over branding set in General settings.
+  const [configured] = useState(readConfiguredBranding);
+
+  // The site's public branding as this device last saw it (logo, name,
+  // favicon), drawn until the server's own answer arrives, so the sign-in
+  // screen and the frame look like the site from the first paint. The answer
+  // replaces it whole, a logo since removed in settings included.
+  const [remembered] = useState(recallBranding);
+  const publicBranding: AdminBranding | undefined = brandingData ?? remembered;
+  useEffect(() => {
+    if (brandingData !== undefined) {
+      rememberBranding(brandingData as Record<string, unknown>);
+    }
+  }, [brandingData]);
 
   useColorInjection(brandingData?.colors);
+  // Only a favicon set in General settings is applied here. A configured one
+  // is already linked in the first HTML, and with none set the page keeps its
+  // own icon: either way nothing is swapped after load.
   useFaviconInjection(
-    brandingData?.favicon?.trim() || DEFAULT_FAVICON_DATA_URL
+    configured.favicon === undefined
+      ? publicBranding?.favicon?.trim() || null
+      : null
   );
 
   // The dev-reload subscription is the SERVER's call, not the bundle's. The
@@ -404,9 +481,17 @@ export function BrandingProvider({
   // anonymous caller can be served at all.
   const value = useMemo(() => {
     const merged =
-      brandingData === undefined && workspaceData === undefined
+      brandingData === undefined &&
+      workspaceData === undefined &&
+      Object.keys(configured).length === 0 &&
+      Object.keys(remembered).length === 0
         ? undefined
-        : { ...brandingData, ...workspaceData };
+        : {
+            ...publicBranding,
+            ...workspaceData,
+            ...placesOfBothHalves(brandingData, workspaceData),
+            ...configured,
+          };
     return {
       branding: merged,
       // The WORKSPACE query, matching `isUnavailable`. Both answer one
@@ -425,13 +510,20 @@ export function BrandingProvider({
       // nothing about whether that conclusion is safe to draw.
       isUnavailable: workspaceUnavailable,
       isBrandingUnavailable: brandingUnavailable,
+      retry: () => {
+        void refetchWorkspace();
+      },
     };
   }, [
     brandingData,
+    publicBranding,
+    remembered,
     workspaceData,
+    configured,
     sessionPending,
     workspacePending,
     workspaceUnavailable,
+    refetchWorkspace,
     brandingUnavailable,
   ]);
 

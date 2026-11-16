@@ -33,6 +33,7 @@ import {
   UNAVAILABLE_SOURCE_MESSAGE,
 } from "../domains/widgets/sources";
 import { NextlyError } from "../errors/nextly-error";
+import { ruleCouldNotRunIn } from "../errors/rule-could-not-run";
 import { getNextlyLogger } from "../observability/logger";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
 
@@ -98,9 +99,31 @@ export function failedSlot(error: unknown): Extract<QuerySlot, { ok: false }> {
   // one of them: the gate above has already refused a source the caller may not read, so that
   // one comes from a field-level rule on a source they can, and names the guard that refused.
   if (isUnavailableSourceRefusal(error)) return unavailableSlot();
+  // A rule that could not run never answered, so the slot says that, naming
+  // whose rule it is, rather than reading as an unexplained failure or as a
+  // source the caller may not read. Kept on the slot, not thrown, because a
+  // streamed batch has already answered 200 when a slot settles.
+  const couldNotRun = ruleCouldNotRunIn(error);
+  if (couldNotRun) return ruleCouldNotRunSlot(couldNotRun);
   return {
     ok: false,
     error: NextlyError.is(error) ? error.publicMessage : GENERIC_SLOT_ERROR,
+  };
+}
+
+/** The slot for a rule that could not run, naming the rule as its error does. */
+function ruleCouldNotRunSlot(
+  error: NextlyError
+): Extract<QuerySlot, { code: "RULE_COULD_NOT_RUN" }> {
+  const data: object = error.publicData ?? {};
+  const subject = "subject" in data ? data.subject : undefined;
+  const field = "field" in data ? data.field : undefined;
+  return {
+    ok: false,
+    error: error.publicMessage,
+    code: "RULE_COULD_NOT_RUN",
+    subject: typeof subject === "string" ? subject : "",
+    ...(typeof field === "string" ? { field } : {}),
   };
 }
 

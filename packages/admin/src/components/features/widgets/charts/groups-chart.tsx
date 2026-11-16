@@ -26,7 +26,7 @@ import { cardLocale, cardNumber } from "../frame/format";
 import { useCardTier } from "../frame/tier";
 import { GROUPS_DRAWN } from "../tier-query";
 
-import { chartSlotsFor, orderGroups, type ChartSlot } from "./chart-colour";
+import { chartMarksFor, orderGroups, type ChartMark } from "./chart-colour";
 import { CHART_ROW_HEIGHT, type ChartConfig } from "./chart-config";
 import { ChartReachArea, ChartTooltip, useChartReach } from "./chart-reach";
 import { chartName, currentPointText, groupsSummary } from "./chart-text";
@@ -72,7 +72,7 @@ export function GroupsChart({
   const fractions = barFractions(drawn.map(group => group.count));
   // Decided over every group the answer holds, not only those drawn, so a status chart cut short
   // by a small card keeps the colours it has on a large one.
-  const slots = chartSlotsFor(counted.map(group => group.value));
+  const marks = chartMarksFor(counted.map(group => group.value));
   // Composed ONCE and handed to both the frame and the graphic, so the table's caption and the
   // chart's own description cannot describe different data. It counts every group the answer
   // holds, not only those this tier draws, so its total is the answer's; "N more groups" says
@@ -143,10 +143,10 @@ export function GroupsChart({
                   .text,
                 fraction: fractions[index] ?? 0,
               }))}
-              config={configOf(drawn, slots)}
+              config={configOf(drawn, marks)}
               shown={reach.shown?.index}
               onHover={index => reach.hover({ series: 0, index })}
-              tooltip={tooltipFor(drawn, reach.shown?.index, slots, unit)}
+              tooltip={tooltipFor(drawn, reach.shown?.index, marks, unit)}
             />
           </Suspense>
         </ChartReachArea>
@@ -174,15 +174,15 @@ function groupKey(index: number): string {
   return `g${index}`;
 }
 
-/** Each drawn group's colour, by its key: its slot among the chart's groups. */
+/** Each drawn group's colour, by its key: its mark among the chart's groups. */
 function configOf(
   drawn: readonly GroupsChartGroup[],
-  slots: readonly ChartSlot[]
+  marks: readonly ChartMark[]
 ): ChartConfig {
   return Object.fromEntries(
     drawn.map((group, index) => [
       groupKey(index),
-      { label: group.label, slot: slots[index] ?? 1 },
+      { label: group.label, mark: marks[index] ?? 1 },
     ])
   );
 }
@@ -191,7 +191,7 @@ function configOf(
 function tooltipFor(
   drawn: readonly GroupsChartGroup[],
   index: number | undefined,
-  slots: readonly ChartSlot[],
+  marks: readonly ChartMark[],
   unit: ChartUnit | undefined
 ) {
   const group = index === undefined ? undefined : drawn[index];
@@ -202,7 +202,7 @@ function tooltipFor(
       lines={[
         {
           key: group.key,
-          slot: slots[index] ?? 1,
+          mark: marks[index] ?? 1,
           value: withUnit(
             cardNumber(group.count, { floor: group.floor }).text,
             group.count,

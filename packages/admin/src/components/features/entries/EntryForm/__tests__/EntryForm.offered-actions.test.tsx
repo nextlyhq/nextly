@@ -23,14 +23,43 @@ import {
   screen,
 } from "@admin/__tests__/utils";
 
-const { useDocumentLock, update, create, canFor } = vi.hoisted(() => ({
-  useDocumentLock: vi.fn(),
-  update: vi.fn(),
-  create: vi.fn(),
-  canFor: vi.fn((_slug: string) => false),
-}));
+const { useDocumentLock, update, create, canFor, replacedDelete } = vi.hoisted(
+  () => ({
+    useDocumentLock: vi.fn(),
+    update: vi.fn(),
+    create: vi.fn(),
+    canFor: vi.fn((_slug: string) => false),
+    // Set by a case standing for a plugin that replaces this collection's
+    // Delete; otherwise the editor's own plugin surfaces stand.
+    replacedDelete: { on: false },
+  })
+);
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
+vi.mock("../usePluginDocumentSurfaces", async importOriginal => {
+  const real =
+    await importOriginal<typeof import("../usePluginDocumentSurfaces")>();
+  return {
+    ...real,
+    usePluginDocumentSurfaces: (
+      args: Parameters<typeof real.usePluginDocumentSurfaces>[0]
+    ) => {
+      const surfaces = real.usePluginDocumentSurfaces(args);
+      if (!replacedDelete.on) return surfaces;
+      return {
+        ...surfaces,
+        actionOverrides: {
+          ...surfaces.actionOverrides,
+          delete: {
+            kind: "replaced" as const,
+            label: "Delete component…",
+            open: () => Promise.resolve({ ok: true as const }),
+          },
+        },
+      };
+    },
+  };
+});
 // A save is observed where it leaves the editor: the mutations.
 vi.mock("@admin/hooks/queries/useUpdateEntry", () => ({
   useUpdateEntry: () => ({ mutateAsync: update, isPending: false }),
@@ -109,6 +138,7 @@ async function menuActions(): Promise<string[]> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  replacedDelete.on = false;
   holding();
   useDocumentLock.mockReturnValue({
     state: { status: "held-by-me" },
@@ -141,10 +171,41 @@ describe("the editor's Delete", () => {
 
     expect(await menuActions()).toContain("delete");
   });
+
+  it("is not offered on a collection deleted through an action of its own", async () => {
+    // The permission alone would offer it, as above: the collection's own
+    // setting is what withholds it.
+    holding("read-categories", "update-categories", "delete-categories");
+    const ownDelete = {
+      ...(categories as object),
+      admin: { disableDelete: true },
+    } as never;
+    render(<EntryForm collection={ownDelete} entry={entry} mode="edit" />, {
+      wrapper: Providers,
+    });
+
+    expect(await menuActions()).not.toContain("delete");
+  });
+
+  it("is offered as a plugin's replacement on a collection deleted through it", async () => {
+    // The plugin's action keeps the Delete row, so the row is offered there,
+    // with the delete permission, as the plugin's.
+    holding("read-categories", "update-categories", "delete-categories");
+    replacedDelete.on = true;
+    const ownDelete = {
+      ...(categories as object),
+      admin: { disableDelete: true },
+    } as never;
+    render(<EntryForm collection={ownDelete} entry={entry} mode="edit" />, {
+      wrapper: Providers,
+    });
+
+    expect(await menuActions()).toContain("delete");
+  });
 });
 
 describe("an action the page contributes", () => {
-  it("is told the document as the form holds it, an unsaved title included", async () => {
+  it("is told the document as the form holds it, an unsaved title included, and that it is unsaved", async () => {
     // The page sits above the form, so the saved entry is all it has; the
     // title being typed lives only in the form until it is saved.
     holding("read-categories", "update-categories");
@@ -183,6 +244,7 @@ describe("an action the page contributes", () => {
 
     expect(chosen).toHaveBeenCalledWith({
       values: expect.objectContaining({ title: "Edited headline" }),
+      dirty: true,
     });
   });
 });
@@ -229,9 +291,9 @@ describe("the other ways to publish", () => {
     ).toBeTruthy();
   });
 
-  it("are rows of More on a clean published document, beside a plain Save", async () => {
-    // Saving leads there, and they are not ways to save: an arrow on Save
-    // would offer scheduling as a kind of saving.
+  it("hang off Save on a clean published document, so it can still be scheduled to come down", async () => {
+    // Nothing to publish, so the arrow holds the ways to do it later, and
+    // More keeps its own rows.
     holding("read-categories", "update-categories", "publish-categories");
     editing("published");
     const bar = await screen.findByTestId("document-bar");
@@ -240,10 +302,10 @@ describe("the other ways to publish", () => {
       within(bar).getByRole("button", { name: /^save changes$/i })
     ).toBeTruthy();
     expect(
-      within(bar).queryByRole("button", { name: "More ways to publish" })
-    ).toBeNull();
-    expect(await menuActions()).toEqual(
-      expect.arrayContaining(["schedule-publish", "add-to-release"])
+      within(bar).getByRole("button", { name: "More ways to publish" })
+    ).toBeTruthy();
+    expect(await menuActions()).not.toEqual(
+      expect.arrayContaining(["schedule-publish"])
     );
   });
 });

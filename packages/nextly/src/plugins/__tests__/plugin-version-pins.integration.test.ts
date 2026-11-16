@@ -89,7 +89,7 @@ async function boot(dialect: TestDialect) {
     for (let i = 0; i < times; i += 1) {
       await handler.updateEntry(
         { collectionName: "notes", entryId, overrideAccess: true },
-        { title: `save ${i}` }
+        { title: `save ${i}`, _overwrite: true }
       );
     }
   };

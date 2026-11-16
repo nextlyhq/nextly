@@ -157,7 +157,9 @@ function activityListModel(now: number): ListModel<ActivityRow> {
     leadingOf: ({ activity }) => (
       <Avatar className="size-full">
         <AvatarImage src={activity.user.avatar} alt="" />
-        <AvatarFallback className="bg-primary/5 text-primary text-[10px] font-semibold">
+        {/* The initials take the page's ink, not `text-primary`: a site's brand primary sets
+            that token, so 10px initials on its own 5% tint fall under 4.5:1 for many brands. */}
+        <AvatarFallback className="bg-primary/5 text-foreground text-[10px] font-semibold">
           {activity.user.initials}
         </AvatarFallback>
       </Avatar>
@@ -204,9 +206,8 @@ const EmptyState: React.FC = () => (
  * The dashboard's Team activity card, drawn from the rows its `load` read from
  * `system:activity`: framed, so the heading and the size are the card's.
  *
- * It draws the rows its body holds, at most the "Number of items" its reader
- * chose, through the one list card core's lists use, each row leading to the
- * entry or Single it is about. Its `load` asks one row more than the card
+ * It draws the "Number of entries" its reader chose, through the one list card
+ * core's lists use, each row leading to the entry or Single it is about. Its `load` asks one row more than the card
  * draws, and that row is not drawn: the feed has no list to open, so the card
  * has no footer, and a footer only ever draws a link. A run of one person's
  * saves is one row.

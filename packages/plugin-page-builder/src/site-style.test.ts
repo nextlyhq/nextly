@@ -7,6 +7,7 @@ import type {
 import { describe, expect, it } from "vitest";
 
 import {
+  removedSiteStyleOption,
   resolveSiteStyle,
   siteBreakpoints,
   siteSheet,
@@ -170,6 +171,14 @@ describe("resolveSiteStyle", () => {
     expect(merged.fonts?.[1]).toEqual(face("Geist", undefined, "italic"));
   });
 
+  it("keeps one cut stored for two scripts as two faces", () => {
+    const latin = { ...face("Lora"), unicodeRange: "U+0000-00FF" };
+    const cyrillic = { ...face("Lora"), unicodeRange: "U+0400-045F" };
+    const merged = resolveSiteStyle(undefined, { fonts: [latin, cyrillic] });
+    // Each covers its own characters; dropping one leaves a script unloaded.
+    expect(merged.fonts).toEqual([latin, cyrillic]);
+  });
+
   it("replaces breakpoints as a WHOLE set when the stored one defines any", () => {
     const stored: BreakpointSet = {
       viewport: [
@@ -227,5 +236,36 @@ describe("siteSheet", () => {
       fonts: style.fonts,
       breakpoints: VIEWPORT_ONLY,
     });
+  });
+});
+
+describe("a spacing model left in a host's options or a stored document", () => {
+  it("reaches neither the resolved site style nor the sheet a page compiles from", () => {
+    // An untyped host, and a document an older release could have written:
+    // the engine then compiles every page with its default, container gaps.
+    const left = { spacingMode: "classic" } as never;
+    const resolved = resolveSiteStyle(left, left);
+    expect(resolved).not.toHaveProperty("spacingMode");
+    expect(siteSheet(resolved)).not.toHaveProperty("spacingMode");
+    // The control: a section that is stated does come through.
+    const stated = resolveSiteStyle(undefined, {
+      breakpoints: {
+        viewport: [{ id: "md", label: "Tablet", maxWidth: 1023 }],
+      },
+    } as never);
+    expect(stated).toHaveProperty("breakpoints");
+  });
+});
+
+describe("removedSiteStyleOption", () => {
+  it("names the removed option, and says it was removed, when it is passed", () => {
+    expect(removedSiteStyleOption({ spacingMode: "gaps" })).toMatch(
+      /siteStyle\.spacingMode.*removed/
+    );
+  });
+
+  it("says nothing for options without it", () => {
+    expect(removedSiteStyleOption(undefined)).toBeUndefined();
+    expect(removedSiteStyleOption({ tokens: { tokens: [] } })).toBeUndefined();
   });
 });

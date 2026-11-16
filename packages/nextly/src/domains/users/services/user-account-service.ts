@@ -21,15 +21,17 @@ import type { MinimalUser } from "@nextly/types/auth";
 
 // PR 4 of unified-error-system migration: ServiceError result-shapes →
 // NextlyError throws. Methods now return data directly or throw.
-import { isPasswordHash } from "../../../auth/password/index";
 import { toDbError } from "../../../database/errors";
+import { appPasswordDigester } from "../../../di/password-digester";
 import { NextlyError } from "../../../errors";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
+import { parseInterfaceLanguage } from "../interface-language";
 
 import {
   passwordColumns,
+  storeRehashedPassword,
   updateUserEndingSessions,
   type PasswordWriteTx,
 } from "./password-write";
@@ -41,6 +43,43 @@ import { UserQueryService } from "./user-query-service";
  * `.success`/`.data`); failures throw NextlyError.
  */
 export type GetUserResponse = MinimalUser;
+
+/**
+ * The width of `users.name` and `users.image` on MySQL, the narrowest of the
+ * dialects (both are text on PostgreSQL and SQLite): the longest value every
+ * installation can store.
+ */
+const PROFILE_TEXT_MAX = 255;
+
+/**
+ * Refuse a profile change whose name or image address is longer than every
+ * dialect stores, naming the field, before anything is read or written. MySQL
+ * would otherwise refuse the write with a database error, or cut the value
+ * short, while PostgreSQL and SQLite kept it whole.
+ */
+function assertProfileTextFits(changes: {
+  name?: string;
+  image?: string;
+}): void {
+  const tooLong = (["name", "image"] as const).filter(
+    field =>
+      typeof changes[field] === "string" &&
+      // Characters, as the column counts them, not UTF-16 units: an emoji
+      // is one character and two units.
+      [...changes[field]].length > PROFILE_TEXT_MAX
+  );
+  if (tooLong.length === 0) return;
+  throw NextlyError.validation({
+    errors: tooLong.map(field => ({
+      path: field,
+      code: "TOO_LONG",
+      message:
+        field === "name"
+          ? `A name can be at most ${PROFILE_TEXT_MAX} characters.`
+          : `A picture's address can be at most ${PROFILE_TEXT_MAX} characters. Choose another picture.`,
+    })),
+  });
+}
 
 export class UserAccountService extends BaseService {
   private queryService: UserQueryService;
@@ -71,7 +110,9 @@ export class UserAccountService extends BaseService {
   }
 
   /**
-   * Update the current user's profile (name and image only).
+   * Update the current user's own profile: name, image and interface
+   * language. The interface language is checked before anything is read or
+   * written, and only this path sets it.
    *
    * @throws NextlyError(NOT_FOUND) when the user does not exist
    *   (propagated from queryService.getUserById).
@@ -84,8 +125,11 @@ export class UserAccountService extends BaseService {
     changes: {
       name?: string;
       image?: string;
+      interfaceLanguage?: string | null;
     }
   ): Promise<GetUserResponse> {
+    assertProfileTextFits(changes);
+    const interfaceLanguage = parseInterfaceLanguage(changes);
     // Validate that user exists first. getUserById throws NOT_FOUND when
     // missing; we let that propagate unchanged.
     await this.queryService.getUserById(userId);
@@ -103,6 +147,10 @@ export class UserAccountService extends BaseService {
 
     if (changes.image !== undefined) {
       updateData.image = changes.image;
+    }
+
+    if (interfaceLanguage !== undefined) {
+      updateData.interfaceLanguage = interfaceLanguage;
     }
 
     try {
@@ -148,10 +196,10 @@ export class UserAccountService extends BaseService {
     // Before any read: the one password write whose hash comes from outside,
     // so it must be one. A raw password sent here was stored as given; it is
     // refused now as invalid input, never echoed or logged, and before the
-    // catch around the write could report it as a database failure. A bcrypt
-    // hash, what core's sign-in verifies; an app with its own hasher sets
-    // passwords through the service, which hashes them with it.
-    if (!isPasswordHash(passwordHash)) {
+    // catch around the write could report it as a database failure. A hash
+    // the app's sign-in verifies: core's bcrypt, or one the app's own hasher
+    // recognises.
+    if (!appPasswordDigester().isHash(passwordHash)) {
       throw NextlyError.validation({
         errors: [
           {
@@ -195,6 +243,31 @@ export class UserAccountService extends BaseService {
       });
     } catch (err) {
       // Normalise raw driver errors so the kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
+    }
+  }
+
+  /**
+   * Store a proven password again with the app's hasher, in place of the
+   * bcrypt value core stored before the app configured it: only while the
+   * stored value is still `from`, and only the hash.
+   *
+   * @throws NextlyError on DB errors via fromDatabaseError.
+   */
+  async storeRehashedPassword(
+    userId: string,
+    from: string,
+    to: string
+  ): Promise<void> {
+    try {
+      await this.withTransaction(async tx => {
+        await storeRehashedPassword(tx as PasswordWriteTx, this.tables, {
+          userId,
+          from,
+          to,
+        });
+      });
+    } catch (err) {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
   }

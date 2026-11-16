@@ -118,8 +118,9 @@ The adapter uses `mysql2`'s built-in pool. Defaults:
 
 | Option                     | Default | Description                                                             |
 | -------------------------- | ------- | ----------------------------------------------------------------------- |
-| `pool.max`                 | `10`    | Maps to `mysql2`'s `connectionLimit`. Maximum simultaneous connections. |
-| `pool.idleTimeoutMs`       | `30000` | Idle connection timeout (`mysql2` `idleTimeout`).                       |
+| `pool.max`                 | `10` (`3` on Vercel) | Maps to `mysql2`'s `connectionLimit`. Maximum simultaneous connections. |
+| `pool.min`                 | `0`     | Connections kept open however long they are idle. Like PostgreSQL's `pool.min`, it is how many of the connections the pool has opened it keeps: the pool does not open connections ahead of demand to reach it. |
+| `pool.idleTimeoutMs`       | `30000` (`5000` on Vercel) | How long a connection above `pool.min` may stay idle before it is closed, checked once a second. `0` keeps every idle connection open. |
 | `pool.connectionTimeoutMs` | `15000` | How long a request waits in the queue while every connection is in use. Past it the request fails as `DATABASE_BUSY` (503, `Retry-After: 5`); `0` leaves that wait unbounded. Also the time a new connection gets to open (`mysql2` `connectTimeout`): one that cannot open in time fails as a connection error, not as busy. |
 
 ```typescript
@@ -133,9 +134,21 @@ const adapter = createMySqlAdapter({
 });
 ```
 
+`mysql2`'s own idle closing cannot keep a minimum: it closes every connection idle past its `idleTimeout`, and only when `maxIdle` is set below `connectionLimit`. So the adapter sets `maxIdle` equal to `connectionLimit`, which keeps `mysql2` from closing idle connections by itself, and closes them itself: past `pool.idleTimeoutMs`, least recently used first, down to `pool.min`. These are the settings and the defaults the PostgreSQL adapter uses on a server, so `pool` and the `DB_POOL_*` variables mean the same pool on both.
+
+Needs the release after 0.0.2-alpha.78. Before it the pool closed no idle connection outside Vercel and ignored `pool.min`, so a server kept every connection it had opened. To keep connections open as before, set `pool.min` to the pool's maximum (`DB_POOL_MIN=10` with the default maximum, or the same value as `DB_POOL_MAX`), or set `pool.idleTimeoutMs: 0` in code.
+
 The pool is configured with `waitForConnections: true`: a request that finds every connection in use waits in the queue for a free one, for at most `pool.connectionTimeoutMs`. The queue has no length limit (`queueLimit: 0`); each wait in it is bounded instead. A connection that frees up after its request gave up goes straight back to the pool.
 
+### On Vercel
+
+On Vercel (where `VERCEL` is set) the pool defaults to `max: 3`, `min: 0` and `idleTimeoutMs: 5000`, so every connection idle for 5 seconds is closed. A Vercel function instance is suspended between requests and keeps the connections it holds open while suspended, so a small pool that closes idle connections quickly keeps a small database within its connection limit. Each setting you give, in `pool` or as a `DB_POOL_*` env var, replaces only its own default.
+
+When [`@vercel/functions`](https://vercel.com/docs/functions/functions-api-reference/vercel-functions-package#attachdatabasepool) is installed in the app, the adapter also hands its pool to `attachDatabasePool`, which keeps an instance alive until its idle connections have closed. It is an optional peer dependency: without it the adapter logs one warning at connect. See [Database connections on Vercel](/docs/guides/deployment#database-connections-on-vercel).
+
 ## SSL / TLS
+
+System health on the dashboard reads whether the connection is actually encrypted; see [Encrypted connections](/docs/database/encrypted-connections).
 
 For production, enable SSL:
 

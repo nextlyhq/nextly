@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { NextlyError } from "../errors/nextly-error";
 
 import {
+  capabilityProvider,
+  recordCapabilityProviders,
   resolveProvides,
   validateCapabilities,
   validateRequires,
@@ -808,5 +810,65 @@ describe("validateCapabilities: an empty requires range", () => {
     expect(
       reasonOf(() => validateCapabilities([plugin({ requires: { x: "" } })]))
     ).toBe("invalid-manifest");
+  });
+});
+
+describe("the providers a boot records", () => {
+  // The record is process-wide, as the boot that writes it is, so each case
+  // starts from a cleared one.
+  afterEach(() => recordCapabilityProviders([]));
+
+  const resolver = { resolve: () => ({}) };
+
+  it("answers which started plugin provides a capability", () => {
+    recordCapabilityProviders([
+      plugin({
+        name: "@test/seo",
+        provides: ["page-metadata"],
+        contributes: { services: { pageMetadata: () => resolver } },
+      }),
+    ]);
+    expect(capabilityProvider("page-metadata")).toBe("@test/seo");
+  });
+
+  it("answers nothing for a capability no started plugin provides", () => {
+    recordCapabilityProviders([plugin({ provides: ["other"] })]);
+    expect(capabilityProvider("page-metadata")).toBeUndefined();
+  });
+
+  it("forgets the previous boot's providers when a boot records none", () => {
+    recordCapabilityProviders([plugin({ provides: ["other"] })]);
+    recordCapabilityProviders([]);
+    expect(capabilityProvider("other")).toBeUndefined();
+  });
+
+  it("does not count a disabled plugin as a provider", () => {
+    recordCapabilityProviders([
+      plugin({ provides: ["other"], enabled: false }),
+    ]);
+    expect(capabilityProvider("other")).toBeUndefined();
+  });
+
+  it("refuses a page-metadata provider with no resolver service", () => {
+    // Declaring the capability is a promise the route helpers act on: every
+    // page would ask a provider that cannot answer, so the boot says so.
+    expect(
+      reasonOf(() =>
+        recordCapabilityProviders([
+          plugin({ name: "@test/seo", provides: ["page-metadata"] }),
+        ])
+      )
+    ).toBe("page-metadata-service-missing");
+  });
+
+  it("refuses a capability two started plugins provide", () => {
+    expect(
+      reasonOf(() =>
+        recordCapabilityProviders([
+          plugin({ name: "@test/a", provides: ["other"] }),
+          plugin({ name: "@test/b", provides: ["other"] }),
+        ])
+      )
+    ).toBe("capability-provided-twice");
   });
 });

@@ -15,16 +15,10 @@
 
 import type { SizeTier } from "@nextlyhq/ui/format";
 import { cardTierAt, tierOfWidth } from "nextly/card-geometry";
-import {
-  effectiveWidgetLimit,
-  GRID_COLUMNS,
-  type ListDensity,
-} from "nextly/config";
+import { GRID_COLUMNS, listEntries } from "nextly/config";
 import { createContext, useContext, type RefObject, type Context } from "react";
 
 import { useMeasuredWidth } from "@admin/components/shared/preview/useMeasuredWidth";
-
-import { listBodyHeight, rowsInBody, type RowsSize } from "./list-rows";
 
 // The outer width a card of `w` columns is drawn at on a dashboard of a given width: twelve
 // columns with a gap between each, at the span its band draws it across and the gap that width
@@ -70,9 +64,9 @@ export function tierBandAt(dashboardWidth: number): string {
 }
 
 /**
- * The rows a card of `size` (its tier, and its height where it has one) draws at `density` when
- * its setting asks for `items`: the whole rows its body holds ({@link rowsInBody}), or fewer
- * where the setting asks for fewer.
+ * The rows a list card draws when its "Number of entries" setting asks for `items`: core's rule
+ * (`listEntries`), the one a card's `load` asks its rows by, so the rows read and the rows drawn
+ * are one count. Never the card's size: a card is as tall as its content.
  *
  * One answer for every reader of it: the list and table displays draw this
  * many, the query asks for one more (to learn whether more exist), and the
@@ -83,18 +77,8 @@ export function tierBandAt(dashboardWidth: number): string {
  * `items` is read through core's own rule, so a missing or garbage setting
  * means what it means to the query: five rows, never NaN.
  */
-export function rowsDrawn(
-  size: SizeTier | RowsSize,
-  items: unknown,
-  density: ListDensity = "default",
-  /** Room the body gives something drawn above the rows, in pixels, which no row may take. */
-  reservedPx = 0
-): number {
-  const rows = typeof size === "string" ? { tier: size } : size;
-  return Math.min(
-    effectiveWidgetLimit(items),
-    rowsInBody(listBodyHeight(rows) - reservedPx, density)
-  );
+export function rowsDrawn(items: unknown): number {
+  return listEntries(items);
 }
 
 /**
@@ -186,39 +170,31 @@ export const CardHeightContext: Context<number | undefined> = createContext<
   number | undefined
 >(undefined);
 
-/** The size an answer was fetched at: the card's tier and height then, and its density. */
-export type AnswerSize = RowsSize & { density?: ListDensity };
+/** What an answer was fetched with: the "Number of entries" its card asked for then. */
+export interface AnswerSize {
+  items: unknown;
+}
 
 /**
- * The size the answer a card shows was fetched at; `undefined` where it is not known. A card that
- * grew keeps its smaller answer on screen until a larger one lands, and that answer holds only
- * the rows its own size asked for, and the one more that says more exist.
+ * What the answer a card shows was fetched with; `undefined` where it is not known. A card whose
+ * reader asked for more entries keeps its smaller answer on screen until a larger one lands, and
+ * that answer holds only the rows it was asked for, and the one more that says more exist.
  */
 export const AnswerSizeContext: Context<AnswerSize | undefined> = createContext<
   AnswerSize | undefined
 >(undefined);
 
 /**
- * The rows a card draws (`rowsDrawn`): at its own tier and height, or at the size its answer was
- * fetched at when that draws fewer. Counted at the card's size, a smaller answer would draw its
+ * The rows a card draws (`rowsDrawn`): its "Number of entries", or the number its answer was
+ * fetched with when that is fewer. Counted at the new setting, a smaller answer would draw its
  * extra row as one more item and lose the sign that more exist.
  */
-export function useRowsDrawn(
-  cardTier: SizeTier,
-  items: unknown,
-  density: ListDensity,
-  /** Room the body gives something drawn above the rows; see `rowsDrawn`. */
-  reservedPx = 0
-): number {
-  const h = useContext(CardHeightContext);
+export function useRowsDrawn(items: unknown): number {
   const answer = useContext(AnswerSizeContext);
-  const drawn = rowsDrawn({ tier: cardTier, h }, items, density, reservedPx);
+  const drawn = rowsDrawn(items);
   return answer === undefined
     ? drawn
-    : Math.min(
-        drawn,
-        rowsDrawn(answer, items, answer.density ?? density, reservedPx)
-      );
+    : Math.min(drawn, rowsDrawn(answer.items));
 }
 
 /**

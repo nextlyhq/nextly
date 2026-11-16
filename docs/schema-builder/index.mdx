@@ -26,13 +26,13 @@ Each Schema Builder uses a two-column layout:
 
 The field palette groups field types into five categories, in this order:
 
-| Category   | Field types in the picker                                       |
-| ---------- | --------------------------------------------------------------- |
-| Basic      | Text, Long text, Editor (rich text), Email, Password, Number    |
-| Advanced   | Code, Date, Select, Radio, Checkbox, Toggle, JSON, Tags (chips) |
-| Media      | Media (upload)                                                  |
-| Relational | Relationship                                                    |
-| Structured | Repeater, Group, Component                                      |
+| Category   | Field types in the picker                                          |
+| ---------- | ------------------------------------------------------------------ |
+| Basic      | Text, Long text, Editor (rich text), Email, Password, Number, Icon |
+| Advanced   | Code, Date, Select, Radio, Checkbox, Toggle, JSON, Tags (chips)    |
+| Media      | Media (upload)                                                     |
+| Relational | Relationship                                                       |
+| Structured | Repeater, Group, Component                                         |
 
 This is the picker grouping inside the admin UI. The reference docs in [Fields](/docs/configuration/fields) group fields slightly differently (Basic / Selection / Media / Relationship / Layout / Component / Advanced) so the prose can talk about families that don't all map to a single picker tab.
 
@@ -40,12 +40,12 @@ This is the picker grouping inside the admin UI. The reference docs in [Fields](
 
 Click a field on the canvas to slide the field editor over the palette. The editor has four tabs:
 
-| Tab            | What you configure                                                                                                                                                                                                         |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **General**    | Name (auto-derived slug), label, description, default value, and the field's type-specific options (e.g. Select options, Relationship target, Upload MIME pattern).                                                        |
-| **Validation** | `required`, plus type-specific rules: `minLength` / `maxLength`, `min` / `max`, `minRows` / `maxRows`, `minChips` / `maxChips`, regex `pattern`, custom `message`.                                                         |
-| **Display**    | Layout `width` (25% / 33% / 50% / 66% / 75% / 100%), `position` (Main content or Sidebar), `readOnly`, `hidden`, conditional visibility (a per-field condition keyed off another field's value), description, placeholder. |
-| **Advanced**   | `unique` constraint, database `index`, and a reserved `localized` flag (not yet wired through to runtime localization).                                                                                                    |
+| Tab            | What you configure                                                                                                                                                                                                                      |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **General**    | Name (auto-derived slug), label, description, default value, and the field's type-specific options (e.g. Select options, Relationship target, Upload MIME pattern).                                                                     |
+| **Validation** | `required`, plus type-specific rules: `minLength` / `maxLength`, `min` / `max`, `minRows` / `maxRows`, `minChips` / `maxChips`, regex `pattern`, custom `message`.                                                                      |
+| **Display**    | Layout `width` (25% / 33% / 50% / 66% / 75% / 100%), `position` (Main content or Sidebar), `readOnly`, `hidden`, conditional visibility (a per-field condition keyed off another field's value), description, placeholder.              |
+| **Advanced**   | `unique` constraint, database `index`, and the `localized` flag, which keeps a value per language on a localized collection, Single or field group (see [Choose what gets translated](/docs/localization#choose-what-gets-translated)). |
 
 Conditional visibility supports type-aware operators (`equals`, `notEquals`, `contains`, `startsWith`, `endsWith`, `isEmpty`, `isNotEmpty`, numeric comparisons, `between`, date `before` / `after`, and boolean `isTrue` / `isNotTrue`).
 
@@ -85,9 +85,41 @@ keys this way has none, and a later save does not add one, so a database that
 already holds rows pointing at missing entries is never asked to accept a key
 those rows would break.
 
+The key points at the table the target collection is stored in, and a
+relationship to Users points at the users table. A relationship to a Single, or
+to several collections at once, gets no key, and neither does one that holds
+several entries: there is no single row for a key to check.
+
+What the key does when an entry it points at is deleted:
+
+- **A required relationship refuses the delete.** The entry stays, and the
+  message says what still points at it, for example: _This entry is still used
+  by 12 Posts in "Author". Change or delete those first._ A bulk delete deletes
+  the other entries and reports each one it could not delete.
+- **An optional relationship is emptied** in the database, and the delete goes
+  through. The referring entries' hooks, versions and webhooks do not run for
+  that change.
+
+Deleting a user works the same way. A required relationship to Users refuses
+the deletion before anything of the account is removed (its roles, its media
+ownership, its email records), with a message such as _This user is still used
+by 12 Posts in "Author". Change or delete those first._ An optional one is
+emptied, and the account is deleted.
+
+Pointing a relationship whose column holds a key at another collection moves
+the key there, once every value it holds is checked against the new collection.
+If some entries hold a value the new collection doesn't have, the save is
+refused before anything changes, naming the field and how many entries are in
+the way, and the old key stays: change or clear those entries first. A target
+with no table to check against (a Single, for example) is refused the same way.
+The new key is added before the old one is dropped, so the field is never left
+unchecked, even on MySQL. Switching the relationship to hold several entries
+works as for any relationship: each value becomes a one-item list, and the key
+goes with the conversion.
+
 ### Container fields and nesting
 
-Repeater, Group, and Component fields can themselves contain fields. Nesting is capped at 4 levels deep — `MAX_NESTING_DEPTH = 4` in `packages/admin/src/components/features/schema-builder/types.ts`. Each level renders with a progressively darker background to make the hierarchy visible.
+Repeater, Group, and Component fields can themselves contain fields, to any depth. Each level renders with a progressively darker background to make the hierarchy visible. A field group cannot be placed inside itself, directly or through other field groups: a save that would do so is refused, naming the field groups in the cycle (see [Field group nesting](/docs/configuration/field-groups#field-group-nesting)).
 
 A Component field embeds a reusable field group definition (created via the Field Groups Builder or `defineFieldGroup()`). It can target a single field group or a list of allowed field groups, and can be marked repeatable to act as an inline content zone.
 
@@ -133,13 +165,12 @@ Applied migrations are not re-run: `nextly migrate` records a `file_apply` event
 
 ## Permissions and visibility
 
-The Visual Schema Builder is reached through the Builders top-level icon. That icon is gated by the `admin.branding.showBuilder` toggle:
+The Visual Schema Builder is reached through the Builders top-level icon.
 
-- Default behaviour: visible when `process.env.NODE_ENV !== "production"`, hidden in production.
-- Force visible: `admin.branding.showBuilder = true` in `nextly.config.ts`.
-- Force hidden: `admin.branding.showBuilder = false`.
+- In development and test it is on, unless `admin.branding.showBuilder` is `false` in `nextly.config.ts`.
+- In production it is off, whatever `showBuilder` says. Its pages, and every schema save, preview, repair and delete, are refused with `BUILDER_DISABLED`. Make the change in development and deploy it as a migration (see [Production migrations](/docs/guides/production-migrations)). Entry editing is unaffected.
 
-See [Branding > Schema Builder visibility](/docs/admin/branding#schema-builder-visibility) for the full toggle reference.
+See [Branding > Schema Builder visibility](/docs/admin/branding#schema-builder-visibility) for the full reference.
 
 ## Builder vs code-first
 
@@ -157,7 +188,7 @@ You can mix both — define core collections in code and let editors prototype n
 ## Next steps
 
 - [Admin Panel Overview](/docs/admin) — full navigation guide
-- [Branding](/docs/admin/branding) — control Builder visibility with `showBuilder`
+- [Branding](/docs/admin/branding) — turn the Builder off outside production with `showBuilder`
 - [Collections](/docs/configuration/collections) — code-first collection definitions
 - [Singles](/docs/configuration/singles) — code-first Single definitions
 - [Field Groups](/docs/configuration/field-groups) — reusable field groups

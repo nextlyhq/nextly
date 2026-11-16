@@ -14,9 +14,13 @@
  * after someone edits the line it exists to watch.
  */
 import type { ReactNode } from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import { render } from "@admin/__tests__/utils";
+import {
+  clearRegistry,
+  registerComponent,
+} from "@admin/lib/plugins/component-registry";
 
 const { headerProps, localization, settings } = vi.hoisted(() => ({
   headerProps: vi.fn(),
@@ -46,6 +50,7 @@ vi.mock("@admin/hooks/queries/useGeneralSettings", () => ({
 }));
 
 import { EntryForm } from "../EntryForm";
+import { useDocumentPreview, type DocumentPreview } from "../EntryFormContext";
 
 /** A localized collection with one text field, the minimum this form needs. */
 const collection = {
@@ -240,5 +245,66 @@ describe("EntryForm wires the preview action into its header", () => {
 
     expect(lastHeaderProps().isPreviewAvailable).toBe(false);
     expect(lastHeaderProps().onPreview).toBeUndefined();
+  });
+});
+
+describe("EntryForm hands its preview to what it draws", () => {
+  /*
+   * A view drawn in the form's place hears the preview the header would have
+   * offered, on the header's terms. A view is the probe because it is drawn
+   * inside the editor's own context, as the page builder's entry view is.
+   */
+  const PROBE = "@acme/pb/admin#PreviewProbe";
+  const heard = vi.fn<(preview: DocumentPreview | null) => void>();
+  function Probe(): null {
+    heard(useDocumentPreview());
+    return null;
+  }
+
+  const previewable = {
+    ...(collection as unknown as Record<string, unknown>),
+    admin: { preview: { hasPreview: true } },
+  } as never;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localization.current = { defaultLocale: "en" };
+    settings.current = { siteUrl: "https://site.example" };
+    registerComponent(PROBE, Probe);
+  });
+  afterEach(() => {
+    clearRegistry();
+  });
+
+  function lastHeard(): DocumentPreview | null | undefined {
+    const calls = heard.mock.calls;
+    expect(calls.length, "the view was never drawn").toBeGreaterThan(0);
+    return calls[calls.length - 1]?.[0];
+  }
+
+  it("offers the preview where the collection declares one", () => {
+    render(
+      <EntryForm
+        collection={previewable}
+        entry={entry}
+        mode="edit"
+        documentView={{ component: PROBE, onExit: () => {} }}
+      />
+    );
+
+    expect(typeof lastHeard()?.open).toBe("function");
+  });
+
+  it("offers none where the header offers none", () => {
+    render(
+      <EntryForm
+        collection={collection}
+        entry={entry}
+        mode="edit"
+        documentView={{ component: PROBE, onExit: () => {} }}
+      />
+    );
+
+    expect(lastHeard()).toBeNull();
   });
 });

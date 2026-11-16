@@ -11,12 +11,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  OFFER_RETRY_AFTER_MS,
-  SLOW_START_AFTER_MS,
-} from "@admin/components/guards/AdminPending";
-
 import { ROUTES } from "@admin/constants/routes";
+import { SIGNED_IN_HERE_KEY } from "@admin/lib/device-memory/device-memory";
 
 const mockUseAuthSession = vi.fn();
 const mockRestart = vi.fn();
@@ -31,20 +27,46 @@ vi.mock("@admin/lib/navigation", () => ({
   navigateTo: (path: string) => mockNavigateTo(path),
 }));
 
+const mockLogout = vi.fn();
+vi.mock("@admin/hooks/useLogout", () => ({
+  useLogout: () => mockLogout,
+}));
+
+const mockRefresh = vi.fn(async () => "ok");
+vi.mock("@admin/lib/api/refreshInterceptor", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("@admin/lib/api/refreshInterceptor")
+  >()),
+  refreshAccessToken: () => mockRefresh(),
+}));
+
 import { PrivateRoute } from "../PrivateRoute";
 
+/**
+ * The guard as the admin mounts it: a frame told whether the session is
+ * confirmed, and the sign-in form drawn in place. The frame's two states are
+ * told apart by their text, so a test can say which one is on screen.
+ */
 function renderGuard() {
   return render(
     <QueryClientProvider client={new QueryClient()}>
-      <PrivateRoute>
-        <span>protected</span>
+      <PrivateRoute signIn={<span>sign-in form</span>}>
+        {confirmed =>
+          confirmed ? <span>protected</span> : <span>frame, no data</span>
+        }
       </PrivateRoute>
     </QueryClientProvider>
   );
 }
 
+/** A browser that has signed in to this admin before. */
+function signedInHereBefore() {
+  window.localStorage.setItem(SIGNED_IN_HERE_KEY, "1");
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  window.localStorage.clear();
 });
 
 afterEach(() => {
@@ -61,10 +83,55 @@ function pendingSession() {
 }
 
 describe("PrivateRoute", () => {
+  it("tells a signed-in account with no role it has no access, and draws no staff screen", () => {
+    mockUseAuthSession.mockReturnValue({
+      status: "success",
+      data: {
+        isSetup: true,
+        isAuthenticated: true,
+        hasRole: false,
+        email: "new@example.com",
+      },
+    });
+
+    renderGuard();
+
+    expect(
+      screen.getByText(/don't have access to the admin yet/)
+    ).toBeInTheDocument();
+    expect(screen.getByText("new@example.com")).toBeInTheDocument();
+    expect(screen.queryByText("protected")).not.toBeInTheDocument();
+    expect(screen.queryByText("frame, no data")).not.toBeInTheDocument();
+    expect(mockNavigateTo).not.toHaveBeenCalled();
+  });
+
+  it("checks again with a freshly minted token, and signs out when asked", async () => {
+    mockUseAuthSession.mockReturnValue({
+      status: "success",
+      data: {
+        isSetup: true,
+        isAuthenticated: true,
+        hasRole: false,
+        email: "new@example.com",
+      },
+    });
+
+    renderGuard();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    });
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+    expect(mockRestart).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(mockLogout).toHaveBeenCalledTimes(1);
+  });
+
   it("renders the protected content for a valid session", () => {
     mockUseAuthSession.mockReturnValue({
       status: "success",
-      data: { isSetup: true, isAuthenticated: true },
+      data: { isSetup: true, isAuthenticated: true, hasRole: true },
     });
 
     renderGuard();
@@ -73,7 +140,8 @@ describe("PrivateRoute", () => {
     expect(mockNavigateTo).not.toHaveBeenCalled();
   });
 
-  it("sends an unauthenticated visitor to login", () => {
+  it("sends a visitor signed in here before, whose session is gone, to login", () => {
+    signedInHereBefore();
     mockUseAuthSession.mockReturnValue({
       status: "success",
       data: { isSetup: true, isAuthenticated: false },
@@ -133,41 +201,66 @@ describe("PrivateRoute", () => {
     expect(screen.queryByText("protected")).not.toBeInTheDocument();
     expect(mockNavigateTo).not.toHaveBeenCalled();
   });
-  it("shows that the admin is loading while the session is pending, never an empty page", () => {
+  it("draws the frame, with no data, while the session is pending in a browser signed in here", () => {
+    signedInHereBefore();
     mockUseAuthSession.mockReturnValue(pendingSession());
 
     renderGuard();
 
-    expect(screen.getByRole("status")).toHaveTextContent("Loading the admin");
+    // The frame paints before the server answers; the screen does not.
+    expect(screen.getByText("frame, no data")).toBeInTheDocument();
+    expect(screen.queryByText("protected")).not.toBeInTheDocument();
+    expect(screen.queryByText("sign-in form")).not.toBeInTheDocument();
+    expect(mockNavigateTo).not.toHaveBeenCalled();
   });
 
-  it("names a slow start, then offers Try again, which asks the server again", () => {
-    vi.useFakeTimers();
+  it("draws the sign-in form while the session is pending in a browser with no record", () => {
     mockUseAuthSession.mockReturnValue(pendingSession());
 
     renderGuard();
-    expect(
-      screen.queryByRole("button", { name: "Try again" })
-    ).not.toBeInTheDocument();
 
-    act(() => {
-      vi.advanceTimersByTime(SLOW_START_AFTER_MS);
+    expect(screen.getByText("sign-in form")).toBeInTheDocument();
+    expect(screen.queryByText("frame, no data")).not.toBeInTheDocument();
+    expect(screen.queryByText("protected")).not.toBeInTheDocument();
+  });
+
+  it("keeps the sign-in form in place when the server says there is no session", () => {
+    // Moving to the sign-in address would draw the form afresh and drop what
+    // the visitor typed while the server started.
+    mockUseAuthSession.mockReturnValue({
+      status: "success",
+      data: { isSetup: true, isAuthenticated: false },
     });
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "The server is starting"
-    );
-    expect(
-      screen.queryByRole("button", { name: "Try again" })
-    ).not.toBeInTheDocument();
 
-    act(() => {
-      vi.advanceTimersByTime(OFFER_RETRY_AFTER_MS - SLOW_START_AFTER_MS);
+    renderGuard();
+
+    expect(screen.getByText("sign-in form")).toBeInTheDocument();
+    expect(mockNavigateTo).not.toHaveBeenCalled();
+  });
+
+  it("records a confirmed session, and forgets it when the server says there is none", () => {
+    mockUseAuthSession.mockReturnValue({
+      status: "success",
+      data: { isSetup: true, isAuthenticated: true, hasRole: true },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    const { unmount } = renderGuard();
+    expect(window.localStorage.getItem(SIGNED_IN_HERE_KEY)).toBe("1");
+    unmount();
 
-    expect(mockRestart).toHaveBeenCalledTimes(1);
-    // The new request starts a new wait.
-    expect(screen.getByRole("status")).toHaveTextContent("Loading the admin");
+    mockUseAuthSession.mockReturnValue({
+      status: "success",
+      data: { isSetup: true, isAuthenticated: false },
+    });
+    renderGuard();
+    expect(window.localStorage.getItem(SIGNED_IN_HERE_KEY)).toBeNull();
+  });
+
+  it("records nothing while the session is still pending", () => {
+    mockUseAuthSession.mockReturnValue(pendingSession());
+
+    renderGuard();
+
+    expect(window.localStorage.getItem(SIGNED_IN_HERE_KEY)).toBeNull();
   });
 
   it("says the server could not be reached when the query errors, with Try again", () => {
@@ -189,6 +282,7 @@ describe("PrivateRoute", () => {
 
   it("shows a retry after an error as a wait, not as the error", () => {
     // React Query keeps `status: "error"` while a refetch from an error runs.
+    signedInHereBefore();
     mockUseAuthSession.mockReturnValue({
       status: "error",
       fetchStatus: "fetching",
@@ -197,7 +291,11 @@ describe("PrivateRoute", () => {
 
     renderGuard();
 
-    expect(screen.getByRole("status")).toHaveTextContent("Loading the admin");
+    expect(screen.getByText("frame, no data")).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
+
+  // Asking again on the sign-in form drawn in place is the form's own offer,
+  // made wherever the form is drawn: covered in
+  // `features/auth-login/__tests__/sign-in-waits-for-server.test.tsx`.
 });

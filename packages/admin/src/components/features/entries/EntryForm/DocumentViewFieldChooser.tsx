@@ -32,6 +32,17 @@ export function DocumentViewFieldChooser({
       >
         Which field do you want to edit?
       </h1>
+      {/* A field inside a repeater is offered once its row has been saved,
+          so a document whose only such field has no saved row yet has
+          nothing to offer; that is said rather than shown as an empty
+          list. */}
+      {candidates.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          {
+            "There's nothing here to open yet. A field inside a repeater opens once its row has been saved."
+          }
+        </p>
+      ) : null}
       <ul className="flex flex-col gap-2">
         {candidates.map(candidate => (
           <li key={candidate.name}>
@@ -41,7 +52,9 @@ export function DocumentViewFieldChooser({
               className="w-full justify-start"
               onClick={() => setSearchParam("field", candidate.name)}
             >
-              {candidate.label ?? candidate.name}
+              {/* A field below the top level is named by where it sits, so
+                  two rows' fields of one name are told apart. */}
+              {candidate.location ?? candidate.label ?? candidate.name}
             </Button>
           </li>
         ))}

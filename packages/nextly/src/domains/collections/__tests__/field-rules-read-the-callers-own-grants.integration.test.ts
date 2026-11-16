@@ -105,7 +105,7 @@ describe("a collection field rule reads the caller's own grants", () => {
         user: { id: "key-owner" },
         authenticatedScope: KEY_WITH_GRANT,
       } as never,
-      { body: "b2", secret: "after" }
+      { body: "b2", secret: "after", _overwrite: true }
     );
 
     expect(updated.success, JSON.stringify(updated)).toBe(true);
@@ -133,7 +133,7 @@ describe("a collection field rule reads the caller's own grants", () => {
         user: { id: "key-owner" },
         authenticatedScope: KEY_WITHOUT_GRANT,
       } as never,
-      { body: "b2", secret: "after" }
+      { body: "b2", secret: "after", _overwrite: true }
     );
 
     // The control for the test above: passing the scope through must not mean

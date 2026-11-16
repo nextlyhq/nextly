@@ -30,28 +30,50 @@
  * ```
  */
 
-import { createInterface } from "node:readline";
+import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type {
+  SqlParam,
+  StatementSession,
+} from "@nextlyhq/adapter-drizzle/types";
 import type { Command } from "commander";
 import { sql, type SQL } from "drizzle-orm";
 
 import { getDialectTables } from "../../database/index";
-import { seedAll, type SeederResult } from "../../database/seeders/index";
+import type { SeederResult } from "../../database/seeders/index";
+import { MIGRATION_LOCK_TABLE as FIELD_GROUP_LOCK_TABLE } from "../../domains/field-groups/migration/session";
+import {
+  busyTableBounds,
+  type BusyTableBounds,
+} from "../../domains/schema/busy-table/bounds";
+import { runStatementsInTries } from "../../domains/schema/busy-table/run-on-session";
 // F8 PR 2: was `DrizzlePushService` (legacy). Switched to the freshPushSchema
 // helper which has the same dialect-aware behavior but is self-contained
 // (no class state, no preview/apply duality).
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
-  isInteractiveTerminal,
+  ACCEPT_DATA_LOSS_ENV,
   judgeDataLoss,
 } from "../../domains/schema/migrate/data-loss-consent";
+import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
 import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
+import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT } from "../../domains/schema/pipeline/pg-visible-relation";
+import {
+  EARLIER_MIGRATE_LOCK_TABLE,
+  SCHEMA_LOCK_TABLE,
+} from "../../domains/schema/pipeline/schema-lock";
 import { describeError, immediateMessage } from "../../errors/index";
-import { dataLossRefusal, exitWithError } from "../errors";
-import { createContext, type CommandContext } from "../program";
+import { NextlyError } from "../../errors/nextly-error";
+import { busyTableNotices } from "../busy-table-options";
+import { reportDryRun } from "../dry-run";
+import { exitWithError } from "../errors";
+import { CliError } from "../errors/cli-error";
+import type { CommandContext } from "../program";
 import {
   createCliAdapter,
+  openDryRunAdapter,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
   type SupportedDialect,
@@ -62,11 +84,18 @@ import {
 } from "../utils/command-prerequisites";
 import {
   readDataLossConsent,
+  requireConsented,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
 import { formatDuration, formatCount } from "../utils/logger";
+import {
+  discoverMigrationGroups,
+  getSortedBaseNames,
+} from "../utils/migration-discovery";
+import { askYesInTerminal } from "../utils/prompt-cancelled";
 
-import { runMigrate } from "./migrate";
+import { commandRun } from "./command-run";
+import { migrateExitCode, runMigrate } from "./migrate";
 
 // ============================================================================
 // Types
@@ -93,6 +122,27 @@ export interface MigrateFreshCommandOptions {
    * @default false
    */
   seed?: boolean;
+
+  /**
+   * `--dry-run`: name every table a real run drops and each migration it runs
+   * again, from the database opened read-only, and change nothing. It drops
+   * nothing, so it asks for no consent.
+   */
+  dryRun?: boolean;
+
+  /**
+   * Refused whenever it is given: it never consents to deleting data.
+   */
+  yes?: boolean;
+
+  /**
+   * One try's bound for a busy table, in whole seconds, as typed (`--lock-timeout`), for the drops
+   * and the re-applied migrations alike; checked with the total before anything changes.
+   */
+  lockTimeout?: string;
+
+  /** Every try's bound together, in whole seconds, as typed (`--lock-timeout-total`). */
+  lockTimeoutTotal?: string;
 }
 
 /**
@@ -103,12 +153,32 @@ interface ResolvedMigrateFreshOptions extends MigrateFreshCommandOptions {
   verbose?: boolean;
   quiet?: boolean;
   cwd?: string;
+  /**
+   * How long a held schema lock is waited for, in milliseconds, before the
+   * run stops naming its holder. Absent, the lock's own wait (about a minute).
+   */
+  lockWaitMs?: number;
 }
+
+/**
+ * The tables the schema lock keeps its rows in, which the drop leaves in
+ * place. The run holds a row in each of them while it drops and re-applies;
+ * dropping one would end that hold part way through, and another run could
+ * then start against a half-reset database.
+ */
+const LOCK_TABLES: ReadonlySet<string> = new Set([
+  SCHEMA_LOCK_TABLE,
+  EARLIER_MIGRATE_LOCK_TABLE,
+  FIELD_GROUP_LOCK_TABLE,
+]);
+
+/** What the claim names as its holder, for another run's refusal to report. */
+const FRESH_LOCK_COMMAND = "nextly migrate:fresh";
 
 /**
  * Result of the fresh command
  */
-interface MigrateFreshResult {
+export interface MigrateFreshResult {
   /** Number of tables dropped */
   tablesDropped: number;
   /** Names of dropped tables */
@@ -138,6 +208,25 @@ export async function runMigrateFresh(
 
   logger.header("Migrate Fresh");
 
+  // The busy-table bounds are checked first, so a value outside its range is refused before
+  // anything is read or changed.
+  let bounds: BusyTableBounds;
+  try {
+    bounds = busyTableBounds({
+      flags: {
+        lockTimeout: options.lockTimeout,
+        lockTimeoutTotal: options.lockTimeoutTotal,
+      },
+      env: process.env,
+    });
+  } catch (error) {
+    exitWithError(logger, error);
+  }
+
+  // `--yes` is refused before anything is read or reached, whatever else is
+  // given, so a run that meant it as consent changes nothing.
+  if (options.yes) exitWithError(logger, yesIsNotConsent());
+
   // Step 1: Validate database environment
   logger.debug("Validating database environment...");
   const dbValidation = requireDatabaseEnv(logger);
@@ -165,18 +254,23 @@ export async function runMigrateFresh(
 
   logger.keyValue("Dialect", getDialectDisplayName(dialect));
 
+  if (options.dryRun === true) {
+    await previewMigrateFresh(options, dbValidation, configResult, context);
+    return;
+  }
+
   // Step 3: Show warning and get confirmation
   logger.newline();
   logger.warn("This command will DROP ALL TABLES in your database.");
   logger.warn("All data will be permanently lost.");
 
   // The data-loss consent decides, before the database is touched: covered,
-  // the run proceeds; at a terminal, it asks; otherwise it refuses at once
-  // rather than waiting on input nobody will give. What it deletes is every
-  // table, which no list of tables can be said to cover.
-  let verdict: Awaited<ReturnType<typeof judgeDataLoss>>;
+  // the run proceeds; where a person can be asked, it asks; otherwise it
+  // refuses at once rather than waiting on input nobody will give. A no at
+  // the prompt ends the run with exit 1, as a refusal does. What it deletes
+  // is every table, which no list of tables can be said to cover.
   try {
-    verdict = await judgeDataLoss({
+    const verdict = await judgeDataLoss({
       deletions: [
         { kind: "unnamed", description: "every table in the database" },
       ],
@@ -186,20 +280,14 @@ export async function runMigrateFresh(
         earlierFlags: options.force ? ["migrate:fresh --force"] : [],
         warn: message => logger.warn(message),
       }),
-      interactive: isInteractiveTerminal(),
-      ask: question => confirmDestructiveAction(`${question} (yes/no): `),
+      interactive: canPrompt(),
+      // A yes deletes; Ctrl+C ends the run with exit 130 (`askYesInTerminal`).
+      ask: question => askYesInTerminal(`${question} (yes/no): `),
       print: line => logger.warn(line),
     });
+    requireConsented(verdict);
   } catch (error) {
     exitWithError(logger, error);
-  }
-  if (verdict.kind === "declined") {
-    logger.newline();
-    logger.info("Operation cancelled.");
-    process.exit(0);
-  }
-  if (verdict.kind === "refused") {
-    exitWithError(logger, dataLossRefusal(verdict));
   }
 
   // Step 4: Connect to database
@@ -219,61 +307,32 @@ export async function runMigrateFresh(
   }
 
   try {
-    // Step 5: Discover and drop all tables
-    logger.newline();
-    logger.info("Discovering tables...");
-
-    const dropStartTime = Date.now();
-    const result = await dropAllTables(
+    // Steps 5 to 8 run under the schema lock, taken once the consent above is
+    // given so no lock is held while a prompt waits. Held from the first drop
+    // to the last re-applied statement, no other run sees the database empty
+    // or half rebuilt; the `nextly migrate` run inside it is this run's own
+    // and takes the same claim rather than waiting on it.
+    const outcome = await withMigrateLock(
       adapter as unknown as DrizzleAdapter,
       dialect,
-      context
-    );
-
-    const dropDuration = Date.now() - dropStartTime;
-
-    if (result.tablesDropped === 0) {
-      logger.info("No tables found to drop.");
-    } else {
-      logger.success(
-        `Dropped ${formatCount(result.tablesDropped, "table")} in ${formatDuration(dropDuration)}`
-      );
-    }
-
-    // Step 6: Re-run all migrations (or push schema for SQLite)
-    logger.newline();
-    logger.divider();
-    logger.newline();
-
-    logger.info("Running all migrations...");
-    logger.newline();
-
-    // All dialects reconcile through the consolidated migrate path:
-    // Phase 1 creates core tables from getDialectTables (single source of
-    // truth) + bootstraps the nextly_schema_events ledger; Phase 2 applies
-    // user migration files. (The old SQLite "push hardcoded DDL directly"
-    // special-case created legacy nextly_migrations/content_schema_events
-    // tables that then tripped the Phase 0 legacy-bookkeeping gate.)
-    await runMigrate(
+      () => dropAndReapply(adapter, dialect, options, bounds, context),
       {
-        config: options.config,
-        verbose: options.verbose,
-        quiet: options.quiet,
-        cwd: options.cwd,
-      },
-      context
+        command: FRESH_LOCK_COMMAND,
+        mode: "wait",
+        waitMs: options.lockWaitMs,
+        ttlSeconds: configResult.config.db.migrateLockTtlSeconds,
+        releaseOnInterrupt: true,
+        logger: {
+          warn: message => logger.warn(message),
+          info: message => logger.info(message),
+        },
+      }
     );
-
-    // Step 7: Run a MySQL schema reconciliation pass before seeding.
-    // This protects migrate:fresh --seed from historical MySQL migration drift
-    // where a migration set may be missing a subset of tables/columns.
-    if (options.seed && dialect === "mysql") {
-      await reconcileMysqlSchema(adapter as unknown as DrizzleAdapter, context);
-    }
-
-    // Step 8: Run seeders if requested
-    if (options.seed) {
-      await performSeeding(adapter, options, context);
+    // Only a wait given `isSettled` ends without running, and this one is not.
+    if (!outcome.ran) {
+      throw NextlyError.internal({
+        logContext: { reason: "migrate:fresh ended without running" },
+      });
     }
 
     // Step 9: Display final summary
@@ -288,22 +347,203 @@ export async function runMigrateFresh(
   }
 }
 
+/**
+ * What `migrate:fresh` would do, named and not done: each table it drops, as
+ * `discoverTables` finds them for the real run, then each migration file it
+ * runs again, in the order `nextly migrate` runs them.
+ */
+async function previewMigrateFresh(
+  options: ResolvedMigrateFreshOptions,
+  dbValidation: ReturnType<typeof requireDatabaseEnv>,
+  configResult: Awaited<ReturnType<typeof loadConfigOrExit>>,
+  context: CommandContext
+): Promise<void> {
+  const { logger } = context;
+  const opened = await openDryRunAdapter({
+    dialect: dbValidation.dialect,
+    databaseUrl: dbValidation.databaseUrl,
+    logger: options.verbose ? logger : undefined,
+  });
+  // A database that is not there is one a real run makes and finds empty, so
+  // it has no tables to drop and every migration still to run.
+  const adapter = "missing" in opened ? undefined : opened;
+  try {
+    const tables =
+      adapter === undefined
+        ? []
+        : await tablesToDrop(
+            adapter as unknown as DrizzleAdapter,
+            dbValidation.dialect
+          );
+    const cwd = options.cwd ?? process.cwd();
+    const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
+    // The files listed are the ones the real run's `nextly migrate` runs:
+    // read for this dialect and the declared schema, which leaves old Schema
+    // Builder files out.
+    const migrations = getSortedBaseNames(
+      await discoverMigrationGroups(
+        migrationsDir,
+        dbValidation.dialect,
+        await declaredNamesOf(
+          { ...configResult, projectRoot: cwd },
+          { orNone: true }
+        )
+      )
+    );
+    reportDryRun(logger, {
+      changes: [
+        ...tables.map(table => ({
+          action: "remove" as const,
+          target: `table ${table}`,
+        })),
+        {
+          action: "run" as const,
+          target: "the core tables' setup, as nextly migrate does",
+        },
+        ...migrations.map(name => ({
+          action: "run" as const,
+          target: `migration ${name}`,
+        })),
+        // The order a real run takes them in: on MySQL, a reconciliation pass
+        // that fills what a migration set is missing, before the seeders.
+        ...(options.seed && dbValidation.dialect === "mysql"
+          ? [
+              {
+                action: "run" as const,
+                target:
+                  "the MySQL schema reconciliation that adds tables or columns the migrations left out",
+              },
+            ]
+          : []),
+        ...(options.seed
+          ? [{ action: "run" as const, target: "the seeders" }]
+          : []),
+      ],
+      notes: [
+        "A real run also applies the configured plugins' migration modules, which a dry run does not list.",
+      ],
+    });
+  } finally {
+    await adapter?.disconnect();
+  }
+}
+
+/**
+ * Drop every table but the lock's own, re-apply every migration, and seed
+ * when asked: the part of the command the schema lock is held for.
+ */
+async function dropAndReapply(
+  adapter: CLIDatabaseAdapter,
+  dialect: SupportedDialect,
+  options: ResolvedMigrateFreshOptions,
+  bounds: BusyTableBounds,
+  context: CommandContext
+): Promise<void> {
+  const { logger } = context;
+  // Step 5: Discover and drop all tables
+  logger.newline();
+  logger.info("Discovering tables...");
+
+  const dropStartTime = Date.now();
+  const result = await dropAllTables(
+    adapter as unknown as DrizzleAdapter,
+    dialect,
+    logger,
+    {
+      bounds,
+      // Each try's notice goes to standard error, as `nextly migrate`'s do, kept back under --quiet.
+      notify: busyTableNotices(logger),
+    }
+  );
+
+  const dropDuration = Date.now() - dropStartTime;
+
+  if (result.tablesDropped === 0) {
+    logger.info("No tables found to drop.");
+  } else {
+    logger.success(
+      `Dropped ${formatCount(result.tablesDropped, "table")} in ${formatDuration(dropDuration)}`
+    );
+  }
+
+  // Step 6: Re-run all migrations (or push schema for SQLite)
+  logger.newline();
+  logger.divider();
+  logger.newline();
+
+  logger.info("Running all migrations...");
+  logger.newline();
+
+  // All dialects reconcile through the consolidated migrate path:
+  // Phase 1 creates core tables from getDialectTables (single source of
+  // truth) + bootstraps the nextly_schema_events ledger; Phase 2 applies
+  // user migration files. (The old SQLite "push hardcoded DDL directly"
+  // special-case created legacy nextly_migrations/content_schema_events
+  // tables that then tripped the Phase 0 legacy-bookkeeping gate.)
+  //
+  // A failure is thrown rather than ending the process where it happens, so
+  // the schema lock is released before the command exits with it.
+  await runMigrate(
+    {
+      config: options.config,
+      verbose: options.verbose,
+      quiet: options.quiet,
+      cwd: options.cwd,
+      // The re-applied migrations wait for a busy table with the bounds the drops waited with.
+      lockTimeout: options.lockTimeout,
+      lockTimeoutTotal: options.lockTimeoutTotal,
+      throwOnFailure: true,
+    },
+    context
+  );
+
+  // Step 7: Run a MySQL schema reconciliation pass before seeding.
+  // This protects migrate:fresh --seed from historical MySQL migration drift
+  // where a migration set may be missing a subset of tables/columns.
+  if (options.seed && dialect === "mysql") {
+    await reconcileMysqlSchema(adapter as unknown as DrizzleAdapter, context);
+  }
+
+  // Step 8: Run seeders if requested
+  if (options.seed) {
+    await performSeeding(adapter, options, context);
+  }
+}
+
 // ============================================================================
 // Table Discovery and Dropping
 // ============================================================================
 
 /**
- * Drop all tables from the database
+ * The tables `migrate:fresh` drops: every table but the lock's own, whose
+ * rows this run holds (`LOCK_TABLES`). A dry run names exactly these.
  */
-async function dropAllTables(
+async function tablesToDrop(
+  adapter: StatementRunner,
+  dialect: SupportedDialect
+): Promise<string[]> {
+  return (await discoverTables(adapter, dialect)).filter(
+    table => !LOCK_TABLES.has(table)
+  );
+}
+
+/** The command's name, as a busy-table report and the schema lock's mark name it. */
+const FRESH_CHANGE = "nextly migrate:fresh";
+
+/**
+ * Drop every table but the lock's own, one `DROP TABLE` at a time on one connection with the
+ * foreign-key checks off, each waiting for a busy table in its own tries
+ * (`runStatementsInTries`). Where one stays busy past its tries the run stops with
+ * `NEXTLY_TABLE_BUSY`, naming the tables already dropped and the held one; those stay dropped,
+ * and the next run drops the rest.
+ */
+export async function dropAllTables(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect,
-  context: CommandContext
+  logger: Pick<CommandContext["logger"], "debug">,
+  busyTable: { bounds: BusyTableBounds; notify: (line: string) => void }
 ): Promise<MigrateFreshResult> {
-  const { logger } = context;
-
-  // Get list of all tables
-  const tables = await discoverTables(adapter, dialect);
+  const tables = await tablesToDrop(adapter, dialect);
 
   if (tables.length === 0) {
     return {
@@ -318,19 +558,28 @@ async function dropAllTables(
 
   const startTime = Date.now();
 
-  // Disable foreign key constraints before dropping
-  await disableForeignKeyChecks(adapter, dialect);
-
-  try {
-    // Drop each table
-    for (const table of tables) {
-      logger.debug(`Dropping table: ${table}`);
-      await dropTable(adapter, dialect, table);
+  // The foreign-key checks are switched off on the connection the drops run on, and back on
+  // after the last drop, or the one that stopped the run.
+  const onSession = (session: StatementSession): SqlRunner => ({
+    executeQuery: <T = unknown>(statement: string, params?: SqlParam[]) =>
+      session.execute<T>(statement, params),
+  });
+  await runStatementsInTries(
+    adapter,
+    tables.map(table => dropTableStatement(dialect, table)),
+    {
+      change: FRESH_CHANGE,
+      bounds: busyTable.bounds,
+      notify: busyTable.notify,
+      appliedBefore: [],
+      // Table names are not secrets; a statement's text never reaches the report.
+      name: index => `the drop of table ${JSON.stringify(tables[index])}`,
+      settings: {
+        set: session => disableForeignKeyChecks(onSession(session), dialect),
+        restore: session => enableForeignKeyChecks(onSession(session), dialect),
+      },
     }
-  } finally {
-    // Re-enable foreign key constraints
-    await enableForeignKeyChecks(adapter, dialect);
-  }
+  );
 
   return {
     tablesDropped: tables.length,
@@ -523,14 +772,11 @@ export async function enableForeignKeyChecks(
   }
 }
 
-/**
- * Drop a single table
- */
-async function dropTable(
-  adapter: DrizzleAdapter,
+/** The statement that drops one table, its name quoted for the dialect. */
+function dropTableStatement(
   dialect: SupportedDialect,
   tableName: string
-): Promise<void> {
+): string {
   let query: string;
 
   // Properly quote the table name based on dialect
@@ -553,69 +799,45 @@ async function dropTable(
       throw new Error(`Unsupported dialect: ${String(dialect)}`);
   }
 
-  await adapter.executeQuery(query);
+  return query;
 }
 
-// ============================================================================
-// Confirmation Helper
-// ============================================================================
-
 /**
- * Prompt user for confirmation of destructive action
+ * The refusal of `migrate:fresh --yes`: it answers other commands' questions,
+ * and deleting every table takes the data-loss consent, never `--yes`.
  */
-async function confirmDestructiveAction(prompt: string): Promise<boolean> {
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  return new Promise(resolve => {
-    rl.question(prompt, answer => {
-      rl.close();
-      const normalizedAnswer = answer.toLowerCase().trim();
-      resolve(normalizedAnswer === "yes" || normalizedAnswer === "y");
-    });
+function yesIsNotConsent(): CliError {
+  return new CliError("INPUT_REFUSED", {
+    what: `--yes does not consent to deleting data: give --accept-data-loss (or ${ACCEPT_DATA_LOSS_ENV}).`,
+    why: "Nothing was changed. migrate:fresh deletes every table, which only the data-loss consent allows.",
+    next: `Run \`nextly migrate:fresh --accept-data-loss\` (or set ${ACCEPT_DATA_LOSS_ENV}=1) in place of --yes.`,
+    context: { reason: "yes-is-not-consent" },
   });
 }
 
 // ============================================================================
-// Command Registration
+// Command Action
 // ============================================================================
 
 /**
- * Register the migrate:fresh command with the program
- *
- * @param program - Commander program instance
+ * The action of `nextly migrate:fresh`, loaded when it runs.
  */
-export function registerMigrateFreshCommand(program: Command): void {
-  program
-    .command("migrate:fresh")
-    .description("Drop all tables and re-run all migrations")
-    .option(
-      "--accept-data-loss [targets]",
-      "Consent to deleting every table, for a run with no terminal; takes no targets. Same as NEXTLY_ACCEPT_DATA_LOSS=1."
-    )
-    .option("-f, --force", "Deprecated: use --accept-data-loss", false)
-    .option("--seed", "Run seeders after migrations", false)
-    .action(async (cmdOptions: MigrateFreshCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
+export async function migrateFreshAction(
+  cmdOptions: MigrateFreshCommandOptions,
+  cmd: Command
+): Promise<void> {
+  const { context, options } = commandRun(cmdOptions, cmd);
+  const resolvedOptions: ResolvedMigrateFreshOptions = options;
 
-      const resolvedOptions: ResolvedMigrateFreshOptions = {
-        ...cmdOptions,
-        config: globalOpts.config,
-        verbose: globalOpts.verbose,
-        quiet: globalOpts.quiet,
-        cwd: globalOpts.cwd,
-      };
-
-      try {
-        await runMigrateFresh(resolvedOptions, context);
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
-    });
+  try {
+    await runMigrateFresh(resolvedOptions, context);
+  } catch (error) {
+    // The status `nextly migrate` ends with, for a failure of the re-apply.
+    exitWithError(context.logger, error, migrateExitCode(error));
+  }
 }
+
+export { registerMigrateFreshCommand } from "./migrate-fresh.command";
 
 // ============================================================================
 // Seeding
@@ -695,6 +917,10 @@ async function performSeeding(
   logger.newline();
   logger.info("Running database seeders...");
 
+  // Loaded when seeding runs, not imported at the top: the seeders reach the
+  // service layer, several hundred modules a reset without seeding never
+  // needs.
+  const { seedAll } = await import("../../database/seeders/index");
   let result: SeederResult;
   try {
     result = await seedAll(adapter as unknown as DrizzleAdapter, {

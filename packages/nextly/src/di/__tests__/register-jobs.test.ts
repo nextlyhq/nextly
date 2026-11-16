@@ -19,6 +19,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ApplyDueReleasesResult } from "../../domains/releases/apply-due-releases";
 import type { JobRegistry } from "../../domains/jobs/job-registry";
+import { DURABLE_EVENTS_DISPATCH_JOB } from "../../domains/plugin-events/dispatch-job";
 import { RELEASES_DRAIN_JOB } from "../../domains/releases/releases-drain-job";
 import { WEBHOOK_DRAIN_JOB } from "../../domains/webhooks/webhook-drain-job";
 import type { Logger } from "../../shared/types";
@@ -133,6 +134,13 @@ describe("the registered job types", () => {
     // quiet stops delivering what it still owes.
     expect(registry.get(WEBHOOK_DRAIN_JOB)).toBeDefined();
     expect(registry.sweeps().map(d => d.slug)).toContain(WEBHOOK_DRAIN_JOB);
+
+    // Durable plugin events: recorded by a write long finished, and owed again
+    // after a failed try at an instant with no request, so a sweep too.
+    expect(registry.get(DURABLE_EVENTS_DISPATCH_JOB)).toBeDefined();
+    expect(registry.sweeps().map(d => d.slug)).toContain(
+      DURABLE_EVENTS_DISPATCH_JOB
+    );
 
     vi.doUnmock("../container");
     vi.resetModules();

@@ -9,9 +9,14 @@
 // @module domains/schema/repair-columns/types
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import type { ColumnOverride } from "../extension/draft";
 import type { ColumnOrigin } from "../services/field-column-descriptor";
+import type { ConversionJudgement } from "../value-conversion/types";
 
+import type { DifferenceToClass } from "./classify";
 import type { ColumnAspects } from "./column-comparison";
+import type { ColumnConversionPlan } from "./conversion/types";
+import type { TableLockFacts } from "./outcome";
 
 /** The kinds of entity whose fields Nextly builds a table from. */
 export type RepairEntityKind =
@@ -42,6 +47,18 @@ export interface EntityDefinition {
   localized: boolean;
   /** Which builder makes the tables from this definition, which decides the column each field names. */
   origin: RepairColumnOrigin;
+  /**
+   * The app's overrides of the entity's own field columns' storage under this definition: the
+   * storage those columns are judged against in place of the field's. Absent, there are none.
+   */
+  columnOverrides?: readonly ColumnOverride[];
+  /**
+   * The type the applied migration snapshot recorded for each column of the entity's table, where a
+   * snapshot says what was applied. A field column it recorded with other storage than its field's
+   * own, within the field's value family, was overridden when that migration was written, whatever
+   * the configuration says now.
+   */
+  recordedTypes?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -114,7 +131,9 @@ export type LegacyShape =
   /** A MySQL column the legacy type map left as `text`, where the descriptor names a varchar. */
   | "mysql-text-fallback"
   /** A component's many-to-many held in a scalar column, where the descriptor names a JSON list. */
-  | "component-list-in-scalar";
+  | "component-list-in-scalar"
+  /** A field-group column in the type the field group's creator gave it before it read the descriptor. */
+  | "field-group-creator-spelling";
 
 /** Why a column differs, where that is known. */
 export type DifferenceCause =
@@ -143,6 +162,35 @@ export interface DiffersFinding extends FindingBase {
   live: ColumnState;
   aspects: ColumnAspects;
   cause: DifferenceCause | null;
+  /**
+   * Whether the column can convert, from the rows it holds: its class, every reason and the rows
+   * that give it. Null for a column a plugin owns, which is reported and never changed.
+   */
+  judgement: ConversionJudgement | null;
+  /**
+   * How the column would convert, read from the live table: its statements, what they cost and
+   * what the new type cannot keep, which makes the difference blocked. Null where the judgement is
+   * null or found no conversion for the pair of types.
+   */
+  conversion: ColumnConversionPlan | null;
+  /**
+   * How many rows the conversion rewrites on this database: every row of the table where the
+   * database rewrites or copies it to convert the column, none where it changes the column in
+   * place. Null where there is no conversion to run.
+   */
+  rowsRewritten: number | null;
+  /**
+   * What the judgement was asked: the field, the column as the database spells it and how its rows
+   * are keyed. An apply asks it again inside the change that converts the column, so a value
+   * written since the report is judged too. Absent on a finding built by hand.
+   */
+  judged?: DifferenceToClass;
+  /**
+   * Why its rows could not be read: another session held its table until the run's tries for it
+   * ran out. Such a column is neither classed nor converted, so its judgement and conversion are
+   * null. Absent where the rows were read.
+   */
+  lock?: TableLockFacts;
 }
 
 /**
@@ -158,7 +206,21 @@ export interface PendingMigrationFinding extends FindingBase {
   live: ColumnState | null;
 }
 
+/**
+ * A column the applied definition names on a table whose definition the database would not let
+ * the run read, because another connection held the whole database (SQLite in exclusive locking
+ * mode). Whether it differs could not be read, so it carries what the configuration gives: where
+ * it is and the column its field expects.
+ */
+export interface DefinitionUnreadableFinding extends FindingBase {
+  kind: "definition-unreadable";
+  expected: ColumnState;
+  /** The wait for the database that ran out, where the run waited in tries; absent otherwise. */
+  lock?: TableLockFacts;
+}
+
 export type ColumnFinding =
   | NotMigratedFinding
   | DiffersFinding
-  | PendingMigrationFinding;
+  | PendingMigrationFinding
+  | DefinitionUnreadableFinding;

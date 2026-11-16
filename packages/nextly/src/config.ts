@@ -90,6 +90,7 @@ export {
   type SanitizedNextlyConfig,
   type TypeScriptConfig,
   type DatabaseConfig,
+  type ExperimentalConfig,
   type RateLimitingConfig,
   type SanitizedRateLimitingConfig,
 } from "./collections/config/define-config";
@@ -107,6 +108,7 @@ export type {
 export {
   isFieldLocalized,
   defaultLocalizedForType,
+  neverTranslatable,
   resolveLocalizedFieldNames,
 } from "./domains/i18n/classify-fields";
 
@@ -143,6 +145,7 @@ export {
   email,
   password,
   code,
+  icon,
   number,
   checkbox,
   date,
@@ -175,6 +178,7 @@ export {
   isEmailField,
   isPasswordField,
   isCodeField,
+  isIconField,
   isNumberField,
   isCheckboxField,
   isDateField,
@@ -194,6 +198,10 @@ export {
 
 export type * from "./collections/fields/types";
 
+// The shape a stored icon id must have, as a value: the admin's form checks
+// an icon field with the same predicate the server's validators use.
+export { isIconIdShape } from "./collections/fields/types/icon";
+
 // Plugin identity and classification. Both modules are import-free, so the
 // admin can share the exact implementations the server uses without pulling
 // the plugin runtime into a browser bundle. Sharing them is the point: a slug
@@ -204,7 +212,46 @@ export {
   isPluginCategory,
   type PluginCategory,
 } from "./plugins/plugin-categories";
-export { pluginAdminSlug } from "./plugins/plugin-slug";
+export { pluginAdminSlug, pluginPageAddress } from "./plugins/plugin-slug";
+// The plugin pages' startup reads the admin layout writes into the prebuilt
+// page, and the one rule and bound of the startup request they keep to: the
+// layout, the admin's startup request and the route answering it read the
+// same answers.
+export {
+  ADMIN_STARTUP_SCREENS_ELEMENT_ID,
+  adminStartupScreensJson,
+} from "./plugins/startup-reads";
+export { MAX_STARTUP_PATHS } from "./route-handler/startup-path";
+// The ids a place contribution's startup reads may name, and their filling:
+// the boot check and the admin page that starts the reads fill a path alike.
+export {
+  fillPlaceStartupPath,
+  PLACE_STARTUP_IDS,
+} from "./plugins/place-startup-reads";
+// The admin places, for the same reason: the catalogue the server checks a
+// plugin's contributions against is the one the admin renders them from.
+export {
+  CORE_ADMIN_PLACES,
+  type AdminPlaceId,
+  type AdminPlaces,
+  type CoreAdminPlaceId,
+} from "./plugins/admin-places";
+// And the entry-list filters a plugin declares, as the workspace meta sends
+// them: the admin offers each one in the list's toolbar.
+export type { PluginListFilterDeclaration } from "./plugins/admin-contributions";
+// And each place's contributions, as the workspace meta sends them to one
+// reader, with the rule language and the one function that answers it, so the
+// admin judges a contribution's rule as the server does.
+export type {
+  AdminContributionsMeta,
+  DeliveredAdminContribution,
+  DeliveredAdminEntry,
+} from "./plugins/admin-contributions-offer";
+export {
+  rowMatches,
+  type RowPredicate,
+  type RowPredicateValue,
+} from "./plugins/row-predicate";
 // And the same for a plugin's HTTP routes, for the same reason and with a
 // sharper consequence. `pluginAdminSlug` derived twice produces a dead link;
 // this derived twice produces a request to a path nothing serves, which the
@@ -212,6 +259,15 @@ export { pluginAdminSlug } from "./plugins/plugin-slug";
 // because a plugin's own UI calling its own route has to address it, and the
 // dispatcher is the only thing that knows where that is.
 export { pluginRouteFullPath } from "./plugins/routes/route-path";
+// Whether two sibling names clash, and whether a field's column is unique, by
+// the rules a save refuses by (@experimental). The Builder refuses a move or
+// names a copy by them: a copy of either rule would let the outline offer a
+// move the save then refuses.
+export {
+  builderColumnIsUnique,
+  siblingNameClash,
+  type SiblingClashKind,
+} from "./domains/schema/field-rules";
 // The mount travels with the path builder, so a client that resolves a route
 // names the same union the server declared it with.
 export type { PluginRouteMount } from "./plugins/routes/route-types";
@@ -223,6 +279,13 @@ export type { PluginRouteMount } from "./plugins/routes/route-types";
 // route the admin cannot call, and nothing fails. A pure string union, so this
 // costs the browser nothing.
 export type { RouteMethod } from "./plugins/routes/route-types";
+// The most rows one request to a declared action's route may name, published
+// so the admin holds a bulk action back on a larger selection instead of
+// sending a request the route refuses. One number, read by both sides: a copy
+// in the admin would stop matching the day the route's limit changes. A plain
+// constant from a module with no runtime imports, so it costs the browser
+// nothing.
+export { MAX_ACTION_ROWS } from "./plugins/routes/route-types";
 
 // And what may travel as one of those routes' bodies. Published here for the
 // same reason: the admin's client serialises with `JSON.stringify`, so a value
@@ -255,7 +318,14 @@ export type { HookWarning } from "./hooks/side-effect-warnings";
 export type {
   ComponentPath,
   HeaderButtonId,
+  // The document-action overrides a plugin publishes, which the admin draws.
+  OverridableDocumentAction,
+  PluginDocumentActionOverride,
 } from "./plugins/admin-contributions";
+// And the list those actions are, a value: the admin holds every one of them
+// while it cannot yet tell whether a plugin overrides it. The module imports
+// types only, so this adds the list and nothing behind it.
+export { OVERRIDABLE_DOCUMENT_ACTIONS } from "./plugins/admin-contributions";
 //
 // Taken from the leaf modules rather than from `domains/widgets/index.ts`: that
 // barrel also carries `executeWidgetQuery`, and through it the Direct API, which
@@ -326,7 +396,7 @@ export {
   effectiveWidgetSettings,
   // How many fields a Fields setting may choose: the settings sheet stops at it.
   MAX_CHOSEN_FIELDS,
-  // How many settings a widget may mark quick: the card's quick popover holds that many.
+  // How many settings a widget may mark quick: the card's header draws the first it can.
   MAX_QUICK_SETTINGS,
   naturalGroupBy,
   resolveWidgetSettings,
@@ -338,6 +408,16 @@ export {
 // Whether a link a plugin wrote stays inside the admin: asked at startup and
 // again by the admin before it draws the link, so both read this one rule.
 export { isAdminRelativePath } from "./domains/widgets/admin-path";
+// The admin's robots directives, for its layout's metadata and the admin's own
+// fallback tag.
+export {
+  ADMIN_BRANDING_ELEMENT_ID,
+  ADMIN_ROBOTS,
+  adminBrandingJson,
+  adminMetadata,
+  adminMetadataFor,
+  type AdminPageBranding,
+} from "./domains/admin-metadata";
 // The settings the sheet draws beyond field configs (a collection, and a
 // filter, sort or grouping over it), and the union every rule reads, so the
 // admin's controls and reset are typed by core's vocabulary, not a copy of it.
@@ -421,6 +501,7 @@ export {
   LIST_DENSITIES,
   type ListDensity,
   effectiveWidgetLimit,
+  listEntries,
 } from "./domains/widgets/query-limits";
 // The VALUE as well as the type. A widget result names each column's kind, and
 // the admin has to decide which kinds it can present -- deriving that from this
@@ -493,3 +574,16 @@ export {
   apiKeyPermissionSlugsFor,
   type ApiKeyOperation,
 } from "./domains/auth/api-key-policy";
+
+// The Schema Builder's field-name rule, for the same reason the upload formats
+// are here: the admin checks a name in the BROWSER as it is typed, and a copy of
+// the rule kept there agrees with the save until one of them changes. The save
+// refuses a name through this function, so the panel accepts exactly what the
+// save takes. Its module reaches no database code.
+export {
+  fieldNameProblem,
+  type FieldNamePlace,
+  type FieldNameProblem,
+  type FieldNameProblemKind,
+  type FieldNameSurface,
+} from "./domains/dynamic-collections/field-name-rule";

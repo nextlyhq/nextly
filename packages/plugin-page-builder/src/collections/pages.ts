@@ -1,12 +1,23 @@
 import {
+  checkbox,
   defineCollection,
   previewUrlFromTemplate,
+  relationship,
   text,
   type CollectionConfig,
   type PreviewViewportsDeclaration,
 } from "nextly/config";
 
 import { blocks } from "../fields/blocksHelper";
+
+import { LAYOUTS_SLUG } from "./layouts";
+
+/** The slug pages are stored under, before any rename a host applies. */
+export const PAGES_SLUG = "pages";
+
+/** The pages' blocks field, which a page draws. */
+export const PAGES_CONTENT_FIELD = "content";
+
 /**
  * There is no page-level custom CSS field.
  *
@@ -85,6 +96,14 @@ export interface PagesCollectionOptions {
    * on.
    */
   breakpoints?: PreviewViewportsDeclaration;
+
+  /**
+   * The `layout` field's own check, run on every write that sends a value for
+   * it, hooks or not: the floor that refuses a page put on a Layout being
+   * removed (`layout-removal/page-reference-guard`). Absent, the field checks
+   * nothing beyond its relationship.
+   */
+  validateLayout?: (value: unknown) => Promise<string | true>;
 }
 
 /*
@@ -94,7 +113,7 @@ export interface PagesCollectionOptions {
  * the ones before it, and the call site stops being readable at exactly the
  * point it starts carrying a preview declaration.
  *
- * Which classes a page references is answered by the `nx_pb_class_usage` index
+ * Which classes a page references is answered by the class usage index
  * rather than by anything on the page row. The index is keyed by class and
  * maintained on every write, so it answers that question as a lookup; a column
  * on the page can only be read once the page is already in hand, which is the
@@ -106,18 +125,61 @@ export interface PagesCollectionOptions {
 export function pagesCollection(
   options: PagesCollectionOptions = {}
 ): CollectionConfig {
-  const { previewPath, breakpoints } = options;
+  const { previewPath, breakpoints, validateLayout } = options;
 
   return defineCollection({
-    slug: "pages",
+    slug: PAGES_SLUG,
     labels: { singular: "Page", plural: "Pages" },
+    // The site's own pages, though this plugin declares them: a plugin that
+    // extends every content type, such as one adding SEO fields, reaches
+    // them as it reaches the site's own collections.
+    siteContent: true,
+    // A page's address may sit beneath another (`docs/getting-started`),
+    // each part normalised as a one-part address is. A rule about the stored
+    // value only, outside the schema, so an existing site migrates nothing
+    // and every one-part address it holds stays as it is.
+    db: { slugPaths: true },
     fields: [
       text({ name: "title", required: true }),
       text({ name: "slug", required: true, unique: true }),
       // Named `content` because that is what the retired choice called its
       // builder arm: a page already holding a block document keeps rendering
       // rather than reading as empty against a field with a new name.
-      blocks({ name: "content", label: "Page Builder" }),
+      blocks({ name: PAGES_CONTENT_FIELD, label: "Page Builder" }),
+      // The Layout this page is drawn inside. Empty means the site's default,
+      // which is the ordinary case: a page names a Layout only to differ from
+      // the rest of the site. A named Layout that is not published falls back
+      // to the default rather than drawing unpublished regions.
+      //
+      // Hidden, as is the switch below: the form keeps both values, and the
+      // page builder draws ONE Layout picker that writes them together (in the
+      // editor's Settings and on the Page Builder card), so an author makes one
+      // choice rather than reconciling two controls.
+      relationship({
+        name: "layout",
+        label: "Layout",
+        relationTo: LAYOUTS_SLUG,
+        admin: {
+          description: "Leave empty to use the site's default Layout.",
+          hidden: true,
+        },
+        // A function, so it is no part of the stored schema: adding it changes
+        // no column and needs no migration.
+        ...(validateLayout === undefined
+          ? {}
+          : { validate: (value: unknown) => validateLayout(value) }),
+      }),
+      // Draw this page with no header or footer at all. It wins over any
+      // Layout the page also names, whoever wrote either field: a landing page
+      // switched off stays switched off when someone later picks a Layout.
+      // Any writer that may update the page may set it; it changes this page
+      // only.
+      checkbox({
+        name: "noHeaderFooter",
+        label: "No header or footer",
+        defaultValue: false,
+        admin: { hidden: true },
+      }),
     ],
     status: true,
     // Pages are what a site shows its visitors, so anyone may read one. A
@@ -144,7 +206,10 @@ export function pagesCollection(
         ? {}
         : {
             preview: {
-              url: previewUrlFromTemplate(previewPath),
+              // The slug is a path (`db.slugPaths`), so its `/` stays.
+              url: previewUrlFromTemplate(previewPath, {
+                pathFields: ["slug"],
+              }),
               // Spread rather than set to `undefined`, so a collection that
               // declares none has no `breakpoints` key at all — which is what
               // `resolvePreviewViewports` reads as "offer nothing" without

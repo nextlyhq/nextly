@@ -69,11 +69,14 @@ function NothingNew({ allHref }: { allHref: string }): JSX.Element {
   );
 }
 
-/** The card's rows, as many as its size holds. */
+/** The card's rows: its reader's "Number of entries", the rows its `load` read. */
 export function NewSubmissionsCard({
   data,
+  settings,
 }: {
   data: NewSubmissionsData;
+  /** The card's settings as its `load` read them; `limit` is its "Number of entries". */
+  settings?: Record<string, unknown>;
 }): JSX.Element {
   // One instant for every row, moved on each minute while the card is
   // mounted, so "just now" becomes "1m ago" without the card being reloaded.
@@ -119,6 +122,15 @@ export function NewSubmissionsCard({
           )
         }
         viewAllHref={data.allHref}
+        // How many there are in all, so the footer reads "View all (N)" once the
+        // card shows fewer than there are.
+        total={{
+          count: data.total,
+          ...(data.atLeast === true ? { atLeast: true } : {}),
+        }}
+        // Its reader's "Number of entries": the list draws the rows the load
+        // read, by the rule the load read them by.
+        limit={typeof settings?.limit === "number" ? settings.limit : undefined}
       />
     </div>
   );

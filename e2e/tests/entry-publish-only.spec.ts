@@ -49,7 +49,7 @@ test.beforeAll(async ({ browser, playwright }, testInfo) => {
   // An editor's change to the live post, held as its draft.
   await expectOk(
     await admin.patch(`/admin/api/collections/posts/entries/${publishedId}`, {
-      data: { excerpt: "The editor's finished excerpt." },
+      data: { excerpt: "The editor's finished excerpt.", _overwrite: true },
     }),
     "holding a draft of the live post"
   );

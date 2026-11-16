@@ -5,10 +5,10 @@
  *
  * A pull request's runs save under its merge ref (`refs/pull/<n>/merge`), and
  * a cache there is read only by later runs of that same pull request: another
- * pull request reads its own ref and `main`'s, never this one. Once it is
+ * pull request reads its own ref and its base branch's, never this one. Once it is
  * closed, nothing reads them again, yet they count against the repository's
  * cache allowance until least-recently-used eviction reaches them, and
- * eviction does not know which entries are dead: it removes `main`'s pnpm
+ * eviction does not know which entries are dead: it removes `dev`'s pnpm
  * store or Playwright browsers as readily. So they are deleted here, on the
  * close.
  *

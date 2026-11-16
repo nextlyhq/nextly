@@ -63,7 +63,7 @@ describe("bulk update honours overrideAccess (integration)", () => {
 
     const result = await entries.updateEntries(
       { collectionName: "notes", overrideAccess: true },
-      [{ id, data: { title: "after" } }]
+      [{ id, data: { title: "after", _overwrite: true } }]
     );
 
     expect(result.errors).toEqual([]);
@@ -111,14 +111,14 @@ describe("bulk update honours overrideAccess (integration)", () => {
     const id = (created.data as { id: string }).id;
 
     const refused = await entries.updateEntries({ collectionName: "posts" }, [
-      { id, data: { status: "published" } },
+      { id, data: { status: "published", _overwrite: true } },
     ]);
     expect(refused.successful).toBe(0);
     expect(refused.failed).toBe(1);
 
     const elevated = await entries.updateEntries(
       { collectionName: "posts", overrideAccess: true },
-      [{ id, data: { status: "published" } }]
+      [{ id, data: { status: "published", _overwrite: true } }]
     );
     expect(elevated.errors).toEqual([]);
     expect(elevated.successful).toBe(1);
@@ -165,7 +165,7 @@ describe("bulk update honours overrideAccess (integration)", () => {
 
     const unelevated = await entries.updateEntries(
       { collectionName: "pages" },
-      [{ id, data: { internalNote: "after" } }]
+      [{ id, data: { internalNote: "after", _overwrite: true } }]
     );
     // The row write is allowed and the protected field is stripped from it,
     // leaving an empty patch, which updates the row's timestamp and nothing
@@ -186,7 +186,7 @@ describe("bulk update honours overrideAccess (integration)", () => {
 
     const elevated = await entries.updateEntries(
       { collectionName: "pages", overrideAccess: true },
-      [{ id, data: { internalNote: "after" } }]
+      [{ id, data: { internalNote: "after", _overwrite: true } }]
     );
     expect(elevated.errors).toEqual([]);
     read = await handler.getEntry({
@@ -205,7 +205,7 @@ describe("bulk update honours overrideAccess (integration)", () => {
     const { handler, entries, id } = await boot();
 
     const result = await entries.updateEntries({ collectionName: "notes" }, [
-      { id, data: { title: "after" } },
+      { id, data: { title: "after", _overwrite: true } },
     ]);
 
     expect(result.successful).toBe(0);

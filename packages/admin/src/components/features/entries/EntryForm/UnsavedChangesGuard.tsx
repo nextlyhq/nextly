@@ -104,6 +104,13 @@ export interface UnsavedChangesGuardProps {
   disabled?: boolean;
 
   /**
+   * A save the page started is on its way. Discard Changes waits for it:
+   * leaving would not stop the save, which could still write the values
+   * discarded. Keep Editing stays offered.
+   */
+  busy?: boolean;
+
+  /**
    * The edited document's fields: a view offered on a field type keeps the
    * document only where it applies to them.
    */
@@ -148,7 +155,7 @@ function SaveableChoices({
         onClick={onDiscard}
         disabled={saving}
         // The dialog's confirm fades on hover; this outline keeps its own hover.
-        className="order-2 border-destructive bg-background text-destructive hover:bg-destructive/10 hover:opacity-100 sm:order-1 sm:mr-auto"
+        className="order-2 border-destructive bg-background text-destructive hover:bg-danger-surface hover:opacity-100 sm:order-1 sm:mr-auto"
       >
         Discard Changes
       </AlertDialogAction>
@@ -219,6 +226,7 @@ export function UnsavedChangesGuard({
   onCancel,
   onSave,
   disabled = false,
+  busy = false,
   fields,
   children,
 }: UnsavedChangesGuardProps): JSX.Element {
@@ -340,7 +348,7 @@ export function UnsavedChangesGuard({
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <SaveableChoices
-                saving={saving}
+                saving={saving || busy}
                 onDiscard={handleConfirm}
                 onSave={() => void handleSave()}
               />
@@ -358,14 +366,13 @@ export function UnsavedChangesGuard({
                 {/* No handler: closing IS the refusal, and it is reported once
                     from `onOpenChange` rather than from both places. */}
                 <AlertDialogCancel>Keep Editing</AlertDialogCancel>
-                {/* Hover darkens the fill by one ramp step, not two.
-                    `destructive-700` drops the on-color label to 3.70:1 in dark
-                    mode, under the 4.5:1 text minimum; `destructive-600` holds
-                    5.67:1 dark and 5.92:1 light and still reads as a state
-                    change against the resting fill. */}
+                {/* Hover darkens the fill to `destructive-hover`, one step deeper than
+                    the resting fill: the label holds 5.92:1 light and 5.67:1 dark,
+                    where a deeper step would drop it under the 4.5:1 text minimum. */}
                 <AlertDialogAction
                   onClick={handleConfirm}
                   variant="destructive"
+                  disabled={busy}
                 >
                   Discard Changes
                 </AlertDialogAction>

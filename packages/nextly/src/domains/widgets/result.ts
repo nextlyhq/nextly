@@ -364,6 +364,20 @@ export type WidgetSlot =
        * dashboard, neither drawn nor counted, and its `load` was not run. Not a failure.
        */
       code: "not-shown";
+    }
+  | {
+      ok: false;
+      error: string;
+      /**
+       * An access or field rule the card's read needs could not run: its own database query
+       * waited out the bound for a connection. Not a refusal, since the rule never answered, and
+       * not "not available": the card shows an error with Retry, which is the remedy.
+       */
+      code: "RULE_COULD_NOT_RUN";
+      /** The collection or Single whose rule it is. */
+      subject: string;
+      /** The field, for a field's rule. */
+      field?: string;
     };
 
 /**

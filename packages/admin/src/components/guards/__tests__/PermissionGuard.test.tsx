@@ -419,7 +419,7 @@ describe("PermissionGuard", () => {
         content: { hasAnswer: false, isPlaceholder: true },
       });
       rerender(guarded());
-      expect(screen.getByText("Setting up your workspace")).toBeTruthy();
+      expect(screen.getByTestId("screen-outline")).toBeTruthy();
       expect(pageRendered).not.toHaveBeenCalled();
 
       // The new language's answer allows the page: it opens again.
@@ -460,7 +460,7 @@ describe("PermissionGuard", () => {
         content: { hasAnswer: false, isPlaceholder: true },
       });
       rerender(guarded());
-      expect(screen.getByText("Setting up your workspace")).toBeTruthy();
+      expect(screen.getByTestId("screen-outline")).toBeTruthy();
       expect(pageRendered).not.toHaveBeenCalled();
     });
 
@@ -486,7 +486,7 @@ describe("PermissionGuard", () => {
         content: { isLoading: true, hasAnswer: false },
       });
       rerender(guarded());
-      expect(screen.getByText("Setting up your workspace")).toBeTruthy();
+      expect(screen.getByTestId("screen-outline")).toBeTruthy();
       expect(screen.queryByText("the page")).toBeNull();
     });
 
@@ -506,7 +506,7 @@ describe("PermissionGuard", () => {
           <Page />
         </PermissionGuard>
       );
-      expect(screen.getByText("Setting up your workspace")).toBeTruthy();
+      expect(screen.getByTestId("screen-outline")).toBeTruthy();
       expect(pageRendered).not.toHaveBeenCalled();
       expect(
         screen.queryByRole("heading", {

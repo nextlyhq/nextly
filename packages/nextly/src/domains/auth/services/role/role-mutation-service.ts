@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, or, sql } from "drizzle-orm";
 
 import { invalidatePermissionCache } from "@nextly/services/lib/permissions";
@@ -20,6 +21,7 @@ import { resolveRelations } from "../../../../database/resolve-relations";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { BaseService } from "../../../../services/base-service";
 import type { Logger } from "../../../../services/shared";
+import { runReadsAndWritesInTransaction } from "../../../../shared/lib/read-transaction-scope";
 import { requireFilterValue } from "../../../../shared/lib/require-filter-value";
 import { isUniqueViolation } from "../../../../shared/lib/unique-violation";
 import {
@@ -27,7 +29,10 @@ import {
   type LastSuperAdminTx,
 } from "../../../users/services/last-super-admin";
 import { PUBLIC_ROLE_SLUG, refuseLinkingPublicRole } from "../public-role";
-import { afterRoleGrantsChanged } from "../role-grants-changed";
+import {
+  afterRoleGrantsChanged,
+  changingRoleGrants,
+} from "../role-grants-changed";
 import { refuseGrantingSuperAdmin } from "../super-admin-grant";
 
 import { toDialectBool, validateRoleId } from "./utils";
@@ -111,6 +116,25 @@ export class RoleMutationService extends BaseService {
   }
 
   /**
+   * Ensure a system role exists with this slug on `tx`, a transaction the
+   * caller holds, created holding nothing where it is missing, so that the
+   * role and the grants the caller then sets on `tx` commit or roll back
+   * together. A role already holding the slug is used as it is.
+   *
+   * @returns Role ID and whether it was newly created
+   */
+  ensureSystemRoleOn(
+    tx: TransactionContext,
+    role: { name: string; slug: string; description: string; level: number }
+  ): Promise<{ id: string; created: boolean }> {
+    // The lookup and the insert read and write through `this.db`, routed to
+    // `tx` here rather than to a pooled connection of their own.
+    return runReadsAndWritesInTransaction(tx, () =>
+      this.ensureBuiltInRole(role)
+    );
+  }
+
+  /**
    * Ensure the Public role exists (idempotent): the built-in role every
    * visitor is judged by, created holding nothing. Only its permissions may
    * change after that, so it is never brought back to a set of its own.
@@ -185,13 +209,17 @@ export class RoleMutationService extends BaseService {
       .from(roleInherits)
       .where(touching);
     if (links.length === 0) return;
-    await this.db.delete(roleInherits).where(touching);
-    const roles = new Set<string>();
-    for (const { parentRoleId, childRoleId } of links) {
-      roles.add(String(parentRoleId));
-      roles.add(String(childRoleId));
-    }
-    for (const id of roles) await afterRoleGrantsChanged(id);
+    // The content expiry this change owes is queued before it is written; the
+    // reads above return before anything is queued when there is nothing to change.
+    return changingRoleGrants(async () => {
+      await this.db.delete(roleInherits).where(touching);
+      const roles = new Set<string>();
+      for (const { parentRoleId, childRoleId } of links) {
+        roles.add(String(parentRoleId));
+        roles.add(String(childRoleId));
+      }
+      for (const id of roles) await afterRoleGrantsChanged(id);
+    });
   }
 
   /**
@@ -227,34 +255,38 @@ export class RoleMutationService extends BaseService {
       .where(eq(roles.id, id))
       .limit(1);
     if (!role) return null;
-    let slug = String(role.slug);
-    // The slug in any case: MySQL's collation finds a role whose slug is
-    // `Public` when asked for `public`, so that one holds it there too.
-    for (let n = 1; slug.toLowerCase() === PUBLIC_ROLE_SLUG; n++) {
-      const free = `${PUBLIC_ROLE_SLUG}-${n}`;
-      if (await this.findRoleIdBySlug(free)) continue;
-      // Only while the role still has the slug it was read with: a rename
-      // another instance made meanwhile stands, and is read back below.
-      try {
-        await this.db
-          .update(roles)
-          .set({ slug: free })
-          .where(and(eq(roles.id, id), eq(roles.slug, slug)));
-      } catch (error) {
-        // Another role took the free slug in the meantime: try the next.
+    // The content expiry this change owes is queued before it is written; the
+    // reads above return before anything is queued when there is nothing to change.
+    return changingRoleGrants(async () => {
+      let slug = String(role.slug);
+      // The slug in any case: MySQL's collation finds a role whose slug is
+      // `Public` when asked for `public`, so that one holds it there too.
+      for (let n = 1; slug.toLowerCase() === PUBLIC_ROLE_SLUG; n++) {
+        const free = `${PUBLIC_ROLE_SLUG}-${n}`;
         if (await this.findRoleIdBySlug(free)) continue;
-        throw error;
+        // Only while the role still has the slug it was read with: a rename
+        // another instance made meanwhile stands, and is read back below.
+        try {
+          await this.db
+            .update(roles)
+            .set({ slug: free })
+            .where(and(eq(roles.id, id), eq(roles.slug, slug)));
+        } catch (error) {
+          // Another role took the free slug in the meantime: try the next.
+          if (await this.findRoleIdBySlug(free)) continue;
+          throw error;
+        }
+        const [now] = await this.db
+          .select({ slug: roles.slug })
+          .from(roles)
+          .where(eq(roles.id, id))
+          .limit(1);
+        if (!now) return null;
+        slug = String(now.slug);
       }
-      const [now] = await this.db
-        .select({ slug: roles.slug })
-        .from(roles)
-        .where(eq(roles.id, id))
-        .limit(1);
-      if (!now) return null;
-      slug = String(now.slug);
-    }
-    await afterRoleGrantsChanged(id);
-    return slug;
+      await afterRoleGrantsChanged(id);
+      return slug;
+    });
   }
 
   /**
@@ -593,33 +625,36 @@ export class RoleMutationService extends BaseService {
         // and these writes are not split by another request's. A retired
         // `manage-` permission is stored as the plain four it stands for,
         // read under the lock on each permission row it reads, so a row
-        // edited since is stored as it is now.
-        const result = await this.adapter.transaction(async tx =>
-          runMutations(tx.getDrizzle(), [
-            ...(await storedAsPlainLocked(
-              tx,
-              uniqueIds,
-              this.adapter.getCapabilities().maxParamsPerQuery
-            )),
-          ])
-        );
+        // edited since is stored as it is now. The content expiry this change owes is
+        // queued before it is written.
+        return changingRoleGrants(async () => {
+          const result = await this.adapter.transaction(async tx =>
+            runMutations(tx.getDrizzle(), [
+              ...(await storedAsPlainLocked(
+                tx,
+                uniqueIds,
+                this.adapter.getCapabilities().maxParamsPerQuery
+              )),
+            ])
+          );
 
-        // Awaited, and the ordering is the invariant rather than a preference:
-        // a runtime that freezes after responding can abandon an unawaited
-        // shared write, leaving every other instance on the old epoch with no
-        // sign anything went wrong.
-        await invalidatePermissionCache({ roleId: id });
+          // Awaited, and the ordering is the invariant rather than a preference:
+          // a runtime that freezes after responding can abandon an unawaited
+          // shared write, leaving every other instance on the old epoch with no
+          // sign anything went wrong.
+          await invalidatePermissionCache({ roleId: id });
 
-        return {
-          id,
-          name: input.name,
-          slug: input.slug,
-          description: input.description ?? null,
-          level: input.level ?? 0,
-          isSystem: Boolean(input.isSystem ?? false),
-          permissionIds: result.assignedPermIds,
-          childRoleIds: result.assignedChildRoleIds,
-        };
+          return {
+            id,
+            name: input.name,
+            slug: input.slug,
+            description: input.description ?? null,
+            level: input.level ?? 0,
+            isSystem: Boolean(input.isSystem ?? false),
+            permissionIds: result.assignedPermIds,
+            childRoleIds: result.assignedChildRoleIds,
+          };
+        });
       } catch (e: unknown) {
         // Log the raw error so developers can see the true cause. The mapped
         // message thrown at the boundary is intentionally generic for safety,
@@ -840,119 +875,129 @@ export class RoleMutationService extends BaseService {
       // and refuses one that returns a promise, so the edit failed there
       // before it changed anything.
       try {
-        await this.adapter.transaction(async tx => {
-          // First, in the same transaction: inheriting a role that confers
-          // super-admin gives super-admin to everyone who holds this one.
-          // And what this one stops inheriting may be how the last
-          // super-admin is one: kept, under the same lock.
-          if (changes.childRoleIds !== undefined) {
-            const guardTx = tx.drizzleWithRelations<LastSuperAdminTx>(
-              resolveRelations(this.dialect)
-            );
-            await refuseGrantingSuperAdmin(
-              guardTx,
-              this.dialect,
-              uniqueChildRoleIds,
-              { roleId: storedRoleId }
-            );
-            await refuseRemovingLastSuperAdmin(
-              guardTx,
-              this.tables,
-              this.dialect,
-              {
-                kind: "replaceChildren",
-                roleId: storedRoleId,
-                childRoleIds: uniqueChildRoleIds,
-              }
-            );
-          }
-          // Update role basic fields if any provided
-          if (Object.keys(updateData).length > 0) {
-            await tx.update(
-              "roles",
-              updateData,
-              this.whereEq("id", storedRoleId)
-            );
-          }
-
-          // Handle permission updates
-          if (changes.permissionIds !== undefined) {
-            // Under the lock on the role's row that every other writer of
-            // its permissions takes (`setRolePermissions`, and boot seeding's
-            // grants to the Public role), so neither lands between this
-            // removal and the insert below.
-            await tx.lockRow("roles", storedRoleId);
-            // A retired `manage-` permission is stored as the plain four it
-            // stands for, so a role saved with one never holds it, read under
-            // the lock on each permission row it reads.
-            const storedPermissionIds = [
-              ...(await storedAsPlainLocked(
-                tx,
-                uniquePermissionIds,
-                this.adapter.getCapabilities().maxParamsPerQuery
-              )),
-            ];
-            // Delete all existing role-permission mappings
-            await tx.delete(
-              "role_permissions",
-              this.whereEq("roleId", storedRoleId)
-            );
-
-            // Insert new role-permission mappings. `createdAt` is set here
-            // because the schema's default for it is applied by the query
-            // builder, which the adapter's insert does not go through.
-            // In runs, each binding no more than one statement may: four
-            // values a row, so a set a retired permission grew past the
-            // adapter's limit still inserts.
-            const createdAt = new Date();
-            for (const run of batches(
-              storedPermissionIds,
-              this.adapter.getCapabilities().maxParamsPerQuery / 4
-            )) {
-              await tx.insertMany(
-                "role_permissions",
-                run.map(permissionId => ({
-                  id: randomUUID(),
-                  roleId: storedRoleId,
-                  permissionId,
-                  createdAt,
-                }))
-              );
-            }
-          }
-
-          // Handle child role updates
-          if (changes.childRoleIds !== undefined) {
-            // Delete all existing role inheritance relationships for this parent
-            await tx.delete(
-              "role_inherits",
-              this.whereEq("parentRoleId", storedRoleId)
-            );
-
-            // Insert new role inheritance relationships
-            if (uniqueChildRoleIds.length > 0) {
-              await tx.insertMany(
-                "role_inherits",
-                uniqueChildRoleIds.map(childRoleId => ({
-                  id: randomUUID(),
-                  parentRoleId: storedRoleId,
-                  childRoleId,
-                }))
-              );
-            }
-          }
-        });
-
-        // Invalidate cache after successful transaction. A new slug changes
-        // the roles a code-defined rule reads, as new grants change the
-        // permissions it reads. Named by the role's own id, as the caches
-        // holding its grants keep it.
-        if (
+        // A new slug changes the roles a code-defined rule reads, as new
+        // grants change the permissions it reads; a name, description or
+        // level changes neither, so an edit of those alone owes no content
+        // expiry and does not enter the gate, which would refuse it when the
+        // jobs queue cannot take the expiry.
+        const grantsChange =
           changes.permissionIds !== undefined ||
           changes.childRoleIds !== undefined ||
-          changes.slug !== undefined
-        ) {
-          await afterRoleGrantsChanged(storedRoleId);
+          changes.slug !== undefined;
+        const update = () =>
+          this.adapter.transaction(async tx => {
+            // First, in the same transaction: inheriting a role that confers
+            // super-admin gives super-admin to everyone who holds this one.
+            // And what this one stops inheriting may be how the last
+            // super-admin is one: kept, under the same lock.
+            if (changes.childRoleIds !== undefined) {
+              const guardTx = tx.drizzleWithRelations<LastSuperAdminTx>(
+                resolveRelations(this.dialect)
+              );
+              await refuseGrantingSuperAdmin(
+                guardTx,
+                this.dialect,
+                uniqueChildRoleIds,
+                { roleId: storedRoleId }
+              );
+              await refuseRemovingLastSuperAdmin(
+                guardTx,
+                this.tables,
+                this.dialect,
+                {
+                  kind: "replaceChildren",
+                  roleId: storedRoleId,
+                  childRoleIds: uniqueChildRoleIds,
+                }
+              );
+            }
+            // Update role basic fields if any provided
+            if (Object.keys(updateData).length > 0) {
+              await tx.update(
+                "roles",
+                updateData,
+                this.whereEq("id", storedRoleId)
+              );
+            }
+
+            // Handle permission updates
+            if (changes.permissionIds !== undefined) {
+              // Under the lock on the role's row that every other writer of
+              // its permissions takes (`setRolePermissions`, and boot seeding's
+              // grants to the Public role), so neither lands between this
+              // removal and the insert below.
+              await tx.lockRow("roles", storedRoleId);
+              // A retired `manage-` permission is stored as the plain four it
+              // stands for, so a role saved with one never holds it, read under
+              // the lock on each permission row it reads.
+              const storedPermissionIds = [
+                ...(await storedAsPlainLocked(
+                  tx,
+                  uniquePermissionIds,
+                  this.adapter.getCapabilities().maxParamsPerQuery
+                )),
+              ];
+              // Delete all existing role-permission mappings
+              await tx.delete(
+                "role_permissions",
+                this.whereEq("roleId", storedRoleId)
+              );
+
+              // Insert new role-permission mappings. `createdAt` is set here
+              // because the schema's default for it is applied by the query
+              // builder, which the adapter's insert does not go through.
+              // In runs, each binding no more than one statement may: four
+              // values a row, so a set a retired permission grew past the
+              // adapter's limit still inserts.
+              const createdAt = new Date();
+              for (const run of batches(
+                storedPermissionIds,
+                this.adapter.getCapabilities().maxParamsPerQuery / 4
+              )) {
+                await tx.insertMany(
+                  "role_permissions",
+                  run.map(permissionId => ({
+                    id: randomUUID(),
+                    roleId: storedRoleId,
+                    permissionId,
+                    createdAt,
+                  }))
+                );
+              }
+            }
+
+            // Handle child role updates
+            if (changes.childRoleIds !== undefined) {
+              // Delete all existing role inheritance relationships for this parent
+              await tx.delete(
+                "role_inherits",
+                this.whereEq("parentRoleId", storedRoleId)
+              );
+
+              // Insert new role inheritance relationships
+              if (uniqueChildRoleIds.length > 0) {
+                await tx.insertMany(
+                  "role_inherits",
+                  uniqueChildRoleIds.map(childRoleId => ({
+                    id: randomUUID(),
+                    parentRoleId: storedRoleId,
+                    childRoleId,
+                  }))
+                );
+              }
+            }
+          });
+
+        if (grantsChange) {
+          // The content expiry this change owes is queued before it is
+          // written; the caches are invalidated after the transaction, by the
+          // role's own id, as the caches holding its grants keep it.
+          await changingRoleGrants(async () => {
+            await update();
+            await afterRoleGrantsChanged(storedRoleId);
+          });
+        } else {
+          await update();
         }
 
         return;
@@ -1027,31 +1072,37 @@ export class RoleMutationService extends BaseService {
       // one pooled client the statements run on, which `this.db` would not.
       // Columns are named as the schema declares them, not as SQL spells them:
       // the adapter resolves a where clause against the table object, whose
-      // keys are the JS property names.
-      await this.adapter.transaction(async tx => {
-        // First, under the lock every change to who is a super-admin takes:
-        // the role's holders may be super-admins only through it, and the
-        // last of them is kept.
-        await refuseRemovingLastSuperAdmin(
-          tx.drizzleWithRelations<LastSuperAdminTx>(
-            resolveRelations(this.dialect)
-          ),
-          this.tables,
-          this.dialect,
-          { kind: "deleteRole", roleId }
-        );
-        // Cascade first, then the role, so nothing references a row that is
-        // already gone if the database is enforcing keys.
-        await tx.delete("role_permissions", this.whereEq("roleId", roleId));
-        await tx.delete("user_roles", this.whereEq("roleId", roleId));
-        await tx.delete("role_inherits", this.whereEq("parentRoleId", roleId));
-        await tx.delete("role_inherits", this.whereEq("childRoleId", roleId));
-        await tx.delete("roles", this.whereEq("id", roleId));
-      });
+      // keys are the JS property names. The content expiry this change owes is
+      // queued before it is written.
+      await changingRoleGrants(async () => {
+        await this.adapter.transaction(async tx => {
+          // First, under the lock every change to who is a super-admin takes:
+          // the role's holders may be super-admins only through it, and the
+          // last of them is kept.
+          await refuseRemovingLastSuperAdmin(
+            tx.drizzleWithRelations<LastSuperAdminTx>(
+              resolveRelations(this.dialect)
+            ),
+            this.tables,
+            this.dialect,
+            { kind: "deleteRole", roleId }
+          );
+          // Cascade first, then the role, so nothing references a row that is
+          // already gone if the database is enforcing keys.
+          await tx.delete("role_permissions", this.whereEq("roleId", roleId));
+          await tx.delete("user_roles", this.whereEq("roleId", roleId));
+          await tx.delete(
+            "role_inherits",
+            this.whereEq("parentRoleId", roleId)
+          );
+          await tx.delete("role_inherits", this.whereEq("childRoleId", roleId));
+          await tx.delete("roles", this.whereEq("id", roleId));
+        });
 
-      // Awaited, for the reason `createRole` gives: an abandoned shared write
-      // leaves the other instances holding answers this delete retired.
-      await afterRoleGrantsChanged(roleId);
+        // Awaited, for the reason `createRole` gives: an abandoned shared write
+        // leaves the other instances holding answers this delete retired.
+        await afterRoleGrantsChanged(roleId);
+      });
     } catch (e: unknown) {
       // Re-throw NextlyErrors unchanged. Raw DB errors map via
       // fromDatabaseError, which provides the spec-compliant generic public

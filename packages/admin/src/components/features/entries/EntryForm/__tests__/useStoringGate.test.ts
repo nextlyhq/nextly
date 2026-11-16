@@ -11,7 +11,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const toast = vi.hoisted(() => ({ error: vi.fn() }));
 vi.mock("@admin/components/ui", () => ({ toast }));
 
-import type { DocumentActionOutcome } from "../useDocumentActionBindings";
+import type {
+  DocumentActionOutcome,
+  StoreReadiness,
+} from "../useDocumentActionBindings";
 import { useStoringGate } from "../useStoringGate";
 
 beforeEach(() => {
@@ -181,5 +184,66 @@ describe("useStoringGate", () => {
       message: "The block couldn't be committed.",
       beforeWrite: true,
     });
+  });
+
+  /**
+   * A handler that judges `work` and checks it before the write, and one
+   * after it that changes the work `changes` times, as an author's edit
+   * during a later handler's wait would.
+   */
+  function judgedThenChanged(changes: number) {
+    let work = 0;
+    let judged = 0;
+    const judge = vi.fn((_action: string, store: StoreReadiness) => {
+      const seen = work;
+      judged += 1;
+      store.checkBeforeWrite(() => work === seen);
+    });
+    const change = () => {
+      if (judged <= changes) work += 1;
+    };
+    return { judge, change };
+  }
+
+  it("runs every handler again when a check before the write finds the work changed", async () => {
+    const { result } = renderGate();
+    const { judge, change } = judgedThenChanged(1);
+    act(() => {
+      result.current.registerBeforeAction(judge);
+      result.current.registerBeforeAction(change);
+    });
+    const perform = vi.fn(
+      async (): Promise<DocumentActionOutcome> => ({ ok: true })
+    );
+
+    let outcome: DocumentActionOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current.storing("publish", perform)();
+    });
+
+    expect(judge).toHaveBeenCalledTimes(2);
+    expect(perform).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual({ ok: true });
+  });
+
+  it("refuses a store whose work keeps changing before its write", async () => {
+    const { result } = renderGate();
+    const { judge, change } = judgedThenChanged(Number.POSITIVE_INFINITY);
+    act(() => {
+      result.current.registerBeforeAction(judge);
+      result.current.registerBeforeAction(change);
+    });
+    const perform = vi.fn(
+      async (): Promise<DocumentActionOutcome> => ({ ok: true })
+    );
+
+    let outcome: DocumentActionOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current.storing("publish", perform)();
+    });
+
+    expect(perform).not.toHaveBeenCalled();
+    expect(judge).toHaveBeenCalledTimes(3);
+    expect(outcome).toMatchObject({ ok: false, reason: "busy" });
   });
 });

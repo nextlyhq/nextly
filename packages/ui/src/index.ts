@@ -418,6 +418,25 @@ export { ColorPicker } from "./components/color-picker";
 /** @experimental */
 export type { ColorPickerProps, ColorSwatch } from "./components/color-picker";
 
+/**
+ * @experimental An icon field and its search-first picker.
+ *
+ * The kit carries no icons: the host passes `loadIcons`, which resolves to an
+ * `IconSource` that searches one set and resolves a stored id, so the set is
+ * loaded only where a field or picker needs it.
+ */
+export { IconField, IconPicker } from "./components/icon-picker";
+/** @experimental */
+export type { IconFieldProps, IconPickerProps } from "./components/icon-picker";
+/** @experimental Draws one icon from a source's body without inserting markup. */
+export { IconGlyph } from "./components/icon-glyph";
+/** @experimental */
+export type {
+  IconGlyphProps,
+  IconSource,
+  IconSourceIcon,
+} from "./components/icon-glyph";
+
 /** @experimental */
 // Types: Table
 export type {
@@ -478,7 +497,7 @@ export {
  * Renders only the visible window, which is what makes a document of thousands of blocks usable
  * and what forces the flat `aria-level` markup: an item's children may not be in the DOM at all.
  */
-export { TreeView } from "./components/tree-view";
+export { TREE_INDENT_PX, TreeView } from "./components/tree-view";
 /** @experimental The node shape a tree is built from, and the control's props. */
 export type { TreeNode, TreeViewProps } from "./components/tree-view";
 
@@ -561,10 +580,21 @@ export type { ModifierState } from "./lib/shortcuts/key-spec";
 export { FieldShell } from "./components/field-shell";
 /** @experimental */
 export type {
+  FieldLayout,
   FieldShellProps,
   FieldShellRenderProps,
   FieldWidth,
 } from "./types/form-layout";
+
+/**
+ * @experimental The settings row's two-column grid, geometry only: the label
+ * and its help on the left, the control on the right. `FieldShell`'s row
+ * layout and the admin's form-bound and grouped settings rows all draw it, so
+ * there is one copy of the grid rather than one per row idiom.
+ */
+export { FieldRow } from "./components/field-row";
+/** @experimental */
+export type { FieldRowProps } from "./components/field-row";
 
 /**
  * @experimental A labelled card holding a group of fields, composing `Card`
@@ -596,8 +626,26 @@ export { Bleed, PageShell, SHELL_MEASURE } from "./components/page-shell";
  * entirely by props, so a page declares what it is instead of a foreign file
  * deriving it from the URL. No first-party plugin has exercised it yet.
  */
-export { PageHeader } from "./components/page-header";
+export { PageHeader, PageTab, PageTabs } from "./components/page-header";
 /** @experimental */
-export type { PageHeaderProps } from "./components/page-header";
+export type {
+  PageHeaderProps,
+  PageTabProps,
+  PageTabsProps,
+} from "./components/page-header";
+/**
+ * @experimental A page's frame by its type (list, form, editor, workspace):
+ * the page says what it is, and the frame decides its width and gutter.
+ */
+export { PageFrame } from "./components/page-frame";
+/** @experimental */
+export type { PageFrameProps, PageType } from "./components/page-frame";
+/**
+ * @experimental Hears whether content draws a `PageFrame`, for a host that
+ * frames unframed content and must not frame a framed page twice.
+ */
+export { PageFrameListener } from "./components/page-frame";
+/** @experimental */
+export type { PageFrameListenerProps } from "./components/page-frame";
 /** @experimental */
 export type { BleedProps, PageShellProps } from "./components/page-shell";

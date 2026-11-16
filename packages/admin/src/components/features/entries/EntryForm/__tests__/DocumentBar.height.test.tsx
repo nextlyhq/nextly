@@ -61,6 +61,7 @@ function Editor({ children }: { children?: ReactNode }) {
   return (
     <FormProvider {...methods}>
       <DocumentEditorLayout
+        place={{ place: "collection.edit", context: null }}
         bar={
           <DocumentBar
             mode="edit"

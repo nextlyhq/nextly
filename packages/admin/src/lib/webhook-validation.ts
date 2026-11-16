@@ -13,7 +13,6 @@ import { z } from "zod";
 
 import {
   REDACTED_HEADER_VALUE,
-  WEBHOOK_EVENT_TYPES,
   WEBHOOK_EVENT_WILDCARD,
   type CreateWebhookInput,
   type UpdateWebhookInput,
@@ -80,25 +79,7 @@ export const webhookFormSchema: z.ZodObject<{
   name: z.ZodString;
   url: z.ZodString;
   allEvents: z.ZodBoolean;
-  eventTypes: z.ZodArray<
-    z.ZodEnum<{
-      "entry.created": "entry.created";
-      "entry.updated": "entry.updated";
-      "entry.deleted": "entry.deleted";
-      "entry.published": "entry.published";
-      "entry.unpublished": "entry.unpublished";
-      "entry.status_changed": "entry.status_changed";
-      "single.updated": "single.updated";
-      "single.published": "single.published";
-      "single.unpublished": "single.unpublished";
-      "media.uploaded": "media.uploaded";
-      "media.updated": "media.updated";
-      "media.deleted": "media.deleted";
-      "user.created": "user.created";
-      "user.deleted": "user.deleted";
-      "form.submission.created": "form.submission.created";
-    }>
-  >;
+  eventTypes: z.ZodArray<z.ZodString>;
   headers: z.ZodArray<
     z.ZodObject<
       {
@@ -132,7 +113,9 @@ export const webhookFormSchema: z.ZodObject<{
         }
       }, "Use an HTTPS URL."),
     allEvents: z.boolean(),
-    eventTypes: z.array(z.enum(WEBHOOK_EVENT_TYPES)),
+    // Which types exist is the server's to say, and it judges them again on
+    // save; the form offers only the ones it lists.
+    eventTypes: z.array(z.string()),
     headers: z.array(headerRowSchema),
     clearExistingHeaders: z.boolean(),
     enabled: z.boolean(),

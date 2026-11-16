@@ -468,7 +468,7 @@ describe.each(dialects)(
         collection: FALLING_BACK,
         id: others,
         locale: "fr",
-        data: { title: "hidden" },
+        data: { title: "hidden", _overwrite: true },
       } as never);
 
       // The control: the author's plain read hides the entry.
@@ -531,7 +531,9 @@ describe.skipIf(lockingDialects.length === 0).each(lockingDialects)(
         t.nextly.update({
           collection: OPEN_POSTS,
           id: own,
-          data: { owner: OTHER },
+          // Over whatever is stored: the race is with the delete's rule, not
+          // with another version of the entry.
+          data: { owner: OTHER, _overwrite: true },
         })
       );
 

@@ -106,7 +106,9 @@ describe("the retired column's provenance, asked once per scan", () => {
 
   it("is asked once across every recheck a removal makes", async () => {
     const db = await libraryOfThreePages();
-    const referencedNow = referencedNowIn(db.adapter as never);
+    const referencedNow = referencedNowIn(db.adapter as never, {
+      getType: () => "local",
+    });
 
     const answers = [];
     for (const batch of [

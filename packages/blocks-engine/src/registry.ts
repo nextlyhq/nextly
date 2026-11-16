@@ -10,12 +10,19 @@
  * at boot with a named error rather than producing broken pages later.
  */
 import type { AnyBlockDefinition, BlockSupports } from "./block";
-import { COMPONENT_INSTANCE_TYPE, isBlockType, isPartName } from "./document";
+import {
+  COMPONENT_INSTANCE_TYPE,
+  CONDITION_HIDDEN_TYPE,
+  isBlockType,
+  isPartName,
+  isTokenRef,
+} from "./document";
 import type { MigrationSource } from "./migration";
 import { MAX_MIGRATION_STEPS, findMigrationGaps } from "./migration";
 import type { NestingSource } from "./nesting";
 import { isPlainRecord } from "./plain-record";
 import { isSlotLock } from "./slot-lock";
+import { childGapIssues } from "./style/child-gap";
 import { styleSupportDefinitions } from "./style/supports-map";
 import type { SlotDefaultSource } from "./tree";
 import type { BlockTypeLookup } from "./validation";
@@ -144,7 +151,10 @@ export const MAX_BLOCK_VERSION: number = 1 + MAX_MIGRATION_STEPS;
  * Names the engine owns. They identify nodes resolved by the engine's own
  * machinery rather than by a registered block, so a block may not claim one.
  */
-const RESERVED_BLOCK_NAMES = new Set<string>([COMPONENT_INSTANCE_TYPE]);
+const RESERVED_BLOCK_NAMES = new Set<string>([
+  COMPONENT_INSTANCE_TYPE,
+  CONDITION_HIDDEN_TYPE,
+]);
 
 /** A support key is a single lowerCamel/slug token. */
 const SUPPORT_KEY_RE = /^[a-zA-Z][a-zA-Z0-9]*$/;
@@ -181,6 +191,33 @@ function assertValidPropRoles(def: AnyBlockDefinition): void {
       fail(
         "NEXTLY_BLOCK_INVALID",
         `block "${def.name}" prop "${propName}" role must be "content", or left out.`
+      );
+    }
+  }
+}
+
+/**
+ * Refuse a media prop's `addressProp` that is not a pairing with a `url` prop
+ * of the same block: unbinding an image kept by its address writes the
+ * address there, and a pairing to nothing, or to a prop that is no address,
+ * would write it where no image is drawn from.
+ *
+ * Only a media or upload prop's key is read: on any other prop it stays the
+ * free extension key `PropSchema` has always allowed, so a block already using
+ * that name for its own option still registers.
+ */
+function assertValidAddressProps(def: AnyBlockDefinition): void {
+  if (!isPlainRecord(def.props)) return;
+  const props = def.props as Record<string, unknown>;
+  for (const [propName, schema] of Object.entries(props)) {
+    if (!isPlainRecord(schema) || schema.addressProp === undefined) continue;
+    if (schema.type !== "media" && schema.type !== "upload") continue;
+    const target = schema.addressProp;
+    const paired = typeof target === "string" ? props[target] : undefined;
+    if (!isPlainRecord(paired) || paired.type !== "url") {
+      fail(
+        "NEXTLY_BLOCK_INVALID",
+        `block "${def.name}" prop "${propName}" addressProp must name a "url" prop of the block.`
       );
     }
   }
@@ -244,6 +281,7 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
     );
   }
   assertValidPropRoles(def);
+  assertValidAddressProps(def);
   // A slot's `allow` is read by every nesting decision, and a malformed one does not degrade — a
   // reader spreading `allow: 42` throws `TypeError: spec.allow is not iterable` at the first
   // validation, repair or insertion lookup, a long way from the definition that caused it and
@@ -317,6 +355,35 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
           `block "${def.name}" part "${named}" must be a plain object.`
         );
       }
+    }
+  }
+  // A length, the number zero, or a token reference and nothing else: what the
+  // declared type allows, and what the catalog's `gap` and margin accept. A
+  // structure or any other number would reach the compile context as a value
+  // neither can take.
+  if (def.childGap !== undefined) {
+    const gap: unknown = def.childGap;
+    const usable =
+      typeof gap === "string" ||
+      gap === 0 ||
+      // A token reference, scaled or not: what it may carry beside the
+      // name is the style values' rule, which `childGapIssues` applies.
+      isTokenRef(gap);
+    if (!usable) {
+      fail(
+        "NEXTLY_BLOCK_INVALID",
+        `block "${def.name}" childGap must be a length or a { $token } reference.`
+      );
+    }
+    // And a length both of its forms take, since it is written as a margin in
+    // block flow and as `gap` under flex or grid: refused here rather than
+    // lost silently on every page that switches the container's layout.
+    const issues = childGapIssues(gap, "/childGap");
+    if (issues.length > 0) {
+      fail(
+        "NEXTLY_BLOCK_INVALID",
+        `block "${def.name}" childGap must be a length that both a margin and a gap take: ${issues[0].message}`
+      );
     }
   }
   if (def.slots !== undefined) {

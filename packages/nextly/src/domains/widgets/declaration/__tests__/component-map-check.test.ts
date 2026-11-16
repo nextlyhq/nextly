@@ -141,7 +141,9 @@ describe("in development", () => {
       expect.any(String),
       process.cwd(),
       undefined,
-      dashboard
+      dashboard,
+      // And no collections of the site's own.
+      undefined
     );
     expect(info).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -159,11 +161,45 @@ describe("in development", () => {
       process.cwd(),
       // No config file here, so the map is written without the config's check, as before.
       undefined,
-      // And no widgets of the site's own.
+      // And no widgets or collections of the site's own.
+      undefined,
       undefined
     );
     expect(info).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "admin-component-map-regenerated" })
+    );
+  });
+
+  it("writes the map again with the views the site's own collections name", async () => {
+    const collections = [
+      {
+        slug: "orders",
+        fields: [],
+        admin: {
+          components: {
+            views: { Edit: { Component: "@acme/site/views#OrderEditor" } },
+          },
+        },
+      },
+    ];
+    // As the boot left them after every setup(): the config as written has
+    // no collections, and a plugin's setup() added this one.
+    setAdminComponentPlugins(
+      [shop],
+      undefined,
+      collections as unknown as Parameters<typeof setAdminComponentPlugins>[2]
+    );
+
+    // A map without the view is out of date, and is written again with the
+    // site's collections, so the rewrite keeps it.
+    await checkAdminComponents({ config, registeredComponentPaths: BOTH });
+    expect(writeComponentMapFiles).toHaveBeenCalledWith(
+      [shop],
+      expect.any(String),
+      process.cwd(),
+      undefined,
+      undefined,
+      collections
     );
   });
 
@@ -319,6 +355,7 @@ describe("where the map is", () => {
       join(root, "types/generated/nextly-types.ts"),
       root,
       join(root, "nextly.config.ts"),
+      undefined,
       undefined
     );
 
@@ -362,6 +399,7 @@ describe("the config a development rewrite checks against", () => {
       join(root, "src/types/generated/nextly-types.ts"),
       root,
       join(root, "config/site.config.mjs"),
+      undefined,
       undefined
     );
   });
@@ -405,7 +443,8 @@ describe("the config a development rewrite checks against", () => {
       join(root, "src/types/generated/nextly-types.ts"),
       root,
       join(root, "nextly.config.ts"),
-      notesDashboard
+      notesDashboard,
+      undefined
     );
   });
 
@@ -434,5 +473,49 @@ describe("the config a development rewrite checks against", () => {
     expect(staleWarning()).toContain(
       "- held to another config: imports ../../../config/nextly.config, where the config is ../../../nextly.config"
     );
+  });
+});
+
+describe("a site collection's own views", () => {
+  beforeEach(() => vi.stubEnv("NODE_ENV", "development"));
+
+  // `generate:types` lists the views the site's own collections name, and the
+  // development check collects them too: read as obsolete, its rewrite would
+  // remove them.
+  it("leaves alone a map listing a site collection's custom edit view, read as the boot left the collections", async () => {
+    // The config as written names no view; a plugin's setup() renamed it to
+    // this one, and the boot recorded the collections it ran with.
+    const written = {
+      ...config,
+      collections: [
+        {
+          slug: "orders",
+          fields: [],
+          admin: {
+            components: {
+              views: { Edit: { Component: "./views/orders#OldEditor" } },
+            },
+          },
+        },
+      ],
+    } as unknown as Parameters<typeof checkAdminComponents>[0]["config"];
+    setAdminComponentPlugins([shop], undefined, [
+      {
+        slug: "orders",
+        fields: [],
+        admin: {
+          components: {
+            views: { Edit: { Component: "./views/orders#OrderEditor" } },
+          },
+        },
+      },
+    ] as unknown as Parameters<typeof setAdminComponentPlugins>[2]);
+
+    await checkAdminComponents({
+      config: written,
+      registeredComponentPaths: [...BOTH, "./views/orders#OrderEditor"],
+    });
+
+    expect(writeComponentMapFiles).not.toHaveBeenCalled();
   });
 });

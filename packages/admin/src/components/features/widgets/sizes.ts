@@ -1,10 +1,12 @@
 /**
  * The one place a card's drawn size is decided.
  *
- * The dashboard is ONE ordered list of cards on a grid twelve columns wide,
- * with rows 72 px high. A card spans its `w` columns and `h` rows, placed in
- * the list's order and never moved out of it to fill a gap, so the order a
- * reader sees, the order the page is read in and the order Tab visits agree.
+ * The dashboard is ONE ordered list of cards on a grid twelve columns wide. A card spans its `w`
+ * columns, placed in the list's order and never moved out of it to fill a gap, so the order a
+ * reader sees, the order the page is read in and the order Tab visits agree. Every card takes one
+ * row of the grid, and the rows are as tall as the tallest card drawn in them: a card is as tall
+ * as its content, at rest and while customising, and the cards that share a row are stretched to
+ * one height so their bottoms meet. A stored `h` is kept, and sets no height.
  *
  * How many columns a card is DRAWN across depends on how wide the DASHBOARD
  * is, not the window: the grid sits in an `@container/dashboard` wrapper and
@@ -15,9 +17,8 @@
  * |----------------|---------------------------------------|
  * | >= 1,024 px    | `w`                                   |
  * | 640-1,023 px   | 6 for a `w` of 6 or less, else 12     |
- * | < 640 px       | 12: one column, in the saved order    |
+ * | < 640 px       | 6 for a `w` of 3 or less, else 12     |
  *
- * 🔴 `h` never changes with the band, so a card keeps its rows at every width.
  * A widget's minimum `w` holds on the twelve-column band only; in the narrower
  * bands a card takes the width the band gives it, and its body adapts through
  * its size tier (`frame/tier`).
@@ -31,20 +32,15 @@
 
 import {
   GRID_COLUMNS,
-  MAX_GRID_ROWS,
-  MIN_GRID_ROWS,
   clampSize,
   isGridSize,
   type GridSize,
   type WidgetSizeBounds,
 } from "nextly/config";
-import type { CSSProperties } from "react";
 
-// One row's height and the gap down the grid, in pixels, and a card's height from its rows: core's
-// own (`nextly/card-geometry`), the numbers a widget's server `load` counts its rows by, so the
-// grid drawn here and the rows a load reads cannot come to disagree. Re-exported for the grid's
-// readers, which name them from here.
-export { cardHeightPx, ROW_GAP_PX, ROW_HEIGHT_PX } from "nextly/card-geometry";
+// The gap down the grid, in pixels: core's own (`nextly/card-geometry`), re-exported for the
+// grid's readers, which name it from here.
+export { ROW_GAP_PX } from "nextly/card-geometry";
 
 // The gaps across, the bands and how many columns a card is drawn across in each (the table
 // above): core's own too, since the layout read works out the tier a card is drawn at from them
@@ -62,16 +58,20 @@ export {
 } from "nextly/card-geometry";
 
 /**
- * The grid's own classes: twelve columns, rows of {@link ROW_HEIGHT_PX}, and the gaps.
+ * The dashboard grid's classes: twelve columns, in order, and the gaps, with rows as tall as the
+ * cards drawn in them. One grid at rest and while customising, so a card is drawn at the same
+ * height in both.
  *
  * 🔴 The gap rule lives here and nowhere else: 16 px down at every width, and across 16 px, or
  * 24 px once the DASHBOARD is {@link WIDE_GAP_FROM_PX} wide. In pixels, because a card's drawn
  * width is its columns plus the gaps between them, and a width predicted with another gap is
  * off by enough to move a card across a tier's edge. `grid-flow-row` and never `dense`: a dense
- * grid backfills a gap with a later card, which draws it out of its order.
+ * grid backfills a gap with a later card, which draws it out of its order. `auto-rows-auto` and
+ * the grid's default stretch make each row as tall as its tallest card, and every card in it as
+ * tall as that.
  */
 export const GRID_CLASS =
-  "grid grid-flow-row grid-cols-12 auto-rows-[72px] gap-x-[16px] gap-y-[16px] @min-[1280px]/dashboard:gap-x-[24px]";
+  "grid grid-flow-row grid-cols-12 gap-x-[16px] gap-y-[16px] @min-[1280px]/dashboard:gap-x-[24px] auto-rows-auto";
 
 /**
  * The grid's columns and the gap across them, without its rows: for a grid that draws cards at
@@ -91,9 +91,9 @@ export const GRID_COLUMNS_CLASS =
  * answer at every band edge.
  */
 export const SPAN_CLASSES: Readonly<Record<number, string>> = Object.freeze({
-  1: "col-span-12 @min-[640px]/dashboard:col-span-6 @min-[1024px]/dashboard:col-span-1",
-  2: "col-span-12 @min-[640px]/dashboard:col-span-6 @min-[1024px]/dashboard:col-span-2",
-  3: "col-span-12 @min-[640px]/dashboard:col-span-6 @min-[1024px]/dashboard:col-span-3",
+  1: "col-span-6 @min-[1024px]/dashboard:col-span-1",
+  2: "col-span-6 @min-[1024px]/dashboard:col-span-2",
+  3: "col-span-6 @min-[1024px]/dashboard:col-span-3",
   4: "col-span-12 @min-[640px]/dashboard:col-span-6 @min-[1024px]/dashboard:col-span-4",
   5: "col-span-12 @min-[640px]/dashboard:col-span-6 @min-[1024px]/dashboard:col-span-5",
   6: "col-span-12 @min-[640px]/dashboard:col-span-6",
@@ -124,7 +124,7 @@ export function drawnSize(
 
 /**
  * The span classes for a card drawn at `w` columns. The one function the grid draws a card's
- * width through; its height is {@link cardRowStyle}'s.
+ * width through; its height is its content's.
  */
 export function cardSpanClass(w: number): string {
   // A `w` the table does not hold is one `drawnSize` would never hand over; drawn full rather
@@ -135,20 +135,21 @@ export function cardSpanClass(w: number): string {
 }
 
 /**
- * The rows a card drawn `h` high spans, as a style rather than a class: a card's `h` has no
- * upper end a list of class text could cover, and it is the same in every band, so no container
- * query has to answer it.
+ * The widths the dashboard names, in columns of twelve: 25%, 33%, 50%, 66%, 75% and 100% of the
+ * row. They are offered wherever a widget's bounds allow them.
  */
-export function cardRowStyle(h: number): CSSProperties {
-  return { gridRow: `span ${h} / span ${h}` };
-}
-
-/** The widths the card menu offers wherever a widget's bounds allow them: the common fractions. */
-const COMMON_WIDTHS: readonly number[] = [3, 4, 6, 8, 12];
+const NAMED_WIDTHS: ReadonlyMap<number, string> = new Map([
+  [3, "25%"],
+  [4, "33%"],
+  [6, "50%"],
+  [8, "66%"],
+  [9, "75%"],
+  [12, "100%"],
+]);
 
 /**
- * The widths a card may be resized to, narrowest first: each common width that lies within the
- * widget's bounds, the bounds' own ends (so a widget whose minimum is 5 is offered 5), the
+ * The widths a card may be resized to, narrowest first: each named width that lies within the
+ * widget's bounds, the bounds' own ends (so a widget bounded 5 to 5 is still offered 5), the
  * widget's declared default (so a card can always go back to the width its author chose), and
  * the width it is drawn at (so one of the choices is always the checked one).
  */
@@ -156,7 +157,7 @@ export function widthChoices(
   bounds: WidgetSizeBounds,
   drawn?: number
 ): number[] {
-  const within = COMMON_WIDTHS.filter(
+  const within = [...NAMED_WIDTHS.keys()].filter(
     w => w >= bounds.min.w && w <= bounds.max.w
   );
   const ends = [bounds.min.w, bounds.default.w, bounds.max.w];
@@ -167,68 +168,35 @@ export function widthChoices(
     .sort((a, b) => a - b);
 }
 
-/**
- * The heights a card may be resized to, shortest first: every one its widget's bounds allow,
- * within the grid's own two to twelve rows. A declaration taller than that is refused at
- * startup; the bounds are held to it here as well, so the menu is never thousands long.
- */
-export function heightChoices(bounds: WidgetSizeBounds): number[] {
-  const lowest = Math.max(bounds.min.h, MIN_GRID_ROWS);
-  const highest = Math.min(bounds.max.h, MAX_GRID_ROWS);
-  if (highest < lowest) return [lowest];
-  return Array.from(
-    { length: highest - lowest + 1 },
-    (_, index) => lowest + index
-  );
-}
-
 /** A width as the card menu says it: "6 columns". */
 export function columnsName(w: number): string {
   return w === 1 ? "1 column" : `${w} columns`;
 }
 
 /**
- * The widths that are an exact share of the row, as the dashboard's design names them: ⅓, ½,
- * Full. A reader thinks of a card as half the row, not as six of twelve columns, so the card
- * menu leads with the share and gives the column count beneath it.
+ * A width as a share of the row, in whole percent: a named width by its name ("50%", "66%"), any
+ * other column count by its own share rounded ("5 columns" is "42%"). A reader thinks of a card
+ * as half the row, not as six of twelve columns.
  */
-const WIDTH_SHARES: ReadonlyMap<number, { glyph: string; name: string }> =
-  new Map([
-    [3, { glyph: "¼", name: "Quarter width" }],
-    [4, { glyph: "⅓", name: "Third width" }],
-    [6, { glyph: "½", name: "Half width" }],
-    [8, { glyph: "⅔", name: "Two thirds width" }],
-    [9, { glyph: "¾", name: "Three quarters width" }],
-    [12, { glyph: "Full", name: "Full width" }],
-  ]);
+export function widthPercent(w: number): string {
+  return NAMED_WIDTHS.get(w) ?? `${Math.round((w / 12) * 100)}%`;
+}
 
 /**
- * A width as the card menu offers it: the share of the row where it is an exact one ("½"), with
- * its columns as the detail beneath, or the columns alone ("5 columns"). `spoken` is the whole
- * name a screen reader hears, "Half width, 6 columns".
+ * A width as the card menu offers it: its share of the row ("50%"), with its columns as the
+ * detail beneath for whoever lays out by the grid. `spoken` is the whole name a screen reader
+ * hears, "50% width".
  */
 export function widthChoiceName(w: number): {
   label: string;
   detail?: string;
   spoken: string;
 } {
-  const share = WIDTH_SHARES.get(w);
-  if (share === undefined) {
-    return { label: columnsName(w), spoken: columnsName(w) };
-  }
-  return {
-    label: share.glyph,
-    detail: columnsName(w),
-    spoken: `${share.name}, ${columnsName(w)}`,
-  };
+  const percent = widthPercent(w);
+  return { label: percent, detail: columnsName(w), spoken: `${percent} width` };
 }
 
-/** A height as the card menu says it: "4 rows". Never one: no card is under two rows high. */
-export function rowsName(h: number): string {
-  return `${h} rows`;
-}
-
-/** A whole size as a sentence says it: "6 columns by 4 rows". */
+/** A whole size as a sentence says it: "50% wide". Its stored `h` sets no height, so is not named. */
 export function sizeName(size: GridSize): string {
-  return `${columnsName(size.w)} by ${rowsName(size.h)}`;
+  return `${widthPercent(size.w)} wide`;
 }

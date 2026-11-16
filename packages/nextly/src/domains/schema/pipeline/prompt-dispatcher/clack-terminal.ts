@@ -8,7 +8,8 @@
 // from the candidate pool so subsequent prompts only show options that
 // haven't been resolved yet.
 //
-// Non-TTY behavior: throws TTYRequiredError with actionable message.
+// Non-TTY behavior (no terminal, `--non-interactive` or `CI`, as
+// `canPrompt` answers): throws TTYRequiredError with actionable message.
 // The intentional v1 limitation per F4 Option E plan: code-first non-TTY
 // users get a clear error directing them to a TTY terminal.
 //
@@ -20,8 +21,10 @@
 
 import * as clack from "@clack/prompts";
 
+import { answered } from "../../../../cli/utils/prompt-cancelled";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { consoleLogger } from "../../../../shared/types";
+import { cancelEndsRun, canPrompt } from "../../migrate/can-prompt";
 import {
   deprecationNotices,
   judgeDataLoss,
@@ -44,10 +47,6 @@ import { PromptCancelledError, TTYRequiredError } from "./errors";
 // Re-export so callers that want to catch these errors can import from the
 // dispatcher module they already depend on.
 export { PromptCancelledError, TTYRequiredError };
-
-function hasTTY(): boolean {
-  return Boolean(process.stdin.isTTY && process.stdout.isTTY);
-}
 
 /**
  * The drops the rename candidates leave in the plan: each candidate's source
@@ -82,13 +81,45 @@ function isDrop(event: ClassifierEvent): event is DestructiveDropEvent {
   return event.kind === "destructive_drop";
 }
 
-/** Asks at the terminal, defaulting to no; a cancelled prompt is a no. */
+/** Whether an event makes a column NOT NULL over rows: made required, or added required. */
+function makesColumnRequired(event: ClassifierEvent): boolean {
+  return (
+    event.kind === "add_not_null_with_nulls" ||
+    event.kind === "add_required_field_no_default"
+  );
+}
+
+/**
+ * A prompt's answer. A cancel (Ctrl+C) is not a no: under a `nextly` command
+ * it ends the run with exit 130 (`answered`); inside the app's dev server
+ * (`next dev`), where nothing turns `cancelEndsRun` on, it stops only this
+ * apply and the server keeps running.
+ */
+async function answeredHere<T>(answer: T | symbol): Promise<T> {
+  if (clack.isCancel(answer) && !cancelEndsRun()) {
+    throw new PromptCancelledError();
+  }
+  return answered(answer);
+}
+
+/** Asks at the terminal, defaulting to no; a cancel as `answeredHere`. */
 async function askInTerminal(question: string): Promise<boolean> {
-  const answer = await clack.confirm({
-    message: question,
-    initialValue: false,
-  });
-  return !clack.isCancel(answer) && answer;
+  return answeredHere(
+    await clack.confirm({
+      message: question,
+      initialValue: false,
+    })
+  );
+}
+
+/**
+ * A prompt's answer, closing the prompt block first on a cancel, which then
+ * goes as `answeredHere`. A cancel is not the "Cancel everything" answer,
+ * which stops only the apply.
+ */
+async function answeredOrClosed<T>(answer: T | symbol): Promise<T> {
+  if (clack.isCancel(answer)) clack.outro("Cancelled");
+  return answeredHere(answer);
 }
 
 export class ClackTerminalPromptDispatcher implements PromptDispatcher {
@@ -188,12 +219,22 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
       return { confirmedRenames: [], resolutions: [], proceed: true };
     }
 
-    if (!hasTTY()) {
+    // The CLI's one answer to whether anyone can be asked: no terminal,
+    // `--non-interactive` or `CI` all mean the prompts below are not shown.
+    if (!canPrompt()) {
       // A batch of nothing but column drops is the data-loss consent's to
       // judge: applied when covered, refused at once, naming the consent
       // that covers it, when not. Anything needing a real decision —
       // renames, type changes — still requires a terminal below.
-      if (candidates.length === 0 && events.every(isDrop)) {
+      //
+      // A column made required has no answer a run without a terminal could give, so it goes on
+      // unanswered: the push counts the rows in its way before anything runs and refuses naming
+      // the entity, the field and the count (`refuseRequiredColumnsOverNulls`), or goes ahead when
+      // no row is in the way any more. Refused here instead, it named none of them.
+      if (
+        candidates.length === 0 &&
+        events.every(e => isDrop(e) || makesColumnRequired(e))
+      ) {
         return {
           confirmedRenames: [],
           resolutions:
@@ -287,7 +328,8 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
 
   // Walk classifier events in order. NOT-NULL kinds get a multi-step
   // (select kind -> text value if provide_default -> next event); type_change
-  // gets a single warning + Y/N. Any abort or cancel returns proceed=false.
+  // gets a single warning + Y/N. An abort or a no returns proceed=false; a
+  // cancel (Ctrl+C) ends the run with exit 130.
   private async runEventPrompts(
     events: ClassifierEvent[],
     kept: { answered: Deletion[]; unasked: Deletion[] } = {
@@ -326,11 +368,13 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
           ].join("\n"),
           `Type change on ${event.tableName}.${event.columnName}: ${event.fromType} -> ${event.toType}`
         );
-        const proceed = await clack.confirm({
-          message: `Proceed with type change on ${event.tableName}.${event.columnName}?`,
-          initialValue: false,
-        });
-        if (clack.isCancel(proceed) || proceed === false) {
+        const proceed = await answeredOrClosed(
+          await clack.confirm({
+            message: `Proceed with type change on ${event.tableName}.${event.columnName}?`,
+            initialValue: false,
+          })
+        );
+        if (!proceed) {
           clack.outro("Cancelled");
           return { resolutions, proceed: false };
         }
@@ -364,29 +408,24 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
         value: kind,
         label: labels[kind],
       }));
-      const choice = await clack.select({
-        message: "How do you want to handle this?",
-        options,
-      });
-      if (clack.isCancel(choice)) {
-        clack.outro("Cancelled");
-        return { resolutions, proceed: false };
-      }
-      const kind = choice;
+      const kind = await answeredOrClosed(
+        await clack.select({
+          message: "How do you want to handle this?",
+          options,
+        })
+      );
       if (kind === "abort") {
         clack.outro("Cancelled");
         return { resolutions, proceed: false };
       }
       if (kind === "provide_default") {
-        const value = await clack.text({
-          message: `Default value for "${event.columnName}":`,
-          validate: v =>
-            !v || v.trim().length === 0 ? "Cannot be empty" : undefined,
-        });
-        if (clack.isCancel(value)) {
-          clack.outro("Cancelled");
-          return { resolutions, proceed: false };
-        }
+        const value = await answeredOrClosed(
+          await clack.text({
+            message: `Default value for "${event.columnName}":`,
+            validate: v =>
+              !v || v.trim().length === 0 ? "Cannot be empty" : undefined,
+          })
+        );
         resolutions.push({
           kind: "provide_default",
           eventId: event.id,
@@ -498,16 +537,13 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
           ? `rename:${compatible.toColumn}`
           : "drop_and_add";
 
-      const choice = await clack.select({
-        message: `Column "${first.fromColumn}" was removed in ${first.tableName}. What should happen?`,
-        options: selectOptions,
-        initialValue,
-      });
-
-      if (clack.isCancel(choice)) {
-        clack.outro("Cancelled");
-        throw new PromptCancelledError();
-      }
+      const choice = await answeredOrClosed(
+        await clack.select({
+          message: `Column "${first.fromColumn}" was removed in ${first.tableName}. What should happen?`,
+          options: selectOptions,
+          initialValue,
+        })
+      );
 
       if (typeof choice === "string" && choice.startsWith("rename:")) {
         const targetColumn = choice.slice("rename:".length);

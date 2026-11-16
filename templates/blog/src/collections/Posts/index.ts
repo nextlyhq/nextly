@@ -18,6 +18,7 @@ import {
   upload,
   relationship,
   group,
+  type HookHandler,
 } from "nextly/config";
 
 // Relative imports (not `@/*` alias) because Nextly's CLI loads the
@@ -33,8 +34,30 @@ import { autoSlug } from "../../hooks/auto-slug";
 import { refuseReservedSlug } from "../../lib/static-params";
 
 import { authorIsCreator } from "./hooks/author-is-creator";
+import { bylineFromCreator } from "./hooks/byline-from-creator";
 import { computeReadingTime } from "./hooks/reading-time";
 import { requireFeaturedAlt } from "./hooks/require-featured-alt";
+
+/**
+ * The hooks of a posts collection whose bylines credit profiles in the
+ * collection `authors`: the template's own (`authors`), or a site's that
+ * installs the blog's collections under other slugs.
+ */
+export function postsHooks(options: { authors: string }): {
+  beforeValidate: HookHandler[];
+  beforeChange: HookHandler[];
+  afterChange: HookHandler[];
+} {
+  const credit = bylineFromCreator(options);
+  return {
+    beforeValidate: [autoSlug, requireFeaturedAlt],
+    // After the field rules: a value a writer may not set is dropped before
+    // these run, so the owner and the credit they fill are the writer's own.
+    beforeChange: [authorIsCreator, credit.beforeChange, computeReadingTime],
+    // A credit left for after its caller's transaction commits.
+    afterChange: [credit.afterChange],
+  };
+}
 
 export const Posts = defineCollection({
   slug: "posts",
@@ -60,6 +83,19 @@ export const Posts = defineCollection({
       name: "author",
       relationTo: "users",
       access: { create: mayPublishPosts, update: mayPublishPosts },
+    }),
+    // The public author a reader is shown: a profile in `authors`. Separate
+    // from `author`, the account that owns the post, which access reads.
+    // Who a post credits is set as its owner is: only a caller who may
+    // publish posts chooses or changes it, anyone else's value is dropped,
+    // and a new post is credited to its writer's own profile (the
+    // bylineFromCreator hook, which runs after the value is dropped).
+    relationship({
+      name: "byline",
+      label: "Byline",
+      relationTo: "authors",
+      access: { create: mayPublishPosts, update: mayPublishPosts },
+      admin: { description: "The public author shown on the post." },
     }),
     relationship({
       name: "categories",
@@ -118,8 +154,5 @@ export const Posts = defineCollection({
     update: ownPostsUnlessPublisher,
     delete: ownPostsUnlessPublisher,
   },
-  hooks: {
-    beforeValidate: [autoSlug, requireFeaturedAlt],
-    beforeChange: [authorIsCreator, computeReadingTime],
-  },
+  hooks: postsHooks({ authors: "authors" }),
 });

@@ -13,15 +13,23 @@ import { assertNoForeignDrops } from "../../../domains/schema/ownership/drop-gua
 import { assertDependenciesInstalled } from "../../../domains/schema/ownership/install-plan";
 import type { OwnerRecord } from "../../../domains/schema/ownership/owner-registry";
 import { assertPluginsInstalled } from "../../../domains/schema/ownership/plugin-install-gate";
+import { assertPluginPrefixesKept } from "../../../domains/schema/ownership/plugin-prefix-check";
 import { assertSchemaVersionUsable } from "../../../domains/schema/ownership/schema-version-check";
 import {
   planUninstall,
   type UninstallInput,
 } from "../../../domains/schema/ownership/uninstall-plan";
 import { NextlyError } from "../../../errors/nextly-error";
+import { actionRouteRefusal } from "../../../plugins/routes/action-route-check";
 import {
   installTargetUnclear,
+  pluginConfigNotEditable,
+  pluginDeclarationInvalid,
   pluginNotFound,
+  pluginOptionInvalid,
+  pluginOptionMissing,
+  pluginPackageNotInstalled,
+  pluginRegistrationUnknown,
 } from "../../errors/areas/plugins";
 
 import type { CliErrorCode } from "../../errors";
@@ -39,6 +47,28 @@ function thrown(run: () => unknown): unknown {
     return error;
   }
   throw new Error("expected the call to throw");
+}
+
+/** The check of a request to escalate ticket 42, its row read as `read` answers. */
+function actionRefusal(read: ReadonlyMap<string, unknown>): Promise<unknown> {
+  return actionRouteRefusal(
+    {
+      action: "acme-support.escalate",
+      rows: [{ collection: "tickets", id: "42" }],
+    },
+    [
+      {
+        id: "acme-support.escalate",
+        kind: "rowAction",
+        visibleWhen: { field: "status", notEquals: "closed" },
+      },
+    ],
+    {
+      self: { name: "@acme/support", collections: {}, singles: {} },
+      refusalFor: () => Promise.resolve(undefined),
+      readRows: () => Promise.resolve(read),
+    }
+  );
 }
 
 /** An uninstall of the plugin with nothing else configured, keeping nothing. */
@@ -106,8 +136,43 @@ export async function uninstallRefused(
 }
 
 export const PLUGIN_CASES = {
+  // As a route bound to a declared action answers a row its rule hides.
+  ACTION_NOT_AVAILABLE: () =>
+    actionRefusal(new Map([["42", { id: "42", status: "closed" }]])),
+  // As it answers a row its caller may not read, or one that is missing.
+  PLUGIN_ACTION_ROW_NOT_FOUND: () => actionRefusal(new Map()),
   PLUGIN_NOT_FOUND: () => pluginNotFound("@acme/sitemap"),
   PLUGIN_INSTALL_TARGET_UNCLEAR: () => installTargetUnclear(undefined),
+  // As `nextly plugins add` raises each, with the values it passes.
+  PLUGIN_PACKAGE_NOT_INSTALLED: () => pluginPackageNotInstalled(PLUGIN),
+  PLUGIN_DECLARATION_INVALID: () =>
+    pluginDeclarationInvalid(
+      PLUGIN,
+      "It names the export seoPlugin, which its entry does not have"
+    ),
+  PLUGIN_REGISTRATION_UNKNOWN: () =>
+    pluginRegistrationUnknown(
+      PLUGIN,
+      "It has no `nextly.plugin` declaration, and its entry exports no plugin definition as it is; a function that makes one is not called to find out"
+    ),
+  PLUGIN_OPTION_MISSING: () =>
+    pluginOptionMissing(PLUGIN, [
+      { name: "siteUrl", description: "The site's production address" },
+    ]),
+  PLUGIN_OPTION_INVALID: () =>
+    pluginOptionInvalid(
+      PLUGIN,
+      'siteUrl must be a full web address, such as https://example.com, and "example.com" is not one'
+    ),
+  PLUGIN_CONFIG_NOT_EDITABLE: () =>
+    pluginConfigNotEditable(
+      "nextly.config.ts sets `plugins` to something other than a list written in place",
+      [
+        'import { seoPlugin } from "@acme/seo";',
+        'plugins: [seoPlugin({ siteUrl: "https://example.com" })]',
+      ],
+      PLUGIN
+    ),
   // As `assertEnabled` in `cli/commands/plugin-lifecycle.ts` throws it.
   PLUGIN_DISABLED: () =>
     new NextlyError({
@@ -188,6 +253,16 @@ export const PLUGIN_CASES = {
         tables: ["seo_redirects"],
       },
     }),
+  PLUGIN_DOWN_LEFT_ELEMENTS: () =>
+    new NextlyError({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      publicMessage: `${PLUGIN}'s DOWN migrations ran but left index "seo_idx_slug" on pages in place, so it was not recorded as uninstalled and its records were kept. Drop it, then run the uninstall again to record it.`,
+      logContext: {
+        plugin: PLUGIN,
+        reason: "elements-left-by-down",
+        elements: [{ table: "pages", kind: "index", name: "seo_idx_slug" }],
+      },
+    }),
   PLUGIN_TABLE_IDENTITY_UNREADABLE: () =>
     new NextlyError({
       code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
@@ -229,6 +304,21 @@ export const PLUGIN_CASES = {
         })
       )
     ),
+  PLUGIN_UNINSTALL_WOULD_DROP_OTHERS: () =>
+    thrown(() =>
+      planUninstall(
+        uninstall({
+          dependents: [
+            {
+              kind: "index",
+              name: "app_idx_on_notes",
+              table: "notes__items",
+              owner: "the app",
+            },
+          ],
+        })
+      )
+    ),
   PLUGIN_DEPENDENCY_NOT_INSTALLED: () =>
     thrown(() =>
       assertDependenciesInstalled({
@@ -258,6 +348,22 @@ export const PLUGIN_CASES = {
         states: new Map(),
         production: true,
         warn: () => {},
+      })
+    ),
+  // As `assertPluginPrefixesKept` throws it for a plugin whose tables were created under "seo".
+  PLUGIN_SCHEMA_PREFIX_CHANGED: () =>
+    thrown(() =>
+      assertPluginPrefixesKept({
+        prefixes: new Map([[PLUGIN, "acme_seo"]]),
+        owners: [
+          {
+            ...APP_POSTS,
+            tableName: "seo__redirects",
+            ownerKind: "plugin",
+            ownerId: PLUGIN,
+            migratedBy: PLUGIN,
+          },
+        ],
       })
     ),
   PLUGIN_SCHEMA_UNINSTALLED: () =>
@@ -396,6 +502,17 @@ export const PLUGIN_CASES = {
       publicMessage:
         "Another migration is holding the migrate lock, so @acme/seo was not installed. Nothing was changed — re-run once it finishes.",
       logContext: { reason: "plugin-lifecycle-lock-busy", outcome: "settled" },
+    }),
+  PLUGIN_COMMAND_FROM_OLDER_RELEASE: () =>
+    NextlyError.conflict({
+      reason: "state",
+      message:
+        "The preset roles' grants were set by Nextly 0.10.0, newer than this release (0.9.0). Run this command from Nextly 0.10.0 or newer.",
+      logContext: {
+        reason: "preset-grants-set-by-a-newer-release",
+        recorded: "0.10.0",
+        running: "0.9.0",
+      },
     }),
   PLUGIN_HOOK_SERVICES_REGISTERED: () =>
     new NextlyError({

@@ -123,7 +123,7 @@ describeEachDialect("a translated field named with capitals", dialect => {
         overrideAccess: true,
         locale: "es",
       },
-      { heading: "Hola", subTitle: "En español" }
+      { heading: "Hola", subTitle: "En español", _overwrite: true }
     );
     expect(spanish.success, JSON.stringify(spanish)).toBe(true);
     return id;

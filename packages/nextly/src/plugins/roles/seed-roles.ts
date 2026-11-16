@@ -16,11 +16,18 @@ import type { CollectedRole } from "./collect-roles";
  *
  * Mirrors the super-admin seeder: builds a `ServiceContainer` from the adapter
  * so it doesn't depend on the DI service graph being fully wired.
+ *
+ * With `deferIncomplete`, a role naming a permission that does not exist yet is
+ * not made at all, and is said: a role is made once and never revisited, so one
+ * made without that permission would lack it for good once it exists. A later
+ * run makes it whole. `nextly migrate` seeds so, where a permission may still
+ * be on its way (one a workflow seeds, at a start that judges the workflows).
  */
 export async function seedPluginRoles(
   adapter: DrizzleAdapter,
   collected: CollectedRole[],
-  logger: Logger
+  logger: Logger,
+  options: { deferIncomplete?: boolean } = {}
 ): Promise<void> {
   if (collected.length === 0) return;
 
@@ -39,17 +46,13 @@ export async function seedPluginRoles(
       const existing = await roleService.findRoleIdBySlug(role.slug);
       if (existing) continue; // idempotent
 
-      const permissionIds: string[] = [];
-      for (const slug of role.permissionSlugs) {
-        const id = slugToId.get(slug);
-        if (!id) {
-          logger.warn?.(
-            `Role "${role.slug}" (${role.owner}) references unknown permission "${slug}" — skipping that permission.`
-          );
-          continue;
-        }
-        permissionIds.push(id);
-      }
+      const permissionIds = permissionIdsOf(
+        role,
+        slugToId,
+        logger,
+        options.deferIncomplete === true
+      );
+      if (permissionIds === undefined) continue;
 
       await createSeededRole(
         roleService,
@@ -71,4 +74,33 @@ export async function seedPluginRoles(
       );
     }
   }
+}
+
+/**
+ * The ids of the permissions `role` bundles, an unknown slug said and left out;
+ * or, with `deferIncomplete`, `undefined` while any of them does not exist yet,
+ * said once, so the role is not made without it.
+ */
+function permissionIdsOf(
+  role: CollectedRole,
+  slugToId: ReadonlyMap<string, string>,
+  logger: Logger,
+  deferIncomplete: boolean
+): string[] | undefined {
+  const missing = role.permissionSlugs.filter(slug => !slugToId.has(slug));
+  if (deferIncomplete && missing.length > 0) {
+    logger.warn?.(
+      `Role "${role.slug}" (${role.owner}) was not created yet: it bundles permission(s) that do not exist yet (${missing.join(", ")}). It is created once they do.`
+    );
+    return undefined;
+  }
+  for (const slug of missing) {
+    logger.warn?.(
+      `Role "${role.slug}" (${role.owner}) references unknown permission "${slug}" — skipping that permission.`
+    );
+  }
+  return role.permissionSlugs.flatMap(slug => {
+    const id = slugToId.get(slug);
+    return id === undefined ? [] : [id];
+  });
 }

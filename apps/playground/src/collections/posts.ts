@@ -92,6 +92,13 @@ export const Posts = defineCollection({
   // buttons in the entry editor and Bulk Publish / Unpublish actions in
   // the entry-table bulk-action bar.
   status: true,
+  // Anyone may read a post, as anyone may read a block page: each published
+  // post is served at `/blog/<slug>` to visitors, whom the Public role judges,
+  // and boot grants that role a collection's read only where its rule answers
+  // `true`. A visitor's read is held to published content, so the rule needs
+  // no condition on the post's state. An owner may still take the read away
+  // on the Public role, and the post's page then answers not found.
+  access: { read: () => true },
   // Drafts and autosave, ON, so the dev harness exercises the working-draft
   // split and the recovery-point path rather than only the simple lifecycle.
   //

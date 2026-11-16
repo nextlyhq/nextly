@@ -64,6 +64,12 @@ export interface CollectionForColumns {
    * nothing that writes to them is offered.
    */
   removedFromCode?: boolean;
+  /**
+   * Whether the admin's own Delete is withheld from this collection's entries
+   * (`admin.disableDelete`): they are deleted through an action of their own,
+   * which a plugin offers instead.
+   */
+  disableDelete?: boolean;
   /** Admin UI configuration */
   admin?: {
     /** Default columns to display in list view */
@@ -104,12 +110,45 @@ const SORTABLE_FIELD_TYPES: readonly string[] = [
   "select",
   "email",
   "checkbox",
+  // An id sorts as text, which groups icons by set and then by name.
+  "icon",
 ];
 
 /**
  * Default number of data columns to show when defaultColumns is not specified.
  */
 const DEFAULT_COLUMN_COUNT = 4;
+
+/** Field types never shown as a column: they hold nested or related data. */
+const NON_COLUMN_TYPES: readonly string[] = [
+  "group",
+  "relationship",
+  "repeater",
+  "component",
+];
+
+/**
+ * Whether the list picks a field as a default column by itself: a named data
+ * field the form shows. A field the form hides (`admin.hidden`) is set by some
+ * other control, so it is left out here; it stays on offer as a column, and a
+ * collection's own `defaultColumns` may still name it.
+ */
+export function isDefaultColumnField(field: {
+  name?: unknown;
+  type?: unknown;
+  admin?: unknown;
+}): field is { name: string; type: string } {
+  if (typeof field.name !== "string" || field.name.length === 0) return false;
+  if (typeof field.type !== "string" || NON_COLUMN_TYPES.includes(field.type)) {
+    return false;
+  }
+  const admin = field.admin;
+  return !(
+    typeof admin === "object" &&
+    admin !== null &&
+    (admin as { hidden?: unknown }).hidden === true
+  );
+}
 
 // ============================================================================
 // Helper Functions
@@ -143,11 +182,10 @@ function isDataField(field: FieldConfig): field is NamedDataFieldConfig {
  */
 function getAllDataFields(fields: FieldConfig[]): NamedDataFieldConfig[] {
   const dataFields: NamedDataFieldConfig[] = [];
-  const excludedTypes = ["group", "relationship", "repeater", "component"];
 
   for (const field of fields) {
     // Only include direct data fields that are not complex/layout types
-    if (isDataField(field) && !excludedTypes.includes(field.type)) {
+    if (isDataField(field) && !NON_COLUMN_TYPES.includes(field.type)) {
       dataFields.push(field);
     }
   }
@@ -163,10 +201,10 @@ function getAllDataFields(fields: FieldConfig[]): NamedDataFieldConfig[] {
  * @returns Array of field names to display as columns
  */
 function getDefaultColumns(fields: FieldConfig[]): string[] {
-  // Filter to data fields only (exclude layout fields)
-  const dataFields = getAllDataFields(fields)
-    .slice(0, DEFAULT_COLUMN_COUNT)
-    .map(f => f.name);
+  // Data fields the form shows, never a hidden one or a layout field.
+  const dataFields = fields
+    .flatMap(field => (isDefaultColumnField(field) ? [field.name] : []))
+    .slice(0, DEFAULT_COLUMN_COUNT);
 
   // Always include title, slug, id, createdAt and updatedAt.
   // 07-admin-bugs-feedback, the user expects both timestamps visible
@@ -274,13 +312,28 @@ export function getDefaultVisibleColumns(
 }
 
 /**
+ * The data field `fieldName` names among `fields` themselves, not inside a
+ * group or repeater: a row holds such a field's value under its own name,
+ * where a nested one's sits inside its parent's value.
+ */
+export function findTopLevelField(
+  fields: FieldConfig[],
+  fieldName: string
+): NamedDataFieldConfig | undefined {
+  return fields.find(
+    (field): field is NamedDataFieldConfig =>
+      isDataField(field) && field.name === fieldName
+  );
+}
+
+/**
  * Finds a field configuration by name, handling nested fields in layout wrappers.
  *
  * @param fields - Array of field configurations
  * @param fieldName - Name of the field to find
  * @returns Field configuration or undefined if not found
  */
-export function findFieldByName(
+function findFieldByName(
   fields: FieldConfig[],
   fieldName: string
 ): NamedDataFieldConfig | undefined {

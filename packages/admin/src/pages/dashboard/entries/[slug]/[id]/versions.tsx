@@ -15,6 +15,7 @@ import type { JSX } from "react";
 import { useVersionDocumentTitle } from "@admin/components/features/versions/useVersionDocumentTitle";
 import {
   readLocaleParam,
+  readFromParam,
   readVersionParam,
 } from "@admin/components/features/versions/version-search-params";
 import { VersionComparePage } from "@admin/components/features/versions/VersionComparePage";
@@ -52,7 +53,7 @@ export default function EntryVersionsPage({
       // `update-${slug}`. The entry list needs only the former, so it is where a
       // read-only viewer can actually go back to.
       readOnlyHref={buildRoute(ROUTES.COLLECTION_ENTRIES, { slug })}
-      from={readVersionParam(searchParams?.from)}
+      from={readFromParam(searchParams?.from)}
       to={readVersionParam(searchParams?.to)}
       locale={locale}
     />

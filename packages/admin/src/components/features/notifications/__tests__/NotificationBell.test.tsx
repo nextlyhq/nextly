@@ -19,6 +19,18 @@ vi.mock("@admin/services/journalApi", async () => {
   };
 });
 
+// The person's own notices are their own suite's; here, none and nothing unread.
+vi.mock("../notices-api", () => ({
+  noticesApi: {
+    list: vi.fn().mockResolvedValue({
+      items: [],
+      meta: { total: 0, page: 1, limit: 20, hasNext: false },
+    }),
+    unreadCount: vi.fn().mockResolvedValue(0),
+    markRead: vi.fn().mockResolvedValue({ marked: 0 }),
+  },
+}));
+
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { journalApi } from "@admin/services/journalApi";
 import type { JournalRow } from "@admin/services/journalApi";
@@ -80,17 +92,21 @@ describe("NotificationBell", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders nothing when the user is not a super-admin", () => {
+  it("renders the bell for a person who is not a super-admin, without counting the journal", async () => {
+    // Every admin user has notices of their own; the journal's unread rows are
+    // a super-admin's alone.
     mockedPermissions.mockReturnValue({
       isSuperAdmin: false,
       isLoading: false,
     });
-    mockedList.mockResolvedValue({ rows: [], hasMore: false });
-
-    const { container } = render(<NotificationBell />, {
-      wrapper: makeWrapper(),
+    mockedList.mockResolvedValue({
+      rows: [rowAt("a", "2026-04-30T10:00:00.000Z")],
+      hasMore: false,
     });
-    expect(container.firstChild).toBeNull();
+
+    render(<NotificationBell />, { wrapper: makeWrapper() });
+    expect(await screen.findByTestId("notification-bell")).toBeInTheDocument();
+    expect(screen.queryByTestId("notification-bell-badge")).toBeNull();
   });
 
   it("renders the bell button (without badge) for a super-admin with no unread rows", async () => {
@@ -204,7 +220,7 @@ describe("NotificationBell", () => {
     await waitFor(() => {
       expect(screen.getByTestId("notification-bell")).toHaveAttribute(
         "aria-label",
-        "Recent schema changes (1 unread)"
+        "Notifications (1 unread)"
       );
     });
   });

@@ -32,6 +32,11 @@ vi.mock("../../di/container", () => ({
   },
 }));
 
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../domains/i18n/per-language-storage";
+
 import { buildRuleContext, type RuleCaller } from "./rule-context";
 import {
   askEachLanguage,
@@ -284,6 +289,36 @@ describe("languagesOfContent", () => {
     declare({ localized: true }, { slug: "banner", localized: true });
     expect(languagesOfContent(pages, french)).toEqual(french);
     expect(languagesOfContent(banner, french)).toEqual(french);
+  });
+
+  // Under `experimental.perLanguageStorage` an entity not marked translatable keeps its
+  // translatable values per language too, so a rule reading the language is told the one asked.
+  it("keeps the language asked for on content the site stores per language under the setting", () => {
+    declare(
+      { localized: false, fields: [{ type: "text", name: "title" }] },
+      { slug: "banner", fields: [{ type: "text", name: "title" }] }
+    );
+    setPerLanguageStorage(true);
+    try {
+      expect(languagesOfContent(pages, french)).toEqual(french);
+      expect(languagesOfContent(banner, french)).toEqual(french);
+    } finally {
+      _resetPerLanguageStorage();
+    }
+  });
+
+  // The setting keeps TRANSLATABLE values per language: an entity whose every field is shared
+  // keeps nothing per language, so an operation on it reaches every language and a rule reading
+  // one language must not authorize it on that language alone.
+  it("tells every language on content with no translatable field, under the setting", () => {
+    declare({ localized: false, fields: [{ type: "number", name: "views" }] });
+    setPerLanguageStorage(true);
+    try {
+      expect(languagesOfContent(pages, french)).toEqual(every);
+      expect(languagesOfContent(banner, french)).toEqual(every);
+    } finally {
+      _resetPerLanguageStorage();
+    }
   });
 
   it("counts a localized field group as content stored per language, and only a localized one", () => {

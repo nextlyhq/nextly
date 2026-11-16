@@ -19,7 +19,7 @@ import type { JSX, ReactNode } from "react";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
-import { cardHeightPx, cardSpanClass } from "../sizes";
+import { cardSpanClass } from "../sizes";
 import { settingsAsAsked } from "../widget-as-asked";
 import { WidgetRenderer } from "../WidgetRenderer";
 
@@ -107,7 +107,7 @@ export function WidgetPreviewState({
       {...(caseName === undefined ? {} : { "data-preview-case": caseName })}
     >
       <p className="text-xs font-medium text-muted-foreground">{label}</p>
-      <div data-preview-card style={{ height: cardHeightPx(size.h) }}>
+      <div data-preview-card>
         {drawn !== undefined ? (
           <WidgetRenderer
             definition={definition}

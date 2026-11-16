@@ -98,20 +98,20 @@ export interface DashboardArrangement {
   /** Move one card from its menu, saying where it went. */
   moveCard: (placementId: string, direction: MoveDirection) => void;
   /**
-   * Put a dragged card down at `final` among the drawn cards, saying where it went, with focus
-   * back on its handle. The menu's sentence, so a drag and a menu move are heard alike.
+   * Put a dragged card down at `final` among the drawn cards, saying where it went. The menu's
+   * sentence, so a drag and a menu move are heard alike.
    */
   dropCard: (placementId: string, final: number) => void;
   /** Set one card's size from its menu, saying so. */
   setCardSize: (placementId: string, size: GridSize) => void;
   /** Put the default dashboard in the draft, saying nothing is saved yet. */
   stageReset: () => void;
-  /** Open customise mode, with focus on its bar, saying what it means. */
+  /** Open customise mode, with focus on its controls in the top bar, saying what it means. */
   begin: () => void;
-  /** Leave customise mode unsaved, with focus back on Customize, saying so. */
+  /** Leave customise mode unsaved, with focus on the greeting, saying so. */
   cancel: () => void;
   /**
-   * Save the draft and say how that went; focus goes back to Customize once
+   * Save the draft and say how that went; focus goes to the greeting once
    * it has landed. A refused or failed save keeps the draft, and focus stays
    * where the reader left it.
    */
@@ -178,7 +178,7 @@ function useCustomiseLifecycle(
     discardOpenPanels();
     editor.cancel();
     announce.discarded();
-    focus.request({ kind: "customize" });
+    focus.request({ kind: "heading" });
   }, [editor, announce, focus]);
 
   const save = useCallback(
@@ -187,7 +187,7 @@ function useCustomiseLifecycle(
       announceSaveOutcome(announce, outcome);
       // Only a save that landed ends the mode; a refused or failed one leaves
       // the reader where they were, with their draft.
-      if (outcome === "saved") focus.request({ kind: "customize" });
+      if (outcome === "saved") focus.request({ kind: "heading" });
       return outcome;
     },
     [editor, announce, focus]
@@ -294,11 +294,8 @@ export function useDashboardArrangement(
       );
       editor.moveTo(placementId, final);
       ring.highlight(placementId);
-      // Back to the handle it was dragged by: the card moved in the page, and React moving a
-      // focused element takes the focus with nowhere to go.
-      focus.request({ kind: "handle", placementId });
     },
-    [announceMove, editor, isDrawn, focus, ring]
+    [announceMove, editor, isDrawn, ring]
   );
 
   const setCardSize = useCallback(

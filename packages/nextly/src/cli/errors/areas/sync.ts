@@ -46,6 +46,31 @@ export const SYNC_CODES = defineCodes({
       },
     ],
   },
+  FIELDS_LEAVING_TRANSLATION_NOT_MOVED: {
+    cause:
+      "`db:sync` could not move the values of a field that stops being translated, so the field keeps them in its translations table.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "fields-leaving-translation-not-moved",
+        describe: error => {
+          const entities = Array.isArray(error.logContext?.entities)
+            ? (error.logContext.entities as unknown[]).map(String)
+            : [];
+          const named =
+            entities.map(e => `\`${e}\``).join(", ") || "some entities";
+          return {
+            what: `The fields leaving translation in ${named} were not moved.`,
+            why:
+              error.logContext?.changed === true
+                ? "The move stopped part-way, at the error printed above. Every value is still in the translations table."
+                : "They can't be moved as the configuration says, for the reason printed above, so nothing was changed.",
+            next: "Fix what the error above names, then run `nextly db:sync` again.",
+          };
+        },
+      },
+    ],
+  },
   PROMOTE_COLLECTION_NOT_FOUND: {
     cause:
       "`db:sync --promote` names a collection the Schema Builder has no record of.",
@@ -53,6 +78,10 @@ export const SYNC_CODES = defineCodes({
   DEMOTE_COLLECTION_NOT_FOUND: {
     cause:
       "`db:sync --demote` names a collection that `nextly.config.ts` does not define.",
+  },
+  SYNC_CONFIRMATION_REQUIRED: {
+    cause:
+      "`db:sync --promote` or `--demote` has a confirmation to ask, no terminal is attached to ask it, and `--yes` was not given, so nothing was changed.",
   },
   I18N_RESTORE_COLLECTION_REQUIRED: {
     cause:
@@ -145,6 +174,18 @@ export function demoteCollectionNotFound(slug: string): CliError {
     what: `Collection '${slug}' not found in nextly.config.ts collections.`,
     why: "`--demote` moves a collection defined in `nextly.config.ts` to the Schema Builder, and its `collections` array has none with this slug.",
     next: "Check the slug against the `collections` array in `nextly.config.ts`. A collection built in the Schema Builder is already there and needs no demotion.",
+  });
+}
+
+/** `--promote`/`--demote` cannot ask its confirmation, and `--yes` was not given. */
+export function syncConfirmationRequired(
+  flag: "--promote" | "--demote",
+  slug: string
+): CliError {
+  return new CliError("SYNC_CONFIRMATION_REQUIRED", {
+    what: `\`db:sync ${flag} ${slug}\` changed nothing: it asks before it changes anything.`,
+    why: "No terminal is attached to ask (or `--non-interactive` was given, or `CI` is set), and `--yes` was not given.",
+    next: `Run \`nextly db:sync ${flag} ${slug} --yes\` to answer it yes.`,
   });
 }
 

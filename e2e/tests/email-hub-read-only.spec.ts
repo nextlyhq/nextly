@@ -41,14 +41,18 @@ test.afterAll(async () => {
   await limited?.context.close();
 });
 
-test("the hub is in the reader's navigation", async () => {
+test("the hub is reached through Settings, which lands on it", async () => {
   await gotoAdmin(page, "");
   const rail = page.getByRole("navigation").first();
-  await expect(rail.locator('a[href="/admin/email"]')).toHaveCount(1);
+  // Email grants alone reveal the Settings entry, and it leads to the hub
+  // rather than to General Settings, which this reader may not open.
+  await expect(rail.locator('a[href="/admin/settings/email"]')).toHaveCount(1);
+  await expect(rail.locator('a[href="/admin/settings"]')).toHaveCount(0);
+  await expect(rail.locator('a[href="/admin/email"]')).toHaveCount(0);
 });
 
 test("Messages lists the emails with nothing to change them", async () => {
-  await gotoAdmin(page, "/email");
+  await gotoAdmin(page, "/settings/email");
   await expect(page.getByText("Welcome").first()).toBeVisible({
     timeout: 30_000,
   });
@@ -61,7 +65,7 @@ test("Messages lists the emails with nothing to change them", async () => {
 });
 
 test("Sending lists the providers with nothing to add", async () => {
-  await gotoAdmin(page, "/email/sending");
+  await gotoAdmin(page, "/settings/email/sending");
   await expect(page.getByRole("tab", { name: "Sending" })).toHaveAttribute(
     "aria-selected",
     "true"
@@ -69,9 +73,14 @@ test("Sending lists the providers with nothing to add", async () => {
   await expect(page.getByRole("link", { name: /Add Provider/ })).toHaveCount(0);
 });
 
-test("Settings no longer lists email", async () => {
-  await gotoAdmin(page, "");
-  const rail = page.getByRole("navigation").first();
-  // Email grants alone reveal no Settings destination.
-  await expect(rail.locator('a[href="/admin/settings"]')).toHaveCount(0);
+test("Settings lists Email and nothing this reader cannot open", async () => {
+  await gotoAdmin(page, "/settings/email");
+  await expect(
+    page.locator('a[href="/admin/settings/email"]').first()
+  ).toBeVisible({ timeout: 30_000 });
+  // General Settings, Users and the developer screens are not offered.
+  await expect(page.locator('a[href="/admin/users"]')).toHaveCount(0);
+  await expect(page.locator('a[href="/admin/settings/api-keys"]')).toHaveCount(
+    0
+  );
 });

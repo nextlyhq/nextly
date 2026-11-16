@@ -22,6 +22,7 @@ import {
   type AuthContext,
 } from "../../auth/middleware";
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
+import { refusedInsideNamedQuery } from "../../auth/named-query-scope";
 import { runAsPrincipal } from "../../auth/principal-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import { visitorReadsSystemResource } from "../../auth/resource-readable";
@@ -41,6 +42,7 @@ import { withCurrentLanguages } from "../../domains/i18n/configured-locales";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
 import { assertRunnableAsPrincipal } from "../../plugins/principals/run-as";
+import { withCurrentSchema } from "../../route-handler/schema-version";
 import type { TrustBound } from "../../services/collections/trust-grant";
 import type { RequestContext } from "../../shared/types/index";
 import type {
@@ -95,6 +97,9 @@ export async function runAsCaller<
   args: A,
   operation: (args: A) => Promise<R>
 ): Promise<R> {
+  // The definitions follow the stored schema version first, as a REST
+  // request's do, so a process that serves no requests still reads a field
+  // added elsewhere (`withCurrentSchema`).
   // One language list for the whole call, as a REST request has: the list is
   // brought up to date first, so a process that serves no requests still sees
   // a language added elsewhere, and a change made while the call runs reaches
@@ -103,14 +108,21 @@ export async function runAsCaller<
   // One memo of access lookups for the call, so a list whose field rules ask
   // about the caller on every row looks the caller up once. A call made inside
   // a request shares that request's memo.
-  return withCurrentLanguages(() =>
-    runWithAccessMemo(() => runAsCallerInMemo(defaultConfig, args, operation))
+  // Inside a page builder named query's run, no call is made: the query
+  // reads only through the reader it is handed, whose reads leave the frame.
+  const refused = refusedInsideNamedQuery("a collection or Single operation");
+  if (refused !== undefined) throw refused;
+  return withCurrentSchema(() =>
+    withCurrentLanguages(() =>
+      runWithAccessMemo(() => runAsCallerInMemo(defaultConfig, args, operation))
+    )
   );
 }
 
 /**
- * `namespace` with each of its methods run under one language list (`withCurrentLanguages`), as
- * `runAsCaller` runs a collection or Single call: for a namespace whose calls reach content
+ * `namespace` with each of its methods run under one language list (`withCurrentLanguages`), and
+ * on definitions that follow the stored schema version (`withCurrentSchema`), as `runAsCaller`
+ * runs a collection or Single call: for a namespace whose calls reach content
  * without passing through `runAsCaller`, such as a form submission or a field group's change.
  */
 export function withLanguagesPinned<N extends object>(namespace: N): N {
@@ -118,16 +130,28 @@ export function withLanguagesPinned<N extends object>(namespace: N): N {
   return Object.fromEntries(
     members.map(([name, member]) => [
       name,
-      typeof member === "function"
-        ? (...args: unknown[]) =>
-            // Every method of these namespaces returns a promise; wrapped, a value one returned
-            // directly still reaches the caller as a resolved promise.
-            withCurrentLanguages(() =>
-              Promise.resolve(member.apply(namespace, args))
-            )
-        : member,
+      // A namespace inside a namespace (`media.folders`) is pinned the same way.
+      isPlainNamespace(member)
+        ? withLanguagesPinned(member)
+        : typeof member === "function"
+          ? (...args: unknown[]) =>
+              // Every method of these namespaces returns a promise; wrapped, a value one returned
+              // directly still reaches the caller as a resolved promise.
+              withCurrentSchema(() =>
+                withCurrentLanguages(() =>
+                  Promise.resolve(member.apply(namespace, args))
+                )
+              )
+          : member,
     ])
   ) as N;
+}
+
+/** Whether `value` is a plain object of methods, as a namespace inside a namespace is. */
+function isPlainNamespace(value: unknown): value is object {
+  if (typeof value !== "object" || value === null) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function runAsCallerInMemo<A extends DirectAPIConfig & RunAsPrincipal, R>(

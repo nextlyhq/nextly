@@ -1,23 +1,23 @@
 "use client";
 
 /**
- * The add gallery: every widget the reader may add, once each, previewed, beside the dashboard.
+ * The add panel: every widget the reader may add, in one list they can search, beside the
+ * dashboard.
  *
- * A modal side sheet, because adding is a task of its own: focus starts in an empty search,
+ * A modal side drawer, because adding is a task of its own: focus starts in an empty search,
  * Escape and the close button leave, and the dashboard behind stays as it is until the reader is
  * done. It stays open after an add, so several cards can be added in one visit.
  *
- * Two steps in the one sheet. The gallery lists the reader's removed cards first, then the
- * suggested pairs, then a tile per widget, filtered by chip and searched by name, description,
- * category and collection. Choosing a widget that reads a collection opens its add step, where
- * the collection, the period and the width are chosen with the card previewed; a widget that
- * reads none is added at once.
+ * Each row is a widget: its icon, its name, the plugin it comes from, its one line, and Add. A
+ * one-card widget already on the dashboard says so instead, and one that reads a collection says
+ * it needs one when the reader may read none it suits. Add puts the card at the end with its
+ * defaults; a widget that reads a collection starts on one no card of it uses yet.
  *
- * It has its own polite live region: a modal sheet takes everything outside it out of the
- * accessibility tree, the dashboard's region included, so the sheet says for itself how many
+ * It has its own polite live region: a modal drawer takes everything outside it out of the
+ * accessibility tree, the dashboard's region included, so the drawer says for itself how many
  * widgets a search found and which card was added.
  *
- * What is offered is the server's to decide (`GET /api/dashboard/gallery`); what a tile does
+ * What is offered is the server's to decide (`GET /api/dashboard/gallery`); what a row does
  * against the draft, and what a search keeps, is `add-panel-model`'s. This module draws it.
  *
  * @module components/features/widgets/edit/AddWidgetPanel
@@ -25,8 +25,8 @@
 
 import {
   Button,
-  Input,
   Sheet,
+  SheetClose,
   SheetContent,
   SheetDescription,
   SheetHeader,
@@ -48,44 +48,29 @@ import {
 
 import * as Icons from "@admin/components/icons";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
-import { cn } from "@admin/lib/utils";
+import { REGISTRY_ENTRIES } from "@admin/lib/plugins/registry/entries";
 import type {
   DashboardWidget,
   WidgetPlacement,
 } from "@admin/types/dashboard/widgets";
 
-import { cardOuterWidth } from "../frame/tier";
-import { WidgetTilePreview } from "../preview/WidgetTilePreview";
-import { drawnSize } from "../sizes";
-import { useDashboardWidthAround } from "../useDashboardWidth";
+import { resolveIconName } from "../archetypes/icon";
+import { settingsAsAsked } from "../widget-as-asked";
 
 import {
-  addWidths,
-  foundCount,
-  GALLERY_CHIPS,
-  galleryCount,
-  galleryTiles,
-  newCardSettings,
-  periodOf,
-  removedCards,
-  searchGallery,
-  startingCollection,
-  suggestionsFor,
-  canChoose,
+  canAdd,
   collectionAsker,
   collectionsFor,
-  tilesInChip,
-  widthsLabel,
-  type GalleryChip,
-  type GalleryCollection,
-  type GalleryPair,
-  type GallerySearch,
+  galleryRows,
+  newCardSettings,
+  pluginShownName,
+  rowsCount,
+  searchRows,
+  startingCollection,
+  usersOffer,
   type GalleryRead,
-  type GalleryTile,
-  type GalleryTileView,
-  type RemovedCard,
+  type GalleryRow,
 } from "./add-panel-model";
-import { SettingsPreview } from "./SettingsPreview";
 
 /** What an add put on the dashboard, for the sentence that says so. */
 export interface AddedCard {
@@ -109,13 +94,14 @@ export interface AddWidgetPanelProps {
   /** Whether the dashboard already holds as many cards as it can, removed ones counted. */
   atCapacity: boolean;
   /**
-   * Add a new card of this widget, starting with `settings` and `width` when given; what was
-   * added, or `null` when nothing was.
+   * Add a new card of this widget at the end, starting with `settings` when given; what was
+   * added, or `null` when nothing was. `matchesOne` says the card starts as one the reader already
+   * has (every collection it can read has its card), so its settings are opened to tell it apart.
    */
   onAdd: (
     widgetId: string,
     settings?: Record<string, unknown>,
-    width?: number
+    matchesOne?: boolean
   ) => AddedCard | null;
   /** Put a removed card back where it was, with its settings; what came back, or `null`. */
   onAddBack: (placementId: string) => AddedCard | null;
@@ -125,8 +111,8 @@ export interface AddWidgetPanelProps {
 
 /**
  * One sentence the panel says, and which saying of it this is. The live region draws each saying
- * as a node of its own (keyed by `id`), so a sentence equal to the last one, "1 widget." for two
- * chips in turn or "Added Note." twice, still changes the region and is announced again.
+ * as a node of its own (keyed by `id`), so a sentence equal to the last one, "Added Note." twice,
+ * still changes the region and is announced again.
  */
 interface Utterance {
   text: string;
@@ -136,37 +122,21 @@ interface Utterance {
 /** How long typing has to pause before the count is announced. */
 const COUNT_ANNOUNCE_DELAY_MS = 500;
 
-/** The add step's state: the widget, and what the reader has chosen so far. */
-interface AddStep {
-  tile: GalleryTile;
-  collection: string;
-  period?: string;
-  width: number;
-}
-
 /**
- * The count, and the one sentence the panel is saying now, for its live region. Each visit starts
- * silent: the panel stays mounted while closed, so a sentence from the last visit, or a count
- * still waiting when it closed, would otherwise be said again on opening.
+ * The one sentence the panel is saying now, for its live region. Each visit starts silent: the
+ * panel stays mounted while closed, so a sentence from the last visit, or a count still waiting
+ * when it closed, would otherwise be said again on opening.
  *
- * The count is said when the reader narrows the gallery, by a search or by a chip they chose
- * (`chosenChip`, `null` until they choose one this visit), and when the read lands under a
- * search typed before it. Not when the count moves under the reader for another reason, as when
- * a card put back leaves the Removed list: that add's own sentence is what the reader should
- * hear, not a count spoken over it a moment later.
- *
- * Each narrowing is said at most once. Opening an add step (`inStep`) cancels a count still
- * waiting and settles that narrowing as said: the gallery it counted is gone and focus is on the
- * step, so "N widgets" there would describe nothing in front of the reader, and coming back from
- * the step, by Back or by an add, does not say it again over what the reader is hearing then.
+ * The count is said once typing pauses, for each search the reader types, and when the read lands
+ * under a search typed before it (`ready`); never for the list the panel opens on, which the
+ * count line under the search already describes.
  */
 function usePanelVoice(
-  found: number,
+  count: string,
   query: string,
   open: boolean,
-  chosenChip: GalleryChip | null,
-  ready: boolean,
-  inStep: boolean
+  /** Whether the read has answered: before it, the list is loading, not empty. */
+  ready: boolean
 ) {
   const [spoken, setSpoken] = useState<Utterance>({ text: "", id: 0 });
   // Each sentence a new saying, even one equal to the last.
@@ -181,35 +151,20 @@ function usePanelVoice(
     setVisit(open);
     setSpoken(last => ({ text: "", id: last.id + 1 }));
   }
-  const count = galleryCount(found, query);
   const pending = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const narrowing = narrowingOf(chosenChip, query);
-  // The narrowing last said, or settled by opening a step: never said twice.
-  const said = useRef<string | null>(null);
-  // Read when the announcement fires, so a later count is said without the count itself being
-  // what schedules one.
+  // Read when the announcement fires, so a count that moves without the search moving (a card
+  // added) does not schedule one of its own.
   const sayCount = useEffectEvent(() => utter(`${count}.`));
-  // Announced once typing pauses, so each keystroke does not interrupt the last. Never while
-  // closed: closing clears a count still waiting, and none starts until the panel opens again.
+  const searched = query.trim();
+  // Never while the read is on its way, which would say an empty list; once it lands under a
+  // search typed before it, the count is said then.
   useEffect(() => {
-    if (!open) {
-      said.current = null;
-      return undefined;
-    }
-    if (!ready || narrowing === null) return undefined;
-    if (inStep) {
-      said.current = narrowing;
-      return undefined;
-    }
-    if (said.current === narrowing) return undefined;
-    pending.current = setTimeout(() => {
-      said.current = narrowing;
-      sayCount();
-    }, COUNT_ANNOUNCE_DELAY_MS);
+    if (!open || !ready || searched === "") return undefined;
+    pending.current = setTimeout(sayCount, COUNT_ANNOUNCE_DELAY_MS);
     return () => clearTimeout(pending.current);
-  }, [narrowing, open, ready, inStep]);
-  // A sentence said on purpose (an add, a cleared search) cancels a count still waiting, which
-  // would otherwise land on top of it.
+  }, [searched, open, ready]);
+  // A sentence said on purpose (an add) cancels a count still waiting, which would otherwise land
+  // on top of it.
   const say = useCallback(
     (sentence: string) => {
       clearTimeout(pending.current);
@@ -217,359 +172,140 @@ function usePanelVoice(
     },
     [utter]
   );
-  // Clear says the count it brings back itself, so the narrowing it leaves (the chip alone) is
-  // settled as said: the pause after it never says the same count a second time.
-  const sayCleared = useCallback(
-    (sentence: string) => {
-      said.current = narrowingOf(chosenChip, "");
-      say(sentence);
-    },
-    [chosenChip, say]
-  );
-  return { count, spoken, say, sayCleared };
+  return { spoken, say };
 }
 
-/**
- * What the reader narrowed the gallery to, by the chip they chose and the search, or `null` when
- * they narrowed it by neither this visit: the key a count is said for once.
- */
-function narrowingOf(
-  chosenChip: GalleryChip | null,
-  query: string
-): string | null {
-  return query.trim() === "" && chosenChip === null
-    ? null
-    : `${chosenChip ?? ""}\u0000${query}`;
+/** The sentence an add, or an add refused at the limit, is announced with. */
+function addedSentence(added: AddedCard | null, verb: string): string {
+  return added === null
+    ? `Your dashboard holds the most cards it can (${MAX_PLACEMENTS}, counting removed ones). Nothing was added.`
+    : `${verb} ${added.title}.`;
 }
 
-/** A section of the gallery, under a small heading. */
-function Section({
-  title,
-  testId,
-  children,
-}: {
-  title: string;
-  testId: string;
-  children: ReactNode;
-}): JSX.Element {
-  const headingId = useId();
-  return (
-    <section
-      aria-labelledby={headingId}
-      className="space-y-2"
-      data-testid={testId}
-    >
-      <h3
-        id={headingId}
-        className="font-mono text-xs uppercase tracking-wide text-muted-foreground"
-      >
-        {title}
-      </h3>
-      {children}
-    </section>
-  );
+/** What the plugin line beside a widget's name says: "SEO plugin". */
+function pluginLine(name: string): string {
+  return /\bplugin\b/i.test(name) ? name : `${name} plugin`;
 }
 
-/** A small button-like chip: a filter, a suggestion, a pair. */
-const CHIP_CLASS =
-  "inline-flex min-h-8 items-center gap-1 rounded-full border border-border bg-background px-3 py-1 text-xs text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
-
-/** The filter chips: one pressed at a time, each a button of its own. */
-function Chips({
-  chip,
-  onChip,
-}: {
-  chip: GalleryChip;
-  onChip: (chip: GalleryChip) => void;
-}): JSX.Element {
-  return (
-    <div
-      role="group"
-      aria-label="Filter widgets"
-      className="flex flex-wrap gap-1.5"
-      data-testid="add-panel-chips"
-    >
-      {GALLERY_CHIPS.map(each => {
-        const on = each.id === chip;
-        return (
-          <button
-            key={each.id}
-            type="button"
-            aria-pressed={on}
-            onClick={() => onChip(each.id)}
-            className={cn(
-              CHIP_CLASS,
-              on &&
-                "border-primary bg-primary text-primary-foreground hover:bg-primary"
-            )}
-          >
-            {each.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-/** What a tile says under its description: its widths, and how many of it are placed. */
-function tileMeta(view: GalleryTileView): string {
-  const parts = [widthsLabel(view.tile.size)];
-  if (view.action.kind === "add-another" && view.placed > 0) {
-    parts.push(`${view.placed} on your dashboard`);
-  }
-  return parts.join(" · ");
-}
-
-/** The settings a tile's preview is drawn with: the collection a new card starts on, if it reads one. */
-function tileSettings(
-  tile: GalleryTile,
-  collection: string | undefined
-): Record<string, unknown> | undefined {
-  if (tile.collectionSetting === undefined || collection === undefined) {
-    return undefined;
-  }
-  return { [tile.collectionSetting]: collection };
-}
-
-/** What a tile shows: its preview, name, description, and its widths or that it is placed. */
-function TileBody({
-  view,
+/** The icon a row is drawn with: its widget's own, else a plugin's or a site widget's glyph. */
+function RowIcon({
+  row,
   widget,
-  collection,
-  descriptionId,
 }: {
-  view: GalleryTileView;
-  widget: DashboardWidget | undefined;
-  collection: string | undefined;
-  descriptionId: string;
-}): JSX.Element {
-  const { tile } = view;
-  const settings = tileSettings(tile, collection);
+  row: GalleryRow;
+  widget?: DashboardWidget;
+}) {
+  const own = resolveIconName(widget?.icon);
+  const fallback =
+    row.tile.plugin === undefined ? (
+      <Icons.LayoutDashboard className="h-4 w-4" />
+    ) : (
+      <Icons.Puzzle className="h-4 w-4" />
+    );
   return (
-    <>
-      <WidgetTilePreview
-        widget={widget}
-        {...(tile.preview === undefined ? {} : { preview: tile.preview })}
-        {...(settings === undefined ? {} : { settings })}
-      />
-      <span className="block break-words text-sm font-medium text-foreground">
-        {tile.name}
-      </span>
-      {tile.description ? (
-        <span
-          id={descriptionId}
-          className="line-clamp-2 block break-words text-xs text-muted-foreground"
-        >
-          {tile.description}
-        </span>
-      ) : null}
-      <span className="block text-xs text-muted-foreground">
-        <TileStatus view={view} />
-      </span>
-    </>
+    <span
+      aria-hidden
+      className="grid size-9 shrink-0 place-items-center rounded-lg border border-border bg-card text-muted-foreground [&_svg]:size-[18px]"
+    >
+      {own ?? fallback}
+    </span>
   );
 }
 
-/** The line under a tile's description: its widths, or why it cannot be added now. */
-function TileStatus({ view }: { view: GalleryTileView }): JSX.Element {
-  const { tile, action } = view;
+/** What stands at a row's end: Add, or why there is nothing to add. */
+function RowEnd({
+  row,
+  atCapacity,
+  onAdd,
+}: {
+  row: GalleryRow;
+  atCapacity: boolean;
+  onAdd: (row: GalleryRow) => void;
+}): JSX.Element {
+  const { tile, action } = row;
   if (action.kind === "on-dashboard") {
     return (
       <span
-        className="inline-flex items-center gap-1"
+        className="shrink-0 text-xs whitespace-nowrap text-muted-foreground"
         data-testid={`add-panel-on-dashboard-${tile.id}`}
       >
-        <Icons.Check aria-hidden className="size-3.5" />
-        On your dashboard
+        On dashboard
       </span>
     );
   }
-  if (action.kind === "no-collection") {
+  if (action.kind === "needs-collection") {
     return (
-      <span data-testid={`add-panel-no-collection-${tile.id}`}>
-        No collection you can read suits it.
+      <span
+        className="max-w-28 shrink-0 text-right text-xs text-muted-foreground"
+        data-testid={`add-panel-needs-collection-${tile.id}`}
+      >
+        Needs a collection you can read
       </span>
     );
   }
-  return <>{tileMeta(view)}</>;
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      // Putting a removed card back adds no card, so it stays offered at the limit.
+      disabled={atCapacity && action.kind === "add"}
+      aria-label={`Add ${tile.name}`}
+      onClick={() => onAdd(row)}
+      // What the press does, for tests that look for a removed card's way back.
+      data-action={action.kind}
+      data-testid={`add-panel-add-${tile.id}`}
+      className="h-7 shrink-0 rounded-[7px] border-control-border bg-card px-2.5 text-[12.5px] font-medium"
+    >
+      Add
+    </Button>
+  );
 }
 
-/** A tile's frame, whether it is a control or not. */
-const TILE_FRAME =
-  "flex h-full w-full flex-col gap-2 rounded-lg border border-border bg-card p-2.5 text-left";
-
-/** One widget's tile: its preview, name, description and widths, all one button. */
-function Tile({
-  view,
+/** One widget's row: no border, a fill on hover, and its Add at the end. */
+function Row({
+  row,
   widget,
-  collection,
   atCapacity,
-  onChoose,
+  onAdd,
 }: {
-  view: GalleryTileView;
+  row: GalleryRow;
   widget: DashboardWidget | undefined;
-  /** The collection a new card starts on, which the preview is drawn with. */
-  collection: string | undefined;
   atCapacity: boolean;
-  onChoose: (view: GalleryTileView) => void;
+  onAdd: (row: GalleryRow) => void;
 }): JSX.Element {
-  const { tile, action } = view;
-  const descriptionId = useId();
-  const body = (
-    <TileBody
-      view={view}
-      widget={widget}
-      collection={collection}
-      descriptionId={descriptionId}
-    />
-  );
-  if (!canChoose(view)) {
-    // Not a control: a one-card widget already on the dashboard is not added again, and one with
-    // no collection it can read cannot be added at all.
-    return (
-      <li className="min-w-0" data-testid={`add-panel-tile-${tile.id}`}>
-        <div className={cn(TILE_FRAME, "opacity-80")}>{body}</div>
-      </li>
-    );
-  }
-  const verb = action.kind === "add-another" ? "Add another" : "Add";
+  const { tile } = row;
   return (
-    <li className="min-w-0" data-testid={`add-panel-tile-${tile.id}`}>
-      <button
-        type="button"
-        disabled={atCapacity}
-        aria-label={`${verb} ${tile.name}`}
-        {...(tile.description ? { "aria-describedby": descriptionId } : {})}
-        data-gallery-tile={tile.id}
-        data-testid={`add-panel-add-${tile.id}`}
-        onClick={() => onChoose(view)}
-        className={cn(
-          TILE_FRAME,
-          "transition-colors hover:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-        )}
-      >
-        {body}
-      </button>
+    <li
+      className="flex items-center gap-3 rounded-lg px-2 py-2.5 transition-colors hover:bg-accent"
+      data-testid={`add-panel-row-${tile.id}`}
+    >
+      <RowIcon row={row} widget={widget} />
+      <div className="min-w-0 flex-1">
+        <p className="flex flex-wrap items-baseline gap-x-2 text-[13.5px] leading-5 font-medium text-foreground">
+          <span className="break-words">{tile.name}</span>
+          {row.pluginName === undefined ? null : (
+            <small className="text-[11.5px] font-normal text-muted-foreground">
+              {pluginLine(row.pluginName)}
+            </small>
+          )}
+        </p>
+        {tile.description ? (
+          <p className="text-[12.5px] leading-[18px] break-words text-muted-foreground">
+            {tile.description}
+          </p>
+        ) : null}
+      </div>
+      <RowEnd row={row} atCapacity={atCapacity} onAdd={onAdd} />
     </li>
   );
 }
 
-/** The cards removed this session, each put back as it was. */
-function RemovedList({
-  cards,
-  onAddBack,
-}: {
-  cards: readonly RemovedCard[];
-  onAddBack: (card: RemovedCard) => void;
-}): JSX.Element {
-  return (
-    <Section title={`Removed ${cards.length}`} testId="add-panel-removed">
-      <ul className="space-y-2">
-        {cards.map(card => (
-          <li
-            key={card.placementId}
-            className="flex items-center justify-between gap-3 rounded-md border border-border p-2.5"
-            data-testid={`add-panel-row-removed:${card.placementId}`}
-          >
-            <span className="min-w-0">
-              <span className="block break-words text-sm font-medium text-foreground">
-                {card.title}
-              </span>
-              <span className="block text-xs text-muted-foreground">
-                Comes back where it was, with its size and settings.
-              </span>
-            </span>
-            {/* Enabled at the limit: putting a removed card back adds no card. */}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="shrink-0"
-              onClick={() => onAddBack(card)}
-              aria-label={`Add back ${card.title}`}
-              data-testid={`add-panel-add-back-removed:${card.placementId}`}
-            >
-              Add back
-            </Button>
-          </li>
-        ))}
-      </ul>
-    </Section>
-  );
-}
-
-/** A labelled row of radio chips: the period, or the width. */
-function RadioChips({
-  legend,
-  name,
-  options,
-  value,
-  onChange,
-  testId,
-  glyphs = false,
-}: {
-  legend: string;
-  name: string;
-  options: ReadonlyArray<{ value: string; label: string; spoken?: string }>;
-  value: string;
-  onChange: (value: string) => void;
-  testId: string;
-  /** Labels that are glyphs (⅓, ½): drawn larger, in the text face, so a fraction reads. */
-  glyphs?: boolean;
-}): JSX.Element {
-  return (
-    <fieldset className="space-y-1.5" data-testid={testId}>
-      <legend className="text-xs font-medium text-muted-foreground">
-        {legend}
-      </legend>
-      <div className="flex flex-wrap gap-1.5">
-        {options.map(option => (
-          <label key={option.value} className="relative">
-            <input
-              type="radio"
-              name={name}
-              value={option.value}
-              checked={option.value === value}
-              onChange={() => onChange(option.value)}
-              aria-label={option.spoken ?? option.label}
-              className="peer sr-only"
-            />
-            <span
-              aria-hidden="true"
-              className={cn(
-                "inline-flex min-h-8 cursor-pointer items-center justify-center rounded-md border border-border px-2.5 text-muted-foreground peer-checked:border-foreground peer-checked:text-foreground peer-focus-visible:ring-2 peer-focus-visible:ring-ring",
-                glyphs ? "min-w-10 text-sm" : "font-mono text-xs"
-              )}
-            >
-              {option.label}
-            </span>
-          </label>
-        ))}
-      </div>
-    </fieldset>
-  );
-}
-
-/** The settings a card added from the step starts with: what the reader chose there. */
-function stepSettings(
-  step: AddStep,
-  widget: DashboardWidget | undefined
-): Record<string, unknown> | undefined {
-  const period = periodOf(widget);
-  return newCardSettings(step.tile, {
-    ...(step.collection === "" ? {} : { collection: step.collection }),
-    ...(period === undefined || step.period === undefined
-      ? {}
-      : { period: { name: period.name, value: step.period } }),
-  });
-}
-
-/** The gallery before its read has answered: loading, or failed with Try again. */
-function GalleryPending({ gallery }: { gallery: GalleryAnswer }): JSX.Element {
+/** The list before its read has answered: loading, or failed with Try again. */
+function ListPending({ gallery }: { gallery: GalleryAnswer }): JSX.Element {
   if (gallery.isError) {
     return (
       <div
-        className="space-y-2 text-sm text-muted-foreground"
+        className="space-y-2 pt-2 text-sm text-muted-foreground"
         data-testid="add-panel-error"
       >
         <p className="font-medium text-foreground">
@@ -590,542 +326,96 @@ function GalleryPending({ gallery }: { gallery: GalleryAnswer }): JSX.Element {
     <ul
       aria-busy="true"
       aria-label="Loading widgets"
-      className="grid grid-cols-2 gap-2.5"
+      className="space-y-1"
       data-testid="add-panel-loading"
     >
-      {[0, 1, 2, 3].map(index => (
-        <li
-          key={index}
-          className="h-44 animate-pulse rounded-lg border border-border bg-muted/40"
-        />
+      {[0, 1, 2, 3, 4].map(index => (
+        <li key={index} className="flex items-center gap-3 px-2 py-2.5">
+          <span className="size-9 shrink-0 animate-pulse rounded-lg bg-muted" />
+          <span className="h-4 flex-1 animate-pulse rounded bg-muted" />
+        </li>
       ))}
     </ul>
   );
 }
 
-/**
- * What the gallery says when it lists nothing: that a search matched nothing, with Clear; or,
- * before any search, that the chip has nothing under it, with the way back to every widget.
- */
-function NothingFound({
-  query,
-  chip,
-  onClear,
-  onShowAll,
-}: {
-  query: string;
-  chip: GalleryChip;
-  onClear: () => void;
-  onShowAll: () => void;
-}): JSX.Element {
-  if (query.trim() === "") {
-    return (
-      <div
-        className="space-y-2 text-sm text-muted-foreground"
-        data-testid="add-panel-chip-empty"
-      >
-        <p className="font-medium text-foreground">
-          No {GALLERY_CHIPS.find(each => each.id === chip)?.label} widgets to
-          add.
-        </p>
-        <Button type="button" variant="outline" size="sm" onClick={onShowAll}>
-          Show all widgets
-        </Button>
-      </div>
-    );
-  }
-  return (
-    <div
-      className="space-y-2 text-sm text-muted-foreground"
-      data-testid="add-panel-none"
-    >
-      <p className="font-medium text-foreground">
-        No widgets match “{query.trim()}”
-      </p>
-      <p>Try another word, or clear the search to see every widget.</p>
-      <Button type="button" variant="outline" size="sm" onClick={onClear}>
-        Clear
-      </Button>
-    </div>
-  );
-}
-
-/** The search, the chips and the count line, which describes the search to a screen reader. */
-function SearchAndChips({
+/** The search, and the count line under it, which describes the search to a screen reader. */
+function Search({
   searchRef,
   query,
   onQuery,
-  chip,
-  onChip,
   count,
-  ready,
 }: {
   searchRef: RefObject<HTMLInputElement | null>;
   query: string;
   onQuery: (query: string) => void;
-  chip: GalleryChip;
-  onChip: (chip: GalleryChip) => void;
+  /** What the count line says; empty before the read has answered. */
   count: string;
-  /** Whether the read has answered; the count line says nothing before it. */
-  ready: boolean;
 }): JSX.Element {
   const countId = useId();
   return (
-    <>
-      <div role="search" className="relative">
-        <Icons.Search
-          aria-hidden
-          className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-        />
-        <Input
+    <div className="shrink-0 px-5 pt-3.5 pb-1">
+      <label
+        role="search"
+        className="flex h-9 items-center gap-2 rounded-lg border border-control-border bg-card px-2.5 text-muted-foreground focus-within:ring-2 focus-within:ring-ring"
+      >
+        <Icons.Search aria-hidden className="size-[15px] shrink-0" />
+        <input
           ref={searchRef}
           type="search"
           value={query}
           onChange={event => onQuery(event.target.value)}
-          placeholder="Search widgets or collections"
-          aria-label="Search widgets or collections"
+          placeholder="Search widgets"
+          aria-label="Search widgets"
           aria-describedby={countId}
           autoComplete="off"
-          className="pl-9"
+          // The browser's own clear button is hidden: it draws in a colour of its own.
+          className="h-full min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground [&::-webkit-search-cancel-button]:appearance-none"
           data-testid="add-panel-search"
         />
-      </div>
-      <Chips chip={chip} onChip={onChip} />
+      </label>
       <p
         id={countId}
-        className="text-xs text-muted-foreground"
+        className="mt-2 text-xs text-muted-foreground"
         data-testid="add-panel-count"
       >
-        {ready ? count : ""}
-      </p>
-    </>
-  );
-}
-
-/** One suggestion, with the tile it adds. */
-type SuggestionView = ReturnType<typeof suggestionsFor>[number];
-
-/** What the gallery lists: the removed cards, the suggestions, a search's pairs, then the tiles. */
-function GalleryLists({
-  found,
-  suggestions,
-  atCapacity,
-  tileFor,
-  onAddBack,
-  onSuggestion,
-  onPair,
-}: {
-  found: GallerySearch;
-  /** The suggestions to show; none while a search or a chip narrows the gallery. */
-  suggestions: readonly SuggestionView[];
-  atCapacity: boolean;
-  tileFor: (view: GalleryTileView) => JSX.Element;
-  onAddBack: (card: RemovedCard) => void;
-  onSuggestion: (suggestion: SuggestionView) => void;
-  onPair: (pair: GalleryPair) => void;
-}): JSX.Element {
-  return (
-    <>
-      {found.removed.length > 0 ? (
-        <RemovedList cards={found.removed} onAddBack={onAddBack} />
-      ) : null}
-      {suggestions.length > 0 ? (
-        <Section title="Suggested for you" testId="add-panel-suggested">
-          <ul className="flex flex-wrap gap-1.5">
-            {suggestions.map(suggestion => (
-              <li key={`${suggestion.widgetId}:${suggestion.collection}`}>
-                <button
-                  type="button"
-                  className={CHIP_CLASS}
-                  disabled={atCapacity}
-                  onClick={() => onSuggestion(suggestion)}
-                >
-                  {suggestion.label}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </Section>
-      ) : null}
-      {found.pairs.length > 0 ? (
-        <Section title="With a collection" testId="add-panel-pairs">
-          <ul className="flex flex-wrap gap-1.5">
-            {found.pairs.map(pair => (
-              <li key={pair.key}>
-                <button
-                  type="button"
-                  className={CHIP_CLASS}
-                  disabled={atCapacity}
-                  aria-label={`Add ${pair.label}`}
-                  onClick={() => onPair(pair)}
-                  data-testid={`add-panel-pair-${pair.key}`}
-                >
-                  <Icons.Plus aria-hidden className="size-3.5" />
-                  {pair.label}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </Section>
-      ) : null}
-      {found.tiles.length > 0 ? (
-        <Section title="Widgets" testId="add-panel-tiles">
-          <ul className="grid grid-cols-2 gap-2.5">
-            {found.tiles.map(tileFor)}
-          </ul>
-        </Section>
-      ) : null}
-    </>
-  );
-}
-
-/** The answer a preview of a card not yet placed starts from: none, so it asks its own. */
-const NOTHING_SHOWN = {
-  slot: undefined,
-  updatedAt: null,
-  isFetching: false,
-} as const;
-
-/** What the line under the collection picker says. */
-function collectionHint(
-  collections: readonly GalleryCollection[],
-  mostEdited: string | undefined,
-  chosen: string
-): string {
-  if (collections.length === 0) {
-    return "There is no collection you can read yet.";
-  }
-  if (mostEdited === undefined) {
-    return "Starts on the first collection you can read.";
-  }
-  return chosen === mostEdited
-    ? "The collection you edit most."
-    : "Defaults to the collection you edit most.";
-}
-
-/** The add step's collection picker, with the line that says where it started. */
-function CollectionPicker({
-  value,
-  collections,
-  mostEdited,
-  onChange,
-}: {
-  value: string;
-  collections: readonly GalleryCollection[];
-  mostEdited: string | undefined;
-  onChange: (collection: string) => void;
-}): JSX.Element {
-  const collectionId = useId();
-  const hintId = useId();
-  return (
-    <div className="space-y-1.5">
-      <label
-        htmlFor={collectionId}
-        className="text-xs font-medium text-muted-foreground"
-      >
-        Collection
-      </label>
-      <select
-        id={collectionId}
-        value={value}
-        aria-describedby={hintId}
-        onChange={event => onChange(event.target.value)}
-        className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        data-testid="add-panel-collection"
-      >
-        <option value="">Choose a collection</option>
-        {collections.map(collection => (
-          <option key={collection.slug} value={collection.slug}>
-            {collection.label}
-          </option>
-        ))}
-      </select>
-      <p id={hintId} className="text-xs text-muted-foreground">
-        {collectionHint(collections, mostEdited, value)}
+        {count}
       </p>
     </div>
   );
 }
 
-/** The add step's period, where the widget has one, and its widths, where it allows several. */
-function StepChoices({
-  step,
-  widget,
-  onChange,
-}: {
-  step: AddStep;
-  widget: DashboardWidget | undefined;
-  onChange: (step: AddStep) => void;
-}): JSX.Element {
-  const period = periodOf(widget);
-  const widths = addWidths(step.tile.size);
+/** The drawer's header: its title, the line under it, and Close. */
+function PanelHeader(): JSX.Element {
   return (
-    <>
-      {period !== undefined && step.period !== undefined ? (
-        <RadioChips
-          legend="Period"
-          name={`period-${step.tile.id}`}
-          options={period.options}
-          value={step.period}
-          onChange={value => onChange({ ...step, period: value })}
-          testId="add-panel-period"
-        />
-      ) : null}
-      {widths.length > 1 ? (
-        <RadioChips
-          legend="Width"
-          name={`width-${step.tile.id}`}
-          options={widths.map(width => ({
-            value: String(width.w),
-            label: width.label,
-            spoken: width.spoken,
-          }))}
-          value={String(step.width)}
-          onChange={value => onChange({ ...step, width: Number(value) })}
-          testId="add-panel-width"
-          glyphs
-        />
-      ) : null}
-    </>
-  );
-}
-
-/**
- * The card as the add step would add it: its settings, and the width chosen, at its starting
- * height, held to the widget's sizes. Drawn at that width on this dashboard where its width is
- * known, so the preview is the card the reader will get, not the widget's default.
- */
-function StepPreview({
-  step,
-  widget,
-}: {
-  step: AddStep;
-  widget: DashboardWidget;
-}): JSX.Element {
-  const dashboardWidth = useDashboardWidthAround();
-  const size = drawnSize(
-    { w: step.width, h: widget.size.default.h },
-    widget.size
-  );
-  return (
-    <SettingsPreview
-      widget={widget}
-      placementId={`gallery-add:${step.tile.id}`}
-      stored={undefined}
-      draft={stepSettings(step, widget) ?? {}}
-      shown={NOTHING_SHOWN}
-      // A card not placed yet: no title of the reader's own.
-      ownTitle=""
-      size={size}
-      cardWidth={
-        dashboardWidth === undefined
-          ? undefined
-          : cardOuterWidth(size.w, dashboardWidth)
-      }
-    />
-  );
-}
-
-/** The add step: the collection, the period and the width, with the card previewed. */
-function AddStepView({
-  step,
-  widget,
-  collections,
-  mostEdited,
-  atCapacity,
-  onChange,
-  onBack,
-  onAdd,
-}: {
-  step: AddStep;
-  widget: DashboardWidget | undefined;
-  collections: readonly GalleryCollection[];
-  mostEdited: string | undefined;
-  atCapacity: boolean;
-  onChange: (step: AddStep) => void;
-  onBack: () => void;
-  onAdd: () => void;
-}): JSX.Element {
-  const headingRef = useRef<HTMLHeadingElement>(null);
-  // Into the step as it opens, so a reader hears where they are.
-  useEffect(() => {
-    headingRef.current?.focus();
-  }, [step.tile.id]);
-  const chosen = step.collection !== "";
-  return (
-    <div className="space-y-4" data-testid="add-panel-step">
-      <h3
-        ref={headingRef}
-        tabIndex={-1}
-        className="text-sm font-semibold text-foreground focus-visible:outline-none"
-      >
-        Add “{step.tile.name}”
-      </h3>
-      <CollectionPicker
-        value={step.collection}
-        collections={collections}
-        mostEdited={mostEdited}
-        onChange={collection => onChange({ ...step, collection })}
-      />
-      <StepChoices step={step} widget={widget} onChange={onChange} />
-      {widget !== undefined && chosen ? (
-        <StepPreview step={step} widget={widget} />
-      ) : null}
-      <div className="flex justify-end gap-2">
-        <Button type="button" variant="outline" onClick={onBack}>
-          Back
-        </Button>
+    <div className="flex shrink-0 items-center gap-2.5 border-b border-border py-3 pr-3 pl-5">
+      <SheetHeader className="min-w-0 flex-1 space-y-0.5 text-left">
+        <SheetTitle className="text-[15px] leading-5 font-semibold">
+          Add widget
+        </SheetTitle>
+        <SheetDescription className="text-[12.5px]">
+          New widgets go to the end. Drag them where you want.
+        </SheetDescription>
+      </SheetHeader>
+      <SheetClose asChild>
         <Button
           type="button"
-          disabled={!chosen || atCapacity}
-          onClick={onAdd}
-          data-testid="add-panel-step-add"
+          variant="ghost"
+          size="icon"
+          className="size-8 shrink-0 text-muted-foreground hover:text-foreground"
+          aria-label="Close"
         >
-          Add to dashboard
+          <Icons.X aria-hidden className="size-[18px]" />
         </Button>
-      </div>
+      </SheetClose>
     </div>
   );
 }
 
-/** The add step as it opens: the collection given, the period's and the width's starting values. */
-function startingStep(
-  tile: GalleryTile,
-  widget: DashboardWidget | undefined,
-  collection: string
-): AddStep {
-  const period = periodOf(widget);
-  return {
-    tile,
-    collection,
-    ...(period === undefined ? {} : { period: period.initial }),
-    width: tile.size.default.w,
-  };
-}
-
-/** The width the reader chose, or none when it is the widget's own starting width. */
-function chosenWidth(step: AddStep): number | undefined {
-  return step.width === step.tile.size.default.w ? undefined : step.width;
-}
-
 /**
- * Where focus goes inside the panel after a step or an add, each a tick later so the render that
- * moved things has landed:
- *
- * - `focusTile`: back on the tile a step was opened from, or on the search when that tile is
- *   gone or disabled;
- * - `keepFocusInPanel`: after an add, focus stays on the control that was pressed while it is
- *   still drawn. When it changed under it (a one-card widget is now on the dashboard), it is
- *   gone and focus goes back to the search, rather than falling out of the panel. The dialog's
- *   focus trap catches a removed control's focus on the sheet itself, which is inside the panel
- *   but no control, so that counts as lost too.
- */
-function usePanelFocus(
-  contentRef: RefObject<HTMLDivElement | null>,
-  searchRef: RefObject<HTMLInputElement | null>
-) {
-  const focusTile = (tileId: string | null) =>
-    setTimeout(() => {
-      const tile =
-        tileId === null
-          ? null
-          : contentRef.current?.querySelector<HTMLElement>(
-              `[data-gallery-tile="${CSS.escape(tileId)}"]`
-            );
-      if (tile && !tile.hasAttribute("disabled")) tile.focus();
-      else searchRef.current?.focus();
-    }, 0);
-  const keepFocusInPanel = () =>
-    setTimeout(() => {
-      const content = contentRef.current;
-      const active = document.activeElement;
-      if (active === content || !content?.contains(active)) {
-        searchRef.current?.focus();
-      }
-    }, 0);
-  return { focusTile, keepFocusInPanel };
-}
-
-/** What the gallery's controls do: open the add step, add a card, add one back, go back. */
-function useGalleryActions({
-  byId,
-  startFor,
-  onAdd,
-  onAddBack,
-  say,
-  step,
-  setStep,
-  focusTile,
-  keepFocusInPanel,
-}: Pick<AddWidgetPanelProps, "byId" | "onAdd" | "onAddBack"> & {
-  /** The collection a new card of a widget starts on, of those it may be set to. */
-  startFor: (widgetId: string) => string | undefined;
-  say: (sentence: string) => void;
-  step: AddStep | null;
-  setStep: (step: AddStep | null) => void;
-  focusTile: (tileId: string | null) => void;
-  keepFocusInPanel: () => void;
-}) {
-  // The tile an add step was opened from, where Back and an add return focus.
-  const openedFrom = useRef<string | null>(null);
-  const openStep = (tile: GalleryTile, collection?: string) => {
-    openedFrom.current = tile.id;
-    setStep(
-      startingStep(
-        tile,
-        byId.get(tile.id),
-        collection ?? startFor(tile.id) ?? ""
-      )
-    );
-  };
-  const addNow = (widgetId: string, settings?: Record<string, unknown>) => {
-    say(addedSentence(onAdd(widgetId, settings), "Added"));
-    keepFocusInPanel();
-  };
-  const leaveStep = () => {
-    setStep(null);
-    focusTile(openedFrom.current);
-  };
-  return {
-    // A widget that reads a collection opens its step; one that reads none is added as it is.
-    choose: (view: GalleryTileView) =>
-      view.tile.collectionSetting === undefined
-        ? addNow(view.tile.id)
-        : openStep(view.tile),
-    suggest: (suggestion: SuggestionView) =>
-      openStep(suggestion.view.tile, suggestion.collection),
-    addPair: (pair: GalleryPair) =>
-      addNow(
-        pair.view.tile.id,
-        newCardSettings(pair.view.tile, { collection: pair.collection.slug })
-      ),
-    addBack: (card: RemovedCard) => {
-      say(addedSentence(onAddBack(card.placementId), "Added back"));
-      keepFocusInPanel();
-    },
-    // Back to the gallery, the panel open for the next card, focus on the tile it came from.
-    addFromStep: () => {
-      if (step === null || step.collection === "") return;
-      say(
-        addedSentence(
-          onAdd(
-            step.tile.id,
-            stepSettings(step, byId.get(step.tile.id)),
-            chosenWidth(step)
-          ),
-          "Added"
-        )
-      );
-      leaveStep();
-    },
-    back: leaveStep,
-  };
-}
-
-/**
- * The side sheet the panel is drawn in: focus starts in the search as it opens, and where it goes
- * as it closes is the dashboard's to say (`onClosed`). Its own polite live region says what the
- * panel is saying (`spoken`), since a modal sheet takes the dashboard's region out of reach.
+ * The drawer the panel is drawn in: focus starts in the search as it opens, and where it goes as
+ * it closes is the dashboard's to say (`onClosed`). Its own polite live region says what the
+ * panel is saying (`spoken`), since a modal drawer takes the dashboard's region out of reach.
  */
 function PanelSheet({
   open,
@@ -1133,13 +423,11 @@ function PanelSheet({
   contentRef,
   searchRef,
   onClosed,
-  header,
   spoken,
   children,
 }: Pick<AddWidgetPanelProps, "open" | "onOpenChange" | "onClosed"> & {
   contentRef: RefObject<HTMLDivElement | null>;
   searchRef: RefObject<HTMLInputElement | null>;
-  header: ReactNode;
   spoken: Utterance;
   children: ReactNode;
 }): JSX.Element {
@@ -1148,7 +436,10 @@ function PanelSheet({
       <SheetContent
         ref={contentRef}
         side="right"
-        className="flex w-full flex-col gap-0 p-0 sm:max-w-xl"
+        // 440 pixels from the small breakpoint up, the whole width below it, on the card colour.
+        // No padding of its own: the header, the search and the list each pad themselves, so the
+        // rule under the header runs edge to edge.
+        className="flex w-full flex-col gap-0 overflow-hidden bg-card p-0 sm:w-[440px] sm:max-w-[440px]"
         data-testid="add-widget-panel"
         onOpenAutoFocus={event => {
           event.preventDefault();
@@ -1160,8 +451,7 @@ function PanelSheet({
           onClosed();
         }}
       >
-        {header}
-        <div className="flex-1 space-y-6 overflow-y-auto p-4">{children}</div>
+        {children}
         <div
           role="status"
           aria-live="polite"
@@ -1175,299 +465,161 @@ function PanelSheet({
   );
 }
 
-/** The panel's header: its title and Close, the search when it is shown, and the limit's note. */
-function PanelHeader({
-  onClose,
-  search,
-  atCapacity,
-}: {
-  onClose: () => void;
-  /** The search and chips, or nothing while the add step is open. */
-  search: ReactNode;
-  atCapacity: boolean;
-}): JSX.Element {
-  return (
-    <SheetHeader className="space-y-3 border-b border-border p-4">
-      <div className="flex items-start justify-between gap-2">
-        <div className="space-y-1">
-          <SheetTitle>Add widget</SheetTitle>
-          <SheetDescription>
-            New cards go to the end of your dashboard. Move them from their
-            menu.
-          </SheetDescription>
-        </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Close"
-          onClick={onClose}
-        >
-          <Icons.X aria-hidden className="size-4" />
-        </Button>
-      </div>
-      {search}
-      {atCapacity ? (
-        <p
-          className="text-sm text-muted-foreground"
-          data-testid="add-panel-at-capacity"
-        >
-          Your dashboard holds the most cards it can ({MAX_PLACEMENTS}, counting
-          removed ones), so no new card can be added. A removed card can still
-          be put back.
-        </p>
-      ) : null}
-    </SheetHeader>
-  );
-}
-
-/** What the gallery's controls do, as `useGalleryActions` gives them. */
-type GalleryActions = ReturnType<typeof useGalleryActions>;
-
-/** The gallery itself: waiting, nothing found, or its lists with a tile per widget. */
-function GallerySection({
-  gallery,
-  found,
-  query,
-  chip,
-  onClear,
-  onShowAll,
-  suggestions,
-  atCapacity,
-  byId,
-  startFor,
-  actions,
-}: {
-  gallery: GalleryAnswer;
-  found: GallerySearch;
-  query: string;
-  chip: GalleryChip;
-  onClear: () => void;
-  onShowAll: () => void;
-  suggestions: readonly SuggestionView[];
-  atCapacity: boolean;
-  byId: ReadonlyMap<string, DashboardWidget>;
-  /** The collection a new card of a widget starts on, which its tile's preview is drawn with. */
-  startFor: (widgetId: string) => string | undefined;
-  actions: GalleryActions;
-}): JSX.Element {
-  return (
-    <GalleryBody
-      gallery={gallery}
-      found={found}
-      query={query}
-      chip={chip}
-      onClear={onClear}
-      onShowAll={onShowAll}
-    >
-      <GalleryLists
-        found={found}
-        suggestions={suggestions}
-        atCapacity={atCapacity}
-        tileFor={view => (
-          <Tile
-            key={view.tile.id}
-            view={view}
-            widget={byId.get(view.tile.id)}
-            collection={startFor(view.tile.id)}
-            atCapacity={atCapacity}
-            onChoose={actions.choose}
-          />
-        )}
-        onAddBack={actions.addBack}
-        onSuggestion={actions.suggest}
-        onPair={actions.addPair}
-      />
-    </GalleryBody>
-  );
-}
-
 /**
- * The panel's state and what it is worked out from: the search, the chip and the add step, each
- * fresh as the panel opens; the lists (`useGalleryModel`); what the panel says
- * (`usePanelVoice`); where focus goes (`usePanelFocus`); and what each control does
- * (`useGalleryActions`).
+ * After an add, focus stays on the Add that was pressed while it is still drawn. When the row
+ * changed under it (a one-card widget is now on the dashboard) it is gone, and focus goes back to
+ * the search rather than falling out of the panel. The dialog's focus trap catches a removed
+ * control's focus on the drawer itself, which is inside the panel but no control, so that counts
+ * as lost too. A tick later, so the render that changed the row has landed.
  */
-function useAddGallery({
-  open,
-  gallery,
-  placements,
-  byId,
-  onAdd,
-  onAddBack,
-}: Pick<
-  AddWidgetPanelProps,
-  "open" | "gallery" | "placements" | "byId" | "onAdd" | "onAddBack"
->) {
-  const [query, setQuery] = useState("");
-  const [chip, setChip] = useState<GalleryChip>("all");
-  // Whether the reader chose a chip this visit, so the count is said for it: the All the visit
-  // opens on was not chosen, and says nothing.
-  const [chipChosen, setChipChosen] = useState(false);
-  const [step, setStep] = useState<AddStep | null>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
-  const read = gallery.read;
-  const model = useGalleryModel(read, placements, byId, chip, query);
-  const voice = usePanelVoice(
-    foundCount(model.found),
-    query,
-    open,
-    chipChosen ? chip : null,
-    read !== undefined,
-    step !== null
-  );
-  const chooseChip = (next: GalleryChip) => {
-    setChip(next);
-    setChipChosen(true);
-  };
-  // A fresh gallery each time it opens: an old search, chip or step would hide what the reader
-  // came to find. Reset during the render that opens it (React's pattern for state that follows
-  // a prop), so the sheet's first frame already draws the search its focus goes to.
-  const [visit, setVisit] = useState(open);
-  if (visit !== open) {
-    setVisit(open);
-    if (open) {
-      setQuery("");
-      setChip("all");
-      setChipChosen(false);
-      setStep(null);
+function keepFocusInPanel(
+  contentRef: RefObject<HTMLDivElement | null>,
+  searchRef: RefObject<HTMLInputElement | null>
+): void {
+  setTimeout(() => {
+    const content = contentRef.current;
+    const active = document.activeElement;
+    if (active === content || !content?.contains(active)) {
+      searchRef.current?.focus();
     }
-  }
-  const { focusTile, keepFocusInPanel } = usePanelFocus(contentRef, searchRef);
-  const actions = useGalleryActions({
-    byId,
-    startFor: model.startFor,
-    onAdd,
-    onAddBack,
-    say: voice.say,
-    step,
-    setStep,
-    focusTile,
-    keepFocusInPanel,
-  });
-  // The count said is what the gallery lists once the search is gone: under the chip still on,
-  // which a cleared search leaves as it was.
-  const clear = () => {
-    setQuery("");
-    voice.sayCleared(`${galleryCount(model.unsearched, "")}.`);
-    searchRef.current?.focus();
-  };
-  return {
-    query,
-    setQuery,
-    chip,
-    chooseChip,
-    step,
-    setStep,
-    searchRef,
-    contentRef,
-    read,
-    model,
-    voice,
-    actions,
-    clear,
-  };
-}
-
-/** The sentence an add, or an add refused at the limit, is announced with. */
-function addedSentence(added: AddedCard | null, verb: string): string {
-  return added === null
-    ? `Your dashboard holds the most cards it can (${MAX_PLACEMENTS}, counting removed ones). Nothing was added.`
-    : `${verb} ${added.title}.`;
+  }, 0);
 }
 
 /**
- * Everything the gallery lists, worked out from the read and the draft (`add-panel-model`): the
- * tiles and removed cards, what the chip and the search keep, the suggestions the draft has room
- * for, and the collection a new card starts on.
+ * The rows, worked out from the read and the draft (`add-panel-model`), what the search keeps of
+ * them, and the collection each widget may be set to.
  */
-function useGalleryModel(
+function usePanelRows(
   read: GalleryRead | undefined,
   placements: readonly WidgetPlacement[],
   byId: ReadonlyMap<string, DashboardWidget>,
-  chip: GalleryChip,
   query: string
 ) {
   // Which collections each widget can be set to, by the rule its card is drawn by.
-  const sources = useBranding().widgetSources;
+  const branding = useBranding();
+  const sources = branding.widgetSources;
+  const plugins = branding.plugins;
   const canAsk = useMemo(() => collectionAsker(byId, sources), [byId, sources]);
-  const tiles = useMemo(
-    () =>
-      read === undefined ? [] : galleryTiles(read, placements, byId, canAsk),
-    [read, placements, byId, canAsk]
-  );
-  const removed = useMemo(
-    () => removedCards(placements, byId),
-    [placements, byId]
-  );
-  const collections = useMemo(() => read?.collections ?? [], [read]);
-  const inChip = useMemo(
-    () => ({ removed, tiles: tilesInChip(tiles, chip), collections, canAsk }),
-    [removed, tiles, chip, collections, canAsk]
-  );
-  const found = useMemo(() => searchGallery(inChip, query), [inChip, query]);
-  // What the chip keeps with no search, by the same search an empty query runs: what Clear
-  // brings back, and says.
-  const unsearched = useMemo(
-    () => foundCount(searchGallery(inChip, "")),
-    [inChip]
-  );
-  const suggestions = useMemo(
-    () =>
-      read === undefined ? [] : suggestionsFor(read, tiles, placements, canAsk),
-    [read, tiles, placements, canAsk]
-  );
+  const offersUsers = useMemo(() => usersOffer(byId), [byId]);
+  const rows = useMemo(() => {
+    if (read === undefined) return [];
+    const named = (plugin: string) =>
+      pluginShownName(
+        plugin,
+        plugins?.find(each => each.name === plugin),
+        REGISTRY_ENTRIES
+      );
+    return galleryRows(read, placements, byId, canAsk, named, offersUsers);
+  }, [read, placements, byId, canAsk, plugins, offersUsers]);
+  const found = useMemo(() => searchRows(rows, query), [rows, query]);
   const collectionsOf = (widgetId: string) =>
-    collectionsFor(widgetId, collections, canAsk);
-  const startFor = (widgetId: string) =>
-    read === undefined
-      ? undefined
-      : startingCollection(read, collectionsOf(widgetId));
-  // Suggested is for the whole gallery: none while a search or a chip narrows it.
-  const narrowed = query.trim() !== "" || chip !== "all";
-  return {
-    tiles,
-    removed,
-    collections,
-    found,
-    unsearched,
-    shownSuggestions: narrowed ? [] : suggestions,
-    collectionsOf,
-    startFor,
+    collectionsFor(widgetId, read?.collections ?? [], canAsk, offersUsers);
+  // The collection a card reads, as it is asked: its declared default where it stores none.
+  const collectionOf = (placement: WidgetPlacement, setting: string) => {
+    const widget = byId.get(placement.widgetId);
+    return widget === undefined
+      ? placement.config?.[setting]
+      : settingsAsAsked(widget, placement.config, sources)[setting];
+  };
+  return { found, collectionsOf, collectionOf };
+}
+
+/**
+ * What a row's Add does: a one-card widget removed this session comes back as it was; any other
+ * is added at the end, a widget that reads a collection starting on the first it may be set to
+ * that no card of it uses yet (`startingCollection`).
+ */
+function useRowAdd({
+  placements,
+  onAdd,
+  onAddBack,
+  collectionsOf,
+  collectionOf,
+  say,
+  keepFocus,
+}: Pick<AddWidgetPanelProps, "placements" | "onAdd" | "onAddBack"> & {
+  collectionsOf: (widgetId: string) => ReturnType<typeof collectionsFor>;
+  collectionOf: (placement: WidgetPlacement, setting: string) => unknown;
+  say: (sentence: string) => void;
+  keepFocus: () => void;
+}) {
+  return (row: GalleryRow) => {
+    if (!canAdd(row)) return;
+    if (row.action.kind === "add-back") {
+      say(addedSentence(onAddBack(row.action.placementId), "Added"));
+      keepFocus();
+      return;
+    }
+    const { tile } = row;
+    const start = startingCollection(
+      tile,
+      collectionsOf(tile.id),
+      placements,
+      collectionOf
+    );
+    const settings = newCardSettings(tile, start?.slug);
+    say(
+      addedSentence(onAdd(tile.id, settings, start?.taken === true), "Added")
+    );
+    keepFocus();
   };
 }
 
-/** The gallery's body: waiting for the read, nothing found, or what it lists (`children`). */
-function GalleryBody({
+/**
+ * The search's text, empty each time the panel opens: an old search would hide what the reader
+ * came to find. Reset during the render that opens it (React's pattern for state that follows a
+ * prop), so the drawer's first frame already draws the search its focus goes to.
+ */
+function useFreshSearch(open: boolean) {
+  const [query, setQuery] = useState("");
+  const [visit, setVisit] = useState(open);
+  if (visit !== open) {
+    setVisit(open);
+    if (open) setQuery("");
+  }
+  return [query, setQuery] as const;
+}
+
+/** Said under the search while the dashboard holds as many cards as it can. */
+function CapacityNote({ atCapacity }: { atCapacity: boolean }) {
+  if (!atCapacity) return null;
+  return (
+    <p
+      className="shrink-0 px-5 pt-1 text-xs text-muted-foreground"
+      data-testid="add-panel-at-capacity"
+    >
+      Your dashboard holds the most cards it can ({MAX_PLACEMENTS}, counting
+      removed ones), so no new card can be added.
+    </p>
+  );
+}
+
+/** The list: waiting for the read, nothing the search matched, or a row each (`children`). */
+function ListBody({
   gallery,
   found,
-  query,
-  chip,
-  onClear,
-  onShowAll,
   children,
 }: {
   gallery: GalleryAnswer;
-  found: GallerySearch;
-  query: string;
-  chip: GalleryChip;
-  onClear: () => void;
-  onShowAll: () => void;
-  children: ReactNode;
+  found: readonly GalleryRow[];
+  children: (row: GalleryRow) => JSX.Element;
 }): JSX.Element {
-  if (gallery.read === undefined) return <GalleryPending gallery={gallery} />;
-  if (foundCount(found) === 0) {
+  if (gallery.read === undefined) return <ListPending gallery={gallery} />;
+  if (found.length === 0) {
     return (
-      <NothingFound
-        query={query}
-        chip={chip}
-        onClear={onClear}
-        onShowAll={onShowAll}
-      />
+      <p
+        className="pt-1.5 text-[13px] text-muted-foreground"
+        data-testid="add-panel-none"
+      >
+        No widget matches. Try another word.
+      </p>
     );
   }
-  return <>{children}</>;
+  return (
+    <ul aria-label="Widgets" data-testid="add-panel-list">
+      {found.map(children)}
+    </ul>
+  );
 }
 
 export function AddWidgetPanel({
@@ -1481,22 +633,27 @@ export function AddWidgetPanel({
   onAddBack,
   onClosed,
 }: AddWidgetPanelProps): JSX.Element {
-  const {
-    query,
-    setQuery,
-    chip,
-    chooseChip,
-    step,
-    setStep,
-    searchRef,
-    contentRef,
+  const [query, setQuery] = useFreshSearch(open);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const read = gallery.read;
+  const { found, collectionsOf, collectionOf } = usePanelRows(
     read,
-    model,
-    voice,
-    actions,
-    clear,
-  } = useAddGallery({ open, gallery, placements, byId, onAdd, onAddBack });
-  const { found, shownSuggestions, collectionsOf, startFor } = model;
+    placements,
+    byId,
+    query
+  );
+  const count = rowsCount(found.length);
+  const voice = usePanelVoice(count, query, open, read !== undefined);
+  const add = useRowAdd({
+    placements,
+    onAdd,
+    onAddBack,
+    collectionsOf,
+    collectionOf,
+    say: voice.say,
+    keepFocus: () => keepFocusInPanel(contentRef, searchRef),
+  });
 
   return (
     <PanelSheet
@@ -1505,53 +662,29 @@ export function AddWidgetPanel({
       contentRef={contentRef}
       searchRef={searchRef}
       onClosed={onClosed}
-      header={
-        <PanelHeader
-          onClose={() => onOpenChange(false)}
-          search={
-            step === null ? (
-              <SearchAndChips
-                searchRef={searchRef}
-                query={query}
-                onQuery={setQuery}
-                chip={chip}
-                onChip={chooseChip}
-                count={voice.count}
-                ready={read !== undefined}
-              />
-            ) : null
-          }
-          atCapacity={atCapacity}
-        />
-      }
       spoken={voice.spoken}
     >
-      {step === null ? (
-        <GallerySection
-          gallery={gallery}
-          found={found}
-          query={query}
-          chip={chip}
-          onClear={clear}
-          onShowAll={() => chooseChip("all")}
-          suggestions={shownSuggestions}
-          atCapacity={atCapacity}
-          byId={byId}
-          startFor={startFor}
-          actions={actions}
-        />
-      ) : (
-        <AddStepView
-          step={step}
-          widget={byId.get(step.tile.id)}
-          collections={collectionsOf(step.tile.id)}
-          mostEdited={read?.mostEdited}
-          atCapacity={atCapacity}
-          onChange={setStep}
-          onBack={actions.back}
-          onAdd={actions.addFromStep}
-        />
-      )}
+      <PanelHeader />
+      <Search
+        searchRef={searchRef}
+        query={query}
+        onQuery={setQuery}
+        count={read === undefined ? "" : count}
+      />
+      <CapacityNote atCapacity={atCapacity} />
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 pt-1.5 pb-5">
+        <ListBody gallery={gallery} found={found}>
+          {row => (
+            <Row
+              key={row.tile.id}
+              row={row}
+              widget={byId.get(row.tile.id)}
+              atCapacity={atCapacity}
+              onAdd={add}
+            />
+          )}
+        </ListBody>
+      </div>
     </PanelSheet>
   );
 }

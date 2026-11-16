@@ -20,6 +20,7 @@
 import { apiKeyScopeFrom } from "../auth/authenticated-scope";
 import { actorFromAuthContext } from "../auth/request-actor";
 import { getService } from "../di";
+import { parseRichTextStyles } from "../dispatcher/helpers/validation";
 import type { SingleResult } from "../domains/singles/types";
 import { errorFromServiceEnvelope } from "../errors/from-service-envelope";
 import { NextlyError } from "../errors/nextly-error";
@@ -130,6 +131,8 @@ function parseRichTextFormat(value: string | null): RichTextOutputFormat {
  *   - "json" (default): Return Lexical JSON structure only
  *   - "html": Return HTML string only
  *   - "both": Return object with both { json, html } properties
+ * - richTextStyles: How rich text HTML is styled ("default" | "none"); "none"
+ *   gives classes only, for the site's own CSS
  *
  * Response:
  * - 200 OK: bare document object (canonical `respondDoc` shape).
@@ -153,6 +156,9 @@ export const GET = withErrorHandler(
     const richTextFormat = parseRichTextFormat(
       searchParams.get("richTextFormat")
     );
+    const richTextStyles = parseRichTextStyles(
+      searchParams.get("richTextStyles")
+    );
 
     const result = await service.get(slug, {
       depth,
@@ -174,7 +180,8 @@ export const GET = withErrorHandler(
         responseData = transformRichTextFields(
           result.data,
           single.fields,
-          richTextFormat
+          richTextFormat,
+          richTextStyles
         ) as typeof result.data;
       }
     }

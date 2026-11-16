@@ -19,6 +19,7 @@ import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { createScratchDatabase } from "../../../../../__tests__/helpers/fresh-database";
+import { installRegistryResolver } from "../../../../../cli/utils/registry-resolver";
 import { loadDialectTables } from "../../../../../database/dialect-tables";
 
 /** The dialects this run can reach: SQLite always, the servers when their URL is set. */
@@ -96,6 +97,9 @@ export async function lockWorld(
             })) as unknown as DrizzleAdapter;
       await adapter.connect();
       await loadDialectTables(dialect);
+      // The static resolver every production adapter carries: the lock seeds its row through a
+      // transaction insert, which an adapter refuses for a table its resolver does not hold.
+      installRegistryResolver(adapter);
       return adapter;
     },
     async reset(adapter, tables = []) {

@@ -164,6 +164,55 @@ describe("builder gate over HTTP", () => {
     expect((await readError(response))?.code).toBe("BUILDER_DISABLED");
   });
 
+  // Every route the builder owns, the GET dry runs included: in production none of them answers,
+  // whatever the host's flag says, because schema reaches production only through migrations.
+  it.each(
+    (
+      [
+        ["POST", ["collections"]],
+        ["PATCH", ["collections", "posts"]],
+        ["DELETE", ["collections", "posts"]],
+        ["GET", ["collections", "schema", "posts", "delete-impact"]],
+        ["POST", ["collections", "schema", "posts", "preview"]],
+        ["POST", ["collections", "schema", "posts", "apply"]],
+        ["POST", ["singles"]],
+        ["DELETE", ["singles", "homepage"]],
+        ["PATCH", ["singles", "homepage", "schema"]],
+        ["POST", ["singles", "schema", "homepage", "preview"]],
+        ["POST", ["singles", "schema", "homepage", "apply"]],
+        ["POST", ["field-groups"]],
+        ["PATCH", ["field-groups", "hero"]],
+        ["DELETE", ["field-groups", "hero"]],
+        ["POST", ["field-groups", "schema", "hero", "preview"]],
+        ["POST", ["field-groups", "schema", "hero", "apply"]],
+        ["GET", ["field-groups", "schema", "hero", "reconcile"]],
+        ["POST", ["field-groups", "schema", "hero", "reconcile"]],
+      ] as const
+    ).map(
+      ([httpMethod, segments]) =>
+        [httpMethod, segments.join("/"), segments] as const
+    )
+  )(
+    "refuses %s /%s in production even when the host turns the builder on",
+    async (httpMethod, path, segments) => {
+      process.env.NODE_ENV = "production";
+      const handlers = handlersWith(true);
+      const response = await handlers[httpMethod](
+        request(path, httpMethod, httpMethod === "GET" ? undefined : {}),
+        ctx([...segments])
+      );
+
+      expect(response.status).toBe(403);
+      const error = await readError(response);
+      expect(error?.code).toBe("BUILDER_DISABLED");
+      // The production refusal, which sends the reader to migrations rather than to a switch
+      // that does nothing there.
+      expect((error as { message?: string } | undefined)?.message).toContain(
+        "migration"
+      );
+    }
+  );
+
   it("lets a schema write through to authentication while the builder is enabled", async () => {
     const handlers = handlersWith(true);
     const response = await handlers.POST(

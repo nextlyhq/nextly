@@ -9,9 +9,12 @@ import {
 
 import type { LocalizedColumnSpec } from "./types";
 
-/** Minimal field shape — cast to FieldDefinition for the descriptor call. */
+/**
+ * Minimal field shape — cast to FieldDefinition for the descriptor call. The name is optional
+ * because a group with no name reaches here from a declared field list.
+ */
 interface FieldLike {
-  name: string;
+  name?: string;
   type: string;
   length?: number;
 }
@@ -56,9 +59,27 @@ export function fieldToLocalizedColumnSpec(
   // Deciding it here instead left a translatable field bounded on the companion while the same
   // declaration was unbounded on the main table, so a value saved in one language was refused in
   // another.
-  builtBy: ColumnOrigin
+  builtBy: ColumnOrigin,
+  /**
+   * `translated` (the default): the companion column. `shared`: the same field's column on the
+   * main table once it stops being translated, which a unique field's whole-column key can bound.
+   */
+  shape: "translated" | "shared" = "translated"
 ): LocalizedColumnSpec | null {
-  const desc = getColumnDescriptor(field as FieldDefinition, dialect, builtBy);
+  // A group with no name has no column in either table: it only lays fields out, and the fields
+  // inside it are stored on the main row, where the companion and the entry write keep them
+  // (`fieldsStoredOnRow`). Asked of it, the descriptor read its missing name and stopped.
+  if (typeof field.name !== "string" || field.name.length === 0) return null;
+  // A translated column is asked without the field's `unique` flag: a translated field is unique
+  // per language, keyed by an index over an expression or a prefix that MySQL builds on a TEXT
+  // column, so its uniqueness never bounds the column the way a shared unique field's
+  // whole-column key does.
+  const { unique: _unique, ...withoutUnique } = field as FieldDefinition;
+  const desc = getColumnDescriptor(
+    shape === "shared" ? (field as FieldDefinition) : withoutUnique,
+    dialect,
+    builtBy
+  );
   if (!desc || desc.kind === "skip") return null;
   // Extension-only kinds cannot reach here: a companion column mirrors a
   // FIELD's column, and no collection field produces one. Narrowed explicitly

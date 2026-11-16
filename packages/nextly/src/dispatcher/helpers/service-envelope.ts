@@ -75,6 +75,7 @@ export function paginatedResponseToMeta(p: {
   totalPages: number;
   hasNextPage: boolean;
   hasPrevPage: boolean;
+  totalCapped?: true;
 }): PaginationMeta {
   return {
     total: p.totalDocs,
@@ -83,6 +84,8 @@ export function paginatedResponseToMeta(p: {
     totalPages: p.totalPages,
     hasNext: p.hasNextPage,
     hasPrev: p.hasPrevPage,
+    // Carried only when set, so an exact total's meta is unchanged.
+    ...(p.totalCapped ? { totalCapped: true as const } : {}),
   };
 }
 

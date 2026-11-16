@@ -212,12 +212,16 @@ export interface StoragePlugin {
   adapter: IStorageAdapter;
   /**
    * Handler for generating client-side upload URLs.
-   * Called when clientUploads is enabled for a collection.
+   * Called when clientUploads is enabled for a collection, for a file whose
+   * name, type and size the upload checks have already allowed. The URL must
+   * bind the type and `options.size`, so storage refuses a different file:
+   * its bytes never pass Nextly's checks.
    */
   getClientUploadUrl?: (
     filename: string,
     mimeType: string,
-    collection: string
+    collection: string,
+    options: ClientUploadOptions
   ) => Promise<ClientUploadData>;
   /**
    * Handler for generating signed download URLs.
@@ -228,6 +232,14 @@ export interface StoragePlugin {
 
 // ============================================================
 // Client Upload Types
+
+/** What a signed client upload is bound to, besides its key and type. */
+export interface ClientUploadOptions {
+  /** The file's exact size in bytes; storage refuses a body of another length. */
+  size: number;
+  /** How long the URL lasts, in seconds, within the adapter's own cap. */
+  expiresIn?: number;
+}
 // ============================================================
 
 /**
@@ -309,6 +321,23 @@ export interface IStorageAdapter {
   /** Upload file buffer to storage */
   upload(buffer: Buffer, options: UploadOptions): Promise<UploadResult>;
 
+  /**
+   * Store bytes at exactly `filePath`, replacing anything there (optional).
+   *
+   * Core calls it only with a key it derived from a file this storage already
+   * holds, to keep a file made from that one, such as a resized copy of an
+   * image, beside it. A storage without it cannot keep such files, and core
+   * serves the original instead. `upload` stays the way new files are
+   * stored, since it is the storage that chooses their keys.
+   *
+   * @experimental
+   */
+  uploadAt?(
+    filePath: string,
+    buffer: Buffer,
+    options: { mimeType: string }
+  ): Promise<UploadResult>;
+
   /** Delete file from storage */
   delete(filePath: string): Promise<void>;
 
@@ -336,11 +365,15 @@ export interface IStorageAdapter {
   /** Generate signed URL for temporary private access (optional) */
   getSignedUrl?(filePath: string, expiresIn?: number): Promise<string>;
 
-  /** Generate pre-signed upload URL for client-side uploads (optional) */
+  /**
+   * Generate pre-signed upload URL for client-side uploads (optional). With
+   * `options.contentLength`, the signature binds the body's exact length.
+   */
   getPresignedUploadUrl?(
     key: string,
     mimeType: string,
-    expiresIn?: number
+    expiresIn?: number,
+    options?: { contentLength?: number }
   ): Promise<ClientUploadData>;
 
   /**

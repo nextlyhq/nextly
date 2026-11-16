@@ -11,6 +11,7 @@ import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { loadDialectTables } from "../../../database/dialect-tables";
 import { getSchemaEventsDdl } from "../../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
@@ -19,6 +20,7 @@ import { runMigrationStatements } from "../../../domains/schema/migrate/migratio
 import { SchemaOwnersRepository } from "../../../domains/schema/ownership/schema-owners-repository";
 import { withMigrateLock } from "../../../domains/schema/pipeline/locks";
 import { createLogger } from "../../utils/logger";
+import { installRegistryResolver } from "../../utils/registry-resolver";
 import { downDatabaseDeps, migrateDownCore } from "../migrate-down";
 
 let adapter: ReturnType<typeof createSqliteAdapter>;
@@ -33,6 +35,10 @@ const DOWN = `INSERT INTO "down_log" ("label") VALUES ('undone')`;
 beforeEach(async () => {
   adapter = createSqliteAdapter({ memory: true });
   await adapter.connect();
+  await loadDialectTables("sqlite");
+  // The static resolver every production adapter carries: the lock seeds its row through a
+  // transaction insert, which an adapter refuses for a table its resolver does not hold.
+  installRegistryResolver(adapter as unknown as DrizzleAdapter);
   sqlite = adapter.getDrizzle<{ $client: Database.Database }>().$client;
   repo = new SchemaEventsRepository(adapter.getDrizzle(), "sqlite");
   sqlite.exec(`CREATE TABLE "down_log" ("label" TEXT NOT NULL)`);

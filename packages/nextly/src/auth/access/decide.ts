@@ -25,6 +25,10 @@
  * log, never for the response.
  */
 import { NextlyError } from "../../errors/nextly-error";
+import {
+  ruleCouldNotRun,
+  waitedOutPoolBound,
+} from "../../errors/rule-could-not-run";
 import { consoleLogger } from "../../shared/types";
 import type {
   CollectionAccessControl,
@@ -171,6 +175,17 @@ export async function askRule(
   try {
     value = await rule(ruleContext(actor, action, target));
   } catch (error) {
+    // A rule whose own query waited out the bound for a database connection
+    // never answered, so nothing it guards can be decided: the request ends
+    // with that, naming whose rule it is, rather than reading the wait as the
+    // rule's refusal. Never remembered as an answer, so a retry asks again.
+    if (waitedOutPoolBound(error)) {
+      throw ruleCouldNotRun({
+        subject: target.slug,
+        rule: `the ${action} rule`,
+        cause: error,
+      });
+    }
     // A broken rule refuses, and is logged so it can be found and fixed.
     consoleLogger.error(
       `[rbac] Code access function for ${action}:${target.slug} threw`,

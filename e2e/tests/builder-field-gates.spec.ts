@@ -20,6 +20,7 @@ import {
   removeMigrationsOf,
 } from "./support/runtime-collection";
 import { LOCK } from "./support/locks";
+import { CANVAS_FRAME, canvasFrame } from "./support/canvas-frame";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.dashboard, LOCK.schema] });
@@ -59,7 +60,9 @@ test("refuses a read-only blocks field at its builder address, and opens an edit
       page.getByRole("heading", { name: "This field can't be edited" })
     ).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText(/read-only/)).toBeVisible();
-    await expect(page.locator(".nx-canvas")).toHaveCount(0);
+    // No canvas frame at all: the blocks are drawn inside one, so a query for
+    // the canvas on the page would pass on an empty page as well.
+    await expect(page.locator(CANVAS_FRAME)).toHaveCount(0);
 
     // The way back is the document's own form.
     await page.getByRole("button", { name: "Back to the document" }).click();
@@ -68,7 +71,9 @@ test("refuses a read-only blocks field at its builder address, and opens an edit
     // The control: the same document's editable field opens its editor.
     await page.goto(`${form}/builder?field=body`);
     await expect(
-      page.locator('.nx-canvas [data-nx-node="body-heading"]').first()
+      canvasFrame(page)
+        .locator('.nx-canvas [data-nx-node="body-heading"]')
+        .first()
     ).toBeVisible({ timeout: 30_000 });
   }
 });

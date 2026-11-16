@@ -55,6 +55,7 @@ export function GroupFieldEditor({
             />
           </div>
           <Switch
+            aria-label="Hide gutter"
             checked={hideGutter || false}
             onCheckedChange={onHideGutterChange}
           />

@@ -20,16 +20,17 @@ test("Forms lives in the main rail exactly once, with its collections inside", a
   const railForms = rail.locator('a[href="/admin/collections/forms"]');
   await expect(railForms).toHaveCount(1);
 
-  // The old duplicates are gone: the Collections sub-sidebar carries no
+  // The old duplicates are gone: the Content panel's Collections carry no
   // Forms group (the plugin's collections moved into the standalone
   // section wholesale). The rail's one Content item opens the panel, named
-  // by its label since it is a link or a button by surface, and the panel's
-  // Collections part is chosen in its "Content type" switch.
+  // by its label since it is a link or a button by surface, and the panel
+  // lists its Collections under their heading.
   await rail.getByLabel("Content", { exact: true }).click();
-  await page
-    .getByRole("navigation", { name: "Content type" })
-    .getByRole("link", { name: "Collections" })
-    .click();
+  await expect(
+    page
+      .getByRole("navigation", { name: "Content" })
+      .getByRole("button", { name: /^Collections, \d+$/ })
+  ).toBeVisible();
   // The rail's own Forms item is named "Forms" for assistive technology, so
   // it is the one visible link of that name: the Collections panel adds none.
   const formsLinks = page

@@ -39,6 +39,7 @@ import {
 import { NextlyError } from "../../errors/nextly-error";
 import { emptyRetiredPermissionAnswers } from "../../init/retired-permission-answers";
 import { getAuthLogger } from "../../lib/logger";
+import { coalesce } from "../../shared/lib/coalesce";
 import { consoleLogger } from "../../shared/types";
 
 import {
@@ -383,6 +384,26 @@ const ACTOR_CACHE_MAX_ENTRIES = 10_000;
 const actorCache = new Map<string, KeptActor>();
 
 /**
+ * The resolutions under way, by user and the role version each began under.
+ *
+ * The requests of one admin screen arrive together, and when the user's
+ * actor is not kept (the first screen after a start, or the minute after it
+ * was kept) each of them would resolve it: sixteen walks of the same roles,
+ * four statements each, where one answers them all. A request arriving while
+ * a resolution for its user is under way is handed that one instead
+ * (`coalesce`), on the same rules as keeping:
+ * - the role version is in the key, so a request that read a newer version
+ *   than a resolution began under never joins it, and a role change made in
+ *   this process applies at once to every request after it;
+ * - while a retirement runs, nothing is joined, as nothing is kept;
+ * - a failed resolution rejects every request that joined it, each failing
+ *   closed, and is never kept, so the next request resolves again.
+ * Authorization state for one user, keyed by that user: never an answer, and
+ * never shared across users.
+ */
+const actorLoads = new Map<string, Promise<ResolvedActor>>();
+
+/**
  * Whether what this process kept under `key` may still be served: the role
  * version it was read under stands and it has not expired. When it may, the
  * request's memo of `key` is told when it expires, so a request that keeps
@@ -445,6 +466,51 @@ async function loadActor(userId: string): Promise<ResolvedActor> {
 }
 
 /**
+ * How many times a request resolves the user again because the resolution it
+ * was handed outlived a role assignment it was built from, before it gives up
+ * and fails closed.
+ */
+const EXPIRED_RESOLUTION_RETRIES = 3;
+
+/**
+ * `actor`, when every role assignment it was built from is still in force,
+ * and otherwise the user resolved again, alone.
+ *
+ * An assignment's expiry moves no role version, so the version in the key
+ * does not keep a request from joining a resolution that read an assignment
+ * which has expired since: one whose later reads (inheritance, grants) ran
+ * past the moment it ended, or one a request joined after it ended. Served,
+ * that resolution would hand the request the ended role's grants, where a
+ * resolution of its own would have read the assignment as ended. So
+ * whichever request receives it, the one that began it included, checks the
+ * soonest expiry it carries (`validUntil`) against the time now, and resolves
+ * the user again on its own where it has passed: never joined, so never
+ * across an expiry. A fresh resolution leaves out every assignment ended when
+ * it read them; one that itself outlives another assignment is resolved
+ * again, a few times at most, then refused (the caller fails closed).
+ */
+async function stillInForce(
+  userId: string,
+  actor: ResolvedActor
+): Promise<ResolvedActor> {
+  let current = actor;
+  for (let retry = 0; ; retry += 1) {
+    if (current.validUntil === undefined || current.validUntil > Date.now()) {
+      return current;
+    }
+    if (retry === EXPIRED_RESOLUTION_RETRIES) {
+      throw NextlyError.internal({
+        logContext: {
+          reason:
+            "every resolution of the user's roles outlived a role assignment it read",
+        },
+      });
+    }
+    current = await loadActor(userId);
+  }
+}
+
+/**
  * The user's actor on the pool: the one this process kept, while the role
  * version it was resolved under stands and before it expires, and otherwise
  * read now and kept.
@@ -466,7 +532,14 @@ async function actorOnPool(userId: string): Promise<ResolvedActor> {
       return kept.actor;
     }
   }
-  const actor = await loadActor(userId);
+  // Joined only while the version this request read is still the one in
+  // force: checked here, after the kept actor, with no await before the join.
+  const shared = stampIsCurrent(resolvedUnder)
+    ? await coalesce(actorLoads, `${userId}\u0000${resolvedUnder}`, () =>
+        loadActor(userId)
+      )
+    : await loadActor(userId);
+  const actor = await stillInForce(userId, shared);
   const expiresAt = keptUntil(userId, actor.validUntil);
   if (stampIsCurrent(resolvedUnder)) {
     if (actorCache.size >= ACTOR_CACHE_MAX_ENTRIES) {
@@ -1066,14 +1139,20 @@ export async function inPermissionSweep<T>(run: () => Promise<T>): Promise<T> {
   // Open for the batch's whole length, not from its first write. A batch exists
   // to write permission rows, and the alternative is a window between the run
   // starting and its first write in which answers derived from rows the batch
-  // is about to change are still being filed as current.
-  return duringRetirement(async () => {
-    try {
-      return await permissionSweep.run(batch, run);
-    } finally {
-      if (batch.dirty) await flushPermissionCaches();
-    }
-  });
+  // is about to change are still being filed as current. The content expiry
+  // the batch owes is queued ahead of its first write and taken by the flush
+  // at its end; a batch that writes nothing queues nothing.
+  return aheadOfGrantsChange(
+    () =>
+      duringRetirement(async () => {
+        try {
+          return await permissionSweep.run(batch, run);
+        } finally {
+          if (batch.dirty) await flushPermissionCaches();
+        }
+      }),
+    { queue: false }
+  );
 }
 
 /**
@@ -1084,6 +1163,7 @@ export async function inPermissionSweep<T>(run: () => Promise<T>): Promise<T> {
  */
 function clearInMemoryTiers(): void {
   actorCache.clear();
+  actorLoads.clear();
   publicGrantsKept = undefined;
 }
 
@@ -1146,11 +1226,31 @@ export async function writingPermissions<TTable, T>(
   permissions: TTable,
   run: (permissions: TTable) => Promise<T>
 ): Promise<T> {
-  try {
-    return await run(permissions);
-  } finally {
-    await invalidateAllPermissionCaches();
-  }
+  // The content expiry the write owes is queued before the write starts, so it
+  // is owed in the database before the write commits; the expiry the
+  // retirement below reaches (or a sweep's, at its end) takes it.
+  return aheadOfGrantsChange(async () => {
+    try {
+      return await run(permissions);
+    } finally {
+      await invalidateAllPermissionCaches();
+    }
+  });
+}
+
+/**
+ * {@link aheadOfGrantsChange}, loaded when a gate is entered rather than with
+ * this module, which most of the package imports, for the reason
+ * `expireContentReads` gives.
+ */
+async function aheadOfGrantsChange<T>(
+  write: () => Promise<T>,
+  options?: { queue?: boolean }
+): Promise<T> {
+  const { aheadOfGrantsChange: ahead } = await import(
+    "../../domains/flush-content-change"
+  );
+  return ahead(write, options);
 }
 
 /**
@@ -1213,9 +1313,26 @@ function storedAnswersReadElsewhere(): boolean {
   return setting !== "false" && setting !== "0";
 }
 
+/**
+ * Retire everything derived from permission rows, after one was written: the caches here, and
+ * the cached content reads (`expireContentAfterGrantsChange`), since a permission's rows decide
+ * what every role holding it, the Public role among them, may read.
+ */
 async function flushPermissionCaches(): Promise<void> {
   clearInMemoryTiers();
   await publishRetirement();
+  await expireContentReads();
+}
+
+/**
+ * The cached content reads expired after a change to grants. Loaded when it runs, so this module,
+ * which most of the package imports, does not import the content cache's.
+ */
+async function expireContentReads(): Promise<void> {
+  const { expireContentAfterGrantsChange } = await import(
+    "../../domains/flush-content-change"
+  );
+  await expireContentAfterGrantsChange();
 }
 
 export async function invalidatePermissionCache(
@@ -1238,6 +1355,9 @@ export async function invalidatePermissionCache(
   }
 
   await publishRetirement();
+  // What a role grants changed, so the cached content reads go too. A user's roles changing
+  // expires none: a read cached for a user is keyed by the roles it was read under.
+  if (roleId) await expireContentReads();
 }
 
 /**

@@ -29,6 +29,7 @@ import { useFieldTypeLabel } from "@admin/lib/builder/field-type-label";
 import { reviewDeletesData } from "@admin/lib/builder/review-deletes-data";
 import type {
   SchemaPreviewChange,
+  SchemaPreviewJoiningTranslation,
   SchemaPreviewLeavingTranslation,
   SchemaPreviewRenameCandidate,
   SchemaRenameResolution,
@@ -37,7 +38,10 @@ import type {
 } from "@admin/services/schemaApi";
 
 import { BUILDER_KIND_NOUN, type BuilderKind } from "./builder-config";
-import { LeavingTranslationNotice } from "./LeavingTranslationNotice";
+import {
+  JoiningTranslationNotice,
+  LeavingTranslationNotice,
+} from "./LeavingTranslationNotice";
 
 interface SchemaChangeDialogProps {
   open: boolean;
@@ -56,6 +60,8 @@ interface SchemaChangeDialogProps {
   interactiveFields: InteractiveField[];
   // Fields that stop being translated: what moves to the archive, or why the change is refused.
   leavingTranslation?: SchemaPreviewLeavingTranslation[];
+  // Fields that become translated: how many values become the default language's.
+  joiningTranslation?: SchemaPreviewJoiningTranslation[];
   onConfirm: (
     resolutions: Record<string, FieldResolution>,
     renameResolutions: SchemaRenameResolution[]
@@ -75,6 +81,7 @@ export function SchemaChangeDialog({
   warnings,
   interactiveFields,
   leavingTranslation = [],
+  joiningTranslation = [],
   onConfirm,
   isApplying,
 }: SchemaChangeDialogProps): JSX.Element {
@@ -268,7 +275,7 @@ export function SchemaChangeDialog({
                   </span>
                 </div>
                 {field.rowCount > 0 && (
-                  <span className="ml-16 text-xs text-warning-600">
+                  <span className="ml-16 text-xs text-warning-text">
                     {field.rowCount.toLocaleString()} rows may be affected
                   </span>
                 )}
@@ -278,6 +285,7 @@ export function SchemaChangeDialog({
         )}
 
         <LeavingTranslationNotice fields={leavingTranslation} />
+        <JoiningTranslationNotice fields={joiningTranslation} />
 
         {/* Rename candidates - one section per dropped column with a list
             of "rename to X" radios + a "drop and add new" option.
@@ -375,7 +383,7 @@ export function SchemaChangeDialog({
 
         {/* Interactive fields -- need user input */}
         {promptedFields.length > 0 && (
-          <div className="space-y-3 rounded-md  border border-border border-warning-200 bg-warning-50 p-3 dark:border-warning-800 dark:bg-warning-950">
+          <div className="space-y-3 rounded-md  border border-warning-border bg-warning-surface p-3">
             {promptedFields.map(field => (
               <div key={field.name} className="space-y-2">
                 {/* The prompt says what needs an answer in plain words; the

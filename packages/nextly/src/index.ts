@@ -103,6 +103,7 @@ export {
 // no other way to tell the caller without dressing it as a failure.
 export {
   recordAdvisoryNotice,
+  type AdvisoryNotice,
   type HookWarning,
 } from "./hooks/side-effect-warnings";
 
@@ -111,9 +112,13 @@ export {
 // ============================================================
 
 // Main initialization API - recommended for most applications
+// `registerNextlyStart` is how an app's `cached-read.ts` says how to start
+// Nextly for a read that finds it not started (a root layout's read on
+// `/_not-found` during `next build`), without starting it eagerly.
 export {
   getNextly,
   getCachedNextly,
+  registerNextlyStart,
   shutdownNextly,
   createRegister,
   type Nextly,
@@ -135,6 +140,16 @@ export { nextly } from "./direct-api";
 // (e.g. `NextlyError.isNotFound(err)`) — the legacy `is*Error` helpers
 // were removed in PR 12 (final unified-error-system cleanup).
 export { NextlyError } from "./errors";
+
+// Whether a failure means Nextly is unavailable, and the render policy that
+// follows from it: in production a page render fails rather than being
+// served without what Nextly gives it. On the root as well as
+// `nextly/runtime`, so `@nextlyhq/plugin-sdk` re-exports it without pulling
+// the runtime barrel into every plugin. `@experimental`.
+export {
+  failRenderWhenUnavailable,
+  isNextlyUnavailable,
+} from "./errors/unavailable";
 
 // The canonical mutation builder, published so a CONTRIBUTED route can answer
 // in the same envelope every first-party write answers in.
@@ -184,6 +199,14 @@ export type {
   DataFromFieldGroupSlug,
 } from "./direct-api/types";
 
+// The site's languages as generated types know them: what a read's `locale` and
+// `fallbackLocale` take, for a caller annotating its own values with them.
+export type {
+  FallbackLocaleOption,
+  Locale,
+  LocaleOption,
+} from "./direct-api/types/locales";
+
 // Direct API types - the `nextly.fieldGroups.*` namespace. Exported from the
 // root because they are the argument and result types of a public namespace:
 // without them a caller cannot annotate a variable holding what it returns.
@@ -219,6 +242,9 @@ export type {
   BulkDeleteArgs,
   DuplicateArgs,
   FindSingleArgs,
+  // What `findSingle` resolves to, `null` included only for a call that may
+  // pass `createIfMissing: false`.
+  FoundSingle,
   UpdateSingleArgs,
   CountResult,
   GroupResult,
@@ -252,6 +278,8 @@ export type {
   UploadMediaArgs,
   FindMediaArgs,
   FindMediaByIDArgs,
+  FindMediaByIDsArgs,
+  MediaCopyArgs,
   UpdateMediaArgs,
   DeleteMediaArgs,
   BulkDeleteMediaArgs,
@@ -314,6 +342,7 @@ export type {
   QueueTemplateEmailArgs,
   QueuedEmail,
   QueuedEmailState,
+  CancelQueuedEmailArgs,
 } from "./direct-api/types";
 
 // Email templates (experimental). Template data takes lists and objects;
@@ -418,6 +447,20 @@ export type {
 } from "./services/users/user-service";
 
 export { MediaService } from "./services/media/media-service";
+/**
+ * Resized copies of stored images: the widths a copy can have, the allowed
+ * width nearest any other, and what `copyOf` answers.
+ * @experimental
+ */
+export {
+  MEDIA_COPY_WIDTHS,
+  nearestMediaCopyWidth,
+  type MediaCopyWidth,
+} from "./domains/media/copies/copy-rules";
+export type {
+  MediaCopy,
+  MediaCopySource,
+} from "./domains/media/copies/media-copies";
 export type {
   MediaFile,
   MediaType,
@@ -511,13 +554,26 @@ export {
   type PluginAuditApi,
   type PluginAuditDeclaration,
   // The helpers a plugin receives on `ctx.security`: passwords, opaque
-  // secrets and one-purpose secrets.
+  // secrets, one-purpose secrets and verifying the webhooks it receives.
   type PluginSecurityApi,
+  standardWebhooks,
+  type InboundWebhookDelivery,
+  type InboundWebhookReading,
+  type InboundWebhookScheme,
+  type ClaimDeliveryOptions,
+  type DeliveryClaim,
+  type DeliveryClaimResult,
+  type PluginReceivedWebhooks,
+  type VerifiedWebhook,
+  type VerifyWebhookOptions,
+  type WebhookRefusal,
+  type WebhookVerification,
   PasswordTooLongError,
   type PasswordCheck,
   type PasswordHelper,
   type PasswordRules,
   type OpaqueSecrets,
+  type KeyedDigests,
   type OneTimeSecrets,
   type SecretData,
   type TxOption,
@@ -534,6 +590,9 @@ export {
   type FrozenValue,
   type PluginEmailSettings,
   type PluginContext,
+  type PluginDurableEvents,
+  type PluginEmitOptions,
+  type PluginEvents,
   type PluginContributions,
   type PluginDatabase,
   type PluginRawDatabase,
@@ -550,8 +609,11 @@ export {
   type PluginPinTransaction,
   type PluginInsert,
   type PluginTransaction,
+  type PluginTransactionBounds,
   type PluginHookPointDeclaration,
   type PluginSettingsApi,
+  type PluginCacheApi,
+  pluginCacheTag,
   type PluginDeclaration,
   type PluginDefinition,
   type PluginPermission,
@@ -569,9 +631,15 @@ export {
   type PluginFieldCodegen,
   type PluginFieldCodegenImport,
   type FieldSurface,
+  type PluginSchedule,
   type ScheduledTask,
+  type PluginWebhookEventType,
+  type PluginTranslations,
   type PermissionSlug,
   type PluginHookRegistry,
+  // `ctx.hooks.onInTransaction`'s handler and what it is handed.
+  type InTransactionContext,
+  type InTransactionHandler,
   type PluginFilterRegistry,
   type PluginActionRegistry,
   type HookPointContext,
@@ -581,6 +649,7 @@ export {
   type HookPointValue,
   type PluginRoute,
   type PluginRouteCaller,
+  type PluginRouteCanOptions,
   type PluginRouteIdentity,
   type PluginRouteContext,
   type PluginRouteHandler,
@@ -589,6 +658,8 @@ export {
   type PluginRouteLimitKey,
   type Middleware,
   type RouteMethod,
+  type PluginProxyHandler,
+  type ProxyAnswer,
   type NextlyPrincipals,
   type PluginPrincipalsApi,
   type PluginRoutePrincipal,
@@ -610,12 +681,130 @@ export {
   type JsonValue,
   type PluginAdminContributions,
   type PluginAdminPage,
+  type PluginPageStartupRead,
   type PluginCollectionView,
+  type OverridableDocumentAction,
+  type PluginDocumentActionOverride,
+  type PluginDocumentActionOverrides,
   type PluginDocumentView,
   type PluginFieldTypeDocumentView,
+  type PluginPanelSection,
+  type PluginAdminPlaceDeclaration,
+  type AdminBlockContribution,
+  type AdminBulkActionContribution,
+  type AdminColumnContribution,
+  type AdminContribution,
+  type AdminContributionAction,
+  type AdminRowActionContribution,
+  type AdminSidebarSectionContribution,
+  type AdminTabContribution,
+  type AdminContributionKind,
+  type RowPredicate,
+  type RowPredicateValue,
+  type PluginListFilterDeclaration,
+  type PluginListFilterOption,
   type PluginMenuItem,
+  type PluginMenuItemFields,
   type PluginNavSection,
+  type PluginAdminPanel,
+  type PluginPanelGroup,
+  type PluginItemCount,
+  type PluginHeaderContributions,
+  type PluginHeaderSlotContributions,
+  type PluginHeaderUserMenuContributions,
+  type PluginItemPlace,
+  type PluginUserMenuAction,
+  type PluginUserMenuItem,
+  type PluginUserMenuLink,
+  CORE_ADMIN_PLACES,
+  type AdminPlaceId,
+  type AdminPlaces,
+  type CoreAdminPlaceId,
 } from "./plugins";
+export type { ForgetSendsInput } from "./domains/email/plugin-send-forgetting";
+// What a plugin is told of its queued emails' changes, and reads of them.
+export type {
+  QueuedEmailCancelCause,
+  QueuedEmailChange,
+  QueuedEmailRecipient,
+  QueuedRecipientOutcome,
+} from "./domains/email/queued-send-changes";
+export type {
+  QueuedEmailStanding,
+  QueuedEmailStatus,
+} from "./domains/email/queued-send-read";
+export type { QueuedEmailChangeHandler } from "./plugins/plugin-context";
+
+// "Every content type except these", one answer for each reader of a scope.
+// @experimental
+export {
+  isContentTypeScope,
+  typesReachedBy,
+  type ContentTypeCandidate,
+  type ContentTypeKind,
+  type ContentTypeScope,
+} from "./plugins/content-type-scope";
+// Which types a plugin's `extend` added each field to, as the start resolved
+// them. @experimental
+export { typesExtendedBy, type ExtendedType } from "./plugins/extended-types";
+// A plugin's switch for the fields its `extend` added. @experimental
+export {
+  EXTENSION_SWITCH_SERVICE,
+  type ExtensionSwitch,
+} from "./plugins/extension-switch";
+
+// The later pages of a paginated list's address (`/news/page/2`): one
+// spelling per page, read the way the content routes read them.
+// @experimental
+export { listPageNumber, listPageOf } from "./runtime/routing/slug-param";
+
+// The cache tags a read of a collection, or of one entry in it, carries:
+// what a write to it expires. For code that caches an answer built from
+// those reads, such as a plugin's page metadata.
+// @experimental
+export { nextlyTags } from "./runtime/cache/nextly-tags";
+
+// The paths every robots.txt of a Nextly site keeps crawlers out of, read
+// by `nextlyRobots` and by a plugin that serves the file.
+// @experimental
+export { FRAMEWORK_CRAWL_EXCLUSIONS } from "./shared/crawl-exclusions";
+
+// Where an entry is served, as the site declares it: one answer for every
+// reader of a page's public address.
+// @experimental
+export {
+  publicAddressOf,
+  typesWithoutAddress,
+  type PublicAddress,
+  type PublicAddressType,
+} from "./domains/public-addresses/public-address";
+
+// How each language's address is formed, by prefix or by domain, as the site
+// declares it: the address a path kept in one language is opened at.
+// @experimental
+export {
+  addressOfRequest,
+  languageAddressOf,
+  type KeptAddress,
+  type LanguageAddress,
+  type LanguageAddressRule,
+} from "./domains/i18n/language-addresses";
+
+// Keeping every public address to one page: the record a plugin keeps, as
+// core asks it on each save (`ctx.publicAddresses`).
+// @experimental
+export type {
+  AddressHolder,
+  HeldAddress,
+  HeldAddressUpdate,
+} from "./domains/public-addresses/participants";
+export type { HeldDocument } from "./domains/public-addresses/held-listing";
+export type {
+  ParticipantTransaction,
+  PluginPublicAddresses,
+  PublicAddressParticipant,
+  RefusedAddressUpdate,
+} from "./plugins/plugin-public-addresses";
 
 // The plugin limiter: `contributes.limits` rules and `ctx.limits`.
 // @experimental
@@ -685,6 +874,10 @@ export {
 // reads its `size` by to ask for no more rows than the card shows, by the formula core's own list
 // cards are drawn with. From the module the admin draws the frame by, which imports nothing more.
 export { rowsThatFit } from "./domains/widgets/card-geometry";
+// @experimental The rows a list card loads and shows for its "Number of entries" setting, and the
+// most that setting offers: what a widget's `load` reads its setting by, the rule core's own list
+// cards and the admin read alike. From `query-limits.ts`, which imports nothing.
+export { listEntries, MAX_WIDGET_ROWS } from "./domains/widgets/query-limits";
 // A setting's own editor component's props (experimental).
 export type { SettingEditorProps } from "./domains/widgets/result";
 // @experimental The check a site's generated admin component map applies, and what it reads:
@@ -841,6 +1034,47 @@ export type {
   ReadableContentCaller,
   ReadableContentEntity,
 } from "./auth/readable-content";
+// A plugin's read of a document's stored field values with no read hook, and
+// its write of a field only if the stored value is still the one it read,
+// judged under the write's own row lock. Here for `@nextlyhq/plugin-sdk` to
+// publish; it is the surface a plugin is promised. The hash is the one both
+// sides of the comparison use, so a plugin never computes its own.
+export { readStoredFields, updateIfUnchanged } from "./plugins/stored-fields";
+export type {
+  PluginConditionalUpdate,
+  PluginConditionalWriteIdentity,
+  PluginStoredDocument,
+  PluginStoredFields,
+  PluginStoredFieldsRequest,
+  PluginStoredIdentity,
+  PluginStoredLifecycle,
+  PluginSystemCheckedWrite,
+  PluginSystemIdentity,
+  PluginWriteExpectation,
+} from "./plugins/stored-fields";
+export { storedValueHash } from "./domains/collections/services/stored-field-read";
+// A field rewrite: one field of an entry or a Single changed on its live copy
+// and on every pending draft that holds it, without publishing, from the
+// version the caller read (`ctx.services.collections.rewriteField`,
+// `nextly.rewriteField`). Its types, here for `@nextlyhq/plugin-sdk` to
+// publish.
+export type {
+  DocumentFieldRewriteRequest,
+  FieldRewriteCopy,
+  FieldRewriteRequest,
+  FieldRewriteResult,
+  FieldRewriteValue,
+  SingleFieldRewriteRequest,
+} from "./domains/versions/field-rewrite";
+// A plugin's question "may this person delete this entry", asked of the
+// delete's own gate (its grant and a rule's row filter for the entry) with no
+// hook run and nothing written. Here for `@nextlyhq/plugin-sdk` to publish.
+export { mayDeleteEntry } from "./plugins/entry-delete-access";
+export type { PluginDeleteCheck } from "./plugins/entry-delete-access";
+// The same question for a write: the update gate, the publish gate where it
+// puts the document live, and each named field's update rule.
+export { mayWriteEntry } from "./plugins/entry-write-access";
+export type { PluginWriteCheck } from "./plugins/entry-write-access";
 
 // Auth extensibility (D71/D57) — pluggable strategies + auth-flow hooks +
 // challenge protocol. @experimental until a first-party plugin exercises it (D55).
@@ -1029,6 +1263,9 @@ export type {
   QueueJobArgs,
   QueueJobResult,
 } from "./direct-api/types/jobs";
+// A plugin's `ctx.services.jobs`: the queue, and running one of its own
+// sweeps now. Named so a plugin can annotate what it hands that service to.
+export type { PluginJobsNamespace } from "./plugins/jobs/plugin-jobs";
 
 // The release materialiser, as a job definition. Exported so an application can
 // register it with the runner today: the periodic trigger that would register it
@@ -1051,6 +1288,13 @@ export type { SchemaEligibilityCollection as ResolvedDraftSplitCollection } from
 // root-level `fields`, `status` or `versions`, so its result is not assignable
 // to `ResolvedDraftSplitCollection` however faithfully the record carries them.
 export { resolvedCollectionView } from "./domains/versions/resolved-collection-view";
+
+// A plugin's durable events (`ctx.events.emitDurable` / `onDurable`): what a
+// subscriber receives, and the handler that receives it.
+export type {
+  DurableEvent,
+  DurableHandler,
+} from "./domains/plugin-events/subscribers";
 
 // Plugin event bus (D8/D51) — `ctx.events` surface + types.
 export {
@@ -1090,6 +1334,7 @@ export {
   type NavFilterContext,
   type ListQueryWhere,
   type ListQueryFilterContext,
+  type PublicAddressTemplateContext,
 } from "./filters";
 
 // ============================================================

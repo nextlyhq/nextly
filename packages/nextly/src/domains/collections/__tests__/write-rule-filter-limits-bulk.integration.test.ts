@@ -130,7 +130,8 @@ describe("a bulk write by query", () => {
     const result = await entriesOf(t).bulkUpdateByQuery({
       collectionName: OPEN_POSTS,
       where: ALL,
-      data: { title: "renamed" },
+      // The write rule's filter is under test, not versions.
+      data: { title: "renamed", _overwrite: true },
       ...asAuthor,
     } as never);
 
@@ -168,7 +169,8 @@ describe("a bulk write by ids", () => {
       entriesOf(t).bulkUpdateEntries({
         collectionName: collection,
         ids,
-        data: { title: "renamed" },
+        // The write rule's filter is under test, not versions.
+        data: { title: "renamed", _overwrite: true },
         ...asAuthor,
       } as never);
 
@@ -192,7 +194,8 @@ describe("a bulk write by ids", () => {
     const result = await entriesOf(t).bulkUpdateEntries({
       collectionName: OPEN_POSTS,
       ids: [own],
-      data: { owner: OTHER },
+      // Refused for the filter, not for want of a version.
+      data: { owner: OTHER, _overwrite: true },
       ...asAuthor,
     } as never);
 
@@ -222,8 +225,8 @@ describe.each(dialects)("a batch in one transaction (%s)", dialect => {
     const result = await entriesOf(t).updateEntries(
       { collectionName: OPEN_POSTS, ...asAuthor } as never,
       [
-        { id: own, data: { title: "renamed" } },
-        { id: others, data: { title: "renamed" } },
+        { id: own, data: { title: "renamed", _overwrite: true } },
+        { id: others, data: { title: "renamed", _overwrite: true } },
       ]
     );
 
@@ -238,8 +241,8 @@ describe.each(dialects)("a batch in one transaction (%s)", dialect => {
     const result = await entriesOf(t).updateEntries(
       { collectionName: OPEN_POSTS, ...asAuthor } as never,
       [
-        { id: ownToo, data: { title: "renamed" } },
-        { id: own, data: { owner: OTHER } },
+        { id: ownToo, data: { title: "renamed", _overwrite: true } },
+        { id: own, data: { owner: OTHER, _overwrite: true } },
       ]
     );
 
@@ -271,9 +274,9 @@ describe("an entry the caller may not read", () => {
     const updated = await entriesOf(t).updateEntries(
       { collectionName: POSTS, ...asAuthor } as never,
       [
-        { id: own, data: { title: "renamed" } },
-        { id: others, data: { title: "renamed" } },
-        { id: missing, data: { title: "renamed" } },
+        { id: own, data: { title: "renamed", _overwrite: true } },
+        { id: others, data: { title: "renamed", _overwrite: true } },
+        { id: missing, data: { title: "renamed", _overwrite: true } },
       ]
     );
     const deleted = await entriesOf(t).deleteEntries(
@@ -343,7 +346,7 @@ describe.each(dialects)("on a collection with languages (%s)", dialect => {
         collection: LOCALIZED,
         id,
         locale: "de",
-        data: { title: germanTitle },
+        data: { title: germanTitle, _overwrite: true },
       } as never);
       return id;
     };
@@ -359,7 +362,8 @@ describe.each(dialects)("on a collection with languages (%s)", dialect => {
     const result = await entriesOf(t).bulkUpdateByQuery({
       collectionName: LOCALIZED,
       where: { note: { equals: "unchanged" } },
-      data: { note: "renamed" },
+      // The write rule's filter is under test, not versions.
+      data: { note: "renamed", _overwrite: true },
       ...asAuthor,
     } as never);
 

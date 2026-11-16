@@ -455,7 +455,7 @@ describe("SingleEntryService", () => {
 
       const result = await ctx.service.update(
         "missing",
-        { siteName: "New" },
+        { siteName: "New", _overwrite: true },
         { overrideAccess: true }
       );
 
@@ -487,6 +487,7 @@ describe("SingleEntryService", () => {
         "site-settings",
         {
           siteName: "New",
+          _overwrite: true,
         },
         { overrideAccess: true }
       );
@@ -518,6 +519,7 @@ describe("SingleEntryService", () => {
         "site-settings",
         {
           siteName: "Set",
+          _overwrite: true,
         },
         { overrideAccess: true }
       );
@@ -556,6 +558,7 @@ describe("SingleEntryService", () => {
         "site-settings",
         {
           siteName: "New",
+          _overwrite: true,
         },
         { overrideAccess: true }
       );
@@ -580,6 +583,7 @@ describe("SingleEntryService", () => {
           id: "should-be-stripped",
           createdAt: new Date(),
           siteName: "Keep",
+          _overwrite: true,
         },
         { overrideAccess: true }
       );
@@ -605,6 +609,7 @@ describe("SingleEntryService", () => {
         "site-settings",
         {
           siteName: "X",
+          _overwrite: true,
         },
         { overrideAccess: true }
       );
@@ -641,6 +646,7 @@ describe("SingleEntryService", () => {
         "site-settings",
         {
           settings: { theme: "dark" },
+          _overwrite: true,
         },
         { overrideAccess: true }
       );
@@ -684,6 +690,7 @@ describe("SingleEntryService", () => {
             url: "/uploads/logo.png",
             filename: "logo.png",
           },
+          _overwrite: true,
         },
         { overrideAccess: true }
       );
@@ -719,6 +726,7 @@ describe("SingleEntryService", () => {
             "media-2",
             { id: "media-3", url: "/c.png" },
           ],
+          _overwrite: true,
         },
         { overrideAccess: true }
       );
@@ -763,6 +771,7 @@ describe("SingleEntryService", () => {
         {
           siteName: "New",
           seo: { metaTitle: "Hello" },
+          _overwrite: true,
         },
         { overrideAccess: true }
       );
@@ -803,7 +812,7 @@ describe("SingleEntryService", () => {
 
       await ctx.service.update(
         "site-settings",
-        { siteName: "New" },
+        { siteName: "New", _overwrite: true },
         { overrideAccess: true }
       );
 
@@ -836,7 +845,7 @@ describe("SingleEntryService", () => {
 
       await ctx.service.update(
         "site-settings",
-        { siteName: "New" },
+        { siteName: "New", _overwrite: true },
         { overrideAccess: true }
       );
 
@@ -867,7 +876,7 @@ describe("SingleEntryService", () => {
 
       await ctx.service.update(
         "site-settings",
-        { siteName: "Original" },
+        { siteName: "Original", _overwrite: true },
         { overrideAccess: true }
       );
 
@@ -903,6 +912,7 @@ describe("SingleEntryService", () => {
         "site-settings",
         {
           siteName: "Whatever",
+          _overwrite: true,
         },
         { overrideAccess: true }
       );
@@ -924,7 +934,7 @@ describe("SingleEntryService", () => {
 
       const result = await ctx.service.update(
         "site-settings",
-        { siteName: "X" },
+        { siteName: "X", _overwrite: true },
         { user: { id: "u1" } }
       );
 
@@ -940,7 +950,7 @@ describe("SingleEntryService", () => {
 
       const result = await ctx.service.update(
         "site-settings",
-        { siteName: "X" },
+        { siteName: "X", _overwrite: true },
         { user: { id: "u1" } }
       );
 
@@ -971,7 +981,7 @@ describe("SingleEntryService", () => {
 
       await ctx.service.update(
         "site-settings",
-        { siteName: "X" },
+        { siteName: "X", _overwrite: true },
         { user: { id: "u1" } }
       );
 
@@ -1000,7 +1010,7 @@ describe("SingleEntryService", () => {
 
       const result = await ctx.service.update(
         "site-settings",
-        {},
+        { _overwrite: true },
         { overrideAccess: true }
       );
 
@@ -1019,6 +1029,7 @@ describe("SingleEntryService", () => {
         "site-settings",
         {
           siteName: "X",
+          _overwrite: true,
         },
         { overrideAccess: true }
       );
@@ -1060,7 +1071,7 @@ describe("SingleEntryService", () => {
 
       const result = await ctx.service.update(
         "site-settings",
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { user: { id: "u1" } }
       );
 
@@ -1079,7 +1090,7 @@ describe("SingleEntryService", () => {
 
       const result = await ctx.service.update(
         "site-settings",
-        { status: "draft" },
+        { status: "draft", _overwrite: true },
         { user: { id: "u1" } }
       );
 
@@ -1104,7 +1115,7 @@ describe("SingleEntryService", () => {
 
       const result = await ctx.service.update(
         "site-settings",
-        { siteName: "Body omits status" },
+        { siteName: "Body omits status", _overwrite: true },
         { user: { id: "u1" } }
       );
 
@@ -1138,7 +1149,7 @@ describe("SingleEntryService", () => {
 
       const result = await ctx.service.update(
         "site-settings",
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { user: { id: "u1" } }
       );
 
@@ -1160,7 +1171,7 @@ describe("SingleEntryService", () => {
 
       const result = await ctx.service.update(
         "site-settings",
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { overrideAccess: true }
       );
 
@@ -1188,7 +1199,7 @@ describe("SingleEntryService", () => {
       // refused by the publish gate before any default is built.
       const result = await ctx.service.update(
         "site-settings",
-        { status: "published", siteName: "S2" },
+        { status: "published", siteName: "S2", _overwrite: true },
         { user: { id: "u1" } }
       );
 
@@ -1221,7 +1232,7 @@ describe("SingleEntryService", () => {
 
       const result = await ctx.service.update(
         "site-settings",
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { user: { id: "u1" } }
       );
 
@@ -1257,28 +1268,44 @@ describe("SingleEntryService", () => {
       const ctx = createCtx({ withRbac: true });
       ctx.registry.registerSingle("site-settings", siteSettingsMeta());
       // Pre-transaction read finds no row (so autoCreated); the in-transaction
-      // read finds the row a hook created in the meantime.
-      ctx.adapter.selectOne.mockResolvedValueOnce(null).mockResolvedValue({
+      // read, a locking read of the Single's table, finds the row a hook
+      // created in the meantime.
+      const hookCreated = {
         id: "hook-created",
         siteName: "S",
         updated_at: "2026-01-01T00:00:00.000Z",
-      });
+      };
+      ctx.adapter.selectOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue(hookCreated);
+      const readOther = ctx.adapter.select.getMockImplementation();
+      ctx.adapter.select.mockImplementation(
+        async (
+          table: string,
+          options?: { forUpdate?: boolean; columns?: string[] }
+        ) =>
+          table === "single_site_settings" &&
+          options?.forUpdate === true &&
+          options.columns === undefined
+            ? [hookCreated]
+            : readOther?.(table, options)
+      );
       ctx.adapter.update.mockResolvedValue([
         { id: "hook-created", siteName: "S2", updated_at: "2026-02-01" },
       ]);
 
       const result = await ctx.service.update(
         "site-settings",
-        { siteName: "S2" },
+        { siteName: "S2", _overwrite: true },
         { overrideAccess: true }
       );
 
       expect(result.success).toBe(true);
       // No duplicate insert — the existing (hook-created) row was reused. The
-      // write still appends outbox events, so assert no insert to the Single
-      // table specifically, not the `nextly_events` outbox.
+      // write still appends its events, so name the Single's own table rather
+      // than listing every table a write may also insert into.
       const rowInserts = ctx.adapter.insert.mock.calls.filter(
-        (c: unknown[]) => c[0] !== "nextly_events"
+        (c: unknown[]) => c[0] === "single_site_settings"
       );
       expect(rowInserts).toHaveLength(0);
     });
@@ -1294,7 +1321,7 @@ describe("SingleEntryService", () => {
       // it: the owner's roles say super-admin, and the owner holds every action.
       const result = await ctx.service.update(
         "site-settings",
-        { siteName: "x" },
+        { siteName: "x", _overwrite: true },
         {
           user: { id: "admin-1", roles: ["super-admin"] },
           authenticatedScope: {

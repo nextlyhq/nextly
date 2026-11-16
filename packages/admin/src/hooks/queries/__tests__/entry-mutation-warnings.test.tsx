@@ -52,7 +52,7 @@ vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({ enabled: false }),
 }));
 
-vi.mock("@admin/components/ui", () => ({
+vi.mock("@admin/components/ui/toaster", () => ({
   toast: {
     success: successSpy,
     warning: warningSpy,
@@ -179,6 +179,53 @@ describe.each(HOOKS)(
       await invoke(result.current);
 
       await waitFor(() => expect(onSuccess).toHaveBeenCalledWith(entry));
+    });
+  }
+);
+
+/**
+ * A notice a PLUGIN raised (`recordAdvisoryNotice` through the SDK) carries
+ * the plugin's own code and phase, which the admin knows nothing of. It is
+ * shown as core's advisories are: the write as the success it is, the notice
+ * beside it in its own words, the entry it names, never failure wording.
+ */
+const pluginNotice = {
+  severity: "notice" as const,
+  phase: "afterChange",
+  collection: "pages",
+  code: "ACME_LAYOUT_FELL_BACK",
+  message: "This page now uses the site's default layout.",
+  entryId: "p7",
+};
+
+describe.each(HOOKS)(
+  "$name shows a plugin's advisory notice",
+  ({ spy, use, invoke, successMessage }) => {
+    it("as an info toast beside the success, naming the entry", async () => {
+      spy.mockResolvedValue({ item: entry, warnings: [pluginNotice] });
+      const client = new QueryClient({
+        defaultOptions: { mutations: { retry: false } },
+      });
+
+      const { result } = renderHook(() => use(), {
+        wrapper: makeWrapper(client),
+      });
+      await invoke(result.current);
+
+      await waitFor(() => expect(infoSpy).toHaveBeenCalledTimes(1));
+      const [headline, options] = infoSpy.mock.calls[0] as [
+        string,
+        { description: React.ReactElement },
+      ];
+      expect(headline).toBe(successMessage);
+      render(options.description);
+      expect(
+        screen.getByText(/This page now uses the site's default layout\./)
+      ).toBeInTheDocument();
+      expect(screen.getByText(/\(p7\)/)).toBeInTheDocument();
+      // Nothing failed, so nothing says it did.
+      expect(warningSpy).not.toHaveBeenCalled();
+      expect(successSpy).not.toHaveBeenCalled();
     });
   }
 );

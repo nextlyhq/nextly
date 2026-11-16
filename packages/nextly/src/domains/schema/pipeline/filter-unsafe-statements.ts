@@ -315,7 +315,14 @@ function orphanDropVerdict(
  */
 export function stripKitDropsOfDeclaredIndexes(
   statements: string[],
-  desired: NextlySnapshotLike
+  desired: NextlySnapshotLike,
+  /**
+   * Live indexes that stand in for a declared one under another name
+   * (`liveIndexesStandingInForDeclared`). Kept like a declared index: the
+   * diff reads each as the declared index it matches, plans nothing for it,
+   * and so nothing would put that index back once the kit dropped it.
+   */
+  standingIn: ReadonlyArray<{ tableName: string; indexName: string }> = []
 ): { kept: string[]; strippedCount: number } {
   // Two keys per declared index: the bare name, and the name qualified by
   // its table. MySQL scopes index names per table and spells the table in
@@ -346,6 +353,15 @@ export function stripKitDropsOfDeclaredIndexes(
     if (desired.tables.length > 0 && table.columns?.some(c => c.primaryKey)) {
       declare(table.name, `${table.name}_pkey`);
     }
+  }
+  // The rule for a live index that IS wanted: one the diff matches to a
+  // declared index by key, whatever its name (a unique index an earlier
+  // release created under drizzle's `<table>_<column>_unique`, say), is that
+  // declared index as far as every plan is concerned, so only a planned
+  // drop_index may remove it. A live index NOT wanted is the diff's to drop,
+  // through its own op, and is not among these.
+  for (const { tableName, indexName } of standingIn) {
+    declare(tableName, indexName);
   }
   if (declaredNames.size === 0) {
     return { kept: statements, strippedCount: 0 };
@@ -447,6 +463,38 @@ function constraintDropOf(
         form: "index",
       }
     : null;
+}
+
+/**
+ * Remove drizzle-kit's drops of the columns a push keeps for a plugin that is
+ * no longer configured (`ownership/kept-elements.ts`).
+ *
+ * The kit's runtime tables are built from the configuration, which no longer
+ * declares those columns, so it reads each as removed and drops it with its
+ * values. The desired snapshot keeps them, and only this pipeline's own
+ * `drop_column` removes a column. Matched only as a statement that drops one
+ * column and does nothing else, per table; any other spelling is KEPT, for
+ * the destructive scan to refuse.
+ */
+export function stripKitDropsOfKeptColumns(
+  statements: string[],
+  kept: ReadonlyArray<{ table: string; name: string }>
+): { kept: string[]; strippedCount: number } {
+  if (kept.length === 0) return { kept: statements, strippedCount: 0 };
+  const keys = new Set(
+    kept.map(c => `${c.table.toLowerCase()}.${c.name.toLowerCase()}`)
+  );
+  let strippedCount = 0;
+  const out = statements.filter(stmt => {
+    const m = stmt.match(
+      /^ALTER\s+TABLE\s+(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?\s+DROP\s+(?:COLUMN\s+)?["`]?(\w+)["`]?\s*;?\s*$/i
+    );
+    if (!m) return true;
+    const isKept = keys.has(`${m[1].toLowerCase()}.${m[2].toLowerCase()}`);
+    if (isKept) strippedCount++;
+    return !isKept;
+  });
+  return { kept: out, strippedCount };
 }
 
 /**

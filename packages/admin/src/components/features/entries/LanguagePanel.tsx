@@ -25,7 +25,7 @@
 
 import { Button, Input } from "@nextlyhq/ui";
 import type { JSX } from "react";
-import { useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
@@ -35,7 +35,7 @@ import { CopyFromLanguageMenu } from "./CopyFromLanguageMenu";
 import { useCopyFromLanguageScope } from "./CopyFromLanguageScope";
 import { useEntryLocale } from "./EntryLocaleContext";
 import { StateDot } from "./LanguageStateDot";
-import { PublishAllConfirmDialog } from "./PublishAllConfirmDialog";
+import { PublishAllConfirm } from "./PublishAllConfirmDialog";
 import {
   languageState,
   languageStateLabel,
@@ -78,6 +78,12 @@ export interface LanguagePanelProps {
    * here and may still read its other languages.
    */
   navigationDisabled?: boolean;
+  /**
+   * Whether the document's shared fields hold unpublished changes
+   * (`_sharedChangesPending` on the editor's read). The shared part is every
+   * language's, so the panel says so in whichever language is on screen.
+   */
+  sharedChangesPending?: boolean;
   className?: string;
 }
 
@@ -488,7 +494,7 @@ const MARKER_ACTIONABLE_CLASS =
  * truncated "chan…" is the fact an author needed. `min-w-0` is what lets a flex child shrink
  * below its content at all; without it the strip reports its content width and nothing gives.
  */
-const MARKER_STRIP_CLASS = "flex min-w-0 shrink items-center gap-2";
+const MARKER_STRIP_CLASS = "flex shrink-0 items-center gap-2";
 
 /**
  * The markers a language row shows, in a FIXED order.
@@ -565,15 +571,14 @@ function LanguageRow({
   navigationDisabled: boolean;
 }) {
   return (
-    <li className="flex items-center gap-2 px-3 py-2 border-b border-border last:border-b-0">
-      {/* The describing half SHRINKS and the acting half does not. This row
-          lives in a 320px rail, and with a long label, a `default`/`rtl` badge
-          and a state to report there is not always room for both buttons —
-          measured, the "Open" of an untranslated RTL language sat 38px past the
-          row's own right edge, unreachable by pointer. Truncating the state text
-          costs nothing that is not said elsewhere: the dot encodes it by SHAPE,
-          and the language button's accessible name carries it in words. */}
-      <div className="flex min-w-0 flex-1 items-center gap-2">
+    <li className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-2 border-b border-border last:border-b-0">
+      {/* The row WRAPS rather than truncating. In a 320px rail a long label,
+          its markers and a state do not always leave room for both buttons,
+          and truncating them to fit left "REV", "R" and "not…", which say
+          nothing. The describing half keeps its natural width, so when the
+          row is short of room the buttons move to a line of their own under
+          it instead of pushing past the row's edge or squeezing the words. */}
+      <div className="flex grow basis-auto flex-wrap items-center gap-x-2 gap-y-1">
         {/* No state is claimed where the states were not read. */}
         {metaKnown ? <StateDot state={state} /> : null}
         {/* The language NAME does not yield. It is the row's identity, and a
@@ -598,7 +603,7 @@ function LanguageRow({
         </span>
         {metaKnown && (
           <span
-            className="min-w-0 truncate text-xs text-muted-foreground"
+            className="whitespace-nowrap text-xs text-muted-foreground"
             title={languageStateLabel(state, { pendingChange, stale })}
           >
             {LANGUAGE_STATE_LABEL[state]}
@@ -612,11 +617,11 @@ function LanguageRow({
           "English", and 120px for "Brazilian Portuguese". The row's describing
           half is already the part that gives way, and it had no more to give. */}
       {isActive ? (
-        <span className="shrink-0 text-xs text-muted-foreground">
+        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
           editing now
         </span>
       ) : (
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {/* Offered on EVERY language, not only an empty one. Filling a
               language that already has content is an overwrite rather than a
               start, which is what the verb reports and what the confirm step
@@ -702,53 +707,66 @@ export function DocumentLanguagePanel({
   );
 }
 
-/**
- * The publish-all confirmation, open only while publishing is offered. One
- * already open when the panel's actions are held (a language switch's answer
- * on its way, a past version on screen) or publishing every language stops
- * being offered is closed, not hidden, so it does not reopen on its own once
- * the hold ends.
- */
-function PublishAllConfirm({
-  open,
-  held,
-  onOpenChange,
-  languageCount,
-  pendingCount,
-  publish,
-}: {
-  open: boolean;
-  held: boolean;
-  onOpenChange: (open: boolean) => void;
-  languageCount: number;
-  // Null where the languages' states were not read, so no count is known.
-  pendingCount: number | null;
-  publish: ReturnType<typeof usePublishAllLanguages>;
-}) {
-  const offered = !held && publish.available;
-  useEffect(() => {
-    if (open && !offered) onOpenChange(false);
-  }, [open, offered, onOpenChange]);
-  return (
-    <PublishAllConfirmDialog
-      open={open && offered}
-      onOpenChange={onOpenChange}
-      languageCount={languageCount}
-      pendingCount={pendingCount}
-      isLoading={publish.pending}
-      onConfirm={() => {
-        publish.publishAll();
-        onOpenChange(false);
-      }}
-    />
-  );
-}
-
 /** The publish hook's options: the lifecycle flag only where the caller knows it. */
 function publishOptions(
   hasStatus: boolean | undefined
 ): Parameters<typeof usePublishAllLanguages>[0] {
   return hasStatus === undefined ? {} : { hasStatus };
+}
+
+/**
+ * The box that narrows a long language list by name; nothing where the list
+ * is short enough not to need it.
+ */
+function LanguageFilter({
+  offered,
+  id,
+  value,
+  onChange,
+}: {
+  offered: boolean;
+  id: string;
+  value: string;
+  onChange: (value: string) => void;
+}): JSX.Element | null {
+  if (!offered) return null;
+  return (
+    <div className="border-b border-border px-3 py-2">
+      <label className="sr-only" htmlFor={id}>
+        Filter languages
+      </label>
+      <Input
+        id={id}
+        type="search"
+        value={value}
+        onChange={event => onChange(event.target.value)}
+        placeholder="Filter languages…"
+        className="h-7 text-xs"
+      />
+    </div>
+  );
+}
+
+/**
+ * Says, in whichever language is on screen, that the document's shared fields
+ * hold unpublished changes; nothing while they hold none.
+ */
+function SharedChangesNotice({
+  pending,
+}: {
+  pending?: boolean;
+}): JSX.Element | null {
+  if (pending !== true) return null;
+  return (
+    <p
+      role="status"
+      aria-label="Shared changes pending"
+      className="border-b border-border px-3 py-2 text-xs text-muted-foreground"
+    >
+      Shared fields have unpublished changes. They go live with the next
+      publish, in every language.
+    </p>
+  );
 }
 
 export function LanguagePanel({
@@ -759,6 +777,7 @@ export function LanguagePanel({
   actionsDisabled = false,
   publishAllDisabled = actionsDisabled,
   navigationDisabled = actionsDisabled,
+  sharedChangesPending,
   className,
 }: LanguagePanelProps): JSX.Element | null {
   const [confirmPublishAll, setConfirmPublishAll] = useState(false);
@@ -776,8 +795,7 @@ export function LanguagePanel({
   const pendingCount = pendingLanguageCount(locales, translations);
   const counts = translationCounts(
     translations,
-    locales.map(l => l.code),
-    defaultLocale
+    locales.map(l => l.code)
   );
 
   const { offersFilter, shown } = filteredLanguages(locales, filter);
@@ -804,30 +822,22 @@ export function LanguagePanel({
         onTranslate={() => onEnterTranslationMode?.(defaultLocale)}
       />
 
+      <SharedChangesNotice pending={sharedChangesPending} />
+
       <PublishAllConfirm
         open={confirmPublishAll}
         held={publishAllDisabled}
         onOpenChange={setConfirmPublishAll}
-        languageCount={locales.length}
         pendingCount={pendingCount}
         publish={publish}
       />
 
-      {offersFilter && (
-        <div className="border-b border-border px-3 py-2">
-          <label className="sr-only" htmlFor={filterId}>
-            Filter languages
-          </label>
-          <Input
-            id={filterId}
-            type="search"
-            value={filter}
-            onChange={event => setFilter(event.target.value)}
-            placeholder="Filter languages…"
-            className="h-7 text-xs"
-          />
-        </div>
-      )}
+      <LanguageFilter
+        offered={offersFilter}
+        id={filterId}
+        value={filter}
+        onChange={setFilter}
+      />
 
       <LanguageRows
         shown={shown}

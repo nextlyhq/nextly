@@ -29,7 +29,7 @@ import { NextlyError } from "../errors/nextly-error";
 import { consoleLogger } from "../shared/types";
 
 import type { SideEffectHookFailure } from "./hook-registry";
-import { isSideEffectHookType } from "./hook-registry";
+import { contextForPhase, isSideEffectHookType } from "./hook-registry";
 import { normalizeHookError } from "./normalize-hook-error";
 import type { PrebuiltHookContext } from "./prebuilt";
 import { getPrebuiltHook, mapHookType } from "./prebuilt";
@@ -205,8 +205,10 @@ export class StoredHookExecutor {
 
       try {
         // Build context for this hook execution
+        // Offered `afterCommit` only in a phase after the write, as a
+        // code-registered handler is (see `contextForPhase`).
         const hookContext: PrebuiltHookContext = {
-          ...context,
+          ...contextForPhase(hookType, context),
           data: currentData,
         };
 

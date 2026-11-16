@@ -70,7 +70,7 @@ async function boot(): Promise<TestNextly> {
       collection: NOTES,
       id: String((made.item as { id: string | number }).id),
       locale: "fr",
-      data: { title, team },
+      data: { title, team, _overwrite: true },
     });
   }
   return t;

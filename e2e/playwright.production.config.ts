@@ -33,6 +33,10 @@ import {
  *
  * @module playwright.production.config
  */
+// Read by `tests/support/session.mjs`, which signs the seeded user in through the
+// form on a production build and leaves it to auto-login on a dev one.
+process.env.E2E_SERVER = "production";
+
 export default defineConfig({
   testDir: "./tests/production",
   fullyParallel: false,

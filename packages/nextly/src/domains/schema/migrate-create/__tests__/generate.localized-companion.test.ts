@@ -100,6 +100,35 @@ describe("generateMigration — localized companion emission", () => {
     expect(snapshotFiles).not.toContain(`${companionBase}.snapshot.json`);
   });
 
+  it("a dry run names where each companion file goes, and the real run writes it there", async () => {
+    const docs: MinimalConfigEntity = {
+      slug: "docs",
+      tableName: "dc_docs",
+      localized: true,
+      fields: [{ name: "body", type: "longText", localized: true }],
+    };
+    const args = {
+      name: "create_docs",
+      dialect: "sqlite" as const,
+      migrationsDir,
+      defaultLocale: "en",
+      collections: [docs],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: NOW,
+    };
+
+    const dry = await generateMigration({ ...args, dryRun: true });
+    expect(await listSqlFiles(migrationsDir)).toEqual([]);
+    const named = dry!.companionFiles.map(file => file.path);
+    expect(named).toHaveLength(1);
+
+    await generateMigration(args);
+    const companion = await findCompanionFile(migrationsDir, "docs");
+    expect(named).toEqual([resolve(migrationsDir, companion!)]);
+  });
+
   it("ENABLE transition: companion seeds + drops; main migration does NOT drop the localized col", async () => {
     // Seed a previous snapshot where dc_pages is NOT yet localized: it holds
     // the `body` column on the main table.
@@ -258,6 +287,41 @@ describe("generateMigration — localized companion emission", () => {
         (x: { name: string }) => x.name === "dc_pages"
       );
       expect(t.localized).toBeUndefined();
+    });
+
+    // The companion a disable drops belonged to a translated entity, so on a Draft/Published one
+    // it held each language's `_status`; rolling the disable back must lay it out again.
+    it("rolls a Draft/Published disable back to a companion with its per-language status", async () => {
+      await generateMigration({
+        name: "create_pages_localized",
+        dialect: "sqlite",
+        migrationsDir,
+        defaultLocale: "en",
+        collections: [{ ...localizedPages, status: true }],
+        singles: [],
+        components: [],
+        nonInteractive: true,
+        now: new Date("2026-07-08T12:00:00.000Z"),
+      });
+      await generateMigration({
+        name: "disable_pages_localization",
+        dialect: "sqlite",
+        migrationsDir,
+        defaultLocale: "en",
+        collections: [{ ...plainPages, status: true }],
+        singles: [],
+        components: [],
+        nonInteractive: true,
+        now: NOW,
+      });
+      const disableFile = (await listSqlFiles(migrationsDir)).find(f =>
+        f.includes("disable_localization_pages")
+      );
+      expect(disableFile).toBeDefined();
+      const sql = await readFile(resolve(migrationsDir, disableFile!), "utf-8");
+      const down = sql.slice(sql.indexOf("-- DOWN"));
+      expect(down).toContain(`CREATE TABLE IF NOT EXISTS "dc_pages_locales"`);
+      expect(down).toContain(`"_status"`);
     });
 
     it("emits a disable companion: restore default → archive others → drop", async () => {

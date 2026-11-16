@@ -54,6 +54,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "email_verified_via" TEXT,
       "password_updated_at" INTEGER,
       "image" TEXT,
+      "interface_language" TEXT,
       "password_hash" TEXT,
       "is_active" INTEGER NOT NULL DEFAULT 0,
       "deactivated_at" INTEGER,
@@ -169,6 +170,8 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE INDEX IF NOT EXISTS "user_roles_user_id_idx"
       ON "user_roles" ("user_id")`,
+    `CREATE INDEX IF NOT EXISTS "user_roles_role_id_idx"
+      ON "user_roles" ("role_id")`,
     `CREATE INDEX IF NOT EXISTS "user_roles_expires_at_idx"
       ON "user_roles" ("expires_at")`,
     `CREATE TABLE IF NOT EXISTS "role_inherits" (
@@ -406,7 +409,10 @@ export function generateSqliteCoreTableStatements(): string[] {
       "created_by" TEXT,
       "created_at" INTEGER NOT NULL,
       "updated_at" INTEGER NOT NULL,
-      "revision" INTEGER NOT NULL DEFAULT 0
+      "revision" INTEGER NOT NULL DEFAULT 0,
+      "base_version_no" INTEGER,
+      "base_draft_revision" INTEGER,
+      "field_sources" TEXT
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_versions_seq_uidx"
       ON "nextly_versions" ("scope_kind", "scope_slug", "entry_id", "version_no")`,
@@ -447,6 +453,60 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_version_views" ("scope_kind", "scope_slug", "entry_id")`,
     `CREATE INDEX IF NOT EXISTS "nextly_version_views_user_idx"
       ON "nextly_version_views" ("user_id")`,
+    // A workflow's review state per document and part. Columns match
+    // schemas/review-states/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_review_states" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "scope_kind" TEXT NOT NULL,
+      "scope_slug" TEXT NOT NULL,
+      "entry_id" TEXT NOT NULL,
+      "part" TEXT,
+      "part_key" TEXT NOT NULL,
+      "stage" TEXT NOT NULL,
+      "entered_at" INTEGER NOT NULL,
+      "entered_by" TEXT,
+      "assignee_kind" TEXT,
+      "assignee_id" TEXT,
+      "due_at" INTEGER,
+      "approved_version_no" INTEGER,
+      "approved_digest" TEXT,
+      "approved_by" TEXT,
+      "approved_at" INTEGER,
+      "definition_hash" TEXT NOT NULL,
+      "revision" INTEGER NOT NULL,
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_review_states_key_uidx"
+      ON "nextly_review_states" ("part_key")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_review_states_doc_idx"
+      ON "nextly_review_states" ("scope_kind", "scope_slug", "entry_id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_review_states_stage_idx"
+      ON "nextly_review_states" ("scope_kind", "scope_slug", "stage")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_review_states_assignee_idx"
+      ON "nextly_review_states" ("assignee_kind", "assignee_id")`,
+    // What admins change for each workflow. Columns match schemas/workflow-settings/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_workflow_settings" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "workflow" TEXT NOT NULL,
+      "settings" TEXT NOT NULL,
+      "revision" INTEGER NOT NULL,
+      "updated_by" TEXT,
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_workflow_settings_workflow_uidx"
+      ON "nextly_workflow_settings" ("workflow")`,
+    // A plugin schedule's windows. Columns match schemas/schedule-windows/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_schedule_windows" (
+      "schedule_key" TEXT NOT NULL,
+      "window_at" INTEGER NOT NULL,
+      "job_id" TEXT,
+      "created_at" INTEGER NOT NULL,
+      PRIMARY KEY ("schedule_key", "window_at")
+    )`,
+    `CREATE INDEX IF NOT EXISTS "nextly_schedule_windows_window_idx"
+      ON "nextly_schedule_windows" ("window_at")`,
     // The record of content events. Columns match
     // schemas/content-events/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_content_events" (
@@ -691,6 +751,56 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_one_time_secrets" ("subject_key")`,
     `CREATE INDEX IF NOT EXISTS "nextly_one_time_secrets_expires_idx"
       ON "nextly_one_time_secrets" ("expires_at")`,
+    // The webhooks plugins have received, one claim per plugin, provider and
+    // delivery. Columns match schemas/received-webhooks/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_received_webhooks" (
+      "delivery_key" TEXT PRIMARY KEY NOT NULL,
+      "owner" TEXT NOT NULL,
+      "provider" TEXT NOT NULL,
+      "delivery_id" TEXT,
+      "freshness" TEXT NOT NULL,
+      "status" TEXT NOT NULL,
+      "claim_token" TEXT NOT NULL,
+      "lease_until" INTEGER,
+      "received_at" INTEGER NOT NULL,
+      "completed_at" INTEGER,
+      "prune_at" INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS "nextly_received_webhooks_prune_idx"
+      ON "nextly_received_webhooks" ("prune_at")`,
+    // Durable plugin events and their deliveries. Columns match
+    // schemas/plugin-events/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_plugin_events" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "owner" TEXT NOT NULL,
+      "name" TEXT NOT NULL,
+      "payload" TEXT NOT NULL,
+      "created_at" INTEGER NOT NULL,
+      "fanned_out_at" INTEGER,
+      "finished_at" INTEGER
+    )`,
+    `CREATE INDEX IF NOT EXISTS "nextly_plugin_events_fan_out_idx"
+      ON "nextly_plugin_events" ("fanned_out_at", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_plugin_events_finished_idx"
+      ON "nextly_plugin_events" ("finished_at")`,
+    `CREATE TABLE IF NOT EXISTS "nextly_plugin_event_deliveries" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "event_id" TEXT NOT NULL,
+      "subscriber" TEXT NOT NULL,
+      "subscriber_key" TEXT NOT NULL,
+      "status" TEXT NOT NULL,
+      "attempt_count" INTEGER NOT NULL DEFAULT 0,
+      "next_attempt_at" INTEGER NOT NULL,
+      "locked_by" TEXT,
+      "locked_until" INTEGER,
+      "last_error" TEXT,
+      "created_at" INTEGER NOT NULL,
+      "finished_at" INTEGER
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_plugin_event_deliveries_event_subscriber_unique"
+      ON "nextly_plugin_event_deliveries" ("event_id", "subscriber_key")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_plugin_event_deliveries_due_idx"
+      ON "nextly_plugin_event_deliveries" ("status", "next_attempt_at")`,
     // The database limit store's counts, used when a site selects it. An
     // integer of milliseconds for the expiry, as the Drizzle bundle declares.
     `CREATE TABLE IF NOT EXISTS "${LIMIT_STORE_TABLE}" (

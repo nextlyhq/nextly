@@ -25,6 +25,7 @@ import type {
   BreakpointSet,
   NodeStyles,
   StyleState,
+  StyleValue,
 } from "../document";
 import {
   MAX_BREAKPOINTS_PER_AXIS,
@@ -45,6 +46,7 @@ import { isConditionGated } from "../visibility";
 
 import { BREAKPOINT_AXES } from "./breakpoint-axes";
 import type { BreakpointAxis } from "./breakpoint-axes";
+import { childGapForms } from "./child-gap";
 import { escapeIdentifier } from "./css-value";
 import type { MayFetchUrl } from "./css-value";
 import { compileStyleValues, DEFAULT_TOKEN_PREFIX } from "./declarations";
@@ -52,25 +54,38 @@ import type { Declaration } from "./declarations";
 import type { NamedClass } from "./named-class";
 import {
   isUsableNamedClass,
-  namedClassName,
+  namedClassesRead,
   orderedNamedClasses,
   orderedNamedClassPositions,
   usableNamedClassPositions,
   MAX_NAMED_CLASS_NAME_LENGTH,
+  classNameOf,
+  isDefaultLook,
+  isLook,
   NAMED_CLASS_SLUG_RE,
+  ownLooksRead,
 } from "./named-class";
 import {
   blockPartClassName,
   blockTypeClassName,
+  CHILD_GAP_CLASS,
   nodeClassNames,
   PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,
 } from "./node-class";
+import { OVERLAY_PREFIX, OVERLAY_RESET } from "./overlay";
+import {
+  partRouting,
+  routeDeclarations,
+  type PartRouting,
+} from "./part-routing";
 import { serializeRules } from "./serialize";
 import type { CssRule } from "./serialize";
+import type { SpacingMode } from "./spacing-mode";
 import type { StyleOrigin, StyleTraceEntry } from "./style-trace";
 import type { StyleIssueBudget } from "./validate-style-value";
 import { newStyleIssueBudget } from "./validate-style-value";
+import { visibilityCascade } from "./visibility-cascade";
 import {
   allowanceSpent,
   newWarningAllowance,
@@ -184,6 +199,36 @@ export interface StyleCompileContext {
    * that manager can supply the same record later.
    */
   elementBases?: Readonly<Partial<Record<TypographicElement, NodeStyles>>>;
+
+  /**
+   * The space each container block type puts between the blocks in its slots,
+   * keyed by block type.
+   *
+   * A block carries no outer margin of its own; the space between two blocks
+   * belongs to the container holding them. In block flow it is a top margin on
+   * every child after the first (`> * + *`), so nothing reaches the
+   * container's own outer edge; the same value is the container's `gap`, which
+   * only a flex or grid container reads. Where a node or a named class makes
+   * the container flex or grid, the compiler takes the flow margin off its
+   * children at that breakpoint so the two do not add up.
+   *
+   * Emitted after the block-type tier and before the named classes, at the
+   * weight a default carries (`0-1-0`): it beats a child's default margin reset
+   * and an element default, and loses to anything an author set on the child
+   * (a node value or a named class, both `0-3-0`).
+   */
+  childGaps?: Readonly<Record<string, StyleValue>>;
+
+  /**
+   * The site's spacing model. Under `classic` no container gap is written,
+   * whatever {@link childGaps} holds, and no container wears the gap marker;
+   * absent or `gaps`, the gaps are written as described there.
+   *
+   * The block library that supplies the element and block defaults reads the
+   * same flag to swap in the defaults of the classic model, so the one flag
+   * decides the whole spacing model of a compile. See `style/spacing-mode`.
+   */
+  spacingMode?: SpacingMode;
 
   /**
    * Whether a node's block declares that these props draw nothing.
@@ -380,7 +425,7 @@ export interface CompiledPageCss {
  * specificity are separated by source order, so the order they are emitted in
  * is part of the contract rather than an artifact of iteration.
  */
-export const TYPOGRAPHIC_ELEMENTS = [
+const TYPOGRAPHIC_ELEMENTS = [
   "h1",
   "h2",
   "h3",
@@ -388,13 +433,21 @@ export const TYPOGRAPHIC_ELEMENTS = [
   "h5",
   "h6",
   "p",
+  "blockquote",
+  "figure",
+  "hr",
+  "ol",
+  "ul",
+  // Last, so adding it moved no earlier element's rule: rich text renders a
+  // code block as one.
+  "pre",
 ] as const;
 
 /**
  * An element a typographic default may be written for.
  *
  * The type is the allow-list rather than a widening of it, so a tag the
- * compiler does not emit — a typo, or `blockquote` before anyone decides it
+ * compiler does not emit — a typo, or `table` before anyone decides it
  * belongs — is refused where it is written instead of silently contributing
  * nothing. A caller reading `Record<string, …>` has no way to learn which keys
  * are honoured except by trying one.
@@ -1217,6 +1270,12 @@ function unknownBreakpointWarnings(
 /** What one envelope is, and what may be written from it. */
 interface EnvelopeContext {
   origin: StyleOrigin;
+  /**
+   * The properties block parts take from a wrapping root, for the tiers that
+   * style a node's root (its own values, shared styles, looks). Absent for
+   * the defaults tiers, whose type class sits on the part itself.
+   */
+  routing?: PartRouting;
   /** Appended to as declarations are emitted; absent when no caller asked for a trace. */
   trace?: StyleTraceEntry[];
   /** Which hosts this site will fetch from; unasked when absent. */
@@ -1283,7 +1342,14 @@ function envelopeRules(
    */
   about: EnvelopeContext
 ): CssRule[] {
-  const { origin, trace, mayFetchUrl, weightlessAnchor, previewStates } = about;
+  const {
+    origin,
+    trace,
+    mayFetchUrl,
+    weightlessAnchor,
+    previewStates,
+    routing,
+  } = about;
   // Chosen ONCE per envelope rather than per rule: it is a property of the
   // compile, and re-deciding it inside the loop invites the two forms to
   // disagree between a node's base rule and its hover one.
@@ -1370,7 +1436,12 @@ function envelopeRules(
       // A property that styles something inside the block goes into its own
       // rule. Keeping the exception in the catalog rather than in a branch here
       // is what makes the set of them enumerable; this only has to honour it.
-      for (const rule of groupByDescendant(compiled.declarations)) {
+      for (const rule of anchoredGroups(
+        compiled.declarations,
+        selector,
+        stateSelectors[state],
+        weightlessAnchor === undefined ? routing : undefined
+      )) {
         rules.push({
           ...(context.atRule === undefined ? {} : { atRule: context.atRule }),
           // Everything after the anchor is wrapped, state and descendant
@@ -1379,15 +1450,18 @@ function envelopeRules(
           // itself would outrank a host rule of the same shape. The anchor is
           // the only part that weighs.
           selector:
-            weightlessAnchor === undefined
+            rule.selector ??
+            (weightlessAnchor === undefined
               ? `${selector}${stateSelectors[state]}${rule.descendant}`
-              : `${weightlessAnchor} :where(${selector}${stateSelectors[state]}${rule.descendant})`,
+              : `${weightlessAnchor} :where(${selector}${stateSelectors[state]}${rule.descendant})`),
           declarations: rule.declarations,
         });
         // Recorded here, from the same declarations that were just emitted, in the same loop.
         // Anywhere else it would be a second reading of the document, and a second reading can
         // disagree with the first — which is the one failure a provenance record must not have.
-        if (trace === undefined) continue;
+        // A routed declaration is written twice (off the wrapper, onto the
+        // part) and traced once: it is one value the node was given.
+        if (trace === undefined || rule.traced === false) continue;
         for (const declaration of rule.declarations) {
           trace.push({
             origin,
@@ -1403,6 +1477,46 @@ function envelopeRules(
     }
   }
   return rules;
+}
+
+/**
+ * The rules one compiled style map writes: grouped by the descendant each
+ * declaration attaches to, root first, with the root's declarations a block
+ * part takes from a wrapping root split off to their own selectors. A routed
+ * group's second rule carries `traced: false`, so the trace records each
+ * value once.
+ */
+function anchoredGroups(
+  declarations: readonly Declaration[],
+  selector: string,
+  state: string,
+  routing: PartRouting | undefined
+): {
+  descendant: string;
+  declarations: Declaration[];
+  selector?: string;
+  traced?: false;
+}[] {
+  const groups = groupByDescendant(declarations);
+  if (routing === undefined || routing.size === 0) return groups;
+  return groups.flatMap(group => {
+    if (group.descendant !== "") return [group];
+    const { kept, routed } = routeDeclarations(
+      selector,
+      state,
+      group.declarations,
+      routing
+    );
+    return [
+      ...(kept.length === 0 ? [] : [{ descendant: "", declarations: kept }]),
+      ...routed.map((rule, index) => ({
+        descendant: "",
+        declarations: rule.declarations,
+        selector: rule.selector,
+        ...(index % 2 === 1 ? { traced: false as const } : {}),
+      })),
+    ];
+  });
 }
 
 /** Split declarations by the descendant they attach to, root first. */
@@ -1491,6 +1605,10 @@ function visibilityRules(
       message: `Breakpoint "${describeValue(id)}" is not defined for this site, so this visibility setting was not applied.`,
     });
   }
+  // Where the node shows, from the one statement of the cascade the editor
+  // reads too, so the bands below hide exactly where the editor says it is
+  // hidden.
+  const shown = visibilityCascade(devices, contexts);
   // Per axis: a container breakpoint neither inherits from nor cancels a
   // viewport one, because the two ask about different boxes.
   for (const axis of ["viewport", "container"] as const) {
@@ -1536,12 +1654,13 @@ function visibilityRules(
         });
         continue;
       }
-      if (declared === false && !hidden) {
+      const visible = shown[contexts.indexOf(context)] ?? true;
+      if (!visible && !hidden) {
         hidden = true;
         hidingFrom = context;
         continue;
       }
-      if (declared === true && hidden) {
+      if (visible && hidden) {
         hidden = false;
         flush(context.maxWidth);
       }
@@ -1718,6 +1837,92 @@ function documentNodes(
  * before it can be written at all, so writing it before that exists would be the
  * one hole nothing else in this design leaves open.
  */
+/**
+ * The children a container's gap spaces: every child after the first.
+ *
+ * The first child is left alone so the gap never reaches the container's own
+ * outer edge, which is what keeps a block from carrying space it did not ask
+ * for into whatever holds it.
+ *
+ * A selector reads siblings in the markup, not boxes on screen, so a child
+ * hidden at a breakpoint still counts as one before the next. When every child
+ * before it is hidden there, the first child shown keeps the gap. Hiding is a
+ * `display: none` written on the hidden node's own class under a width query,
+ * which leaves nothing a sibling selector can read; telling the two apart
+ * would take a rule per width band per run of hidden siblings, across both
+ * breakpoint axes. An author's top margin of zero on that child, at that
+ * breakpoint, removes the space.
+ */
+const FLOW_CHILDREN = "> * + *";
+
+/** The flow margin a flex or grid container's children get instead of the gap. */
+const NO_FLOW_GAP: readonly Declaration[] = [
+  { property: "margin-block-start", value: "0" },
+];
+
+/**
+ * Whether a compiled `display` lays its children out with `gap` rather than in
+ * block flow. Every flex and grid form counts, including the inline and
+ * two-keyword ones (`inline-flex`, `block grid`).
+ */
+function spacesWithGap(display: string): boolean {
+  return /\b(?:flex|grid)\b/.test(display);
+}
+
+/**
+ * The flow-margin rules a container needs where its own styles set `display`.
+ *
+ * One rule per state and breakpoint that states a display, state outside and
+ * breakpoint inside — the order `envelopeRules` writes the display itself in —
+ * so the cascade that decides which display applies decides which margin
+ * applies too: a flex or grid display takes the flow margin off the children,
+ * any other display puts the gap back. A state's rule carries the same state
+ * selector the display rule does, so a container that turns flex on hover
+ * drops the margin only while hovered.
+ *
+ * The display is compiled through the catalog rather than read raw, so a value
+ * the stylesheet refuses changes nothing here either. Its warnings are already
+ * reported by the envelope that emits the display, so they are not repeated.
+ */
+function layoutModeRules(
+  styles: unknown,
+  container: string,
+  flow: readonly Declaration[],
+  contexts: readonly BreakpointContext[],
+  anchor: string,
+  tokenPrefix: string,
+  stateSelectors: Readonly<Record<StyleState, string>>
+): CssRule[] {
+  if (!isPlainRecord(styles)) return [];
+  const rules: CssRule[] = [];
+  for (const state of STYLE_STATES) {
+    const byBreakpoint = styles[state];
+    if (!isPlainRecord(byBreakpoint)) continue;
+    for (const context of contexts) {
+      const display = displayAt(byBreakpoint[context.id], tokenPrefix);
+      if (display === undefined) continue;
+      rules.push({
+        ...(context.atRule === undefined ? {} : { atRule: context.atRule }),
+        selector: `${anchor} :where(${container}${stateSelectors[state]} ${FLOW_CHILDREN})`,
+        declarations: [...(spacesWithGap(display) ? NO_FLOW_GAP : flow)],
+      });
+    }
+  }
+  return rules;
+}
+
+/** The compiled `display` one breakpoint's values state, if any. */
+function displayAt(values: unknown, tokenPrefix: string): string | undefined {
+  if (!isPlainRecord(values) || !Object.hasOwn(values, "display")) {
+    return undefined;
+  }
+  return compileStyleValues(
+    { display: values.display },
+    "/display",
+    tokenPrefix
+  ).declarations.find(declaration => declaration.property === "display")?.value;
+}
+
 export function compilePageCss(
   doc: BlockDocument,
   ctx: StyleCompileContext
@@ -1749,6 +1954,11 @@ export function compilePageCss(
   // own hover, a class's, a block type's, the page's — so a tier that missed it
   // would show half the appearance the author is editing.
   const previewStates = ctx.previewStates === true;
+  // The state selectors this compile writes, for the rules written outside
+  // `envelopeRules` that still have to follow a state the way it does.
+  const stateSelectorsOfCompile = previewStates
+    ? PREVIEW_STATE_SELECTORS
+    : STATE_SELECTORS;
   // What was WRITTEN, which is not always what was asked for: a scope this
   // compiler refuses is dropped and the sheet compiled global, and a caller that
   // recorded the request would store an artifact claiming an isolation its own
@@ -1770,6 +1980,9 @@ export function compilePageCss(
     scope === ""
       ? `.${PAGE_ROOT_CLASS}`
       : `.${PAGE_ROOT_CLASS}:where(${scope})`;
+  // Which root properties block parts take from a wrapping root, read once
+  // for the node and class tiers below.
+  const routing = partRouting(ctx.blockParts);
 
   const nodes = documentNodes(
     doc,
@@ -1983,6 +2196,98 @@ export function compilePageCss(
     }
   }
 
+  // The space each container puts between its children. After every block
+  // default rather than beside each one, so no child type's own margin reset —
+  // which sorts after its container's type as often as before it — can cancel
+  // the gap at equal weight; before the named classes and the nodes, so an
+  // author's spacing on a child always wins.
+  const flowGaps = new Map<string, readonly Declaration[]>();
+  // The classic model writes no container gap at all: its blocks space
+  // themselves with their own margins.
+  const gaps = ctx.spacingMode === "classic" ? {} : (ctx.childGaps ?? {});
+  for (const type of [...usedTypes].sort()) {
+    if (!Object.hasOwn(gaps, type)) continue;
+    const path = pointer("/childGaps", type);
+    // The same grammar the block-type tier holds a type to, for the same
+    // reason: the type reaches a selector.
+    if (!isBlockType(type)) {
+      pushBoundedWarning(warningAllowance, warnings, {
+        path,
+        code: "invalid-node-type",
+        severity: "warning",
+        message: `"${describeValue(type)}" is not a block type, so the space between its children was not written.`,
+        suggestion: 'Use a namespaced slug such as "core/section".',
+      });
+      continue;
+    }
+    // Both forms or neither: a value only one of them takes would space the
+    // children in one layout mode and lose the spacing in the other, so the
+    // container is left unspaced and unmarked, and the refusal is reported.
+    const forms = childGapForms(gaps[type]);
+    const flow = compileStyleValues(
+      forms.flow,
+      path,
+      tokenPrefix,
+      budget,
+      warningAllowance,
+      { mayFetchUrl }
+    );
+    warnings.push(...flow.warnings);
+    if (flow.declarations.length === 0) continue;
+    const spaced = compileStyleValues(
+      forms.spaced,
+      path,
+      tokenPrefix,
+      budget,
+      warningAllowance,
+      { mayFetchUrl }
+    );
+    warnings.push(...spaced.warnings);
+    if (spaced.declarations.length === 0) continue;
+    const typeClass = `.${escapeIdentifier(blockTypeClassName(type))}`;
+    // The type AND the marker, so the marker alone switches the gap off.
+    const container = `${typeClass}.${CHILD_GAP_CLASS}`;
+    flowGaps.set(type, flow.declarations);
+    rules.push(
+      {
+        selector: `${defaultsAnchor} :where(${container} ${FLOW_CHILDREN})`,
+        declarations: flow.declarations,
+      },
+      {
+        selector: `${defaultsAnchor} :where(${typeClass})`,
+        declarations: spaced.declarations,
+      },
+      // A block whose own default lays it out as flex or grid spaces its
+      // children with `gap`, so the flow margin comes back off — decided the
+      // same way a node's or a class's display decides it, and written after
+      // the flow rule on the same selector so it wins.
+      ...layoutModeRules(
+        Object.hasOwn(bases, type) ? bases[type] : undefined,
+        container,
+        flow.declarations,
+        contexts,
+        defaultsAnchor,
+        tokenPrefix,
+        stateSelectorsOfCompile
+      )
+    );
+  }
+
+  // The container types each named class is actually worn by in this
+  // document, so a class's layout rules follow the document rather than every
+  // class times every container type. Read from the same bounded node walk
+  // and the same per-node cap the class list on an element is built from.
+  const classWearers = new Map<string, Set<string>>();
+  for (const { node } of nodes) {
+    if (!flowGaps.has(node.type) || !Array.isArray(node.classes)) continue;
+    for (const id of node.classes.slice(0, MAX_CLASSES_PER_NODE)) {
+      if (typeof id !== "string") continue;
+      const wearers = classWearers.get(id) ?? new Set<string>();
+      wearers.add(node.type);
+      classWearers.set(id, wearers);
+    }
+  }
+
   // The named classes, in library order — the tier between a block's defaults and a node's own
   // values. At one specificity the cascade is source order, so being emitted here IS what makes
   // a class beat the block default and lose to a local value.
@@ -2008,10 +2313,7 @@ export function compilePageCss(
   const wholeLibrary: readonly NamedClass[] = Array.isArray(storedLibrary)
     ? (storedLibrary as readonly NamedClass[])
     : [];
-  const library =
-    wholeLibrary.length > MAX_NAMED_CLASSES
-      ? wholeLibrary.slice(0, MAX_NAMED_CLASSES)
-      : wholeLibrary;
+  const library = namedClassesRead(wholeLibrary);
   if (library.length < wholeLibrary.length) {
     pushBoundedWarning(warningAllowance, warnings, {
       path: "/classes",
@@ -2049,10 +2351,28 @@ export function compilePageCss(
   // the library could not use and those can be primitives: `[null, null]` is two entries needing
   // two separate repairs, and a lookup keyed by the entry answers with the first position for
   // both, sending an editor to a class it has already fixed.
+  // The own looks the bases are laid from, one per block type: any other is reported below.
+  const ownRead = new Set<NamedClass>(ownLooksRead(library));
   const orderedPositions = orderedNamedClassPositions(library);
   for (const position of orderedPositions) {
     const cls = library[position];
     if (written.has(position)) continue;
+    // A block's own look is read as its type's base edits, never written as a class: not dropped.
+    // A second one for the same type is never read, and is said so.
+    if (isUsableNamedClass(cls) && isDefaultLook(cls)) {
+      if (ownRead.has(cls)) {
+        ownRead.delete(cls);
+        continue;
+      }
+      pushBoundedWarning(warningAllowance, warnings, {
+        path: pointer("/classes", String(position)),
+        code: "duplicate-own-look",
+        severity: "warning",
+        message: `The class ${describeValue(cls.id)} is another own look for ${describeValue(cls.blockType)} blocks, so it was not read; the first one in the library's order is.`,
+        suggestion: "Keep one own look per block type, and remove the other.",
+      });
+      continue;
+    }
     // Reported once per entry the library could not use, naming which of the three reasons it
     // was. A usable record whose name is free is not reachable here, so the remaining case after
     // the two structural ones is a name another class already took.
@@ -2108,7 +2428,7 @@ export function compilePageCss(
     rules.push(
       ...envelopeRules(
         cls.styles,
-        `${pageRoot} .${escapeIdentifier(namedClassName(cls.slug))}`,
+        `${pageRoot} .${escapeIdentifier(classNameOf(cls))}`,
         // The envelope is stored under `styles`, so the pointer names it. Without that a warning
         // reads `/classes/0/base/base/bogus`, which resolves to nothing an editor can open.
         pointer(pointer("/classes", String(position)), "styles"),
@@ -2123,13 +2443,40 @@ export function compilePageCss(
         newStyleIssueBudget(),
         warningAllowance,
         {
-          origin: { kind: "class", id: cls.id, slug: cls.slug },
+          origin: {
+            kind: "class",
+            id: cls.id,
+            slug: cls.slug,
+            // A look reaches only its own block type, so a reader of the
+            // trace can refuse it on any other, as the compiler does.
+            ...(isLook(cls) ? { blockType: cls.blockType } : {}),
+          },
           previewStates,
           trace,
           mayFetchUrl,
+          routing,
         }
       )
     );
+    // A class that makes a container flex or grid swaps the flow margin for
+    // `gap` on each container type that wears it here, exactly as a node's
+    // own display does below.
+    const classSelector = `.${escapeIdentifier(classNameOf(cls))}`;
+    for (const type of [...(classWearers.get(cls.id) ?? [])].sort()) {
+      const flow = flowGaps.get(type);
+      if (flow === undefined) continue;
+      rules.push(
+        ...layoutModeRules(
+          cls.styles,
+          `.${escapeIdentifier(blockTypeClassName(type))}.${CHILD_GAP_CLASS}${classSelector}`,
+          flow,
+          contexts,
+          defaultsAnchor,
+          tokenPrefix,
+          stateSelectorsOfCompile
+        )
+      );
+    }
   }
 
   // Each node's own values, in document order so the stylesheet reads the way
@@ -2170,6 +2517,7 @@ export function compilePageCss(
           trace,
           mayFetchUrl,
           previewStates,
+          routing,
         }
       ),
       ...visibilityRules(
@@ -2180,6 +2528,15 @@ export function compilePageCss(
         warnings,
         warningAllowance,
         preview
+      ),
+      ...layoutModeRules(
+        node.styles,
+        `.${className}.${CHILD_GAP_CLASS}`,
+        flowGaps.get(node.type) ?? [],
+        flowGaps.has(node.type) ? contexts : [],
+        defaultsAnchor,
+        tokenPrefix,
+        stateSelectorsOfCompile
       ),
     ];
     // Held out of the sheet when the node can be pruned at read time. Serialized on its own, so
@@ -2225,7 +2582,9 @@ export function compilePageCss(
   for (const { node, path } of nodes) {
     const own = classes.get(node.id);
     if (own === undefined) continue;
-    const names = [own];
+    // A container that spaces its children wears the marker its gap rules are
+    // keyed on.
+    const names = flowGaps.has(node.type) ? [own, CHILD_GAP_CLASS] : [own];
     // A stored `classes` that is not a list — `"c1"` rather than `["c1"]` — references nothing
     // this compiler can apply. Normalized away in silence it leaves an author with classes in the
     // document, none on the element, and no account of either.
@@ -2341,7 +2700,19 @@ export function compilePageCss(
           )
           .filter((cls): cls is NamedClass => cls !== undefined)
       )) {
-        names.push(namedClassName(cls.slug));
+        // A look is bound to one block type: on any other block it is not applied, and said
+        // so, as a class the library does not define is.
+        if (isLook(cls) && cls.blockType !== node.type) {
+          pushBoundedWarning(warningAllowance, warnings, {
+            path: pointer(path, "classes"),
+            code: "look-for-another-block",
+            severity: "warning",
+            message: `This node lists the look ${describeValue(cls.id)}, which belongs to ${describeValue(cls.blockType)} blocks, so it was not applied.`,
+            suggestion: "Pick one of this block's own looks instead.",
+          });
+          continue;
+        }
+        names.push(classNameOf(cls));
       }
     }
     attributeClasses.set(node.id, names.join(" "));
@@ -2352,7 +2723,7 @@ export function compilePageCss(
     // The NORMALISED name, so a refused one leaves this absent and the artifact
     // reads as the published sheet it actually is.
     ...(preview === undefined ? {} : { previewContainer: preview }),
-    css: serializeRules(rules),
+    css: withOverlayReset(rules, gated),
     warnings,
     classes: attributeClasses,
     // Omitted rather than empty when nobody asked, so a caller cannot mistake "not requested"
@@ -2362,4 +2733,29 @@ export function compilePageCss(
     // the shape it did before this field existed.
     ...(Object.keys(gated).length === 0 ? {} : { gated }),
   };
+}
+
+/**
+ * The page's rules, preceded by the overlay's reset when a rule reads it: so a
+ * section's overlay stops at its own image rather than reaching nested ones.
+ */
+function withOverlayReset(
+  rules: readonly CssRule[],
+  gated: Readonly<Record<string, string>>
+): string {
+  const css = serializeRules(rules);
+  // Any of the overlay's properties read: the image's layer, or a longhand's
+  // entry lined up with it.
+  const reading = `var(${OVERLAY_PREFIX}`;
+  // A gated node's rules are kept apart, and appended for a reader who sees
+  // it: the reset stays in the sheet, so the page put back together is the
+  // one an ungated compile writes.
+  const reads =
+    rules.some(rule =>
+      rule.declarations.some(declaration => declaration.value.includes(reading))
+    ) || Object.values(gated).some(fragment => fragment.includes(reading));
+  if (!reads) return css;
+  // Joined only to what is there: a sheet whose every rule is gated is the
+  // reset alone, so the page put back together has no blank line in it.
+  return css === "" ? OVERLAY_RESET : `${OVERLAY_RESET}\n${css}`;
 }

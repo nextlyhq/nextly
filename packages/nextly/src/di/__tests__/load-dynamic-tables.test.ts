@@ -18,6 +18,10 @@ import {
   forgetFieldGroupStorageNames,
   resolveFieldGroupRegistryName,
 } from "../../domains/field-groups/storage/resolve-storage-names";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../domains/i18n/per-language-storage";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { loadDynamicTables } from "../load-dynamic-tables";
 
@@ -599,5 +603,39 @@ describe("loadDynamicTables — an entity removed from code", () => {
       "dc_tags",
       "dc_drafts",
     ]);
+  });
+});
+
+// A collection removed from code is registered only while every table it owns stands. Under
+// `experimental.perLanguageStorage` an untranslated one owns a per-language table too, so one whose
+// per-language table is gone is left unregistered, as a translated one's would be.
+describe("loadDynamicTables — a code-removed entity under per-language storage", () => {
+  it("leaves an untranslated entity unregistered once its per-language table is gone", async () => {
+    setPerLanguageStorage(true);
+    try {
+      const { adapter } = makeAdapter([
+        {
+          table_name: "dc_gone",
+          fields: JSON.stringify([{ name: "title", type: "text" }]),
+          slug: "gone",
+          localized: 0,
+          source: "code",
+          locked: 1,
+        },
+      ]);
+      Object.assign(adapter, {
+        tableExists: vi.fn(async (name: string) => name === "dc_gone"),
+        getCapabilities: () => ({ dialect: "sqlite" }),
+      });
+      const register = vi.fn(async () => undefined);
+
+      await loadDynamicTables(adapter, "dynamic_collections", register, {
+        declaredSlugs: new Set(["kept"]),
+      });
+
+      expect(register).not.toHaveBeenCalled();
+    } finally {
+      _resetPerLanguageStorage();
+    }
   });
 });

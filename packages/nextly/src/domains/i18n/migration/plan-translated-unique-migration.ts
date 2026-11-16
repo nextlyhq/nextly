@@ -11,6 +11,7 @@
  * @module domains/i18n/migration/plan-translated-unique-migration
  */
 import type { TableSpec } from "../../schema/pipeline/diff/types";
+import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 
 import {
   companionUniqueIndexChanges,
@@ -49,6 +50,8 @@ export function planTranslatedUniqueMigration(args: {
   /** The entity's companion as the config now describes it. */
   spec: CompanionMigrationSpec;
   fields: readonly UniqueFieldLike[];
+  /** The column rule the entity's tables are made by, so each column's kind is the table's. */
+  builtBy: ColumnOrigin;
   previous:
     | Pick<
         TableSpec,
@@ -72,7 +75,7 @@ export function planTranslatedUniqueMigration(args: {
     fields: args.fields,
     entityLocalized: true,
     dialect,
-    builtBy: "codeFirst",
+    builtBy: args.builtBy,
   });
   const translatedColumns = [
     ...new Set([

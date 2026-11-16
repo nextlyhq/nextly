@@ -1,6 +1,5 @@
 import React from "react";
 
-import { widgetPreviewsRoute } from "@admin/components/features/widgets/preview/preview-route";
 import { NotFoundPage } from "@admin/components/shared/not-found-page";
 import { PluginPageHold } from "@admin/components/shared/plugin-page-hold";
 import { PluginPageHost } from "@admin/components/shared/plugin-page-host";
@@ -17,6 +16,7 @@ import {
   isPluginPageAddress,
   matchPluginPage,
 } from "./plugins/plugin-route-registry";
+import { routePatternRegex } from "./route-pattern";
 import { setRoutePreloader } from "./route-preload";
 import { parseSearchParams } from "./search-params";
 
@@ -91,37 +91,6 @@ export {
   type SearchParams,
 } from "./search-params";
 
-// Normalize Next.js App Router patterns
-function normalizePattern(pattern: string): string {
-  return pattern
-    .replace(/\([^)]*\)\//g, "") // strip route groups (auth) → ""
-    .replace(/\/@[^/]+/g, "") // strip parallel segments @slot → ""
-    .replace(/\(\.\)(\w+)/g, "$1"); // intercepting routes (.)edit → edit
-}
-
-// Convert route pattern to regex and extract parameter keys
-function patternToRegex(pattern: string): { regex: RegExp; keys: string[] } {
-  const keys: string[] = [];
-  pattern = normalizePattern(pattern);
-
-  const regexStr = pattern
-    .replace(/\//g, "\\/") // escape slashes
-    .replace(/\[\.\.\.(\w+)\]/g, (_, key) => {
-      keys.push(key);
-      return "(.*)"; // catch-all
-    })
-    .replace(/\[\[\.\.\.(\w+)\]\]/g, (_, key) => {
-      keys.push(key);
-      return "(.*)?"; // optional catch-all
-    })
-    .replace(/\[(\w+)\]/g, (_, key) => {
-      keys.push(key);
-      return "([^\\/]+)"; // single param
-    });
-
-  return { regex: new RegExp("^" + regexStr + "$"), keys };
-}
-
 // Match dynamic routes
 function matchDynamicRoute(pathname: string): {
   component: React.ComponentType<PageProps>;
@@ -134,7 +103,7 @@ function matchDynamicRoute(pathname: string): {
   pattern: string;
 } | null {
   for (const [pattern, Component] of Object.entries(registry)) {
-    const { regex, keys } = patternToRegex(pattern);
+    const { regex, keys } = routePatternRegex(pattern);
     const match = pathname.match(regex);
     if (match) {
       const params: Params = {};
@@ -256,11 +225,22 @@ function isUndeclaredDocumentView(pattern: string, params: Params): boolean {
 setRoutePreloader(href => {
   if (/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(href)) return;
   const [pathname] = href.split(/[?#]/, 1);
-  const { Component } = resolveRoute(pathname, "");
+  startRouteCode(resolveRoute(pathname, ""));
+});
+
+/**
+ * Starts fetching a resolved route's page, when it is one fetched lazily; a
+ * page already fetched, or fetching, is joined rather than fetched again. The
+ * router calls it as soon as it resolves an address, so a screen drawn only
+ * once the server confirms the session has its code on the way while that
+ * check is still out, rather than starting the download after its answer.
+ */
+export function startRouteCode(route: Pick<RouteResult, "Component">): void {
+  const { Component } = route;
   if ("preload" in Component && typeof Component.preload === "function") {
     Component.preload();
   }
-});
+}
 
 export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
   // Exact match
@@ -315,13 +295,6 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       section: "plugins",
     };
   }
-
-  // The widget preview page, for a development server only: the page on the
-  // server's explicit yes, held while it has not answered, and otherwise left
-  // to the not-found answer below, as any address the admin does not serve.
-  // Before the dynamic routes, so no pattern can answer for it either way.
-  const preview = widgetPreviewsRoute(pathname, parseSearchParams(rawSearch));
-  if (preview) return preview;
 
   // Dynamic match
   const dynamic = matchDynamicRoute(pathname);

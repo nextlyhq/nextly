@@ -1,8 +1,8 @@
 /**
  * A list card at each tier: how many rows it draws, and that the list archetype draws no footer.
  *
- * Its rows are what its widget's `load` answered; the card draws as many of them as its tier
- * holds. The archetype names no list view for its rows, so its footer is never drawn: a card
+ * Its rows are what its widget's `load` answered; the card draws every one of them, at most
+ * twenty, at every tier: a card is as tall as its content, so its length is the widget's. The archetype names no list view for its rows, so its footer is never drawn: a card
  * that links to a list view draws that link itself (`Widget.List`'s `viewAllHref`). The View
  * all link's own address, from a card's read, is `listViewHref`'s, tested below.
  */
@@ -11,7 +11,7 @@ import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup } from "@testing-library/react";
 
-import { AnswerSizeContext, CardTierContext } from "../../frame/tier";
+import { CardTierContext } from "../../frame/tier";
 import { listViewHref } from "../../frame/list-view-href";
 import { listBody } from "../list";
 import { tableBody } from "../table";
@@ -61,33 +61,33 @@ function drawAt(
 }
 
 describe("a list card's rows at each tier", () => {
-  it("draws three rows at small", () => {
+  it("draws every row its answer holds at small", () => {
+    // 🔴 Counted by the tier, a small card drew three of these four.
     drawAt("small", 4);
-    expect(screen.getAllByTestId("entity-row")).toHaveLength(3);
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(4);
   });
 
   it("draws a row's meta at small too, stacked in its fixed-height row", () => {
     drawAt("small", 4);
     // Every tier below large stacks the row's slots, so a small card keeps the detail a
-    // medium one shows; only the number of rows is the small tier's own.
-    expect(screen.getAllByTestId("entity-row")).toHaveLength(3);
+    // medium one shows.
     expect(
       screen.getAllByTestId("entity-row-meta").map(node => node.textContent)
-    ).toEqual(Array(3).fill("draft"));
+    ).toEqual(Array(4).fill("draft"));
   });
 
-  it("draws the card's number of items at medium, with a line of detail", () => {
-    drawAt("medium", 6);
-    expect(screen.getAllByTestId("entity-row")).toHaveLength(5);
+  it("draws every row its answer holds at medium, with a line of detail", () => {
+    // 🔴 Capped at the default five, a medium card drew five of these seven.
+    drawAt("medium", 7);
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(7);
     expect(
       screen.getAllByTestId("entity-row-meta").map(node => node.textContent)
-    ).toEqual(Array(5).fill("draft"));
+    ).toEqual(Array(7).fill("draft"));
   });
 
-  it("draws at most the default five rows at large, where a table is drawn", () => {
-    // No items setting reaches the archetype, so its rows are capped at the default number.
+  it("draws at most twenty rows at large, where a table is drawn", () => {
     drawAt("large", 26);
-    expect(screen.getAllByTestId("list-card-table-row")).toHaveLength(5);
+    expect(screen.getAllByTestId("list-card-table-row")).toHaveLength(20);
   });
 });
 
@@ -170,26 +170,5 @@ describe("the lifecycle a View all link carries", () => {
 
   it("names none for a card that read every entry", () => {
     expect(statusOf("all")).toBeNull();
-  });
-});
-
-describe("an answer smaller than the card", () => {
-  it("draws the rows its answer was asked for", () => {
-    // Fetched for a small card (three rows and one more), shown on a card that has since grown to
-    // medium while its larger answer is out or was refused: the extra row is not an item.
-    const outcome = listBody(
-      { op: "list", items: items(4), fields: described } as never,
-      recentPosts
-    );
-    if (!outcome.ok || !("node" in outcome) || !outcome.node)
-      throw new Error("drew nothing");
-    render(
-      <CardTierContext.Provider value="medium">
-        <AnswerSizeContext.Provider value={{ tier: "small" }}>
-          {outcome.node}
-        </AnswerSizeContext.Provider>
-      </CardTierContext.Provider>
-    );
-    expect(screen.getAllByTestId("entity-row")).toHaveLength(3);
   });
 });

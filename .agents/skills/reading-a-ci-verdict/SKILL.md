@@ -53,7 +53,7 @@ PR HEAD. So the head is where to look them up, and "the head tree passed" is
 not what a green check means — it means the merge of head and base passed.
 (Inside a workflow the relationship inverts, but only for `pull_request`:
 there `github.sha` IS the synthetic merge commit. On `pull_request_target` it is
-the tip of the BASE branch — `main` for an ordinary PR, and the PARENT FEATURE
+the tip of the BASE branch — `dev` for an ordinary PR, and the PARENT FEATURE
 BRANCH for a stacked one, so `labeler.yml` and `small-checks.yml` see whichever the
 PR targets rather than the PR's own revision. On `push` it is the pushed commit.
 Do not carry a variable named `SHA` between contexts, and qualify the claim by
@@ -286,20 +286,20 @@ pushing:
 | `small-checks.yml` | group per PR, cancel only on a pull request | cancels and re-queues at the back |
 
 So read the workflow's `concurrency:` block before deciding a push is expensive.
-These cancel a pull request's older run; a run on `main` or in the queue is
-keyed by its commit and never cancelled.
+These cancel a pull request's older run; a run on `main`, on `dev` or in the
+queue is keyed by its commit and never cancelled.
 
 ## A stacked base runs none of the jobs that gate a merge
 
-Three workflows are declared `pull_request: branches: [main]`, so a PR whose base
-is another FEATURE BRANCH never triggers them. Measured across
+Three workflows are declared `pull_request: branches: [main, dev]`, so a PR
+whose base is another FEATURE BRANCH never triggers them. Measured across
 `.github/workflows/`:
 
 | workflow                                  | trigger                                    | fires on a stacked PR? |
 | ----------------------------------------- | ------------------------------------------ | ---------------------- |
-| `ci.yml`                                  | `pull_request: branches: [main]`           | **no**                 |
-| `integration.yml`                         | `pull_request: branches: [main]`           | **no**                 |
-| `preview.yml`                             | `pull_request: branches: [main]`           | **no**                 |
+| `ci.yml`                                  | `pull_request: branches: [main, dev]`      | **no**                 |
+| `integration.yml`                         | `pull_request: branches: [main, dev]`      | **no**                 |
+| `preview.yml`                             | `pull_request: branches: [main, dev]`      | **no**                 |
 | `labeler.yml`, `small-checks.yml`         | `pull_request_target`                      | yes                    |
 | `scaffold-build.yml`, `package-smoke.yml` | `pull_request` + `paths`, no branch filter | yes, if a path matches |
 
@@ -316,20 +316,21 @@ ceiling would reintroduce exactly the fixed number this file argues against.
 There is no red to notice and nothing conspicuously missing.
 
 **A stacked PR's CI verdict is therefore UNOBTAINABLE, not pending.** Local runs
-are the only evidence until the base is `main`.
+are the only evidence until the base is `dev` (or `main`).
 
 **Retargeting alone does not start CI**, which is the trap on the way out.
 Changing a PR's base emits the `pull_request` activity `edited`, and the default
 activity set is `opened`, `synchronize` and `reopened` — none of these three
 workflows declares `types:`, so none subscribes to `edited`. Retargeting makes
 the branch filter eligible and emits an event nothing is listening for, leaving
-a PR that now LOOKS main-targeting with still no substantive run against it.
+a PR that now LOOKS dev-targeting with still no substantive run against it.
+Moving open PRs from `main` to `dev` is the same retarget, with the same gap.
 
 Follow it with an operation that DEMONSTRABLY moves the head, then confirm a
-new run exists. A plain `git rebase main` is not that: when the branch is
-already a descendant of `main` it reports the branch up to date and changes
+new run exists. A plain `git rebase dev` is not that: when the branch is
+already a descendant of `dev` it reports the branch up to date and changes
 nothing, so the push that follows emits no `synchronize` and the four
-main-filtered workflows stay absent — having done exactly what the instruction
+branch-filtered workflows stay absent — having done exactly what the instruction
 said. **Prefer an EMPTY COMMIT**, then PUSH it:
 
 ```bash

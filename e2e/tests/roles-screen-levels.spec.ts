@@ -190,21 +190,30 @@ test("marks a collection whose code narrows it, naming what the code limits", as
       "This collection's code also limits who can edit it. The level here is the most a role can be given."
     )
   ).toBeVisible();
-  // POPULATION CONTROL: a collection whose code declares no rule is not marked.
-  await expect(
-    page
-      .locator('[data-slot="permission-level-row"]')
-      .filter({ hasText: "tags" })
-      .getByText("Narrowed in code")
-  ).toHaveCount(0);
+  // POPULATION CONTROL: a collection whose code declares no rule is not marked. Found by its
+  // level control, since a filter on the words "tags" also matches "journal-tags", whose code
+  // does declare one.
+  const tagsRow = page.locator('[data-slot="permission-level-row"]').filter({
+    has: page.getByRole("radiogroup", { name: "Tag (tags) level" }),
+  });
+  await expect(tagsRow).toBeVisible();
+  await expect(tagsRow.getByText("Narrowed in code")).toHaveCount(0);
 });
 
 test("folds a plugin under its name and saves its collections' levels and its own permission", async ({
   page,
 }) => {
-  // The form builder contributes forms and submissions, and declares an
-  // export permission of its own, outside both collections.
-  const roleId = await roleHolding(["read-forms", "read-form-submissions"]);
+  // The form builder contributes forms, submissions, their sends and resends
+  // and the files sent with them, and declares an export permission of its
+  // own, outside every collection. A role that may read each of them holds
+  // one level across the plugin.
+  const roleId = await roleHolding([
+    "read-forms",
+    "read-form-submissions",
+    "read-form-submission-sends",
+    "read-form-submission-resends",
+    "read-form-uploads",
+  ]);
 
   await gotoAdmin(page, `/security/roles/edit/${roleId}`);
   const plugins = page.getByRole("region", { name: "Plugins" });

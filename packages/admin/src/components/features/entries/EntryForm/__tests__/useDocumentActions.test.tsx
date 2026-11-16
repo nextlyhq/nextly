@@ -159,10 +159,10 @@ describe("useDocumentActions", () => {
     const find = (id: string) =>
       result.current?.actions.find(action => action.id === id);
     expect(find("publish")?.disabledReason).toBe(
-      "Someone else is editing this document"
+      "This document is being edited elsewhere"
     );
     expect(find("schedule-publish")?.disabledReason).toBe(
-      "Someone else is editing this document"
+      "This document is being edited elsewhere"
     );
     expect(find("pin")?.disabledReason).toBeUndefined();
   });

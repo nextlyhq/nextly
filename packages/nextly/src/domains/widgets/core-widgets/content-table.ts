@@ -12,40 +12,51 @@
  * @module domains/widgets/core-widgets/content-table
  */
 
-import { rowsThatFit } from "../card-geometry";
 import { defineWidget } from "../declaration/define-widget";
-import { MAX_WIDGET_ROWS } from "../query-limits";
+import { listEntries } from "../query-limits";
 import { CONTENT_SOURCE_ID } from "../system-source-ids";
 
 import type { CoreListWidgetData } from "./data";
 import { CORE_WIDGET_ID } from "./ids";
+import { LIST_ITEMS } from "./shared";
 import { readCoreList } from "./system-read";
 
 export const contentTableWidget = defineWidget({
   id: CORE_WIDGET_ID.contentTable,
+  // Drawn beside its name in the add panel.
+  icon: "Table",
   title: "Content",
+  // One line, as the add panel lists it.
   description:
-    "One compact table of the collections and Singles this reader may see: entries, drafts, the last update, and a create button on each row.",
+    "Every collection and Single, with its entries, drafts and a create button.",
   // From half the row, where the table's five columns still read, to the full width.
   size: {
     default: { w: 12, h: 4 },
     min: { w: 6, h: 3 },
     max: { w: 12, h: 6 },
   },
-  load: async ({ services, size, signal, now }): Promise<CoreListWidgetData> =>
+  // How many collections and Singles the table lists before "View all".
+  settings: { limit: LIST_ITEMS },
+  load: async ({
+    settings,
+    services,
+    signal,
+    now,
+  }): Promise<CoreListWidgetData> =>
     readCoreList(
       {
         source: CONTENT_SOURCE_ID,
         op: "list",
-        // The rows the card's height holds, at most the ten a list draws, and the one more that
-        // says more exist. The card offers no Density, so its rows are the default's.
-        limit:
-          Math.min(MAX_WIDGET_ROWS, rowsThatFit(size, { density: "default" })) +
-          1,
+        // Its "Number of entries", and the one more that says more exist (`listEntries`).
+        limit: listEntries(settings.limit) + 1,
       },
       { services, signal, now }
     ),
   // Its own component: a table of the rows on a wide card, rows on a narrow one.
+  // Loads as the table it draws, holding the place of its "Number of entries" of rows: a site
+  // has collections from its first day, so the table is nearly always full, and a full answer
+  // lands at the height the card loaded at.
+  skeleton: "table",
   view: { component: "core#ContentTable" },
   // The component draws its own empty state, which says what the table lists.
   isEmpty: () => false,

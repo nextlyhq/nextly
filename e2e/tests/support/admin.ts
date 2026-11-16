@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 // Where the chosen theme is stored, shared with the visual check.
 import { THEME_STORAGE_KEY } from "./theme.mjs";
@@ -99,4 +99,19 @@ export async function toRgb(
     const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
     return [r, g, b] as [number, number, number];
   }, color);
+}
+
+/**
+ * A data table's row, found by the text of its way in: the primary cell's link
+ * or button, marked `data-row-entry`, which is the row's one control. The row
+ * itself has no role, since it holds other controls (the selection box, the
+ * actions menu). The table draws each row twice, as a row for a wide screen
+ * and a card for a narrow one, both carrying `data-row-id`; only the one drawn
+ * at this width is visible, so the hidden one is left out.
+ */
+export function tableRow(page: Page, name: string | RegExp): Locator {
+  return page
+    .locator("[data-row-id]")
+    .filter({ has: page.locator("[data-row-entry]", { hasText: name }) })
+    .filter({ visible: true });
 }

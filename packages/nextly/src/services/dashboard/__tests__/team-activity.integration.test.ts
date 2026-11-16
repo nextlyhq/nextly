@@ -139,7 +139,12 @@ function writesTo(t: TestNextly, collection: string) {
       return id;
     },
     update: (when: Date, entryId: string, data: Record<string, unknown>) =>
-      written(t, when, () => handler.updateEntry({ ...asAna, entryId }, data)),
+      written(t, when, () =>
+        handler.updateEntry(
+          { ...asAna, entryId },
+          { ...data, _overwrite: true }
+        )
+      ),
     remove: (when: Date, entryId: string) =>
       written(t, when, () => handler.deleteEntry({ ...asAna, entryId })),
   };

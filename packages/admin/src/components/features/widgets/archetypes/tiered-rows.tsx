@@ -10,6 +10,7 @@
  * @module components/features/widgets/archetypes/tiered-rows
  */
 
+import { MAX_WIDGET_ROWS } from "nextly/config";
 import type { JSX } from "react";
 
 import { fieldLabel } from "@admin/lib/field-label";
@@ -20,7 +21,7 @@ import type {
 
 import { ListCard, type ListModel, type ListTotal } from "../frame/list-card";
 import { useListDensity } from "../frame/list-rows";
-import { useCardTier, useRowsDrawn } from "../frame/tier";
+import { useCardTier } from "../frame/tier";
 
 import { asPresentedText } from "./cell-text";
 import { presentedCell } from "./presented-cell";
@@ -49,10 +50,9 @@ export function TieredRows({
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
   const density = useListDensity();
-  // Laid out at the card's tier, counted at its answer's size when that draws fewer; see
-  // `useRowsDrawn`. No items setting to count from: the answer is what the widget's `load` read
-  // for the card's size, so the card's own room decides how many of its rows are drawn.
-  const drawn = useRowsDrawn(tier, undefined, density);
+  // Every row the widget's `load` answered, at most the rows a card draws: the answer is what its
+  // `load` chose to read, and a card is as tall as its content, so its length is the widget's.
+  const drawn = Math.min(items.length, MAX_WIDGET_ROWS);
   return (
     <ListCard
       model={answerListModel(columns, labelField, hrefOf)}

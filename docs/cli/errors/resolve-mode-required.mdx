@@ -11,14 +11,14 @@ description: "`nextly migrate:resolve` was given none, or more than one, of `--a
 
 ## Fix
 
-- Pass exactly one: `--applied <file>`, `--rolled-back <file>` or `--failed-cleanup <file>`.
+- Pass exactly one: `--applied <file>`, `--rolled-back <file>`, `--failed-cleanup <file>` or `--removed <file>`.
 - `nextly migrate:resolve --help` describes each.
 
 ## Example
 
 ```text
 ✗ `nextly migrate:resolve` needs exactly one thing to record.
-  Why:  It was given none of `--applied`, `--rolled-back` and `--failed-cleanup`.
-  Next: Provide exactly one of --applied, --rolled-back, or --failed-cleanup.
+  Why:  It was given none of `--applied`, `--rolled-back`, `--failed-cleanup` and `--removed`.
+  Next: Provide exactly one of --applied, --rolled-back, --failed-cleanup, or --removed.
   Docs: https://nextlyhq.com/docs/cli/errors/resolve-mode-required  (RESOLVE_MODE_REQUIRED)
 ```

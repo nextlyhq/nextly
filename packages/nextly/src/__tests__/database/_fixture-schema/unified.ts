@@ -106,6 +106,11 @@ export const nextlyTables: TableDefinition[] = [
         type: "text",
       },
       {
+        // Nullable: unset means the person follows the site's language.
+        name: "interface_language",
+        type: "text",
+      },
+      {
         // Nullable, matching `mustChangePassword: integer(..., { mode: "boolean" })`
         // on the real table: unset means "no answer recorded", which is not the
         // same as "need not change".
@@ -803,6 +808,10 @@ export const nextlyTables: TableDefinition[] = [
       {
         name: "user_roles_user_id_idx",
         columns: ["user_id"],
+      },
+      {
+        name: "user_roles_role_id_idx",
+        columns: ["role_id"],
       },
       {
         name: "user_roles_expires_at_idx",

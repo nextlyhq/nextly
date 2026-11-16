@@ -17,6 +17,7 @@ import {
   assertValidFieldGroupConfig,
 } from "../../field-groups/config/validate-field-group";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
+import { refuseSchemaChangeInProduction } from "../../shared/builder-refusal";
 import type {
   FieldGroupDefinition,
   CreateFieldGroupArgs,
@@ -143,6 +144,10 @@ export function createFieldGroupsNamespace(
     async create(
       args: CreateFieldGroupArgs
     ): Promise<MutationResult<FieldGroupDefinition>> {
+      // A field group's definition is schema, which reaches production only
+      // through migrations: refused there before anything else, as the
+      // builder's own routes refuse it, whoever the caller is.
+      refuseSchemaChangeInProduction("fieldGroups.create");
       // Checked as the REST route checks it, before anything else: REST
       // authorizes before it reads the body.
       await checkWrite(
@@ -225,6 +230,8 @@ export function createFieldGroupsNamespace(
     async update(
       args: UpdateFieldGroupArgs
     ): Promise<MutationResult<FieldGroupDefinition>> {
+      // Schema, so refused in production first, as `create` is.
+      refuseSchemaChangeInProduction("fieldGroups.update");
       await checkWrite(
         ctx.defaultConfig,
         args,
@@ -291,6 +298,8 @@ export function createFieldGroupsNamespace(
     async delete(
       args: DeleteFieldGroupArgs
     ): Promise<MutationResult<{ slug: string }>> {
+      // Schema, so refused in production first, as `create` is.
+      refuseSchemaChangeInProduction("fieldGroups.delete");
       await checkWrite(
         ctx.defaultConfig,
         args,

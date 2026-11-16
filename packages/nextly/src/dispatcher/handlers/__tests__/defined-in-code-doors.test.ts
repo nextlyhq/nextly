@@ -90,7 +90,12 @@ describe("a schema route asked to change something defined in code", () => {
     "applySingleSchemaChanges",
   ])("refuses a Single's %s as defined in code", async method => {
     await expect(
-      dispatchSingles(method, { slug: "site-settings" }, { fields: [] })
+      dispatchSingles(
+        method,
+        { slug: "site-settings" },
+        // Confirmed, so the apply gets past what its body alone decides.
+        { fields: [], confirmed: true }
+      )
     ).rejects.toMatchObject(changed("Single"));
   });
 
@@ -113,7 +118,8 @@ describe("a schema route asked to change something defined in code", () => {
           {} as ServiceContainer,
           method,
           { collectionName: "posts" },
-          { fields: [] }
+          // Confirmed, so the apply gets past what its body alone decides.
+          { fields: [], confirmed: true }
         )
       ).rejects.toMatchObject(changed("collection"));
     }

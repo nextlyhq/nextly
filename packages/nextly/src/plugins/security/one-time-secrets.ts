@@ -50,7 +50,8 @@ import { isUniqueViolation } from "../../shared/lib/unique-violation";
 import type { PluginTransaction } from "../database/plugin-database";
 import { linkedTransaction } from "../database/plugin-transaction-link";
 
-import { isWellFormed } from "./well-formed";
+import { pluginWriter } from "./plugin-write";
+import { isStorableText } from "./well-formed";
 
 /** @experimental A secret's data: stored in clear, at most 1 KB serialised. */
 export type SecretData = Record<string, string | number | boolean | null>;
@@ -253,20 +254,9 @@ export function createOneTimeSecrets(
       )
       .digest("hex");
 
-  /**
-   * Run a write on the plugin's transaction when it passed one, else in a
-   * transaction of its own, refused when the calling flow has one open.
-   */
-  const write = <R>(
-    operation: string,
-    tx: PluginTransaction | undefined,
-    work: (adapterTx: TransactionContext) => Promise<R>
-  ): Promise<R> => {
-    if (tx !== undefined) return linkedTransaction(tx, operation).run(work);
-    const adapter = options.adapter();
-    assertNoOpenTransaction(adapter, operation);
-    return adapter.transaction(work);
-  };
+  // Every write on the plugin's transaction or one of its own, as
+  // `runPluginWrite` decides.
+  const write = pluginWriter(options.adapter);
 
   const ownerWhere = (purpose: string) => [
     { column: "owner", op: "=" as const, value: owner },
@@ -310,7 +300,7 @@ export function createOneTimeSecrets(
       const data = serialiseData(input.data);
       const token = randomBytes(TOKEN_BYTES).toString("base64url");
       const createdAt = now();
-      const expiresAt = new Date(createdAt.getTime() + expiresInMs);
+      const expiresAt = wholeSecondExpiry(createdAt, expiresInMs);
       const [current] = keys();
       // A token minted to replace the earlier ones takes the subject's token
       // live key, whose unique index admits one holder: two such mints at once
@@ -425,7 +415,7 @@ export function createOneTimeSecrets(
           }
         );
         const issueSeq = (latest?.issueSeq ?? 0) + 1;
-        const expiresAt = new Date(createdAt.getTime() + expiresInMs);
+        const expiresAt = wholeSecondExpiry(createdAt, expiresInMs);
         await adapterTx.insert(ONE_TIME_SECRETS_TABLE, {
           id: randomUUID(),
           owner,
@@ -741,15 +731,29 @@ function checkPurpose(purpose: string): string {
   );
 }
 
+/**
+ * When a secret minted at `createdAt` for `expiresInMs` expires, to the whole second below. SQLite
+ * keeps a date to the second, so a millisecond expiry would be reported later than that database
+ * honours it; held to the second everywhere, the expiry returned is the one stored and the one
+ * compared, on every dialect.
+ */
+function wholeSecondExpiry(createdAt: Date, expiresInMs: number): Date {
+  return new Date(
+    Math.floor((createdAt.getTime() + expiresInMs) / 1000) * 1000
+  );
+}
+
 function checkSubject(subject: string): string {
   if (
     typeof subject === "string" &&
     subject.length > 0 &&
-    subject.length <= BOUNDS.subjectLength &&
-    !subject.includes("\u0000") &&
-    // Lone surrogates all encode to one replacement character, so two such
-    // subjects would share a key and reach each other's secrets.
-    isWellFormed(subject)
+    // Counted in code points, as the column counts characters: an emoji is one character,
+    // though two UTF-16 units.
+    [...subject].length <= BOUNDS.subjectLength &&
+    // No NUL, which PostgreSQL cannot store, and no lone surrogates, which all
+    // encode to one replacement character, so two such subjects would share a
+    // key and reach each other's secrets.
+    isStorableText(subject)
   ) {
     return subject;
   }

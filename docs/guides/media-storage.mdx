@@ -347,7 +347,7 @@ s3Storage({
 | Option               | Type      | Default | Description                                              |
 |----------------------|-----------|---------|----------------------------------------------------------|
 | `prefix`             | `string`  | --      | Folder prefix for this collection's uploads.             |
-| `clientUploads`      | `boolean` | `false` | Enable client-side direct uploads (bypasses serverless body limits). |
+| `clientUploads`      | `boolean` | `false` | Enable client-side direct uploads (bypasses serverless body limits). S3 only. The file's name, type and size are checked before the URL is signed, and the URL binds the type and exact size; SVGs always go through the standard upload. See [Media upload security](/docs/configuration/media-upload-security). |
 | `signedDownloads`    | `boolean` | `false` | Issue signed URLs for download.                          |
 | `signedUrlExpiresIn` | `number`  | `3600`  | Signed-URL expiry in seconds.                            |
 
@@ -423,6 +423,84 @@ wherever it renders. The synchronous proxy from `nextly/runtime` assumes an alre
 initialised process and throws `Nextly services not initialized` when it is the first
 Nextly code a worker runs, which a blank scaffold makes likely because it ships no
 `instrumentation.ts`.
+
+## Resized copies
+
+A page that shows a 2,200-pixel photo in a 385-pixel slot sends the visitor far
+more bytes than it draws. Nextly can serve a resized copy of any stored JPEG,
+PNG, WebP or AVIF image instead, made the first time it is asked for and kept
+beside the original.
+
+<Callout type="warn">
+  Resized copies are experimental: the route, `media.copyOf()` and the widths
+  may change before they are stable.
+</Callout>
+
+Ask for a copy at the media route, with the width it is shown at:
+
+```
+GET /api/media/:id/copy/:width
+```
+
+- **Widths are fixed.** Copies come at 96, 160, 240, 320, 640, 960, 1280 and
+  1920 pixels wide, and any other width is served the nearest one: ask for 700
+  and you get 640. A copy is never wider than its original: past its width the
+  route sends the image at its own width, and `media.copyOf()` answers `null`
+  so you use the original. The fixed list is what stops anyone making the
+  server resize an image to every width there is.
+- **The format follows the browser.** A JPEG or PNG is sent as AVIF to a browser
+  that accepts it, otherwise as WebP, otherwise in its own format. A WebP or AVIF
+  original keeps its format. The answer says `Vary: Accept`, so a cache can keep
+  each format apart. Some CDNs ignore `Vary` unless set up for it, and would
+  then hand one browser a format meant for another: set yours to vary on
+  `Accept` for these addresses.
+- **It is read as the item is.** The route answers a copy to exactly whoever may
+  read the media item, and refuses it the same way otherwise. On the public
+  `/api/media` route that means a visitor gets copies only while the Public role
+  may read media (`read-media`).
+- **It is kept with its original.** A copy is stored by the same storage, under
+  the original's key with the width and format added
+  (`photo.jpg.w640.webp`), and deleted with the original, or when its file is
+  replaced. Nothing is cut at upload.
+
+Rather than building the address yourself, ask for it. `media.copyOf()` takes a
+media item's `id`, or an address, and the width; it answers the copy's `url` and
+the width it snapped to, or `null` when there is no copy to be had and the
+original is to be used as it is:
+
+```ts
+const copy = await nextly.media.copyOf({ id: "abc-123", width: 700 });
+// { url: "/api/media/abc-123/copy/640?v=3f9a2c71b0de", width: 640 }
+const src = copy?.url ?? media.url;
+```
+
+It answers `null` for an address that is not one of your media items (an image on
+another site, or an item since deleted), for a width past the original's, while
+visitors may not read media (the copy's address is on the public route), for a
+type that is not resized (GIF, SVG, any file that is not an
+image), when the image library `sharp` is not installed, and when the storage
+cannot keep copies.
+
+The `v` in the address is the original file's version. While it is current the
+copy is cached for a year; once the file is replaced, an old address still
+answers, with the new picture, and is checked again rather than kept.
+
+| Storage           | Keeps copies                                               |
+| ----------------- | ---------------------------------------------------------- |
+| Local disk        | Yes                                                        |
+| S3 and compatible | Yes                                                        |
+| Vercel Blob       | Yes                                                        |
+| Uploadthing       | No: it chooses every file's key, so the original is served |
+
+When a copy cannot be made at the moment it is asked for (an original too large
+to resize, an animated WebP or PNG, which is sent whole rather than as its first
+frame, a file missing from storage, or storage not answering), the route
+redirects to the original, so the image still shows.
+
+A photo's `width` and `height` are recorded as it is shown: one its camera marked
+as turned a quarter is stored on its side, and recorded turned upright, as every
+browser and copy shows it. An image uploaded before this release keeps the size
+it was recorded with.
 
 ## Upgrading from a release with image sizes
 

@@ -75,6 +75,21 @@ describe("the write seam judges a submission", () => {
     expect(ctx.data.spamReason).toBe("honeypot");
   });
 
+  it("stores the address the server judged, never one the caller posted", async () => {
+    // The collection grants public create: a posted address would choose the
+    // network one response per person compares.
+    const posted = writeOf({ email: "a@b.test" }, { ip: "203.0.113.7" });
+    (posted.data as Record<string, unknown>).ipAddress = "198.51.100.66";
+    await run(posted, {});
+    expect(posted.data.ipAddress).toBe("203.0.113.7");
+
+    // An import no request produced keeps the address it was given.
+    const imported = writeOf({ email: "a@b.test" }, { request: false });
+    (imported.data as Record<string, unknown>).ipAddress = "198.51.100.66";
+    await run(imported, {});
+    expect(imported.data.ipAddress).toBe("198.51.100.66");
+  });
+
   it("leaves a clean submission alone", async () => {
     // The control. A seam that flagged everything would satisfy the case above
     // while making the Spam view the only view.

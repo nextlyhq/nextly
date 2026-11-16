@@ -33,8 +33,9 @@ import {
   type UseInfiniteQueryResult,
   type InfiniteData,
 } from "@tanstack/react-query";
+import { useCallback } from "react";
 
-import { toast } from "@admin/components/ui";
+import { toast } from "@admin/components/ui/toaster";
 import type { BulkResponse, PerItemError } from "@admin/lib/api/response-types";
 import {
   bulkDeleteMedia,
@@ -279,6 +280,21 @@ export function useInfiniteMedia(
  */
 export function useMediaItem(mediaId?: string): UseQueryResult<Media, Error> {
   return useQuery<Media, Error>({
+    ...mediaItemQuery(mediaId ?? ""),
+    enabled: !!mediaId,
+  });
+}
+
+/**
+ * The one query a media item is read by, so every reader of an item shares its
+ * cache: {@link useMediaItem} and {@link useMediaResolver} ask for an id once
+ * between them.
+ */
+function mediaItemQuery(mediaId: string): {
+  queryKey: readonly ["media", string];
+  queryFn: () => Promise<Media>;
+} {
+  return {
     queryKey: ["media", mediaId],
     queryFn: async () => {
       if (!mediaId) {
@@ -286,8 +302,130 @@ export function useMediaItem(mediaId?: string): UseQueryResult<Media, Error> {
       }
       return await getMediaById(mediaId);
     },
-    enabled: !!mediaId,
+  };
+}
+
+/**
+ * How long a media item read for drawing stays fresh before it is read again.
+ * A page drawn in the editor asks for each of its images whenever a block is
+ * drawn afresh; within this time those asks are answered from the cache, and
+ * an edit to an item through the library invalidates it at once.
+ */
+const MEDIA_DRAWN_FRESH_MS = 60_000;
+
+/**
+ * Read a media item by id, outside a component's render: for code that draws
+ * a page and resolves its images as it goes.
+ *
+ * Through the same query as {@link useMediaItem}, so an item is fetched once
+ * however many images name it, and a read in flight is shared rather than
+ * repeated. Answers `null` for an item that cannot be read, so one missing
+ * image does not stop a page being drawn. The function is stable for the
+ * component's life.
+ *
+ * @experimental
+ */
+export function useMediaResolver(): (mediaId: string) => Promise<Media | null> {
+  const queryClient = useQueryClient();
+  return useCallback(
+    (mediaId: string) =>
+      queryClient
+        .fetchQuery<Media, Error, Media, readonly ["media", string]>({
+          ...mediaItemQuery(mediaId),
+          staleTime: MEDIA_DRAWN_FRESH_MS,
+        })
+        .catch(() => null),
+    [queryClient]
+  );
+}
+
+/**
+ * How many images one search of the library answers with: four rows of a
+ * three-column picker, the first page only.
+ */
+const MEDIA_SEARCH_LIMIT = 12;
+
+/**
+ * A promise that settles as `read` does, or rejects once `signal` aborts, so
+ * a caller that moved on to another search stops waiting on this one. The
+ * read itself is left to finish into the shared cache.
+ */
+function untilAborted<T>(read: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(abortReason(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    read.then(
+      value => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    );
   });
+}
+
+/**
+ * Why an aborted search was rejected: the signal's own reason when it is an
+ * error, else one named `AbortError` as the platform names an abort.
+ */
+function abortReason(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason;
+  const aborted = new Error("The search was aborted.");
+  aborted.name = "AbortError";
+  return aborted;
+}
+
+/**
+ * Search the media library's images by name, outside a component's render:
+ * for a picker that searches as the author types.
+ *
+ * Images only, newest first, the first {@link MEDIA_SEARCH_LIMIT} of them; an
+ * empty search asks for none by name, so it answers the newest images. Read
+ * through the same `["media", params]` list query as {@link useMedia}, so a
+ * search repeated is answered from the cache and an upload's invalidation of
+ * `["media"]` reaches it. Rejects when the library cannot be read, so the
+ * picker can say so rather than show an empty library, and when `signal`
+ * aborts. The function is stable for the component's life.
+ *
+ * @experimental
+ */
+export function useMediaSearcher(): (
+  search: string,
+  signal?: AbortSignal
+) => Promise<Media[]> {
+  const queryClient = useQueryClient();
+  return useCallback(
+    (search: string, signal?: AbortSignal) => {
+      const wanted = search.trim();
+      const params: MediaParams = {
+        page: 1,
+        limit: MEDIA_SEARCH_LIMIT,
+        // Left out when empty, so the empty search shares the newest
+        // images' query rather than asking for a blank name.
+        ...(wanted === "" ? {} : { search: wanted }),
+        type: "image",
+        sortBy: "uploadedAt",
+        sortOrder: "desc",
+      };
+      const read = queryClient
+        .fetchQuery<
+          MediaListResponse,
+          Error,
+          MediaListResponse,
+          readonly ["media", MediaParams]
+        >({
+          queryKey: ["media", params],
+          queryFn: () => fetchMedia(params),
+        })
+        .then(response => response.data);
+      return signal === undefined ? read : untilAborted(read, signal);
+    },
+    [queryClient]
+  );
 }
 
 /**

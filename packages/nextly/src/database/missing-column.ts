@@ -287,7 +287,9 @@ function identifierAt(text: string, name: string): number {
   if (name.length === 0) return -1;
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = new RegExp(
-    `(['"\`.]|: |named )${escaped}(?![A-Za-z0-9_$])`,
+    // A dash continues a name (`dc_posts-archive` is not `dc_posts`), as a
+    // dashed `dbName` is one identifier.
+    `(['"\`.]|: |named )${escaped}(?![A-Za-z0-9_$-])`,
     "i"
   ).exec(text);
   return match ? match.index + match[1].length : -1;
@@ -330,18 +332,55 @@ export function tableOfMissingColumn(
 ): string | undefined {
   const at = identifierAt(text, column);
   if (at > 0 && text[at - 1] === ".") {
-    // A dashed `dbName` (`dc_legacy-posts`) is one identifier too.
-    return /([A-Za-z0-9_$-]+)["`]?$/.exec(text.slice(0, at - 1))?.[1];
+    return qualifierBefore(text.slice(0, at - 1));
   }
   return (
     /of relation "([^"]+)"/i.exec(text)?.[1] ??
-    /^table (\S+) has no column named/i.exec(text)?.[1]
+    /^table (.+?) has no column named/i.exec(text)?.[1]
   );
 }
 
-/** A statement's target table: what follows `from`, `into` or `update`. */
+/**
+ * The table qualifying a column, given the text up to the qualifier's dot.
+ *
+ * No dialect quotes it: PostgreSQL writes `column t.x`, MySQL `'t.x'` and
+ * SQLite `no such column: t.x`, so a `dbName` holding a space or a dot
+ * (`legacy posts`, `legacy.posts`) is told from the words before it only by
+ * where each wording starts the name. The column is already known, so the
+ * table is exactly what lies between that start and its dot. A wording with
+ * no start this knows (a translated PostgreSQL message) is read as before,
+ * the identifier characters before the dot, which leaves such a name
+ * unmatched rather than guessed.
+ */
+function qualifierBefore(before: string): string | undefined {
+  const quoted = /(["`])([^"`]+)\1$/.exec(before);
+  if (quoted) return quoted[2];
+  const starts = [
+    before.lastIndexOf("'") + 1,
+    before.includes(": ") ? before.lastIndexOf(": ") + 2 : 0,
+    ...[...before.matchAll(/\bcolumn /gi)].map(m => m.index + m[0].length),
+  ];
+  const start = Math.max(...starts);
+  const name =
+    start > 0 ? before.slice(start) : /([A-Za-z0-9_$-]+)$/.exec(before)?.[1];
+  return name === undefined || name.length === 0 ? undefined : name;
+}
+
+/**
+ * A statement's target table: what follows `from`, `into` or `update`, as a
+ * whole name. A quoted part may hold a space or a dot (`"legacy posts"`), and
+ * a schema-qualified target (`"cms"."dc_posts"`) names its table last.
+ */
 const STATEMENT_TARGET =
-  /^\s*(?:select\b[\s\S]*?\bfrom|insert into|update|delete from)\s+[`"]?([A-Za-z0-9_$-]+)/i;
+  /^\s*(?:select\b[\s\S]*?\bfrom|insert into|update|delete from)\s+((?:"[^"]+"|`[^`]+`|[A-Za-z0-9_$-]+)(?:\.(?:"[^"]+"|`[^`]+`|[A-Za-z0-9_$-]+))*)/i;
+
+/** The table part of a target `STATEMENT_TARGET` matched, unquoted. */
+function targetTable(target: string | undefined): string | undefined {
+  if (target === undefined) return undefined;
+  const parts = target.match(/"[^"]+"|`[^`]+`|[A-Za-z0-9_$-]+/g) ?? [];
+  const last = parts[parts.length - 1];
+  return last === undefined ? undefined : last.replace(/^["`]|["`]$/g, "");
+}
 
 /**
  * The table the failed statement was written against, or undefined when
@@ -368,7 +407,7 @@ function ownStatementTable(link: unknown): string | undefined {
     return record.table;
   }
   return typeof record.sql === "string"
-    ? STATEMENT_TARGET.exec(record.sql)?.[1]
+    ? targetTable(STATEMENT_TARGET.exec(record.sql)?.[1])
     : undefined;
 }
 
@@ -378,6 +417,6 @@ function contextStatementTable(message: string): string | undefined {
   if (context !== undefined) return context;
   const prefix = "Failed query: ";
   return message.startsWith(prefix)
-    ? STATEMENT_TARGET.exec(message.slice(prefix.length))?.[1]
+    ? targetTable(STATEMENT_TARGET.exec(message.slice(prefix.length))?.[1])
     : undefined;
 }

@@ -1,10 +1,11 @@
 /**
  * The secondary panel's width and its divider.
  *
- * On the wide layout the panel's track keeps its width whether or not the
- * selection owns a panel, so the main column beside it never moves; only a
- * surface that releases the panel takes the width back. On the narrow layout
- * the panel overlays, and has width only while open.
+ * On the wide layout the panel's track has width when the route's section owns
+ * a panel, decided from the route so it is held from the first paint, or when
+ * a panel is open. A page with no panel draws no empty column. A surface that
+ * releases the panel takes the width back. On the narrow layout the panel
+ * overlays, and has width only while open.
  *
  * A border on a zero-width box is still a 1px box, painted a pixel from the
  * rail's own edge, so the divider follows the width, not the selection.
@@ -18,36 +19,67 @@ import {
 
 const WIDE = { isMobile: false, released: false } as const;
 const NARROW = { isMobile: true, released: false } as const;
+/** A page whose section owns a panel, such as a collection. */
+const PANEL_PAGE = { sectionHasPanel: true } as const;
+/** A page whose section owns none, such as the dashboard. */
+const BARE_PAGE = { sectionHasPanel: false } as const;
 
 describe("subSidebarHoldsWidth", () => {
-  it("holds the panel's width on the wide layout whether or not the selection owns a panel", () => {
-    // The separating property: the main column's left edge follows this box,
-    // so a track that took its width from the selection would slide the
-    // column 256 px each time a reader moved between the dashboard and a
-    // collection.
-    expect(subSidebarHoldsWidth({ ...WIDE, hasSubSidebar: true })).toBe(true);
-    expect(subSidebarHoldsWidth({ ...WIDE, hasSubSidebar: false })).toBe(true);
+  it("holds the track from the first paint on a page whose section has a panel", () => {
+    // Before the reader's answers arrive the panel is not yet open
+    // (`hasSubSidebar` false), but the route already says the section has
+    // one: holding the track then is what keeps the main column still while
+    // the panel's links load.
+    expect(
+      subSidebarHoldsWidth({ ...WIDE, ...PANEL_PAGE, hasSubSidebar: false })
+    ).toBe(true);
+    expect(
+      subSidebarHoldsWidth({ ...WIDE, ...PANEL_PAGE, hasSubSidebar: true })
+    ).toBe(true);
+  });
+
+  it("draws no column on a page whose section has no panel", () => {
+    // The separating property: the dashboard, Releases and Translations used
+    // to hold an empty 256px column beside the rail.
+    expect(
+      subSidebarHoldsWidth({ ...WIDE, ...BARE_PAGE, hasSubSidebar: false })
+    ).toBe(false);
+  });
+
+  it("gives a panel opened from such a page its width", () => {
+    // The reader opened a panel from the rail on a page without one.
+    expect(
+      subSidebarHoldsWidth({ ...WIDE, ...BARE_PAGE, hasSubSidebar: true })
+    ).toBe(true);
   });
 
   it("gives the width back on the wide layout when a surface releases the panel", () => {
     // An immersive editor asks for the panel to go to have the width; holding
     // the track there would leave it an empty column instead.
     expect(
-      subSidebarHoldsWidth({ ...WIDE, hasSubSidebar: false, released: true })
+      subSidebarHoldsWidth({
+        ...WIDE,
+        ...PANEL_PAGE,
+        hasSubSidebar: false,
+        released: true,
+      })
     ).toBe(false);
   });
 
   it("follows the selection on the narrow layout, where the panel overlays", () => {
-    expect(subSidebarHoldsWidth({ ...NARROW, hasSubSidebar: true })).toBe(true);
-    expect(subSidebarHoldsWidth({ ...NARROW, hasSubSidebar: false })).toBe(
-      false
-    );
+    expect(
+      subSidebarHoldsWidth({ ...NARROW, ...PANEL_PAGE, hasSubSidebar: true })
+    ).toBe(true);
+    expect(
+      subSidebarHoldsWidth({ ...NARROW, ...PANEL_PAGE, hasSubSidebar: false })
+    ).toBe(false);
   });
 
   it("treats an unresolved layout as the wide one", () => {
     expect(
       subSidebarHoldsWidth({
         isMobile: undefined,
+        ...PANEL_PAGE,
         hasSubSidebar: false,
         released: false,
       })
@@ -57,26 +89,34 @@ describe("subSidebarHoldsWidth", () => {
 
 describe("subSidebarBorderClass", () => {
   it("draws nothing when the panel has no width, in either layout", () => {
-    expect(subSidebarBorderClass({ ...NARROW, hasSubSidebar: false })).toBe("");
     expect(
-      subSidebarBorderClass({ ...WIDE, hasSubSidebar: false, released: true })
+      subSidebarBorderClass({ ...NARROW, ...PANEL_PAGE, hasSubSidebar: false })
+    ).toBe("");
+    expect(
+      subSidebarBorderClass({ ...WIDE, ...BARE_PAGE, hasSubSidebar: false })
+    ).toBe("");
+    expect(
+      subSidebarBorderClass({
+        ...WIDE,
+        ...PANEL_PAGE,
+        hasSubSidebar: false,
+        released: true,
+      })
     ).toBe("");
   });
 
-  it("divides the held track on the right on the wide layout, open or not", () => {
-    // The track keeps its width with nothing in it, so it keeps its edge too:
-    // without one the empty track reads as part of the page beside it.
+  it("divides a held track on the right on the wide layout, open or not", () => {
     for (const hasSubSidebar of [true, false]) {
-      expect(subSidebarBorderClass({ ...WIDE, hasSubSidebar })).toContain(
-        "border-r"
-      );
+      expect(
+        subSidebarBorderClass({ ...WIDE, ...PANEL_PAGE, hasSubSidebar })
+      ).toContain("border-r");
     }
   });
 
   it("divides on the left when the panel overlays from the left edge", () => {
-    expect(subSidebarBorderClass({ ...NARROW, hasSubSidebar: true })).toContain(
-      "border-l"
-    );
+    expect(
+      subSidebarBorderClass({ ...NARROW, ...PANEL_PAGE, hasSubSidebar: true })
+    ).toContain("border-l");
   });
 
   it("pairs every border side with the token that colours it", () => {
@@ -86,6 +126,7 @@ describe("subSidebarBorderClass", () => {
     for (const layout of [WIDE, NARROW]) {
       const className = subSidebarBorderClass({
         ...layout,
+        ...PANEL_PAGE,
         hasSubSidebar: true,
       });
       expect(className).toContain("border-border");
@@ -99,10 +140,13 @@ describe("subSidebarBorderClass", () => {
     expect(
       subSidebarBorderClass({
         isMobile: undefined,
+        ...PANEL_PAGE,
         hasSubSidebar: true,
         released: false,
       })
-    ).toBe(subSidebarBorderClass({ ...WIDE, hasSubSidebar: true }));
+    ).toBe(
+      subSidebarBorderClass({ ...WIDE, ...PANEL_PAGE, hasSubSidebar: true })
+    );
   });
 
   it("emits no border utility of any side while it has no width", () => {
@@ -110,8 +154,9 @@ describe("subSidebarBorderClass", () => {
     // the rail's own edge, so the invariant is "no side at all", not "not
     // the right one".
     for (const input of [
-      { ...NARROW, hasSubSidebar: false },
-      { ...WIDE, hasSubSidebar: false, released: true },
+      { ...NARROW, ...PANEL_PAGE, hasSubSidebar: false },
+      { ...WIDE, ...BARE_PAGE, hasSubSidebar: false },
+      { ...WIDE, ...PANEL_PAGE, hasSubSidebar: false, released: true },
     ]) {
       expect(subSidebarBorderClass(input)).not.toMatch(/\bborder(-[a-z]+)?\b/);
     }

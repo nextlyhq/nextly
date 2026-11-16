@@ -28,7 +28,10 @@ import { recordEvent } from "../record-event";
 import { WebhookEndpointRegistry } from "../endpoint-registry";
 import { deliverDueDeliveries, type DeliverTransport } from "../deliver";
 import { runDrain } from "../run-drain";
-import { verifySignature } from "../signing";
+import {
+  standardWebhooks,
+  verifyWebhookDelivery,
+} from "../../../plugins/security/inbound-webhooks";
 import { DEFAULT_MAX_ATTEMPTS } from "../delivery-policy";
 import type { WebhookEventType } from "../types";
 
@@ -258,16 +261,18 @@ describe("webhook delivery engine (real SQLite)", () => {
     expect(headers["webhook-id"]).toBe("dlv_1");
     expect(headers["webhook-timestamp"]).toMatch(/^\d+$/);
     expect(headers["webhook-signature"]).toMatch(/^v1,/);
+    // Checked by core's one verifier, at the moment it was signed.
+    const sentAt = new Date(Number(headers["webhook-timestamp"]) * 1000);
     expect(
-      verifySignature({
-        id: "dlv_1",
-        timestamp: headers["webhook-timestamp"],
-        body,
-        signatureHeader: headers["webhook-signature"],
-        secrets: [SECRET],
-        toleranceSeconds: Infinity,
-      })
-    ).toBe(true);
+      verifyWebhookDelivery(
+        {
+          headers: new Headers(headers),
+          bytes: new TextEncoder().encode(body),
+        },
+        { scheme: standardWebhooks, secrets: [SECRET] },
+        sentAt
+      )
+    ).toMatchObject({ verified: true, body, deliveryId: "dlv_1" });
   });
 
   it("reschedules a 5xx response for a retry (transient)", async () => {

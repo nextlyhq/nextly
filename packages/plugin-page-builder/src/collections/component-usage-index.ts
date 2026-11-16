@@ -1,4 +1,15 @@
 /**
+ * RETIRED: where the component usage index's rows used to live.
+ *
+ * Nothing reads or writes these rows any more. A super-admin passes every
+ * access rule below, so a row added or removed here by hand changed what a
+ * count said while health still called it exact. The rows now live in the
+ * plugin's own table (`schema/tables.ts`), which only the plugin's database
+ * reaches, and a row here changes nothing. The collection stays declared so
+ * an existing site keeps its table and registry row as they are.
+ *
+ * What follows describes the design the table kept.
+ *
  * Where the record of "which documents embed which component" lives.
  *
  * One row per reference: a page embedding three components contributes three
@@ -135,7 +146,7 @@ export function componentUsageIndexCollection(): CollectionConfig {
     webhooks: false,
     admin: {
       description:
-        "Which documents embed which components. Maintained automatically; editing it cannot change what any page renders.",
+        "No longer used. The page builder keeps its usage index elsewhere, and nothing reads these rows.",
     },
     // A row is a fact derived from a document, not an event. `createdAt` and
     // `updatedAt` invite exactly the question they cannot answer — when the

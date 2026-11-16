@@ -385,7 +385,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "posts" as never,
         id: post,
-        data: { author: draftAuthor } as never,
+        data: { author: draftAuthor, _overwrite: true } as never,
         draft: true,
       } as never);
 
@@ -520,6 +520,7 @@ describe.each(getConfiguredTestDialects())(
           headline: "Hi",
           featured: draftAuthor,
           status: "draft",
+          _overwrite: true,
         } as never,
       });
       const [row] = await homepageRows(t);

@@ -58,7 +58,7 @@ describe("the card settings sheet when its code cannot be fetched", () => {
     const user = userEvent.setup();
     render(<LazyWidgetSettingsSheet {...cellProps()} />);
 
-    const panel = await screen.findByRole("dialog", { name: "Notes settings" });
+    const panel = await screen.findByRole("dialog", { name: "Notes" });
     expect(await within(panel).findByRole("alert")).toHaveTextContent(
       "Settings could not be loaded"
     );

@@ -1,4 +1,9 @@
 import { expectTypeOf } from "vitest";
+import type { ComponentType, ReactNode } from "react";
+import type {
+  FieldTypeCatalogEntry,
+  FieldValidationRule,
+} from "nextly/field-catalog";
 
 import type { PluginAdminContributions as RootAdminContributions } from "@nextlyhq/plugin-sdk";
 import * as adminEntry from "@nextlyhq/plugin-sdk/admin";
@@ -48,6 +53,7 @@ import type {
   PluginAdminPage,
   PluginCollectionView,
   PluginMenuItem,
+  PluginPageStartupRead,
 } from "@nextlyhq/plugin-sdk/admin";
 
 // The root entry also re-exports the contract types (node-safe, no React).
@@ -59,9 +65,33 @@ expectTypeOf(registerKnownPlugin).toBeFunction();
 
 // Contract types are re-exported on the admin entry.
 expectTypeOf<ComponentPath>().toEqualTypeOf<string>();
+
+// The signed-in user's id, or null when none is known: a plugin keying
+// something per user must handle "nobody" rather than receive a placeholder.
+expectTypeOf(adminEntry.useCurrentUserId).returns.toEqualTypeOf<
+  string | null
+>();
+// The schema version, unknown until an answer carried one, and a listener
+// for its moves that answers the call stopping it.
+expectTypeOf(adminEntry.schemaVersion).returns.toEqualTypeOf<
+  number | undefined
+>();
+expectTypeOf(adminEntry.onSchemaChange)
+  .parameter(0)
+  .toEqualTypeOf<(version: number) => void>();
+expectTypeOf(adminEntry.onSchemaChange).returns.toEqualTypeOf<() => void>();
 expectTypeOf<PluginAdminContributions>().toMatchTypeOf<{
   menu?: PluginMenuItem[];
   pages?: PluginAdminPage[];
+}>();
+// A page's startup reads are the reads of the plugin's own routes it makes as
+// it opens, named as `usePluginRoute` names them.
+expectTypeOf<PluginAdminPage["startupReads"]>().toEqualTypeOf<
+  readonly PluginPageStartupRead[] | undefined
+>();
+expectTypeOf<PluginPageStartupRead>().toEqualTypeOf<{
+  path: string;
+  mount?: "plugin" | "root";
 }>();
 expectTypeOf<PluginCollectionView>().toMatchTypeOf<{
   edit?: ComponentPath;
@@ -94,6 +124,8 @@ expectTypeOf<CustomEditViewProps>().toMatchTypeOf<{
   collectionSlug: string;
   isCreating: boolean;
 }>();
+// The page of the view an address names: a path, or absent on the edit address.
+expectTypeOf<CustomEditViewProps["view"]>().toEqualTypeOf<string | undefined>();
 
 // ---------------------------------------------------------------------------
 // Control primitives.
@@ -224,3 +256,336 @@ expectTypeOf(adminEntry).not.toHaveProperty("cardNumber");
 expectTypeOf(adminEntry).not.toHaveProperty("cardChange");
 expectTypeOf(adminEntry).not.toHaveProperty("GroupsChart");
 expectTypeOf(adminEntry).not.toHaveProperty("OverTimeChart");
+
+// ---------------------------------------------------------------------------
+// The shared field picker and the field-type description (@experimental).
+//
+// New names beside the field-UI kit, which `field-ui-compat.test-d.ts` keeps
+// pinned as it was. The props are asserted EXACTLY against a consumer's view
+// of them, so a prop renamed, dropped or widened to `any` fails here, and the
+// description is asserted to be the catalog row plus its search words.
+type PickerProps = Parameters<typeof adminEntry.FieldPicker>[0];
+expectTypeOf<PickerProps>().toEqualTypeOf<adminEntry.FieldPickerProps>();
+expectTypeOf<adminEntry.FieldPickerProps>().toEqualTypeOf<{
+  open: boolean;
+  config: adminEntry.FieldPickerConfig;
+  title?: string;
+  placement?: string;
+  initialLabel?: string;
+  offerAddAnother?: boolean;
+  onCancel: () => void;
+  onAdd: (
+    choice: adminEntry.FieldPickerChoice,
+    how: { addAnother: boolean }
+  ) => void;
+}>();
+expectTypeOf<adminEntry.FieldPickerConfig>().toEqualTypeOf<{
+  surface: "entries" | "users" | "forms" | "blocks";
+  types: readonly adminEntry.FieldTypeDescription<string>[];
+  exclude?: readonly string[];
+  mostUsed?: readonly string[];
+  deriveName: (label: string) => string;
+  nameProblem?: (name: string) => string | null;
+  fieldGroups?: {
+    type: string;
+    options: readonly adminEntry.FieldGroupOption[];
+    loading?: boolean;
+  };
+}>();
+expectTypeOf<adminEntry.FieldPickerChoice>().toEqualTypeOf<{
+  type: string;
+  label: string;
+  name: string;
+  fieldGroup?: string;
+}>();
+expectTypeOf<adminEntry.FieldGroupOption>().toEqualTypeOf<{
+  slug: string;
+  label: string;
+  text: string;
+}>();
+expectTypeOf<adminEntry.FieldTypeDescription<"rating">>().toEqualTypeOf<{
+  type: "rating";
+  label: string;
+  category: "Basic" | "Advanced" | "Media" | "Relational" | "Structured";
+  hint: string;
+  icon: string;
+  synonyms: readonly string[];
+}>();
+// One description function, generic over the surface's own type union.
+expectTypeOf(adminEntry.describeFieldTypes<"rating">)
+  .parameter(0)
+  .toEqualTypeOf<readonly FieldTypeCatalogEntry<"rating">[]>();
+expectTypeOf(adminEntry.describeFieldTypes<"rating">).returns.toEqualTypeOf<
+  adminEntry.FieldTypeDescription<"rating">[]
+>();
+
+// ---------------------------------------------------------------------------
+// The shared field settings panel and its surface configuration
+// (@experimental). Asserted EXACTLY, as the picker is, so a prop renamed,
+// dropped or widened to `any` fails here rather than in a plugin.
+type PanelProps = Parameters<typeof adminEntry.FieldSettingsPanel>[0];
+expectTypeOf<PanelProps>().toEqualTypeOf<adminEntry.FieldSettingsPanelProps>();
+expectTypeOf<adminEntry.FieldSettingsPanelProps>().toEqualTypeOf<{
+  surface: adminEntry.FieldSettingsSurface;
+  field: adminEntry.FieldSettingsField;
+  ancestors: readonly adminEntry.FieldSettingsField[];
+  siblings: readonly adminEntry.FieldSettingsField[];
+  saved: boolean;
+  readOnly?: boolean;
+  onChange: (next: adminEntry.FieldSettingsField) => void;
+  onClose?: () => void;
+  actions?: ReactNode;
+}>();
+expectTypeOf<adminEntry.FieldSettingsSurface>().toEqualTypeOf<{
+  surface: "entries" | "users" | "forms" | "blocks";
+  deriveName: (label: string) => string;
+  checkName?: (name: string) => string | null;
+  fixed?: readonly adminEntry.FixedFieldSetting[];
+  extraSettings?: Partial<
+    Record<
+      adminEntry.FieldSettingsTab,
+      ComponentType<adminEntry.FieldSettingsSurfaceControlProps>
+    >
+  >;
+  conditions:
+    | "sibling"
+    | "none"
+    | ComponentType<adminEntry.FieldSettingsConditionsProps>;
+  validationRules?: (
+    type: string,
+    allowed: readonly FieldValidationRule[]
+  ) => readonly FieldValidationRule[];
+  displaySwitches?: boolean;
+  widthSetting?: boolean;
+  pluginSettings?: boolean;
+  typeSettings?: Readonly<
+    Partial<Record<string, adminEntry.FieldTypeSettings>>
+  >;
+}>();
+expectTypeOf<adminEntry.FixedFieldSetting>().toEqualTypeOf<{
+  setting: "name" | "type";
+  when: "always" | "saved";
+  reason: string;
+}>();
+expectTypeOf<adminEntry.FieldSettingsTab>().toEqualTypeOf<
+  "general" | "validation" | "display" | "conditions" | "advanced"
+>();
+expectTypeOf<adminEntry.FieldTypeSettings>().toEqualTypeOf<{
+  defining?: ComponentType<adminEntry.FieldSettingsControlProps>;
+  tabs?: Partial<
+    Record<
+      adminEntry.FieldSettingsTab,
+      ComponentType<adminEntry.FieldSettingsControlProps>
+    >
+  >;
+}>();
+// The field it edits carries the definition's own keys, so a surface can map
+// its storage to and from it.
+expectTypeOf<adminEntry.FieldSettingsField>().toHaveProperty("id");
+expectTypeOf<adminEntry.FieldSettingsField>().toHaveProperty("name");
+expectTypeOf<adminEntry.FieldSettingsField>().toHaveProperty("type");
+
+// A plugin's one-shot write to its own route: the caller names the answer's
+// shape, and a refusal arrives as a rejection rather than as `undefined`.
+expectTypeOf(
+  adminEntry.writePluginRoute<{ message: string }>
+).returns.toEqualTypeOf<Promise<{ message: string } | undefined>>();
+
+// ---------------------------------------------------------------------------
+// The admin's page building blocks (@experimental): the list surface, the
+// top-bar trail, the segmented control, the checklist, the grouped settings
+// row, the row layout of `FieldShell` and the status badge.
+//
+// Each component's first parameter is asserted EQUAL to its published props
+// type, so a plugin typing a wrapper against `ListViewProps` is typing it
+// against the component itself rather than a copy that agreed once; and the
+// props a plugin page actually passes are pinned, so one going missing in the
+// forwarding through two barrels fails here rather than in a plugin's build.
+// ---------------------------------------------------------------------------
+
+type Row = { id: string; title: string };
+expectTypeOf(adminEntry.ListView<Row>)
+  .parameter(0)
+  .toEqualTypeOf<adminEntry.ListViewProps<Row>>();
+expectTypeOf<adminEntry.ListViewProps<Row>>().toMatchTypeOf<
+  adminEntry.DataTableViewProps<Row>
+>();
+expectTypeOf<adminEntry.ListViewProps<Row>>().toMatchTypeOf<{
+  search?: adminEntry.ListSearch;
+  filters?: React.ReactNode;
+  inlineFilters?: React.ReactNode;
+  columnsControl?: adminEntry.ListColumnsControl<Row>;
+  empty?: adminEntry.ListEmpty;
+  emptyFiltered?: adminEntry.ListEmpty;
+  slots?: adminEntry.ListSlots;
+}>();
+expectTypeOf(adminEntry.useTableColumns<Row>)
+  .parameter(0)
+  .toEqualTypeOf<adminEntry.UseTableColumnsOptions<Row>>();
+expectTypeOf(adminEntry.useTableColumns<Row>).returns.toEqualTypeOf<
+  adminEntry.UseTableColumnsResult<Row>
+>();
+expectTypeOf(adminEntry.useListColumns<Row>).returns.toEqualTypeOf<
+  adminEntry.ListColumnsControl<Row>
+>();
+
+expectTypeOf(adminEntry.Breadcrumbs)
+  .parameter(0)
+  .toEqualTypeOf<adminEntry.BreadcrumbsProps>();
+expectTypeOf<adminEntry.BreadcrumbItem>().toMatchTypeOf<{
+  label: React.ReactNode;
+  href?: string;
+}>();
+
+expectTypeOf(adminEntry.SegmentedChoice)
+  .parameter(0)
+  .toEqualTypeOf<adminEntry.SegmentedChoiceProps>();
+expectTypeOf<adminEntry.SegmentedChoiceSize>().toEqualTypeOf<
+  "compact" | "bordered"
+>();
+
+expectTypeOf(adminEntry.Checklist)
+  .parameter(0)
+  .toEqualTypeOf<adminEntry.ChecklistProps>();
+expectTypeOf(adminEntry.ChecklistItem)
+  .parameter(0)
+  .toEqualTypeOf<adminEntry.ChecklistItemProps>();
+expectTypeOf<adminEntry.ChecklistStatus>().toEqualTypeOf<
+  "open" | "done" | "skipped"
+>();
+// Two columns and struck-through done steps are opt-in, so a list that sets
+// neither draws as it always did.
+expectTypeOf<adminEntry.ChecklistProps["columns"]>().toEqualTypeOf<
+  1 | 2 | undefined
+>();
+expectTypeOf<adminEntry.ChecklistDoneStyle>().toEqualTypeOf<
+  "quiet" | "struck"
+>();
+expectTypeOf<adminEntry.ChecklistProps["doneStyle"]>().toEqualTypeOf<
+  adminEntry.ChecklistDoneStyle | undefined
+>();
+
+// A stat's dot takes a badge's status names, and its compact size is opt-in.
+expectTypeOf<adminEntry.StatProps["tone"]>().toEqualTypeOf<
+  "success" | "warning" | "destructive" | "info" | undefined
+>();
+expectTypeOf<adminEntry.StatProps["size"]>().toEqualTypeOf<
+  "default" | "compact" | undefined
+>();
+
+expectTypeOf(adminEntry.SettingsRowGroup)
+  .parameter(0)
+  .toEqualTypeOf<adminEntry.SettingsRowGroupProps>();
+expectTypeOf<FieldShellProps["layout"]>().toEqualTypeOf<
+  adminEntry.FieldLayout | undefined
+>();
+expectTypeOf<adminEntry.FieldLayout>().toEqualTypeOf<"stacked" | "row">();
+
+// The status variants a table cell draws are among the badge's variants.
+expectTypeOf<"success" | "warning" | "destructive" | "info">().toMatchTypeOf<
+  NonNullable<adminEntry.BadgeProps["variant"]>
+>();
+
+// ---------------------------------------------------------------------------
+// Grouped rows, rows that open a region, the stepper and the save bar's own
+// message (@experimental). The grouping and the region are props of the
+// admin's table, so they are pinned on BOTH the table's and the list's props:
+// a prop dropped in the forwarding through two barrels fails here rather than
+// in a plugin's build.
+// ---------------------------------------------------------------------------
+
+expectTypeOf<adminEntry.DataTableViewProps<Row>["grouping"]>().toEqualTypeOf<
+  adminEntry.DataTableGrouping<Row> | undefined
+>();
+expectTypeOf<adminEntry.ListViewProps<Row>["grouping"]>().toEqualTypeOf<
+  adminEntry.DataTableGrouping<Row> | undefined
+>();
+expectTypeOf<adminEntry.DataTableViewProps<Row>["rowDetail"]>().toEqualTypeOf<
+  adminEntry.DataTableRowDetail<Row> | undefined
+>();
+expectTypeOf<adminEntry.ListViewProps<Row>["rowDetail"]>().toEqualTypeOf<
+  adminEntry.DataTableRowDetail<Row> | undefined
+>();
+expectTypeOf<adminEntry.DataTableGrouping<Row>>().toMatchTypeOf<{
+  groups: readonly adminEntry.DataTableGroup[];
+  groupOf: (row: Row) => string;
+  collapsible?: boolean;
+  collapsedIds?: readonly string[];
+  onCollapsedChange?: (collapsedIds: string[]) => void;
+}>();
+expectTypeOf<adminEntry.DataTableGroup>().toMatchTypeOf<{
+  id: string;
+  title: React.ReactNode;
+  badge?: React.ReactNode;
+  count?: React.ReactNode;
+  actions?: React.ReactNode;
+}>();
+expectTypeOf<adminEntry.DataTableRowDetail<Row>>().toMatchTypeOf<{
+  render: (row: Row) => React.ReactNode;
+  hasDetail?: (row: Row) => boolean;
+  expandedIds?: readonly string[];
+  onExpandedChange?: (expandedIds: string[]) => void;
+}>();
+
+expectTypeOf(adminEntry.Stepper)
+  .parameter(0)
+  .toEqualTypeOf<adminEntry.StepperProps>();
+expectTypeOf<adminEntry.StepperStep>().toMatchTypeOf<{
+  label: React.ReactNode;
+  href?: string;
+  onSelect?: () => void;
+}>();
+expectTypeOf<adminEntry.StepState>().toEqualTypeOf<
+  "complete" | "current" | "upcoming"
+>();
+
+expectTypeOf(adminEntry.FileDropArea)
+  .parameter(0)
+  .toEqualTypeOf<adminEntry.FileDropAreaProps>();
+expectTypeOf<adminEntry.FileDropAreaProps>().toMatchTypeOf<{
+  onFiles: (files: File[]) => void;
+  label: string;
+  title: React.ReactNode;
+}>();
+
+expectTypeOf<adminEntry.FormActionsProps["message"]>().toEqualTypeOf<
+  React.ReactNode | undefined
+>();
+
+// The template declaration and how a plugin contributes templates
+// (@experimental): a plain declaration a plugin's admin module registers under
+// its own name, getting the removal back.
+expectTypeOf(adminEntry.registerSchemaTemplates).toEqualTypeOf<
+  (
+    source: string,
+    templates: readonly adminEntry.SchemaTemplate[]
+  ) => () => void
+>();
+expectTypeOf<adminEntry.SchemaTemplate["kind"]>().toEqualTypeOf<
+  "collection" | "single" | "fieldGroup"
+>();
+expectTypeOf<adminEntry.SchemaTemplate>().toMatchTypeOf<{
+  id: string;
+  category: string;
+  name: string;
+  description: string;
+  fields: readonly adminEntry.SchemaTemplateField[];
+}>();
+expectTypeOf<adminEntry.SchemaTemplateField["fields"]>().toEqualTypeOf<
+  readonly adminEntry.SchemaTemplateField[] | undefined
+>();
+// A link may name several collections, and a field several field groups, as
+// the Builder's own fields may.
+expectTypeOf<adminEntry.SchemaTemplateField["relationTo"]>().toEqualTypeOf<
+  string | readonly string[] | undefined
+>();
+expectTypeOf<adminEntry.SchemaTemplateField["components"]>().toEqualTypeOf<
+  readonly string[] | undefined
+>();
+// A plugin's own field type carries its settings, as the Builder stores them.
+expectTypeOf<adminEntry.SchemaTemplateField["pluginOptions"]>().toEqualTypeOf<
+  Readonly<Record<string, unknown>> | undefined
+>();
+// What a template needs is read from its fields, so a declaration has no
+// separate list of what it needs to keep in agreement with them.
+expectTypeOf<adminEntry.SchemaTemplate>().not.toHaveProperty("needs");

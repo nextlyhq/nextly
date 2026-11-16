@@ -1,54 +1,72 @@
 /**
- * Which of the five shared chart colours a chart's groups take.
+ * What colour a chart's groups take.
  *
- * A chart of statuses gives each status its pinned slot, the same on every
- * card and in every order. Any other chart of groups draws every bar in slot 1,
- * so arbitrary values never become colour that says nothing; the name beside
- * each bar is what identifies it either way.
+ * A chart of statuses draws each status in its own status colour, the same on
+ * every card, in every order, and beside every status chip. Any other chart of
+ * groups draws every bar in slot 1, so arbitrary values never become colour that
+ * says nothing; the name beside each bar is what identifies it either way.
  */
 import { describe, expect, it } from "vitest";
 
-import { chartColour, chartSlotsFor, orderGroups } from "../chart-colour";
+import {
+  chartColour,
+  chartMarksFor,
+  markColour,
+  orderGroups,
+} from "../chart-colour";
 
-describe("the slots a chart's groups take", () => {
-  it("puts each status on its pinned slot in a chart of statuses", () => {
+describe("the marks a chart's groups take", () => {
+  it("puts each status on its own status mark in a chart of statuses", () => {
     expect(
-      chartSlotsFor(["scheduled", "draft", "published", "changes", "archived"])
-    ).toEqual([1, 2, 3, 4, 5]);
+      chartMarksFor(["scheduled", "draft", "published", "changes", "archived"])
+    ).toEqual(["info", "neutral", "success", "warning", "neutral"]);
   });
 
   it("does not depend on the order the statuses arrive in", () => {
     // 🔴 The separating case: a palette assigned by position gives the first
     // group colour 1 whatever it is.
-    expect(chartSlotsFor(["archived", "published", "draft"])).toEqual([
-      5, 3, 2,
+    expect(chartMarksFor(["archived", "published", "draft"])).toEqual([
+      "neutral",
+      "success",
+      "neutral",
     ]);
   });
 
   it("draws every bar of an arbitrary select in slot 1", () => {
-    expect(chartSlotsFor(["gold", "silver", "bronze", "tin"])).toEqual([
+    expect(chartMarksFor(["gold", "silver", "bronze", "tin"])).toEqual([
       1, 1, 1, 1,
     ]);
   });
 
   it("draws every bar in slot 1 where one status-like value sits among others", () => {
-    // 🔴 A select that happens to hold "draft" is no status field: pinning that
+    // 🔴 A select that happens to hold "draft" is no status field: marking that
     // one bar would claim a meaning the field does not have.
-    expect(chartSlotsFor(["draft", "gold", "silver"])).toEqual([1, 1, 1]);
+    expect(chartMarksFor(["draft", "gold", "silver"])).toEqual([1, 1, 1]);
   });
 
   it("counts the group with no value as no status", () => {
-    expect(chartSlotsFor(["published", null])).toEqual([1, 1]);
+    expect(chartMarksFor(["published", null])).toEqual([1, 1]);
   });
 
   it("gives nothing for no groups", () => {
-    expect(chartSlotsFor([])).toEqual([]);
+    expect(chartMarksFor([])).toEqual([]);
   });
 });
 
-describe("the colour a slot is drawn in", () => {
-  it("is the shared token, never a colour of its own", () => {
+describe("the colour a mark is drawn in", () => {
+  it("is a slot's shared token, never a colour of its own", () => {
     expect(chartColour(3)).toBe("var(--nx-chart-3)");
+    expect(markColour(3)).toBe("var(--nx-chart-3)");
+  });
+
+  it("is a status's solid token, never a tinted shade", () => {
+    expect(markColour("success")).toBe("var(--nx-success-solid)");
+    expect(markColour("warning")).toBe("var(--nx-warning-solid)");
+    expect(markColour("info")).toBe("var(--nx-info-solid)");
+  });
+
+  it("is the muted ink for a status that marks nothing to act on", () => {
+    expect(markColour("neutral")).toBe("var(--nx-muted-foreground)");
   });
 });
 

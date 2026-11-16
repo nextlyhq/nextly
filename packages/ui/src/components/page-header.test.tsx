@@ -81,9 +81,10 @@ describe("PageHeader", () => {
 
     // Recorded rather than assumed: a faint primary alpha was tried here and
     // failed contrast, so the muted token is the one that passes.
-    expect(container.querySelector("p")?.className).toContain(
-      "text-muted-foreground"
-    );
+    expect(
+      container.querySelector('[data-slot="page-header-description"]')
+        ?.className
+    ).toContain("text-muted-foreground");
   });
 
   it("accepts a caller's className without losing its own layout", () => {

@@ -42,6 +42,10 @@ import {
   COMPANION_LOCALE_COLUMN,
   COMPANION_PARENT_COLUMN,
 } from "../i18n/companion-columns";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../i18n/per-language-storage";
 import { buildCompanionSchema } from "../i18n/runtime/companion-io";
 import { SingleRegistryService } from "../singles/services/single-registry-service";
 import { isOtherHasherFormat } from "../users/services/plaintext-password-cleanup";
@@ -248,8 +252,9 @@ async function entities(
         dialect
       );
     }
-    // A translated container is stored on the companion row, per language.
-    const companion = entry.localized
+    // A translated container is stored on the companion row, per language: on every entity's when
+    // the site keeps every translatable value so.
+    const companion = storesPerLanguage(entry)
       ? buildCompanionSchema({
           slug: entry.slug,
           tableName: entry.tableName,
@@ -257,7 +262,7 @@ async function entities(
             typeof buildCompanionSchema
           >[0]["fields"],
           dialect,
-          status: entry.status,
+          status: publishesPerLanguage(entry),
         })
       : null;
     const translated = new Set(

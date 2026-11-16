@@ -34,6 +34,8 @@ const EVENT_TYPES = [
   "core_apply",
   "file_rollback",
   "plugin_lifecycle",
+  "old_builder_file",
+  "file_removed",
 ] as const satisfies readonly SchemaEventType[];
 
 const STATUSES = [
@@ -43,6 +45,7 @@ const STATUSES = [
   "rolled_back",
   "superseded",
   "nothing_applied",
+  "recorded",
 ] as const satisfies readonly SchemaEventStatus[];
 
 // Each list names every member of its union, or this stops compiling, so a

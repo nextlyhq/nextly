@@ -8,13 +8,18 @@ import { describe, expect, it } from "vitest";
 
 import {
   cardBodyHeightPx,
+  cardHeightPx,
   cardTierAt,
   LIST_ROW_HEIGHT_PX,
+  listCardHeightPx,
   rowsInBody,
   rowsThatFit,
 } from "../card-geometry";
 import { MAX_GRID_ROWS, MIN_GRID_ROWS } from "../grid-size";
-import { MAX_WIDGET_ROWS } from "../query-limits";
+import { listEntries, MAX_WIDGET_ROWS } from "../query-limits";
+
+/** The most rows `rowsThatFit` and `rowsInBody` answer, whatever a card's "Number of entries" offers. */
+const MOST_ROWS_THAT_FIT = 10;
 
 describe("rowsThatFit", () => {
   it("counts the whole default rows a card's body holds at each height", () => {
@@ -33,7 +38,9 @@ describe("rowsThatFit", () => {
   });
 
   it("never counts more than ten rows, however tall the card", () => {
-    expect(MAX_WIDGET_ROWS).toBe(10);
+    // Ten, not the twenty a card's "Number of entries" now offers: an answer a published `load`
+    // reads keeps its meaning.
+    expect(MAX_WIDGET_ROWS).toBe(20);
     // 574 px holds eleven default rows and 926 px seventeen: both draw ten.
     expect(rowsThatFit({ h: 8 }, { density: "default" })).toBe(10);
     expect(rowsThatFit({ h: MAX_GRID_ROWS }, { density: "default" })).toBe(10);
@@ -47,7 +54,7 @@ describe("rowsThatFit", () => {
         expect(rowsThatFit({ h }, { density })).toBe(
           Math.min(
             Math.floor(cardBodyHeightPx(h) / LIST_ROW_HEIGHT_PX[density]),
-            MAX_WIDGET_ROWS
+            MOST_ROWS_THAT_FIT
           )
         );
         expect(rowsThatFit({ h }, { density })).toBe(
@@ -87,8 +94,9 @@ describe("cardTierAt", () => {
       "large",
       "large",
     ]);
+    // Below 640 px a quarter card pairs with another at half the row, small there.
     expect(tiers(358)).toEqual([
-      "medium",
+      "small",
       "medium",
       "medium",
       "medium",
@@ -105,5 +113,25 @@ describe("cardTierAt", () => {
     expect(cardTierAt(6, 720)).toBe("medium");
     expect(cardTierAt(3, 1420)).toBe("small");
     expect(cardTierAt(3, 1440)).toBe("medium");
+  });
+});
+
+describe("listCardHeightPx", () => {
+  it("is a list card's rows and the 114 px of frame around them", () => {
+    // Written out rather than recomputed: the frame is the one `cardBodyHeightPx` takes away.
+    expect(listCardHeightPx(0, "default")).toBe(114);
+    // A card holding its default five entries, as a list card's skeleton does while it loads.
+    expect(listEntries(undefined)).toBe(5);
+    expect(listCardHeightPx(5, "default")).toBe(374);
+    expect(listCardHeightPx(5, "compact")).toBe(294);
+  });
+
+  it("puts back exactly the frame a card's body height takes away", () => {
+    // 🔴 One frame for both directions: a body of a card's height, filled with rows, makes a card
+    // of that height again. A frame counted differently here is off by its difference.
+    for (let h = MIN_GRID_ROWS; h <= MAX_GRID_ROWS; h++) {
+      const rows = cardBodyHeightPx(h) / LIST_ROW_HEIGHT_PX.default;
+      expect(listCardHeightPx(rows, "default")).toBeCloseTo(cardHeightPx(h), 6);
+    }
   });
 });

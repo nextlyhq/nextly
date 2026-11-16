@@ -7,9 +7,9 @@
  * assistive tech and the engine's own keyboard layer is off, since the chart's name, description,
  * table, keys and live region are `GroupsChart`'s, outside it.
  *
- * The rows share the card's body: each takes an equal part of its height, and its bar thickens
- * with the row up to `MAX_BAR`, so a few groups fill a tall card without a block of bars at its
- * top, and many keep their bars apart. The names' column is as wide as the longest name, up to
+ * The rows share the card's body: each takes an equal part of its height, at least a row's own,
+ * and its bar thickens with the row up to `MAX_BAR`, so a few groups fill a card stretched beside
+ * a taller one without a block of bars at its top, and many keep their bars apart. The names' column is as wide as the longest name, up to
  * `NAME_SHARE` of the drawing (`nameColumnWidth`); a name longer than that ends in "…", and its
  * `aria-label`, its `<title>`, the tooltip and the table hold it whole. The names and the counts
  * are each a category axis over the same rows, so a row's name, bar and count cannot drift apart.
@@ -155,7 +155,7 @@ export default function GroupsDrawing({
       className="relative min-h-0 flex-1"
       data-motion={animate ? "animated" : "reduced"}
       onMouseMove={pointer.onMouseMove}
-      // design-lint-ok: each group's colour, set once from its chart slot's token.
+      // design-lint-ok: each group's colour, set once from its mark's token.
       style={chartConfigStyle(config)}
     >
       {/* The engine never sees the pointer, and draws no tooltip (`pointer-index`): the pointer

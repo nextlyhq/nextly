@@ -34,6 +34,10 @@ import {
   hashRegistryIdentity,
 } from "../manifest";
 import { readRegistryRows, runFieldGroupMigration } from "../run";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../../i18n/per-language-storage";
 import { MIGRATION_LOCK_TABLE } from "../session";
 import {
   classifyLockStatement,
@@ -566,6 +570,19 @@ describe("companion ownership", () => {
   // to the application — and adopting it into the plan renames it away.
   it("claims no companion for a group the registry says is not localized", async () => {
     await expect(companionFor({ rows: { localized: 0 } })).resolves.toBe(false);
+  });
+
+  // Under `experimental.perLanguageStorage` every group keeps its translatable values per
+  // language, so its companion moves with it whether or not the group is marked translatable.
+  it("claims the companion of an untranslated group under the setting", async () => {
+    setPerLanguageStorage(true);
+    try {
+      await expect(companionFor({ rows: { localized: 0 } })).resolves.toBe(
+        true
+      );
+    } finally {
+      _resetPerLanguageStorage();
+    }
   });
 
   it("claims the companion when the flag and the table agree", async () => {

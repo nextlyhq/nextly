@@ -7,7 +7,9 @@ import {
   rateLimitKey,
   rateLimitProxyWarning,
   routeCsrfMode,
+  routeDeclaresAccess,
   shouldNotStore,
+  undeclaredRouteWarning,
   unkeyedAuthRouteWarnings,
   validateRouteOptions,
 } from "../route-options";
@@ -738,5 +740,60 @@ describe("unkeyedAuthRouteWarnings", () => {
 
   it("says nothing while the auth limiter is off", () => {
     expect(unkeyedAuthRouteWarnings([unkeyed], false)).toEqual([]);
+  });
+});
+
+describe("what a route declares reaching it takes", () => {
+  it("counts a permission, public, a principal, checksAccess: true or siteWide: false, and nothing else", () => {
+    expect(routeDeclaresAccess(route({ requiredPermission: "read-x" }))).toBe(
+      true
+    );
+    expect(routeDeclaresAccess(route({ public: true }))).toBe(true);
+    expect(routeDeclaresAccess(route({ siteWide: false }))).toBe(true);
+    expect(routeDeclaresAccess(route({ checksAccess: true }))).toBe(true);
+    expect(routeDeclaresAccess(route())).toBe(false);
+    expect(routeDeclaresAccess(route({ public: false }))).toBe(false);
+  });
+
+  it("refuses siteWide set to anything but false, or beside another declaration", () => {
+    expect(
+      validateRouteOptions(route({ siteWide: true as unknown as false }))
+    ).toMatch(/only takes false/);
+    expect(
+      validateRouteOptions(
+        route({ siteWide: false, requiredPermission: "read-x" })
+      )
+    ).toMatch(/cannot be combined/);
+    expect(
+      validateRouteOptions(route({ siteWide: false, public: true }))
+    ).toMatch(/cannot be combined/);
+    expect(validateRouteOptions(route({ siteWide: false }))).toBeNull();
+    expect(
+      validateRouteOptions(route({ checksAccess: false as unknown as true }))
+    ).toMatch(/only takes true/);
+    expect(
+      validateRouteOptions(route({ checksAccess: true, siteWide: false }))
+    ).toMatch(/cannot be combined/);
+    expect(validateRouteOptions(route({ checksAccess: true }))).toBeNull();
+  });
+
+  it("names every undeclared route at startup, and none when all declare", () => {
+    const entry = (over: Partial<PluginRoute>, path: string) => ({
+      pluginName: "@acme/x",
+      fullPath: path,
+      route: route(over),
+    });
+    const warning = undeclaredRouteWarning([
+      entry({}, "/plugins/@acme/x/a"),
+      entry({ siteWide: false }, "/plugins/@acme/x/b"),
+      entry({}, "/plugins/@acme/x/c"),
+    ]);
+    expect(warning).toMatch(/2 plugin route\(s\)/);
+    expect(warning).toContain('"@acme/x" POST /plugins/@acme/x/a');
+    expect(warning).toContain('"@acme/x" POST /plugins/@acme/x/c');
+    expect(warning).not.toContain("/b");
+    expect(
+      undeclaredRouteWarning([entry({ public: true }, "/plugins/@acme/x/a")])
+    ).toBeNull();
   });
 });

@@ -21,6 +21,7 @@ import { singleDocumentKeys, useSingleDocument } from "./useSingles";
 import {
   useStoredSingleDocument,
   useWithStoredReferences,
+  type DocumentLatest,
 } from "./useStoredReferences";
 
 export interface UseSingleEditorDocumentArgs {
@@ -55,6 +56,8 @@ export interface UseSingleEditorDocumentResult {
   sourceDoc: SingleDocument | undefined;
   /** Whether the active language differs from the app default. */
   isNonDefaultLocale: boolean;
+  /** When the document was read, and how to read it again. */
+  latest: DocumentLatest;
 }
 
 export function useSingleEditorDocument({
@@ -88,7 +91,7 @@ export function useSingleEditorDocument({
     fallbackLocale,
     draft: draftsEnabled,
   });
-  const { document, isLoading, error } = useWithStoredReferences({
+  const { document, isLoading, error, latest } = useWithStoredReferences({
     fields,
     populated,
     stored,
@@ -114,5 +117,5 @@ export function useSingleEditorDocument({
     },
   });
 
-  return { document, isLoading, error, sourceDoc, isNonDefaultLocale };
+  return { document, isLoading, error, sourceDoc, isNonDefaultLocale, latest };
 }

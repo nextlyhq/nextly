@@ -1,6 +1,6 @@
 /**
  * The dashboard's Team activity card, drawn from the rows its `load` read from
- * `system:activity`: the rows its tier and its "Number of items" allow, each
+ * `system:activity`: its "Number of entries" of rows at every size, each
  * saying who did what to which entry in the event's own verb and leading to
  * what it is about, and its own empty state. The frame draws loading, no
  * permission and error before the component is reached, so those are the
@@ -173,12 +173,45 @@ describe("the Team activity card", () => {
     ).toEqual(["Ana updated Doc 1", "Ana updated Doc 2"]);
   });
 
-  it("draws no more rows than a small card has room for", () => {
+  it.each([10, 20])(
+    "draws %i rows of the one more its load read at every size, and no footer",
+    limit => {
+      // 🔴 Counted by its size, a small card drew three, and a medium one five.
+      const read = Array.from({ length: limit + 1 }, (_, i) => row(i + 1));
+      for (const tier of ["small", "medium", "large"] as const) {
+        const { unmount } = draw(read, { limit, tier });
+        // List rows below large, table rows at it.
+        expect(
+          [
+            ...screen.queryAllByTestId("entity-row"),
+            ...screen.queryAllByTestId("list-card-table-row"),
+          ],
+          tier
+        ).toHaveLength(limit);
+        expect(screen.queryAllByText(`Ana saved Doc ${limit}`)).not.toEqual([]);
+        expect(screen.queryAllByText(`Ana saved Doc ${limit + 1}`)).toEqual([]);
+        // The feed has no list to open, so however many more there are, no View all is drawn.
+        expect(
+          screen.queryByTestId("list-card-footer")
+        ).not.toBeInTheDocument();
+        expect(screen.queryByRole("link", { name: /^View all/ })).toBeNull();
+        unmount();
+      }
+    }
+  );
+
+  it("draws every row when there are fewer than its number", () => {
     draw(
-      [1, 2, 3, 4, 5].map(n => row(n)),
+      [1, 2, 3, 4, 5, 6, 7].map(n => row(n)),
       { limit: 10, tier: "small" }
     );
-    expect(titles()).toEqual(["Doc 1", "Doc 2", "Doc 3"]);
+    expect(titles()).toHaveLength(7);
+    expect(screen.queryByTestId("list-card-footer")).not.toBeInTheDocument();
+  });
+
+  it("draws five until its reader sets a number", () => {
+    draw([1, 2, 3, 4, 5, 6].map(n => row(n)));
+    expect(titles()).toEqual(["Doc 1", "Doc 2", "Doc 3", "Doc 4", "Doc 5"]);
   });
 
   it("draws a run of saves with its count, and leaves out a row it cannot read", () => {

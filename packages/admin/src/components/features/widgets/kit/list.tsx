@@ -33,7 +33,7 @@ export interface WidgetListTotal {
 
 /** What `Widget.List` and `Widget.Table` share: the rows, where they lead, and the footer. */
 interface WidgetRowsProps<Row> {
-  /** Every row the widget has; the card draws as many as its size holds. */
+  /** Every row the widget has; the card draws its "Number of entries" of them (`limit`). */
   rows: readonly Row[];
   /** A row's title, drawn on one line and read whole by assistive technology. */
   title: (row: Row) => string;
@@ -50,7 +50,7 @@ interface WidgetRowsProps<Row> {
   /** The full list the rows come from, for the footer's "View all", the footer's one link. */
   viewAllHref?: string;
   /**
-   * The most rows the card shows, its reader's "Number of items", from the settings a view is
+   * The most rows the card shows, its reader's "Number of entries", from the settings a view is
    * handed. A `load` that reads one row more than the card draws, a row that only says more
    * exist, passes the limit so that row is never drawn.
    */
@@ -146,7 +146,7 @@ function useRowsLayout(limit: number | undefined) {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
   const density = useListDensity();
-  const drawn = useRowsDrawn(tier, limit, density);
+  const drawn = useRowsDrawn(limit);
   return { tier, density, drawn };
 }
 

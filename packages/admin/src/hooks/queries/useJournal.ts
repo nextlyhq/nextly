@@ -27,9 +27,12 @@ export const JOURNAL_QUERY_KEY = ["schema", "journal"] as const;
 export const JOURNAL_PAGE_SIZE = 20;
 
 export function useJournal(
-  params: ListJournalParams = {}
+  params: ListJournalParams = {},
+  /** Whether to read it at all: the journal is a super-admin's, and only where the builder runs. */
+  options: { enabled?: boolean } = {}
 ): UseQueryResult<JournalListResponse, Error> {
   return useQuery<JournalListResponse, Error>({
+    enabled: options.enabled ?? true,
     queryKey: [
       ...JOURNAL_QUERY_KEY,
       params.limit ?? JOURNAL_PAGE_SIZE,

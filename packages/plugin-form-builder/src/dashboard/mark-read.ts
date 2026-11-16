@@ -34,9 +34,13 @@ export function markReadRequest(
       // The row's link navigates away at once; kept alive, the update is
       // still sent when that navigation leaves the page.
       keepalive: true,
+      // An update by query writes one value to whatever matches, with no
+      // version of its own for each document, so it says it sets the status
+      // whatever is stored: the `where` above is what keeps it to a
+      // submission still new.
       body: JSON.stringify({
         where: { id: { equals: id }, status: { equals: NEW_STATUS } },
-        data: { status: READ_STATUS },
+        data: { status: READ_STATUS, _overwrite: true },
       }),
     },
   };

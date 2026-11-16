@@ -26,11 +26,13 @@ const api = vi.hoisted(() => ({
   updateByIDs: vi.fn(),
   publishAllEntryLocales: vi.fn(),
   publishAllSingleLocales: vi.fn(),
+  // The read of every language a publish of every language takes first.
+  findByID: vi.fn(() => Promise.resolve({ id: "e1", _rev: "2" })),
+  getDocument: vi.fn(() => Promise.resolve({ id: "s1", _rev: "2" })),
   updateDocument: vi.fn(),
   getSingleSchema: vi.fn(),
   getCollectionSchema: vi.fn(),
   discardWorkingDraft: vi.fn(),
-  restore: vi.fn(),
   setLabel: vi.fn(),
   toastError: vi.fn(),
 }));
@@ -48,6 +50,7 @@ vi.mock("@admin/services/entryApi", async importOriginal => {
       deleteByIDs: api.deleteByIDs,
       updateByIDs: api.updateByIDs,
       publishAllLocales: api.publishAllEntryLocales,
+      findByID: api.findByID,
     },
   };
 });
@@ -60,6 +63,7 @@ vi.mock("@admin/services/singleApi", async importOriginal => {
     singleApi: {
       ...actual.singleApi,
       publishAllLocales: api.publishAllSingleLocales,
+      getDocument: api.getDocument,
       updateDocument: api.updateDocument,
       getSchema: api.getSingleSchema,
     },
@@ -86,7 +90,6 @@ vi.mock("@admin/services/versionApi", async importOriginal => {
     versionApi: {
       ...actual.versionApi,
       discardWorkingDraft: api.discardWorkingDraft,
-      restore: api.restore,
       setLabel: api.setLabel,
     },
   };
@@ -96,7 +99,7 @@ vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({ enabled: false }),
 }));
 
-vi.mock("@admin/components/ui", () => ({
+vi.mock("@admin/components/ui/toaster", () => ({
   toast: {
     success: vi.fn(),
     warning: vi.fn(),
@@ -123,7 +126,7 @@ import {
   useUpdateSingleDocument,
 } from "../useSingles";
 import { useUpdateEntry } from "../useUpdateEntry";
-import { useRestoreVersion, useSetVersionLabel } from "../useVersions";
+import { useSetVersionLabel } from "../useVersions";
 
 function sentence(kind: "collection" | "single", slug: string) {
   const thing = kind === "single" ? "Single" : "collection";
@@ -244,14 +247,6 @@ const HOOKS: HookCase[] = [
     toasts: true,
   },
   {
-    name: "useRestoreVersion (an entry)",
-    kind: "collection",
-    spy: api.restore,
-    use: () => useRestoreVersion({ scope: COLLECTION_SCOPE }) as MutationLike,
-    variables: 2,
-    toasts: false,
-  },
-  {
     name: "useSetVersionLabel (an entry)",
     kind: "collection",
     spy: api.setLabel,
@@ -283,14 +278,6 @@ const HOOKS: HookCase[] = [
     spy: api.updateDocument,
     use: () => useUpdateSingleDocument("home") as MutationLike,
     variables: { title: "Hello" },
-    toasts: false,
-  },
-  {
-    name: "useRestoreVersion (a Single)",
-    kind: "single",
-    spy: api.restore,
-    use: () => useRestoreVersion({ scope: SINGLE_SCOPE }) as MutationLike,
-    variables: 2,
     toasts: false,
   },
   {

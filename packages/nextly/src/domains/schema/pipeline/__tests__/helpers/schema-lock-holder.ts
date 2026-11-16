@@ -19,6 +19,7 @@ import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { installRegistryResolver } from "../../../../../cli/utils/registry-resolver";
 import { loadDialectTables } from "../../../../../database/dialect-tables";
 import { withSchemaLock } from "../../schema-lock";
 
@@ -35,6 +36,9 @@ const adapter = (dialect === "postgresql"
 await adapter.connect();
 // What `registerServices` does for an adapter handed to it, which this process skips.
 await loadDialectTables(dialect);
+// The static resolver every production adapter carries: the lock seeds its row through a
+// transaction insert, which an adapter refuses for a table its resolver does not hold.
+installRegistryResolver(adapter);
 
 const lines = createInterface({ input: process.stdin });
 const next = (): Promise<string> =>

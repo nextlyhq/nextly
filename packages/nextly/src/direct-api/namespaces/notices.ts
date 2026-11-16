@@ -11,7 +11,6 @@
  * its kind, through the notices service, inside the change it reports.
  *
  * @module direct-api/namespaces/notices
- * @experimental Until the notices feature is complete.
  */
 import { container } from "../../di/container";
 import { toPaginationMeta } from "../../dispatcher/helpers/service-envelope";
@@ -21,7 +20,6 @@ import type {
 } from "../../domains/notices/notices-service";
 import type { ListResult, MutationResult } from "../types/shared";
 
-/** @experimental */
 export interface NoticesNamespace {
   /** A page of this person's notices, newest first, as `{ items, meta }`. */
   find(args: {

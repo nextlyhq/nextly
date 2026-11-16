@@ -14,7 +14,7 @@ interface LinkProps extends React.AnchorHTMLAttributes<HTMLAnchorElement> {
  * protocol-relative one, or a scheme like `mailto:`. The SPA router only
  * understands admin paths and would prefix these into a dead route.
  */
-function isExternalHref(href: string): boolean {
+export function isExternalHref(href: string): boolean {
   return href.startsWith("//") || /^[a-z][a-z0-9+.-]*:/i.test(href);
 }
 

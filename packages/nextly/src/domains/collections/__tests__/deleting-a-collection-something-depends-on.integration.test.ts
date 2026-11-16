@@ -4,12 +4,13 @@
  *
  * Three kinds of dependent, each on every path: a field of another
  * collection, a Single or a field group pointing at the collection at any
- * depth; a foreign key a plugin declares on its own table, pointing at the
- * collection's table; and a hidden column and index a plugin added to the
- * collection's table. Each refusal names what depends on the collection, and
- * after it the table, its rows, its field-group values, its translations, its
- * registry row and the plugin's key, column, values and index are all still
- * there.
+ * depth; a foreign key the app declares on its own table, pointing at the
+ * collection's table (a plugin's key to it is refused at boot, as a plugin's
+ * migrations run before the app's, which create it); and a hidden column and
+ * index a plugin added to the collection's table. Each refusal names what
+ * depends on the collection, and after it the table, its rows, its
+ * field-group values, its translations, its registry row and the key, column,
+ * values and index are all still there.
  *
  * Every dialect, because the registries store a field list as jsonb, as JSON
  * and as text, and because what a drop does to another owner's key differs
@@ -26,10 +27,8 @@ process.env.NEXTLY_SECRET =
 import { afterEach, expect, it, vi } from "vitest";
 
 import { DELETE as deleteCollectionRoute } from "../../../api/collections-schema-detail";
-import { buildClaims } from "../../../auth/jwt/claims";
-import { signAccessToken } from "../../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
-import { runPrune } from "../../../cli/commands/prune";
+import { pruneUnderSchemaLock, runPrune } from "../../../cli/commands/prune";
 import { defineCollection, relationship, text } from "../../../config";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -50,7 +49,7 @@ import type { CollectionRegistryService } from "../services/collection-registry-
 
 import {
   CARDS,
-  LINKS_PLUGIN,
+  LINKS_OWNER,
   LINKS_TABLE,
   MARKER_COLUMN,
   MARKER_PLUGIN,
@@ -61,7 +60,7 @@ import {
   TAGS_TABLE,
   cards,
   columnValues,
-  linksPlugin,
+  linksDb,
   liveForeignKeys,
   liveIndexes,
   markerPlugin,
@@ -69,6 +68,7 @@ import {
   plainTags,
   posts,
   settings,
+  superAdminSession,
   tags,
 } from "./helpers/collection-dependents-fixtures";
 
@@ -118,44 +118,6 @@ function builderBulkDelete(slugs: readonly string[]): Promise<unknown> {
     { collectionName: slugs[0], together: slugs.slice(1).join(",") },
     undefined
   );
-}
-
-/** A super-admin's session cookie: the first user created is the super-admin. */
-async function superAdminSession(
-  t: TestNextly
-): Promise<Record<string, string>> {
-  const direct = t.nextly as unknown as {
-    users: {
-      create(a: {
-        email: string;
-        password: string;
-        data: Record<string, unknown>;
-      }): Promise<{ item: { id: string } }>;
-    };
-  };
-  const seeder = t.getService("permissionSeedService") as unknown as {
-    seedSystemPermissions: () => Promise<unknown>;
-  };
-  await seeder.seedSystemPermissions();
-  const userId = (
-    await direct.users.create({
-      email: "owner@example.com",
-      password: "Password123!",
-      data: { name: "Owner", isActive: true },
-    })
-  ).item.id;
-  const token = await signAccessToken(
-    buildClaims({
-      userId,
-      email: "owner@example.com",
-      name: "Owner",
-      image: null,
-      roleIds: [],
-      sessionEpoch: 0,
-    }),
-    process.env.NEXTLY_SECRET!
-  );
-  return { cookie: `nextly_session=${token}` };
 }
 
 /** The schema route's delete, answered as the Builder's admin would be. */
@@ -232,14 +194,13 @@ async function bootWithFieldsPointing(dialect: TestDialect, translated = true) {
   return current;
 }
 
-/** Boot with TAGS and a plugin whose own table has a key to TAGS's table. */
+/** Boot with TAGS and the app's own table with a key to TAGS's table. */
 async function bootWithDeclaredKey(dialect: TestDialect, contributed = false) {
   current = await createTestNextly({
     dialect,
     collections: contributed ? [] : [plainTags],
     plugins: contributed
       ? [
-          linksPlugin,
           definePlugin({
             name: "@t/dep-tags-owner",
             version: "1.0.0",
@@ -247,7 +208,8 @@ async function bootWithDeclaredKey(dialect: TestDialect, contributed = false) {
             contributes: { collections: [plainTags] },
           }),
         ]
-      : [linksPlugin],
+      : [],
+    db: linksDb,
   });
   await current.nextly.create({ collection: TAGS, data: { label: "kept" } });
   await unlock(current, TAGS);
@@ -304,10 +266,10 @@ async function markerState(t: TestNextly) {
   };
 }
 
-/** The message names the plugin, the key and its table; SQLite keeps no key names. */
+/** The message names the key's owner, the key and its table; SQLite keeps no key names. */
 function expectNamesTheKey(message: string, key: string, dialect: TestDialect) {
   expect(message).toContain(`"${TAGS}"`);
-  expect(message).toContain(`on "${LINKS_TABLE}" (plugin "${LINKS_PLUGIN}")`);
+  expect(message).toContain(`on "${LINKS_TABLE}" (${LINKS_OWNER})`);
   if (dialect !== "sqlite") {
     expect(message).toContain(`"${key.split("->")[0]}"`);
   }
@@ -345,7 +307,7 @@ describeEachDialect("deleting a collection something depends on", dialect => {
     expect(await tagsState(t, true)).toEqual(INTACT_TRANSLATED);
   }, 120_000);
 
-  it("refuses the Builder's delete while a plugin's declared key points at its table, and keeps the key", async () => {
+  it("refuses the Builder's delete while a declared key points at its table, and keeps the key", async () => {
     const t = await bootWithDeclaredKey(dialect);
     const key = await declaredKeyName(t, dialect);
 
@@ -416,6 +378,52 @@ describeEachDialect("deleting a collection something depends on", dialect => {
     expect(refusal.statusCode).toBe(403);
     expect(await tagsState(current, false)).toEqual(INTACT);
     expect(await registryOf(current).getCollectionBySlug(POSTS)).not.toBeNull();
+  }, 120_000);
+
+  it("refuses the Builder's delete while a field inside a group with no name points at it, naming it where it is stored", async () => {
+    // A group with no name only lays fields out: its fields are stored at the
+    // level it sits in, so the relationship is `meta.tag`. The code-first
+    // config refuses a field with no name, so the Builder creates the shape.
+    const LAID_OUT = "dep_laid_out";
+    current = await createTestNextly({ dialect, collections: [plainTags] });
+    await current.nextly.create({ collection: TAGS, data: { label: "kept" } });
+    await unlock(current, TAGS);
+    await dispatchCollections(
+      {} as ServiceContainer,
+      "createCollection",
+      {},
+      {
+        name: LAID_OUT,
+        label: "Laid out",
+        fields: [
+          { name: "title", type: "text" },
+          {
+            name: "meta",
+            type: "group",
+            fields: [
+              {
+                type: "group",
+                label: "Layout",
+                fields: [
+                  { name: "tag", type: "relationship", relationTo: TAGS },
+                ],
+              },
+            ],
+          },
+        ],
+      }
+    );
+
+    const result = await handlerOf(current).deleteCollection({
+      collectionName: TAGS,
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      statusCode: 409,
+      message: `"${TAGS}" cannot be deleted while other schema depends on it. Fields that point at it: ${LAID_OUT}.meta.tag. Remove those fields, or point them at another collection, then delete "${TAGS}".`,
+    });
+    expect(await tagsState(current, false)).toEqual(INTACT);
   }, 120_000);
 
   it("deletes a collection whose only reference is to itself", async () => {
@@ -534,7 +542,7 @@ describeEachDialect("deleting a collection something depends on", dialect => {
       await t.nextly.update({
         collection: TAGS,
         id: String(tag.item.id),
-        data: { featured: post.item.id },
+        data: { featured: post.item.id, _overwrite: true },
       });
     }
   }
@@ -597,7 +605,7 @@ describeEachDialect("deleting a collection something depends on", dialect => {
         await t.nextly.update({
           collection: TAGS,
           id: String(tag.item.id),
-          data: { posts: [post.item.id] },
+          data: { posts: [post.item.id], _overwrite: true },
         });
       }
     } finally {
@@ -706,7 +714,7 @@ describeEachDialect("deleting a collection something depends on", dialect => {
     expect(await tagsState(t, true)).toEqual(INTACT_TRANSLATED);
   }, 120_000);
 
-  it("refuses the schema route's delete while a plugin's declared key points at its table", async () => {
+  it("refuses the schema route's delete while a declared key points at its table", async () => {
     const t = await bootWithDeclaredKey(dialect);
     const key = await declaredKeyName(t, dialect);
 
@@ -749,6 +757,8 @@ describeEachDialect("deleting a collection something depends on", dialect => {
       registry: registryOf(t),
       adapter: t.adapter,
       currentSlugs,
+      // The schema lock the command drops under, on this instance's database.
+      lock: pruneUnderSchemaLock(t.adapter),
       // Every drop approved, as `--accept-data-loss` approves it.
       approve: () => Promise.resolve(true),
       extensionSchema: () => Promise.resolve(getActiveExtensionSchema(dialect)),
@@ -777,7 +787,7 @@ describeEachDialect("deleting a collection something depends on", dialect => {
     expect(await tagsState(current, false)).toEqual(INTACT);
   }, 120_000);
 
-  it("refuses a prune whose orphan a plugin's declared key points at", async () => {
+  it("refuses a prune whose orphan a declared key points at", async () => {
     const t = await bootWithDeclaredKey(dialect, true);
     const key = await declaredKeyName(t, dialect);
 
@@ -943,6 +953,8 @@ describeEachDialect("deleting a collection something depends on", dialect => {
         registry: registryOf(current),
         adapter: current.adapter,
         currentSlugs: [],
+        // The schema lock the command drops under, as above.
+        lock: pruneUnderSchemaLock(current.adapter),
         approve: () => Promise.resolve(true),
         extensionSchema: () =>
           Promise.reject(new Error("a plugin's schema hook threw")),

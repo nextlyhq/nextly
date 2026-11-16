@@ -120,7 +120,11 @@ function save(
   locale: string,
   data: Record<string, unknown>
 ) {
-  return singles.update(SLUG, data, { locale, overrideAccess: true });
+  return singles.update(
+    SLUG,
+    { ...data, _overwrite: true },
+    { locale, overrideAccess: true }
+  );
 }
 
 async function liveCount(singles: SingleEntryService): Promise<unknown> {
@@ -291,6 +295,24 @@ describe.each(getConfiguredTestDialects())(
       expect(await pendingLocales()).toEqual(["en"]);
     });
 
+    it("publishes an English change behind live in one step when the request retypes the live count", async () => {
+      const singles = await boot(dialect);
+      await spanishPublishesThirteen(singles);
+
+      // The editor retypes the live value into the publish itself, rather
+      // than taking the live values first: judged as the request merged over
+      // the stored change, nothing the publish writes is behind live.
+      const published = await save(singles, "en", {
+        articleCount: 13,
+        status: "published",
+      });
+
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      expect(await liveCount(singles)).toBe(13);
+      expect(await liveName(singles, "en")).toBe("EN edited");
+      expect(await pendingLocales()).toEqual([]);
+    });
+
     it("publishes once English takes the live values, and keeps 13", async () => {
       const singles = await boot(dialect);
       await spanishPublishesThirteen(singles);
@@ -299,6 +321,7 @@ describe.each(getConfiguredTestDialects())(
         slug: SLUG,
         locale: "en",
         overrideAccess: true,
+        version: { _overwrite: true },
       });
       expect(taken.success).toBe(true);
       const published = await save(singles, "en", { status: "published" });
@@ -327,8 +350,12 @@ describe.each(getConfiguredTestDialects())(
       // rules, which no caller here passes for the score.
       const refused = await singles.update(
         SLUG,
-        { status: "published" },
-        { locale: "en", overrideAccess: true, routeAuthorized: true }
+        { status: "published", _overwrite: true },
+        {
+          locale: "en",
+          overrideAccess: true,
+          routeAuthorized: true,
+        }
       );
 
       expect(refused.statusCode).toBe(409);
@@ -345,7 +372,10 @@ describe.each(getConfiguredTestDialects())(
 
       // Publishing every language throws its refusals, as its schema gate does.
       await expect(
-        singles.publishAllLocales(SLUG, { overrideAccess: true })
+        singles.publishAllLocales(SLUG, {
+          overrideAccess: true,
+          data: { _overwrite: true },
+        })
       ).rejects.toMatchObject({
         statusCode: 409,
         publicData: {
@@ -381,6 +411,7 @@ describe.each(getConfiguredTestDialects())(
 
         const published = await singles.publishAllLocales(SLUG, {
           overrideAccess: true,
+          data: { _overwrite: true },
         });
 
         expect(published.success).toBe(true);
@@ -412,6 +443,7 @@ describe.each(getConfiguredTestDialects())(
         locale: "en",
         overrideAccess: false,
         user: { id: "u1" },
+        version: { _overwrite: true },
       });
 
       expect(taken.data).toEqual({
@@ -462,6 +494,7 @@ describe.each(getConfiguredTestDialects())(
         locale: "en",
         overrideAccess: false,
         user: { id: "u1" },
+        version: { _overwrite: true },
       });
 
       expect(taken.data).toEqual({ taken: [], outOfDate: ["details"] });
@@ -481,6 +514,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: "a-document-replaced-since",
         locale: "en",
         overrideAccess: true,
+        version: { _overwrite: true },
       });
       expect({
         success: refused.success,
@@ -503,6 +537,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         locale: "en",
         overrideAccess: true,
+        version: { _overwrite: true },
       });
       expect(taken.data).toEqual({ taken: ["articleCount"], outOfDate: [] });
     });
@@ -564,6 +599,7 @@ describe.each(getConfiguredTestDialects())(
               ...(named ? { entryId: authorised } : {}),
               locale: "en",
               overrideAccess: true,
+              version: { _overwrite: true },
             });
             await untilSomeoneWaitsOnALock(current!.adapter, dialect);
             release();
@@ -627,6 +663,7 @@ describe.each(getConfiguredTestDialects())(
           locale: "en",
           overrideAccess: false,
           user: { id: "u1" },
+          version: { _overwrite: true },
         });
 
         expect(result.data).toEqual({ taken, outOfDate });
@@ -668,6 +705,7 @@ describe.each(getConfiguredTestDialects())(
         locale: "en",
         overrideAccess: false,
         user: { id: "u1" },
+        version: { _overwrite: true },
       });
 
       expect(result.data).toEqual({ taken: [], outOfDate: ["gate", "fee"] });
@@ -710,6 +748,7 @@ describe.each(getConfiguredTestDialects())(
         locale: "en",
         overrideAccess: false,
         user: { id: "u1" },
+        version: { _overwrite: true },
       });
 
       expect(result.data).toEqual({ taken: ["fee"], outOfDate: ["gate"] });
@@ -736,6 +775,7 @@ describe.each(getConfiguredTestDialects())(
         locale: "es",
         overrideAccess: false,
         user: { id: "u1" },
+        version: { _overwrite: true },
       });
 
       // The ranking's rule refuses a write for Spanish, so it isn't taken.
@@ -813,6 +853,7 @@ describe.each(getConfiguredTestDialects())(
 
         const published = await singles.publishAllLocales(SLUG, {
           overrideAccess: true,
+          data: { _overwrite: true },
         });
 
         expect(published.success).toBe(true);
@@ -872,7 +913,10 @@ describe.each(getConfiguredTestDialects())(
         }).toEqual(kept);
 
         await expect(
-          singles.publishAllLocales(SLUG, { overrideAccess: true })
+          singles.publishAllLocales(SLUG, {
+            overrideAccess: true,
+            data: { _overwrite: true },
+          })
         ).rejects.toMatchObject({
           statusCode: 409,
           publicData: {
@@ -903,7 +947,10 @@ describe.each(getConfiguredTestDialects())(
       );
 
       await expect(
-        singles.publishAllLocales(SLUG, { overrideAccess: true })
+        singles.publishAllLocales(SLUG, {
+          overrideAccess: true,
+          data: { _overwrite: true },
+        })
       ).rejects.toMatchObject({
         statusCode: 409,
         publicData: {

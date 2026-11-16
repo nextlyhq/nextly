@@ -2,19 +2,42 @@
  * The Needs your attention card's rows: each item's severity by shape, its
  * label and count, its reason and one Review; a failed item's "Not all
  * checked" with a Retry that asks the card again; no control that dismisses
- * an item; and the fold that grows the card for the items its height does not
- * hold.
+ * an item; and every item drawn, however many there are, with nothing folded
+ * behind "Show N more".
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
-
-import { LIST_ROW_HEIGHT_PX } from "nextly/card-geometry";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
-import { cardBodyHeightPx } from "@admin/components/features/widgets/frame/measures";
 import { HiddenWhileEmptyContext } from "@admin/components/features/widgets/hidden-while-empty";
 import { fireEvent, render, screen, within } from "@admin/__tests__/utils";
 
+import type { ReleaseListResponse } from "@admin/services/releaseApi";
+
 import { NeedsAttention } from "./NeedsAttention";
+
+// The releases a release row names, read from the Releases list's own Needs
+// attention tab; answered with none unless a test says otherwise.
+const releaseReads = vi.hoisted(() => ({ fetchReleases: vi.fn() }));
+vi.mock("@admin/services/releaseApi", async () => {
+  const actual = await vi.importActual<
+    typeof import("@admin/services/releaseApi")
+  >("@admin/services/releaseApi");
+  return { ...actual, fetchReleases: releaseReads.fetchReleases };
+});
+
+function releasesAnswer(
+  items: readonly { id: string; title: string; state: string }[]
+): ReleaseListResponse {
+  return {
+    items,
+    meta: { total: items.length, page: 1, limit: 3 },
+  } as unknown as ReleaseListResponse;
+}
+
+beforeEach(() => {
+  releaseReads.fetchReleases.mockReset();
+  releaseReads.fetchReleases.mockResolvedValue(releasesAnswer([]));
+});
 
 const STOPPED = {
   id: "core/stopped-releases",
@@ -78,38 +101,6 @@ function draw(
   );
 }
 
-/**
- * Lays the card out as the frame draws it at `h` grid rows: a body of `cardBodyHeightPx(h)`, rows
- * of the list's own height from its top, and the fold's control wherever it is drawn.
- */
-function layOut(h: number): void {
-  const rect = (top: number, bottom: number) =>
-    ({
-      top,
-      bottom,
-      left: 0,
-      right: 600,
-      width: 600,
-      height: bottom - top,
-    }) as DOMRect;
-  const row = LIST_ROW_HEIGHT_PX.default;
-  const body = cardBodyHeightPx(h);
-  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
-    function (this: Element) {
-      if (this.getAttribute("data-testid") === "widget-card-body")
-        return rect(0, body);
-      if (this.hasAttribute("data-fold-row")) {
-        const index = [
-          ...(this.parentElement?.querySelectorAll("[data-fold-row]") ?? []),
-        ].indexOf(this);
-        return rect(row * index, row * (index + 1));
-      }
-      if (this.hasAttribute("aria-controls")) return rect(body + 12, body + 40);
-      return rect(0, 0);
-    }
-  );
-}
-
 const plugin = (n: number) => ({
   ...SEO,
   id: `seo/item-${n}`,
@@ -118,6 +109,93 @@ const plugin = (n: number) => ({
 });
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("NeedsAttention's release rows", () => {
+  it("names each stopped release under its row, linked to its page, from the stopped part of Needs attention", async () => {
+    releaseReads.fetchReleases.mockImplementation(
+      (params: { reason?: string }) =>
+        Promise.resolve(
+          params.reason === "stopped"
+            ? releasesAnswer([
+                { id: "r-1", title: "Autumn launch", state: "blocked" },
+              ])
+            : releasesAnswer([])
+        )
+    );
+    draw([STOPPED, SEO]);
+    const [stopped] = screen.getAllByTestId("needs-attention-item");
+
+    const named = await within(stopped).findByRole("link", {
+      name: "Autumn launch",
+    });
+    expect(named.getAttribute("href")).toMatch(/\/releases\/r-1$/);
+    expect(releaseReads.fetchReleases).toHaveBeenCalledWith(
+      expect.objectContaining({ tab: "attention", reason: "stopped" })
+    );
+  });
+
+  it("names each overdue release under its row", async () => {
+    releaseReads.fetchReleases.mockImplementation(
+      (params: { reason?: string }) =>
+        Promise.resolve(
+          params.reason === "overdue"
+            ? releasesAnswer([
+                { id: "r-2", title: "Spring sale", state: "scheduled" },
+                { id: "r-3", title: "Price change", state: "scheduled" },
+              ])
+            : releasesAnswer([])
+        )
+    );
+    draw([OVERDUE]);
+    const [overdue] = screen.getAllByTestId("needs-attention-item");
+
+    expect(
+      await within(overdue).findByRole("link", { name: "Spring sale" })
+    ).toBeInTheDocument();
+    expect(
+      within(overdue).getByRole("link", { name: "Price change" })
+    ).toBeInTheDocument();
+  });
+
+  // The names arrive on a read of their own after the card has drawn. The
+  // property separating this from a plausible broken card is that the line
+  // is in place, empty and of the names' own classes, before they arrive: a
+  // card that drew nothing until then would push every row under the release
+  // row down when the names land.
+  it("holds the names' line, empty, while their read is on its way, and draws the names in it", async () => {
+    let answer: (value: ReleaseListResponse) => void = () => {};
+    releaseReads.fetchReleases.mockImplementation(
+      () =>
+        new Promise<ReleaseListResponse>(resolve => {
+          answer = resolve;
+        })
+    );
+    draw([STOPPED, SEO]);
+    const [stopped] = screen.getAllByTestId("needs-attention-item");
+    const held = stopped.querySelector(
+      "[aria-hidden='true'].pb-2.pl-9.text-xs"
+    );
+    expect(held).not.toBeNull();
+    expect(held?.textContent?.trim()).toBe("");
+
+    answer(
+      releasesAnswer([{ id: "r-1", title: "Autumn launch", state: "blocked" }])
+    );
+    const names = await within(stopped).findByRole("list", {
+      name: "Stopped releases",
+    });
+    // The same line: the classes that size it are the held one's.
+    expect(names.className).toContain("pb-2 pl-9 text-xs");
+    expect(
+      stopped.querySelector("[aria-hidden='true'].pb-2.pl-9.text-xs")
+    ).toBeNull();
+  });
+
+  it("reads no releases for a row that is not about releases", () => {
+    draw([SEO]);
+    expect(releaseReads.fetchReleases).not.toHaveBeenCalled();
+  });
+});
 
 describe("NeedsAttention", () => {
   it("draws each item with its severity, label and count, reason and one Review, in the answer's order", () => {
@@ -139,6 +217,14 @@ describe("NeedsAttention", () => {
     expect(review).toHaveTextContent("Review");
     expect(review.getAttribute("href")).toMatch(
       /\/releases\?tab=attention&reason=overdue$/
+    );
+
+    // Each mark in its status's text colour, never a tinted shade.
+    expect(within(overdue).getByTestId("needs-attention-mark")).toHaveClass(
+      "text-danger-text"
+    );
+    expect(within(seo).getByTestId("needs-attention-mark")).toHaveClass(
+      "text-warning-text"
     );
 
     // A plugin's warning: a triangle rather than a circle, its floor capped at "99+", and no
@@ -218,50 +304,44 @@ describe("NeedsAttention", () => {
     expect(retry).toHaveBeenCalledTimes(1);
   });
 
-  it("folds the items its height does not hold behind Show N more, which shows them, moves focus and says so", () => {
-    layOut(3);
-    draw([STOPPED, OVERDUE, plugin(3), plugin(2)]);
-
-    expect(screen.getAllByTestId("needs-attention-item")).toHaveLength(2);
-    const control = screen.getByRole("button", { name: "Show 2 more" });
-    expect(control).toHaveAttribute("aria-expanded", "false");
-
-    fireEvent.click(control);
-    const rows = screen.getAllByTestId("needs-attention-item");
-    expect(rows).toHaveLength(4);
-    expect(rows[2]).toHaveFocus();
-    expect(screen.getByText("2 more items shown")).toBeInTheDocument();
-    expect(control).toHaveAccessibleName("Show less");
-
-    fireEvent.click(control);
-    expect(screen.getAllByTestId("needs-attention-item")).toHaveLength(2);
-    expect(screen.queryByText("2 more items shown")).toBeNull();
-  });
-
-  it("fills its body with whole rows at 3 and 4 rows tall, its control in the footer's room", () => {
-    const items = [STOPPED, OVERDUE, plugin(5), plugin(4), plugin(3)];
-    const fits = (h: number) =>
-      Math.floor(cardBodyHeightPx(h) / LIST_ROW_HEIGHT_PX.default);
-    for (const h of [3, 4]) {
-      layOut(h);
-      const { unmount } = draw(items);
-      expect(
-        screen.getAllByTestId("needs-attention-item"),
-        `h=${h}`
-      ).toHaveLength(fits(h));
-      // In the footer, whose room the frame keeps for every card: none of the body's room goes
-      // to it, so the rows have all of it.
-      const control = screen.getByRole("button", {
-        name: `Show ${items.length - fits(h)} more`,
-      });
-      expect(screen.getByTestId("widget-card-footer")).toContainElement(
-        control
-      );
-      unmount();
-      vi.restoreAllMocks();
-    }
-    // The frame's geometry: 2 rows at 3 tall, 4 at 4.
-    expect([fits(3), fits(4)]).toEqual([2, 4]);
+  it("draws every one of seven items, with no control to show more or fewer", () => {
+    // Laid out as a body two 52 px rows tall, so a card that folded what its body does not hold
+    // would draw fewer than seven and a "Show N more".
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Element) {
+        const height =
+          this.getAttribute("data-testid") === "widget-card-body" ? 104 : 52;
+        return DOMRect.fromRect({ width: 600, height });
+      }
+    );
+    const items = [
+      STOPPED,
+      OVERDUE,
+      plugin(5),
+      plugin(4),
+      plugin(3),
+      plugin(2),
+      plugin(1),
+    ];
+    draw(items);
+    expect(
+      screen
+        .getAllByTestId("needs-attention-item")
+        .map(row => within(row).getByTestId("entity-row-title").textContent)
+    ).toEqual([
+      "Releases that stopped · 1",
+      "Overdue releases · 2",
+      "Item 5 · 5+",
+      "Item 4 · 4+",
+      "Item 3 · 3+",
+      "Item 2 · 2+",
+      "Item 1 · 1+",
+    ]);
+    expect(screen.queryByRole("button", { name: /^Show/ })).toBeNull();
+    expect(screen.queryByText(/more items? shown/)).toBeNull();
+    expect(
+      within(screen.getByTestId("widget-card-footer")).queryByRole("button")
+    ).toBeNull();
   });
 
   it("carries how many items there are beside its title, read with it", () => {
@@ -282,5 +362,55 @@ describe("NeedsAttention", () => {
   it("says nothing of arriving when it was drawn from the start", () => {
     draw([STOPPED, OVERDUE]);
     expect(screen.queryByText(/need your attention/)).toBeNull();
+  });
+
+  it("draws the database's danger and couldn't-check items with How to fix, opening the docs in a new tab", () => {
+    const docs = "https://nextlyhq.com/docs/database/encrypted-connections";
+    draw([
+      {
+        id: "core/system-connection-unencrypted",
+        kind: "system",
+        label: "Database connection is not encrypted",
+        count: 1,
+        single: true,
+        severity: "critical",
+        reason: "Passwords and data cross the network as plain text.",
+        help: docs,
+      },
+      {
+        id: "core/system-connection-unchecked",
+        kind: "system",
+        label: "Couldn't check the database connection's encryption",
+        count: 1,
+        single: true,
+        severity: "warning",
+        reason: "It may cross the network as plain text.",
+        help: docs,
+      },
+    ]);
+    const [danger, unchecked] = screen.getAllByTestId("needs-attention-item");
+    expect(within(danger).getByTestId("needs-attention-critical")).toBeTruthy();
+    expect(danger.textContent).toContain(
+      "Database connection is not encrypted"
+    );
+    expect(danger.textContent).not.toContain("· 1");
+    expect(danger.textContent).toContain(
+      "Passwords and data cross the network as plain text."
+    );
+    expect(
+      within(unchecked).getByTestId("needs-attention-warning")
+    ).toBeTruthy();
+    for (const [row, label] of [
+      [danger, "database connection is not encrypted"],
+      [unchecked, "couldn't check the database connection's encryption"],
+    ] as const) {
+      const fix = within(row).getByRole("link", {
+        name: `How to fix: ${label}`,
+      });
+      expect(fix.textContent).toBe("How to fix");
+      expect(fix.getAttribute("href")).toBe(docs);
+      expect(fix.getAttribute("target")).toBe("_blank");
+      expect(fix.getAttribute("rel")).toContain("noopener");
+    }
   });
 });

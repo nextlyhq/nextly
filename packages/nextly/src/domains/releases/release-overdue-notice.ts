@@ -17,7 +17,6 @@
  * Registered by the releases feature's registration (`register-releases`).
  *
  * @module domains/releases/release-overdue-notice
- * @experimental Until the notices feature is complete.
  */
 import { z } from "zod";
 
@@ -40,13 +39,11 @@ const overdueData = z.object({
   ranAt: z.string().nullable(),
 });
 
-/** @experimental */
 export type ReleaseOverdueNoticeData = z.infer<typeof overdueData>;
 
 /** How long past its moment a release is overdue, in the words a notice says. */
 const OVERDUE_AFTER_WORDS = `${RELEASE_OVERDUE_AFTER_MS / 60_000} minutes`;
 
-/** @experimental */
 export const RELEASE_OVERDUE_NOTICE =
   defineNoticeKind<ReleaseOverdueNoticeData>({
     key: "releases.overdue",

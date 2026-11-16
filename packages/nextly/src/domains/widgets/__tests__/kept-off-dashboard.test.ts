@@ -43,7 +43,7 @@ function registryHolds(
   vi.mocked(container.get).mockImplementation((name: string) => {
     if (name === "collectionRegistryService") {
       return {
-        getAllCollections: async () =>
+        getAllCollectionsForRead: async () =>
           rows.map(row => ({
             ...row,
             fields: [{ name: "title", type: "text" }],

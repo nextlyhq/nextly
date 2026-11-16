@@ -19,6 +19,10 @@ const { get, post, patch, del } = vi.hoisted(() => ({
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { get, post, patch, delete: del },
 }));
+// Who is signed in: nobody known yet, so no holder reads as this user's own.
+vi.mock("@admin/hooks/useCurrentUserId", () => ({
+  useCurrentUserId: () => null,
+}));
 
 import { DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS } from "nextly/document-lock";
 
@@ -106,5 +110,29 @@ describe("the lock surface of a reader", () => {
     await waitFor(() => expect(post).toHaveBeenCalled());
     expect(get).not.toHaveBeenCalled();
     expect(result.current.actionsDisabled).toBe(false);
+  });
+
+  it("says what they read may be out of date when a read of it fails", async () => {
+    // A reader writes nothing, so nothing is held back for it; but the page
+    // keeps the copy on screen through the failure, and they are told.
+    const reload = vi.fn(() => Promise.resolve());
+    const { result } = renderHook(() =>
+      useDocumentLockSurface({
+        ...ref,
+        readOnlyForReader: true,
+        latest: { readAt: 1, failed: true, reload },
+      })
+    );
+
+    await waitFor(() => expect(get).toHaveBeenCalled());
+    expect(result.current.readOnly).toBe(true);
+    expect(result.current.notice?.message).toMatch(
+      /couldn't load the latest version of this document, so what you see may be out of date/
+    );
+    expect(result.current.notice?.retryLabel).toBe("Try again");
+    act(() => {
+      result.current.retryLoad();
+    });
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 });

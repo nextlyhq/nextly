@@ -26,7 +26,7 @@ export const LIST_CLASS = "flex min-w-0 flex-col divide-y divide-border";
 /**
  * A list row's fixed height at each density: the box every `EntityRow`, every table row and
  * every skeleton row standing in for one is drawn in, so a loading list and the list that
- * replaces it are the same height. The pixel heights the row count is worked out from are
+ * replaces it are the same height. The pixel heights these classes draw are
  * `LIST_ROW_HEIGHT_PX` in `frame/list-rows`.
  */
 export const LIST_ROW_HEIGHT_CLASS: Readonly<Record<ListDensity, string>> = {

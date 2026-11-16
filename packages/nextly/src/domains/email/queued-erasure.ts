@@ -37,7 +37,9 @@ export interface EmailQueueTables {
   dialect: SupportedDialect;
   queue: Table & {
     id: Column;
+    scope: Column;
     state: Column;
+    jobId: Column;
     message: Column;
     principalKind: Column;
     principalId: Column;
@@ -167,6 +169,84 @@ async function cancelAndClear(
     .set({ ...values, message: null, updatedAt: now })
     .where(these);
   await db.delete(recipients).where(inArray(recipients.queuedId, ids));
+}
+
+/**
+ * The rows `scope` queued, by the exact bytes of the scope. MySQL compares a
+ * column under its collation, which may ignore case and accents, so
+ * `plugin:cafe` would match `plugin:café`, another plugin's; the plain
+ * comparison stays so an index can still narrow the rows.
+ */
+function ownedBy(
+  queue: EmailQueueTables["queue"],
+  tables: EmailQueueTables,
+  scope: string
+): SQL | undefined {
+  return and(
+    eq(queue.scope, scope),
+    tables.dialect === "mysql"
+      ? sql`CAST(${queue.scope} AS BINARY) = CAST(${scope} AS BINARY)`
+      : undefined
+  );
+}
+
+/**
+ * A queued email a cancel reached, as it stood just before: which caller
+ * queued it, its state, and the job that makes its attempts.
+ */
+export interface ReachedQueuedEmail {
+  id: string;
+  scope: string;
+  state: string;
+  jobId: string | null;
+}
+
+/**
+ * Cancel and clear the queued emails among `ids` that `scope` queued (a
+ * plugin's own, `plugin:<name>`), or that anyone did when `scope` is
+ * undefined: an id another caller queued, or none at all, is passed over.
+ * Read under the lock a deletion takes, so one being claimed for an attempt
+ * is read as it stands. Answers each email reached, as it stood before.
+ */
+export async function cancelQueuedEmailsAmong(
+  db: QueuedErasureDb,
+  tables: EmailQueueTables,
+  scope: string | undefined,
+  ids: readonly string[]
+): Promise<ReachedQueuedEmail[]> {
+  const { queue } = tables;
+  const reached: ReachedQueuedEmail[] = [];
+  for (let start = 0; start < ids.length; start += BATCH) {
+    const batch = ids.slice(start, start + BATCH);
+    const rows = (await locked(
+      tables,
+      db
+        .select({
+          id: queue.id,
+          scope: queue.scope,
+          state: queue.state,
+          jobId: queue.jobId,
+        })
+        .from(queue)
+        .where(
+          and(
+            inArray(queue.id, batch),
+            scope === undefined ? undefined : ownedBy(queue, tables, scope)
+          )
+        )
+        .limit(BATCH)
+    )) as ReachedQueuedEmail[];
+    if (rows.length > 0) {
+      await cancelAndClear(
+        db,
+        tables,
+        rows.map(row => row.id),
+        {}
+      );
+      reached.push(...rows);
+    }
+  }
+  return reached;
 }
 
 /**

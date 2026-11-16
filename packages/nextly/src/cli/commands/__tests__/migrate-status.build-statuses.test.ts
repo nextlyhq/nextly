@@ -53,6 +53,39 @@ describe("buildMigrationStatuses", () => {
   });
 });
 
+describe("an applied file's checksum", () => {
+  const SUM = "a".repeat(64);
+  const file = {
+    name: "20260101_000000_000_init",
+    filePath: "/x/20260101_000000_000_init.sql",
+    checksum: SUM,
+    collections: [],
+    timestamp: "20260101_000000",
+  };
+  const applied = (sha256: string) => ({
+    id: "e1",
+    filename: "20260101_000000_000_init.sql",
+    sha256,
+    status: "applied" as const,
+    appliedBy: null,
+    durationMs: 5,
+    errorJson: null,
+    appliedAt: new Date("2026-01-01T00:00:00Z"),
+  });
+
+  it.each([
+    ["a matching checksum", SUM, "applied"],
+    ["a different recorded checksum", "b".repeat(64), "applied (modified)"],
+    // `ledgerRecords` reads a missing checksum as "".
+    ["no checksum recorded", "", "applied"],
+    ["the text an older backfill wrote", "null", "applied"],
+  ] as const)("with %s reads %s", (_name, sha256, status) => {
+    const [only] = buildMigrationStatuses([file], [applied(sha256)]);
+    expect(only?.status).toBe(status);
+    expect(only?.checksumMismatch).toBe(status === "applied (modified)");
+  });
+});
+
 describe("the order statuses are listed in", () => {
   it("lists a plugin's modules in the order they run, after the app's files", () => {
     // `10_more` runs before `1_init`: modules run in `compareModuleNames`
@@ -261,6 +294,33 @@ describe("ledgerRecords", () => {
     expect(records.map(r => [r.filename, r.status])).toEqual([
       ["0001_a.sql", "applied"],
       ["0002_b.sql", "applied"],
+    ]);
+  });
+
+  it("reads an applied migration whose removal was recorded as removed on purpose, not missing", () => {
+    const removal = {
+      ...event("0001_a.sql", "recorded", 2000),
+      eventType: "file_removed" as const,
+    };
+    const records = ledgerRecords(
+      [
+        event("0001_a.sql", "applied", 1000),
+        event("0002_b.sql", "applied", 1000),
+      ],
+      undefined,
+      [removal]
+    );
+    expect(records.map(r => [r.filename, r.removed === true])).toEqual([
+      ["0001_a.sql", true],
+      ["0002_b.sql", false],
+    ]);
+    // Neither file is in the folder: the removed one is information, the
+    // other still the problem a missing file is.
+    expect(
+      buildMigrationStatuses([], records).map(s => [s.filename, s.status])
+    ).toEqual([
+      ["0001_a", "applied (file removed)"],
+      ["0002_b", "applied (file missing)"],
     ]);
   });
 

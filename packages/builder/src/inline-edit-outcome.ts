@@ -30,7 +30,14 @@ export type InlineEditRefusal =
    * author can act on; a node that went while they typed is the case they
    * cannot.
    */
-  | "rejected";
+  | "rejected"
+  /**
+   * The value stopped being editable while the caret was in it — a lock
+   * arrived, or it is no longer a shape this surface can store — and its
+   * element is still on the page. The words stay there to be copied, and a
+   * second Escape lets them go.
+   */
+  | "no-longer-editable";
 
 /** The edit produced a document. */
 export interface InlineEditWritten {
@@ -47,9 +54,14 @@ export interface InlineEditUnchanged {
  * The author changed the value, it could not be stored, and the surface has
  * been given back.
  *
- * The value stopped being editable while the caret was in it — deleted, locked,
- * or no longer a shape this surface can store. Their typing is gone, and a host
- * that can say so should: nothing else will mention it.
+ * The value stopped being editable while the caret was in it and its element
+ * has left the page, so there is nothing to keep the words in: the block was
+ * deleted, or the canvas re-rendered without it. Their typing is gone, and a
+ * host that can say so should: nothing else will mention it. While the element
+ * is still on the page the edit is {@link InlineEditRefused} instead, except
+ * where the host itself finished a line of text: a host finishing an edit is
+ * closing or opening something else, so the line cannot stay open, and its
+ * unwritten words are reported here.
  *
  * Distinct from {@link InlineEditRefused} in the one way that matters to a
  * host: there is nothing left to protect, so this must not stop it closing.

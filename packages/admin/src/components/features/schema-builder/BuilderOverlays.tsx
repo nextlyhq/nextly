@@ -1,40 +1,38 @@
 "use client";
 
 /**
- * The overlays a builder page mounts over its field list: the settings modal,
- * the field-type picker, and the field editor sheet in its create and edit
- * modes.
+ * The overlays a builder page mounts over its field list: the settings modal
+ * and the field picker. The field settings panel is docked beside the list
+ * rather than laid over it, so the layout draws it (`BuilderFieldSettings`).
  *
- * One overlay is open at a time, so the page holds a single `ActiveOverlay`
- * value rather than four booleans that could disagree.
+ * One of these is open at a time, or a field is being edited, so the page
+ * holds a single `ActiveOverlay` value rather than booleans that could
+ * disagree.
  */
 import type { JSX } from "react";
 
-import { findFieldById, findParentContainerId } from "@admin/lib/builder";
-import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
+import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
+import type { StoredHookConfig } from "@admin/types/collection";
 
-import { pickerExcludedTypes, type BuilderConfig } from "./builder-config";
+import type { BuilderConfig } from "./builder-config";
+import { BuilderFieldPicker } from "./BuilderFieldPicker";
 import {
   BuilderSettingsModal,
   type BuilderSettingsValues,
 } from "./BuilderSettingsModal";
-import { FieldEditorSheet } from "./FieldEditorSheet";
-import { FieldPickerModal } from "./FieldPickerModal";
 import type { BuilderField, BuilderFieldsApi } from "./types";
 
 /**
  * Which overlay is open, and the state that overlay needs.
  *
- * `create` carries a draft rather than appending a placeholder field: a
- * cancelled create then leaves nothing behind. `picker` and `create` both
- * carry an optional `parentFieldId` so the same overlay serves an add at the
- * top level and an add inside a group or repeater, at any depth.
+ * `picker` carries the position the new field lands at: the container (the
+ * top level when none) and the field it goes before (the end when none). The
+ * picker adds the field there, then the settings panel opens on it (`edit`).
  */
 export type ActiveOverlay =
   | { kind: "none" }
   | { kind: "settings" }
-  | { kind: "picker"; insertAt: number; parentFieldId?: string }
-  | { kind: "create"; draft: BuilderField; parentFieldId?: string }
+  | { kind: "picker"; position: FieldInsertPosition }
   | { kind: "edit"; fieldId: string };
 
 type Props = {
@@ -47,62 +45,13 @@ type Props = {
   onSettingsChange: (next: BuilderSettingsValues) => void;
   /** Code-first entities render every editing affordance disabled. */
   readOnly: boolean;
+  /** A collection's stored hooks, which the settings modal shows read-only. */
+  storedHooks?: readonly StoredHookConfig[];
+  /** The fields as last saved, where a pending delete still holds its name until the save. */
+  savedFields?: readonly BuilderField[];
+  /** Whether the save judges names with Draft/Published on: as stored, or as the pending settings set it. */
+  lifecycleEnabled?: boolean;
 };
-
-/**
- * A new field id.
- *
- * Deliberately not `generateFieldId` from `lib/builder`: that one draws 9
- * random characters where the builder pages have always drawn 7, and the two
- * are not interchangeable without changing ids the running page already holds.
- */
-function newFieldId(): string {
-  return `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-}
-
-/**
- * Whether a field added under `parentFieldId` would sit inside a repeating
- * container. True when the parent repeats itself, or when the parent already
- * lives inside something that does — the helper only walks ancestors, so the
- * parent's own type has to be checked here.
- */
-function addingIntoRepeatingContainer(
-  fields: BuilderField[],
-  parentFieldId: string
-): boolean {
-  const parent = findFieldById(fields, parentFieldId);
-  if (!parent) return false;
-  const parentIsRepeating =
-    parent.type === "repeater" ||
-    (parent.type === "component" && parent.repeatable === true);
-  return parentIsRepeating || isInsideRepeatingAncestor(parent.id, fields);
-}
-
-/**
- * The fields a newly created field will sit beside: its parent's children when
- * one is named, otherwise the top level.
- */
-function siblingsForNewField(
-  fields: BuilderField[],
-  parentFieldId?: string
-): BuilderField[] {
-  if (!parentFieldId) return fields;
-  return findFieldById(fields, parentFieldId)?.fields ?? [];
-}
-
-/**
- * The fields an edited field must stay uniquely named among: its parent's other
- * children when it is nested, otherwise the other top-level fields.
- */
-function siblingsForEditedField(
-  fields: BuilderField[],
-  field: BuilderField
-): BuilderField[] {
-  const parent = findParentContainerId(fields, field.id);
-  if (!parent) return fields.filter(f => f.id !== field.id);
-  const container = findFieldById(fields, parent.containerId);
-  return (container?.fields ?? []).filter(f => f.id !== field.id);
-}
 
 export function BuilderOverlays({
   active,
@@ -112,23 +61,11 @@ export function BuilderOverlays({
   settings,
   onSettingsChange,
   readOnly,
+  storedHooks,
+  savedFields,
+  lifecycleEnabled = false,
 }: Props): JSX.Element {
   const close = () => onActiveChange({ kind: "none" });
-
-  /** Commit a configured field to its parent, or to the top level. */
-  const commitField = (field: BuilderField, parentFieldId?: string) => {
-    if (parentFieldId) {
-      builder.handleNestedFieldAdd(parentFieldId, field);
-    } else {
-      builder.setFields([...builder.fields, field]);
-    }
-    close();
-  };
-
-  const editingField =
-    active.kind === "edit"
-      ? (findFieldById(builder.fields, active.fieldId) ?? null)
-      : null;
 
   return (
     <>
@@ -140,6 +77,7 @@ export function BuilderOverlays({
           config={config}
           initialValues={settings}
           readOnly={readOnly}
+          storedHooks={storedHooks}
           onCancel={close}
           onSubmit={next => {
             onSettingsChange(next);
@@ -148,86 +86,22 @@ export function BuilderOverlays({
         />
       )}
 
-      {/* Field picker — opens off the toolbar's add affordance or the in-list
-          one. Picking a type does not add a field; it opens the editor sheet
-          in create mode against a draft. */}
+      {/* Field picker: picking a type and a label adds the field where the
+          picker was opened, then opens it in the settings panel; add-and-add-another
+          stays in the picker for the next one. */}
       {active.kind === "picker" && (
-        <FieldPickerModal
-          open
-          title={
-            active.parentFieldId
-              ? `Add field to ${
-                  findFieldById(builder.fields, active.parentFieldId)?.name ??
-                  "parent"
-                }`
-              : undefined
-          }
-          excludedTypes={pickerExcludedTypes(config, active.parentFieldId)}
+        <BuilderFieldPicker
+          config={config}
+          fields={builder.fields}
+          position={active.position}
+          entitySlug={settings.slug}
           onCancel={close}
-          onSelect={type =>
-            onActiveChange({
-              kind: "create",
-              parentFieldId: active.parentFieldId,
-              draft: {
-                id: newFieldId(),
-                name: "",
-                label: "",
-                type,
-                validation: {},
-              },
-            })
-          }
-        />
-      )}
-
-      {active.kind === "create" && (
-        <FieldEditorSheet
-          open
-          mode="create"
-          kind={config.kind}
-          field={active.draft}
-          siblingFields={siblingsForNewField(
-            builder.fields,
-            active.parentFieldId
-          )}
-          readOnly={readOnly}
-          isInsideRepeatingAncestor={
-            active.parentFieldId
-              ? addingIntoRepeatingContainer(
-                  builder.fields,
-                  active.parentFieldId
-                )
-              : false
-          }
-          onCancel={close}
-          onApply={next => commitField(next, active.parentFieldId)}
-          // Delete is hidden in create mode, so this is unreachable; it exists
-          // to satisfy the sheet's prop contract.
-          onDelete={close}
-        />
-      )}
-
-      {active.kind === "edit" && editingField && (
-        <FieldEditorSheet
-          open
-          mode="edit"
-          kind={config.kind}
-          field={editingField}
-          siblingFields={siblingsForEditedField(builder.fields, editingField)}
-          readOnly={readOnly}
-          isInsideRepeatingAncestor={isInsideRepeatingAncestor(
-            editingField.id,
-            builder.fields
-          )}
-          onCancel={close}
-          onApply={next => {
-            builder.handleFieldUpdate(next);
-            close();
+          onFieldsChange={builder.setFields}
+          onAdded={(fieldId, how) => {
+            if (!how.addAnother) onActiveChange({ kind: "edit", fieldId });
           }}
-          onDelete={() => {
-            builder.handleFieldDelete(editingField.id);
-            close();
-          }}
+          savedFields={savedFields}
+          lifecycleEnabled={lifecycleEnabled}
         />
       )}
     </>

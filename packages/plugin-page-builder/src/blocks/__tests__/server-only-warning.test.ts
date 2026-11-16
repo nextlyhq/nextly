@@ -125,3 +125,40 @@ describe("a declared editor entry", () => {
     expect(() => service.registerDeclaredBlocks(ctx)).toThrow(/editorEntry/);
   });
 });
+
+describe("the blocks the editor can draw", () => {
+  it("are the core set and declared blocks with an editor entry, never server-only ones", () => {
+    const { ctx } = contextFor([
+      {
+        name: "@acme/blocks",
+        contributes: {
+          declarations: {
+            [service.PAGE_BUILDER_PLUGIN]: {
+              blocks: [block("acme/drawn")],
+              editorEntry: "@acme/blocks/editor#blocks",
+            },
+          },
+        },
+      },
+      {
+        name: "@acme/server",
+        contributes: {
+          declarations: {
+            [service.PAGE_BUILDER_PLUGIN]: { blocks: [block("acme/hidden")] },
+          },
+        },
+      },
+    ]);
+    service.registerCoreBlocks(ctx);
+    service.registerDeclaredBlocks(ctx);
+    service.blockRegistry(ctx).register(block("acme/in-code"));
+
+    const names = service.editorVisibleBlocks().map(each => each.name);
+    expect(names).toContain("acme/drawn");
+    expect(names).toContain("core/heading");
+    // Registered, yet never drawn by the editor.
+    expect(getBlock("acme/hidden")).toBeDefined();
+    expect(names).not.toContain("acme/hidden");
+    expect(names).not.toContain("acme/in-code");
+  });
+});

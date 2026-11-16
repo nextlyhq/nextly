@@ -53,6 +53,8 @@ function oneScope(): OneScope {
 function contributedWidget(): {
   load: (input: {
     services: ReturnType<typeof services>;
+    /** The card's settings as core's batch resolves them; `limit` is its "Number of entries". */
+    settings: Record<string, unknown>;
     size: { w: number; h: number; tier: "medium" };
     signal: AbortSignal;
     scope?: OneScope;
@@ -64,6 +66,7 @@ function contributedWidget(): {
       scope?: OneScope;
     }) => Promise<number | { count: number; atLeast?: boolean }>;
   };
+  settings?: Record<string, unknown>;
 } {
   const widget = formBuilder().plugin.contributes?.dashboard?.widgets?.find(
     candidate => candidate.id === NEW_SUBMISSIONS_WIDGET_ID
@@ -380,6 +383,7 @@ describe("the card's read", () => {
     const reads = services({ forms, submissions });
     const data = await widget.load({
       services: reads,
+      settings: {},
       size: { w: 6, h: 8, tier: "medium" },
       signal,
     });
@@ -408,6 +412,7 @@ describe("the card's read", () => {
     const scope = oneScope();
     const data = await widget.load({
       services: reads,
+      settings: {},
       size: { w: 6, h: 8, tier: "medium" },
       signal,
       scope,
@@ -426,6 +431,72 @@ describe("the card's read", () => {
         call.options.select[0] === "id"
     );
     expect(scans).toHaveLength(1);
+  });
+
+  describe("its Number of entries", () => {
+    /** Twenty-five new submissions to a readable form, a minute apart, newest last. */
+    const many = Array.from({ length: 25 }, (_, i) =>
+      submission(
+        `s${i}`,
+        CONTACT.id,
+        { fullName: `Person ${i}` },
+        `2026-02-01T00:${String(i).padStart(2, "0")}:00.000Z`
+      )
+    );
+
+    /** The rows the card's load asked the submissions for, and the rows it answered. */
+    async function loaded(settings: Record<string, unknown>, h: number) {
+      const reads = services({ forms, submissions: many });
+      const data = await contributedWidget().load({
+        services: reads,
+        settings,
+        size: { w: 6, h, tier: "medium" },
+        signal: new AbortController().signal,
+      });
+      const asked = reads.calls
+        .filter(call => call.collection === COLLECTIONS.submissions)
+        .map(call => call.options.limit);
+      return { asked, answered: data.items.length, total: data.total };
+    }
+
+    it.each([
+      [10, 10],
+      [20, 20],
+      [7, 7],
+      [25, 20],
+    ])(
+      "reads %i as %i rows, the same on a card two rows high as on one eight high",
+      async (limit, rows) => {
+        // 🔴 Read by the card's size, the card two rows high asked none, and the one eight
+        // rows high the ten its body holds.
+        for (const h of [2, 8]) {
+          expect(await loaded({ limit }, h)).toEqual({
+            asked: [rows],
+            answered: rows,
+            total: 25,
+          });
+        }
+      }
+    );
+
+    it("reads five until its reader sets a number, or for one that is not a number", async () => {
+      for (const settings of [{}, { limit: "10" }, { limit: Number.NaN }]) {
+        expect(await loaded(settings, 8)).toMatchObject({
+          asked: [5],
+          answered: 5,
+        });
+      }
+    });
+
+    it("is offered as a number from one to twenty, five to start", () => {
+      expect(contributedWidget().settings?.limit).toMatchObject({
+        type: "number",
+        label: "Number of entries",
+        defaultValue: 5,
+        min: 1,
+        max: 20,
+      });
+    });
   });
 
   it("has a total and no rows on a card too short to draw one", async () => {

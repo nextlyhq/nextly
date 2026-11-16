@@ -49,18 +49,7 @@ export default defineConfig({
 
 ## Client-side uploads
 
-For files larger than ~4.5 MB on Vercel's serverless functions, enable client uploads:
-
-```ts
-vercelBlobStorage({
-  token: process.env.BLOB_READ_WRITE_TOKEN!,
-  collections: {
-    media: { clientUploads: true },
-  },
-});
-```
-
-The admin uploader hands the file to the browser-side SDK, which uploads directly to Blob. The server only signs the upload.
+Vercel Blob does not sign direct uploads: Nextly can't bind a Blob client upload to a checked type and size, so `clientUploads` is refused for it and every file goes through the standard, fully checked upload. For files larger than Vercel's ~4.5 MB request-body limit, store that collection on S3 (or an S3-compatible provider) with `@nextlyhq/storage-s3`, which signs direct uploads.
 
 ## Main exports
 

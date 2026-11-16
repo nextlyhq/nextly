@@ -26,8 +26,14 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { getDialectDisplayName } from "../../../cli/utils/adapter";
+import {
+  consentToCover,
+  describeDeletion,
+  type Deletion,
+} from "../migrate/data-loss-consent";
 import { NO_TRANSACTION_MARKER } from "../migrate/split-sql";
+
+import { getDialectDisplayName } from "./dialect-name";
 
 /**
  * The field-group header written into a generated migration, and the pattern that reads it
@@ -45,6 +51,48 @@ export const FIELD_GROUP_HEADER = "-- Field groups:";
 
 /** The header line naming one entity's settings changes (`-- Settings: posts: description`). */
 const SETTINGS_HEADER = "-- Settings:";
+
+/**
+ * The header line naming one app's or plugin's added and removed permissions
+ * (`-- Permissions: @nextlyhq/plugin-form-builder: + export-submissions`).
+ */
+const PERMISSIONS_HEADER = "-- Permissions:";
+
+/**
+ * The destructive mark: the line saying a file deletes data and which consent `nextly migrate`
+ * needs for it, and the line naming each deletion. Written second in the header, under the
+ * migration's name, so a reviewer reading the file in a diff sees it first. It is for that
+ * review: `nextly migrate` judges a file by its statements, marked or not.
+ */
+export const DESTRUCTIVE_HEADER = "-- Destructive:";
+export const DELETES_HEADER = "-- Deletes:";
+
+/** The destructive mark for `deletions`, or nothing for a file that deletes nothing. */
+function destructiveLines(deletions: readonly Deletion[]): string {
+  if (deletions.length === 0) return "";
+  const consent = consentToCover(deletions);
+  const each = deletions.map(deletion => {
+    // The count belongs to one database; the file runs against others.
+    const uncounted: Deletion =
+      deletion.kind === "unnamed"
+        ? deletion
+        : { ...deletion, count: undefined };
+    return `${DELETES_HEADER} ${oneLine(describeDeletion(uncounted))}\n`;
+  });
+  return (
+    `${DESTRUCTIVE_HEADER} this migration deletes data. nextly migrate needs consent: ${oneLine(consent)}\n` +
+    each.join("")
+  );
+}
+
+/**
+ * `text` on one line. A settings or permissions header names what a config or a plugin declares,
+ * which may hold a line break; one would end the comment and leave the rest of the line as a
+ * statement `nextly migrate` runs. Each break becomes a space.
+ */
+function oneLine(text: string): string {
+  return text.replace(/[\r\n\u2028\u2029]+/g, " ");
+}
 
 /**
  * Marks a file whose entity headers name what the migration CHANGES.
@@ -67,17 +115,6 @@ const SETTINGS_HEADER = "-- Settings:";
  * once the operator names something, which is when they make it.
  */
 export const SCOPED_ENTITIES_MARKER = "-- Entity scope: touched";
-
-/**
- * The marker as a HEADER LINE, which is the only form that counts.
- *
- * 🔴 A substring test reads the marker's own guidance sentence as provenance —
- * and the blank template prints that sentence — so a file whose real marker was
- * removed still answered `scoped`. That is not only a wrong answer: it made the
- * test guarding the marker unable to fail, because the text it searched for was
- * present either way.
- */
-const SCOPED_ENTITIES_PATTERN = /^-- Entity scope: touched$/m;
 
 /**
  * The one-line instruction for annotating a hand-written migration.
@@ -108,8 +145,6 @@ export const ENTITY_HEADER_GUIDANCE =
   `\`${SCOPED_ENTITIES_MARKER}\` if it is not already there. ` +
   "A generated migration's `.sql` is hashed by its paired snapshot, so leave " +
   "that one alone — its entities keep the behaviour they had before";
-export const FIELD_GROUP_HEADER_PATTERN =
-  /^-- (?:Field groups?|Components?):\s*(.+)$/m;
 
 export interface FormatArgs {
   /** Slug-cased migration name (without timestamp prefix or extension). */
@@ -152,10 +187,24 @@ export interface FormatArgs {
    */
   settingsChanges?: readonly string[];
   /**
+   * Each app's or plugin's added and removed permissions, one line per owner,
+   * as `describePermissionChange` writes them. Kept apart from the entity
+   * headers for the same reason as the settings: no table changes with them.
+   */
+  permissionChanges?: readonly string[];
+  /**
    * Whether the file changes no table. Its UP may still hold statements: a
    * Builder entity's registry row travels with its settings.
    */
   changesNoTable?: boolean;
+  /**
+   * What the migration deletes (`plannedDeletions`). A file with any carries
+   * the destructive mark: a `-- Destructive:` line naming the consent `nextly
+   * migrate` needs, and one `-- Deletes:` line per deletion. Counts are left
+   * out: they are of the database `migrate:create` read, and the file runs
+   * against others.
+   */
+  deletions?: readonly Deletion[];
   /** Override generated-at timestamp for tests; default = `new Date()`. */
   now?: Date;
 }
@@ -179,7 +228,10 @@ export function formatMigrationFile(args: FormatArgs): string {
   const scopeLine =
     args.entitiesAreScoped === false ? "" : `${SCOPED_ENTITIES_MARKER}\n`;
   const settingsLines = (args.settingsChanges ?? [])
-    .map(change => `${SETTINGS_HEADER} ${change}\n`)
+    .map(change => `${SETTINGS_HEADER} ${oneLine(change)}\n`)
+    .join("");
+  const permissionLines = (args.permissionChanges ?? [])
+    .map(change => `${PERMISSIONS_HEADER} ${oneLine(change)}\n`)
     .join("");
   // Each statement gets a trailing `;`. splitSqlStatements in migrate.ts
   // splits on `;` so statements MUST be terminated.
@@ -190,16 +242,19 @@ export function formatMigrationFile(args: FormatArgs): string {
   // file must not stop a rollback reaching the migrations before it. So its
   // DOWN is one statement that changes nothing, valid on every dialect.
   const settingsOnly =
-    args.changesNoTable === true && (args.settingsChanges ?? []).length > 0;
+    args.changesNoTable === true &&
+    (args.settingsChanges ?? []).length +
+      (args.permissionChanges ?? []).length >
+      0;
   const downBody =
     args.downSqlStatements.length > 0
       ? args.downSqlStatements.map(s => `${s};`).join("\n\n")
       : settingsOnly
-        ? "-- No table statements to undo: this migration changes settings only.\nSELECT 1;"
+        ? "-- No table statements to undo: this migration changes settings or permissions only.\nSELECT 1;"
         : "-- (no automatic down — this migration is not reversible. Hand-write rollback SQL here)";
 
   return `-- Migration: ${args.name}
-${collectionLine}${singleLine}${componentLine}${userExtLine}${scopeLine}${settingsLines}-- Generated at: ${now}
+${destructiveLines(args.deletions ?? [])}${collectionLine}${singleLine}${componentLine}${userExtLine}${scopeLine}${settingsLines}${permissionLines}-- Generated at: ${now}
 -- Dialect: ${getDialectDisplayName(args.dialect)}
 
 -- UP
@@ -324,52 +379,11 @@ export function slugify(name: string): string {
     .replace(/^_|_$/g, "");
 }
 
-/**
- * The entity slugs a migration's header names.
- *
- * Lives beside {@link formatMigrationFile} for the reason the field-group
- * pattern does: a writer and a reader that each spell the format themselves are
- * two places to change and one place to forget. Two callers read this — the
- * migrate command when it parses a file, and the pending sweep when it asks
- * which entities are still waiting on something.
- *
- * The singular spellings are accepted because files already on disk carry them.
- */
-export interface MigrationEntityHeaders {
-  collections: string[];
-  singles: string[];
-  components: string[];
-  /**
-   * Whether the names above are what this migration CHANGES.
-   *
-   * False for a legacy file, whose header lists the whole config, and for a
-   * hand-written one with no header. A caller deciding ownership must treat
-   * those as unknown rather than as evidence.
-   */
-  scoped: boolean;
-}
-
-const COLLECTIONS_HEADER_PATTERN = /^-- Collections?:\s*(.+)$/m;
-const SINGLES_HEADER_PATTERN = /^-- Singles?:\s*(.+)$/m;
-
-/** The comma-separated slugs on one header line, or none. */
-function headerSlugs(content: string, pattern: RegExp): string[] {
-  const match = content.match(pattern);
-  if (!match?.[1]) return [];
-  return match[1]
-    .split(",")
-    .map(value => value.trim())
-    .filter(value => value.length > 0);
-}
-
-export function parseEntityHeaders(content: string): MigrationEntityHeaders {
-  return {
-    collections: headerSlugs(content, COLLECTIONS_HEADER_PATTERN),
-    singles: headerSlugs(content, SINGLES_HEADER_PATTERN),
-    components: headerSlugs(content, FIELD_GROUP_HEADER_PATTERN),
-    scoped: SCOPED_ENTITIES_PATTERN.test(content),
-  };
-}
+export {
+  FIELD_GROUP_HEADER_PATTERN,
+  parseEntityHeaders,
+  type MigrationEntityHeaders,
+} from "./entity-headers";
 
 /**
  * The header line naming ONE entity, chosen by its kind.

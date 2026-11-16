@@ -30,6 +30,11 @@ export { nextlyDeletedPrincipals } from "../deleted-principals/mysql";
 // is CREATED, and a table in one but not the other is never made.
 export { nextlyPluginSettings } from "../plugin-settings/mysql";
 export { nextlyOneTimeSecrets } from "../one-time-secrets/mysql";
+export { nextlyReceivedWebhooks } from "../received-webhooks/mysql";
+export {
+  nextlyPluginEvents,
+  nextlyPluginEventDeliveries,
+} from "../plugin-events/mysql";
 export { nextlyLimitStore } from "../limit-store/mysql";
 export { nextlyCacheTagExpiries } from "../cache-tag-expiries/mysql";
 export { nextlySpentChallenges } from "../spent-challenges/mysql";
@@ -127,6 +132,9 @@ export { nextlyEmailBrandMysql as nextlyEmailBrand } from "../email-brand/mysql"
 // Version view markers; in the bundle so freshPushSchema creates the table on
 // a fresh database, for the reason the release tables above give.
 export { nextlyVersionViewsMysql as nextlyVersionViews } from "../version-views/mysql";
+export { nextlyReviewStatesMysql as nextlyReviewStates } from "../review-states/mysql";
+export { nextlyWorkflowSettingsMysql as nextlyWorkflowSettings } from "../workflow-settings/mysql";
+export { nextlyScheduleWindowsMysql as nextlyScheduleWindows } from "../schedule-windows/mysql";
 // The record of content events; in the bundle so freshPushSchema creates the
 // tables on a fresh database, for the reason the release tables above give.
 export {

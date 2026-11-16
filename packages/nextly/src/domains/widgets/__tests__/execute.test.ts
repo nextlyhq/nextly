@@ -10,7 +10,7 @@ vi.mock("../../../direct-api/nextly", () => ({
 }));
 
 import { NextlyError } from "../../../errors/nextly-error";
-import { executeWidgetQuery } from "../execute";
+import { countAsCaller, executeWidgetQuery } from "../execute";
 import { openWindowEnd, rangeWindow, validateWidgetQuery } from "../query";
 import { clearSources, registerSource } from "../sources";
 
@@ -436,5 +436,30 @@ describe("a series over a range", () => {
     expect(args.rowsEnd).toEqual(openWindowEnd(now));
     // The intervals are still placed by the batch's instant.
     expect(args.now).toEqual(rangeWindow("7d", now).anchor);
+  });
+});
+
+describe("countAsCaller", () => {
+  it("counts every entry the reader may open, drafts included, as the reader", async () => {
+    // A read naming no status counts published entries only, so a panel's
+    // number would fall short of the list it opens by the drafts in it.
+    await expect(countAsCaller("posts", undefined, caller)).resolves.toBe(7);
+    expect(count).toHaveBeenCalledTimes(1);
+    expect(count).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: "posts",
+        status: "all",
+        overrideAccess: false,
+        user: caller.user,
+      })
+    );
+  });
+
+  it("still narrows by the item's where, beside every status", async () => {
+    const where = { status: { equals: "draft" } };
+    await countAsCaller("posts", where, caller);
+    expect(count).toHaveBeenCalledWith(
+      expect.objectContaining({ collection: "posts", status: "all", where })
+    );
   });
 });

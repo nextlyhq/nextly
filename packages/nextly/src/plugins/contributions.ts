@@ -5,8 +5,10 @@ import type {
   FieldStoragePrimitive,
   FieldSurface,
   FieldTypeCategory,
+  PluginFieldTypeSetting,
 } from "../collections/fields/catalog";
 import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-field";
+import type { JsonValue as JobJsonValue } from "../direct-api/types/jobs";
 import type { GeneratedTypes } from "../direct-api/types/shared";
 import type { RegisteredEmailProvider } from "../domains/email/provider-definition";
 import type { AnyJobDefinition } from "../domains/jobs/job-registry";
@@ -17,6 +19,7 @@ import type { PluginMigration } from "../domains/schema/migrate/plugin/plugin-mi
 import type { DashboardContribution } from "../domains/widgets/declaration/dashboard";
 import type { AnyWidget } from "../domains/widgets/declaration/define-widget";
 import type { FieldGroupConfig } from "../field-groups/config/types";
+import type { EmailTemplateVariable } from "../schemas/email-templates/types";
 import type { SingleConfig } from "../singles/config/types";
 
 import type {
@@ -24,9 +27,11 @@ import type {
   ComponentPath,
 } from "./admin-contributions";
 import type { PluginAuthContributions } from "./auth-contributions";
+import type { ContentTypeScope } from "./content-type-scope";
 import type { EntityTransform } from "./entity-transforms";
 import type { PluginContext } from "./plugin-context";
 import type { PrincipalKindContribution } from "./principals/types";
+import type { PluginProxyHandler } from "./proxy/proxy-types";
 import type { PluginRoute } from "./routes/route-types";
 
 /**
@@ -83,17 +88,72 @@ export interface PluginRole {
 }
 
 /**
- * @experimental A reserved scheduled-task declaration. **Not executed yet**
- * — see `contributes.schedules`. The shape is forward-designed so it stays stable
- * once a durable-jobs backend lands.
+ * @experimental A plugin's schedule: the job it runs once per window of a cron
+ * expression. Each jobs pass (the jobs route, `/admin/api/jobs/run` in a
+ * scaffolded app) enqueues the job for the
+ * latest window that has opened, once, whatever runs the pass and however
+ * often; a schedule's first job is for the first window that opens after the
+ * installation first sees it, and windows missed while nothing called the
+ * jobs route are not run later. Minute schedules need the route called every
+ * minute.
+ */
+export interface PluginSchedule {
+  /** Unique within the plugin, e.g. `'regenerate-sitemap'`. */
+  slug: string;
+  /**
+   * Five-field cron (minute, hour, day of month, month, day of week) or an
+   * alias such as `@daily`, read in `tz`.
+   */
+  cron: string;
+  /** The slug of a job this plugin declares in `contributes.jobs`. */
+  job: string;
+  /** An IANA time zone, e.g. `'Europe/Berlin'`; UTC when absent. */
+  tz?: string;
+  /**
+   * Given to the job with each run, beside `window`: the ISO time the window
+   * opened, which this cannot replace.
+   */
+  input?: { [key: string]: JobJsonValue };
+}
+
+/**
+ * @experimental The earlier scheduled-task declaration.
+ *
+ * @deprecated Declare a {@link PluginSchedule} instead. One in this shape is
+ * mapped to it, with a deprecation notice: `name` is the slug, a cron string
+ * is the cron, an interval in milliseconds of whole minutes dividing an hour
+ * or whole hours dividing a day is the cron that fires on it, and `handler`
+ * runs as a job of its own, given the plugin's context. One that cannot be
+ * mapped (another interval, a cron that does not parse, no handler) is not
+ * run, and a notice says why; it never stops the installation starting.
  */
 export interface ScheduledTask {
   /** Unique, namespaced task name, e.g. `'seo.regenerate-sitemap'`. */
   name: string;
-  /** Cron expression or interval in milliseconds (reserved; not yet honored). */
+  /** Cron expression or interval in milliseconds. */
   schedule: string | number;
-  /** Task handler (reserved — the runtime does not invoke it yet). */
+  /** Task handler, run once per window with the plugin's context. */
   handler?: (ctx: PluginContext) => Promise<void> | void;
+  description?: string;
+}
+
+/**
+ * @experimental A plugin's admin strings, `contributes.translations`: interface
+ * language, then key, then the text.
+ */
+export type PluginTranslations = Readonly<
+  Record<string, Readonly<Record<string, string>>>
+>;
+
+/**
+ * @experimental A webhook event type a plugin declares: `contributes.webhookEvents`.
+ */
+export interface PluginWebhookEventType {
+  /** The type's id, in the plugin's namespace, e.g. `"acme-shop.order.paid"`. */
+  type: string;
+  /** What the admin's webhook form calls it; the id when absent. */
+  label?: string;
+  /** One line on when the event fires. */
   description?: string;
 }
 
@@ -151,7 +211,14 @@ export interface PluginEmailTemplate {
   /** HTML body; supports `{{variable}}` interpolation. */
   htmlContent: string;
   plainTextContent?: string;
-  variables?: Array<{ name: string; description?: string; required?: boolean }>;
+  /**
+   * The variables the template uses, as core's own are declared; a plugin
+   * may leave the description out. `type`, `label`, `example` and `fields`
+   * are `@experimental` and shape only the editor's test data.
+   */
+  variables?: Array<
+    Omit<EmailTemplateVariable, "description"> & { description?: string }
+  >;
   /** Wrap with the shared layout; default true. */
   useLayout?: boolean;
   /**
@@ -202,6 +269,11 @@ export interface PluginEmailTemplate {
 // surface types) so plugin authors keep importing it from the plugin surface.
 export type { FieldSurface };
 
+// Declared in the field catalog, beside the surface and category types, so the
+// admin reads the same shape the plugin writes; re-exported here so plugin
+// authors import it from the plugin surface.
+export type { PluginFieldTypeSetting };
+
 export interface PluginFieldType {
   /** Field type id used as `field.type` (e.g. `"rating"`). Must not collide with a built-in. */
   type: string;
@@ -223,6 +295,14 @@ export interface PluginFieldType {
   icon?: string;
   /** Picker grouping. Defaults to `"Advanced"`. */
   category?: FieldTypeCategory;
+  /**
+   * @experimental The type's own settings, shown in the Schema Builder's
+   * settings panel for every field of the type and stored in the field's
+   * `pluginOptions`. A malformed list refuses boot, naming the plugin, the
+   * type and the setting: a select with no options, a key used twice, or the
+   * reserved keys `type` and `name`.
+   */
+  settings?: readonly PluginFieldTypeSetting[];
   /**
    * Which admin surfaces may offer this type in their field pickers. Omitted
    * means the entry/single editing surface only — a type never auto-appears
@@ -251,9 +331,10 @@ export interface PluginFieldType {
    * Runs after the built-in rules for the storage primitive and BEFORE the
    * field's own `validate`, so a schema author's rule composes on top of this
    * one rather than replacing it. An absent or empty value never reaches here
-   * — that is what `required` is for — and neither does one the storage
-   * primitive already refused, so a validator never has to re-check that it
-   * was handed the shape its type stores.
+   * — that is what `required` is for — unless the type sets `validateEmpty`;
+   * and neither does one the storage primitive already refused, so a
+   * validator never has to re-check that it was handed the shape its type
+   * stores.
    *
    * Return `true` to accept. Return a string for a single problem, or an array
    * when one value can be wrong in several places at once (a structured
@@ -271,6 +352,18 @@ export interface PluginFieldType {
     value: unknown,
     args: PluginFieldValidateArgs
   ) => PluginFieldValidationResult | Promise<PluginFieldValidationResult>;
+  /**
+   * @experimental Run `validate` for an EMPTY value too: a write that sets the
+   * field to `null` or an empty string, which otherwise never reaches it.
+   *
+   * For a type whose stored content a write must not be able to drop without
+   * being asked, such as a page whose blocks an author locked. Judged where
+   * every other rule is, on the data the write's `before*` hooks have left, so
+   * a hook emptying the field is judged as the caller emptying it would be.
+   * The validator then receives the empty value and decides what it means;
+   * required-ness is still reported as before.
+   */
+  validateEmpty?: boolean;
   /**
    * Checks on the field's own DECLARATION, run when a schema is registered
    * rather than when a value is written.
@@ -500,6 +593,14 @@ export interface PluginFieldWrite {
    */
   readonly id?: string;
   /**
+   * The language this write is judged in, for a document whose content is
+   * stored per language. Absent for a document that is not, and where the
+   * write is in the app's default language. A validator reading what this
+   * document already stores passes it on as {@link PluginStoredValueTarget}'s
+   * `locale`, so it compares the value with the same language's stored value.
+   */
+  readonly locale?: string;
+  /**
    * Whether the write runs inside a transaction — a batch, an import, or a
    * caller's own. `readStored` sees what it has written; a read on any other
    * connection does not, and can wait on the connection the transaction holds.
@@ -515,24 +616,56 @@ export interface PluginFieldWrite {
    *
    * Scoped to fields of the validator's own type, and refused otherwise: a
    * type may read the values of its own kind wherever they are stored, and
-   * nothing else. Only top-level fields of a collection are readable.
+   * nothing else. A top-level field of a collection or a single is
+   * readable, and so is one inside named groups, named by its path
+   * (`hero.body`). A field in a repeater's rows, in a field-group instance or
+   * in a group kept per language is not.
    */
   readStored(target: PluginStoredValueTarget): Promise<PluginStoredValue>;
 }
 
-/** @experimental Which stored value {@link PluginFieldWrite.readStored} reads. */
-export interface PluginStoredValueTarget {
-  /** The collection's slug. */
-  readonly collection: string;
-  /** The entry's id. */
-  readonly id: string;
-  /** A top-level field of the validator's own type. */
+/**
+ * @experimental Which stored value {@link PluginFieldWrite.readStored} reads:
+ * one field of a collection's entry, or of a single.
+ */
+export type PluginStoredValueTarget =
+  | PluginStoredEntryTarget
+  | PluginStoredSingleTarget;
+
+/** @experimental What a stored read names in either kind of document. */
+interface PluginStoredFieldTarget {
+  /**
+   * A field of the validator's own type: its name at top level, or its path
+   * through named groups (`hero.body`).
+   */
   readonly field: string;
   /**
    * `published` reads the live row. `draft` reads what an editor's preview
    * reads: the pending working draft where one is shown, else the live row.
    */
   readonly form: "published" | "draft";
+  /**
+   * The language to read, for a field stored per language. Absent: the
+   * language the write is judged in (`PluginFieldWrite.locale`), which is the
+   * app's default language for a write in it. A language that stores no value for the field reads as
+   * absent, never as another language's value. A field not stored per
+   * language has one value, which every language reads.
+   */
+  readonly locale?: string;
+}
+
+/** @experimental A field of one entry of a collection. */
+export interface PluginStoredEntryTarget extends PluginStoredFieldTarget {
+  /** The collection's slug. */
+  readonly collection: string;
+  /** The entry's id. */
+  readonly id: string;
+}
+
+/** @experimental A field of a single, which has one document and no id. */
+export interface PluginStoredSingleTarget extends PluginStoredFieldTarget {
+  /** The single's slug. */
+  readonly single: string;
 }
 
 /**
@@ -647,9 +780,17 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
    * `fieldGroups` each arrive through a `define*` call that has already
    * narrowed them, while these are written inline with nothing to narrow them,
    * so a plugin's own contributed type has to be nameable here.
+   *
+   * `target` names entities by slug, or, as a {@link ContentTypeScope}
+   * (`@experimental`), every content type the site defines except the ones
+   * listed, including Schema Builder types made later. A scope never reaches
+   * Nextly's system types, nor a plugin's own types apart from a collection
+   * marked `siteContent`, and leaves alone a type that already has a field of
+   * the same name rather than refusing to boot. `typesExtendedBy` says which
+   * types a field was added to.
    */
   extend?: Array<{
-    target: string | string[];
+    target: string | string[] | ContentTypeScope;
     fields: AuthorableFieldConfig[];
   }>;
   /**
@@ -741,28 +882,66 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
    */
   declarations?: Record<string, unknown>;
   /**
-   * @experimental Scheduled tasks — **RESERVED, NOT EXECUTED** in this
-   * release. The shape is published so authors aren't surprised by its absence,
-   * but the runtime does not run these yet (a real scheduler needs durable jobs,
-   * D51, because the typical Next.js/serverless deploy has no long-lived
-   * process). Until then: trigger work via an external cron service hitting a
-   * route handler, or react to events (e.g. for cache
-   * invalidation). See `docs/plugins`.
+   * @experimental The plugin's schedules: each runs one of its jobs once per
+   * window of a cron expression ({@link PluginSchedule}). A schedule that
+   * cannot run (an invalid cron or time zone, a job the plugin does not
+   * declare) stops the installation from starting, naming the plugin. An
+   * entry in the earlier {@link ScheduledTask} shape is mapped to this one
+   * with a deprecation notice, or, when it cannot be, not run, with a notice.
    */
-  schedules?: ScheduledTask[];
+  schedules?: Array<PluginSchedule | ScheduledTask>;
   /** @experimental Custom email providers, registered into the provider registry. */
   emailProviders?: PluginEmailProvider[];
   /** @experimental Email templates, seeded idempotently into the DB on boot. */
   emailTemplates?: PluginEmailTemplate[];
   /** @experimental Custom field types — registry seam mapping to a storage primitive + admin component. */
   fieldTypes?: PluginFieldType[];
-  /** @experimental Custom event names this plugin may emit. No first-party plugin declares custom events yet. */
-  events?: Array<{ name: string }>;
+  /**
+   * @experimental Custom event names this plugin may emit. No first-party
+   * plugin declares custom events yet.
+   *
+   * `durable: true` makes an event one the plugin records with the work that
+   * emits it, for core to deliver to each durable subscriber until it
+   * succeeds. Only an event declared so may be emitted durably.
+   */
+  events?: Array<{ name: string; durable?: boolean }>;
+  /**
+   * @experimental The admin's strings this plugin's components show, by
+   * interface language and then by key: `{ en: { "acme-shop.cart.title": "Cart" } }`.
+   *
+   * Each key begins with the plugin's admin slug and a dot. Startup refuses
+   * a key outside that namespace, a malformed key or language, a value that is
+   * not text, and a key another plugin already declares. The admin's own keys
+   * begin with `nextly.`, which no plugin's may, so a plugin slugged `nextly`
+   * can declare none. English is the fallback for a key a language lacks.
+   */
+  translations?: PluginTranslations;
+  /**
+   * @experimental Webhook event types this plugin declares, which an
+   * endpoint may subscribe to beside core's. Distinct from `events`, which are
+   * the plugin's own in-process bus events and never leave the server.
+   *
+   * Each `type` begins with the plugin's admin slug and a dot, and is written
+   * as lower-case segments separated by dots, such as `"acme-shop.order.paid"`
+   * for `@acme/shop`.
+   * Checked at startup, which refuses a type outside that namespace, one of
+   * core's, one declared twice, or one that is malformed.
+   */
+  webhookEvents?: PluginWebhookEventType[];
   /**
    * @public HTTP routes, namespaced under `/plugins/<name>` beneath wherever the
    * app mounts the Nextly handler (`/admin/api` in a scaffolded project).
    */
   routes?: PluginRoute[];
+  /**
+   * @experimental Handlers the site's Proxy asks about every request it
+   * matches, before the page is served (`createNextlyProxy` from
+   * `nextly/runtime`, called from the app's `proxy.ts`). A handler may answer
+   * the request, as a redirect does, set headers on whatever is served, or
+   * pass headers on to the page's render. Checked at startup: each needs a
+   * name, unique within the plugin, and a `handle` function.
+   */
+  proxy?: PluginProxyHandler[];
   /**
    * @public Admin UI contributions: menu, pages + settings and per-collection
    * view overrides. Dashboard widgets are declared under `dashboard`, not

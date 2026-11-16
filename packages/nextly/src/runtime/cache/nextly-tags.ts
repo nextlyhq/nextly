@@ -113,3 +113,13 @@ export function readTags(
 export function nextlySingleTags(slug: string): string[] {
   return [singleTag(slug)];
 }
+
+/**
+ * The tag a read of the site's general settings should carry, so a write to
+ * the settings invalidates every page that shows the site's name, address,
+ * logo or time zone. Its own segment after the namespace, so no collection's
+ * or Single's tag can be spelled the same.
+ */
+export function nextlySiteSettingsTags(): string[] {
+  return ["nextly:system:site-settings"];
+}

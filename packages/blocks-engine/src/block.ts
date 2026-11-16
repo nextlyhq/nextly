@@ -9,8 +9,10 @@
  * return type is opaque here and narrowed by the React binding package. That is
  * what keeps this package dependency-free and usable from any runtime.
  */
-import type { BlockNode, BlockPart, NodeStyles } from "./document";
+import type { ContentModel } from "./content-model";
+import type { BlockNode, BlockPart, NodeStyles, TokenRef } from "./document";
 import type { MigrationMap } from "./migration";
+import type { BoundValue } from "./resolve-bindings";
 
 /** Why a block needs JavaScript in the browser. */
 export interface BlockIsland {
@@ -24,6 +26,17 @@ export interface BlockIsland {
    */
   reason: string;
 }
+
+/**
+ * How deep a list's `item` schemas nest before the editor stops drawing them:
+ * a list of records holding lists, and so on, this many levels down. Any
+ * reader that walks item schemas the editor draws (which relation targets a
+ * search may read, for one) walks exactly this far, so what is drawn and what
+ * is allowed cannot disagree.
+ *
+ * @experimental
+ */
+export const ITEM_SCHEMA_MAX_DEPTH = 4;
 
 /**
  * A prop's schema entry. Structural on purpose: the engine only needs each
@@ -62,7 +75,55 @@ export interface PropSchema {
    * configuration. Registration refuses any other value, naming the prop.
    */
   role?: "content";
+  /**
+   * What an author calls the prop, in plain words: "Image", "Alt text",
+   * "Open in a new tab". The editor's controls are labelled with it, and fall
+   * back to the prop's name, spaced and capitalised, when it is left out.
+   *
+   * For an on/off prop, say what "on" does ("Open by default"), since the
+   * control is a switch and its label is the whole of what it explains.
+   */
+  label?: string;
+  /**
+   * What an author calls each of a select's `options`, keyed by the stored
+   * value: `{ lazy: "Load when near the screen" }`. An option left out is
+   * shown as its value. The stored value never changes with its name.
+   */
+  optionLabels?: Readonly<Record<string, string>>;
+  /**
+   * For a `media` prop, the kinds of file the picker offers, as an `accept`
+   * list (`image/*`), so an image is never given a PDF to draw.
+   */
+  accept?: string;
+  /**
+   * For a `media` or `upload` prop: the block's `url` prop that holds an image
+   * by its address rather than its library id, as core/image's `mediaId` and
+   * `src` are. Declared, never guessed from the props beside it: unbinding an
+   * image a visitor saw by its address keeps that address here, since the
+   * media prop can hold only a library id. Registration refuses one that
+   * names no `url` prop of the block.
+   */
+  addressProp?: string;
   [option: string]: unknown;
+}
+
+/**
+ * The prop that holds an image by its address for the media prop `prop`, as
+ * the block's definition declares it ({@link PropSchema.addressProp}), or
+ * `undefined` when it declares none.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function addressPropOf(
+  props: Readonly<Partial<Record<string, PropSchema>>> | undefined,
+  prop: string
+): string | undefined {
+  const schema = props?.[prop];
+  // Read on a media prop alone, as registration judges it: elsewhere the key
+  // is a block's own extension option.
+  if (schema?.type !== "media" && schema?.type !== "upload") return undefined;
+  const declared = schema.addressProp;
+  return typeof declared === "string" && declared !== "" ? declared : undefined;
 }
 
 /**
@@ -193,6 +254,7 @@ export const BLOCK_ICONS = [
   // Content
   "heading",
   "text",
+  "rich-text",
   "list",
   "quote",
   "code",
@@ -215,6 +277,10 @@ export const BLOCK_ICONS = [
   "user",
   "cart",
   "star",
+  // A component the site made, so the Add panel can say what it is at a glance.
+  "component",
+  // An entry's own content drawn inside its template.
+  "entry",
 ] as const;
 
 /**
@@ -306,6 +372,22 @@ export interface BlockVariation<P extends object = Record<string, unknown>> {
   name: string;
   label?: string;
   props?: Partial<P>;
+  /**
+   * A LOOK rather than an insert preset: the styles of one named variant of the block
+   * (Outline, Rounded), which an author picks for a block already on the page. The site
+   * receives it as a shared style bound to this block type (`blockLooks`), which it may edit;
+   * a variation with styles is not offered as a separate insert entry.
+   *
+   * @experimental
+   */
+  styles?: NodeStyles;
+  /**
+   * Names the block's own look, its `baseStyles`, as one of its looks (a button's Primary).
+   * Carries no styles of its own: wearing it is wearing no look.
+   *
+   * @experimental
+   */
+  isDefault?: true;
 }
 
 /**
@@ -368,6 +450,23 @@ export interface BlockRenderArgs<P, C = unknown> {
    * the convenience of an editor-only component.
    */
   markProp?: (name: string) => Record<string, string>;
+  /**
+   * What each bound prop's value is, by prop name, for a block that wants
+   * more than the value in `props`.
+   *
+   * A bound date reaches a text prop as text, formatted for the reader; its
+   * entry here is `{ kind: "date", datetime }`, the machine-readable value a
+   * block can put in `<time datetime>`. A prop filled from its binding's
+   * fallback says so. A prop showing its own value has no entry, and a block
+   * with no bound prop receives no `bound` at all.
+   *
+   * An argument rather than a field of `ctx`, so it comes from the renderer
+   * that filled the props and cannot be supplied by a block rebuilding the
+   * context its children see.
+   *
+   * @experimental Settles with the editor's binding controls.
+   */
+  bound?: Readonly<Record<string, BoundValue>>;
   /**
    * Render one of this block's slots, optionally under a different context.
    *
@@ -485,6 +584,21 @@ export interface BlockDefinition<
    */
   parts?: Readonly<Record<string, BlockPart>>;
   /**
+   * The space this block puts between the blocks in its slots: a literal
+   * length, the number `0` (which the catalog's `gap` also takes), or a
+   * `{ $token }` reference. A literal must be one both a margin and `gap`
+   * take, so not negative, not `auto` or `normal`, and a single length;
+   * registration refuses anything else.
+   *
+   * Declared by containers, never as a margin on the blocks they hold. A block
+   * carries no outer margin of its own, so the space between two blocks belongs
+   * to whatever holds them; the compiler writes it as a top margin on every
+   * child after the first, and as `gap` once the container is made flex or
+   * grid. In block flow an author's top margin on a child replaces it; under
+   * flex or grid the gap stays and that margin adds to it, as CSS margins do.
+   */
+  childGap?: string | 0 | TokenRef;
+  /**
    * Declared when this block needs JavaScript in the browser to do its job.
    *
    * NOT a hydration mechanism, and deliberately not one. React already decides
@@ -564,6 +678,23 @@ export interface BlockDefinition<
    */
   rendersNothing?(this: void, props: P): boolean;
   /**
+   * What this block is as HTML content for these props, and what it lets sit
+   * beneath it: a Card with its link on is interactive and refuses anything
+   * interactive inside it; a Section rendered as a footer refuses another
+   * footer. The editor and the server both read it through the one placement
+   * rule, so a block whose settings change its HTML is judged by what it
+   * renders, not by its name.
+   *
+   * Optional. A block that declares nothing is flow content accepting flow
+   * content, which is what it was treated as before this existed.
+   *
+   * Pure and synchronous, like {@link BlockDefinition.rendersNothing}, and for
+   * the same reasons; a throw or a malformed answer is read as undeclared.
+   *
+   * @experimental Settles with the editor's placement rule.
+   */
+  contentModel?(this: void, props: P): ContentModel;
+  /**
    * What this block contributes to the page's metadata when the entry's own
    * SEO fields are blank.
    *
@@ -579,8 +710,11 @@ export interface BlockDefinition<
    * would put a network call between a crawler and the page title. An image is
    * returned as a media id or a URL and resolved by the caller, which is what
    * keeps it that way.
+   *
+   * `read.bound` names what each bound prop holds, as the block's render is
+   * given it, so the metadata offers the picture the page draws.
    */
-  seo?(props: P): BlockSeoContribution | undefined;
+  seo?(props: P, read?: BlockSeoRead): BlockSeoContribution | undefined;
   /**
    * Slots this block may decline to render for some props.
    *
@@ -604,6 +738,16 @@ export interface BlockDefinition<
   conditionalSlots?: readonly string[];
   /** Editor-only metadata; never serialized. */
   editor?: BlockEditorMeta<P>;
+}
+
+/**
+ * What a block's `seo` is told about the props it is asked with.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export interface BlockSeoRead {
+  /** What each bound prop holds, by prop name, as its render is given it. */
+  readonly bound?: Readonly<Record<string, BoundValue>>;
 }
 
 /**
@@ -648,6 +792,21 @@ export interface BlockSeoContribution {
  * broken image while a wrong media lookup silently drops the picture.
  */
 export type BlockSeoImage = string | { media: string } | { url: string };
+
+/**
+ * What an author calls one of a select's options: its `optionLabels` entry,
+ * or the option itself.
+ *
+ * One rule for every surface that names a choice, the block's inspector and a
+ * component field a placement edits, so the two never offer one choice in two
+ * spellings.
+ */
+export function optionLabel(schema: PropSchema, option: string): string {
+  const named = schema.optionLabels;
+  if (typeof named !== "object" || named === null) return option;
+  const given = (named as Record<string, unknown>)[option];
+  return typeof given === "string" && given.trim() !== "" ? given : option;
+}
 
 /**
  * Declare a block type. Returns the definition unchanged — its job is to bind
@@ -706,6 +865,7 @@ export interface AnyBlockDefinition
     | "localized"
     | "render"
     | "rendersNothing"
+    | "contentModel"
     | "seo"
   > {
   example: { props: object; slots?: Record<string, BlockNode[]> };
@@ -714,6 +874,8 @@ export interface AnyBlockDefinition
   localized?: string[];
   render(args: BlockRenderArgs<object, unknown>): BlockRenderResult;
   rendersNothing?(this: void, props: object): boolean;
+  /** Widened for the reason `rendersNothing` is: read with stored props. */
+  contentModel?(this: void, props: object): ContentModel;
   /**
    * Widened for the same reason as the members above, and it was the one member
    * that was missed.
@@ -727,5 +889,5 @@ export interface AnyBlockDefinition
    * nothing to fall back on, and EVERY typed definition was rejected by
    * `registerBlocks` whether or not it contributed any SEO at all.
    */
-  seo?(props: object): BlockSeoContribution | undefined;
+  seo?(props: object, read?: BlockSeoRead): BlockSeoContribution | undefined;
 }

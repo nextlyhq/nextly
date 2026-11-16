@@ -1,0 +1,31 @@
+---
+title: REQUIRED_COLUMN_UNCOUNTED
+description: "The rows in the way of a column becoming required could not be counted, so that change was refused before it ran."
+---
+
+## Cause
+
+The rows in the way of a column becoming required could not be counted, so that change was refused before it ran.
+
+Before a change makes a column NOT NULL, Nextly counts the rows of its table that hold no value in it. When that count fails (the database could not be reached, or the table could not be read), the change cannot be known to be safe, so it is refused rather than run and left to the database. The Why line names the table and the field.
+
+In `nextly migrate`, a change that comes after a statement of the same file writing to its table is counted at that statement, when the statements before it have already run. A count that fails there names the file, the statement it stopped at and the statements that ran before it, and says whether they stayed applied (outside a transaction, or a schema change on MySQL) or were rolled back.
+
+A table a migration names through a qualifier (`archive.posts`) is counted only when the qualifier is the one an unqualified name reaches: SQLite's `main`, or MySQL's current database. Any other qualifier may reach another schema, so nothing is counted and the change is refused before anything runs. On PostgreSQL, a change through a qualified name is refused earlier, by the schema guard.
+
+## Fix
+
+The database couldn't be read: check the connection and that the table exists and can be read, then run the command again.
+
+When the refusal names a qualifier, write the table's unqualified name in the migration, then run it again.
+
+When the refusal names statements that stayed applied, check what they left before running the migration again: a statement that writes rows may not be safe to run twice.
+
+## Example
+
+```text
+✗ A column could not be made required, because the rows in its way could not be counted.
+  Why:  Table 'dc_posts': the rows that would break making 'subtitle' required could not be counted, so that change was refused before it ran. Check that the database can be reached and the table read, then try again.
+  Next: Check the database connection and that the table can be read, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/required-column-uncounted  (REQUIRED_COLUMN_UNCOUNTED)
+```

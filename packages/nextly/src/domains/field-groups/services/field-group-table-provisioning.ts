@@ -6,13 +6,17 @@
 // together; the bodies are byte-identical to the versions the dispatcher carried.
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { getColumns, is, Table } from "drizzle-orm";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getSchemaRegistryFromDI } from "../../../dispatcher/helpers/di";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { FieldGroupSchemaService } from "../../../services/field-groups/field-group-schema-service";
 import { consoleLogger } from "../../../shared/types";
-import { appLocalization } from "../../i18n/configured-locales";
+import {
+  appLanguageOrder,
+  appLocalization,
+} from "../../i18n/configured-locales";
 import { refuseTranslatedUniqueThatCannotHold } from "../../i18n/migration/archive-preflight";
 import { applyCompanionTransition } from "../../i18n/migration/held-leaving-drops";
 import {
@@ -21,6 +25,7 @@ import {
 } from "../../i18n/migration/reconcile-companion";
 import { liveCompanionShape } from "../../i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
+import type { BusyTableWait } from "../../schema/services/apply-migration-statements";
 
 /**
  * Whether the in-memory schema was actually refreshed, and why not when it was not.
@@ -37,6 +42,34 @@ export interface RuntimeSchemaRegistration {
   reason?: string;
 }
 
+/**
+ * The column names of the runtime table registered for `tableName`, lowercased, or `undefined`
+ * where no table is registered for it.
+ *
+ * The runtime table is what this process addresses the field group's table as. A start leaves out
+ * of it a field inside a group with no name whose column the table does not hold yet
+ * (`RuntimeSchemaOptions.heldColumns`), and the instance write asks this so it leaves out that
+ * field's value too, rather than naming a column the table lacks.
+ */
+export function registeredComponentColumns(
+  adapter: DrizzleAdapter,
+  tableName: string
+): ReadonlySet<string> | undefined {
+  const registry = getSchemaRegistryFromDI();
+  // The same two places registration writes to, read in the same order.
+  const table = registry
+    ? registry.getTable(tableName)
+    : (
+        adapter as unknown as {
+          tableResolver?: { getTable?: (name: string) => unknown };
+        }
+      ).tableResolver?.getTable?.(tableName);
+  if (!is(table, Table)) return undefined;
+  return new Set(
+    Object.values(getColumns(table)).map(column => column.name.toLowerCase())
+  );
+}
+
 export function registerComponentRuntimeSchema(
   adapter: DrizzleAdapter,
   dialect: string,
@@ -45,7 +78,10 @@ export function registerComponentRuntimeSchema(
   typeColumn: string,
   // i18n: when localized, the main comp_ runtime table omits translatable columns and the
   // companion comp_<slug>_locales runtime table is registered for per-language reads/writes.
-  localized = false
+  localized = false,
+  // The columns the live table holds, where the caller read them; see
+  // `RuntimeSchemaOptions.heldColumns`. Omitted after a create or a save, which leave every column.
+  heldColumns?: readonly string[]
 ): RuntimeSchemaRegistration {
   try {
     const fieldGroupSchemaService = new FieldGroupSchemaService(
@@ -54,7 +90,7 @@ export function registerComponentRuntimeSchema(
     const runtimeTable = fieldGroupSchemaService.generateRuntimeSchema(
       tableName,
       fields,
-      { localized, typeColumn }
+      { localized, typeColumn, heldColumns }
     );
     const companion = localized
       ? buildCompanionRuntimeTable({
@@ -163,6 +199,8 @@ export async function reconcileComponentCompanion(args: {
    * throwing when they are refused. Left out, each column is dropped right after its copy.
    */
   settleLeaving?: () => Promise<void>;
+  /** A Schema Builder save's wait for a busy table (`applyCompanionTransition`). */
+  busyTable?: BusyTableWait;
   // Whether any DDL actually ran. The caller cannot derive this from the request: a field-set
   // change on a group that was and remains non-localized reaches here and moves nothing, and a
   // caller that inferred "the tables changed" from the request shape would report a physical
@@ -200,6 +238,7 @@ export async function reconcileComponentCompanion(args: {
     tableName,
     dialect,
     defaultLocale,
+    languageOrder: appLanguageOrder(),
     // Components are never Draft/Published — companion has no `_status`.
     status: false,
     // And never had one, so the disable restore has no status to carry back.
@@ -226,6 +265,7 @@ export async function reconcileComponentCompanion(args: {
     adapter,
     plan,
     settleLeaving: args.settleLeaving,
+    ...(args.busyTable === undefined ? {} : { busyTable: args.busyTable }),
     kind: "fieldGroup",
     slug,
     tableName,
@@ -263,10 +303,26 @@ export async function resolveComponentTypeColumn(
   adapter: DrizzleAdapter,
   tableName: string
 ): Promise<string> {
-  const { resolveTypeColumns } = await import(
+  // Derived from the fuller answer, read by the same one catalog listing.
+  return (await resolveComponentTableColumns(adapter, tableName)).typeColumn;
+}
+
+/**
+ * {@link resolveComponentTypeColumn} with the columns the table holds, for a caller that registers
+ * the runtime table over a table it does not alter: a field inside a group with no name whose
+ * column the table lacks yet is then left out of it (`RuntimeSchemaOptions.heldColumns`).
+ */
+export async function resolveComponentTableColumns(
+  adapter: DrizzleAdapter,
+  tableName: string
+): Promise<{ typeColumn: string; columns: readonly string[] | undefined }> {
+  const { resolveTableColumns } = await import(
     "../storage/resolve-storage-names"
   );
   const { STORAGE_FORMAT } = await import("../../../schemas/storage-format");
-  const typeColumns = await resolveTypeColumns(adapter, [tableName]);
-  return typeColumns.get(tableName) ?? STORAGE_FORMAT.columns.type;
+  const held = (await resolveTableColumns(adapter, [tableName])).get(tableName);
+  return {
+    typeColumn: held?.typeColumn ?? STORAGE_FORMAT.columns.type,
+    columns: held?.columns,
+  };
 }

@@ -52,7 +52,10 @@ export type WebhookDeliveryStatus =
 /** The resource an event was about, surfaced from the joined event row. */
 export interface WebhookDeliveryResource {
   kind: string;
+  /** The collection an entry belongs to, or a slugged resource's slug; null for a plugin's event. */
   collection: string | null;
+  /** The admin slug of the plugin that recorded the event, for kind `plugin`. */
+  plugin?: string | null;
   id: string | null;
   /**
    * Which translation changed, for a localized resource. Two writes to the
@@ -129,6 +132,32 @@ interface DeliveryJoinRow {
   // column) is read from it.
   payload: unknown;
   eventCreatedAt: Date;
+}
+
+/**
+ * The resource as the delivery log presents it.
+ *
+ * A plugin's event keeps the plugin's admin slug in the scope column, the
+ * column a collection's slug lives in for an entry. Presented as `plugin`,
+ * with `collection` null, so the log never shows a plugin's event as an
+ * entry of a collection that happens to share the plugin's slug.
+ */
+function deliveryResource(row: DeliveryJoinRow): WebhookDeliveryResource {
+  if (row.resourceKind === "plugin") {
+    return {
+      kind: "plugin",
+      plugin: row.resourceCollection,
+      collection: null,
+      id: row.resourceId,
+      locale: null,
+    };
+  }
+  return {
+    kind: row.resourceKind,
+    collection: row.resourceCollection,
+    id: row.resourceId,
+    locale: localeFromPayload(row.payload),
+  };
 }
 
 /**
@@ -282,25 +311,18 @@ export class WebhookDeliveryQueryService extends BaseService {
       webhookId: row.webhookId,
       eventId: row.eventId,
       eventType: row.eventType,
-      resource: {
-        kind: row.resourceKind,
-        collection: row.resourceCollection,
-        id: row.resourceId,
-        locale: localeFromPayload(row.payload),
-      },
+      resource: deliveryResource(row),
       status: row.status as WebhookDeliveryStatus,
       attemptCount: row.attemptCount,
       lastStatusCode: row.lastStatusCode,
       lastLatencyMs: row.lastLatencyMs,
       lastError: row.lastError,
-      // Dialect-aware instant recovery: a SQLite epoch Date is already correct,
-      // while a naive Postgres/MySQL Date is reinterpreted as UTC. Returning the
-      // corrected Date lets the response layer serialize the right ISO-8601
-      // instant on every dialect, on a UTC or non-UTC server alike.
-      nextAttemptAt: dbTimestampToInstant(row.nextAttemptAt, this.dialect),
-      eventCreatedAt: dbTimestampToInstant(row.eventCreatedAt, this.dialect),
-      createdAt: dbTimestampToInstant(row.createdAt, this.dialect),
-      updatedAt: dbTimestampToInstant(row.updatedAt, this.dialect),
+      // The adapter hands back each stamp as the instant stored, on every
+      // dialect and in any server time zone; an invalid one reads as none.
+      nextAttemptAt: dbTimestampToInstant(row.nextAttemptAt),
+      eventCreatedAt: dbTimestampToInstant(row.eventCreatedAt),
+      createdAt: dbTimestampToInstant(row.createdAt),
+      updatedAt: dbTimestampToInstant(row.updatedAt),
     };
   }
 

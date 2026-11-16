@@ -9,6 +9,8 @@ export interface User {
   roles: string[];
   created: string;
   image?: string;
+  /** Their own interface language, a language tag; null follows the browser. */
+  interfaceLanguage?: string | null;
   password: string;
   isActive?: boolean;
   createdAt?: string;

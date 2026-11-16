@@ -168,7 +168,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
         overrideAccess: true,
         locale: "es",
       },
-      { heading: "Hola" }
+      { heading: "Hola", _overwrite: true }
     );
     expect(spanish.success, JSON.stringify(spanish)).toBe(true);
     return id;
@@ -189,7 +189,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
     ]) {
       const written = await singles.update(
         "hero",
-        { heading, views: 7 },
+        { heading, views: 7, _overwrite: true },
         { locale, overrideAccess: true }
       );
       expect(written.success, JSON.stringify(written)).toBe(true);
@@ -586,7 +586,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
       current.getService("singleEntryService");
     const written = await singles.update(
       "hero",
-      { heading: "Hello", views: 7 },
+      { heading: "Hello", views: 7, _overwrite: true },
       { overrideAccess: true }
     );
     expect(written.success, JSON.stringify(written)).toBe(true);
@@ -1023,7 +1023,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
         overrideAccess: true,
         locale: "es",
       },
-      { heading: "Hola" }
+      { heading: "Hola", _overwrite: true }
     );
     expect(spanish.success, JSON.stringify(spanish)).toBe(true);
     return id;
@@ -1163,10 +1163,9 @@ describeEachDialect("a translated field that is renamed", dialect => {
   const RENAMED_SHARED_PATHS = [
     {
       path: "the builder saves the collection",
-      // Saved through the schema service's own ALTER, which on SQLite renders no column
-      // modification (`generateAlterTableMigration`), so the NOT NULL a Required setting adds
-      // once the values are shared is not applied there.
-      sqliteSkipsColumnModification: true,
+      // Saved through the schema pipeline's push, as the dialog applies it, which rebuilds a
+      // SQLite table to apply the NOT NULL a Required setting adds once the values are shared.
+      sqliteSkipsColumnModification: false,
       table: "dc_posts",
       seed: seedCollection,
       change: async (fields: unknown[]) => {
@@ -1202,10 +1201,9 @@ describeEachDialect("a translated field that is renamed", dialect => {
     },
     {
       path: "a Single's schema is saved",
-      // Saved through the schema service's own ALTER, which on SQLite renders no column
-      // modification (`generateAlterTableMigration`), so the NOT NULL a Required setting adds
-      // once the values are shared is not applied there.
-      sqliteSkipsColumnModification: true,
+      // On SQLite the save rebuilds the table to apply the NOT NULL a Required setting adds once
+      // the values are shared, which the schema service's ALTER cannot express there.
+      sqliteSkipsColumnModification: false,
       table: "single_hero",
       seed: seedSingle,
       change: async (fields: unknown[]) => {
@@ -1292,8 +1290,9 @@ describeEachDialect("a translated field that is renamed", dialect => {
     "refuses a field renamed, made shared and Required while an entry has no English value, and changes nothing, when $path",
     async ({ table, seed, change }) => {
       const id = await seed();
+      // No language has a value, so whichever the entry keeps, it would be left without one.
       await query(
-        `DELETE FROM ${quote(dialect, `${table}_locales`)} WHERE ${quote(dialect, "_locale")} = 'en'`
+        `UPDATE ${quote(dialect, `${table}_locales`)} SET ${quote(dialect, "heading")} = NULL`
       );
 
       const refusal = await change(renamedShared({ required: true })).then(
@@ -1301,9 +1300,12 @@ describeEachDialect("a translated field that is renamed", dialect => {
         (error: unknown) => error
       );
 
-      expect(reported(refusal)).toMatch(/1 entry has no English title2/);
+      expect(reported(refusal)).toMatch(
+        /1 entry would have no title2 once it is shared/
+      );
       expect(await companionValues(table, "heading", id)).toEqual({
-        es: "Hola",
+        en: null,
+        es: null,
       });
       expect(await columnsOf(table)).not.toContain("title2");
     }
@@ -1981,7 +1983,11 @@ describeEachDialect("a translated field that is renamed", dialect => {
       (error: unknown) => error
     );
 
-    expect(reported(refusal)).toMatch(/nothing was changed/);
+    // Refused before any statement runs, naming the column in the way, rather than by the
+    // database once the RENAME is tried.
+    expect(reported(refusal)).toMatch(
+      /RENAME_TARGET_TAKEN.*table 'single_hero_locales' already has a column 'title2'/
+    );
     expect(await companionValues("single_hero", "heading", id)).toEqual({
       en: "Hello",
       es: "Hola",
@@ -2000,5 +2006,59 @@ describeEachDialect("a translated field that is renamed", dialect => {
       en: "Hello",
       es: "Hola",
     });
+  });
+
+  it("keeps a shared field's values through its rename when the same save adds a translated field", async () => {
+    // The rename is the main table's: decided on the shared fields, as the
+    // migration file decides it, not on every field, where the added
+    // translated one makes it look like one removed and two added.
+    const id = await seedCollection();
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      {
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "count", type: "number" },
+          { name: "subtitle", type: "text" },
+        ],
+      }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    expect(await columnsOf("dc_posts")).not.toContain("views");
+    expect(Number(await mainValue("dc_posts", "count", id))).toBe(7);
+  });
+
+  it("turns translation off over entries with a Required translated field, keeping its value and its Required", async () => {
+    // The column reaches the main table from the companion, so it is added
+    // without NOT NULL, filled by the restore, and made Required after it.
+    const created = await handler().createCollection({
+      name: "posts",
+      label: "Post",
+      localized: true,
+      fields: [{ name: "heading", type: "text", required: true }],
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const entry = await handler()
+      .getEntryService()
+      .createEntry(
+        { collectionName: "posts", overrideAccess: true, locale: "en" },
+        { heading: "Hello" }
+      );
+    expect(entry.success, JSON.stringify(entry)).toBe(true);
+    const id = String((entry.data as { id: unknown }).id);
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      {
+        localized: false,
+        fields: [{ name: "heading", type: "text", required: true }],
+      }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    expect(await mainValue("dc_posts", "heading", id)).toBe("Hello");
+    expect(await isNotNull("dc_posts", "heading")).toBe(true);
   });
 });

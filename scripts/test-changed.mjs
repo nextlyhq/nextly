@@ -32,7 +32,7 @@
  * on a passing run: both legs run, with the verdicts they gave before.
  *
  * Usage (from the pre-push, after the build):
- *   node scripts/test-changed.mjs [base] [--max-workers=N]   # base defaults to origin/main
+ *   node scripts/test-changed.mjs [base] [--max-workers=N]   # base defaults to origin/dev
  *
  * @module scripts/test-changed
  */
@@ -48,6 +48,7 @@ import {
   workspacesFrom,
 } from "./gate-scope.mjs";
 import { isCliEntry } from "./cli-entry.mjs";
+import { INTEGRATION_BASE } from "./integration-branch.mjs";
 import { pnpmInvocation } from "./pnpm-invocation.mjs";
 
 /**
@@ -520,7 +521,7 @@ function testScripts(root, paths) {
  */
 function optionsFrom(argv) {
   return {
-    base: argv.find(arg => !arg.startsWith("--")) ?? "origin/main",
+    base: argv.find(arg => !arg.startsWith("--")) ?? INTEGRATION_BASE,
     scriptsOnly: argv.includes("--scripts-only"),
     all: argv.includes("--all") ? "every test was asked for (NEXTLY_PREPUSH_ALL_TESTS=1)" : null,
     workers: workersFrom(argv),

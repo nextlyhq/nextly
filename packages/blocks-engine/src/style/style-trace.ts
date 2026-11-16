@@ -54,7 +54,13 @@ export type StyleOrigin =
    * reads its name: an inspector offering to open the class needs the first, and a label needs
    * the second.
    */
-  | { kind: "class"; id: string; slug: string }
+  | {
+      kind: "class";
+      id: string;
+      slug: string;
+      /** The block type a look is bound to; absent for a shared style. */
+      blockType?: string;
+    }
   /** One node's own values. */
   | { kind: "node"; id: string };
 

@@ -11,6 +11,9 @@
 
 import type { SubmissionDocument, FormDocument, AnyFormField } from "../types";
 
+import { askedField, askedFieldsOf, type AskedField } from "./asked-fields";
+import { isConsentAnswer } from "./consent";
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -131,7 +134,9 @@ function safeString(value: unknown): string {
  */
 export function formatExportValue(
   value: unknown,
-  field?: AnyFormField
+  // Only the field's type decides how a value reads, so a field as a
+  // submission was asked it reads the same as the form's own.
+  field?: { readonly type: string }
 ): string {
   // Handle null/undefined
   if (value === null || value === undefined) {
@@ -176,6 +181,14 @@ export function formatExportValue(
       case "hidden":
         return safeString(value);
 
+      case "consent":
+        // The choice with the text the visitor was shown, which is what the
+        // answer records; the form's text today may differ.
+        if (isConsentAnswer(value)) {
+          return `${value.agreed ? "Agreed" : "Not agreed"}: "${value.text}"`;
+        }
+        return safeString(value);
+
       default:
         // text, email, phone, url, textarea, number, radio
         break;
@@ -196,6 +209,63 @@ export function formatExportValue(
   }
 
   return safeString(value);
+}
+
+/**
+ * A choice answer by its options' labels as asked, several joined. A value
+ * no option has (an option removed since) reads as itself.
+ */
+export function optionLabels(
+  field: Pick<AskedField, "options">,
+  value: unknown
+): string {
+  const values = Array.isArray(value) ? value : [value];
+  return values
+    .map(each => {
+      const text = typeof each === "string" ? each : formatExportValue(each);
+      return (
+        field.options?.find(option => option.value === text)?.label ?? text
+      );
+    })
+    .join(", ");
+}
+
+/** The kinds of field answered by picking among options. */
+const CHOICE_TYPES: ReadonlySet<string> = new Set(["select", "radio"]);
+
+/**
+ * An answer as one line of text, read with the field as it was asked: a
+ * choice by its options' labels, so a list and an export read "Backend
+ * engineer" rather than the stored `backend-engineer`; anything else as
+ * `formatExportValue` reads it.
+ */
+function answerText(value: unknown, field: AskedField): string {
+  if (value === null || value === undefined) return "";
+  return CHOICE_TYPES.has(field.type)
+    ? optionLabels(field, value)
+    : formatExportValue(value, field);
+}
+
+/**
+ * A submission's answers as text, each read with its field as the submission
+ * was asked it, or as the form has it now for a field it was not asked (one
+ * added since) or a submission stored before submissions kept that. The
+ * submissions list and the CSV export both read answers through this, so the
+ * two cannot show one answer differently.
+ */
+export function answerReader(
+  submission: { data?: Record<string, unknown> | null; asked?: unknown },
+  formFields: readonly AnyFormField[]
+): (field: AnyFormField) => string {
+  const data = submission.data ?? {};
+  const asked = new Map(
+    askedFieldsOf(submission.asked, formFields, data).fields.map(each => [
+      each.name,
+      each,
+    ])
+  );
+  return field =>
+    answerText(data[field.name], asked.get(field.name) ?? askedField(field));
 }
 
 /**
@@ -264,7 +334,8 @@ function escapeCSVValue(value: string, delimiter: string = ","): string {
  * Export submissions to CSV format.
  *
  * Generates an RFC 4180 compliant CSV string with:
- * - Form field values as columns (in form definition order)
+ * - Form field values as columns (in form definition order), headed by the
+ *   fields' labels, a choice answer by its option's label
  * - Optional metadata columns at the end (_id, _status, _submittedAt, etc.)
  * - Proper escaping of special characters
  * - Optional UTF-8 BOM for Excel compatibility
@@ -317,13 +388,12 @@ export function exportToCSV(
 
   for (const submission of submissions) {
     const row: string[] = [];
-    const data = submission.data;
+    // Each answer as the list shows it: a choice by its option's label.
+    const answer = answerReader(submission, exportableFields);
 
     // Form field values
     for (const field of exportableFields) {
-      const value = data[field.name];
-      const formatted = formatExportValue(value, field);
-      row.push(escapeCSVValue(formatted, delimiter));
+      row.push(escapeCSVValue(answer(field), delimiter));
     }
 
     // Metadata values

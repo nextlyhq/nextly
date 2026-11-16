@@ -129,7 +129,7 @@ describe("a call between inner services keeps its operation's languages", () => 
     await entryService().bulkUpdateEntries({
       collectionName: "posts",
       ids: ["a", "b"],
-      data: { title: "x" },
+      data: { title: "x", _overwrite: true },
       overrideAccess: false,
     });
 
@@ -183,7 +183,7 @@ describe("an operation that reaches past the language it names", () => {
       // The reserved filter is outside `WhereFilter`'s published shape, as
       // the translation worklist passes it.
       where: translatedFilter("fr", "missing") as never,
-      data: { title: "x" },
+      data: { title: "x", _overwrite: true },
       overrideAccess: false,
     });
 

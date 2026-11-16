@@ -20,14 +20,14 @@
  *
  * ## `--apply` needs the operator's word on the hasher
  *
- * An app may pass its own `passwordHasher` to `getNextly`, in its code rather
- * than in `nextly.config.ts`, so this command cannot see one. A hasher that
+ * The command loads `nextly.config.ts`, and a value the configured
+ * `auth.passwordHasher` recognises is never counted. It cannot see a hasher
+ * passed to `getNextly` in code, or one the app used before: a hasher that
  * writes a format the clean-up does not recognise would have its hashes taken
  * for plain text, and clearing them locks those people out. So `--apply` also
- * needs `--confirm-default-hasher`, the operator's statement that no stored
- * password was written by a custom hasher, now or earlier: an app that once
- * passed one and no longer does may still hold its hashes. Without it nothing
- * is written.
+ * needs `--confirm-default-hasher`, the operator's statement that every stored
+ * password was written by core's bcrypt or by the configured hasher, now and
+ * earlier. Without it nothing is written.
  *
  * @module cli/commands/clear-plaintext-passwords
  */
@@ -35,6 +35,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import type { PasswordHasher } from "../../auth/password/policy";
 import { PlainTextPasswordCleanup } from "../../domains/users/services/plaintext-password-cleanup";
 import { consoleLogger } from "../../services/shared";
 import { exitWithError } from "../errors";
@@ -43,23 +44,37 @@ import { passwordClearUnconfirmed } from "../errors/areas/commands";
 // module adds no runtime import of the program that registers it.
 import type { CommandContext, GlobalOptions } from "../program";
 import { withAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
+import { loadConfig } from "../utils/config-loader";
 
-export const CLEAR_PLAINTEXT_PASSWORDS_COMMAND =
-  "users:clear-plaintext-passwords";
+import {
+  CLEAR_PLAINTEXT_PASSWORDS_COMMAND,
+  CONFIRM_DEFAULT_HASHER,
+} from "./clear-plaintext-passwords.command";
 
-const CONFIRM_DEFAULT_HASHER = "--confirm-default-hasher";
+export {
+  CLEAR_PLAINTEXT_PASSWORDS_COMMAND,
+  registerClearPlaintextPasswordsCommand,
+} from "./clear-plaintext-passwords.command";
 
-/** The warning every count carries, since a custom hasher is invisible here. */
+/**
+ * The warning every count carries: the configured hasher's values are never
+ * counted, but a hasher outside the config, or an earlier one, is invisible.
+ */
 const CUSTOM_HASHER_WARNING =
-  "If your app passes, or ever passed, a passwordHasher to getNextly, these may be its hashes: do not clear them.";
+  "If your app passes a passwordHasher to getNextly rather than in nextly.config.ts, or ever used another, these may be its hashes: do not clear them.";
 
-/** The clean-up over a CLI connection. */
+/**
+ * The clean-up over a CLI connection, recognising the config's
+ * `auth.passwordHasher`, when it sets one, as the app's sign-in does.
+ */
 export function plainTextPasswordCleanup(
-  adapter: CLIDatabaseAdapter
+  adapter: CLIDatabaseAdapter,
+  hasher?: PasswordHasher
 ): PlainTextPasswordCleanup {
   return new PlainTextPasswordCleanup(
     adapter as unknown as DrizzleAdapter,
-    consoleLogger
+    consoleLogger,
+    { hasher }
   );
 }
 
@@ -93,10 +108,19 @@ export async function runClearPlaintextPasswords(
   }
   logger.keyValue("Mode", apply ? "apply" : "preview (nothing is written)");
   logger.newline();
+  // The config names the app's hasher, whose values are never counted, and
+  // the PostgreSQL schema the accounts live in.
+  const { config } = await loadConfig({
+    configPath: context.options.config,
+    cwd: context.options.cwd,
+  });
 
   return withAdapter(
     async adapter => {
-      const cleanup = plainTextPasswordCleanup(adapter);
+      const cleanup = plainTextPasswordCleanup(
+        adapter,
+        config.auth?.passwordHasher
+      );
       const count = apply
         ? await cleanup.clear()
         : (await cleanup.find()).length;
@@ -117,39 +141,28 @@ export async function runClearPlaintextPasswords(
   );
 }
 
-export function registerClearPlaintextPasswordsCommand(
-  program: Command,
+/**
+ * The action of `nextly users:clear-plaintext-passwords`, loaded when it
+ * runs, building its context with the factory the program hands in.
+ */
+export function clearPlaintextPasswordsAction(
   createContext: (options: GlobalOptions) => CommandContext
-): void {
-  program
-    .command(CLEAR_PLAINTEXT_PASSWORDS_COMMAND)
-    .description(
-      "Find accounts holding a password stored as given, and with --apply clear it and end their sessions"
-    )
-    .option(
-      "--apply",
-      "Clear the values (without this, the command only previews)",
-      false
-    )
-    .option(
-      CONFIRM_DEFAULT_HASHER,
-      "With --apply: state that no stored password was written by a custom passwordHasher, now or earlier",
-      false
-    )
-    .action(
-      async (
-        cmdOptions: { apply?: boolean; confirmDefaultHasher?: boolean },
-        cmd: Command
-      ) => {
-        const context = createContext(cmd.optsWithGlobals());
-        // A refused apply wrote nothing, and says so with its exit status.
-        await runClearPlaintextPasswords(
-          cmdOptions.apply === true,
-          context,
-          cmdOptions.confirmDefaultHasher === true
-        ).catch((error: unknown) => {
-          exitWithError(context.logger, error);
-        });
-      }
-    );
+): (
+  cmdOptions: { apply?: boolean; confirmDefaultHasher?: boolean },
+  cmd: Command
+) => Promise<void> {
+  return async (
+    cmdOptions: { apply?: boolean; confirmDefaultHasher?: boolean },
+    cmd: Command
+  ) => {
+    const context = createContext(cmd.optsWithGlobals());
+    // A refused apply wrote nothing, and says so with its exit status.
+    await runClearPlaintextPasswords(
+      cmdOptions.apply === true,
+      context,
+      cmdOptions.confirmDefaultHasher === true
+    ).catch((error: unknown) => {
+      exitWithError(context.logger, error);
+    });
+  };
 }

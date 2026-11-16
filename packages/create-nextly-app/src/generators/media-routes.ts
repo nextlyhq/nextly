@@ -95,6 +95,19 @@ export const ADMIN_LAYOUT = {
   importsConfig: true,
 } as const;
 
+/**
+ * The admin component map's two generated files, under the app's source root,
+ * as the base template commits them: the admin layout imports the list, and
+ * the admin page imports the map that registers the components. Read with the
+ * routes, so an app Nextly is added to starts from the template's own empty
+ * map rather than a second one written out here, and `next dev` rewrites them
+ * as plugins are added.
+ */
+export const ADMIN_COMPONENT_MAP_FILES = [
+  "types/generated/plugin-admin-components.generated.ts",
+  "types/generated/plugin-admin-imports.generated.ts",
+] as const;
+
 /** Every file the existing-app path writes from the templates, read together. */
 const ALL_ROUTES: readonly { path: string; importsConfig: boolean }[] = [
   ...ROUTES,
@@ -245,6 +258,20 @@ export async function readMediaRouteTemplates(
       );
     }
     texts.set(route.path, text);
+  }
+  for (const file of ADMIN_COMPONENT_MAP_FILES) {
+    const relative = `base/src/${file}`;
+    try {
+      texts.set(
+        file,
+        await fs.readFile(path.join(templatesDir, relative), "utf-8")
+      );
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? "unreadable";
+      throw new Error(
+        `The templates at ${templatesDir} have no readable ${relative} (${code}), so Nextly's admin component map cannot be added. Nothing was installed or written; check the --local-template path if one was given.`
+      );
+    }
   }
   return texts;
 }

@@ -133,6 +133,18 @@ export function registeredCachedRead(): CachedRead | undefined {
   return state().cachedRead;
 }
 
+/**
+ * Whether the app has registered its `"use cache"` read function in this
+ * process, so `cachedFind` reads through it rather than `unstable_cache`.
+ * Asked by code an app bundles that must not read through `unstable_cache`
+ * under Cache Components: there a miss is a query still pending when a
+ * prerender stops, and the build fails. Derived from `registeredCachedRead`,
+ * the function `cachedFind` itself reads through, so the two cannot disagree.
+ */
+export function cachedReadRegistered(): boolean {
+  return registeredCachedRead() !== undefined;
+}
+
 /** The reason an unregistered read is refused with, matched on the way back out. */
 const UNREGISTERED = "unregistered-cached-read";
 

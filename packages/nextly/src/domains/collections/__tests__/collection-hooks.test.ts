@@ -391,7 +391,7 @@ describe("CollectionEntryService — Hook Contracts", () => {
 
       await service.updateEntry(
         { overrideAccess: true, collectionName: "posts", entryId: "entry-1" },
-        { title: "Updated" }
+        { title: "Updated", _overwrite: true }
       );
 
       expect(callOrder[0]).toBe("beforeOperation");
@@ -404,7 +404,7 @@ describe("CollectionEntryService — Hook Contracts", () => {
 
       await service.updateEntry(
         { overrideAccess: true, collectionName: "posts", entryId: "entry-1" },
-        { title: "Updated" }
+        { title: "Updated", _overwrite: true }
       );
 
       expect(mockHookRegistry.executeBeforeOperation).toHaveBeenCalledWith(
@@ -652,7 +652,7 @@ describe("CollectionEntryService — Hook Contracts", () => {
 
       const result = await service.updateEntry(
         { overrideAccess: true, collectionName: "posts", entryId: "entry-1" },
-        { title: "Updated" }
+        { title: "Updated", _overwrite: true }
       );
 
       expect(result.success).toBe(false);

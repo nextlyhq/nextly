@@ -162,7 +162,11 @@ export function UploadEditor({
             description="Upload multiple files"
           />
         </div>
-        <Switch checked={hasMany || false} onCheckedChange={onHasManyChange} />
+        <Switch
+          aria-label="Allow multiple"
+          checked={hasMany || false}
+          onCheckedChange={onHasManyChange}
+        />
       </div>
 
       {/* File Type Filter */}
@@ -180,7 +184,10 @@ export function UploadEditor({
               handleMimeCategoryChange(value)
             }
           >
-            <SelectTrigger className="h-8 text-sm">
+            <SelectTrigger
+              aria-label="Allowed file types"
+              className="h-8 text-sm"
+            >
               <SelectValue placeholder="Select file type" />
             </SelectTrigger>
             <SelectContent>
@@ -209,6 +216,7 @@ export function UploadEditor({
               description="Comma-separated MIME types or patterns (e.g., image/*)"
             />
             <Input
+              aria-label="Custom MIME Types"
               value={mimeTypes || ""}
               onChange={e => handleCustomMimeTypeChange(e.target.value)}
               placeholder="e.g., image/png,image/jpeg,application/pdf"
@@ -226,6 +234,7 @@ export function UploadEditor({
           />
           <div className="flex gap-2">
             <Input
+              aria-label="Max file size"
               type="number"
               min={0}
               value={fileSizeValue}
@@ -239,7 +248,10 @@ export function UploadEditor({
                 handleFileSizeUnitChange(value)
               }
             >
-              <SelectTrigger className="h-8 text-sm w-20">
+              <SelectTrigger
+                aria-label="Max file size unit"
+                className="h-8 text-sm w-20"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -274,6 +286,7 @@ export function UploadEditor({
             />
           </div>
           <Switch
+            aria-label="Allow create"
             checked={allowCreate !== false}
             onCheckedChange={onAllowCreateChange}
           />

@@ -20,6 +20,7 @@ import type {
   EmailFieldConfig,
   PasswordFieldConfig,
   CodeFieldConfig,
+  IconFieldConfig,
   NumberFieldConfig,
   CheckboxFieldConfig,
   SelectFieldConfig,
@@ -77,6 +78,11 @@ const RichTextInput = lazy(() =>
 const CodeInput = lazy(() =>
   import("./text/CodeInput").then(mod => ({ default: mod.CodeInput }))
 );
+// IconInput names the icon set's dynamic import. Lazy, so that import sits in
+// a chunk of its own and the admin's main bundle never references the set.
+const IconInput = lazy(() =>
+  import("./special/IconInput").then(mod => ({ default: mod.IconInput }))
+);
 
 // Special inputs
 
@@ -89,6 +95,14 @@ function EditorSkeleton() {
       <span className="text-sm text-muted-foreground">Loading editor...</span>
     </div>
   );
+}
+
+/**
+ * Stands in for the icon field while its control loads: the field's own
+ * height, so the form does not shift when the control arrives.
+ */
+function IconFieldSkeleton() {
+  return <div className="h-10 rounded-md bg-muted" />;
 }
 
 /**
@@ -189,6 +203,7 @@ function getNestedError(
  * ### Text Fields
  * - `text` - Single-line text input
  * - `textarea` - Multi-line text area
+ * - `icon` - One icon, chosen from a search-first picker
  *
  * ### Number Fields
  * - `number` - Number input with min/max/step
@@ -434,6 +449,15 @@ export function FieldRenderer({
           </ClientOnly>
         );
 
+      case "icon":
+        return (
+          <ClientOnly fallback={<IconFieldSkeleton />}>
+            <Suspense fallback={<IconFieldSkeleton />}>
+              <IconInput {...commonProps} field={field as IconFieldConfig} />
+            </Suspense>
+          </ClientOnly>
+        );
+
       // =========================================
       // Number Types
       // =========================================
@@ -599,7 +623,7 @@ export function FieldRenderer({
           );
         }
         return (
-          <div className="rounded-lg  border border-destructive bg-destructive/10 p-4 text-center">
+          <div className="rounded-lg  border border-danger-border bg-danger-surface p-4 text-center">
             <p className="text-sm text-destructive">
               Unknown field type: {(field as { type: string }).type}
             </p>

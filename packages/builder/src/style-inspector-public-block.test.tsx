@@ -27,13 +27,13 @@ import {
   clearBlocks,
   defineBlock,
   registerBlocks,
-  STYLE_GROUP_DEFS,
   stylePropertiesForSupports,
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { INSPECTOR_SECTIONS } from "./inspector-sections";
 import { inspectStyle, type StyleInspection } from "./style-inspector";
 
 interface CalloutProps {
@@ -126,24 +126,24 @@ describe("a block declared through the public API", () => {
   });
 
   it("gets a section for every group it supports, with no editor code of its own", () => {
-    const groups = inspect("acme/callout").sections.map(s => s.group);
+    const keys = inspect("acme/callout").sections.map(s => s.key);
 
-    // Exactly the three it opted into. `toEqual` on a sorted list rather than
-    // three `toContain`s, so a section it did NOT opt into fails here instead
-    // of passing unnoticed.
-    expect([...groups].sort()).toEqual(["color", "spacing", "typography"]);
+    // Exactly the sections its three groups land in: colour sits inside
+    // Typography. `toEqual` on a sorted list rather than `toContain`s, so a
+    // section it did NOT opt into fails here instead of passing unnoticed.
+    expect([...keys].sort()).toEqual(["spacing", "typography"]);
   });
 
-  it("orders those sections as the catalog presents them, not as supports lists them", () => {
-    const groups = inspect("acme/callout").sections.map(s => s.group);
+  it("orders those sections as the builder presents them, not as supports lists them", () => {
+    const keys = inspect("acme/callout").sections.map(s => s.key);
 
-    const catalogOrder = STYLE_GROUP_DEFS.map(g => g.key).filter(k =>
-      groups.includes(k)
+    const builderOrder = INSPECTOR_SECTIONS.map(section => section.key).filter(
+      key => keys.includes(key)
     );
-    // The definition lists spacing, typography, color; the catalog's own order
+    // The definition lists spacing, typography, color; the builder's own order
     // is what an author sees. A block author cannot reorder another block's
     // inspector by the order they happened to type their supports.
-    expect(groups).toEqual(catalogOrder);
+    expect(keys).toEqual(builderOrder);
   });
 
   it("offers every property the engine says those supports allow, not merely some", () => {
@@ -155,16 +155,16 @@ describe("a block declared through the public API", () => {
     // inspector that kept only the FIRST property of each group satisfies
     // "every section is non-empty" while presenting a partial inspector — the
     // exact failure the phrase "complete inspector" is about.
-    for (const section of sections) {
-      const offered = section.properties.map(property => property.property);
-      const allowed = stylePropertiesForSupports({
-        [section.group]: true,
-      }).map(entry => entry.property);
+    const offered = sections
+      .flatMap(section => section.properties.map(property => property.property))
+      .sort();
+    const allowed = stylePropertiesForSupports(acmeCallout.supports)
+      .map(entry => entry.property)
+      .sort();
 
-      // Membership rather than length: a section that dropped one property and
-      // gained another matches any total compared against.
-      expect(offered).toEqual(allowed);
-    }
+    // Membership rather than length: a panel that dropped one property and
+    // gained another matches any total compared against.
+    expect(offered).toEqual(allowed);
   });
 
   it("gives every offered property at least one control to edit it with", () => {

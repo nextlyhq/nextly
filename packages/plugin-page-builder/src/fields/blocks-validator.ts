@@ -23,13 +23,14 @@ import {
   DOCUMENT_VERDICT_CODES,
   registryBlockSource,
   registryNestingSource,
+  slotAdmits,
   validateDocument,
   walkNodes,
 } from "@nextlyhq/blocks-engine";
 
 import { siteBreakpoints } from "../site-style";
 
-import type { DocumentKind } from "./blocks-options";
+import { DEFAULT_ACCEPTED_KINDS, type DocumentKind } from "./blocks-options";
 
 /**
  * The issue shape core's validation envelope carries. Declared structurally
@@ -67,8 +68,8 @@ export interface BlocksValidationOptions {
  * rejects — each side internally consistent, so neither looks wrong.
  */
 
-/** What a field accepts when it says nothing: its own entry's page content. */
-const DEFAULT_KINDS: readonly DocumentKind[] = ["page"];
+/** What a field accepts when it says nothing, from the one statement of it. */
+const DEFAULT_KINDS: readonly DocumentKind[] = DEFAULT_ACCEPTED_KINDS;
 
 /**
  * How many document issues one field reports. A document may hold thousands of
@@ -364,7 +365,10 @@ function disallowedBlockIssues(
 
   const disallowed = new Set<string>();
   walkNodes(doc.nodes, node => {
-    if (typeof node.type === "string" && !isAllowed(node.type, allow)) {
+    // The engine's one reading of an allow-list, which a slot's allow-list
+    // and the blocks route's listing match by too: an exact name, or "ns/*"
+    // bound to the namespace separator ("core/*" never admits "coreevil/x").
+    if (typeof node.type === "string" && !slotAdmits(allow, node.type)) {
       disallowed.add(node.type);
     }
   });
@@ -378,19 +382,4 @@ function disallowedBlockIssues(
       message: `${label} does not accept ${[...disallowed].sort().join(", ")}. Accepted: ${accepted}.`,
     },
   ];
-}
-
-/**
- * Exact name match, or a namespace match for a `namespace/*` pattern.
- *
- * The wildcard binds to the namespace separator rather than to raw characters:
- * `core/*` matches `core/heading` and never `coreevil/banner`. A bare prefix
- * test would quietly admit any namespace that merely starts with the same
- * letters, which is a wider policy than the declaration reads as.
- */
-function isAllowed(type: string, allow: readonly string[]): boolean {
-  return allow.some(pattern => {
-    if (!pattern.endsWith("/*")) return type === pattern;
-    return type.startsWith(pattern.slice(0, -1));
-  });
 }

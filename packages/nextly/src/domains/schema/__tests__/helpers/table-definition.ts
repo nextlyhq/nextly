@@ -61,6 +61,12 @@ export interface CheckDefinition {
   expression: string;
 }
 
+/** A trigger on the table, or a view that reads it, with the definition the database keeps. */
+export interface DependentDefinition {
+  name: string;
+  definition: string;
+}
+
 /**
  * The whole definition. Columns are in the table's own order, so a column that moved compares
  * unequal; indexes, keys and checks are sorted by name, because the catalogs return them in no
@@ -74,6 +80,10 @@ export interface TableDefinition {
   checks: CheckDefinition[];
   /** The table's own options: its collation, engine and comment, or SQLite's table options. */
   options: Record<string, string | null>;
+  /** The triggers on the table, sorted by name. */
+  triggers: DependentDefinition[];
+  /** The views that read the table, sorted by name. */
+  views: DependentDefinition[];
 }
 
 /** What a change names, and so what may differ after it. */
@@ -163,6 +173,8 @@ export function withNamedChange(
       expression: renamed(check.expression),
     })),
     options: before.options,
+    triggers: before.triggers,
+    views: before.views,
   };
 }
 
@@ -243,6 +255,17 @@ async function readPostgres(
   const options = await query<{ comment: string | null }>(
     `SELECT obj_description(${relation}, 'pg_class') AS comment`
   );
+  const triggers = await query<DependentDefinition>(
+    `SELECT tgname AS name, pg_get_triggerdef(oid, true) AS definition FROM pg_trigger ` +
+      `WHERE tgrelid = ${relation} AND NOT tgisinternal`
+  );
+  // A view reads the table through its `_RETURN` rule, which the catalog records as depending on
+  // the table.
+  const views = await query<DependentDefinition>(
+    `SELECT DISTINCT v.relname AS name, pg_get_viewdef(v.oid, true) AS definition ` +
+      `FROM pg_depend d JOIN pg_rewrite r ON r.oid = d.objid JOIN pg_class v ON v.oid = r.ev_class ` +
+      `WHERE d.classid = 'pg_rewrite'::regclass AND d.refobjid = ${relation} AND v.oid <> ${relation}`
+  );
   const asList = (value: string[] | string): string[] =>
     Array.isArray(value)
       ? value
@@ -285,6 +308,8 @@ async function readPostgres(
         }))
     ),
     options: { comment: options[0]?.comment ?? null },
+    triggers: byName(triggers),
+    views: byName(views),
   };
 }
 
@@ -374,6 +399,15 @@ async function readMysql(
     `SELECT TABLE_COLLATION AS \`collation\`, ENGINE AS \`engine\`, TABLE_COMMENT AS \`comment\` FROM information_schema.TABLES ` +
       `WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${name}`
   );
+  const triggers = await query<DependentDefinition>(
+    `SELECT TRIGGER_NAME AS \`name\`, CONCAT(ACTION_TIMING, ' ', EVENT_MANIPULATION, ' ', ACTION_STATEMENT) AS \`definition\` ` +
+      `FROM information_schema.TRIGGERS WHERE EVENT_OBJECT_SCHEMA = DATABASE() AND EVENT_OBJECT_TABLE = ${name}`
+  );
+  const views = await query<DependentDefinition>(
+    `SELECT v.TABLE_NAME AS \`name\`, v.VIEW_DEFINITION AS \`definition\` FROM information_schema.VIEWS v ` +
+      `JOIN information_schema.VIEW_TABLE_USAGE u ON u.VIEW_SCHEMA = v.TABLE_SCHEMA AND u.VIEW_NAME = v.TABLE_NAME ` +
+      `WHERE v.TABLE_SCHEMA = DATABASE() AND u.TABLE_SCHEMA = DATABASE() AND u.TABLE_NAME = ${name}`
+  );
   const indexes = new Map<string, IndexDefinition>();
   for (const row of statistics) {
     const index = indexes.get(row.name) ?? {
@@ -408,6 +442,8 @@ async function readMysql(
     foreignKeys: groupForeignKeys(keys),
     checks: byName(checks),
     options: options[0] ?? {},
+    triggers: byName(triggers),
+    views: byName(views),
   };
 }
 
@@ -467,6 +503,20 @@ async function readSqlite(
     on_update: string;
     on_delete: string;
   }>(`SELECT * FROM pragma_foreign_key_list(${name}) ORDER BY id, seq`);
+  const triggers = await query<DependentDefinition>(
+    `SELECT name, sql AS definition FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ${name}`
+  );
+  // SQLite records no dependency of a view on a table, so a view reads the table where its stored
+  // statement names it as a whole word.
+  const tableWord = new RegExp(
+    `(^|[^\\w$])["\`[]?${table.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["\`\\]]?($|[^\\w$])`,
+    "i"
+  );
+  const views = (
+    await query<DependentDefinition>(
+      `SELECT name, sql AS definition FROM sqlite_master WHERE type = 'view'`
+    )
+  ).filter(view => tableWord.test(view.definition));
   return {
     columns: columns.map(column => {
       const declared = create.columns.get(column.name.toLowerCase());
@@ -502,6 +552,8 @@ async function readSqlite(
       expression,
     })),
     options: { tail: create.tail },
+    triggers: byName(triggers),
+    views: byName(views),
   };
 }
 

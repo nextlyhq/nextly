@@ -9,9 +9,12 @@
  * @module pages/dashboard/entries/[slug]/[id]/custom-edit-view-lock.test
  */
 
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { useReportUnsavedWork } from "@admin/components/features/entries/EntryForm/UnsavedWorkContext";
+import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import type { UpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import {
   clearRegistry,
@@ -27,6 +30,24 @@ import { renderWithProviders } from "../../../../../__tests__/utils";
 const useDocumentLock = vi.fn();
 /** What the page last handed the (replaced) default editor. */
 let entryFormProps: Record<string, unknown> | undefined;
+// The page's started reads, watched: which places it starts, with which ids.
+const { startedPlaces } = vi.hoisted(() => ({ startedPlaces: vi.fn() }));
+vi.mock("@admin/hooks/queries/usePluginRoute", async importOriginal => {
+  const actual =
+    await importOriginal<
+      typeof import("@admin/hooks/queries/usePluginRoute")
+    >();
+  return {
+    ...actual,
+    usePlaceStartupReads: (
+      ...args: Parameters<typeof actual.usePlaceStartupReads>
+    ) => {
+      startedPlaces(...args);
+      return actual.usePlaceStartupReads(...args);
+    },
+  };
+});
+
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({
   useDocumentLock: (options: unknown) => useDocumentLock(options) as unknown,
 }));
@@ -55,11 +76,8 @@ vi.mock(
 vi.mock("@admin/components/features/releases/ScheduledReleaseBanner", () => ({
   ScheduledReleaseBanner: () => <p>scheduled release banner</p>,
 }));
-vi.mock("@admin/components/features/releases/AddToReleaseAction", () => ({
-  useAddToReleaseAction: () => ({ dialog: null, contributed: null }),
-}));
-vi.mock("@admin/components/features/releases/SchedulePublishAction", () => ({
-  useSchedulePublishAction: () => ({ dialog: null, contributed: null }),
+vi.mock("@admin/components/features/releases/ScheduleDocumentAction", () => ({
+  useScheduleDocumentAction: () => ({ dialog: null, contributed: null }),
 }));
 
 let collectionSchema: Record<string, unknown> = {};
@@ -78,6 +96,8 @@ vi.mock("@admin/hooks/queries/useEntry", () => ({
 // here the page is handed the entry as the populated read gives it, unless a
 // case sets `mergedEntry` to stand for a merge that differs from it.
 let mergedEntry: Record<string, unknown> | undefined;
+/** When the entry was read and how to read it again, for a case that gains it. */
+let entryLatest: DocumentLatest | undefined;
 vi.mock("@admin/hooks/queries/useStoredReferences", () => ({
   useStoredEntry: () => ({ data: undefined, isLoading: false, error: null }),
   useWithStoredReferences: ({
@@ -88,6 +108,7 @@ vi.mock("@admin/hooks/queries/useStoredReferences", () => ({
     document: mergedEntry ?? populated.data,
     isLoading: populated.isLoading,
     error: populated.error,
+    latest: entryLatest,
   }),
 }));
 /** What the server's answer says about the user changing this collection. */
@@ -121,9 +142,6 @@ vi.mock("@admin/hooks/useTranslationMode", () => ({
     exitTranslationMode: vi.fn(),
   }),
 }));
-vi.mock("@admin/hooks/usePluginAutoRegistration", () => ({
-  usePluginAutoRegistration: () => undefined,
-}));
 
 import EditEntryPage from "./index";
 
@@ -153,6 +171,7 @@ beforeEach(() => {
   };
   // Cleared, so a case reading these cannot pass on the previous case's render.
   mergedEntry = undefined;
+  entryLatest = undefined;
   customViewProps = undefined;
   entryFormProps = undefined;
 });
@@ -186,6 +205,28 @@ describe("a custom collection edit view", () => {
     withCustomView();
     renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
     expect(customViewProps?.initialData).toEqual({ id: "42", title: "A post" });
+  });
+
+  it("leads back to its list under the list's own name, the plural", () => {
+    // A collection answers `label` with its one-entry name as well as its
+    // labels; the trail's step opens the list, which is called by the plural.
+    collectionSchema = {
+      name: "form-submissions",
+      slug: "form-submissions",
+      label: "Submission",
+      labels: { singular: "Submission", plural: "Submissions" },
+    };
+    withCustomView();
+    renderWithProviders(
+      <EditEntryPage params={{ slug: "form-submissions", id: "42" }} />
+    );
+    const trail = screen.getByRole("navigation", { name: "Breadcrumb" });
+    const step = within(trail).getByRole("link", { name: "Submissions" });
+    expect(step).toHaveAttribute(
+      "href",
+      expect.stringContaining("/collections/form-submissions")
+    );
+    expect(within(trail).queryByText("Submission")).toBeNull();
   });
 
   it("leaves the default form the merged entry", () => {
@@ -475,11 +516,10 @@ describe("a routed document view", () => {
     ).toBe(VIEW);
   });
 
-  it("answers not found for a field-type view on a collection without the field", () => {
+  it("opens a field-type view on a collection whose field of its type sits in a named group", () => {
     registerDocumentViews([
       { fieldType: "blocks", path: "builder", component: VIEW },
     ]);
-    // Only nested inside a group, which does not count.
     collectionSchema = {
       ...collectionSchema,
       fields: [
@@ -488,6 +528,39 @@ describe("a routed document view", () => {
           name: "extra",
           type: "group",
           fields: [{ name: "body", type: "blocks" }],
+        },
+      ],
+    };
+
+    renderWithProviders(
+      <EditEntryPage params={{ slug: "posts", id: "42", view: "builder" }} />
+    );
+
+    expect(screen.getByText("default entry form")).toBeInTheDocument();
+    expect(
+      (entryFormProps?.documentView as { component: string } | undefined)
+        ?.component
+    ).toBe(VIEW);
+  });
+
+  it("answers not found for a field-type view on a collection without the field", () => {
+    registerDocumentViews([
+      { fieldType: "blocks", path: "builder", component: VIEW },
+    ]);
+    // Only inside the rows of a repeater that declares its own `id`, which a
+    // view does not reach: those rows get no saved id to address one by, and
+    // a position names another row after a reorder.
+    collectionSchema = {
+      ...collectionSchema,
+      fields: [
+        { name: "title", type: "text" },
+        {
+          name: "extra",
+          type: "repeater",
+          fields: [
+            { name: "id", type: "text" },
+            { name: "body", type: "blocks" },
+          ],
         },
       ],
     };
@@ -546,5 +619,223 @@ describe("the scheduled-release banner on the default editor", () => {
     ).not.toBeInTheDocument();
     render(<>{entryFormProps?.documentBanner}</>);
     expect(screen.getByText("scheduled release banner")).toBeInTheDocument();
+  });
+});
+
+describe("a custom edit view that gains the entry", () => {
+  it("starts again from the copy loaded after the gain, not the one it read before", async () => {
+    // A view may read `initialData` once, as it mounts, and keep its own copy.
+    // Handed the newer entry as a prop alone, it would unlock over the copy it
+    // read while the colleague held the entry, and its next save would put
+    // that copy back over what they saved.
+    registerComponent(
+      CUSTOM_VIEW,
+      ({ initialData }: { initialData?: Record<string, unknown> }) => {
+        const [title] = useState(String(initialData?.title));
+        return <p>editing {title}</p>;
+      }
+    );
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { views: { Edit: { Component: CUSTOM_VIEW } } } },
+    };
+    const reload = vi.fn(() => Promise.resolve());
+    entryLatest = { readAt: 1, failed: false, reload };
+    useDocumentLock.mockReturnValue({
+      state: {
+        status: "held-by-other",
+        holder: { ownerId: "u2", ownerLabel: "Ada", expiresInSeconds: 90 },
+        requestSent: false,
+      },
+      gains: 0,
+      takeOver,
+    });
+    const view = renderWithProviders(
+      <EditEntryPage params={{ slug: "posts", id: "42" }} />
+    );
+    expect(screen.getByText("editing A post")).toBeInTheDocument();
+
+    // Ada saved and left: this editor gains the entry and reloads it.
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-me", someoneWaiting: false },
+      gains: 1,
+      takeOver,
+    });
+    view.rerender(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+
+    // The reads made since arrive with what Ada saved.
+    entryQuery = {
+      data: { id: "42", title: "Ada's post" },
+      isLoading: false,
+      error: null,
+    };
+    entryLatest = { readAt: 2, failed: false, reload };
+    view.rerender(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(await screen.findByText("editing Ada's post")).toBeInTheDocument();
+  });
+});
+
+describe("a site collection's own edit view", () => {
+  // The site's own collection names its view relative to its config, and the
+  // generated component map registers it under exactly that path. Nothing else
+  // loads it: the admin imports no module by name.
+  const SITE_VIEW = "./views/orders#OrderEditor";
+
+  it("draws in place of the default editor once the map has registered it", () => {
+    registerComponent(SITE_VIEW, () => <div>site order editor</div>);
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { views: { Edit: { Component: SITE_VIEW } } } },
+    };
+
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(screen.getByText("site order editor")).toBeInTheDocument();
+    expect(entryFormProps).toBeUndefined();
+  });
+
+  it("leaves the default editor when the map does not register it, and nothing loads it later", async () => {
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { views: { Edit: { Component: SITE_VIEW } } } },
+    };
+
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(entryFormProps).toBeDefined();
+    // Given every chance to: a run-time import resolved in a later task.
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(screen.queryByText("site order editor")).toBeNull();
+    expect(entryFormProps).toBeDefined();
+  });
+});
+
+describe("a custom edit view with pages of its own", () => {
+  /** The view's pages, each a document view that draws the view itself. */
+  function withPages() {
+    registerDocumentViews([
+      { slug: "posts", path: "settings", component: CUSTOM_VIEW },
+      { slug: "posts", path: "preview", component: CUSTOM_VIEW },
+    ]);
+  }
+
+  it("draws the view at each page's address, told which page, and keeps it mounted from page to page", () => {
+    let mounts = 0;
+    registerComponent(CUSTOM_VIEW, (props: Record<string, unknown>) => {
+      // Counted once per mount: a remount would lose what the view holds.
+      useState(() => (mounts += 1));
+      customViewProps = props;
+      return <div>bespoke product editor</div>;
+    });
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { views: { Edit: { Component: CUSTOM_VIEW } } } },
+    };
+    withPages();
+
+    const page = renderWithProviders(
+      <EditEntryPage params={{ slug: "posts", id: "42", view: "settings" }} />
+    );
+    // The view draws its own page; the form hosts nothing.
+    expect(screen.getByText("bespoke product editor")).toBeInTheDocument();
+    expect(entryFormProps).toBeUndefined();
+    expect(customViewProps?.view).toBe("settings");
+    // It is the document's editor, so it claims the document.
+    expect(claimRequest()).toMatchObject({ enabled: true });
+
+    page.rerender(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+    expect(customViewProps?.view).toBeUndefined();
+    page.rerender(
+      <EditEntryPage params={{ slug: "posts", id: "42", view: "preview" }} />
+    );
+    expect(customViewProps?.view).toBe("preview");
+    expect(mounts).toBe(1);
+  });
+
+  it("leaves a view drawing another component to the form", () => {
+    // The control: only a view whose component IS the edit view is one of
+    // its pages.
+    registerDocumentViews([
+      { slug: "posts", path: "settings", component: "@acme/other#View" },
+    ]);
+    withCustomView();
+    renderWithProviders(
+      <EditEntryPage params={{ slug: "posts", id: "42", view: "settings" }} />
+    );
+    expect(screen.queryByText("bespoke product editor")).toBeNull();
+    expect(entryFormProps?.documentView).toMatchObject({
+      component: "@acme/other#View",
+    });
+  });
+
+  it("asks before leaving while the view holds unsaved work, but not to move between its pages", async () => {
+    registerComponent(CUSTOM_VIEW, () => {
+      useReportUnsavedWork("product", true);
+      return <div>bespoke product editor</div>;
+    });
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { views: { Edit: { Component: CUSTOM_VIEW } } } },
+    };
+    withPages();
+    window.history.pushState(null, "", "/admin/collections/posts/42");
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    // One of the view's own pages: the same document, so not asked about.
+    act(() => {
+      window.history.pushState(
+        null,
+        "",
+        "/admin/collections/posts/42/settings"
+      );
+    });
+    expect(window.location.pathname).toBe(
+      "/admin/collections/posts/42/settings"
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+
+    // Away from the document: held, and asked about.
+    act(() => {
+      window.history.pushState(null, "", "/admin/collections/posts");
+    });
+    expect(window.location.pathname).toBe(
+      "/admin/collections/posts/42/settings"
+    );
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+  });
+
+  it("lets a view with nothing unsaved leave without asking", () => {
+    // The control for the case above: the page asks only because the view
+    // said it holds work.
+    registerComponent(CUSTOM_VIEW, () => {
+      useReportUnsavedWork("product", false);
+      return <div>bespoke product editor</div>;
+    });
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { views: { Edit: { Component: CUSTOM_VIEW } } } },
+    };
+    window.history.pushState(null, "", "/admin/collections/posts/42");
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+    act(() => {
+      window.history.pushState(null, "", "/admin/collections/posts");
+    });
+    expect(window.location.pathname).toBe("/admin/collections/posts");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+});
+
+describe("the reads the edit page starts as it opens", () => {
+  it("starts its own place's parts' reads and the form's, with the ids each takes", () => {
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+    expect(startedPlaces).toHaveBeenCalledWith([
+      { place: "collection.edit", ids: { collection: "posts", entryId: "42" } },
+      {
+        place: "entry.form",
+        ids: { kind: "collection", slug: "posts", entryId: "42" },
+      },
+    ]);
   });
 });

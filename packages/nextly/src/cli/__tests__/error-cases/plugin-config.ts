@@ -36,8 +36,10 @@ import {
   slugCollisionError,
 } from "../../../plugins/schema-error";
 import { topoSortPlugins } from "../../../plugins/topo-sort";
+import { assertDocumentSurfaces } from "../../../plugins/document-surfaces";
 import { assertDocumentViews } from "../../../plugins/validate-document-views";
 import { validatePluginMenus } from "../../../plugins/validate-menus";
+import { validatePluginNames } from "../../../plugins/validate-names";
 import { validatePluginSlugs } from "../../../plugins/validate-slugs";
 import { validatePluginVersions } from "../../../plugins/validate-versions";
 import { builderSchemaConflict } from "../../errors/areas/plugin-config";
@@ -254,6 +256,44 @@ export const PLUGIN_CONFIG_CASES = {
                 posts: {
                   documentViews: [{ path: "Insights", component: "seo#Panel" }],
                 },
+              },
+            },
+          },
+        }),
+      ])
+    ),
+  // `plugins/document-surfaces.ts`.
+  PLUGIN_DOCUMENT_SURFACE_COLLISION: () =>
+    thrown(() =>
+      assertDocumentSurfaces([
+        plugin("layouts", {
+          contributes: {
+            admin: {
+              views: { pages: { documentActions: { delete: "hidden" } } },
+            },
+          },
+        }),
+        plugin("archive", {
+          contributes: {
+            admin: {
+              views: {
+                pages: {
+                  documentActions: { delete: { component: "archive#Remove" } },
+                },
+              },
+            },
+          },
+        }),
+      ])
+    ),
+  PLUGIN_DOCUMENT_SURFACE_INVALID: () =>
+    thrown(() =>
+      assertDocumentSurfaces([
+        plugin("layouts", {
+          contributes: {
+            admin: {
+              views: {
+                pages: { documentActions: { delete: { component: "" } } },
               },
             },
           },
@@ -782,6 +822,10 @@ export const PLUGIN_CONFIG_MERGED_CASES: Record<
         'Plugin "reports" declares the secret path "retries", which names a value that cannot be a string; a secret is stored as a string.',
         { plugin: "reports", path: "retries" }
       ),
+  },
+  PLUGIN_NAME_RESERVED: {
+    code: "PLUGIN_RESOLUTION_ERROR",
+    make: () => thrown(() => validatePluginNames([plugin("app")])),
   },
   PLUGIN_NAME_TOO_LONG_FOR_SETTINGS: {
     code: "PLUGIN_RESOLUTION_ERROR",

@@ -211,9 +211,11 @@ for (const leg of LEGS) {
         // committed `draft` (B is uncommitted), then blocks taking the row lock.
         // It names a field: a row naming the status alone is an unpublish,
         // judged by that gate before any lock, so it would never reach the race.
+        // It overwrites, so its version, which this race is not about, is not
+        // judged.
         const aResultP = entryService.updateEntries(
           { collectionName: SLUG, user: { id: RACE_EDITOR } },
-          [{ id, data: { title: "t2", status: "draft" } }]
+          [{ id, data: { title: "t2", status: "draft", _overwrite: true } }]
         );
 
         // Wait until A is observably parked on B's row lock (not a fixed sleep),
@@ -224,9 +226,11 @@ for (const leg of LEGS) {
         await bTx;
 
         const aResult = await aResultP;
-        // The draft-over-published write is an unpublish the editor may not do.
+        // The draft-over-published write is an unpublish the editor may not do,
+        // refused as one rather than for any other reason.
         expect(aResult.successful).toBe(0);
         expect(aResult.failed).toBe(1);
+        expect(aResult.errors[0]?.code).toBe("FORBIDDEN");
 
         // A was refused under the lock, so B's publish stands.
         const [row] = await handle.adapter.select<{ status: string }>(TABLE, {
@@ -289,10 +293,10 @@ for (const leg of LEGS) {
         // Writer A: a batch update to `published`. Its plain existence read sees
         // the still-committed row, then it blocks taking the row lock behind B.
         // It names a field, as above: a row naming the status alone is a
-        // publish judged before any lock.
+        // publish judged before any lock. It overwrites, as above.
         const aResultP = entryService.updateEntries(
           { collectionName: SLUG, user: { id: VANISH_EDITOR } },
-          [{ id, data: { title: "t2", status: "published" } }]
+          [{ id, data: { title: "t2", status: "published", _overwrite: true } }]
         );
 
         // Release the gate only once A is observably blocked on B's row lock, so

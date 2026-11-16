@@ -1,4 +1,5 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
@@ -139,6 +140,22 @@ export class RoleService extends BaseService {
    */
   ensureSuperAdminRole(): Promise<{ id: string; created: boolean }> {
     return this.mutationService.ensureSuperAdminRole();
+  }
+
+  /**
+   * Ensure a system role exists with this slug on `tx`, a transaction the
+   * caller holds, created holding nothing where it is missing
+   * (`RoleMutationService.ensureSystemRoleOn`).
+   *
+   * @returns Role ID and whether it was newly created
+   */
+  ensureSystemRoleOn(
+    tx: TransactionContext,
+    role: { name: string; slug: string; description: string; level: number }
+  ): Promise<{ id: string; created: boolean }> {
+    // Typed by its class, which the getter returns.
+    const mutations: RoleMutationService = this.mutationService;
+    return mutations.ensureSystemRoleOn(tx, role);
   }
 
   /**

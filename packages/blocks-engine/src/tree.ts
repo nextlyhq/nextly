@@ -79,6 +79,7 @@
  * own.
  */
 import type { PropSchema, SlotSpec } from "./block";
+import type { ContentModelDeclaration } from "./content-model";
 import type { BlockNode } from "./document";
 import { isBlockType, renderedDomId } from "./document";
 import { isDescendable, walkForest } from "./forest-walk";
@@ -89,6 +90,7 @@ import type { NestingSource } from "./nesting";
 import { isPlainRecord } from "./plain-record";
 import { isUsableSlotName } from "./registry";
 import { defineEntry, ownEntry } from "./safe-record";
+import { assembleSlots } from "./structural-sharing";
 import { isConditionGated } from "./visibility";
 
 /** Stable unique node id. `crypto.randomUUID` exists in Node ≥ 20 and browsers. */
@@ -136,6 +138,16 @@ export interface SlotDefaultSource {
          * content, which a `"contentOnly"` slot leaves editable.
          */
         props?: Partial<Record<string, PropSchema>>;
+        /**
+         * What the block is as HTML content for a set of props, read by the
+         * placement rule. Typed loosely because the answer is read through
+         * `resolveContentModel`, which checks it rather than trusting it.
+         */
+        contentModel?: ContentModelDeclaration;
+        /** Whether these props draw nothing, read by the placement rule. */
+        rendersNothing?: (props: never) => boolean;
+        /** The label an author knows the block by, read to word a refusal. */
+        editor?: { readonly label?: string };
       }
     | undefined;
 }
@@ -776,7 +788,7 @@ export function mapForest(
     if (top.kind === "close") {
       stack.pop();
       onPath.delete(top.source);
-      top.out.push(assembleSlots(top.mapped, top.built));
+      top.out.push(assembleSlots(top.source, top.mapped, top.built));
       continue;
     }
     if (top.index >= top.source.length) {
@@ -825,25 +837,6 @@ function isSlotsRecord(slots: unknown): slots is Record<string, BlockNode[]> {
   // `Array.isArray` separately, because `typeof [] === "object"` and an array
   // of slots is malformed rather than empty.
   return typeof slots === "object" && slots !== null && !Array.isArray(slots);
-}
-
-/** Put the rebuilt slots back on a node, keeping any slot that was not rebuilt. */
-function assembleSlots(
-  mapped: BlockNode,
-  built: Map<string, BlockNode[]>
-): BlockNode {
-  const slots: Record<string, BlockNode[]> = {};
-  for (const [name, original] of Object.entries(mapped.slots ?? {})) {
-    // A slot absent from `built` held something this rebuild could not walk.
-    // Keeping the stored value is the point: an unrelated edit must not be the
-    // thing that destroys it.
-    const value = built.get(name) ?? original;
-    // DEFINED rather than assigned — the write-side twin of reading through a
-    // `Map` above. `safe-record` carries why; it is shared because fixing this
-    // one site left three others in the package with the plain-assignment form.
-    defineEntry(slots, name, value);
-  }
-  return { ...mapped, slots };
 }
 
 /** Clamp an insertion index into a list's valid range. */
@@ -999,13 +992,18 @@ export function removeNode(nodes: BlockNode[], id: string): BlockNode[] {
     // slot — an edit that named a DIFFERENT node silently deleting stored
     // content. `fromEntries` defines each key, so it keeps one. See
     // `safe-record` for the two spellings that do not.
+    // A list that did not hold the id stays itself, and a node none of whose
+    // lists held it is returned as itself (see `structural-sharing`).
+    let held = false;
     const slots = Object.fromEntries(
-      Object.entries(node.slots).map(([name, children]) => [
-        name,
-        children.filter(child => child.id !== id),
-      ])
+      Object.entries(node.slots).map(([name, children]) => {
+        const kept = children.filter(child => child.id !== id);
+        if (kept.length === children.length) return [name, children];
+        held = true;
+        return [name, kept];
+      })
     );
-    return { ...node, slots };
+    return held ? { ...node, slots } : node;
   });
 }
 
@@ -1572,9 +1570,9 @@ function reidForestRestoringEach(
   const rebuilt = mapForest(nodes, original =>
     reidOneRestoringEach(original, each)
   );
-  // By the copy's id rather than its object: the rebuild assembles slots into
-  // a new object, so the node the first pass returned is not the one this pass
-  // is handed.
+  // By the copy's id rather than its object: a node the first pass changed is
+  // a new object once the rebuild puts its slots back, so it may not be the one
+  // this pass is handed.
   const linked = mapForest(rebuilt, copy =>
     relinkOne(copy, referenceAnswers(each.holders.get(copy.id), each))
   );

@@ -1,9 +1,9 @@
 /**
  * The blog template's Cache Components read function, as an app runs it: the
  * lifetime it gives each read, the tags, the key, and its registration. The
- * file is copied into a temporary directory, its `next/cache` and
- * `nextly/runtime` imports pointed at stand-ins that record what they are
- * called with.
+ * file is copied into a temporary directory, its `next/cache`, `nextly`,
+ * `nextly/runtime` and app config imports pointed at stand-ins
+ * that record what they are called with.
  *
  * The guide prints the same function for apps made before it shipped, so the
  * last case holds the guide's copy to the template's.
@@ -13,6 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+import { cachedReadCode } from "./cached-read-copy";
 
 const TEMPLATE = join(
   __dirname,
@@ -36,6 +38,10 @@ interface Calls {
   cacheTag: string[][];
   run: string[];
   registered: [unknown, unknown][];
+  /** What `getNextly` was called with. */
+  started: unknown[];
+  /** The starts the file registered through `registerNextlyStart`. */
+  starts: (() => Promise<unknown>)[];
 }
 
 const NEXT_CACHE = `const calls = globalThis.__cachedReadCalls;
@@ -45,6 +51,15 @@ export const cacheTag = (...tags) => { calls.cacheTag.push(tags); };
 const NEXTLY_RUNTIME = `const calls = globalThis.__cachedReadCalls;
 export const runRegisteredRead = async key => { calls.run.push(key); return "read:" + key; };
 export const registerCachedRead = (fn, value) => { calls.registered.push([fn, value]); };
+`;
+
+/** Starts Nextly as a database that is down would: the start rejects. */
+const NEXTLY = `const calls = globalThis.__cachedReadCalls;
+export const getNextly = async args => { calls.started.push(args); return { started: args }; };
+export const registerNextlyStart = start => { calls.starts.push(start); };
+`;
+/** The app's config, as `@nextly-config` resolves it. */
+const APP_CONFIG = `export default { app: "config" };
 `;
 
 let dir = "";
@@ -57,16 +72,27 @@ let cachedRead: (
 
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), "nextly-cached-read-"));
-  calls = { cacheLife: [], cacheTag: [], run: [], registered: [] };
+  calls = {
+    cacheLife: [],
+    cacheTag: [],
+    run: [],
+    registered: [],
+    started: [],
+    starts: [],
+  };
   (globalThis as { __cachedReadCalls?: Calls }).__cachedReadCalls = calls;
   await writeFile(join(dir, "next-cache.mjs"), NEXT_CACHE);
   await writeFile(join(dir, "nextly-runtime.mjs"), NEXTLY_RUNTIME);
+  await writeFile(join(dir, "nextly.mjs"), NEXTLY);
+  await writeFile(join(dir, "app-config.mjs"), APP_CONFIG);
   const source = (await readFile(TEMPLATE, "utf8"))
     .replace('"next/cache"', JSON.stringify(join(dir, "next-cache.mjs")))
     .replace(
       '"nextly/runtime"',
       JSON.stringify(join(dir, "nextly-runtime.mjs"))
-    );
+    )
+    .replace('"nextly"', JSON.stringify(join(dir, "nextly.mjs")))
+    .replace('"@nextly-config"', JSON.stringify(join(dir, "app-config.mjs")));
   await writeFile(join(dir, "cached-read.ts"), source);
   ({ cachedRead } = await import(join(dir, "cached-read.ts")));
 });
@@ -170,12 +196,30 @@ describe("blog template: the Cache Components read function", () => {
     ]);
   });
 
+  it("registers how Nextly starts, and starts nothing as it loads", () => {
+    // Starting here would preempt an app page's own `getNextly` with options
+    // beyond the config, and the first start is the one Nextly keeps.
+    expect(calls.starts).toHaveLength(1);
+    expect(calls.started).toEqual([]);
+  });
+
+  it("starts Nextly with the app's config when the registered start runs", async () => {
+    // What a read that finds Nextly not started runs: the root layout's
+    // `<SiteCode>` on `/_not-found` during `next build`.
+    await expect(calls.starts[0]?.()).resolves.toEqual({
+      started: { config: { app: "config" } },
+    });
+    expect(calls.started).toEqual([{ config: { app: "config" } }]);
+  });
+
   it("is the function the caching guide prints", async () => {
     const template = await readFile(TEMPLATE, "utf8");
     const guide = await readFile(GUIDE, "utf8");
     // The template's code after its doc comment, and the guide's block after
-    // its file-name line, compared without the guide's list indentation.
-    const code = template.slice(template.indexOf("*/") + 2).trim();
+    // its file-name line, compared without the guide's list indentation, and
+    // with the config import set aside: each app imports its config its own
+    // way, and the guide says so beside the block.
+    const code = cachedReadCode(template);
     const block =
       /```ts\n {3}\/\/ src\/nextly\/cached-read\.ts\n([\s\S]*?)\n {3}```/.exec(
         guide
@@ -186,6 +230,7 @@ describe("blog template: the Cache Components read function", () => {
       .map(line => line.replace(/^ {3}/, ""))
       .join("\n")
       .trim();
-    expect(printed).toBe(code);
+    // The printed block has no doc comment, so one is put before it.
+    expect(cachedReadCode(`/** */\n${printed}`)).toBe(code);
   });
 });

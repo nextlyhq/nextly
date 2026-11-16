@@ -38,6 +38,18 @@ describe("dashboard routes", () => {
     });
   });
 
+  it("resolves the Content overview's route, and nothing below it", () => {
+    expect(parseRestRoute(["dashboard", "content"], "GET")).toMatchObject({
+      service: "dashboard",
+      method: "getDashboardContent",
+    });
+    expect(
+      parseRestRoute(["dashboard", "content", "extra"], "GET").method
+    ).not.toBe("getDashboardContent");
+    // A read only: no other verb reaches it.
+    expect(parseRestRoute(["dashboard", "content"], "POST")).toEqual({});
+  });
+
   it("does not claim a path with extra segments after a GET route", () => {
     expect(
       parseRestRoute(["dashboard", "stats", "extra"], "GET").method
@@ -109,6 +121,16 @@ describe("dashboard routes", () => {
     ).toBeUndefined();
     // The checklist's deprecated read is gone, with no alias.
     expect(parseRestRoute(["dashboard", "onboarding"], "GET")).toEqual({});
+  });
+
+  it("resolves the diagnostics report under GET alone", () => {
+    expect(parseRestRoute(["dashboard", "diagnostics"], "GET")).toMatchObject({
+      method: "getDashboardDiagnostics",
+    });
+    expect(parseRestRoute(["dashboard", "diagnostics"], "POST")).toEqual({});
+    expect(
+      parseRestRoute(["dashboard", "diagnostics", "full"], "GET").method
+    ).toBeUndefined();
   });
 
   it("rejects a DELETE to an id other than layout or pins", () => {

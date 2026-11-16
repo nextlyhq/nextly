@@ -240,7 +240,7 @@ test.describe("on a Single", () => {
   test.beforeEach(async () => {
     await expectOk(
       await admin.patch(`/admin/api/singles/${SINGLE}`, {
-        data: { headline: "Links", ...groups() },
+        data: { headline: "Links", ...groups(), _overwrite: true },
       }),
       "resetting the Single"
     );

@@ -8,8 +8,6 @@
  */
 
 export { FieldCards, type FieldCardsProps } from "./FieldCards";
-export { AddFieldDialog, type AddFieldDialogProps } from "./AddFieldDialog";
-export { FieldEditor, type FieldEditorProps } from "./FieldEditor";
 export { FormPreview, type FormPreviewProps } from "./FormPreview";
 export {
   ConditionalLogicEditor,

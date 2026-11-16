@@ -7,7 +7,7 @@ A production-quality blog starter for Nextly. Ships with:
 
 - 15 seeded posts · 3 authors · 4 categories · 8 tags
 - Modern-tech visual design with full light/dark mode parity via a 3-state theme toggle
-- Users-as-authors (no separate authors collection) with real admin/editor/author roles
+- Public author profiles (an `authors` collection), kept apart from the accounts that own posts, with real admin/editor/author roles
 - Homepage with admin-editable hero, featured post, latest grid, category strip, and newsletter CTA
 - Post detail with reading progress bar, auto-TOC, share buttons, prev/next, and related posts
 - Static search via Pagefind (zero server infrastructure)
@@ -28,15 +28,16 @@ A production-quality blog starter for Nextly. Ships with:
 - **Navigation** - Header link list + footer "Read" link list + UI toggles (show theme toggle, show search icon).
 - **Homepage** - Hero title/subtitle + section-visibility toggles (featured post, latest grid, category strip, newsletter CTA) + newsletter heading/subheading.
 
-### Users as authors
+### Authors and bylines
 
-The template uses the built-in `users` collection as the author identity: posts relate directly to users via the `author` relationship field. Each user has additional scalar fields defined in `configs/codefirst.config.ts`:
+A post has two people fields, kept apart on purpose:
 
-- `bio` (textarea): short author bio shown on post footers and `/authors/[slug]`.
-- `avatarUrl` (text): URL of an avatar image. Plain text (not an uploaded media record) because user-extension fields support only scalar types today.
-- `slug` (text): URL slug for `/authors/[slug]`. Unique per user.
+- `author` (relationship to `users`): the account that owns the post. The Author role may edit only the posts whose `author` is them, and a new post's `author` is the account that creates it.
+- `byline` (relationship to `authors`, labelled **Byline**): the public author a reader is shown, with their name, page at `/authors/[slug]` and bio. A new post is credited to the profile of the account that writes it, when that account has one. A post written inside a transaction its caller holds is credited once that transaction commits. As with `author`, only a `publish-posts` holder chooses or changes it; anyone else's value is dropped, so a writer's new post is credited to their own profile, never to one they named.
 
-No separate `authors` collection; no duplicated profile data.
+The **Authors** collection holds those public profiles: `name`, `slug` (unique, used by `/authors/[slug]`), `bio`, `avatar` (an image in the media library), and `account`, the account the profile belongs to (unique: an account has one profile at most, so a new post's credit is never a choice between two). Accounts stay private; profiles are readable by anyone, which is what lets a page show them, but a profile's `account` is read only by a caller who may change profiles (`update-authors`), so a visitor neither sees it nor filters on it. Deleting a profile clears the byline of the posts that named it.
+
+The demo seed creates one author profile per seeded user, in order, with its avatar uploaded to the media library, and credits each post to its author's profile. An avatar in the seed data is a file name from `src/endpoints/seed/media` or an absolute `http(s)` address, which the seed fetches; one it can't load leaves the profile without an avatar and is listed in the seed's warnings. Running the seed again credits a post an earlier run left uncredited and keeps a byline a post already has, and uploads an avatar only for a profile without one, so it adds no media for a profile that has its avatar. The users keep their `bio`, `avatarUrl` and `slug` fields, which no page reads.
 
 ### Roles
 
@@ -56,7 +57,7 @@ Collection access rules in `src/access/` decide by permission, never by a role's
 
 So the seeded editor edits and deletes every post, and the seeded author, who holds `update-posts` and `delete-posts` but not `publish-posts`, only their own. To let another role edit every post, give it `publish-posts`.
 
-A blog scaffolded with the visual approach registers Posts without these rules, since the Schema Builder can't store a function, so the permission alone decides. Its seed gives the author no `delete-posts`, which would reach every post, and `update-posts` lets the author edit every post. See [Only their own entries](https://nextlyhq.com/docs/permissions#only-their-own-entries).
+A blog scaffolded with the visual approach registers Posts without these rules, since the Schema Builder can't store a function, so the permission alone decides. Its seed gives the author no `delete-posts`, which would reach every post, and `update-posts` lets the author edit every post. For the same reason, any writer there may set a post's `author` and `byline`. Its config registers the template's own plugin (`src/collections/Posts/credit-plugin.ts`), which adds the two hooks by the collection's slug, so a new post with neither is still owned by and credited to the account that writes it. Its collections also carry no read rule, so nothing grants the Public role their read: visitors can't read posts, authors, categories or tags over REST, while the blog's own pages read them on the server, where that role does not apply. To open them, grant the Public role their read on the Roles screen. See [Only their own entries](https://nextlyhq.com/docs/permissions#only-their-own-entries).
 
 ## Pages
 
@@ -201,7 +202,7 @@ On platforms other than Vercel, set a `Content-Type: application/wasm` header fo
 
 The homepage and footer newsletter forms submit to the `@nextlyhq/plugin-form-builder` plugin. Submissions are stored in the `form-submissions` collection and visible at `/admin/collections/form-submissions`.
 
-A production boot refuses a configured plugin that has not been installed on its database; development only warns. The `build` script installs it for you, after migrating and against the database the build targets (`nextly migrate && nextly plugins install @nextlyhq/plugin-form-builder && next build`), so a deploy that builds against the production database needs no extra step. If you deploy without building against that database, run the same two `nextly` commands there before the first production boot. When you remove a plugin from `nextly.config.ts`, remove its `nextly plugins install` from your build script too, or the build fails. See [Installing](https://nextlyhq.com/docs/guides/production-migrations#installing).
+A production boot refuses a configured plugin that has not been installed on its database; development only warns. The `build` script installs it for you, after migrating and against the database the build targets (`nextly migrate && nextly plugins install @nextlyhq/plugin-form-builder && next build`), so a deploy that builds against the production database needs no extra step. A visual blog registers one plugin from its own source, and its build installs it with `nextly plugins install --all`. If you deploy without building against that database, run the same two `nextly` commands there before the first production boot. When you remove a plugin from `nextly.config.ts`, remove its `nextly plugins install` from your build script too, or the build fails. See [Installing](https://nextlyhq.com/docs/guides/production-migrations#installing).
 
 The seed creates a form with slug `newsletter` on first run. If the seed skipped it (or you removed it), create a new Form at `/admin/collections/forms` with slug `newsletter` and the plugin + frontend will start working.
 

@@ -96,9 +96,15 @@ describe("core's Note, declared", () => {
       settings: [
         expect.objectContaining({
           name: "text",
-          label: "Note",
+          label: "Text",
           type: "textarea",
           maxLength: 2000,
+          // What Markdown the text takes, said where the reader writes it.
+          admin: {
+            description: expect.stringMatching(
+              /^Supports Markdown: `\*\*bold\*\*`, `_italic_`, `- lists` and `\[links\]\(https:\/\/…\)`\./
+            ),
+          },
         }),
       ],
     });

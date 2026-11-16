@@ -475,11 +475,13 @@ async function promotedDocument(
   if (ctx.callerData) {
     Object.assign(
       promoted,
-      await keepDeniedAtStored({
-        update: ctx.callerData,
-        stored: promoted,
-        applyRules: promotionRules(ctx, live),
-      })
+      (
+        await keepDeniedAtStored({
+          update: ctx.callerData,
+          stored: promoted,
+          applyRules: promotionRules(ctx, live),
+        })
+      ).kept
     );
   }
   // Written with the status it publishes, whatever its snapshot was saved
@@ -609,12 +611,24 @@ async function schemaIssues(
       req: ctx.user ? { user: ctx.user } : {},
       localizedFieldNames: ctx.localizedFieldNames,
       enforceLocalizedRequired: ctx.enforceLocalizedRequired,
+      // The promoted document is the stored snapshot the write produces, so a
+      // whole-number field's stored fraction rides through it: the rule binds
+      // values a caller writes, and the write's own gate refused the caller's
+      // fraction before it could reach this snapshot.
+      assembledFromStorage: true,
       // A component inside a group or repeater is judged here: the component
       // write the promotion runs never reaches it.
       ...(ctx.componentFields === undefined
         ? {}
         : { componentFields: ctx.componentFields }),
-      ...(ctx.write === undefined ? {} : { write: ctx.write }),
+      // The write as this language is judged in: one promotion can judge
+      // several languages, so the language joins here rather than where the
+      // write was built.
+      ...(ctx.write === undefined
+        ? {}
+        : {
+            write: locale === null ? ctx.write : { ...ctx.write, locale },
+          }),
     }
   );
   // The promoted document holds every stored field, those the publisher may

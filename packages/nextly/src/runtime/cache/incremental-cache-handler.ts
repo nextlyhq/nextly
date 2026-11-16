@@ -10,7 +10,14 @@
  * @module runtime/cache/incremental-cache-handler
  */
 
+import { awaitStartInFlight, startInFlight } from "../../init/start-in-flight";
+
 import { sharedEntries } from "./bounded-entries";
+import {
+  buildOutputReader,
+  type BuildOutputEntry,
+  type CacheHandlerContext,
+} from "./build-output";
 import { holdFailedRecord, retryFailedRecordsAtRead } from "./record-retry";
 import { markIncrementalHandlerInUse } from "./shared-handlers";
 import {
@@ -18,6 +25,8 @@ import {
   isEntryExpired,
   localNow,
   refreshTagExpiries,
+  tagExpiryLedgerPublished,
+  whenTagExpiryLedgerPublished,
 } from "./tag-expiry-view";
 
 interface StoredEntry {
@@ -35,9 +44,17 @@ interface CacheContext {
   cacheControl?: unknown;
   tags?: readonly string[];
   softTags?: readonly string[];
+  /** The kind of entry asked for: a page, a route response, a fetch. */
+  kind?: unknown;
 }
 
 /** The tags a stored page or response carries in its cache-tags header. */
+/**
+ * How Next.js begins the tags it derives from a page's path (`_N_T_/admin`),
+ * as against the tags its reads name.
+ */
+const NEXT_IMPLICIT_TAG_PREFIX = "_N_T_";
+
 function headerTags(value: unknown): string[] {
   const header = (value as { headers?: Record<string, unknown> } | null)
     ?.headers?.["x-next-cache-tags"];
@@ -145,11 +162,27 @@ function fillBegan(key: string): number {
   return now;
 }
 
+/**
+ * Whether what expired can be asked of the ledger: at once when it is
+ * published; when a start is under way, once that start publishes it (as soon
+ * as its database connects) or ends without it; otherwise not.
+ */
+async function expiriesCanBeAsked(): Promise<boolean> {
+  if (tagExpiryLedgerPublished()) return true;
+  if (startInFlight() === null) return false;
+  await Promise.race([whenTagExpiryLedgerPublished(), awaitStartInFlight()]);
+  return tagExpiryLedgerPublished();
+}
+
 export default class NextlyIncrementalCacheHandler {
+  /** The pages and responses the build wrote to disk, read on a miss. */
+  private readonly fromBuild: ReturnType<typeof buildOutputReader>;
+
   // Next.js constructs the configured handler for each request and build
   // before it renders, so reads this process caches keep their lifetimes.
-  constructor() {
+  constructor(ctx?: CacheHandlerContext) {
     markIncrementalHandlerInUse();
+    this.fromBuild = buildOutputReader(ctx);
   }
 
   async get(
@@ -164,7 +197,7 @@ export default class NextlyIncrementalCacheHandler {
     // Where a timer may never fire, a read retries what the ledger refused.
     const retrying = retryFailedRecordsAtRead();
     if (retrying !== undefined) await retrying;
-    const stored = entries().get(key);
+    const stored = entries().get(key) ?? (await this.storedFromBuild(key, ctx));
     if (stored === undefined) return null;
     const tags = [
       ...stored.tags,
@@ -184,6 +217,49 @@ export default class NextlyIncrementalCacheHandler {
       value: stored.value,
       cacheControl: stored.cacheControl,
     };
+  }
+
+  /**
+   * What the build wrote for `key`, kept here as an entry this process stored,
+   * or `undefined`. Judged from when the build wrote it, so a write anywhere
+   * since expires it as it expires any entry stored before the write.
+   */
+  private async storedFromBuild(
+    key: string,
+    ctx: CacheContext | undefined
+  ): Promise<StoredEntry | undefined> {
+    const built: BuildOutputEntry | null | undefined = await this.fromBuild?.(
+      key,
+      ctx?.kind,
+      ctx
+    );
+    if (!built) return undefined;
+    // A build copy naming a content tag is served only once what expired
+    // since the build can be asked: before the ledger is published, a write
+    // another process recorded would go unseen, and the stale page could be
+    // kept by a shared cache too. A render on a miss waits for the start as it
+    // always has. A copy carrying only its path tags read nothing tagged, so
+    // it is served at once; every later read asks about those tags as well.
+    const contentTags = [
+      ...headerTags(built.value),
+      ...(ctx?.tags ?? []),
+    ].filter(tag => !tag.startsWith(NEXT_IMPLICIT_TAG_PREFIX));
+    if (contentTags.length > 0 && !(await expiriesCanBeAsked())) {
+      return undefined;
+    }
+    // A page stored while the disk was read is newer than the build's copy
+    // (a regeneration another request finished first), so it stands.
+    const storedMeanwhile = entries().get(key);
+    if (storedMeanwhile !== undefined) return storedMeanwhile;
+    const entry: StoredEntry = {
+      value: built.value,
+      lastModified: built.lastModified,
+      begunAt: built.lastModified,
+      tags: [],
+      cacheControl: built.cacheControl ?? ctx?.cacheControl,
+    };
+    entries().set(key, entry, sizeOf(built.value));
+    return entry;
   }
 
   // Synchronous work behind the promise Next.js expects from a handler.

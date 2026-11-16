@@ -3,17 +3,18 @@
  * declares its own. One module per widget; `core-widgets/index.ts` lists them
  * in their order.
  *
- * One row of step tiles at full width, for super-admins only, detected from
- * the site's data (`domains/widgets/setup`): start with sample content, create
+ * A vertical checklist, half the row wide by default and up to the whole
+ * row, for super-admins only, detected from the site's data (`domains/widgets/setup`): start with sample content, create
  * a collection, add a first entry, fill in the Singles, invite a teammate.
  *
  * - Only a super-admin is told it exists: its id is in `SUPER_ADMIN_WIDGET_IDS`,
  *   which the dashboard's audience reads (`widgetAudience`), so nobody else is
  *   placed it, offered it or handed it.
- * - `shows` leaves it out for an API key, and for a reader who dismissed it or
- *   was already told "You're all set", so nothing is fetched for them.
- * - `load` answers the steps with the reader's skips, whether they collapsed
- *   it, and whether every step is done; that last answer is said once and
+ * - `shows` leaves it out for an API key, and for a reader already told
+ *   "You're all set", so nothing is fetched for them. Hiding it is removing
+ *   it from the layout, which Add widget undoes.
+ * - `load` answers the steps with the reader's skips, and whether every step
+ *   is done; that last answer is said once and
  *   recorded, so the next load leaves the card out.
  *
  * Both are handed to this module by `setup-card` when the dashboard's widgets
@@ -71,7 +72,7 @@ function setupReads(): SetupCardReads {
   return reads;
 }
 
-/** A new project, part way through, for the preview page. */
+/** A new project, part way through, for the preview board. */
 const PART_WAY: SetupCardData = {
   setup: {
     known: true,
@@ -96,7 +97,7 @@ const PART_WAY: SetupCardData = {
   allSet: false,
 };
 
-/** Every step done, the once the card says so, for the preview page. */
+/** Every step done, the once the card says so, for the preview board. */
 const ALL_SET: SetupCardData = {
   setup: {
     known: true,
@@ -115,21 +116,25 @@ const ALL_SET: SetupCardData = {
 export const setupWidget = defineWidget({
   id: CORE_WIDGET_ID.setup,
   title: "Set up your project",
-  description:
-    "The setup steps left on a new project, detected from its data. For super-admins, until setup is done.",
-  icon: "ListChecks",
-  // Full width and two rows: a thin progress bar over one row of tiles, the
-  // count in the header. It grows in place only while the reader has the
-  // Singles' list open, or where its tiles wrap on a narrow screen.
+  // One line, as the add panel lists it.
+  description: "The steps a new project needs. Ticks itself from your data.",
+  // Drawn beside its name in the add panel: a name the admin's icon set holds.
+  icon: "Flag",
+  // Half the row by default, beside Needs attention, and never narrower: below
+  // half a step's buttons no longer fit beside its hint. Up to the whole row.
+  // The card is as tall as its checklist, whatever its rows say.
   size: {
-    default: { w: 12, h: 2 },
-    min: { w: 12, h: 2 },
-    max: { w: 12, h: 4 },
+    default: { w: 6, h: 4 },
+    min: { w: 6, h: 2 },
+    max: { w: 12, h: 6 },
   },
   // A read that throws leaves the card out, and is logged as the widget's.
   shows: async ({ services }) => setupReads().shownTo(services),
   load: async ({ services, now }) => setupReads().dataFor(services, now),
   view: { component: "core#Setup" },
+  // Loads as a list's rows, as tall as a checklist of steps, so the card does
+  // not grow under the cards below it when its steps arrive.
+  skeleton: "list",
   // Never empty: `shows` decides whether the card is there, and while it is
   // it always has something to say, "could not check setup" included.
   isEmpty: () => false,

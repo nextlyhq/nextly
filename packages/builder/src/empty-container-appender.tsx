@@ -17,9 +17,9 @@
  * This draws a labelled "+" over each such container instead. Pressing one
  * only reports the container's id through
  * {@link EmptyContainerAppendersProps.onAppend}; it does not select anything
- * or open an inserter. Once a container IS selected, `insertionPointFor`
- * already reads {@link emptySlotOf} to decide that a new block goes INSIDE it
- * rather than beside it — so wiring a press to select-then-open needs no new
+ * or open an inserter. The host hands that id to the Add panel as its
+ * `inside`, and `insertionCandidates` reads {@link emptySlotOf} to put a new
+ * block in the container's empty region — so wiring a press needs no new
  * targeting path, and this component needs no knowledge of the editor at all.
  *
  * ## One question, answered once
@@ -46,11 +46,12 @@
  * against: unscaled, it is wrong by `(1 - scale) * inset`, exactly zero at
  * 100% and invisible in precisely the configuration most testing happens in.
  *
- * ## A fixed, centred square rather than a rectangle sized to the container
+ * ## A fixed, centred control rather than a rectangle sized to the container
  *
  * The button does not stretch to the measured rectangle's own width and
- * height. It is a fixed {@link APPENDER_SIZE_PX} square centred inside it,
- * and that is a correction rather than a style choice.
+ * height. It is a fixed {@link APPENDER_WIDTH_PX} by {@link APPENDER_SIZE_PX}
+ * control centred inside it, wide enough for its words, and that is a
+ * correction rather than a style choice.
  *
  * `emptySlotOf` names which SLOT is empty, but there is no DOM address for
  * "slot X of node Y" to measure — `NODE_ID_ATTRIBUTE` marks a node's whole
@@ -102,17 +103,16 @@
  * populated region.
  *
  * The rule's ANCESTOR conditions are part of that question and not a detail of
- * how the stylesheet is written. Its box is scoped to a builder shell that has
- * not been asked to hide empty-element chrome, and `Canvas` and this component
- * are both exported — so a host composing them with no shell renders containers
+ * how the stylesheet is written. Its box is scoped to a canvas inside a builder
+ * shell, and `Canvas` and this component are both exported — so a host composing them with no shell renders containers
  * the element-level condition accepts and the rule never reaches. Asking the
  * whole selector is what keeps "there is a box here" a fact rather than an
  * assumption about how the caller mounted this.
  *
  * The consequence is that a container carrying no visual affordance gets no
  * control either, which is the point rather than a shortfall — it is still
- * fillable, because selecting it and inserting routes through `emptySlotOf`
- * in `insertionPointFor` exactly as before.
+ * fillable, by dropping a block onto it on the canvas or moving one into it in
+ * Layers; only the Add panel's explicit "inside" goes through this control.
  *
  * ## Never outside its own container
  *
@@ -201,13 +201,14 @@ import {
 } from "react";
 
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
+import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
 import { EMPTY_CONTAINER_SELECTOR, emptySlotOf } from "./empty-slot";
 import type { Rect } from "./geometry";
 import {
   canvasContentRect,
-  canvasRootFrom,
   clippedByAncestorRect,
+  overlaySpaceOf,
   layoutFragments,
   renderSkips,
   viewportPositioned,
@@ -380,8 +381,17 @@ function controlRectFor(
 const APPENDER_SIZE_PX = 44;
 
 /**
- * A {@link APPENDER_SIZE_PX} square centred inside a rectangle, never larger
- * than the rectangle itself.
+ * The control's width, in the canvas's content pixels: room for the "+" and
+ * its words. A narrower container clamps it, and the words then shorten.
+ */
+const APPENDER_WIDTH_PX = 320;
+
+/** What the control says, beside its "+". */
+const APPENDER_WORDS = "Drop a block here, or click to add one";
+
+/**
+ * A control of the given size centred inside a rectangle, never larger than
+ * the rectangle itself.
  *
  * See the module docblock ("A fixed, centred square") for why the button is
  * not sized to the measured rectangle, and ("Never outside its own container")
@@ -395,9 +405,13 @@ const APPENDER_SIZE_PX = 44;
  * unclamped one; there is no `min-width`, so a legitimately narrow empty
  * container — a column a few pixels wide — is the case that needs it.
  */
-export function centeredControlRect(rect: Rect, size: number): Rect {
-  const width = Math.min(size, rect.width);
-  const height = Math.min(size, rect.height);
+export function centeredControlRect(
+  rect: Rect,
+  controlWidth: number,
+  controlHeight: number
+): Rect {
+  const width = Math.min(controlWidth, rect.width);
+  const height = Math.min(controlHeight, rect.height);
   return {
     x: rect.x + (rect.width - width) / 2,
     y: rect.y + (rect.height - height) / 2,
@@ -652,9 +666,12 @@ export function EmptyContainerAppenders({
    */
   const measure = useCallback(() => {
     const element = layer.current;
-    const root =
-      element === null ? null : canvasRootFrom(element, CANVAS_ROOT_CLASS);
-    if (root === null) {
+    // The canvas the controls are drawn over, and the space they are drawn
+    // in: see `overlaySpaceOf`.
+    const space =
+      element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+    const root = space?.root ?? null;
+    if (space === null || root === null) {
       setPlacements(current => (current.size === 0 ? current : NO_PLACEMENTS));
       return;
     }
@@ -689,10 +706,16 @@ export function EmptyContainerAppenders({
         next.set(container.id, DECLINED);
         continue;
       }
-      const measured = canvasContentRect(target, root);
+      // Placed in the chrome's coordinates before the control is centred in
+      // it, so the control keeps its own size at any zoom.
+      const measured = space.place(canvasContentRect(target, root));
       next.set(container.id, {
         kind: "measured",
-        rect: centeredControlRect(measured, APPENDER_SIZE_PX),
+        rect: centeredControlRect(
+          measured,
+          APPENDER_WIDTH_PX,
+          APPENDER_SIZE_PX
+        ),
       });
     }
     setPlacements(next);
@@ -701,6 +724,9 @@ export function EmptyContainerAppenders({
   // Measured before paint, matching `BlockToolbar` and `SpacingOverlay`: a
   // control drawn at a stale rectangle for one frame is worse than one that
   // appears a frame late.
+  // A zoom, or a page loading into the frame, moves the containers on screen
+  // while nothing in the document changes.
+  const canvasFrame = useCanvasFrame();
   useLayoutEffect(() => {
     if (hidden) return;
     measure();
@@ -709,7 +735,7 @@ export function EmptyContainerAppenders({
     // which containers are empty, and a re-measure keyed on the container set
     // alone would keep describing the layout the container had before the
     // edit.
-  }, [measure, hidden, document]);
+  }, [measure, hidden, document, canvasFrame]);
 
   /*
    * Re-measure for the changes no render reports, all of them: a resize with
@@ -734,7 +760,7 @@ export function EmptyContainerAppenders({
   useEffect(() => {
     if (hidden || containers.length === 0) return;
     return watchCanvasFor(() => layer.current, measure);
-  }, [measure, hidden, containers, document]);
+  }, [measure, hidden, containers, document, canvasFrame]);
 
   // `hidden` renders NOTHING, matching how `BlockToolbar` is suppressed during
   // a drag: a control that were merely invisible would still take a press, and
@@ -773,11 +799,24 @@ export function EmptyContainerAppenders({
             // The block's own name, so a control an author meets is one they
             // can find by searching for the thing it fills rather than for a
             // generic "add block" that says nothing about which container.
-            aria-label={`Add a block to ${container.label}`}
+            // Its name starts with the words it shows, so a voice command
+            // speaking them reaches it (WCAG 2.5.3), then says which container.
+            aria-label={`${APPENDER_WORDS}, in ${container.label}`}
             title={`Add a block to ${container.label}`}
             onClick={() => onAppend(container.id)}
           >
-            <Plus size={16} aria-hidden="true" />
+            {/* On a plate of the editor's own surface: the box is drawn over
+                the SITE's ground, which can be any colour, and the editor's
+                text colour holds its contrast only against the editor's own
+                surface. */}
+            <span className="nx-empty-container-appenders__plate">
+              <Plus size={16} aria-hidden="true" />
+              {/* The words the editor's design gives an empty box, so the "+"
+                  says what a drop or a press here does. */}
+              <span className="nx-empty-container-appenders__words">
+                {APPENDER_WORDS}
+              </span>
+            </span>
           </button>
         );
       })}

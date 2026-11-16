@@ -19,6 +19,7 @@ import { COMPONENTS_SLUG, componentsCollection } from "./components";
 import { LAYOUTS_SLUG, layoutsCollection } from "./layouts";
 import { pagesCollection } from "./pages";
 import { PATTERNS_SLUG, patternsCollection } from "./patterns";
+import { TEMPLATES_SLUG } from "./templates";
 
 /** A field as the collection config carries it, before any narrowing. */
 interface DeclaredField {
@@ -353,6 +354,9 @@ describe("exactly one navigation source claims Pages", () => {
       PATTERNS_SLUG,
       COMPONENTS_SLUG,
       LAYOUTS_SLUG,
+      TEMPLATES_SLUG,
+      // The bindings report, a page rather than a collection.
+      undefined,
     ]);
   });
 });

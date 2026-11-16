@@ -43,9 +43,12 @@ export interface ChartTableDisclosureProps {
   rows: readonly ChartRow[];
 }
 
-/** The disclosure's button: a quiet text control under the chart, in the card's own tokens. */
+/**
+ * The disclosure's button: a quiet text control under the chart, in the card's own tokens, at
+ * least 24px tall so it is a target a finger can hit.
+ */
 const DISCLOSURE_CLASS =
-  "inline-flex w-fit items-center gap-1 rounded-sm text-xs font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline";
+  "inline-flex min-h-6 w-fit items-center gap-1 rounded-sm text-xs font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline";
 
 export function ChartTableDisclosure({
   chart,

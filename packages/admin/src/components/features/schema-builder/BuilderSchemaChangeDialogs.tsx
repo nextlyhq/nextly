@@ -19,6 +19,7 @@ import type {
 } from "@admin/services/schemaApi";
 
 import type { BuilderKind } from "./builder-config";
+import { CreateEntityConfirmDialog } from "./CreateEntityConfirmDialog";
 import { SafeChangeConfirmDialog } from "./SafeChangeConfirmDialog";
 import { SchemaChangeDialog } from "./SchemaChangeDialog";
 import type { SchemaChangeConfirmation } from "./types";
@@ -38,14 +39,20 @@ type Props = {
     resolutions: Record<string, FieldResolution>,
     renameResolutions: SchemaRenameResolution[]
   ) => void;
+  /**
+   * The entity is not on the server yet, so this save is its create. Its
+   * review says what will be created, rather than judging a change.
+   */
+  creating?: boolean;
 };
 
 /**
  * Whether a preview can be applied without asking the user to resolve
  * anything: additive, with no rename the server wants a decision on, no
- * field leaving translation, and no field removed. The short confirmation
- * says the change does not affect existing data, which is untrue when a
- * field's other languages move to the archive, and when a field is removed:
+ * field leaving or joining translation, and no field removed. The short
+ * confirmation says the change does not affect existing data, which is untrue
+ * when a field's other languages move to the archive, when a field's values
+ * become the default language's, and when a field is removed:
  * its column goes, and the preview's count of the values in it reads 0 when
  * counting fails. Those changes get the full dialog, where a removal is red.
  */
@@ -54,7 +61,8 @@ export function isSafeChange(preview: SchemaPreviewResponse): boolean {
     preview.classification === "safe" &&
     preview.changes.removed.length === 0 &&
     !(preview.renamed && preview.renamed.length > 0) &&
-    !(preview.leavingTranslation && preview.leavingTranslation.length > 0)
+    !(preview.leavingTranslation && preview.leavingTranslation.length > 0) &&
+    !(preview.joiningTranslation && preview.joiningTranslation.length > 0)
   );
 }
 
@@ -63,10 +71,26 @@ export function BuilderSchemaChangeDialogs({
   kind,
   entityName,
   onConfirm,
+  creating = false,
 }: Props): JSX.Element | null {
   const { preview, previewId, isOpen, isApplying, setOpen } = confirmation;
 
   if (!preview) return null;
+
+  if (creating) {
+    return (
+      <CreateEntityConfirmDialog
+        key={previewId}
+        open={isOpen}
+        onOpenChange={setOpen}
+        kind={kind}
+        entityName={entityName}
+        changes={preview.changes}
+        onConfirm={() => onConfirm({}, [])}
+        isApplying={isApplying}
+      />
+    );
+  }
 
   if (isSafeChange(preview)) {
     return (
@@ -97,6 +121,7 @@ export function BuilderSchemaChangeDialogs({
       warnings={preview.warnings}
       interactiveFields={preview.interactiveFields}
       leavingTranslation={preview.leavingTranslation}
+      joiningTranslation={preview.joiningTranslation}
       onConfirm={onConfirm}
       isApplying={isApplying}
     />

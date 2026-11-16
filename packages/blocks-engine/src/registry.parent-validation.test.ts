@@ -9,6 +9,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { addressPropOf } from "./block";
 import { clearBlocks, getBlock, registerBlocks } from "./registry";
 
 const base = {
@@ -353,5 +354,71 @@ describe("prop role validation at registration", () => {
       ).toThrow(/block "acme\/quote" prop "text" role must be "content"/);
       clearBlocks();
     }
+  });
+});
+
+describe("an image's declared address prop", () => {
+  const withAddress = (
+    props: Record<string, unknown>
+  ): Record<string, unknown> => ({ ...base, name: "acme/picture", props });
+
+  it("accepts a media prop paired with a url prop of the block", () => {
+    expect(() =>
+      registerBlocks(
+        [
+          withAddress({
+            mediaId: { type: "media", addressProp: "src" },
+            src: { type: "url" },
+          }),
+        ] as never,
+        { source: "acme" }
+      )
+    ).not.toThrow();
+    expect(addressPropOf(getBlock("acme/picture")?.props, "mediaId")).toBe(
+      "src"
+    );
+    expect(addressPropOf(getBlock("acme/picture")?.props, "src")).toBe(
+      undefined
+    );
+  });
+
+  it("refuses a media prop's pairing to no prop, or to one that is no address", () => {
+    for (const props of [
+      { mediaId: { type: "media", addressProp: "missing" } },
+      {
+        mediaId: { type: "media", addressProp: "alt" },
+        alt: { type: "text" },
+      },
+      {
+        file: { type: "upload", addressProp: "alt" },
+        alt: { type: "text" },
+      },
+    ]) {
+      expect(() =>
+        registerBlocks([withAddress(props)] as never, { source: "acme" })
+      ).toThrow(
+        /block "acme\/picture" prop "\w+" addressProp must name a "url" prop/
+      );
+      clearBlocks();
+    }
+  });
+
+  it("leaves the key alone on a prop that is no image, as a block's own option", () => {
+    // `addressProp` was a free extension key on any prop before it named a
+    // media prop's pairing: a block using it for its own option still
+    // registers, and the key is never read as a pairing there.
+    expect(() =>
+      registerBlocks(
+        [
+          withAddress({
+            title: { type: "text", addressProp: "headline-anchor" },
+          }),
+        ] as never,
+        { source: "acme" }
+      )
+    ).not.toThrow();
+    expect(addressPropOf(getBlock("acme/picture")?.props, "title")).toBe(
+      undefined
+    );
   });
 });

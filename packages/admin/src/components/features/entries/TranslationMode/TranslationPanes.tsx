@@ -126,11 +126,11 @@ function ActivePanes({
   });
 
   return (
-    // The window less the top bar (4rem), and below `lg` less the phone's
-    // menu bar above it as well (3.5rem), so the panes fill the content area
-    // exactly and each scrolls on its own rather than the page around them.
-    // Named, so the target pane can say how tall its own scroll area is.
-    <div className="flex h-(--translation-mode-height) flex-col [--translation-mode-height:calc(100dvh-4rem)] max-lg:[--translation-mode-height:calc(100dvh-7.5rem)]">
+    // The window less the admin's one top bar (`--admin-bar-height`, the same
+    // at every width), so the panes fill the content area exactly and each
+    // scrolls on its own rather than the page around them. Named, so the
+    // target pane can say how tall its own scroll area is.
+    <div className="flex h-(--translation-mode-height) flex-col [--translation-mode-height:calc(100dvh-var(--admin-bar-height))]">
       <ModeBar source={source} onExit={onExit} control={control} />
       {/* Sizes are PERCENTAGE STRINGS, and that is load-bearing rather than a
           style choice: this library reads a bare number as PIXELS, so

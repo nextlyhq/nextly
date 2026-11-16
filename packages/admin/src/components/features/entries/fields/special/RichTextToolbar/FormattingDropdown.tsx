@@ -69,6 +69,9 @@ export function FormattingDropdown({
               size="md"
               className="h-8 gap-0.5 px-1.5"
               disabled={disabled}
+              // Icons only: the tooltip's text, which names nothing until it
+              // opens, is also the button's name.
+              aria-label="More Formatting"
             >
               <ALargeSmall className="h-4 w-4" />
               <ChevronDown className="h-3 w-3 opacity-50" />

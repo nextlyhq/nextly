@@ -30,14 +30,20 @@ import {
 } from "../../domains/email/queued-send";
 import { scopedSender } from "../../domains/email/send-claims";
 import type { EmailService } from "../../domains/email/services/email-service";
+import { createGrantsContentExpiryJob } from "../../domains/grants-content-expiry-job";
 import { JobRegistry } from "../../domains/jobs/job-registry";
 import { JobsRepository } from "../../domains/jobs/jobs-repository";
 import { databaseRunAs } from "../../domains/jobs/jobs-runner";
 import { createMediaFinalizeDeletesJob } from "../../domains/media/finalize-deletes-job";
+import type { DispatchAdapter } from "../../domains/plugin-events/dispatch";
+import { createDurableEventsDispatchJob } from "../../domains/plugin-events/dispatch-job";
+import { getDurableSubscribers } from "../../domains/plugin-events/subscribers";
 import { pluginSettingsSecrets } from "../../domains/plugins/settings-service";
 import type { ApplyDueReleasesResult } from "../../domains/releases/apply-due-releases";
 import { createReleaseNoticeEmailJob } from "../../domains/releases/release-notice-email";
 import { createReleasesDrainJob } from "../../domains/releases/releases-drain-job";
+import { collectSchedules } from "../../domains/schedules/collect-schedules";
+import { scheduleWindows } from "../../domains/schedules/schedule-windows";
 import {
   IN_PASS_DRAIN_BOUNDS,
   type RunWebhookDrainOptions,
@@ -46,6 +52,7 @@ import {
 import type { WebhookEndpointRegistry } from "../../domains/webhooks/endpoint-registry";
 import type { RunDrainResult } from "../../domains/webhooks/run-drain";
 import { createWebhookDrainJob } from "../../domains/webhooks/webhook-drain-job";
+import { createWorkflowNoticeEmailJob } from "../../domains/workflows/workflow-notices";
 import { env } from "../../lib/env";
 import { collectJobs } from "../../plugins/jobs/collect-jobs";
 import type { Logger } from "../../services/shared";
@@ -167,6 +174,20 @@ export function registerJobServices(ctx: RegistrationContext): void {
   // configuration error, and a configuration error should stop the boot that
   // introduced it.
   const declaredJobs = collectJobs(ctx.config, ctx.config.plugins ?? []);
+  // Collected eagerly for the same reason: a schedule that cannot run (an
+  // invalid cron or time zone, or a job its plugin does not declare) stops the
+  // start that introduced it, naming the plugin. One in the earlier shape is
+  // mapped with a deprecation notice, or left unexecuted with a notice, and
+  // its handler, when mapped, runs as a job given the plugin's started context.
+  const { schedules: declaredSchedules, jobs: earlierScheduleJobs } =
+    collectSchedules(ctx.config.plugins ?? [], declaredJobs, {
+      notice: message => logger.warn(message),
+      contextOf: async plugin => {
+        // Imported when a handler runs: the registration imports this module.
+        const { getInitializedPluginContext } = await import("../register");
+        return getInitializedPluginContext(plugin);
+      },
+    });
 
   container.registerSingleton<JobsRepository>(
     "jobsRepository",
@@ -196,16 +217,21 @@ export function registerJobServices(ctx: RegistrationContext): void {
         onOutcome: result => reportReleasesOutcome(logger, result),
       })
     );
+    // What a notice's email job reads and sends through, resolved on each run so
+    // the send service is the one registered when it runs.
+    const noticeEmailDeps = () => ({
+      db: adapter,
+      email: container.has("emailService")
+        ? container.get<EmailService>("emailService")
+        : null,
+    });
     // A release notice's email: handed on in the notice's own transaction, and
     // queued through core's queued send once that has committed.
-    registry.register(
-      createReleaseNoticeEmailJob(() => ({
-        db: adapter,
-        email: container.has("emailService")
-          ? container.get<EmailService>("emailService")
-          : null,
-      }))
-    );
+    registry.register(createReleaseNoticeEmailJob(noticeEmailDeps));
+    // A workflow notice's email, the same shared notice email under the workflows' own slug:
+    // queued in the step's or assignment's transaction where the site sends email and the
+    // trigger's switch is on, and sent once that has committed.
+    registry.register(createWorkflowNoticeEmailJob(noticeEmailDeps));
 
     // Advisory document locks. A lapsed row is already ignored by every
     // reader, so this buys space rather than correctness: without it the table
@@ -247,6 +273,17 @@ export function registerJobServices(ctx: RegistrationContext): void {
         result => reportWebhookDrainOutcome(logger, result)
       )
     );
+    // Durable plugin events: fanned out to the subscribers registered in this
+    // process and delivered until each succeeds, on every jobs run, apart
+    // from the webhook outbox. The subscribers are read per run, as plugins
+    // register them at init.
+    registry.register(
+      createDurableEventsDispatchJob({
+        adapter: () => container.get<DispatchAdapter>("adapter"),
+        subscribers: getDurableSubscribers,
+        logger,
+      })
+    );
     // Queued email: one attempt per run of a queued email's job, which carries
     // only the email's id. The send service is resolved per run, as the
     // queued email's own scope sends through it, so its key is claimed where
@@ -276,14 +313,42 @@ export function registerJobServices(ctx: RegistrationContext): void {
       })
     );
 
+    // The content expiry a change to grants owes: queued before the expiry is
+    // tried and withdrawn once it lands, so a row left is one whose process
+    // failed or is gone, and the next jobs run expires the pages it left. A
+    // row near the end of its attempts queues a successor through the queue.
+    registry.register(
+      createGrantsContentExpiryJob({
+        jobs: () => container.get<JobsRepository>("jobsRepository"),
+      })
+    );
+
     // Job types the application and its plugins declared. Registered AFTER the
     // built-ins so a plugin cannot shadow one: `collectJobs` already refuses a
     // reserved namespace, and `JobRegistry.register` refuses a duplicate slug
     // outright rather than replacing the incumbent — which would make the
     // winner depend on load order and leave the loser silently unrun.
-    for (const { definition } of declaredJobs) {
-      registry.register(definition);
+    // With the plugin that declared each, so the registry answers which
+    // sweeps a plugin may run as its own.
+    for (const { definition, plugin } of [
+      ...declaredJobs,
+      ...earlierScheduleJobs,
+    ]) {
+      registry.register(definition, { plugin });
     }
+    // The plugins' schedules, swept by every jobs pass, and pruned even when
+    // none is declared any more, so a removed schedule's windows still go.
+    // A schedule whose window cannot be recorded is said out loud, and the
+    // others still run.
+    registry.useSchedules(
+      scheduleWindows(adapter, declaredSchedules, {
+        onError: (error, scheduleKey) =>
+          logger.error("A plugin schedule could not be swept", {
+            scheduleKey,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+      })
+    );
 
     return registry;
   });

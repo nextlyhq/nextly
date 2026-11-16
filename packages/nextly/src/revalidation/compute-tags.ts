@@ -10,6 +10,7 @@
  *   nextly:{collection}:id:{id}:{locale}    one entry in one locale
  *   nextly:{collection}:slug:{slug}         one entry by slug (old AND new on rename)
  *   nextly:single:{slug}                    a singleton / global
+ *   nextly:@plugin:{plugin}:{part}          a plugin's own data (`ctx.cache`)
  */
 import { NextlyError } from "../errors/nextly-error";
 
@@ -95,6 +96,40 @@ export function entrySlugTag(collection: string, slug: string): string {
 /** `nextly:single:{slug}` — a singleton / global, consumed sitewide. */
 export function singleTag(slug: string): string {
   return `${NAMESPACE}:single:${requireSegment(slug, "slug")}`;
+}
+
+/**
+ * The segment a plugin's tags sit under. It starts with `@`, which no slug can
+ * (slugs start with a lowercase letter), so no collection's or Single's tag can
+ * ever be spelled like a plugin's.
+ */
+const PLUGIN_SEGMENT = "@plugin";
+
+/**
+ * `nextly:@plugin:{plugin}:{part}`: a tag in one plugin's own namespace, for a
+ * read built from the plugin's data (its settings, its redirects) and for the
+ * expiry that clears it. Both sides call this, so they always agree.
+ *
+ * The plugin's name ends at the first `:`, so a name holding one is refused: it
+ * could spell another plugin's tag. A part may hold `:`, being inside the name's
+ * namespace. A part, and if need be the name, long enough to push the tag past
+ * Next's cap is hashed instead, as a long slug is.
+ */
+export function pluginCacheTag(plugin: string, part: string): string {
+  const name = requireSegment(plugin, "plugin");
+  if (name.includes(":")) {
+    throw NextlyError.internal({
+      logContext: { reason: "plugin-name-in-cache-tag-holds-separator", name },
+    });
+  }
+  const value = requireSegment(part, "part");
+  const prefix = `${NAMESPACE}:${PLUGIN_SEGMENT}:${name}:`;
+  const tag = `${prefix}${value}`;
+  if (tag.length <= MAX_TAG_LENGTH) return tag;
+  const hashedPart = `${prefix}h:${fnv1a(value)}`;
+  return hashedPart.length <= MAX_TAG_LENGTH
+    ? hashedPart
+    : `${NAMESPACE}:${PLUGIN_SEGMENT}:h:${fnv1a(name)}:h:${fnv1a(value)}`;
 }
 
 /** Order-preserving de-duplication, so a tag list never carries a repeat. */

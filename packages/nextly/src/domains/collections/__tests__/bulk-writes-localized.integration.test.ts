@@ -142,7 +142,7 @@ describe("a bulk write on a localized collection", () => {
 
     const updated = await entries.updateEntries(
       { collectionName: "pages", overrideAccess: true },
-      [{ id: created._parent, data: { kind: "edited" } }]
+      [{ id: created._parent, data: { kind: "edited", _overwrite: true } }]
     );
 
     expect(updated.errors).toEqual([]);
@@ -176,7 +176,7 @@ describe("a bulk write on a localized collection", () => {
     // the whole document in this language, not the one field that moved.
     await entries.updateEntries(
       { collectionName: "pages", overrideAccess: true },
-      [{ id: created._parent, data: { kind: "edited" } }]
+      [{ id: created._parent, data: { kind: "edited", _overwrite: true } }]
     );
 
     const events = await handle.adapter.select<{
@@ -324,7 +324,7 @@ describe("a bulk write on a localized collection", () => {
     // goes to the companion the trigger refuses.
     const result = await entries
       .updateEntries({ collectionName: "mixed2", overrideAccess: true }, [
-        { id: row.id, data: { title: "after", rank: 2 } },
+        { id: row.id, data: { title: "after", rank: 2, _overwrite: true } },
       ])
       .catch((error: unknown) => ({
         successful: 0,
@@ -466,7 +466,7 @@ describe("a bulk write on a localized collection", () => {
     const edited = { root: { children: [{ type: "p", text: "edited" }] } };
     const updated = await entries.updateEntries(
       { collectionName: "articles", overrideAccess: true },
-      [{ id: created.id, data: { body: edited } }]
+      [{ id: created.id, data: { body: edited, _overwrite: true } }]
     );
     expect(updated.errors).toEqual([]);
     const after = await handle.adapter.executeQuery<{ body: unknown }>(
@@ -539,7 +539,7 @@ describe("a bulk write on a localized collection", () => {
     // Only `title`. `metaTitle` is untouched and must stay that way.
     await entries.updateEntries(
       { collectionName: "hooked", overrideAccess: true },
-      [{ id: row._parent, data: { title: "two" } }]
+      [{ id: row._parent, data: { title: "two", _overwrite: true } }]
     );
 
     expect(fired).toEqual(["title"]);
@@ -574,7 +574,7 @@ describe("a bulk write on a localized collection", () => {
 
     await entries.updateEntries(
       { collectionName: "pages", overrideAccess: true },
-      [{ id: created._parent, data: { kind: "edited" } }]
+      [{ id: created._parent, data: { kind: "edited", _overwrite: true } }]
     );
 
     const events = await handle.adapter.select<{
@@ -663,7 +663,7 @@ describe("a bulk write that moves a localized collection's published state", () 
 
     const result = await entries
       .updateEntries({ collectionName: "posts", user: { id: "editor" } }, [
-        { id: row._parent, data: { status: "published" } },
+        { id: row._parent, data: { status: "published", _overwrite: true } },
       ])
       .catch(() => ({ successful: 0, failed: 1, errors: [{}] }));
 
@@ -699,7 +699,7 @@ describe("a bulk write that moves a localized collection's published state", () 
 
     const result = await entries.updateEntries(
       { collectionName: "posts", user: { id: "editor" } },
-      [{ id: row._parent, data: { status: "published" } }]
+      [{ id: row._parent, data: { status: "published", _overwrite: true } }]
     );
 
     expect(result.errors).toEqual([]);
@@ -737,7 +737,7 @@ describe("a bulk write that moves a localized collection's published state", () 
     // Translated content only. No status named anywhere in the patch.
     const result = await entries.updateEntries(
       { collectionName: "posts", overrideAccess: true },
-      [{ id: row._parent, data: { title: "neu" } }]
+      [{ id: row._parent, data: { title: "neu", _overwrite: true } }]
     );
     expect(result.errors).toEqual([]);
     expect(result.successful).toBe(1);
@@ -792,7 +792,7 @@ describe("a bulk write that moves a localized collection's published state", () 
 
     const result = await entries.updateEntries(
       { collectionName: "posts", overrideAccess: true },
-      [{ id: row._parent, data: { status: "published" } }]
+      [{ id: row._parent, data: { status: "published", _overwrite: true } }]
     );
     expect(result.errors).toEqual([]);
 
@@ -833,7 +833,7 @@ describe("a bulk write that moves a localized collection's published state", () 
 
     const result = await entries.updateEntries(
       { collectionName: "posts", overrideAccess: true },
-      [{ id: row._parent, data: { title: "neu" } }]
+      [{ id: row._parent, data: { title: "neu", _overwrite: true } }]
     );
     expect(result.errors).toEqual([]);
 
@@ -945,7 +945,7 @@ describe("a bulk write that moves a localized collection's published state", () 
 
     const result = await entries
       .updateEntries({ collectionName: "mixed", overrideAccess: true }, [
-        { id: row.id, data: { rank: 2 } },
+        { id: row.id, data: { rank: 2, _overwrite: true } },
       ])
       .catch(() => ({ successful: 0, failed: 1, errors: [{}] }));
 

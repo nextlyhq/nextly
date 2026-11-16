@@ -29,19 +29,25 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
+import { fieldGroupStructuralDefaults } from "../../../field-groups/services/field-group-schema-service";
 import { resolveLocalizedFieldNames } from "../../../i18n/classify-fields";
 import {
   assertIndexBuildable,
   type WeighedColumn,
 } from "../../extension/naming";
+import { builderColumnIsUnique } from "../../field-rules";
 import {
   componentRelationshipHoldsReferenceList,
+  fieldsStoredOnRow,
   getColumnDescriptor,
   getComponentRowColumnDescriptor,
+  getSingleRowColumnDescriptor,
   componentRelationIsSingleReference,
   type ColumnOrigin,
   kindAndSizes,
   systemColumnsForFields,
+  relationshipStoresJson,
+  relationStorageShape,
 } from "../../services/field-column-descriptor";
 import {
   columnTypeIsIndexable,
@@ -87,6 +93,8 @@ interface MinimalFieldDef {
   unique?: boolean;
   index?: boolean;
   localized?: boolean;
+  /** A Builder relationship's options, where `relationType` says whether it is one-to-one. */
+  options?: unknown;
 }
 
 /** Optional toggles that affect which system columns are injected. */
@@ -208,6 +216,17 @@ interface CollectionIndexContext<F> {
    * forget it; an optional field with a lenient default rebuilds that place inside the option bag.
    */
   uniquenessIsIndexable: (field: F, column: string) => boolean;
+  /**
+   * Whether the field's column is unique, by the rule of whatever creates the table.
+   *
+   * The Schema Builder's collection and Single creator makes a one-to-one relationship's column
+   * unique by its cardinality, with no `unique` flag (`builderColumnIsUnique`); the field-group and
+   * code-first creators read the flag alone. Asked of the caller, and required, for the reason
+   * `uniquenessIsIndexable` is: a desired schema that read the flag alone for a Builder table left
+   * the one-to-one's uniqueness out of every migration written from it, so the table took
+   * duplicates.
+   */
+  fieldIsUnique: (field: F) => boolean;
 }
 
 /**
@@ -274,7 +293,11 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
     // keep the uniqueness inline and write no index, so declaring one here would make every diff
     // propose a `CREATE UNIQUE INDEX` the server refuses.
     const uniqueIsIndexable =
-      field.unique === true && context.uniquenessIsIndexable(field, col);
+      context.fieldIsUnique(field) && context.uniquenessIsIndexable(field, col);
+    // A relationship unique by its cardinality alone keeps the plain index it has always had
+    // beside its unique one: every one-to-one made before its uniqueness was declared carries it,
+    // and dropping it would plan an operation for a column that is already unique.
+    const keepsPlainIndex = !uniqueIsIndexable || field.unique !== true;
 
     if (uniqueIsIndexable) {
       indexes.push({
@@ -282,7 +305,9 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
         columns: [col],
         unique: true,
       });
-    } else if (
+    }
+    if (
+      keepsPlainIndex &&
       (field.index === true || isSingleRelation) &&
       (context.columnIsIndexable?.(field, col) ?? true)
     ) {
@@ -432,17 +457,23 @@ export function buildDesiredTableFromFields(
   // Localized fields live in the companion `_locales` table (migration-owned); omit them
   // from the main table's desired columns/indexes. A localized `title`/`slug` field is thus
   // absent from main: the user field is skipped below, and the system column is not re-injected
-  // because `hasTitleField`/`hasSlugField` see the (localized) user field as present.
+  // because `hasTitleField`/`hasSlugField` see the (localized) user field as present. Classified
+  // from the declared list, as the companion and the entry write classify them, so a field inside
+  // a group with no name stays on the row, where both of those keep it.
   const localizedNames = options.localized
     ? new Set(resolveLocalizedFieldNames(fields, true))
     : new Set<string>();
+  // The fields whose columns sit on the row, those inside a group with no name among them, as the
+  // creating SQL and the runtime table read them (`fieldsStoredOnRow`). Read whole, the group's
+  // missing name stopped the descriptor, and with it every save whose desired schema held one.
+  const stored = fieldsStoredOnRow(fields);
 
   // Reserved system columns first, as the runtime schema injects them: the
   // same helper decides which a user field replaces, so the diff input stays in
   // lockstep with the runtime schema and DDL. status only when Draft/Published
   // is enabled.
   const systemColumns = systemColumnsForFields(
-    fields as unknown as Parameters<typeof systemColumnsForFields>[0],
+    stored as unknown as Parameters<typeof systemColumnsForFields>[0],
     dialect,
     {
       builtBy: options.builtBy,
@@ -468,10 +499,14 @@ export function buildDesiredTableFromFields(
   }
 
   // User-defined fields — descriptor module handles layout-only filtering,
-  // hasMany/relationTo promotion to JSON, and per-dialect token rendering.
-  for (const field of fields) {
+  // hasMany/relationTo promotion to JSON, and per-dialect token rendering. A
+  // Single's reference columns accept NULL (`getSingleRowColumnDescriptor`).
+  const describeUserColumn = tableName.startsWith("single_")
+    ? getSingleRowColumnDescriptor
+    : getColumnDescriptor;
+  for (const field of stored) {
     if (localizedNames.has(field.name)) continue; // lives in the companion table
-    const desc = getColumnDescriptor(
+    const desc = describeUserColumn(
       // The descriptor's input type is FieldDefinition; this util is
       // structurally compatible (same name/type/required/hasMany/relationTo
       // keys). Cast through unknown to bridge the two surface types
@@ -481,15 +516,10 @@ export function buildDesiredTableFromFields(
       options.builtBy
     );
     if (!desc) continue;
-    columns.push({
-      name: desc.name,
-      type: desc.dialectType,
-      nullable: desc.nullable,
-      default: undefined,
-    });
+    columns.push(userColumnSpec(field, desc, dialect));
   }
 
-  const indexes = collectionIndexSpecs(tableName, fields, {
+  const indexes = collectionIndexSpecs(tableName, stored, {
     hasSlugColumn: columns.some(c => c.name === "slug"),
     hasCreatedAtColumn: columns.some(c => c.name === "created_at"),
     hasCreatedByColumn: columns.some(c => c.name === "created_by"),
@@ -503,6 +533,12 @@ export function buildDesiredTableFromFields(
         columns.find(c => c.name === col)?.type ?? "",
         dialect
       ),
+    // The Builder's collection and Single creator makes a one-to-one's column unique, so the
+    // table it describes does too; a code-first table reads the flag alone.
+    fieldIsUnique: field =>
+      options.builtBy === "collection"
+        ? builderColumnIsUnique(field)
+        : field.unique === true,
     localizedNames,
     columnNameFor: field =>
       getColumnDescriptor(
@@ -533,20 +569,51 @@ export function buildDesiredTableFromFields(
 }
 
 /**
- * Whether a component column is marked as holding a list of references, which makes a type change
- * into it a reference-list conversion.
- *
- * A relation keeping a list on the component row (a many-to-many or a `hasMany` relation), which an
- * older table may hold in a scalar column. A single polymorphic reference is JSON but not a list, so
- * it keeps the ordinary conversion. Not on SQLite, which keeps the list as text and has no form of
- * the conversion: a type change into the column there (an integer field becoming a many-to-many)
- * stays with SQLite's own route.
+ * The marker a collection or Single column of a relation carries for the conversion a switch
+ * between one related entry and many needs: a cast reads neither a bare id as a list nor a list's
+ * one id. SQLite keeps both as text, so its diff plans no type change to mark. A relation naming
+ * several targets is not marked as a list: it holds `{ relationTo, value }` references, which the
+ * list conversion does not make, and a switch to it over values is refused before anything runs.
  */
-function holdsReferenceListOn(
-  field: Parameters<typeof componentRelationshipHoldsReferenceList>[0],
-  dialect: SupportedDialect
-): boolean {
-  return dialect !== "sqlite" && componentRelationshipHoldsReferenceList(field);
+/**
+ * A user field's column as the desired schema states it, from its descriptor: the default is left
+ * to the application, and a relation's column carries its markers (`referenceMarkerOn`).
+ */
+function userColumnSpec(
+  field: MinimalFieldDef,
+  desc: { name: string; dialectType: string; nullable: boolean; kind: string },
+  dialect: SupportedDialect,
+  component = false
+): ColumnSpec {
+  return {
+    name: desc.name,
+    type: desc.dialectType,
+    nullable: desc.nullable,
+    default: undefined,
+    ...referenceMarkerOn(field, desc.kind, dialect, component),
+  };
+}
+
+function referenceMarkerOn(
+  field: MinimalFieldDef,
+  kind: string,
+  dialect: SupportedDialect,
+  component = false
+): Pick<
+  ColumnSpec,
+  "holdsReferenceList" | "holdsSingleReference" | "referenceShape"
+> {
+  // The shape on every dialect, so a migration snapshot records what the column holds.
+  const referenceShape = relationStorageShape(field, component);
+  const shape = referenceShape === undefined ? {} : { referenceShape };
+  if (dialect === "sqlite") return shape;
+  if (kind === "fkSingle") return { ...shape, holdsSingleReference: true };
+  const list =
+    kind === "json" &&
+    (component
+      ? componentRelationshipHoldsReferenceList(field)
+      : relationshipStoresJson(field) && !Array.isArray(field.relationTo));
+  return list ? { ...shape, holdsReferenceList: true } : shape;
 }
 
 /**
@@ -555,6 +622,18 @@ function holdsReferenceListOn(
  * _order, _component_type) instead of collection system columns (title, slug).
  * Used by previewDesiredSchema when processing desired.components.
  */
+/** Gives each of a field group's system columns the default its creator gives it. */
+function declareStructuralDefaults(
+  columns: ColumnSpec[],
+  dialect: SupportedDialect
+): void {
+  const structuralDefaults = fieldGroupStructuralDefaults(dialect);
+  for (const column of columns) {
+    const columnDefault = structuralDefaults.get(column.name);
+    if (columnDefault !== undefined) column.default = columnDefault;
+  }
+}
+
 export function buildDesiredTableFromComponentFields(
   tableName: string,
   fields: MinimalFieldDef[],
@@ -580,6 +659,11 @@ export function buildDesiredTableFromComponentFields(
 ): TableSpec {
   const typeColumn = options.typeColumn ?? STORAGE_FORMAT.columns.type;
   const columns: ColumnSpec[] = [];
+  // The fields that own a column on the row. A group with no name only lays fields out: it has no
+  // column, and the fields inside it are stored on this row as the ones beside it are, as the
+  // field-group creator makes them (`columnFields`) and the instance write stores them. Both read
+  // `fieldsStoredOnRow`, so the desired table and the created one name the same columns.
+  const namedFields = fieldsStoredOnRow(fields);
 
   // i18n: when the component is localized, its translatable fields live in the
   // companion `comp_<slug>_locales` table (migration-owned) and MUST be omitted
@@ -713,7 +797,7 @@ export function buildDesiredTableFromComponentFields(
   }
 
   // User-defined fields.
-  for (const field of fields) {
+  for (const field of namedFields) {
     if (localizedNames.has(field.name)) continue; // lives in the companion table
     const desc = getComponentRowColumnDescriptor(
       field as unknown as Parameters<typeof getColumnDescriptor>[0],
@@ -721,15 +805,7 @@ export function buildDesiredTableFromComponentFields(
       options.builtBy
     );
     if (!desc) continue;
-    columns.push({
-      name: desc.name,
-      type: desc.dialectType,
-      nullable: desc.nullable,
-      default: undefined,
-      ...(holdsReferenceListOn(field, dialect)
-        ? { holdsReferenceList: true }
-        : {}),
-    });
+    columns.push(userColumnSpec(field, desc, dialect, true));
   }
 
   // Timestamp columns — type tokens must match PostgreSQL udt_name / MySQL
@@ -776,6 +852,12 @@ export function buildDesiredTableFromComponentFields(
     });
   }
 
+  // The defaults the field group's creator gives its system columns
+  // (`fieldGroupStructuralDefaults`), declared from the same answer. Left out, every table the
+  // creator made read as carrying defaults the schema did not, and its first save dropped them, so
+  // an insert that leaves `_order` or a timestamp to the database stored NULL or failed NOT NULL.
+  declareStructuralDefaults(columns, dialect);
+
   // Component tables have no slug. They get a composite index on the parent-link
   // columns plus the system created_at index — mirroring field-group-schema-service.ts
   // (idx_<table>_parent). The parent index is required so the migrate:create snapshot
@@ -799,7 +881,7 @@ export function buildDesiredTableFromComponentFields(
     // created_at indexes here left the rest out of the snapshot, so a SQLite
     // rebuild dropped them and nothing put them back — including the unique
     // ones, which is a constraint silently disappearing, not just an index.
-    ...collectionIndexSpecs(tableName, fields, {
+    ...collectionIndexSpecs(tableName, namedFields, {
       // A relation holding a list of references takes no plain index even when it asks for one,
       // as the creator writes none (`componentRelationshipHoldsReferenceList` says why). A single
       // polymorphic reference is one object and keeps an index it asks for.
@@ -814,6 +896,8 @@ export function buildDesiredTableFromComponentFields(
           columns.find(c => c.name === col)?.type ?? "",
           dialect
         ),
+      // The field-group creator makes a column unique on the flag alone, a relationship included.
+      fieldIsUnique: field => field.unique === true,
       // Components have no slug column; created_at is present when the
       // component carries timestamps.
       hasSlugColumn: false,

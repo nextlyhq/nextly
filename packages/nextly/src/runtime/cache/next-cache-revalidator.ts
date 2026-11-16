@@ -165,6 +165,26 @@ const NO_REQUEST_STORE = /static generation store missing/;
 // say expiries wait for a request, and every write after it would repeat it.
 let waitingLogged = false;
 
+/** The tags `failed` holds, and every reason they failed for, as one line. */
+function failureOf(failed: Map<string, string>): {
+  deferredTags: string[];
+  reason: string;
+} {
+  return {
+    deferredTags: [...failed.keys()],
+    reason: [...new Set(failed.values())].join("; "),
+  };
+}
+
+/** Say once per process that a write outside a request leaves its expiry waiting. */
+function logWaitingOnce(): void {
+  if (waitingLogged) return;
+  waitingLogged = true;
+  consoleLogger.warn(
+    "[nextly] cache expiry waits for a request: a write made outside one (a script, a job) leaves its tags pending until a write inside a request expires them"
+  );
+}
+
 /** Runs `call` once; its error, or null. */
 function attempt(call: () => void): string | null {
   try {
@@ -332,26 +352,26 @@ export class NextCacheRevalidator implements CacheRevalidator {
    * pending, each once, for the next write that runs inside a request to
    * expire; retaking and retrying every pending tag on each such write made a
    * run of N of them O(N²) attempts and log. An installed hand-off expires
-   * from outside a request, so there they are handed to it as any failure is,
-   * and kept, once each, for Next.js's own cache at the next request.
+   * from outside a request, so there they are handed to it as a failure's
+   * are, and kept, once each, for Next.js's own cache at the next request.
+   * Either way nothing failed, so one line says it for the process, and no
+   * error is logged: a server's start expires what it changed this way.
    */
   private async waitForRequest(
     tags: string[],
     own: string[],
     reason: string
   ): Promise<FlushOutcome | void> {
+    logWaitingOnce();
     const handoff = this.handoff();
     if (!isPendingExpiryHandoff(handoff)) {
-      return this.defer(new Map(tags.map(tag => [tag, reason])), own);
+      return this.handOffAndNote(new Map(tags.map(tag => [tag, reason])), own);
     }
     await handoff.handOff(tags, reason);
-    if (!waitingLogged) {
-      waitingLogged = true;
-      consoleLogger.warn(
-        "[nextly] cache expiry waits for a request: a write made outside one (a script, a job) leaves its tags pending until a write inside a request expires them"
-      );
-    }
-    return own.length > 0 ? { deferredTags: own } : undefined;
+    // Pending in this process only: nothing records them for another.
+    return own.length > 0
+      ? { deferredTags: own, keptInProcess: own }
+      : undefined;
   }
 
   /**
@@ -365,12 +385,23 @@ export class NextCacheRevalidator implements CacheRevalidator {
   ): Promise<FlushOutcome | void> {
     // The write is committed: what failed twice goes to the out-of-request
     // path, and the outcome lets the response say it may take a moment.
-    const deferredTags = [...failed.keys()];
-    const reason = [...new Set(failed.values())].join("; ");
+    const { deferredTags, reason } = failureOf(failed);
     consoleLogger.error(
       `[nextly] cache expiry failed twice and was handed off (${reason}): ${deferredTags.join(", ")}`
     );
-    await this.handOff(deferredTags, reason);
+    return this.handOffAndNote(failed, own);
+  }
+
+  /**
+   * Hands `failed` off, and notes on this write's response the tags that are
+   * its own; what {@link defer} does once it has logged the failure.
+   */
+  private async handOffAndNote(
+    failed: Map<string, string>,
+    own: string[]
+  ): Promise<FlushOutcome | void> {
+    const { deferredTags, reason } = failureOf(failed);
+    const recorded = await this.handOff(deferredTags, reason);
     // The response says so: the change is saved, and its public pages may
     // show the previous content until the hand-off runs. A no-op outside a
     // request, where there is no response to tell.
@@ -386,20 +417,25 @@ export class NextCacheRevalidator implements CacheRevalidator {
     }
     // This write's outcome names only its own tags: an earlier write's tag
     // that failed again is handed off and logged above, but is not this
-    // response's to report.
-    return owned.length > 0 ? { deferredTags: owned } : undefined;
+    // response's to report. Unrecorded, they are this process's alone.
+    if (owned.length === 0) return undefined;
+    return recorded
+      ? { deferredTags: owned }
+      : { deferredTags: owned, keptInProcess: owned };
   }
 
   /**
    * Hands tags off through {@link handOffWithin}, to the installed hand-off,
    * and keeps them for Next.js's own cache at the next request: the in-process
    * default already keeps them for that, and an installed one records them
-   * only where nextly's cache handlers read.
+   * only where nextly's cache handlers read. Whether it recorded them where
+   * every instance reads them.
    */
-  private async handOff(tags: string[], reason: string): Promise<void> {
+  private async handOff(tags: string[], reason: string): Promise<boolean> {
     const handoff = this.handoff();
-    await handOffWithin(handoff, tags, reason);
+    const recorded = await handOffWithin(handoff, tags, reason);
     if (!isPendingExpiryHandoff(handoff)) holdForNextRequest(tags);
+    return recorded;
   }
 }
 
@@ -408,13 +444,14 @@ export class NextCacheRevalidator implements CacheRevalidator {
  * without letting the hand-off itself fail the write: one that does not answer
  * must not hold the response, or a committed write made outside a request.
  * Tags it refused, or did not take in time, are kept for this process's next
- * flush. Shared by every revalidator that hands off.
+ * flush. Shared by every revalidator that hands off. Whether the hand-off
+ * answered in time that it recorded them where every instance reads them.
  */
 export async function handOffWithin(
   handoff: ExpiryHandoff,
   tags: string[],
   reason: string
-): Promise<void> {
+): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const timedOut = new Promise<"timed-out">(resolve => {
@@ -432,13 +469,16 @@ export async function handOffWithin(
       // It may still take them, but it may not: keep them for the next flush
       // too, and retry them, since a quiet process may make no next flush.
       holdFailedRecord(tags);
+      return false;
     }
+    return answer === true;
   } catch (error) {
     consoleLogger.error(
       `[nextly] the cache expiry hand-off failed: ${error instanceof Error ? error.message : String(error)}`
     );
     // Not lost with the hand-off: the next flush in this process drains them.
     holdForNextFlush(tags);
+    return false;
   } finally {
     clearTimeout(timer);
   }

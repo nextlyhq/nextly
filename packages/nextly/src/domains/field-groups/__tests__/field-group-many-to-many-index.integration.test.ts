@@ -14,7 +14,7 @@
  * embedding the group, so the outcome asserted is the one a user sees: the save succeeds and the
  * two related ids come back.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, text } from "../../../config";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
@@ -37,9 +37,18 @@ import type { SingleEntryService } from "../../singles/services/single-entry-ser
 
 let handle: TestNextly | undefined;
 
+// A field group's Builder create builds its table in development only; anywhere else it writes the
+// migration for the deploy's `nextly migrate` and records the group pending, with no table. These
+// cases judge the table a create leaves, so they run as a development server does. `vi.stubEnv`
+// rather than assigning: `NODE_ENV` is declared read-only.
+beforeEach(() => {
+  vi.stubEnv("NODE_ENV", "development");
+});
+
 afterEach(async () => {
   await handle?.destroy();
   handle = undefined;
+  vi.unstubAllEnvs();
 });
 
 const tags = defineCollection({
@@ -187,7 +196,7 @@ async function writeTwoIds(
   const singles = t.getService("singleEntryService") as SingleEntryService;
   const saved = await singles.update(
     `${slug}_page`,
-    { card: { heading: "Hello", related: ids } },
+    { card: { heading: "Hello", related: ids }, _overwrite: true },
     { overrideAccess: true }
   );
   // The message travels with the flag so a refused save names its reason.

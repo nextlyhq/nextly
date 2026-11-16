@@ -265,8 +265,9 @@ fi
 # nobody read, on a day CI's queue could not report it either.
 #
 # "Affects" is turbo's own answer, not a second model kept here. `--affected`
-# selects the packages whose files changed against `origin/main` (merge-base,
-# so a `main` that moved on is not read as this branch's change), every
+# selects the packages whose files changed against `origin/dev`, the branch
+# pull requests merge into (merge-base, so a `dev` that moved on is not read as
+# this branch's change; `scripts/integration-branch.mjs` names it), every
 # package that depends on them, and every package when a GLOBAL input changed:
 # `turbo.jsonc` declares `scripts/**`, the root manifest and the lockfile as
 # reaching every task, because a root script is compiled by a workspace's
@@ -286,12 +287,12 @@ if [ "$TYPES_STATUS" -ne 0 ]; then
     echo "pre-push: the diff redefines the workspace, task or dependency graph and the typecheck is red; refusing." >&2
     exit 1
   fi
-  if ! TURBO_SCM_BASE=origin/main pnpm turbo check-types --continue --affected --only; then
+  if ! TURBO_SCM_BASE=origin/dev pnpm turbo check-types --continue --affected --only; then
     echo "" >&2
     echo "pre-push: the typecheck is red in a package this push affects; refusing." >&2
     echo "  A package this push changes, one that depends on it, or every package when a" >&2
     echo "  root input (scripts/, the root manifest, the lockfile) changed. Fix it here," >&2
-    echo "  or if it came in with a merge from main, fix it here anyway: the push carries it." >&2
+    echo "  or if it came in with a merge from dev, fix it here anyway: the push carries it." >&2
     exit 1
   fi
   echo ""

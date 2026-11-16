@@ -87,7 +87,7 @@ describe("version retention (integration)", () => {
     for (const title of ["v2", "v3", "v4", "v5"]) {
       await handler.updateEntry(
         { collectionName: "posts", entryId: id, overrideAccess: true },
-        { title }
+        { title, _overwrite: true }
       );
     }
 
@@ -118,7 +118,7 @@ describe("version retention (integration)", () => {
     for (const title of ["v2", "v3", "v4"]) {
       await handler.updateEntry(
         { collectionName: "posts", entryId: id, overrideAccess: true },
-        { title }
+        { title, _overwrite: true }
       );
     }
 
@@ -173,7 +173,7 @@ describe("version retention (integration)", () => {
     // One ordinary save triggers the trim across the whole backlog.
     await handler.updateEntry(
       { collectionName: "posts", entryId: id, overrideAccess: true },
-      { title: "final" }
+      { title: "final", _overwrite: true }
     );
 
     expect(await versionsFor(current, "posts")).toHaveLength(2);
@@ -187,6 +187,8 @@ describe("version retention (integration)", () => {
       collections: [
         defineCollection({
           slug: "posts",
+          // Kept with working drafts, which a restore writes.
+          status: true,
           versions: { maxPerDoc: 2 },
           fields: [text({ name: "title" })],
         }),
@@ -203,7 +205,7 @@ describe("version retention (integration)", () => {
 
     await handler.updateEntry(
       { collectionName: "posts", entryId: id, overrideAccess: true },
-      { title: "v2" }
+      { title: "v2", _overwrite: true }
     );
 
     // The cap is 2, so restoring the oldest surviving version puts the pass in
@@ -220,6 +222,7 @@ describe("version retention (integration)", () => {
       entryId: id,
       versionNo: source,
       user: { id: "u1" },
+      version: { _overwrite: true },
     });
 
     const rows = await versionsFor(current, "posts");
@@ -255,11 +258,11 @@ describe("version retention (integration)", () => {
 
     await handler.updateEntry(
       { collectionName: "posts", entryId: aId, overrideAccess: true },
-      { title: "a2" }
+      { title: "a2", _overwrite: true }
     );
     await handler.updateEntry(
       { collectionName: "posts", entryId: aId, overrideAccess: true },
-      { title: "a3" }
+      { title: "a3", _overwrite: true }
     );
 
     const rows = await versionsFor(current, "posts");
@@ -307,7 +310,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "de",
         },
-        { title: "Hallo", status: "published" }
+        { title: "Hallo", status: "published", _overwrite: true }
       );
       const german = (await versionsFor(current, "posts")).find(
         r => r.locale === "de" && r.status === "published"
@@ -322,7 +325,7 @@ describe.each(getConfiguredTestDialects())(
             overrideAccess: true,
             locale: "en",
           },
-          { title: `Hello ${n}` }
+          { title: `Hello ${n}`, _overwrite: true }
         );
       }
 
@@ -375,7 +378,7 @@ describe.each(getConfiguredTestDialects())(
                   overrideAccess: true,
                   locale,
                 },
-                { title, status: word }
+                { title, status: word, _overwrite: true }
               );
 
         const created = await save("en", "Hello");
@@ -429,12 +432,12 @@ describe.each(getConfiguredTestDialects())(
 
       await singles.update(
         "branding",
-        { heading: "EN", status: "published" },
+        { heading: "EN", status: "published", _overwrite: true },
         { overrideAccess: true, locale: "en" }
       );
       await singles.update(
         "branding",
-        { heading: "DE", status: "published" },
+        { heading: "DE", status: "published", _overwrite: true },
         { overrideAccess: true, locale: "de" }
       );
       const german = (await versionsFor(current, "branding")).find(
@@ -445,7 +448,7 @@ describe.each(getConfiguredTestDialects())(
       for (const n of [2, 3, 4, 5, 6]) {
         await singles.update(
           "branding",
-          { heading: `EN ${n}` },
+          { heading: `EN ${n}`, _overwrite: true },
           { overrideAccess: true, locale: "en" }
         );
       }
@@ -528,7 +531,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "en",
         },
-        { title: "Final" }
+        { title: "Final", _overwrite: true }
       );
 
       const kept = (await versionsFor(current, "posts")).map(r => r.versionNo);
@@ -559,7 +562,7 @@ describe.each(getConfiguredTestDialects())(
       const id = (created.data as { id: string }).id;
       await handler.updateEntry(
         { collectionName: "posts", entryId: id, overrideAccess: true },
-        { title: "v2" }
+        { title: "v2", _overwrite: true }
       );
       const [v1, v2] = await versionsFor(current, "posts");
       const repo = repositoryFor(current);
@@ -671,7 +674,7 @@ describe.each(getConfiguredTestDialects())(
       for (const title of ["v2", "v3", "v4"]) {
         await handler.updateEntry(
           { collectionName: "posts", entryId: id, overrideAccess: true },
-          { title }
+          { title, _overwrite: true }
         );
       }
 

@@ -64,6 +64,10 @@ import {
   noticeRuleNoLongerAllows,
 } from "../../../auth/access/rule-answer-log";
 import { buildRuleContext } from "../../../auth/access/rule-context";
+import {
+  ruleCouldNotRun,
+  waitedOutPoolBound,
+} from "../../../errors/rule-could-not-run";
 import type { Principal } from "../../../plugins/principals/types";
 import type { AccessOperation } from "../../../services/access/types";
 import {
@@ -100,6 +104,16 @@ async function askRuleFunction(
   try {
     answer = await ask();
   } catch (error) {
+    // A rule whose own query waited out the bound for a database connection
+    // never answered: the request ends with that, naming whose rule it is, as
+    // the access decision ends it, rather than reading the wait as a refusal.
+    if (waitedOutPoolBound(error)) {
+      throw ruleCouldNotRun({
+        subject: target.slug,
+        rule: `the ${operation} rule`,
+        cause: error,
+      });
+    }
     consoleLogger.error(
       `[rbac] Code access function for ${operation}:${target.slug} threw`,
       { error: error }

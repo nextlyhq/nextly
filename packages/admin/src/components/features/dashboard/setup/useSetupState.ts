@@ -1,13 +1,13 @@
 "use client";
 
 /**
- * What the setup card writes for its reader: collapsed or expanded, dismissed
- * or resumed, and a skippable step skipped or restored.
+ * What the setup card writes for its reader: hidden once it says "You're all
+ * set", and a skippable step skipped or restored.
  *
  * Kept on the server per reader (`/api/dashboard/setup`), so it follows them
  * across devices, and never in the layout, whose row means "arranged". Each
- * write asks again for what it changes: the card's own data after a skip or a
- * collapse, and the layout after a dismissal, whose read then leaves the card
+ * write asks again for what it changes: the card's own data after a skip, and
+ * the layout after a dismissal, whose read then leaves the card
  * out (its `shows` says no). A retirement asks for nothing: the card already
  * says "You're all set", and the next layout read leaves it out.
  *
@@ -27,7 +27,6 @@ const SETUP_PATH = "/dashboard/setup";
 
 /** One change, as the route takes it. */
 type SetupChange =
-  | { collapsed: boolean }
   | { dismissed: boolean }
   | { skip: { kind: SkippableSetupStepKind; skipped: boolean } }
   | { retire: SampleRoute };
@@ -42,11 +41,6 @@ interface WriteOutcome {
 }
 
 export interface SetupStateWrite {
-  /**
-   * Collapses or expands the card; `onDone` runs once the write lands (the card's data is asked
-   * for again then), `onFailed` when it fails.
-   */
-  setCollapsed: (collapsed: boolean, outcome?: WriteOutcome) => void;
   dismiss: () => void;
   setSkipped: (kind: SkippableSetupStepKind, skipped: boolean) => void;
   /**
@@ -96,11 +90,6 @@ export function useSetupState(refresh: () => void): SetupStateWrite {
       }),
     [mutate]
   );
-  const setCollapsed = useCallback(
-    (collapsed: boolean, outcome?: WriteOutcome) =>
-      send({ collapsed }, outcome),
-    [send]
-  );
   const dismiss = useCallback(() => mutate({ dismissed: true }), [mutate]);
   const setSkipped = useCallback(
     (kind: SkippableSetupStepKind, skipped: boolean) =>
@@ -113,7 +102,6 @@ export function useSetupState(refresh: () => void): SetupStateWrite {
     [send]
   );
   return {
-    setCollapsed,
     dismiss,
     setSkipped,
     retire,

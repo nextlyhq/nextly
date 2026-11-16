@@ -46,6 +46,7 @@ export {
 } from "./rbac";
 export { createJobsNamespace, type JobsNamespace } from "./jobs";
 export { createNoticesNamespace, type NoticesNamespace } from "./notices";
+export { createVersionsNamespace, type VersionsNamespace } from "./versions";
 export {
   createContentEventsNamespace,
   type ContentEventsNamespace,

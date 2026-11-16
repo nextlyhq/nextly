@@ -609,7 +609,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
           collectionName: "posts",
           entryId: "nonexistent",
         },
-        { title: "Updated" }
+        { title: "Updated", _overwrite: true }
       );
 
       expect(result.success).toBe(false);
@@ -627,7 +627,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
           entryId: "entry-1",
           user: { id: "user-1", role: "editor" },
         },
-        { title: "Updated" }
+        { title: "Updated", _overwrite: true }
       );
 
       expect(fakeUserHoldsPermission).toHaveBeenCalled();
@@ -643,7 +643,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
           entryId: "entry-1",
           user: { id: "user-1" },
         },
-        { title: "Updated" }
+        { title: "Updated", _overwrite: true }
       );
 
       expect(result.success).toBe(false);
@@ -670,7 +670,11 @@ describe("CollectionEntryService — Mutation Contracts", () => {
         { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
         // A relationship value shaped as the admin sends it: an object carrying display
         // properties, which normalisation reduces to its id.
-        { title: "Updated", author: { id: "user-9", name: "Ada" } }
+        {
+          title: "Updated",
+          author: { id: "user-9", name: "Ada" },
+          _overwrite: true,
+        }
       );
 
       // EVERY dispatch seam, not the one that happened to be handy. Asserting only
@@ -702,7 +706,11 @@ describe("CollectionEntryService — Mutation Contracts", () => {
         { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
         // A relationship value shaped as the admin sends it: an object carrying display
         // properties, which normalisation reduces to its id.
-        { title: "Updated", author: { id: "user-9", name: "Ada" } }
+        {
+          title: "Updated",
+          author: { id: "user-9", name: "Ada" },
+          _overwrite: true,
+        }
       );
 
       expect(mockHookRegistry.executeBeforeOperation).toHaveBeenCalled();
@@ -725,7 +733,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
 
       await service.updateEntry(
         { overrideAccess: true, collectionName: "posts", entryId: "entry-1" },
-        { title: "Updated" }
+        { title: "Updated", _overwrite: true }
       );
 
       expect(mockHookRegistry.executeBeforeOperation).toHaveBeenCalledWith(
@@ -741,7 +749,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
 
       await service.updateEntry(
         { overrideAccess: true, collectionName: "posts", entryId: "entry-1" },
-        { title: "Updated" }
+        { title: "Updated", _overwrite: true }
       );
 
       expect(mockHookRegistry.execute).toHaveBeenCalledWith(
@@ -759,7 +767,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
 
       const result = await service.updateEntry(
         { overrideAccess: true, collectionName: "posts", entryId: "entry-1" },
-        { title: "Updated" }
+        { title: "Updated", _overwrite: true }
       );
 
       expect(result).toHaveProperty("success");

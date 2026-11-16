@@ -17,7 +17,9 @@ import type { ReactElement } from "react";
 import { coreBlocks } from "./blocks";
 import { createBlockResolver } from "./resolver";
 import { throughBoundary } from "./__tests__/through-boundary";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+
+import { afterOverrunLines } from "./__tests__/overrun-quiet";
 
 const cached = vi.fn();
 
@@ -124,7 +126,10 @@ async function renderWith(
     route.ContentPage({
       params: { slug: ["about"] },
     })
-  )) as ReactElement<{ definitions?: Map<string, BlockDocument> }>;
+  )) as ReactElement<{
+    definitions?: Map<string, BlockDocument>;
+    context?: { timeZone?: string; fieldShapes?: unknown };
+  }>;
   return { props: element.props, calls: r.calls };
 }
 
@@ -186,6 +191,30 @@ describe("the definitions a route reads for its page", () => {
     expect(read.user).toBeUndefined();
     expect("req" in read).toBe(true);
     expect(read.req).toBeUndefined();
+  });
+
+  it("gives a list filtering by a day inside a component the site's time zone", async () => {
+    // The list is in the component, not the stored page: only the page as
+    // composed holds it.
+    const dayList = {
+      id: "list",
+      type: "core/collection-loop",
+      version: 1,
+      props: {
+        collection: "posts",
+        filters: [
+          { field: "publishedAt", op: "greater_than", value: "2026-09-01" },
+        ],
+      },
+    };
+    const { props } = await renderWith(
+      { hero: definition([dayList]) },
+      page(["hero"]),
+      // The core blocks, as a site registers them, so the list is drawn.
+      { timeZone: "Asia/Karachi", blocks: createBlockResolver(coreBlocks) }
+    );
+    expect(props.context?.timeZone).toBe("Asia/Karachi");
+    expect(props.context?.fieldShapes).toBeDefined();
   });
 
   it("hands over a row whose field is unreadable rather than dropping it", async () => {
@@ -462,6 +491,31 @@ describe("a component's pending edits in draft mode", () => {
     expect(meta.title).toBe("PENDING EDIT");
   });
 
+  it("names the placement of a draft component read refused for want of reads, as a component", async () => {
+    const r = splitStoreReader(
+      { hero: definition([headingNode("PUBLISHED")]) },
+      { hero: definition([headingNode("PENDING EDIT")]) },
+      page(["hero"])
+    );
+    const route = createBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      nextly: r.nextly,
+      draft: true,
+      maxQueries: 0,
+    } as Parameters<typeof createBlocksPage>[0]);
+    const element = (await throughBoundary(
+      route.ContentPage({ params: { slug: ["about"] } })
+    )) as ReactElement<{
+      context?: { queries?: { report(): { unread: unknown[] } } };
+    }>;
+    // The placement asking for the definition, classed as the component
+    // read the published path classes it as.
+    expect(element.props.context?.queries?.report().unread).toEqual([
+      { nodeId: "i0", what: "component" },
+    ]);
+  });
+
   it("does NOT cache the draft read", async () => {
     // The rule `resolve-content` states for the draft entry read, which this
     // read sits beside: a working draft changes on every save while cache tags
@@ -655,3 +709,6 @@ describe("a Single blocks page and the components it embeds", () => {
     expect(meta.title).toBe("PENDING EDIT");
   });
 });
+
+// Pages here outrun their caps, and a route logs that after a short quiet.
+afterAll(afterOverrunLines);

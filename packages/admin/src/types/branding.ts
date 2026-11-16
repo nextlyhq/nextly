@@ -1,11 +1,33 @@
-import type { PublishedContentSource } from "nextly/config";
 import type {
-  FieldStoragePrimitive,
-  FieldSurface,
-  FieldTypeCategory,
-} from "nextly/field-catalog";
+  DeliveredAdminContribution,
+  OverridableDocumentAction,
+  PluginDocumentActionOverride,
+  AdminContributionsMeta,
+  PluginListFilterDeclaration,
+  PublishedContentSource,
+} from "nextly/config";
+import type { PluginFieldTypeMeta } from "nextly/field-catalog";
 // The widget as the workspace payload serves it, a type only.
 import type { PublishedWidget } from "nextly/widget-result";
+
+/** What a declared action does: open a plugin component, or call its route. */
+export type DeclaredActionMeta = Extract<
+  DeliveredAdminContribution,
+  { kind: "rowAction" }
+>["action"];
+
+/**
+ * A plugin's person's-menu item as delivered: a label, an icon, and a link or
+ * an action, with the id its action's route is called with.
+ */
+export type PluginUserMenuItemMeta = {
+  id: string;
+  label: string;
+  icon: string;
+} & (
+  | { to: string; action?: undefined }
+  | { action: DeclaredActionMeta; to?: undefined }
+);
 
 export interface ResolvedBrandingColors {
   primary?: string;
@@ -42,7 +64,32 @@ export interface PluginMenuItemMeta {
    * defers to the plugin's own `placement` rather than meaning "Plugins".
    */
   section?: PluginNavSectionMeta;
+  /**
+   * The id of one of the plugin's `panel.groups`, the heading the item is
+   * listed under in its own standalone panel. The server sends only one the
+   * plugin declares.
+   */
+  group?: string;
+  /** A quiet number beside the label, shown at 0 too. */
+  count?: PluginItemCountMeta;
+  /** A pill beside the label, shown only while its number is above 0. */
+  badge?: PluginItemCountMeta;
   children?: PluginMenuItemMeta[];
+}
+
+/**
+ * What a panel item's number counts, as the server checked it: one of the
+ * plugin's own collections, by the slug the host registered it under, or one
+ * of its own attention items, by id.
+ */
+export type PluginItemCountMeta =
+  | { collection: string; where?: Record<string, unknown> }
+  | { attention: string };
+
+/** A heading of a standalone plugin's own panel. */
+export interface PluginPanelGroupMeta {
+  id: string;
+  label: string;
 }
 
 /** A plugin custom admin page, delivered via `/admin-meta`. */
@@ -97,6 +144,11 @@ export interface PluginMetadata {
    * `usePluginClientConfig` rather than searching this array by hand.
    */
   clientConfig?: Record<string, unknown>;
+  /**
+   * The plugin's admin strings, by interface language and key, declared in
+   * `contributes.translations`. On the signed-in metadata only.
+   */
+  translations?: Readonly<Record<string, Readonly<Record<string, string>>>>;
   version?: string;
   description?: string;
   /** Author shown in the plugins list; mirrors package.json by convention. */
@@ -124,6 +176,13 @@ export interface PluginMetadata {
   order?: number;
   /** Position anchor for standalone plugins (which built-in section to appear after). */
   after?: string;
+  /**
+   * Where a standalone plugin's rail item goes, as an admin address the
+   * server has already resolved and checked against what the plugin owns.
+   * Absent when the plugin names none; the rail then opens the first
+   * collection or menu item its panel lists (`standalonePluginLanding`).
+   */
+  landing?: string;
   collections: string[];
   /** Slugs of contributed singles, for the detail page's contributions view. */
   singles?: string[];
@@ -164,6 +223,11 @@ export interface PluginMetadata {
   };
   /** Declarative sidebar menu items contributed via `contributes.admin.menu`. */
   menu?: PluginMenuItemMeta[];
+  /**
+   * The headings of the plugin's own standalone panel, in the order declared
+   * (`contributes.admin.panel`); absent when it declares none.
+   */
+  panel?: { groups: PluginPanelGroupMeta[] };
   /** Custom admin pages contributed via `contributes.admin.pages`. */
   pages?: PluginPageMeta[];
   /**
@@ -172,11 +236,20 @@ export interface PluginMetadata {
    * asks for, which the settings page asks for too.
    */
   settings?: { component: string; permission?: string };
-  /** Admin header-slot component contributed via `contributes.admin.headerSlot`. */
+  /**
+   * Admin header-slot component contributed via `contributes.admin.headerSlot`,
+   * mirrored for a slot at the bar's right end only.
+   */
   headerSlot?: string;
-  /** Header customization contributed via `contributes.admin.header`. */
+  /**
+   * Header customization contributed via `contributes.admin.header`. `place`
+   * is absent for the bar's right end; `slot` is drawn at the bar or the
+   * rail's foot, `item` in the person's menu.
+   */
   header?: {
     slot?: string;
+    place?: "rail-foot" | "menu";
+    item?: PluginUserMenuItemMeta;
     hideDefaults?: boolean;
     hide?: Array<"github" | "discord" | "docs" | "notifications">;
   };
@@ -214,6 +287,36 @@ export interface PluginMetadata {
     )
   >;
   /**
+   * @experimental Overrides of a collection's built-in document actions,
+   * contributed via `contributes.admin.views[<slug>].documentActions`: on the
+   * slug the admin routes (rename map applied), `"hidden"` or the component
+   * the action opens instead. Present only for enabled plugins.
+   */
+  documentActions?: Array<{
+    slug: string;
+    action: OverridableDocumentAction;
+    override: PluginDocumentActionOverride;
+  }>;
+  /**
+   * @experimental Sections added to a collection's document panel, after
+   * Details, contributed via `contributes.admin.views[<slug>].panelSections`.
+   * Present only for enabled plugins.
+   */
+  panelSections?: Array<{ slug: string; title: string; component: string }>;
+  /**
+   * @experimental The collections whose document screens start with the
+   * rail's panel folded away, contributed via
+   * `contributes.admin.views[<slug>].foldedPanel`, on the slug the admin
+   * routes. Present only for enabled plugins.
+   */
+  foldedPanels?: string[];
+  /**
+   * @experimental The filters this plugin offers in the entry list's toolbar,
+   * via `contributes.admin.filters`, as they passed the boot check. Present
+   * only for enabled plugins.
+   */
+  listFilters?: PluginListFilterDeclaration[];
+  /**
    * Custom field types — `type` → admin editor component path. `layout:
    * "takeover"` marks a type whose visible field collapses the entry-form body
    * to just that field + its condition controller (see takeoverLayout). The
@@ -221,18 +324,7 @@ export interface PluginMetadata {
    * the type opted into let each surface offer only the types meant for it
    * (see pluginFieldTypeCatalogEntries).
    */
-  fieldTypes?: Array<{
-    type: string;
-    component: string;
-    /** The primitive this type persists as; decides binding compatibility. */
-    storage: FieldStoragePrimitive;
-    layout?: "takeover";
-    label?: string;
-    description?: string;
-    icon?: string;
-    category?: FieldTypeCategory;
-    surfaces?: readonly FieldSurface[];
-  }>;
+  fieldTypes?: PluginFieldTypeMeta[];
 }
 
 export interface AdminBranding {
@@ -250,7 +342,10 @@ export interface AdminBranding {
   logoText?: string;
   favicon?: string;
   colors?: ResolvedBrandingColors;
-  /** Runtime toggle for builder-related navigation visibility. */
+  /**
+   * Whether the server offers the schema builder: never in production, and
+   * elsewhere unless `admin.branding.showBuilder` is false.
+   */
   showBuilder?: boolean;
 
   /**
@@ -266,14 +361,6 @@ export interface AdminBranding {
   devReload?: boolean;
 
   /**
-   * Whether the RUNNING server serves the widget preview page's read, from the
-   * session-gated half alone: the same development check that gates the read.
-   * Only an explicit `true` registers the page; `undefined` means the answer
-   * has not arrived, which holds the page's address rather than showing it.
-   */
-  widgetPreviews?: boolean;
-
-  /**
    * INSTALLED plugin metadata, for sidebar rendering and plugin settings pages.
    *
    * Comes from the session-gated half alone, so its absence means the list has
@@ -281,6 +368,20 @@ export interface AdminBranding {
    * `useBrandingStatus()` before concluding anything from a plugin missing here.
    */
   plugins?: PluginMetadata[];
+
+  /**
+   * Each admin place's contributions, by kind, in order, as this reader may
+   * see them: the signed-in half's every place but the login page's, the
+   * public half's the login page's alone.
+   */
+  contributions?: AdminContributionsMeta;
+
+  /**
+   * The fields a plugin's extension switch keeps off each type's pages, by
+   * `collection:<slug>` or `single:<slug>`: added by the plugin there and
+   * switched off now. Drawn nowhere; their stored values stay.
+   */
+  withheldFields?: Record<string, string[]>;
 
   /**
    * Public client configuration, readable before a session exists.

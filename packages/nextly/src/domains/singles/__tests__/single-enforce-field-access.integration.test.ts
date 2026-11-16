@@ -42,7 +42,7 @@ async function seed(): Promise<TestNextly> {
   const nextly = await createTestNextly({ singles: [settings()] });
   await nextly.nextly.updateSingle({
     slug: "site-settings",
-    data: { siteName: "Acme", apiToken: "secret-token" },
+    data: { siteName: "Acme", apiToken: "secret-token", _overwrite: true },
   });
   return nextly;
 }

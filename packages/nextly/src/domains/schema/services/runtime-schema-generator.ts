@@ -13,7 +13,7 @@
  * @module services/schema/runtime-schema-generator
  */
 
-import { sql } from "drizzle-orm";
+import { getColumns, sql } from "drizzle-orm";
 import {
   mysqlTable,
   text as mysqlText,
@@ -71,12 +71,13 @@ import {
   toColumnDescriptor,
   withDeclaredModifiers,
 } from "../extension/column-descriptor";
+import type { ColumnOverride } from "../extension/draft";
 import { enumChecks } from "../extension/enum-check";
 import type { ExtensionColumn } from "../extension/types";
 import type { ForeignKeySpec } from "../pipeline/diff/types";
 
 import {
-  type getSystemColumnDescriptors,
+  getSystemColumnDescriptors,
   type ColumnDescriptor,
   type ColumnKind,
   type ColumnOrigin,
@@ -84,7 +85,11 @@ import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
   ENUM_STORAGE_LENGTH,
+  fieldsStoredOnRow,
   getColumnDescriptor,
+  getSingleRowColumnDescriptor,
+  migrateStepColumnDescriptors,
+  renderDialectType,
   systemColumnsForFields,
 } from "./field-column-descriptor";
 
@@ -150,6 +155,14 @@ export interface RuntimeSchemaOptions {
    */
   extensionColumns?: readonly ExtensionColumn[];
   /**
+   * The app's overrides of this table's field columns' storage. Defaulted
+   * from the active extension schema, as the contributed columns are: the
+   * runtime table is what drizzle-kit pushes and what a SQLite rebuild
+   * recreates, so a column built here with the field's own storage would be
+   * changed back by either.
+   */
+  columnOverrides?: readonly ColumnOverride[];
+  /**
    * The foreign keys THIS table's desired spec carries, declared on a SQLite
    * table only.
    *
@@ -192,6 +205,8 @@ export function generateRuntimeSchema(
     isSingle: options.isSingle ?? tableName.startsWith("single_"),
     extensionColumns:
       options.extensionColumns ?? contributedColumnsFor(tableName, dialect),
+    columnOverrides:
+      options.columnOverrides ?? overriddenColumnsFor(tableName, dialect),
   };
   let table: unknown;
   switch (dialect) {
@@ -301,6 +316,12 @@ function buildCompanionColumnRecord(
   // worklist's SQL filter is unaffected either way: it names the column in raw SQL and is guarded
   // by `hasUpdatedAt`.
 
+  // The version counter and last changer are not declared here either, for the same kind of
+  // reason: this builder serves a field group's translation table too, which is no document and
+  // never gets them, and a bare `select()` naming them would fail there. A collection's or
+  // Single's translation row has them, and they are read and written by statements that name
+  // them (`domains/versions/document-revision`).
+
   // Localized field columns — always nullable (localized-required is app-layer, M2).
   for (const col of columns) {
     const desc: ColumnDescriptor = {
@@ -328,6 +349,46 @@ export function contributedColumnsFor(
   dialect: SupportedDialect
 ): readonly ExtensionColumn[] {
   return getActiveExtensionSchema(dialect)?.entityColumns.get(tableName) ?? [];
+}
+
+/**
+ * The app's overrides of `tableName`'s field columns, from the active
+ * extension schema: the one lookup every runtime-table builder makes, as
+ * `contributedColumnsFor` is for contributed columns.
+ */
+export function overriddenColumnsFor(
+  tableName: string,
+  dialect: SupportedDialect
+): readonly ColumnOverride[] {
+  return (
+    getActiveExtensionSchema(dialect)?.columnOverrides.get(tableName) ?? []
+  );
+}
+
+/**
+ * A field column's descriptor with the storage an override gives it: the
+ * kind and size change, and its name and nullability stay the field's. The
+ * rendered type is asked of `renderDialectType`, so the runtime column and
+ * the desired spec (`withEntityContributions`) render one override alike.
+ */
+export function withColumnOverride(
+  desc: ColumnDescriptor,
+  overrides: readonly ColumnOverride[],
+  dialect: SupportedDialect
+): ColumnDescriptor {
+  const override = overrides.find(o => o.column === desc.name);
+  if (override === undefined) return desc;
+  return {
+    name: desc.name,
+    nullable: desc.nullable,
+    kind: override.kind,
+    dialectType: renderDialectType(override.kind, dialect, override),
+    ...(override.length !== undefined ? { length: override.length } : {}),
+    ...(override.precision !== undefined
+      ? { precision: override.precision }
+      : {}),
+    ...(override.scale !== undefined ? { scale: override.scale } : {}),
+  };
 }
 
 /**
@@ -546,16 +607,27 @@ function buildDrizzleColumnRecord(
   }
 
   // User-defined fields. Layout-only field types and unmapped types
-  // come back as `null` from getColumnDescriptor and are skipped.
-  for (const field of fields) {
+  // come back as `null` from getColumnDescriptor and are skipped. Those inside
+  // a group with no name are columns of this row, read through the walk every
+  // builder of the row's columns shares (`fieldsStoredOnRow`); the group
+  // itself has no name to give a column. A Single's reference columns accept
+  // NULL (`getSingleRowColumnDescriptor`).
+  const describeUserColumn =
+    options.isSingle === true
+      ? getSingleRowColumnDescriptor
+      : getColumnDescriptor;
+  for (const field of fieldsStoredOnRow(fields)) {
     if (localizedNames.has(field.name)) continue; // companion-owned
-    const desc = getColumnDescriptor(
+    const desc = describeUserColumn(
       field,
       dialect,
       options.builtBy ?? "codeFirst"
     );
     if (!desc) continue;
-    out[field.name] = buildUserDrizzleColumn(desc, dialect);
+    out[field.name] = buildUserDrizzleColumn(
+      withColumnOverride(desc, options.columnOverrides ?? [], dialect),
+      dialect
+    );
   }
 
   addContributedDrizzleColumns(out, options.extensionColumns ?? [], dialect);
@@ -601,8 +673,17 @@ function buildSystemDrizzleColumn(
   const literal =
     sys.defaultValue?.kind === "literal" ? sys.defaultValue.value : undefined;
   const clockDefault = sys.defaultValue?.kind === "now";
+  const numeric =
+    sys.defaultValue?.kind === "number" ? sys.defaultValue.value : undefined;
 
   if (dialect === "postgresql") {
+    if (sys.kind === "integer") {
+      const col = pgInteger(sys.name);
+      return finishColumn(
+        numeric === undefined ? col : col.default(numeric),
+        sys
+      );
+    }
     if (sys.kind === "timestamp") {
       const col = pgTimestamp(sys.name);
       return finishColumn(clockDefault ? col.defaultNow() : col, sys);
@@ -622,6 +703,13 @@ function buildSystemDrizzleColumn(
   }
 
   if (dialect === "mysql") {
+    if (sys.kind === "integer") {
+      const col = mysqlInt(sys.name);
+      return finishColumn(
+        numeric === undefined ? col : col.default(numeric),
+        sys
+      );
+    }
     if (sys.kind === "timestamp") {
       const col = mysqlTimestamp(sys.name);
       return finishColumn(clockDefault ? col.defaultNow() : col, sys);
@@ -640,6 +728,13 @@ function buildSystemDrizzleColumn(
     );
   }
 
+  if (sys.kind === "integer") {
+    const col = sqliteInteger(sys.name);
+    return finishColumn(
+      numeric === undefined ? col : col.default(numeric),
+      sys
+    );
+  }
   // SQLite stores a timestamp as an epoch integer and has no distinct varchar.
   if (sys.kind === "timestamp") {
     const col = sqliteInteger(sys.name, { mode: "timestamp" });
@@ -650,6 +745,104 @@ function buildSystemDrizzleColumn(
   }
   const col = sqliteText(sys.name);
   return finishColumn(literal === undefined ? col : col.default(literal), sys);
+}
+
+/** One-column tables, by dialect and column, whose column encodes a value. */
+const encoderTables = new Map<string, Record<string, unknown>>();
+
+/**
+ * A value as the driver receives it for system column `name` on `dialect`:
+ * what the runtime table's own column turns it into on a write.
+ *
+ * For a statement that names a system column its table's runtime model does
+ * not declare — a translation table's `_changed_at` — so the value is stored
+ * exactly as the declared column on a main table stores it, rather than as
+ * the driver would bind a bare `Date`, which on PostgreSQL and MySQL depends
+ * on the server's time zone. Built from the same descriptor and builder as
+ * the column itself, so the two cannot encode differently.
+ */
+export function systemColumnDriverValue(
+  dialect: SupportedDialect,
+  name: string,
+  value: unknown
+): unknown {
+  const key = `${dialect}\u0000${name}`;
+  let table = encoderTables.get(key);
+  if (table === undefined) {
+    const descriptor = getSystemColumnDescriptors(dialect, {
+      hasTitleField: true,
+      hasSlugField: true,
+      hasStatus: true,
+      isSingle: false,
+    }).find(column => column.name === name);
+    if (descriptor === undefined) {
+      throw NextlyError.internal({
+        logContext: { reason: "unknown-system-column", name },
+      });
+    }
+    const record = { column: buildSystemDrizzleColumn(descriptor, dialect) };
+    table = (
+      dialect === "postgresql"
+        ? pgTable("__nextly_encode", record as never)
+        : dialect === "mysql"
+          ? mysqlTable("__nextly_encode", record as never)
+          : sqliteTable("__nextly_encode", record as never)
+    ) as Record<string, unknown>;
+    encoderTables.set(key, table);
+  }
+  const columns = getColumns(table as never) as Record<
+    string,
+    { mapToDriverValue(value: unknown): unknown }
+  >;
+  return columns.column.mapToDriverValue(value);
+}
+
+const languageRevisionTables = new Map<string, Record<string, unknown>>();
+
+/**
+ * The Drizzle model a statement naming a translation table's per-document
+ * columns goes through: its keys, and its counter, changer and change time,
+ * each built from the same descriptor and builder as on a main table.
+ *
+ * A translation table's own runtime model does not declare those columns
+ * (the same model serves field-group translation tables, which never carry
+ * them), so a read or write naming them goes through this model instead,
+ * which Drizzle quotes and binds as it does every other query.
+ */
+export function languageRevisionTable(
+  dialect: SupportedDialect,
+  tableName: string
+): Record<string, unknown> {
+  const key = `${dialect}\u0000${tableName}`;
+  const cached = languageRevisionTables.get(key);
+  if (cached !== undefined) return cached;
+  const documentColumns = Object.fromEntries(
+    migrateStepColumnDescriptors(dialect).map(descriptor => [
+      descriptor.name,
+      buildSystemDrizzleColumn(descriptor, dialect),
+    ])
+  );
+  const table = (
+    dialect === "postgresql"
+      ? pgTable(tableName, {
+          _parent: pgText("_parent"),
+          _locale: pgText("_locale"),
+          ...documentColumns,
+        } as never)
+      : dialect === "mysql"
+        ? mysqlTable(tableName, {
+            _parent: mysqlVarchar("_parent", { length: 255 }),
+            _locale: mysqlVarchar("_locale", { length: 255 }),
+            ...documentColumns,
+          } as never)
+        : sqliteTable(tableName, {
+            _parent: sqliteText("_parent"),
+            _locale: sqliteText("_locale"),
+            ...documentColumns,
+          } as never)
+  ) as Record<string, unknown>;
+  languageRevisionTables.set(key, table);
+  return table;
 }
 
 /**
@@ -755,7 +948,7 @@ export function buildPgColumnFromKind(
     case "json":
       return withNullability(pgJsonb(name), nullable);
     case "fkSingle":
-      return pgText(name);
+      return withNullability(pgText(name), nullable);
     // Extension-only kinds. Omitting them does NOT fail to compile — this
     // function returns `unknown`, so a missing case falls through to
     // `undefined` and the table receives a non-column. Every kind is listed
@@ -825,7 +1018,10 @@ export function buildMysqlColumnFromKind(
     case "json":
       return withNullability(mysqlJson(name), nullable);
     case "fkSingle":
-      return mysqlVarchar(name, { length: length ?? 36 });
+      return withNullability(
+        mysqlVarchar(name, { length: length ?? 36 }),
+        nullable
+      );
     // See the PostgreSQL builder: a missing case falls through to `undefined`
     // rather than failing to compile, so every kind is listed.
     case "bigint": {
@@ -898,7 +1094,7 @@ export function buildSqliteColumnFromKind(
       // SQLite stores JSON as text.
       return withNullability(sqliteText(name), nullable);
     case "fkSingle":
-      return sqliteText(name);
+      return withNullability(sqliteText(name), nullable);
     case "skip":
       return null;
     default:

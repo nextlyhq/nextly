@@ -20,7 +20,12 @@ import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
-import { useDeliveries, useRunDrain, useWebhook } from "@admin/hooks/queries";
+import {
+  useDeliveries,
+  useRunDrain,
+  useWebhook,
+  useWebhookEventTypes,
+} from "@admin/hooks/queries";
 import { useCan } from "@admin/hooks/useCan";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { usePagination } from "@admin/hooks/usePagination";
@@ -65,6 +70,7 @@ const DeliveriesContent: React.FC<{ id: string }> = ({ id }) => {
   const [eventType, setEventType] = useState<WebhookEventType | undefined>();
 
   const { data: endpoint, isLoading: isEndpointLoading } = useWebhook(id);
+  const eventTypes = useWebhookEventTypes();
   // The tab names the webhook these deliveries belong to, so two endpoints'
   // logs open side by side can be told apart.
   useDocumentTitle(endpoint?.name);
@@ -218,6 +224,8 @@ const DeliveriesContent: React.FC<{ id: string }> = ({ id }) => {
           pageSize={pageSize}
           status={status}
           eventType={eventType}
+          eventTypes={eventTypes.data}
+          eventTypesFailed={eventTypes.isError}
           onPageChange={setPage}
           onPageSizeChange={setPageSize}
           onStatusChange={handleStatusChange}
@@ -238,7 +246,7 @@ export default function WebhookDeliveriesPage(): React.JSX.Element {
 
   if (!id) {
     return (
-      <PageContainer width="wide">
+      <PageContainer type="list">
         <SettingsLayout {...DELIVERIES_PAGE}>
           <Alert variant="destructive">
             <AlertDescription>
@@ -257,7 +265,7 @@ export default function WebhookDeliveriesPage(): React.JSX.Element {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer width="wide">
+      <PageContainer type="list">
         <SettingsLayout {...DELIVERIES_PAGE}>
           <DeliveriesContent id={id} />
         </SettingsLayout>

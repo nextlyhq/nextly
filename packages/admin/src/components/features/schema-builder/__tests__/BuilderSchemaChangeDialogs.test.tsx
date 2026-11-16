@@ -47,9 +47,12 @@ function confirmationOf(
     previewId: 1,
     isOpen: true,
     isApplying: false,
+    isBusy: false,
     request: vi.fn(),
     setOpen: vi.fn(),
     settle: vi.fn(),
+    beginPreview: vi.fn(),
+    endPreview: vi.fn(),
     beginApply: vi.fn(),
     endApply: vi.fn(),
     ...overrides,
@@ -59,7 +62,8 @@ function confirmationOf(
 function renderDialogs(
   p: SchemaPreviewResponse | null,
   onConfirm = vi.fn(),
-  overrides: Partial<SchemaChangeConfirmation> = {}
+  overrides: Partial<SchemaChangeConfirmation> = {},
+  creating = false
 ) {
   const result = render(
     <BuilderSchemaChangeDialogs
@@ -67,6 +71,7 @@ function renderDialogs(
       kind="collection"
       entityName="posts"
       onConfirm={onConfirm}
+      creating={creating}
     />
   );
   return { ...result, onConfirm };
@@ -228,6 +233,82 @@ describe("BuilderSchemaChangeDialogs", () => {
     expect(
       screen.getByText(
         "4 Spanish values move to the archive. English becomes the shared value. 2 entries have no English value and keep another language's instead."
+      )
+    ).toBeInTheDocument();
+  });
+
+  // The summary names whose page changes: entries whose shared value comes from another language
+  // show that language's value to their English readers, so the languages are named.
+  it("names the languages entries take their shared value from instead of English", () => {
+    renderDialogs(
+      preview({
+        leavingTranslation: [
+          {
+            name: "heading",
+            column: "heading",
+            entriesWithoutDefault: 3,
+            sharedFrom: { fr: 1, es: 2 },
+            byLocale: { es: 4 },
+            total: 4,
+            defaultLocale: "en",
+            restoreCommand:
+              "nextly i18n:restore --collection posts --field heading",
+          },
+        ],
+      })
+    );
+
+    expect(
+      screen.getByText(
+        "4 Spanish values move to the archive. English becomes the shared value. 3 entries take theirs from another language, which their English readers will see: 2 Spanish and 1 French."
+      )
+    ).toBeInTheDocument();
+  });
+
+  // A field becoming translated moves its values to the default language, and every other
+  // language shows that value until it is translated: the short confirmation's "does not affect
+  // existing data" would hide that, so the full dialog says it.
+  it("shows the full dialog, saying whose values a field becoming translated keeps, for a field joining translation", () => {
+    renderDialogs(
+      preview({
+        joiningTranslation: [
+          {
+            name: "heading",
+            column: "heading",
+            values: 2,
+            defaultLocale: "en",
+          },
+        ],
+      })
+    );
+
+    expect(screen.queryByText(/safe change/i)).not.toBeInTheDocument();
+    expect(screen.getByText("now localized")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "2 values become the English value. Other languages show it until they are translated."
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /save changes/i })).toBeEnabled();
+  });
+
+  it("says a field becoming translated keeps its values as English although they could not be counted", () => {
+    renderDialogs(
+      preview({
+        joiningTranslation: [
+          {
+            name: "heading",
+            column: "heading",
+            values: null,
+            defaultLocale: "en",
+          },
+        ],
+      })
+    );
+
+    expect(
+      screen.getByText(
+        "Its values become the English value; they couldn't be counted. Other languages show it until they are translated."
       )
     ).toBeInTheDocument();
   });
@@ -497,5 +578,56 @@ describe("a rename that keeps the rows but converts their values", () => {
       })
     );
     expect(screen.getByText(/data preserved/i)).toBeInTheDocument();
+  });
+
+  // Saving an entity not created yet is its create. Its review is built in the
+  // browser, not by the server, so it says what will be created and makes no
+  // claim that the change is safe.
+  it("says what saving a new entity creates, with no safety verdict", async () => {
+    const { onConfirm } = renderDialogs(
+      preview({
+        changes: {
+          added: [
+            {
+              name: "headline",
+              type: "text",
+              required: true,
+              hasDefault: false,
+              classification: "safe",
+            },
+          ],
+          removed: [],
+          changed: [],
+          unchanged: [],
+        },
+      }),
+      vi.fn(),
+      {},
+      true
+    );
+    const dialog = screen.getByRole("alertdialog");
+    expect(
+      within(dialog).getByRole("heading", {
+        name: "Create the collection posts?",
+      })
+    ).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(
+      "The collection posts will be created with these fields."
+    );
+    expect(dialog).toHaveTextContent("headline");
+    expect(dialog).not.toHaveTextContent(/safe change/i);
+    expect(dialog).not.toHaveTextContent(/do not affect existing data/i);
+
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Create" })
+    );
+    expect(onConfirm).toHaveBeenCalledWith({}, []);
+  });
+
+  it("says a new entity with no fields is created with none", () => {
+    renderDialogs(preview(), vi.fn(), {}, true);
+    expect(screen.getByRole("alertdialog")).toHaveTextContent(
+      "The collection posts will be created, with no fields yet."
+    );
   });
 });

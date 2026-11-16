@@ -25,7 +25,10 @@
  *
  * @module domains/media/retired-image-sizes-store
  */
-import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  SupportedDialect,
+  TransactionContext,
+} from "@nextlyhq/adapter-drizzle/types";
 import { sql, type SQL } from "drizzle-orm";
 
 import { isMissingNamedColumnError } from "../../database/missing-column";
@@ -397,37 +400,94 @@ export function retiredSizesReader(
 ): RetiredSizesReader {
   let column: Promise<boolean> | undefined;
   return async ids => {
-    const found = new Map<string, unknown>();
-    if (ids.length === 0) return found;
+    if (ids.length === 0) return new Map<string, unknown>();
     column ??= hasRetiredSizesColumn(db, dialect).catch((error: unknown) => {
       column = undefined;
       throw error;
     });
-    if (!(await column)) return found;
-    let rows: Array<{ id: string; sizes: unknown }>;
-    try {
-      rows = await rowsOf<{ id: string; sizes: unknown }>(
-        db,
-        dialect,
-        sql`SELECT ${id}, ${sizes} FROM ${media} WHERE ${id} IN (${sql.join(
-          ids.map(value => sql`${value}`),
-          sql`, `
-        )}) AND ${sizes} IS NOT NULL`
-      );
-    } catch (error) {
-      // The column dropped since its provenance was asked, as
-      // `nextly media remove-sizes --apply --drop` can during a delete. It is
-      // dropped only once no item names a size file, so there are none to
-      // read, and failing would abort the delete. Told by the driver's code
-      // for a missing column and by its name; any other failure is the
-      // caller's.
-      if (!isMissingNamedColumnError(error, RETIRED_SIZES_COLUMN)) throw error;
-      column = Promise.resolve(false);
-      return found;
-    }
-    for (const row of rows) found.set(row.id, row.sizes);
-    return found;
+    if (!(await column)) return new Map<string, unknown>();
+    const found = await sizesByIdOrGone(ids, statement =>
+      rowsOf<SizesRow>(db, dialect, statement)
+    );
+    if (found === null) column = Promise.resolve(false);
+    return found ?? new Map<string, unknown>();
   };
+}
+
+/** One item's stored `sizes`, as the read of them returns it. */
+interface SizesRow {
+  id: string;
+  sizes: unknown;
+}
+
+/**
+ * The stored `sizes` of `ids`, by id, read through `read`; null when the
+ * column is gone. One statement and one reading of its failure for every
+ * reader, on the pool or on a transaction.
+ */
+async function sizesByIdOrGone(
+  ids: readonly string[],
+  read: (statement: SQL) => Promise<SizesRow[]>
+): Promise<Map<string, unknown> | null> {
+  let rows: SizesRow[];
+  try {
+    rows = await read(
+      sql`SELECT ${id}, ${sizes} FROM ${media} WHERE ${id} IN (${sql.join(
+        ids.map(value => sql`${value}`),
+        sql`, `
+      )}) AND ${sizes} IS NOT NULL`
+    );
+  } catch (error) {
+    // The column dropped since its provenance was asked, as
+    // `nextly media remove-sizes --apply --drop` can during a delete. It is
+    // dropped only once no item names a size file, so there are none to
+    // read, and failing would abort the delete. Told by the driver's code
+    // for a missing column and by its name; any other failure is the
+    // caller's.
+    if (!isMissingNamedColumnError(error, RETIRED_SIZES_COLUMN)) throw error;
+    return null;
+  }
+  const found = new Map<string, unknown>();
+  for (const row of rows) found.set(row.id, row.sizes);
+  return found;
+}
+
+/** What a read of the retired sizes on a transaction uses of it. */
+export type SizesTransaction = Pick<
+  TransactionContext,
+  "queryStatement" | "savepoint" | "rollbackToSavepoint" | "releaseSavepoint"
+>;
+
+/** The savepoint a read on a transaction runs under, where it has them. */
+const SIZES_SAVEPOINT = "nextly_retired_sizes";
+
+/**
+ * The stored `sizes` of `ids` read on `tx`, for a delete that removes the
+ * size files of exactly the rows it holds locked there. The caller asks the
+ * column's provenance first (`hasRetiredSizesColumn`), before its
+ * transaction, and reads only when that says the column is there.
+ *
+ * A drop of the column after that ask fails this read with a missing column,
+ * read as no sizes, as the pooled reader reads it. On PostgreSQL that failure
+ * aborts the whole transaction, so the read runs under a savepoint wherever
+ * the transaction has them and only the savepoint is rolled back. MySQL has
+ * none here, and a failed statement there does not end its transaction.
+ */
+export async function retiredSizesOnTransaction(
+  tx: SizesTransaction,
+  ids: readonly string[]
+): Promise<Map<string, unknown>> {
+  if (ids.length === 0) return new Map<string, unknown>();
+  await tx.savepoint?.(SIZES_SAVEPOINT);
+  const found = await sizesByIdOrGone(ids, statement =>
+    tx.queryStatement<SizesRow>(statement)
+  );
+  if (found === null) {
+    await tx.rollbackToSavepoint?.(SIZES_SAVEPOINT);
+    return new Map<string, unknown>();
+  }
+  await tx.releaseSavepoint?.(SIZES_SAVEPOINT);
+  return found;
 }
 
 /**
@@ -550,26 +610,47 @@ function retiredUseOf(
   object: SchemaObjectSql,
   objects: RetiredObjects
 ): string | null {
-  const text = object.body ?? "";
-  const uses: string[] = [];
-  if (
-    objects.tableRows !== null &&
-    object.on !== RETIRED_IMAGE_SIZES_TABLE &&
-    namesIdentifier(text, RETIRED_IMAGE_SIZES_TABLE)
-  ) {
-    uses.push(`the \`${RETIRED_IMAGE_SIZES_TABLE}\` table`);
-  }
-  const onMedia = object.on === "media" || namesIdentifier(text, "media");
-  if (
-    objects.column &&
-    onMedia &&
-    namesIdentifier(text, RETIRED_SIZES_COLUMN)
-  ) {
-    uses.push(`the \`media.${RETIRED_SIZES_COLUMN}\` column`);
-  }
+  const uses = [
+    ...(usesRetiredTable(object, objects)
+      ? [`the \`${RETIRED_IMAGE_SIZES_TABLE}\` table`]
+      : []),
+    ...(usesRetiredColumn(object, objects)
+      ? [`the \`media.${RETIRED_SIZES_COLUMN}\` column`]
+      : []),
+  ];
   if (uses.length === 0) return null;
   const where = object.on === null ? "" : ` on \`${object.on}\``;
   return `${object.kind} \`${object.name}\`${where} uses ${uses.join(" and ")}`;
+}
+
+/**
+ * Whether a view or trigger uses the `image_sizes` table the drop removes:
+ * named in its SQL, unless it is a trigger on that table, which goes with it.
+ */
+function usesRetiredTable(
+  object: SchemaObjectSql,
+  objects: RetiredObjects
+): boolean {
+  return (
+    objects.tableRows !== null &&
+    object.on !== RETIRED_IMAGE_SIZES_TABLE &&
+    namesIdentifier(object.body ?? "", RETIRED_IMAGE_SIZES_TABLE)
+  );
+}
+
+/**
+ * Whether a view or trigger uses the media table's `sizes` column the drop
+ * removes: named in SQL that names the media table too, or in a trigger on it.
+ */
+function usesRetiredColumn(
+  object: SchemaObjectSql,
+  objects: RetiredObjects
+): boolean {
+  const text = object.body ?? "";
+  const onMedia = object.on === "media" || namesIdentifier(text, "media");
+  return (
+    objects.column && onMedia && namesIdentifier(text, RETIRED_SIZES_COLUMN)
+  );
 }
 
 /**

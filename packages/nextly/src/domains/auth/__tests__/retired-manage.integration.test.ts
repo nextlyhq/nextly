@@ -27,6 +27,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runUpgrade, type UpgradeAdapter } from "../../../cli/commands/upgrade";
 import { getDialectTables } from "../../../database/index";
 import { getService } from "../../../di";
+import { container } from "../../../di/container";
 import { seedSuperAdmin } from "../../../database/seeders/super-admin";
 import { seedPermissionsAndRolePresets } from "../../../init/seed-permissions";
 import {
@@ -35,6 +36,10 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import {
+  RBAC_EPOCH_ROW_ID,
+  rbacEpochTables,
+} from "../../../schemas/rbac-epoch";
 import { ServiceContainer } from "../../../services/index";
 
 import {
@@ -97,6 +102,26 @@ describe.each(getConfiguredTestDialects())(
           RETIRED.some(resource => slugs.includes(`manage-${resource}`))
         )
         .map(({ name }) => name);
+    }
+
+    /** The role version every instance watches, read from its shared row. */
+    async function sharedRoleVersion(): Promise<unknown> {
+      const table = rbacEpochTables(dialect).nextlyRbacEpoch;
+      const db = t.adapter.getDrizzle() as unknown as {
+        select: (projection: Record<string, unknown>) => {
+          from: (table: unknown) => {
+            where: (condition: unknown) => {
+              limit: (n: number) => Promise<unknown[]>;
+            };
+          };
+        };
+      };
+      const [row] = await db
+        .select({ revision: table.revision, generation: table.generation })
+        .from(table)
+        .where(eq(table.id, RBAC_EPOCH_ROW_ID))
+        .limit(1);
+      return row;
     }
 
     const lines: string[] = [];
@@ -513,7 +538,19 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("is converted by nextly upgrade once: the plain four, no retired manage, background jobs as they were", async () => {
-        await upgrade();
+        // As the command runs it: no Nextly started in its process, so the
+        // service container holds no adapter, only the one the command opened.
+        const versionBefore = await sharedRoleVersion();
+        const booted = container.detach();
+        try {
+          await upgrade();
+          // Every instance is told the roles changed: the shared role version
+          // each one watches moved before the command ended, so none keeps
+          // answering from the grants before.
+          expect(await sharedRoleVersion()).not.toEqual(versionBefore);
+        } finally {
+          container.restore(booted);
+        }
         expect((await holds(managerId)).sort()).toEqual(
           [...RETIRED.flatMap(plainOn), "manage-background-jobs"].sort()
         );

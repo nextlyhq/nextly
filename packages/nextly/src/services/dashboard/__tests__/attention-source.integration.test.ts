@@ -164,9 +164,12 @@ describe.each(getConfiguredTestDialects())(
       const trusted = new Nextly();
       await trusted.updateSingle({
         slug: HOME,
-        data: { heading: "Live", status: "published" },
+        data: { heading: "Live", status: "published", _overwrite: true },
       });
-      await trusted.updateSingle({ slug: HOME, data: { heading: "Edited" } });
+      await trusted.updateSingle({
+        slug: HOME,
+        data: { heading: "Edited", _overwrite: true },
+      });
       // Every dashboard request rebuilds the content sources before it resolves
       // a card, and boot publishes none; these tests call the resolver
       // directly, so they rebuild them as a request would.

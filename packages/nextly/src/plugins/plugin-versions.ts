@@ -37,7 +37,8 @@ import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { runWithCallerScope } from "../auth/caller-scope";
 import { canReadEntity, readAccessCaller } from "../auth/entity-read-access";
 import { runAsPrincipal } from "../auth/principal-scope";
-import type { RequestActor } from "../auth/request-actor";
+import { SYSTEM_ACTOR, type RequestActor } from "../auth/request-actor";
+import { getService } from "../di";
 import {
   authorizeChecked,
   checkedCaller,
@@ -47,6 +48,10 @@ import type { DirectAPIConfig } from "../direct-api/types";
 import type { UserContext } from "../domains/singles/types";
 import { discardWorkingDraft } from "../domains/versions/discard-working-draft";
 import {
+  restoreVersion,
+  type RestoreVersionResult,
+} from "../domains/versions/restore-version";
+import {
   serializeVersionSnapshot,
   type AutosaveWriteResult,
   type VersionRef,
@@ -54,6 +59,7 @@ import {
 } from "../domains/versions/versions-repository";
 import type { VersionsService } from "../domains/versions/versions-service";
 import { NextlyError } from "../errors/nextly-error";
+import { assertNoOpenTransaction } from "../shared/lib/open-transaction";
 
 import {
   pluginVersionPins,
@@ -92,12 +98,16 @@ export interface PluginVersionWrites {
   ): Promise<VersionRow>;
   /**
    * @experimental Discard a document's working draft in one locale. Made as a
-   * person, the person needs to read and update the document.
+   * person, the person needs to read and update the document. `version` is
+   * the version the draft was read at (`_rev`) and the overwrite choice
+   * (`_overwrite`): a discard is judged as a save of the change is, so one
+   * made from an out-of-date read is refused with `STALE_VERSION`.
    */
   deleteWorkingDraft(
     ref: VersionRef,
     locale: string | null,
-    opts?: ServiceOpts
+    opts?: ServiceOpts,
+    version?: Readonly<Record<string, unknown>>
   ): Promise<number>;
   /**
    * @experimental Record an author's recovery point. Made as a person, the
@@ -110,6 +120,25 @@ export interface PluginVersionWrites {
     input: AutosaveInput,
     opts?: ServiceOpts
   ): Promise<AutosaveWriteResult>;
+  /**
+   * @experimental Restore a version into the document's working draft: the
+   * fields `options.fields` names, or every field the version holds, go into
+   * the drafts of the parts the version holds, and nothing published changes.
+   * Refused where the collection or Single keeps no drafts. Made as a person,
+   * the person needs to read and update the document, and a field they may not
+   * read or write is left out and reported in `droppedFields`.
+   * `options.version` is the version the document was read at (`_rev`) and the
+   * overwrite choice (`_overwrite`), judged as a save's are.
+   */
+  restore(
+    ref: VersionRef,
+    versionNo: number,
+    options?: {
+      fields?: readonly string[];
+      version?: Readonly<Record<string, unknown>>;
+    },
+    opts?: ServiceOpts
+  ): Promise<RestoreVersionResult>;
   /**
    * @experimental Version pins on the plugin's own transaction: register a
    * holder, then pin, release and list its slots in `ctx.db.transaction` or
@@ -182,7 +211,7 @@ async function assertHandlerGates(
   ref: VersionRef & { scopeKind: "collection" | "single" },
   user: UserContext,
   resolved: ResolvedOpts,
-  write: "label" | "discard" | "autosave",
+  write: "label" | "discard" | "autosave" | "restore",
   logContext: Record<string, unknown>,
   // The version a label names, whose own language is asked about.
   versionNo?: number
@@ -256,8 +285,8 @@ async function assertHandlerGates(
 async function checkedWriter(
   ref: VersionRef,
   resolved: ResolvedOpts,
-  write: "label" | "discard" | "autosave",
-  // The version a label names, and the language a discard or an autosave
+  write: "label" | "discard" | "autosave" | "restore",
+  // The version a label or a restore names, and the language a discard or an autosave
   // names, as the plugin passes it.
   at: { versionNo?: number; locale?: string | null } = {}
 ): Promise<HistoryWriter | null> {
@@ -289,8 +318,10 @@ async function checkedWriter(
   // label every language. Set here rather than inherited, so a plugin calling
   // from inside an operation in one language is judged as REST judges the
   // route, not in that operation's language.
+  // A restore is judged as REST's restore route judges it: in every language,
+  // as a label is, since the version it names may be any language's.
   await withRuleLanguage(
-    write === "label"
+    write === "label" || write === "restore"
       ? everyLanguage()
       : registeredWriteAsNamedLanguagesFor(at.locale || undefined),
     () =>
@@ -355,10 +386,48 @@ function refuseOtherAuthor(
  * id, so a discard made with a key is refused rather than recorded against
  * the key's owner, who did not make it. The count is of the drafts removed.
  */
+/**
+ * A trusted plugin's discard of a working draft: through the document's own
+ * service, as every other discard goes, never straight to the draft table. The
+ * service deletes the draft under the document's lock and, in the same
+ * transaction, moves the document's version: what a reader of the draft would
+ * see has changed. Page history has no document version, so it keeps the
+ * direct delete.
+ */
+async function discardTrusted(
+  ref: VersionRef,
+  locale: string | null,
+  service: () => VersionsService,
+  version: Readonly<Record<string, unknown>> | undefined
+): Promise<number> {
+  if (ref.scopeKind === "collection") {
+    return getService("collectionsHandler")
+      .getEntryService()
+      .discardWorkingDraftCounted({
+        collectionName: ref.scopeSlug,
+        entryId: ref.entryId,
+        locale,
+        actor: SYSTEM_ACTOR,
+        version,
+      });
+  }
+  if (ref.scopeKind === "single") {
+    return getService("singleEntryService").discardWorkingDraftCounted({
+      slug: ref.scopeSlug,
+      entryId: ref.entryId,
+      locale,
+      actor: SYSTEM_ACTOR,
+      version,
+    });
+  }
+  return service().deleteWorkingDraft(ref, locale);
+}
+
 async function discardAsWriter(
   ref: VersionRef,
   locale: string | null,
-  writer: HistoryWriter
+  writer: HistoryWriter,
+  version: Readonly<Record<string, unknown>> | undefined
 ): Promise<number> {
   refuseUnnamedKey(ref, writer, "discard");
   // Only collections and Singles have a working draft; page history was
@@ -373,6 +442,7 @@ async function discardAsWriter(
     authenticatedScope: writer.authenticatedScope,
     actor: writer.actor,
     ...writer.hookInputs,
+    version,
   });
   return removed;
 }
@@ -443,13 +513,72 @@ export function pluginVersionWrites(
       });
     },
 
-    deleteWorkingDraft(ref, locale, opts) {
+    deleteWorkingDraft(ref, locale, opts, version) {
       return asCalled(opts, async resolved => {
+        // A collection's or Single's discard takes the document's row lock in
+        // a transaction of its own. Inside the plugin's open transaction,
+        // which may hold that lock, it would wait on it until the database
+        // gave up, on the dialects whose transactions take a connection each;
+        // it is refused at once instead, on every dialect.
+        if (ref.scopeKind === "collection" || ref.scopeKind === "single") {
+          assertNoOpenTransaction(
+            getService("adapter"),
+            "versions.deleteWorkingDraft"
+          );
+        }
         const writer = await checkedWriter(ref, resolved, "discard", {
           locale,
         });
-        if (!writer) return service().deleteWorkingDraft(ref, locale);
-        return discardAsWriter(ref, locale, writer);
+        // Judged on the version the draft was read at, as a save of it is.
+        if (!writer) return discardTrusted(ref, locale, service, version);
+        return discardAsWriter(ref, locale, writer, version);
+      });
+    },
+
+    restore(ref, versionNo, options, opts) {
+      return asCalled(opts, async resolved => {
+        if (ref.scopeKind === "page") {
+          throw NextlyError.forbidden({
+            logContext: {
+              reason: "page-history-restore",
+              scopeSlug: ref.scopeSlug,
+              entryId: ref.entryId,
+            },
+          });
+        }
+        // A restore's update takes the document's row lock in a transaction
+        // of its own. Inside the plugin's open transaction, which may hold
+        // that lock, it would wait on it until the database gave up, as a
+        // discard would; it is refused at once instead, before any read.
+        assertNoOpenTransaction(getService("adapter"), "versions.restore");
+        const writer = await checkedWriter(ref, resolved, "restore", {
+          versionNo,
+        });
+        // The same restore REST's route runs once its gates have passed; a
+        // trusted call runs it with no person to judge. A trusted call made
+        // for a named person is still theirs: their actor, never their gates.
+        const named = resolved.user?.id;
+        return restoreVersion({
+          scopeKind: ref.scopeKind,
+          slug: ref.scopeSlug,
+          entryId: ref.entryId,
+          versionNo,
+          ...(writer
+            ? {
+                user: writer.user,
+                actor: writer.actor,
+                ...(writer.authenticatedScope
+                  ? { authenticatedScope: writer.authenticatedScope }
+                  : {}),
+              }
+            : named === undefined
+              ? {}
+              : { actor: { type: "user" as const, id: String(named) } }),
+          // What the plugin hands its hooks, for the update the restore makes.
+          ...hookInputsOf(resolved),
+          ...(options?.fields ? { fields: options.fields } : {}),
+          ...(options?.version ? { version: options.version } : {}),
+        });
       });
     },
 

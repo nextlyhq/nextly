@@ -1,5 +1,6 @@
-// The permission allowlist has to be a CONDITION on the query, because the
-// `total` this returns is what a client pages by.
+// The permission allowlist has to decide which rows are counted, before the
+// total is taken and the page cut, because the `total` this returns is what a
+// client pages by.
 //
 // Filtering the returned page in application code instead makes the rows and
 // the meta describe different sets: the total becomes the count of one
@@ -9,6 +10,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import Database from "better-sqlite3";
+import { asc } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { describe, expect, it, afterEach, beforeEach } from "vitest";
 
@@ -93,7 +95,19 @@ describe("DynamicCollectionRegistryService.listCollections — slugAllowlist", (
         maxParamsPerQuery: 999,
         maxIdentifierLength: 128,
       }),
-    } satisfies Pick<DrizzleAdapter, "getDrizzle" | "getCapabilities">;
+      // The registry's listing, which the list's pages, totals and order are
+      // derived from (`listStoredRegistry`): every row, oldest first, as the
+      // real adapter's `select` answers it. With no `transactionOpenInFlow`
+      // the listing is read on every call rather than cached, so each case
+      // reads what it seeded.
+      select: async () =>
+        db
+          .select()
+          .from(dynamicCollectionsSqlite)
+          .orderBy(asc(dynamicCollectionsSqlite.createdAt)),
+    } satisfies Pick<DrizzleAdapter, "getDrizzle" | "getCapabilities"> & {
+      select: () => Promise<unknown[]>;
+    };
 
     // `satisfies` checks the two members the registry reaches for against the
     // adapter's own declarations, so a signature change fails here rather than
@@ -182,5 +196,49 @@ describe("DynamicCollectionRegistryService.listCollections — slugAllowlist", (
       "mango",
       "zebra",
     ]);
+  });
+
+  it("counts and pages without the denied collections", async () => {
+    // 🔴 A denylist is a condition on the same query, so the total a client
+    // pages by counts only the rows it can be shown: two here, on two pages.
+    const first = await registry.listCollections({
+      slugDenylist: ["mango"],
+      limit: 1,
+      page: 1,
+      sortBy: "slug",
+      sortOrder: "asc",
+    });
+    const second = await registry.listCollections({
+      slugDenylist: ["mango"],
+      limit: 1,
+      page: 2,
+      sortBy: "slug",
+      sortOrder: "asc",
+    });
+
+    expect(first.total).toBe(2);
+    expect(first.totalPages).toBe(2);
+    expect(first.collections.map(c => c.slug)).toEqual(["alpha"]);
+    expect(second.collections.map(c => c.slug)).toEqual(["zebra"]);
+  });
+
+  it("denies nothing for an empty denylist", async () => {
+    const result = await registry.listCollections({
+      slugDenylist: [],
+      limit: 10,
+    });
+
+    expect(result.total).toBe(3);
+  });
+
+  it("only narrows an allowlist, counting what both admit", async () => {
+    const result = await registry.listCollections({
+      slugAllowlist: ["alpha", "mango"],
+      slugDenylist: ["mango", "zebra"],
+      limit: 10,
+    });
+
+    expect(result.collections.map(c => c.slug)).toEqual(["alpha"]);
+    expect(result.total).toBe(1);
   });
 });

@@ -16,6 +16,7 @@
 
 import { useCallback, useRef, useState } from "react";
 
+import type { PanelKept } from "./panel-values";
 import {
   bringRefusedPanelForward,
   stagePendingPanels,
@@ -50,9 +51,14 @@ function stagedSettings({
   kept,
 }: {
   placementId: string;
-  kept: { config: Record<string, unknown>; ownTitle: string };
+  kept: PanelKept;
 }): StagedSettings {
-  return { placementId, config: kept.config, ownTitle: kept.ownTitle };
+  return {
+    placementId,
+    config: kept.config,
+    ownTitle: kept.ownTitle,
+    ...(kept.resize === undefined ? {} : { resize: kept.resize }),
+  };
 }
 
 /**

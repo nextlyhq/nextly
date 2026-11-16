@@ -11,7 +11,11 @@ import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
 import type { BreachedPasswordsConfig } from "../../../shared/types/config";
-import { breachedPasswordsWarnings } from "../breached-passwords";
+import { BreachedPasswordsConfigSchema } from "../../../schemas/security-config";
+import {
+  breachedPasswordsWarnings,
+  RANGE_ANSWER_MAX_BYTES,
+} from "../breached-passwords";
 import { createPasswordHelper } from "../password-helper";
 
 const PASSWORD = "a password that is long enough";
@@ -21,11 +25,16 @@ const SUFFIX = SHA1.slice(5);
 
 /** A fetch that records each request and answers with `body`. */
 function recordingFetch(body: string, status = 200) {
-  const requests: Array<{ url: string; headers: Record<string, string> }> = [];
+  const requests: Array<{
+    url: string;
+    headers: Record<string, string>;
+    redirect: RequestInit["redirect"];
+  }> = [];
   const fetch = vi.fn(async (url: string, init: RequestInit) => {
     requests.push({
       url,
       headers: Object.fromEntries(new Headers(init.headers).entries()),
+      redirect: init.redirect,
     });
     return new Response(body, { status });
   });
@@ -124,6 +133,8 @@ describe("a range service over https", () => {
     expect(requests[0]?.url).toBe(`https://ranges.example/range/${PREFIX}`);
     expect(requests[0]?.headers["add-padding"]).toBe("true");
     expect(requests[0]?.headers["user-agent"]).toMatch(/^Nextly\//);
+    // A redirect could carry the prefix to an address the site never named.
+    expect(requests[0]?.redirect).toBe("error");
     const sent = JSON.stringify(requests);
     expect(sent).not.toContain(SUFFIX);
     expect(sent).not.toContain(PASSWORD);
@@ -247,4 +258,62 @@ describe("a configured time limit", () => {
       });
     }
   );
+});
+
+// A fast answer far larger than any padded range costs memory the time limit does not bound.
+describe("a range answer past the byte cap", () => {
+  it("stops reading and leaves the password unchecked", async () => {
+    let served = 0;
+    const chunk = new TextEncoder().encode(
+      `${"0".repeat(35)}:1\r\n`.repeat(1000)
+    );
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              if (served > RANGE_ANSWER_MAX_BYTES * 4) {
+                controller.close();
+                return;
+              }
+              served += chunk.byteLength;
+              controller.enqueue(chunk);
+            },
+          })
+        )
+    );
+    expect(
+      await check({ source: { url: "https://ranges.example/range/" } }, fetch)
+    ).toEqual({ ok: true, breachedCheck: "unavailable" });
+    // Stopped soon after the cap rather than reading the whole body.
+    expect(served).toBeLessThan(RANGE_ANSWER_MAX_BYTES * 2);
+  });
+});
+
+// A source naming both shapes is refused in the configuration, and asks neither at runtime.
+describe("a source naming both a url and a range", () => {
+  const both = {
+    url: "https://ranges.example/range/",
+    range: vi.fn(async () => [SUFFIX]),
+  };
+
+  it("is refused by the configuration schema", () => {
+    expect(
+      BreachedPasswordsConfigSchema.safeParse({ source: both }).success
+    ).toBe(false);
+  });
+
+  it("asks neither, leaves the password unchecked, and is named at boot", async () => {
+    const { fetch, requests } = recordingFetch(`${SUFFIX}:12\r\n`);
+    expect(
+      await check({ source: both } as unknown as BreachedPasswordsConfig, fetch)
+    ).toEqual({ ok: true, breachedCheck: "unavailable" });
+    expect(requests).toHaveLength(0);
+    expect(both.range).not.toHaveBeenCalled();
+    expect(
+      breachedPasswordsWarnings({
+        source: both,
+      } as unknown as BreachedPasswordsConfig)
+    ).toEqual([expect.stringMatching(/names both a url and a range/)]);
+  });
 });

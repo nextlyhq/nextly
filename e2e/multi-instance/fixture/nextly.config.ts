@@ -10,6 +10,8 @@ import {
   type SanitizedNextlyConfig,
 } from "nextly/config";
 
+import { fixtureCachePlugin } from "./nextly/cache-plugin";
+
 export const Notes = defineCollection({
   slug: "notes",
   fields: [
@@ -18,10 +20,13 @@ export const Notes = defineCollection({
   ],
 });
 
-// Typed as the public config type: the fixture has no plugins, so the widget
-// record defineConfig adds to it is empty, and its own name is not exported.
+// Typed as the public config type: the fixture's one plugin declares no
+// widgets, so the widget record defineConfig adds to it is empty, and its own
+// name is not exported.
 const config: SanitizedNextlyConfig = defineConfig({
   collections: [Notes],
+  // Expires a cached read of its own through `ctx.cache`.
+  plugins: [fixtureCachePlugin],
   db: { migrationsDir: "./migrations" },
 });
 

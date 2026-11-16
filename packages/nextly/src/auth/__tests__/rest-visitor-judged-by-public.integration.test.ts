@@ -170,7 +170,7 @@ describe.each(getConfiguredTestDialects())(
       } as never);
       await t.nextly.updateSingle({
         slug: NOTICE,
-        data: { title: "Opening hours" },
+        data: { title: "Opening hours", _overwrite: true },
       } as never);
     });
 

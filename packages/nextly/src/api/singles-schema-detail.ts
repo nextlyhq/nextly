@@ -24,6 +24,7 @@ import type { FieldConfig } from "@nextly/collections";
 
 import { getService } from "../di";
 import { SCHEMA_CHANGE_PERMISSIONS } from "../domains/auth/system-write-policy";
+import { withSchemaChangeExcluded } from "../domains/schema/services/schema-change-exclusion";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import {
   coerceBuilderMaxPerDoc,
@@ -42,7 +43,10 @@ import type { FieldGroupRegistryService } from "../services/field-groups/field-g
 import type { SingleRegistryService } from "../services/singles/single-registry-service";
 import { requireBuilderEnabled } from "../shared/builder-access";
 
-import { assertValidFieldsPayload } from "./fields-payload";
+import {
+  assertBuilderFieldNames,
+  assertValidFieldsPayload,
+} from "./fields-payload";
 import { respondDoc, respondMutation } from "./response-shapes";
 import {
   requireRouteAllPermissions,
@@ -174,7 +178,8 @@ export const PATCH = withErrorHandler(
 
     if (body.fields !== undefined) {
       // Same rules as the ui-schema.json mirror (see api/fields-payload).
-      assertValidFieldsPayload(body.fields);
+      // The names are judged under the lock below, against the row as stored then.
+      assertValidFieldsPayload(body.fields, { stored: "under-lock" });
       updateData.fields = body.fields;
       // The registry re-validates the field config; cast through `unknown`
       // to avoid `any` while keeping the existing trust boundary.
@@ -209,19 +214,6 @@ export const PATCH = withErrorHandler(
       if (body[key] !== undefined) {
         adminOverrides[key] = body[key];
       }
-    }
-
-    if (Object.keys(adminOverrides).length > 0) {
-      // As stored, past the registry row cache: the overrides merge into it, so a cached row
-      // would write back an admin setting another instance changed a moment ago.
-      const existing = await registry.getSingleForWrite(slug);
-      if (!existing) {
-        throw NextlyError.notFound({ logContext: { entity: "Single", slug } });
-      }
-      updateData.admin = {
-        ...(existing.admin || {}),
-        ...adminOverrides,
-      };
     }
 
     // Version history toggle, normalized to the resolved config the registry
@@ -263,10 +255,49 @@ export const PATCH = withErrorHandler(
       updateData.webhooks = resolveBuilderWebhooks(body.webhooks === true);
     }
 
-    // Update Single (source: "ui" to enforce locking rules)
-    const updated = await registry.updateSingle(slug, updateData, {
-      source: "ui",
-    });
+    // The read of the stored admin settings and the row write hold the schema lock together,
+    // refused at once while a migration holds it: the row describes storage a migration could be
+    // moving. Everything above reads the request alone and is decided before the lock is taken.
+    const updated = await withSchemaChangeExcluded(
+      {
+        adapter: getService("adapter"),
+        logger: getService("logger"),
+        label: `update single "${slug}"`,
+        // This route writes the registry row alone; any table change comes from the next migrate.
+        // It issues no DDL, so it must not create the lock table on a role without DDL rights.
+        issuesDdl: false,
+      },
+      async () => {
+        const hasOverrides = Object.keys(adminOverrides).length > 0;
+        if (hasOverrides || body.fields !== undefined) {
+          // As stored, past the registry row cache: the overrides merge into it, so a cached row
+          // would write back an admin setting another instance changed a moment ago, and the
+          // field names are judged against the fields it holds now.
+          const existing = await registry.getSingleForWrite(slug);
+          if (!existing) {
+            throw NextlyError.notFound({
+              logContext: { entity: "Single", slug },
+            });
+          }
+          if (body.fields !== undefined) {
+            // A field name the Single already holds keeps working whatever its case; one this
+            // save creates is the Builder's own.
+            assertBuilderFieldNames(body.fields, existing.fields ?? []);
+          }
+          if (hasOverrides) {
+            updateData.admin = {
+              ...(existing.admin || {}),
+              ...adminOverrides,
+            };
+          }
+        }
+
+        // Update Single (source: "ui" to enforce locking rules)
+        return registry.updateSingle(slug, updateData, {
+          source: "ui",
+        });
+      }
+    );
 
     // Update endpoint: canonical mutation envelope so the admin gets a
     // server-authored toast message alongside the refreshed Single.
@@ -281,7 +312,10 @@ export const PATCH = withErrorHandler(
  * `deleteSingle` authorization. The registry returns 403 if the Single is locked
  * (code-first Singles cannot be deleted via API). Singles require
  * `force: true` to delete because they represent persistent site-wide
- * configuration.
+ * configuration. A Single another owner depends on, through a foreign key
+ * declared into its tables or a column, index, foreign key or check added to
+ * them, is refused with 409 naming each, and with 503 when those cannot be
+ * read; nothing is removed either way.
  */
 export const DELETE = withErrorHandler(
   async (request: Request, context: RouteContext) => {
@@ -294,7 +328,32 @@ export const DELETE = withErrorHandler(
     const { slug } = await context.params;
     const registry = await getSingleRegistry();
 
-    await registry.deleteSingle(slug, { force: true });
+    // The registry's read of the Single and its removal hold the schema lock together, refused at
+    // once while a migration holds it.
+    await withSchemaChangeExcluded(
+      {
+        adapter: getService("adapter"),
+        logger: getService("logger"),
+        label: `delete single "${slug}"`,
+        // This route removes rows alone; it issues no DDL, so it must not create the lock table on
+        // a role without DDL rights.
+        issuesDdl: false,
+      },
+      async () => {
+        // Refused before the row goes, as the Builder's delete refuses before its drops, while a
+        // declared key into the Single's tables or another owner's element on them depends on it.
+        // A Single that does not exist has nothing to ask about: the delete answers not found.
+        const single = await registry.getSingleForWrite(slug);
+        if (single) {
+          await registry.assertNothingDependsOn({
+            slug,
+            tableName: single.tableName,
+            fields: single.fields,
+          });
+        }
+        await registry.deleteSingle(slug, { force: true });
+      }
+    );
 
     return new Response(null, { status: 204 });
   }

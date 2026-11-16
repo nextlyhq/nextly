@@ -14,6 +14,7 @@ import {
   promoteCollectionNotFound,
   restoreCollectionRequired,
   restoreEntityRefusal,
+  syncConfirmationRequired,
 } from "../../errors/areas/sync";
 
 import type { ErrorCases } from "./types";
@@ -51,6 +52,8 @@ function restoreRefusal(
 export const SYNC_CASES = {
   PROMOTE_COLLECTION_NOT_FOUND: () => promoteCollectionNotFound("posts"),
   DEMOTE_COLLECTION_NOT_FOUND: () => demoteCollectionNotFound("posts"),
+  SYNC_CONFIRMATION_REQUIRED: () =>
+    syncConfirmationRequired("--promote", "posts"),
   I18N_RESTORE_COLLECTION_REQUIRED: () => restoreCollectionRequired(),
   I18N_RESTORE_KIND_INVALID: () => restoreRefusal("hero", HERO, "page"),
   I18N_RESTORE_ENTITY_NOT_FOUND: () => restoreRefusal("heroes", []),
@@ -87,6 +90,18 @@ export const SYNC_CASES = {
         reason: "registry rows name storage that does not exist",
         refusalKind: "permanent",
         missing: ["comp_hero"],
+      },
+    }),
+  // As `syncSchemaInOrder` in `cli/commands/sync-schema.ts` refuses a move before it starts.
+  FIELDS_LEAVING_TRANSLATION_NOT_MOVED: () =>
+    NextlyError.conflict({
+      reason: "state",
+      message:
+        "Fields leaving translation in posts were not moved, and nothing was changed (see above). Their values are intact in the translations table. Fix the error above and sync again.",
+      logContext: {
+        reason: "fields-leaving-translation-not-moved",
+        entities: ["posts"],
+        changed: false,
       },
     }),
   // As `provisionLocalization` in `cli/commands/dev-build.ts` refuses the sync.

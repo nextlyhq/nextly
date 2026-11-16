@@ -24,7 +24,8 @@
  *
  * Before the drift check it also warns, without failing, about each file
  * holding a statement `nextly migrate` or `migrate:down` would refuse
- * (`REFUSED_STATEMENT`), and names each file marked
+ * (`REFUSED_STATEMENT`), and about each file whose UP or DOWN deletes data,
+ * naming what it deletes (`DESTRUCTIVE`), and names each file marked
  * `-- nextly:no-transaction`. A warning, because the check does not connect:
  * a file already applied is never run again, and failing CI over one would
  * leave the operator nothing to fix.
@@ -57,6 +58,16 @@ import type { Command } from "commander";
 
 import { LOCALIZATION_MIGRATION_MARKER } from "../../domains/i18n/migration/write-migration-file";
 import {
+  describeDeletion,
+  type Deletion,
+} from "../../domains/schema/migrate/data-loss-consent";
+import {
+  fileDeletions,
+  functionsDefinedBy,
+} from "../../domains/schema/migrate/file-deletions";
+import { offlineDeletionFacts } from "../../domains/schema/migrate/offline-deletion-facts";
+import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
+import {
   marksNoTransaction,
   splitSqlStatements,
   statementRefusals,
@@ -69,10 +80,7 @@ import {
   NO_APP_STREAM_TABLES,
   type AppStreamTables,
 } from "../../domains/schema/migrate-create/app-stream";
-import {
-  toMinimalEntities,
-  withBuilderSettingsAll,
-} from "../../domains/schema/migrate-create/config-entities";
+import { toMinimalEntities } from "../../domains/schema/migrate-create/config-entities";
 import {
   describeSettingsChange,
   settingsChangesFor,
@@ -80,17 +88,18 @@ import {
 } from "../../domains/schema/migrate-create/entity-settings";
 import type { MinimalConfigEntity } from "../../domains/schema/migrate-create/generate";
 import { buildDesiredSnapshotFromConfig } from "../../domains/schema/migrate-create/generate";
+import { reportMigrationSiblingFields } from "../../domains/schema/migrate-create/sibling-fields";
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
+  parseSnapshotFile,
   SnapshotFileError,
   verifyMigrationHash,
 } from "../../domains/schema/migrate-create/snapshot-io";
+import { describeOp } from "../../domains/schema/pipeline/diff/describe-operation";
 import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff";
-import type {
-  NextlySchemaSnapshot,
-  Operation,
-} from "../../domains/schema/pipeline/diff/types";
+import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
+import { siblingClashesErrorFor } from "../../domains/schema/sibling-fields";
 import { validateCrossFile } from "../../domains/schema/ui-schema/cross-file";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import {
@@ -110,7 +119,6 @@ import {
   exitWithError,
 } from "../errors";
 import {
-  builderSnapshotMissing,
   migrationFileEdited,
   migrationSnapshotInvalid,
   migrationSnapshotMissing,
@@ -122,13 +130,16 @@ import { builderSchemaConflict } from "../errors/areas/plugin-config";
 import { createContext, type CommandContext } from "../program";
 import type { SupportedDialect } from "../utils/adapter";
 import {
+  loadDeclaredConfigOrExit,
   requireDatabaseEnv,
-  loadConfigOrExit,
 } from "../utils/command-prerequisites";
 import {
   discoverMigrationGroups,
+  type DeclaredNames,
   getSortedBaseNames,
-  isBuilderWrittenMigration,
+  oldBuilderFileLine,
+  partialBuilderFileLine,
+  readMigrationFolder,
   selectVariant,
 } from "../utils/migration-discovery";
 
@@ -169,7 +180,9 @@ export async function runMigrateCheck(
   const dialect = dbValidation.dialect;
 
   // Load config.
-  const configResult = await loadConfigOrExit(
+  // The configuration with its plugin field declarations checked; an invalid
+  // one is reported and the check exits, like every other check failure.
+  const configResult = await loadDeclaredConfigOrExit(
     {
       configPath: options.config,
       cwd: options.cwd,
@@ -177,25 +190,7 @@ export async function runMigrateCheck(
     },
     logger
   );
-
-  // `loadConfig` has registered `contributes.fieldTypes` by now, which is the
-  // first moment an unknown field type can be told apart from one a plugin had
-  // not contributed yet: the `define*` validators defer that question because
-  // the config bundle is evaluated before any plugin registers. Asked here, a
-  // misspelled or wrong-surface token fails the command instead of silently
-  // generating primitive fallback types and a snapshot that production boot
-  // then refuses.
-  try {
-    assertPluginFieldDeclarations({
-      collections: configResult.config.collections,
-      singles: configResult.config.singles,
-      fieldGroups: configResult.config.fieldGroups,
-    });
-  } catch (error) {
-    // Reported and exited rather than thrown, so an invalid declaration reads
-    // like every other check failure instead of an unhandled crash.
-    exitWithError(logger, configDeclarationError(error) ?? error);
-  }
+  if (configResult === undefined) return;
 
   const cwd = options.cwd ?? process.cwd();
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
@@ -273,12 +268,17 @@ export async function runMigrateCheck(
     manifest,
   });
 
-  const desiredSnapshot = buildDesiredSnapshotFromConfig(
-    merged.collections,
-    merged.singles,
-    merged.components,
-    dialect
-  );
+  // Built once the latest snapshot is read, as `migrate:create` builds it:
+  // a field a plugin holds back from a type switched off keeps its column
+  // while that snapshot has it.
+  const desiredSnapshot = (existing: NextlySchemaSnapshot) =>
+    buildDesiredSnapshotFromConfig(
+      merged.collections,
+      merged.singles,
+      merged.components,
+      dialect,
+      existing
+    );
 
   // The app stream's extension schema, compiled exactly as `migrate:create`
   // compiles it. Without it every table an app declared through
@@ -291,13 +291,21 @@ export async function runMigrateCheck(
     logger: { warn: m => logger.warn(m) },
   });
 
+  // Read as `nextly migrate` reads the folder.
+  const declared = await declaredNamesOf({
+    ...configResult,
+    projectRoot: cwd,
+  });
+
   await runChecks({
     migrationsDir,
     desiredSnapshot,
     appStream,
     dialect,
-    // Each entity with its settings, as `migrate:create` records them.
-    entities: withBuilderSettingsAll(merged, manifest),
+    declared,
+    // Each entity with its settings, as `migrate:create` records them; the
+    // merge sets a Builder entity's (`uiToMinimal`).
+    entities: merged,
     logger,
   });
 }
@@ -313,8 +321,14 @@ export async function runMigrateCheck(
  */
 export async function runChecks(args: {
   migrationsDir: string;
-  /** What the entities alone describe; the extension schema is `appStream`. */
-  desiredSnapshot: NextlySchemaSnapshot;
+  /**
+   * What the entities alone describe; the extension schema is `appStream`.
+   * Or how to build it from the latest snapshot's tables, which keep the
+   * columns of fields a plugin holds back from a type switched off.
+   */
+  desiredSnapshot:
+    | NextlySchemaSnapshot
+    | ((existing: NextlySchemaSnapshot) => NextlySchemaSnapshot);
   /** The app stream's extension schema. Omitted, there is none. */
   appStream?: AppStreamTables;
   /**
@@ -322,6 +336,8 @@ export async function runChecks(args: {
    * check is skipped.
    */
   dialect?: SupportedDialect;
+  /** What the declared schema names, which old Builder files are judged against. */
+  declared?: DeclaredNames;
   /**
    * The declared entities with their settings, compared with the newest
    * snapshot's settings record. Omitted, settings are not checked.
@@ -342,6 +358,13 @@ export async function runChecks(args: {
   } catch {
     sqlFiles = [];
   }
+  sqlFiles = await withoutOldBuilderFiles(
+    sqlFiles,
+    migrationsDir,
+    args.dialect,
+    args.declared,
+    logger
+  );
 
   let snapshotFiles: string[];
   try {
@@ -377,18 +400,6 @@ export async function runChecks(args: {
       throw err;
     }
     if (!result.ok && result.expected === undefined) {
-      // A Builder save writes no snapshot. Its remedy is the file
-      // `migrate:create` writes for the change, which `nextly migrate` also
-      // asks for before it refuses to apply this one.
-      if (isBuilderWrittenMigration(sqlName.replace(/\.sql$/, ""))) {
-        return exitWithError(
-          logger,
-          builderSnapshotMissing(
-            "`nextly migrate:check` found a Schema Builder migration file with no snapshot, which `nextly migrate` does not apply.",
-            [sqlName]
-          )
-        );
-      }
       return exitWithError(logger, migrationSnapshotMissing(sqlName, metaDir));
     }
     if (!result.ok) {
@@ -416,17 +427,10 @@ export async function runChecks(args: {
   // check cannot tell a pending file from an applied one, which never runs
   // again.
   if (args.dialect !== undefined) {
-    const judged = await judgeStatements(migrationsDir, args.dialect);
-    for (const file of judged.outsideTransaction) {
-      logger.info(
-        `${file} is marked -- nextly:no-transaction: it runs outside a transaction, and a failure part-way leaves the statements before it applied.`
-      );
-    }
-    for (const { file, message } of judged.refused) {
-      logger.warn(
-        `REFUSED_STATEMENT: ${file}: nextly migrate and migrate:down refuse it while it is pending. ${message}`
-      );
-    }
+    reportStatements(
+      await judgeStatements(migrationsDir, args.dialect, args.declared),
+      logger
+    );
   }
 
   // Check 4: schema drift (config vs latest snapshot).
@@ -439,10 +443,14 @@ export async function runChecks(args: {
   let latest: Awaited<ReturnType<typeof loadLatestSnapshot>>;
   try {
     latest = await loadLatestSnapshot(metaDir);
+    const existing = latest?.data.snapshot ?? EMPTY_SNAPSHOT;
     const stream = appStreamSnapshots({
-      previous: latest?.data.snapshot ?? EMPTY_SNAPSHOT,
+      previous: existing,
       previousContributions: latest?.data.contributions ?? {},
-      desired: args.desiredSnapshot,
+      desired:
+        typeof args.desiredSnapshot === "function"
+          ? args.desiredSnapshot(existing)
+          : args.desiredSnapshot,
       tables: args.appStream ?? NO_APP_STREAM_TABLES,
     });
     previousSnapshot = stream.previous;
@@ -463,6 +471,16 @@ export async function runChecks(args: {
   const refused = reportMigrationAddresses(args.entities, latest, logger);
   if (refused.length > 0) {
     return exitWithError(logger, addressRefusalsError(refused));
+  }
+  // Sibling fields, by the one sibling rule: a new pair fails the check; one an entity already
+  // holds (the latest snapshot records it) keeps working and is warned about once.
+  const refusedSiblings = reportMigrationSiblingFields(
+    args.entities,
+    latest,
+    logger
+  );
+  if (refusedSiblings.length > 0) {
+    return exitWithError(logger, siblingClashesErrorFor(refusedSiblings));
   }
 
   const ops = diffSnapshots(previousSnapshot, desiredSnapshot);
@@ -487,6 +505,31 @@ export async function runChecks(args: {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/**
+ * `sqlFiles` as every reader of the folder reads them: an old Builder file is
+ * named and checked no further, and a file with only part of its signature is
+ * named with what it lacks and checked as any migration. Classifying reads
+ * statements, so without a dialect no file is set aside.
+ */
+async function withoutOldBuilderFiles(
+  sqlFiles: string[],
+  migrationsDir: string,
+  dialect: SupportedDialect | undefined,
+  declared: DeclaredNames | undefined,
+  logger: CommandContext["logger"]
+): Promise<string[]> {
+  if (dialect === undefined) return sqlFiles;
+  const folder = await readMigrationFolder(migrationsDir, dialect, declared);
+  const ignored = new Set(folder.oldBuilderFiles.map(f => f.file));
+  for (const file of folder.oldBuilderFiles) {
+    logger.info(oldBuilderFileLine(file));
+  }
+  for (const file of folder.partialBuilderFiles) {
+    logger.warn(partialBuilderFileLine(file));
+  }
+  return sqlFiles.filter(f => !ignored.has(f));
+}
 
 /**
  * Check 6: settings changed with no migration for them, as the error the
@@ -518,6 +561,33 @@ function settingsInStep(
 }
 
 /**
+ * Prints what `judgeStatements` found: each file marked to run outside a
+ * transaction, each statement a run would refuse (`REFUSED_STATEMENT`), and
+ * each UP or DOWN that deletes data (`DESTRUCTIVE`). Warnings only.
+ */
+function reportStatements(
+  judged: Awaited<ReturnType<typeof judgeStatements>>,
+  logger: CommandContext["logger"]
+): void {
+  for (const file of judged.outsideTransaction) {
+    logger.info(
+      `${file} is marked -- nextly:no-transaction: it runs outside a transaction, and a failure part-way leaves the statements before it applied.`
+    );
+  }
+  for (const { file, message } of judged.refused) {
+    logger.warn(
+      `REFUSED_STATEMENT: ${file}: nextly migrate and migrate:down refuse it while it is pending. ${message}`
+    );
+  }
+  for (const { file, section, deletions } of judged.destructive) {
+    const command = section === "UP" ? "nextly migrate" : "migrate:down";
+    logger.warn(
+      `DESTRUCTIVE: ${file} (${section}) deletes data: ${deletions.map(describeDeletion).join("; ")}. ${command} runs it only with --accept-data-loss covering each.`
+    );
+  }
+}
+
+/**
  * What `nextly migrate` and `migrate:down` would make of each migration
  * file's statements on `dialect`: the files marked to run outside a
  * transaction, and every statement either would refuse. The file judged is
@@ -526,77 +596,118 @@ function settingsInStep(
  */
 export async function judgeStatements(
   migrationsDir: string,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  declared?: DeclaredNames
 ): Promise<{
   outsideTransaction: string[];
   refused: { file: string; message: string }[];
+  destructive: {
+    file: string;
+    section: "UP" | "DOWN";
+    deletions: Deletion[];
+  }[];
 }> {
   const outsideTransaction: string[] = [];
   const refused: { file: string; message: string }[] = [];
-  const groups = await discoverMigrationGroups(migrationsDir);
+  const destructive: {
+    file: string;
+    section: "UP" | "DOWN";
+    deletions: Deletion[];
+  }[] = [];
+  const groups = await discoverMigrationGroups(
+    migrationsDir,
+    dialect,
+    declared
+  );
+  const metaDir = resolve(migrationsDir, "meta");
+  // The schema before the file being read: nothing before the first file,
+  // then the snapshot paired with the file before it (undefined when that
+  // file has none, as a localisation file does).
+  let before: NextlySchemaSnapshot | undefined = EMPTY_SNAPSHOT;
+  const files = await readSections(migrationsDir, groups, dialect);
+  // Without a catalog, a function counts as user-defined when a migration
+  // file defines it (a qualified one outside pg_catalog always does).
+  const functions = new Set(
+    files.flatMap(({ sections }) =>
+      sections.flatMap(([, statements]) =>
+        functionsDefinedBy(statements, dialect)
+      )
+    )
+  );
+  for (const { file, transaction, sections } of files) {
+    // UP runs against the schema before the file, DOWN against the one the
+    // file leaves, which its own snapshot records.
+    const after = await pairedSnapshot(metaDir, file);
+    const schemaFor = { UP: before, DOWN: after };
+    before = after;
+    if (!transaction) outsideTransaction.push(file);
+    for (const [section, statements] of sections) {
+      for (const refusal of statementRefusals(statements, dialect, {
+        transaction,
+        unit: "file",
+      })) {
+        refused.push({ file, message: refusal.message });
+      }
+      const deletions = fileDeletions(
+        statements,
+        dialect,
+        offlineDeletionFacts(schemaFor[section], functions)
+      );
+      if (deletions.length > 0) destructive.push({ file, section, deletions });
+    }
+  }
+  return { outsideTransaction, refused, destructive };
+}
+
+/** Each migration file in run order, the dialect's variant, with its UP and DOWN split into statements. */
+async function readSections(
+  migrationsDir: string,
+  groups: Awaited<ReturnType<typeof discoverMigrationGroups>>,
+  dialect: SupportedDialect
+): Promise<
+  {
+    file: string;
+    transaction: boolean;
+    sections: (readonly ["UP" | "DOWN", string[]])[];
+  }[]
+> {
+  const files = [];
   for (const baseName of getSortedBaseNames(groups)) {
     const file = selectVariant(groups.get(baseName)?.variants ?? [], dialect);
     if (file === undefined) continue;
     const content = await readFile(resolve(migrationsDir, file), "utf-8");
     const transaction = !marksNoTransaction(content);
-    if (!transaction) outsideTransaction.push(file);
     const { upSql, downSql } = parseSqlSections(content);
-    for (const sql of [upSql, downSql]) {
-      for (const refusal of statementRefusals(
-        splitSqlStatements(sql, dialect, { transaction }),
-        dialect,
-        { transaction, unit: "file" }
-      )) {
-        refused.push({ file, message: refusal.message });
-      }
-    }
+    const split = (sql: string) =>
+      splitSqlStatements(sql, dialect, { transaction });
+    files.push({
+      file,
+      transaction,
+      sections: [
+        ["UP", split(upSql)],
+        ["DOWN", split(downSql)],
+      ] as const satisfies (readonly ["UP" | "DOWN", string[]])[],
+    });
   }
-  return { outsideTransaction, refused };
+  return files;
 }
 
 /**
- * Render an Operation as a short human-readable summary for the
- * SCHEMA_DRIFT error output. Mirrors the apply pipeline's logging
- * style for consistency.
+ * The schema recorded by the snapshot paired with migration `file`, or
+ * undefined when it has none or it cannot be read. `runChecks` has already
+ * failed on an unreadable snapshot by then; this reader only judges what a
+ * file deletes, which then falls back to leaving a rebuild to the run.
  */
-function describeOp(op: Operation): string {
-  switch (op.type) {
-    case "add_table":
-      return `add_table ${op.table.name}`;
-    case "drop_table":
-      return `drop_table ${op.tableName}`;
-    case "rename_table":
-      return `rename_table ${op.fromName} -> ${op.toName}`;
-    case "add_column":
-      return `add_column ${op.tableName}.${op.column.name} (${op.column.type})`;
-    case "drop_column":
-      return `drop_column ${op.tableName}.${op.columnName}`;
-    case "rename_column":
-      return `rename_column ${op.tableName}.${op.fromColumn} -> ${op.toColumn}`;
-    case "change_column_type":
-      return `change_column_type ${op.tableName}.${op.columnName} (${op.fromType} -> ${op.toType})`;
-    case "change_column_nullable":
-      return `change_column_nullable ${op.tableName}.${op.columnName} (${op.fromNullable} -> ${op.toNullable})`;
-    case "change_column_default":
-      return `change_column_default ${op.tableName}.${op.columnName}`;
-    case "add_index":
-      return `add_index ${op.index.name} on ${op.tableName}`;
-    case "drop_index":
-      return `drop_index ${op.index.name} on ${op.tableName}`;
-    case "add_check":
-      return `add_check ${op.check.name} on ${op.tableName}`;
-    case "drop_check":
-      return `drop_check ${op.check.name} on ${op.tableName}`;
-    case "add_foreign_key":
-      return `add_foreign_key ${op.foreignKey.name} on ${op.tableName}`;
-    case "drop_foreign_key":
-      return `drop_foreign_key ${op.foreignKey.name} on ${op.tableName}`;
-    case "change_foreign_key_action":
-      return (
-        `change_foreign_key_action ${op.tableName}.${op.columnName} ` +
-        `(ON DELETE ${op.fromOnDelete} -> ${op.toOnDelete}, ` +
-        `ON UPDATE ${op.fromOnUpdate} -> ${op.toOnUpdate})`
-      );
+async function pairedSnapshot(
+  metaDir: string,
+  file: string
+): Promise<NextlySchemaSnapshot | undefined> {
+  const name = `${file.replace(/\.sql$/, "")}.snapshot.json`;
+  try {
+    const content = await readFile(resolve(metaDir, name), "utf-8");
+    return parseSnapshotFile(content, name).snapshot;
+  } catch {
+    return undefined;
   }
 }
 
@@ -606,30 +717,29 @@ function describeOp(op: Operation): string {
 export type { SupportedDialect };
 
 // ============================================================================
-// Command Registration
+// Command Action
 // ============================================================================
 
-export function registerMigrateCheckCommand(program: Command): void {
-  program
-    .command("migrate:check")
-    .description(
-      "Verify migration file integrity and config drift (CI-friendly; no DB connection)"
-    )
-    .action(async (_cmdOptions: MigrateCheckCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
+/**
+ * The action of `nextly migrate:check`, loaded when it runs.
+ */
+export async function migrateCheckAction(
+  _cmdOptions: MigrateCheckCommandOptions,
+  cmd: Command
+): Promise<void> {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
 
-      const resolvedOptions: ResolvedMigrateCheckOptions = {
-        config: globalOpts.config,
-        verbose: globalOpts.verbose,
-        quiet: globalOpts.quiet,
-        cwd: globalOpts.cwd,
-      };
+  const resolvedOptions: ResolvedMigrateCheckOptions = {
+    config: globalOpts.config,
+    verbose: globalOpts.verbose,
+    quiet: globalOpts.quiet,
+    cwd: globalOpts.cwd,
+  };
 
-      try {
-        await runMigrateCheck(resolvedOptions, context);
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
-    });
+  try {
+    await runMigrateCheck(resolvedOptions, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }

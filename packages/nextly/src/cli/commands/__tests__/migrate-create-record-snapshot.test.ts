@@ -1,8 +1,9 @@
 /**
- * `migrate:create --record-snapshot` exits 2 whenever it has nothing to record, as a plain run
- * exits 2 when it has nothing to write, so a script can tell "commit the new files" from "nothing
- * to do" by the code alone. Driven over the command itself, since the project with no entities
- * is decided there, before any migration is generated.
+ * `migrate:create --record-snapshot` exits 0 whenever it has nothing to record, as a plain run
+ * does when it has nothing to write: nothing to do is not a failure. The exit is explicit, so a
+ * run that stopped there is told apart from one that wrote a record. Driven over the command
+ * itself, since the project with no entities is decided there, before any migration is
+ * generated.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,6 +12,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineConfig, text } from "../../../config";
+import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
@@ -66,10 +68,12 @@ async function migrateCreate(
     options: {},
     cwd: dir,
   } as CommandContext;
+  // As `--non-interactive` does: no rename is asked about.
+  setNonInteractive(true);
   try {
     await runMigrateCreate(
       recordSnapshot ? undefined : "change",
-      { cwd: dir, nonInteractive: true, recordSnapshot },
+      { cwd: dir, recordSnapshot },
       context
     );
     return undefined;
@@ -78,6 +82,7 @@ async function migrateCreate(
     if (match) return Number(match[1]);
     throw error;
   } finally {
+    setNonInteractive(false);
     exit.mockRestore();
   }
 }
@@ -89,11 +94,11 @@ const project = (collections: ReturnType<typeof defineCollection>[]) =>
   } as never);
 
 describe("migrate:create --record-snapshot with nothing to record", () => {
-  it("exits 2 for a project with no entities", async () => {
-    expect(await migrateCreate(project([]), true)).toBe(2);
+  it("exits 0 for a project with no entities", async () => {
+    expect(await migrateCreate(project([]), true)).toBe(0);
   });
 
-  it("exits 2 for a project whose snapshot records its translated fields, whatever the config holds", async () => {
+  it("exits 0 for a project whose snapshot records its translated fields, whatever the config holds", async () => {
     const posts = (fields: ReturnType<typeof text>[]) =>
       project([defineCollection({ slug: "posts", fields })]);
     expect(
@@ -107,6 +112,6 @@ describe("migrate:create --record-snapshot with nothing to record", () => {
         posts([text({ name: "headline" }), text({ name: "summary" })]),
         true
       )
-    ).toBe(2);
+    ).toBe(0);
   });
 });

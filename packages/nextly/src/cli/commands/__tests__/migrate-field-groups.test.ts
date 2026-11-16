@@ -12,6 +12,9 @@
  * total, or quietly dropped `basis` and `lock`, would satisfy every "it ran" assertion while giving
  * the operator less than the engine took care to provide.
  */
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { describe, expect, it, vi, beforeEach, beforeAll } from "vitest";
 
 const runFieldGroupMigration = vi.fn();
@@ -21,6 +24,16 @@ vi.mock("../../../domains/field-groups/migration/run", () => ({
 }));
 
 const setTableResolver = vi.fn();
+
+// The site's config, as the loader reads it: only its evaluation is stood in for, so the
+// loader's own adoption of the storage choice runs as it does in a real process.
+const bundleAndRequire = vi.hoisted(() => vi.fn());
+vi.mock("../../utils/config-bundler", () => ({ bundleAndRequire }));
+vi.mock("node:fs", async importOriginal => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, existsSync: vi.fn(actual.existsSync) };
+});
+const CONFIG_PATH = resolve("/virtual/nextly.config.ts");
 
 vi.mock("../../utils/adapter", () => ({
   // As the real check answers for a valid environment: the dialect and URL come with it.
@@ -41,6 +54,11 @@ vi.mock("../../utils/adapter", () => ({
 }));
 
 import { runMigrateFieldGroups } from "../migrate-field-groups";
+import {
+  _resetPerLanguageStorage,
+  perLanguageStorageEnabled,
+} from "../../../domains/i18n/per-language-storage";
+import { clearConfigCache } from "../../utils/config-loader";
 import { loadDialectTables } from "../../../database/dialect-tables";
 
 // The postgresql tables this file reads; the unit setup loads only
@@ -81,6 +99,9 @@ beforeEach(() => {
   runFieldGroupMigration.mockReset();
   setTableResolver.mockReset();
   runFieldGroupMigration.mockResolvedValue(DRY_RUN_OUTCOME);
+  // A fresh process: nothing has chosen the storage layout yet.
+  _resetPerLanguageStorage();
+  clearConfigCache();
 });
 
 describe("migrate:field-groups — what it asks the engine for", () => {
@@ -152,6 +173,32 @@ describe("migrate:field-groups — what it asks the engine for", () => {
       direction: "down",
       dryRun: true,
     });
+  });
+});
+
+describe("migrate:field-groups — the site it plans for", () => {
+  // Under `experimental.perLanguageStorage` an untranslated group keeps a translations table that
+  // the rename has to carry with its base table. The plan decides that from the storage choice,
+  // which a fresh CLI process holds only once it has read the site's config.
+  it("plans with the site's per-language storage choice, read from its config", async () => {
+    vi.mocked(existsSync).mockImplementation(path => path === CONFIG_PATH);
+    bundleAndRequire.mockResolvedValue({
+      mod: { default: { experimental: { perLanguageStorage: true } } },
+      dependencies: [],
+    });
+    let chosenWhenPlanned: boolean | undefined;
+    runFieldGroupMigration.mockImplementation(async () => {
+      chosenWhenPlanned = perLanguageStorageEnabled();
+      return DRY_RUN_OUTCOME;
+    });
+
+    await runMigrateFieldGroups(
+      { config: CONFIG_PATH, cwd: "/virtual" },
+      context
+    );
+
+    expect(chosenWhenPlanned).toBe(true);
+    vi.mocked(existsSync).mockRestore();
   });
 });
 

@@ -27,6 +27,15 @@ vi.mock("../../../../domains/auth/services/role-permission-service", () => ({
 vi.mock("../../../../domains/auth/services/role-grants-changed", () => ({
   afterGrantsChanged: recheck,
 }));
+// The services a grants change goes through are lent on a real connection,
+// which this test has none of; the conversion is what it judges, run as given.
+vi.mock("../../../utils/lend-command-services", () => ({
+  withCommandServicesLent: (
+    _adapter: unknown,
+    _logger: unknown,
+    run: () => Promise<unknown>
+  ) => run(),
+}));
 
 const { convertRoles } = await import("../retired-manage");
 

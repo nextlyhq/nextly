@@ -156,6 +156,59 @@ describe("useBrandingStatus", () => {
 });
 
 /**
+ * A reader that says the plugin list failed offers Retry: it asks the
+ * workspace half again, reads as pending while that is on its way (as on
+ * first load), and then as answered once it arrives. What separates this from a Retry that does
+ * nothing is the second request and the list it brings.
+ */
+describe("retrying a workspace half that never answered", () => {
+  function RetryProbe() {
+    const { isPending, isUnavailable, retry } = useBrandingStatus();
+    return (
+      <>
+        <span data-testid="state">
+          {isPending ? "pending" : isUnavailable ? "unavailable" : "answered"}
+        </span>
+        <button type="button" onClick={retry}>
+          Retry
+        </button>
+      </>
+    );
+  }
+
+  it("asks again, reads as pending while it does, and then has the list", async () => {
+    get.mockResolvedValue({ logoText: "Acme" } as AdminBranding);
+    protectedGet.mockRejectedValueOnce(new Error("offline"));
+    let answer: (value: AdminBranding) => void = () => {};
+    protectedGet.mockReturnValueOnce(
+      new Promise<AdminBranding>(resolve => {
+        answer = resolve;
+      })
+    );
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({ defaultOptions: { queries: { retry: false } } })
+        }
+      >
+        <BrandingProvider>
+          <RetryProbe />
+        </BrandingProvider>
+      </QueryClientProvider>
+    );
+    const state = () => screen.getByTestId("state").textContent;
+    await waitFor(() => expect(state()).toBe("unavailable"));
+
+    screen.getByRole("button", { name: "Retry" }).click();
+
+    await waitFor(() => expect(state()).toBe("pending"));
+    expect(protectedGet).toHaveBeenCalledTimes(2);
+    answer({ plugins: [] } as AdminBranding);
+    await waitFor(() => expect(state()).toBe("answered"));
+  });
+});
+
+/**
  * The product's name is one decision, so it has one implementation. A screen
  * that spelled `branding.logoText ?? "Nextly"` for itself could disagree with
  * the component beside it — the signed-out card supplies the logo's label

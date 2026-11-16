@@ -265,27 +265,77 @@ describeEachDialect("a schema save whose migration fails", dialect => {
     );
   });
 
-  // Not on SQLite, whose unique index is created `IF NOT EXISTS`: a name already taken is skipped
-  // there rather than refused, so this save cannot be made to fail part-way the same way.
-  it.skipIf(dialect === "sqlite")(
-    "finishes a change the database refused part-way when it is saved again",
+  it("refuses a unique field whose index's name another index holds, before anything changes, and saves once it is gone", async () => {
+    // An index already holding the name the new unique index takes, on another column. The
+    // apply creates an index only where its name is free, so it is refused before anything
+    // changes, naming the index, rather than recorded unique with nothing enforcing it.
+    await postsWith(
+      [{ name: "heading", type: "text" }],
+      [{ heading: "One" }, { heading: "Two" }]
+    );
+    const q = (name: string) =>
+      dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+    const blocking = uniqueIndexNameForColumn("dc_posts", "code");
+    await query(`CREATE INDEX ${q(blocking)} ON ${q("dc_posts")} (${q("id")})`);
+    const fields = [
+      { name: "heading", type: "text" },
+      // Short, so MySQL can index it.
+      {
+        name: "code",
+        type: "text",
+        unique: true,
+        options: { variant: "short" },
+        validation: { maxLength: 64 },
+      },
+    ];
+
+    const refused = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields }
+    );
+
+    expect(refused.success, JSON.stringify(refused)).toBe(false);
+    expect(JSON.stringify(refused)).toContain(blocking);
+    expect(await columnsOf("dc_posts")).not.toContain("code");
+    expect(await registeredFields("posts")).not.toContain("code");
+
+    await query(
+      dialect === "mysql"
+        ? `DROP INDEX ${q(blocking)} ON ${q("dc_posts")}`
+        : `DROP INDEX ${q(blocking)}`
+    );
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    expect(await columnsOf("dc_posts")).toContain("code");
+    expect(await registeredFields("posts")).toContain("code");
+    expect((await createPost({ heading: "Three", code: "X" })).success).toBe(
+      true
+    );
+    expect((await createPost({ heading: "Four", code: "X" })).success).toBe(
+      false
+    );
+  });
+
+  // MySQL has no partial index; an index on part of the rows is the case this holds.
+  it.skipIf(dialect === "mysql")(
+    "refuses a unique field whose index's name a partial index holds, before anything changes",
     async () => {
-      // Something no precondition foresees: an index already holding the name the new unique
-      // index takes. PostgreSQL rolls the whole save back; MySQL has added the column by then,
-      // since it commits each schema statement, and the next save has to finish from there.
+      // A partial index is not described by its columns, but it holds the name all the same: the
+      // apply's CREATE INDEX IF NOT EXISTS would skip it, and nothing would enforce uniqueness.
       await postsWith(
         [{ name: "heading", type: "text" }],
         [{ heading: "One" }, { heading: "Two" }]
       );
-      const q = (name: string) =>
-        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
       const blocking = uniqueIndexNameForColumn("dc_posts", "code");
       await query(
-        `CREATE INDEX ${q(blocking)} ON ${q("dc_posts")} (${q("id")})`
+        `CREATE INDEX "${blocking}" ON "dc_posts" ("id") WHERE "id" IS NOT NULL`
       );
       const fields = [
         { name: "heading", type: "text" },
-        // Short, so MySQL can index it.
         {
           name: "code",
           type: "text",
@@ -301,32 +351,10 @@ describeEachDialect("a schema save whose migration fails", dialect => {
       );
 
       expect(refused.success, JSON.stringify(refused)).toBe(false);
-      expect(refused.message).toMatch(
-        dialect === "mysql"
-          ? /^The database refused statement \d+ of \d+ of this schema change\./
-          : /^The database refused this schema change, so nothing was changed\./
-      );
+      expect(JSON.stringify(refused)).toContain(blocking);
+      expect(JSON.stringify(refused)).toContain("partial");
+      expect(await columnsOf("dc_posts")).not.toContain("code");
       expect(await registeredFields("posts")).not.toContain("code");
-
-      await query(
-        dialect === "mysql"
-          ? `DROP INDEX ${q(blocking)} ON ${q("dc_posts")}`
-          : `DROP INDEX ${q(blocking)}`
-      );
-      const saved = await handler().updateCollection(
-        { collectionName: "posts" },
-        { fields }
-      );
-
-      expect(saved.success, JSON.stringify(saved)).toBe(true);
-      expect(await columnsOf("dc_posts")).toContain("code");
-      expect(await registeredFields("posts")).toContain("code");
-      expect((await createPost({ heading: "Three", code: "X" })).success).toBe(
-        true
-      );
-      expect((await createPost({ heading: "Four", code: "X" })).success).toBe(
-        false
-      );
     }
   );
 
@@ -425,6 +453,41 @@ describeEachDialect("a schema save whose migration fails", dialect => {
     );
 
     expect(unique.success, JSON.stringify(unique)).toBe(true);
+  });
+
+  it("refuses making a field Required while its column is still waiting to be added over entries", async () => {
+    // Outside development the first save only queues the column's ADD. Deployed over the entries
+    // already there, it creates the column empty in every one of them, so the second save's NOT
+    // NULL would fail that deployment part-way: it is refused now, naming the step that works.
+    await postsWith([{ name: "heading", type: "text" }], [{ heading: "One" }]);
+    vi.stubEnv("NODE_ENV", "production");
+    const code = {
+      name: "code",
+      type: "text",
+      options: { variant: "short" },
+      validation: { maxLength: 64 },
+    };
+    const added = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [{ name: "heading", type: "text" }, code] }
+    );
+    expect(added.success, JSON.stringify(added)).toBe(true);
+    expect(await columnsOf("dc_posts")).not.toContain("code");
+
+    const required = await handler().updateCollection(
+      { collectionName: "posts" },
+      {
+        fields: [
+          { name: "heading", type: "text" },
+          { ...code, required: true },
+        ],
+      }
+    );
+
+    expect(required.success).toBe(false);
+    expect(JSON.stringify(required)).toContain(
+      "REQUIRED_COLUMN_NOT_YET_APPLIED"
+    );
   });
 
   const q = (name: string) =>
@@ -541,9 +604,9 @@ describeEachDialect("a schema save whose migration fails", dialect => {
       status: true,
     } as Parameters<DynamicCollectionService["generateCollectionUpdate"]>[1]);
 
-    // The file is replayed on databases without the column; only this database skips it.
+    // The file is replayed on databases without the column. This database's own apply is the
+    // push, which diffs the live table and so adds nothing it already has.
     expect(update.migrationSQL).toMatch(/ADD COLUMN .status./);
-    expect(update.localMigrationSQL ?? "").not.toMatch(/ADD COLUMN .status./);
   });
 
   it("turns Draft/Published off when the status column is already gone", async () => {
@@ -704,8 +767,6 @@ describeEachDialect("a schema save whose migration fails", dialect => {
 
     const index = uniqueIndexNameForColumn("dc_posts", "heading");
     expect(on.migrationSQL).toContain(`CREATE UNIQUE INDEX ${q(index)}`);
-    // This database still has the index, so its own run creates none.
-    expect(on.localMigrationSQL ?? "").not.toContain("CREATE UNIQUE INDEX");
   });
 });
 

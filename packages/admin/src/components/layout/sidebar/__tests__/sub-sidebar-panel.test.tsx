@@ -43,7 +43,7 @@ function renderPanel({
       <SubSidebarPanel
         isMobile={isMobile}
         selectedMain={selectedMain}
-        visibleMenuItemIds={["dashboard", "settings"]}
+        visibleMenuItemIds={["dashboard", "settings", "collections", "singles"]}
         isFolderTreeVisible={false}
         standaloneLabel=""
         content={{} as never}
@@ -75,17 +75,15 @@ function widthClasses(): string[] {
 }
 
 describe("SubSidebarPanel's track on the wide layout", () => {
-  it("keeps the open panel's width on a surface that owns no panel", () => {
-    // The separating property: the main column starts where this box ends, so
-    // a track as wide as the open panel on the dashboard and on a collection
-    // is what keeps the column still between them.
+  it("takes width on a section with a panel and none on a page without one", () => {
+    // The separating property: the main column starts where this box ends.
+    // A page with a panel holds its track; the dashboard, which owns none,
+    // draws no empty column beside the rail.
     renderPanel({ suppress: false, selectedMain: "settings" });
-    const open = widthClasses();
+    expect(widthClasses()).toEqual(["w-64"]);
     cleanup();
     renderPanel({ suppress: false, selectedMain: "dashboard" });
-
-    expect(open).toEqual(["w-64"]);
-    expect(widthClasses()).toEqual(open);
+    expect(widthClasses()).toEqual(["w-0"]);
   });
 
   it("holds nothing in the track while the selection owns no panel", () => {
@@ -127,5 +125,32 @@ describe("SubSidebarPanel on the narrow layout", () => {
 
     renderPanel({ suppress: false, isMobile: true, selectedMain: "settings" });
     expect(widthClasses()).toEqual(["w-64"]);
+  });
+});
+
+describe("SubSidebarPanel's title", () => {
+  it("goes to the Content overview from the Content panel, from either kind", () => {
+    renderPanel({ suppress: false, selectedMain: "collections" });
+    expect(screen.getByRole("link", { name: "Content" })).toHaveAttribute(
+      "href",
+      "/admin/content"
+    );
+    cleanup();
+
+    renderPanel({ suppress: false, selectedMain: "singles" });
+    expect(screen.getByRole("link", { name: "Content" })).toHaveAttribute(
+      "href",
+      "/admin/content"
+    );
+  });
+
+  it("only names the other panels", () => {
+    // The control: the title is a link because it is Content's, not because
+    // every title became one.
+    renderPanel({ suppress: false, selectedMain: "settings" });
+    expect(screen.getByText("settings")).not.toHaveAttribute("href");
+    expect(screen.getAllByRole("link").map(link => link.textContent)).toEqual([
+      "API Keys",
+    ]);
   });
 });

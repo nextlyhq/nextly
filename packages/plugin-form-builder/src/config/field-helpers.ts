@@ -49,6 +49,7 @@ import type {
   DateFormField,
   TimeFormField,
   HiddenFormField,
+  ConsentFormField,
 } from "../types";
 
 // ============================================================
@@ -528,4 +529,32 @@ export const hidden = (
 ): HiddenFormField => ({
   ...config,
   type: "hidden",
+});
+
+/**
+ * Creates a consent field configuration.
+ *
+ * A box the visitor ticks to agree to `agreementText`. It is always required,
+ * and the stored answer keeps the text the visitor was shown, so a later
+ * change to the text leaves what earlier visitors agreed to as it was. Staff
+ * can never edit a submitted consent.
+ *
+ * @param config - Field configuration without the `type` property
+ * @returns Complete consent field configuration
+ *
+ * @example
+ * ```typescript
+ * consent({
+ *   name: 'privacy',
+ *   label: 'Privacy',
+ *   agreementText: 'I agree to the privacy policy',
+ * })
+ * ```
+ */
+export const consent = (
+  config: Omit<ConsentFormField, "type" | "required">
+): ConsentFormField => ({
+  ...config,
+  type: "consent",
+  required: true,
 });

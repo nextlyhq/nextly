@@ -80,15 +80,13 @@ describe("the card settings sheet while its code loads", () => {
       );
     }
     render(<Opened />);
-    const panel = await screen.findByRole("dialog", { name: "Notes settings" });
+    const panel = await screen.findByRole("dialog", { name: "Notes" });
     await waitFor(() =>
       expect(panel).toContainElement(document.activeElement as HTMLElement)
     );
     await userEvent.keyboard("{Escape}");
     await waitFor(() =>
-      expect(
-        screen.queryByRole("dialog", { name: "Notes settings" })
-      ).toBeNull()
+      expect(screen.queryByRole("dialog", { name: "Notes" })).toBeNull()
     );
     expect(
       screen.getByRole("button", { name: "Card menu for Notes" })
@@ -98,7 +96,7 @@ describe("the card settings sheet while its code loads", () => {
   it("opens a panel named for the card, takes focus into it, says it is loading, then gives way to the sheet", async () => {
     render(<LazyWidgetSettingsSheet {...cellProps()} />);
 
-    const panel = await screen.findByRole("dialog", { name: "Notes settings" });
+    const panel = await screen.findByRole("dialog", { name: "Notes" });
     expect(within(panel).getByRole("status")).toHaveTextContent(
       "Loading settings…"
     );

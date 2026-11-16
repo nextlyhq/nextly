@@ -18,7 +18,13 @@ vi.mock("@admin/components/layout/sidebar/lib/settings-nav", async () => {
     SETTINGS_NAV: actual.SETTINGS_NAV.map(group => ({
       ...group,
       items: group.items.map(item =>
-        item.id === "webhooks" ? { ...item, label: "Outgoing Hooks" } : item
+        item.id === "webhooks"
+          ? { ...item, label: "Outgoing Hooks" }
+          : item.id === "email"
+            ? { ...item, label: "Mail" }
+            : item.id === "users"
+              ? { ...item, label: "Accounts" }
+              : item
       ),
     })),
   };
@@ -93,19 +99,27 @@ describe("the name each route gives its screen", () => {
     expect(nameOf(ROUTES.SETTINGS_WEBHOOKS_DELIVERIES)).toBe("Outgoing Hooks");
   });
 
-  it("names each Email hub tab by its tab label, within Email", () => {
-    expect(nameOf(ROUTES.EMAIL)).toBe("Messages · Email");
-    // Read from the tab declarations: the label swapped above, not a copy.
-    expect(nameOf(ROUTES.EMAIL_DESIGN)).toBe("Look and Feel · Email");
-    expect(nameOf(ROUTES.EMAIL_SENDING)).toBe("Sending · Email");
+  it("names each Email hub tab by its tab label, within its Settings entry", () => {
+    // Both parts are read from declarations, each swapped above: the tab's
+    // label and the hub's entry in the Settings panel ("Mail").
+    expect(nameOf(ROUTES.EMAIL)).toBe("Messages · Mail");
+    expect(nameOf(ROUTES.EMAIL_DESIGN)).toBe("Look and Feel · Mail");
+    expect(nameOf(ROUTES.EMAIL_SENDING)).toBe("Sending · Mail");
     // A tab's editors, and the old addresses that redirect into it, carry the
     // tab they belong to.
-    expect(nameOf(ROUTES.EMAIL_MESSAGES_EDIT)).toBe("Messages · Email");
-    expect(nameOf(ROUTES.EMAIL_SENDING_CREATE)).toBe("Sending · Email");
-    expect(nameOf(ROUTES.SETTINGS_EMAIL_PROVIDERS_EDIT)).toBe(
-      "Sending · Email"
-    );
-    expect(nameOf(ROUTES.SETTINGS_EMAIL_TEMPLATES)).toBe("Messages · Email");
+    expect(nameOf(ROUTES.EMAIL_MESSAGES_EDIT)).toBe("Messages · Mail");
+    expect(nameOf(ROUTES.EMAIL_SENDING_CREATE)).toBe("Sending · Mail");
+    expect(nameOf(ROUTES.SETTINGS_EMAIL_PROVIDERS_EDIT)).toBe("Sending · Mail");
+    expect(nameOf(ROUTES.SETTINGS_EMAIL_TEMPLATES)).toBe("Messages · Mail");
+    expect(nameOf(ROUTES.OLD_EMAIL_HUB)).toBe("Messages · Mail");
+    expect(nameOf(ROUTES.OLD_EMAIL_HUB_PAGE)).toBe("Messages · Mail");
+  });
+
+  it("names the user fields screens as a part of Users", () => {
+    // No Settings entry of their own: named by "Fields" within the Users
+    // entry, whose label is read from the panel ("Accounts" above).
+    expect(nameOf(ROUTES.USERS_FIELDS)).toBe("Fields · Accounts");
+    expect(nameOf(ROUTES.USERS_FIELDS_EDIT)).toBe("Fields · Accounts");
   });
 
   it("names a plugin's settings apart from its details", () => {

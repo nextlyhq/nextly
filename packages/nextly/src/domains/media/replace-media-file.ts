@@ -39,11 +39,13 @@ import {
   errorForLog,
   filesKeptByOthers,
   removeStoredFiles,
+  storageReadingOf,
   warnNotRemoved,
+  type StoredFileRemover,
 } from "./remove-stored-files";
 import { revalidateMedia } from "./revalidate-media";
 import { StoredFileSearchReader } from "./stored-file-search";
-import { storedFilesOf } from "./stored-files";
+import { copiesToRemove, storedFilesOf } from "./stored-files";
 import {
   forgetKeptFiles,
   recordKeptFiles,
@@ -67,7 +69,11 @@ export interface ReplacementFile {
 /** What replacing needs: the database, the storage and the image tools. */
 export interface ReplaceMediaFileDeps {
   adapter: DrizzleAdapter;
-  storage: {
+  /** The media storage, which also says where it serves a file and its kind. */
+  storage: Pick<
+    StoredFileRemover,
+    "getPublicUrl" | "getStorageType" | "keepsCopies"
+  > & {
     upload(buffer: Buffer, options: UploadOptions): Promise<UploadResult>;
     delete(filePath: string, collection?: string): Promise<void>;
   };
@@ -254,13 +260,21 @@ async function namedByAddress(
   return !recorded || named;
 }
 
-/** The files `current` had that the replacement does not, by address. */
+/**
+ * The files `current` had that the replacement does not, by address: its
+ * own, and the resized copies of its original where the storage keeps them,
+ * since the replacement's file has a new key and copies of its own.
+ */
 function oldFilesOf(
   current: Media,
-  replacement: StoredReplacement
+  replacement: StoredReplacement,
+  keepsCopies: boolean
 ): ReplacedRecord["files"] {
-  return storedFilesOf(current)
-    .paths.filter(path => !replacement.paths.includes(path))
+  return [
+    ...storedFilesOf(current).paths,
+    ...copiesToRemove(current, keepsCopies, new Set()),
+  ]
+    .filter(path => !replacement.paths.includes(path))
     .map(path => ({ path, url: current.url }));
 }
 
@@ -286,13 +300,18 @@ async function settleOldFiles(
   previous: Media,
   replacement: StoredReplacement
 ): Promise<void> {
-  const files = oldFilesOf(previous, replacement);
+  const files = oldFilesOf(
+    previous,
+    replacement,
+    deps.storage.keepsCopies?.("media") ?? false
+  );
   try {
     if (await keptOutsideTheRecord(deps, previous)) return;
     const kept = await filesKeptByOthers(
       new StoredFileSearchReader(deps.adapter, deps.logger).search,
       files.map(file => file.path),
-      [mediaId]
+      [mediaId],
+      storageReadingOf(deps.storage)
     );
     if (!kept) return;
     const forgotten = await forgetKeptFiles(deps.adapter, mediaId, files, tx =>
@@ -351,7 +370,15 @@ export async function replaceMediaFile(
       // are known as the item's (and go when it does) whatever happens after
       // this commits; they are taken back out once nothing is found to name
       // them.
-      await recordKeptFiles(tx, mediaId, oldFilesOf(current, replacement));
+      await recordKeptFiles(
+        tx,
+        mediaId,
+        oldFilesOf(
+          current,
+          replacement,
+          deps.storage.keepsCopies?.("media") ?? false
+        )
+      );
       return { previous: current, next };
     });
   } catch (error) {

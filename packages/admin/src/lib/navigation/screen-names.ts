@@ -18,6 +18,7 @@ import { SETTINGS_NAV } from "@admin/components/layout/sidebar/lib/settings-nav"
 import { MAIN_MENU_ITEMS } from "@admin/components/layout/sidebar/sidebar-types";
 import { EMAIL_HUB_TABS } from "@admin/constants/email-hub";
 import type { NavSection } from "@admin/constants/nav-sections";
+import { ROUTES } from "@admin/constants/routes";
 import type { PluginMenuItemMeta, PluginMetadata } from "@admin/types/branding";
 import type { ApiSingle } from "@admin/types/entities";
 
@@ -81,20 +82,11 @@ export function railScreen(section: NavSection): ScreenName {
   return () => railLabel(section);
 }
 
-/**
- * A tab of the Email hub, named by the tab's own label and then the hub's:
- * "Messages · Email". The hub is one page headed "Email" with its tabs below,
- * so unlike a settings screen, whose own heading is its panel label, a tab
- * names a part of a screen. "Design" or "Sending" alone would not say that
- * they are about email. `href` is the tab's address; its create and edit
- * screens, and the old addresses that redirect into it, declare the same tab.
- */
-export function emailHubScreen(href: string): ScreenName {
-  return () =>
-    joinTitleParts([
-      EMAIL_HUB_TABS.find(tab => tab.href === href)?.label,
-      railLabel("email"),
-    ]);
+/** The settings panel's label for the destination at `href`. */
+function settingsLabel(href: string): string | undefined {
+  return SETTINGS_NAV.flatMap(group => group.items).find(
+    item => item.href === href
+  )?.label;
 }
 
 /**
@@ -103,9 +95,32 @@ export function emailHubScreen(href: string): ScreenName {
  * and edit forms, declare the same name; the item they show tells them apart.
  */
 export function settingsScreen(href: string): ScreenName {
+  return () => settingsLabel(href);
+}
+
+/**
+ * A part of a settings destination that has no panel entry of its own, named
+ * by its own label and then the destination's: "Fields · Users".
+ */
+export function settingsSubScreen(label: string, href: string): ScreenName {
+  return () => joinTitleParts([label, settingsLabel(href)]);
+}
+
+/**
+ * A tab of the Email hub, named by the tab's own label and then the hub's
+ * Settings entry: "Messages · Email". The hub is one page headed "Email" with
+ * its tabs below, so unlike a settings screen, whose own heading is its panel
+ * label, a tab names a part of a screen. "Design" or "Sending" alone would not
+ * say that they are about email. `href` is the tab's address; its create and
+ * edit screens, and the old addresses that redirect into it, declare the same
+ * tab.
+ */
+export function emailHubScreen(href: string): ScreenName {
   return () =>
-    SETTINGS_NAV.flatMap(group => group.items).find(item => item.href === href)
-      ?.label;
+    joinTitleParts([
+      EMAIL_HUB_TABS.find(tab => tab.href === href)?.label,
+      settingsLabel(ROUTES.EMAIL),
+    ]);
 }
 
 /**

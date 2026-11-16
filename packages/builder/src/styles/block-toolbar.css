@@ -1,0 +1,392 @@
+/*
+ * The ancestor breadcrumb, along the bottom bar.
+ *
+ * Scrolls horizontally rather than wrapping: the bar is a fixed-height strip,
+ * and a deep selection would otherwise grow it and shrink the canvas every time
+ * an author selected something nested.
+ */
+/*
+ * The bar's two halves: the trail at the start, the hint at the end, as the
+ * agreed design draws it. The trail gives way first, scrolling rather than
+ * pushing the hint off the bar.
+ */
+.nx-bottom-bar {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.nx-bottom-bar__hint {
+  flex: none;
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--nx-builder-text-muted);
+  white-space: nowrap;
+}
+
+.nx-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.nx-breadcrumb__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+.nx-breadcrumb__separator {
+  flex: none;
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-breadcrumb__crumb {
+  padding: 0.125rem 0.25rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--nx-builder-text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.nx-breadcrumb__crumb:hover {
+  color: var(--nx-builder-text);
+}
+
+/*
+ * The current crumb is the selection, so it reads at full strength. Colour
+ * alone does not carry it — the `aria-current` attribute is what a screen
+ * reader announces, and this rule is the visual half of the same fact.
+ */
+.nx-breadcrumb__crumb[aria-current] {
+  color: var(--nx-builder-text);
+  font-weight: 500;
+}
+
+/*
+ * The floating block toolbar.
+ *
+ * Positioned in the canvas's own content coordinates, like the drop indicator
+ * and for the same reason: the coordinates the component computes are the ones
+ * `left` and `top` consume, so scrolling the canvas carries the bar along with
+ * the block it names and there is no frame on which the two disagree.
+ *
+ * Above the indicator in the stack. They are never both on screen — the bar
+ * unmounts for the duration of a drag — but a z-index that depended on that
+ * staying true would fail silently the first time it stopped being true.
+ */
+.nx-block-toolbar {
+  position: absolute;
+  z-index: 3;
+  /*
+   * Only the buttons take the pointer: the bar sits over the block above the
+   * selection, and a press in a gap between two buttons, or on the bar's
+   * edge, reaches that block instead of landing on nothing.
+   */
+  pointer-events: none;
+  transition: opacity 120ms ease-out;
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+  padding: 0.125rem;
+  /*
+   * A DARK bar in both themes, drawn on the author's page rather than on the
+   * admin. The admin's raised surface is white in the light theme and near
+   * black in the dark one, so it melted into a white page or a dark section in
+   * turn; a fixed dark ink with light text reads the same on any page, and
+   * reads as the editor's rather than as part of the site.
+   *
+   * The edge is the ink's own text colour, faint, so the bar still separates
+   * from a page or section as dark as it is. The elevation is drawn in that
+   * edge colour rather than a translucent black: an alpha-blended shadow's
+   * contrast depends on whatever the page renders behind it, which is the one
+   * value this component cannot know.
+   */
+  border: 1px solid
+    color-mix(in srgb, var(--nx-builder-ink-text) 15%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--nx-builder-ink);
+  color: var(--nx-builder-ink-text);
+  box-shadow: 0 1px 3px
+    color-mix(in srgb, var(--nx-builder-ink) 40%, transparent);
+}
+
+.nx-block-toolbar button {
+  pointer-events: auto;
+}
+
+/*
+ * Faded while the pointer is over another block, so the block it points at is
+ * not covered; still there to press, and back once the pointer is on it or the
+ * keyboard is in it.
+ */
+.nx-block-toolbar[data-faded]:not(:focus-within) {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-block-toolbar {
+    transition: none;
+  }
+}
+
+/*
+ * 1.75rem is 28px, over the 24px floor WCAG 2.2 SC 2.5.8 sets for a target.
+ * The icons are 16px, so the remainder is the hit area rather than padding
+ * around a smaller one.
+ */
+.nx-block-toolbar__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--nx-builder-ink-text);
+  cursor: pointer;
+}
+
+.nx-block-toolbar__button:hover {
+  background: color-mix(in srgb, var(--nx-builder-ink-text) 12%, transparent);
+}
+
+/* The ink's own light text as the ring: the admin's accent is black in the
+   light theme, which is no ring at all on a dark bar. */
+.nx-block-toolbar__button:focus-visible {
+  outline: 2px solid var(--nx-builder-ink-text);
+  outline-offset: -2px;
+}
+
+/*
+ * `aria-disabled`, never the `disabled` attribute — the button stays focusable
+ * so the reason it is unavailable can be read. The styling therefore has to
+ * carry what `:disabled` would have: no hover response, and a pointer that says
+ * the press will not land.
+ */
+.nx-block-toolbar__button[aria-disabled="true"] {
+  color: color-mix(in srgb, var(--nx-builder-ink-text) 55%, transparent);
+  cursor: not-allowed;
+}
+
+.nx-block-toolbar__button[aria-disabled="true"]:hover {
+  background: none;
+}
+
+/*
+ * The selected block's Layers lock, said at the start of its bar: a lock icon
+ * and "Locked", or "Locked by" the block whose lock covers it. In the bar's own
+ * ink, so it reads on the dark bar in either theme, and set apart from the
+ * buttons by a rule in that ink rather than by a fill.
+ */
+.nx-block-toolbar__lock {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding-inline: 0.375rem 0.5rem;
+  margin-inline-end: 0.125rem;
+  border-inline-end: 1px solid
+    color-mix(in srgb, var(--nx-builder-ink-text) 25%, transparent);
+  color: var(--nx-builder-ink-text);
+  /* The type scale is declared inline, so its custom property can be absent
+     at runtime; the fallback is the same step. */
+  font-size: var(--text-xs, 0.75rem);
+  white-space: nowrap;
+}
+
+/*
+ * The "More" menu's items: icon, verb, and under a dimmed verb the reason in
+ * words, so the menu stays one width while the reason wraps.
+ */
+.nx-block-toolbar__menu {
+  max-width: 20rem;
+}
+
+.nx-block-toolbar__menu-item {
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.nx-block-toolbar__menu-item > svg {
+  flex: none;
+  margin-top: 0.125rem;
+}
+
+.nx-block-toolbar__menu-text {
+  display: grid;
+  gap: 0.125rem;
+}
+
+.nx-block-toolbar__menu-reason {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: var(--nx-muted-foreground);
+}
+
+/**
+ * The selected block's spacing, drawn over the page it applies to.
+ *
+ * Margin amber and padding green, which is the box-model palette browser
+ * developer tools have used for years — an author arrives already knowing which
+ * band is which, and a different pairing would cost that for nothing.
+ *
+ * BASE tokens rather than the `--nx-builder-*` set above. Those are declared on
+ * `.nx-builder-chrome`, and the canvas is mounted without the shell in the
+ * harness a browser drives it through, so a builder token would resolve to
+ * nothing exactly where the overlay is under test. The drop indicator's select
+ * hue resolves there only because the canvas declares it on itself.
+ */
+.nx-spacing-overlay {
+  position: absolute;
+  inset: 0;
+  /*
+   * Under the drop indicator and the toolbar, both of which say what is about to
+   * happen; this only describes what already is.
+   */
+  z-index: 1;
+  /*
+   * Never a pointer target. The bands cover the block they measure — the margin
+   * ones cover its neighbours too — so a hit-test that could land here would
+   * make the selected block unclickable, and the author would meet that as a
+   * canvas that stops responding once anything is selected.
+   */
+  pointer-events: none;
+
+  /*
+   * Clipped at the canvas, so chrome never joins the page's scroll extent.
+   *
+   * The value chips deliberately overflow their own band, because the case where
+   * a number is hardest to guess is the case where the space is too small to
+   * hold it. On a block flush with a canvas edge that overflow would otherwise
+   * enlarge the scrollable area — and the canvas is the surface a responsive
+   * layout is measured against, so selecting a block could change the width the
+   * page lays out in and move the very spacing being inspected.
+   *
+   * `clip` rather than `hidden`: both contain the overflow, and `hidden` makes
+   * the element a scroll container, which is the thing being avoided.
+   *
+   * `overflow-clip-margin` is what keeps the clip from being the wrong answer for
+   * a band that legitimately sits OUTSIDE the root. The first block's top margin
+   * can collapse through the page wrapper and the canvas — neither establishes a
+   * formatting context — so the block's border box starts at the root's top edge
+   * and its margin band is placed at a negative offset. A bare clip would remove
+   * that band while the gap it names is plainly visible. The allowance paints it
+   * without making it scrollable, which is the whole point: an extended clip
+   * region contributes no scrollable overflow.
+   */
+  overflow: clip;
+  /*
+   * Set by the component from the bands it actually measured, because a fixed
+   * allowance is too small for some legal value — `2rem` clipped an ordinary
+   * `64px` spacing step. Zero is the floor when nothing escapes.
+   */
+  overflow-clip-margin: var(--nx-spacing-escape, 0px);
+}
+
+.nx-spacing-overlay__band {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/*
+ * The fill is a pseudo-element rather than the band's own background, because on
+ * a rounded block it has to be CLIPPED and the value chip must not be.
+ *
+ * A block with `border-radius` curves away from the rectangle its bands are cut
+ * from, so a full-width strip paints colour into the transparent corner OUTSIDE
+ * the rendered border — a band is read as a measurement, and one covering ground
+ * the block does not occupy states a measurement that is false. The component
+ * supplies the curve as `--nx-spacing-clip`; a square block sets nothing and the
+ * fallback leaves the fill uncut.
+ *
+ * Clipping the band itself would take the chip with it, and the chip
+ * deliberately overflows the band it names.
+ */
+.nx-spacing-overlay__band::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  clip-path: var(--nx-spacing-clip, none);
+}
+
+.nx-spacing-overlay__band[data-box="margin"]::before {
+  background-color: color-mix(in srgb, var(--nx-chart-4) 22%, transparent);
+}
+
+/*
+ * A margin that is the container's gap rather than the block's own, in the
+ * padding hue of the container it belongs to, so the band reads as space the
+ * parent put there. The chip names the container.
+ */
+.nx-spacing-overlay__band[data-gap]::before {
+  background-color: color-mix(in srgb, var(--nx-chart-3) 22%, transparent);
+}
+
+.nx-spacing-overlay__band[data-box="padding"]::before {
+  background-color: color-mix(in srgb, var(--nx-chart-3) 22%, transparent);
+}
+
+/*
+ * A negative margin is hatched rather than filled.
+ *
+ * It lies INSIDE the border edge, over the same pixels a padding band occupies,
+ * because that is where the space it removes is. A flat fill there reads as
+ * ordinary space and says the opposite of what is happening; a hatch reads as
+ * the element being pulled over its neighbour, which it is.
+ */
+.nx-spacing-overlay__band[data-box="margin"][data-negative]::before {
+  background-color: transparent;
+  background-image: repeating-linear-gradient(
+    45deg,
+    color-mix(in srgb, var(--nx-chart-4) 34%, transparent) 0 3px,
+    transparent 3px 7px
+  );
+}
+
+/**
+ * The value, on a chip rather than drawn straight onto the band.
+ *
+ * The band is translucent and whatever the author put on the page shows through
+ * it, so bare text lands on arbitrary content and is legible only by luck. The
+ * chip is opaque, which makes the number readable over any page at either theme.
+ *
+ * It is NOT clipped to the band. A four-pixel margin cannot contain a label, and
+ * the case where the value is hardest to guess from looking is exactly the case
+ * where the space is too small to hold it — so the chip overflows and stays
+ * centred on the band it names.
+ */
+.nx-spacing-overlay__value {
+  /*
+   * Positioned so it paints ABOVE the fill. The fill is an absolutely positioned
+   * pseudo-element, which takes the positioned-descendants layer and would
+   * otherwise be painted over this in-flow text whatever the source order says.
+   */
+  /* Over a frame the layer is scaled with the page; the number keeps its own
+     size. */
+  scale: calc(1 / var(--nx-spacing-scale, 1));
+  position: relative;
+  padding: 0 3px;
+  border-radius: 2px;
+  background-color: var(--nx-background);
+  color: var(--nx-foreground);
+  /* The smallest size already in this sheet, rather than a fourth one. */
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  /* So a column of values does not jitter as digits change under a drag. */
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

@@ -120,7 +120,7 @@ export default function EditApiKeyPage(): React.JSX.Element {
 
   if (!id) {
     return (
-      <PageContainer width="form">
+      <PageContainer type="form">
         <SettingsLayout {...API_KEYS_PAGE}>
           <Alert variant="destructive">
             <AlertDescription>
@@ -139,7 +139,7 @@ export default function EditApiKeyPage(): React.JSX.Element {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer width="form">
+      <PageContainer type="form">
         <SettingsLayout {...API_KEYS_PAGE}>
           <EditApiKeyContent id={id} />
         </SettingsLayout>

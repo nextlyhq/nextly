@@ -1,10 +1,13 @@
 import { describe, it, expect } from "vitest";
 
+import { publishDeclaredCollectionFields } from "../domains/collections/services/declared-collection-fields";
 import { NextlyError } from "../errors/nextly-error";
 
 import { DbError } from "./errors";
 import {
   asNotMigrated,
+  collectionNotMigrated,
+  collectionRowNotMigrated,
   singleNotMigrated,
   withDbErrors,
 } from "./with-db-errors";
@@ -375,6 +378,47 @@ describe("asNotMigrated", () => {
         entity
       )
     ).toMatchObject({ publicData: { field: "subtitle" } });
+  });
+
+  it("reads a collection's declared fields from the configuration its start published", async () => {
+    // Whether the row comes from the registry service or from the write that
+    // already read it, the collection's declared fields are the ones the
+    // running configuration published.
+    publishDeclaredCollectionFields([
+      { slug: "posts", fields: [{ name: "subtitle", type: "text" }] },
+    ]);
+    try {
+      const error = () =>
+        statementOn(
+          "dc_posts",
+          driver('column "subtitle" does not exist', "42703")
+        );
+      const served = { tableName: "dc_posts", fields: [] };
+      for (const entity of [
+        collectionNotMigrated(
+          { getCollection: () => Promise.resolve(served) },
+          "posts",
+          { trusted: true }
+        ),
+        collectionRowNotMigrated("posts", served, { trusted: true }),
+      ]) {
+        expect(await asNotMigrated(error(), entity)).toMatchObject({
+          code: "ENTITY_NOT_MIGRATED",
+          publicData: { kind: "collection", field: "subtitle" },
+        });
+      }
+      // A collection the configuration does not declare names nothing.
+      publishDeclaredCollectionFields([]);
+      const failed = error();
+      expect(
+        await asNotMigrated(
+          failed,
+          collectionRowNotMigrated("posts", served, { trusted: true })
+        )
+      ).toBe(failed);
+    } finally {
+      publishDeclaredCollectionFields([]);
+    }
   });
 
   it("names the field and table only to a caller entitled to them, and always in the log", async () => {

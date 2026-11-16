@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { load } from "js-yaml";
 import { describe, expect, it } from "vitest";
 
-import { MAX_VERDICT_AGE_MS, WORKFLOWS, main } from "./main-catch-up.mjs";
+import { BRANCHES, MAX_VERDICT_AGE_MS, WORKFLOWS, main } from "./main-catch-up.mjs";
 
 const REPO = "nextlyhq/nextly";
 const SHA = "c".repeat(40);
@@ -16,9 +16,10 @@ const env = { GITHUB_REPOSITORY: REPO };
 const NOW = Date.parse("2026-10-27T12:00:00Z");
 const hoursAgo = hours => new Date(NOW - hours * 3_600_000).toISOString();
 
-const runsOf = workflow => `GET repos/${REPO}/actions/workflows/${workflow}/runs?branch=main&head_sha=${SHA}&per_page=20`;
-const recentOf = workflow => `GET repos/${REPO}/actions/workflows/${workflow}/runs?branch=main&per_page=50`;
-const catchUpsOf = workflow => `GET repos/${REPO}/actions/workflows/${workflow}/runs?branch=main&event=workflow_dispatch&per_page=20`;
+const runsOf = (workflow, branch = "main") => `GET repos/${REPO}/actions/workflows/${workflow}/runs?branch=${branch}&head_sha=${SHA}&per_page=20`;
+const recentOf = (workflow, branch = "main") => `GET repos/${REPO}/actions/workflows/${workflow}/runs?branch=${branch}&per_page=50`;
+const catchUpsOf = (workflow, branch = "main") =>
+  `GET repos/${REPO}/actions/workflows/${workflow}/runs?branch=${branch}&event=workflow_dispatch&per_page=20`;
 const jobsOf = id => `GET repos/${REPO}/actions/runs/${id}/jobs?per_page=100`;
 const dispatchOf = workflow => `POST repos/${REPO}/actions/workflows/${workflow}/dispatches`;
 
@@ -35,7 +36,7 @@ function api(routes) {
   return { fetchImpl, calls, dispatched: () => calls.filter(call => call.key.startsWith("POST")).map(call => call.key) };
 }
 
-const head = { [`GET repos/${REPO}/commits/main`]: { sha: SHA } };
+const headOf = (branch = "main") => ({ [`GET repos/${REPO}/commits/${branch}`]: { sha: SHA } });
 /** A job by its listed name; a matrix name (ending " (") gets an instance's value. */
 const job = (name, conclusion) => ({ name: name.endsWith(" (") ? `${name}ubuntu-latest)` : name, conclusion });
 const testedJobs = workflow => ({ jobs: WORKFLOWS[workflow].map(name => job(name, "success")) });
@@ -45,19 +46,19 @@ const skippedJobs = workflow => ({ jobs: WORKFLOWS[workflow].map(name => job(nam
  * Every workflow with the given runs on the newest commit, and those runs'
  * jobs. Main's recent runs are those plus an earlier commit's run that tested
  * it `lastVerdict` hours ago (one hour, unless a case says otherwise), and any
- * `extra` runs a case adds.
+ * `extra` runs a case adds. All on `branch`, main unless a case names another.
  */
-function routesWith(runFor, jobsFor, { lastVerdict = 1, extra = () => [] } = {}) {
-  const routes = { ...head };
+function routesWith(runFor, jobsFor, { lastVerdict = 1, extra = () => [], branch = "main" } = {}) {
+  const routes = { ...headOf(branch) };
   for (const [at, workflow] of Object.keys(WORKFLOWS).entries()) {
     // A case may give the newest commit one run or several.
     const onHead = [].concat(runFor(workflow, at + 1) ?? []);
-    routes[runsOf(workflow)] = { workflow_runs: onHead };
+    routes[runsOf(workflow, branch)] = { workflow_runs: onHead };
     for (const run of onHead) routes[jobsOf(run.id)] = jobsFor(workflow);
     const earlier = { id: 100 + at, event: "push", status: "completed", updated_at: hoursAgo(lastVerdict) };
     routes[jobsOf(earlier.id)] = testedJobs(workflow);
-    routes[recentOf(workflow)] = { workflow_runs: [...extra(workflow, at), ...onHead, earlier] };
-    routes[catchUpsOf(workflow)] = { workflow_runs: [...extra(workflow, at), ...onHead].filter(run => run.event === "workflow_dispatch") };
+    routes[recentOf(workflow, branch)] = { workflow_runs: [...extra(workflow, at), ...onHead, earlier] };
+    routes[catchUpsOf(workflow, branch)] = { workflow_runs: [...extra(workflow, at), ...onHead].filter(run => run.event === "workflow_dispatch") };
   }
   return routes;
 }
@@ -206,6 +207,35 @@ describe("the catch-up on main's newest commit", () => {
     const { fetchImpl, dispatched } = api({});
     expect(await main(env, { fetchImpl })).toBe(1);
     expect(dispatched()).toEqual([]);
+  });
+});
+
+describe("the catch-up on dev's newest commit", () => {
+  it("reads dev's runs and starts each workflow on dev, never on main", async () => {
+    const { fetchImpl, calls, dispatched } = api(routesWith((_, id) => ({ id, event: "push", status: "completed" }), skippedJobs, { branch: "dev" }));
+    expect(await main(env, { fetchImpl, branch: "dev" })).toBe(0);
+    expect(dispatched()).toEqual(Object.keys(WORKFLOWS).map(dispatchOf));
+    for (const call of calls.filter(entry => entry.key.startsWith("POST"))) expect(JSON.parse(call.body)).toEqual({ ref: "dev" });
+    expect(calls.filter(call => call.key.includes("branch=main") || call.key.endsWith("commits/main"))).toEqual([]);
+  });
+
+  it("starts nothing on dev when a run already tested its newest commit", async () => {
+    const { fetchImpl, dispatched } = api(routesWith((_, id) => ({ id, event: "push", status: "completed" }), testedJobs, { branch: "dev" }));
+    expect(await main(env, { fetchImpl, branch: "dev" })).toBe(0);
+    expect(dispatched()).toEqual([]);
+  });
+
+  it("refuses a branch it does not keep tested, reading and starting nothing", async () => {
+    const { fetchImpl, calls } = api(routesWith((_, id) => ({ id, event: "push", status: "completed" }), skippedJobs, { branch: "feature" }));
+    expect(await main(env, { fetchImpl, branch: "feature" })).toBe(2);
+    expect(calls).toEqual([]);
+  });
+
+  it("is run for every branch it keeps tested, by the workflow", () => {
+    const workflow = load(readFileSync(new URL("../.github/workflows/main-catch-up.yml", import.meta.url), "utf8"));
+    const commands = workflow.jobs["catch-up"].steps.map(step => step.run).filter(Boolean);
+    expect(commands).toEqual(BRANCHES.map(branch => `node scripts/main-catch-up.mjs ${branch}`));
+    expect((workflow.on ?? workflow[true]).push.branches).toEqual(BRANCHES);
   });
 });
 

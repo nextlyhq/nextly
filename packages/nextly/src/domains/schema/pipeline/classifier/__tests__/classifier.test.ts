@@ -116,6 +116,51 @@ describe("RealClassifier — NOT NULL detection (F5)", () => {
     }
   });
 
+  // One value for every row it fills repeats in a unique column, or collides with a value one
+  // already holds, so "fill with one value" is never offered for one; the rest stay.
+  it("offers no single fill value for a unique column, made or added required", async () => {
+    const c = new RealClassifier();
+    const result = await c.classify({
+      operations: [
+        {
+          type: "change_column_nullable",
+          tableName: "dc_users",
+          columnName: "handle",
+          fromNullable: true,
+          toNullable: false,
+        },
+        {
+          type: "add_column",
+          tableName: "dc_users",
+          column: { name: "code", type: "text", nullable: false },
+        },
+        {
+          type: "add_column",
+          tableName: "dc_users",
+          column: { name: "phone", type: "text", nullable: false },
+        },
+      ],
+      drizzleWarnings: noopWarnings,
+      hasDataLoss: false,
+      countNulls: vi.fn().mockResolvedValue(1),
+      countRows: vi.fn().mockResolvedValue(5),
+      isUnique: (table, column) =>
+        table === "dc_users" && (column === "handle" || column === "code"),
+      dialect: "postgresql",
+    });
+    const offered = Object.fromEntries(
+      result.events.map(e => [
+        e.columnName,
+        "applicableResolutions" in e ? e.applicableResolutions : [],
+      ])
+    );
+    expect(offered).toEqual({
+      handle: ["make_optional", "delete_nonconforming", "abort"],
+      code: ["make_optional", "abort"],
+      phone: ["provide_default", "make_optional", "abort"],
+    });
+  });
+
   it("does NOT emit add_required_field_no_default when table is empty", async () => {
     const op: Operation = {
       type: "add_column",

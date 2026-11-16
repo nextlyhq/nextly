@@ -44,6 +44,45 @@ export const CORE_CONTENT_EVENT_KINDS = {
     name: "draft-discarded",
     label: "Draft discarded by {actor}",
   },
+  overwritten: {
+    name: "overwritten",
+    label: "Overwritten by {actor}",
+    // How the overwrite stood against the document: no version given, the
+    // current one, or one out of date. Out of date, `replaced` is who made
+    // the latest change it replaced, by id alone, named when history is read
+    // so an erased account is never named from the record; null when the
+    // row records no maker. The event's actor is who overwrote.
+    payload: z
+      .object({
+        given: z.enum(["none", "current", "stale"]),
+        replaced: z
+          .object({
+            kind: z.string().min(1),
+            id: z.string().min(1).nullable(),
+            principalKind: z.string().min(1).nullable(),
+          })
+          .strict()
+          .nullable(),
+      })
+      .strict(),
+  },
+  fieldRewritten: {
+    name: "field-rewritten",
+    label: "{field} rewritten by {actor}",
+    // One field changed on the live copy and the pending drafts that held it,
+    // without a save of either: which field, and which copies changed
+    // (`live`, and `draft` or `draft:<language>` for each draft). `plugin`
+    // names the plugin that made it for a person, when one did; made on the
+    // plugin's own behalf, the plugin is the event's actor instead. The
+    // reason the caller gave is the event's note.
+    payload: z
+      .object({
+        field: z.string().min(1).max(255),
+        copies: z.array(z.string().min(1).max(64)).min(1).max(64),
+        plugin: z.string().min(1).max(255).optional(),
+      })
+      .strict(),
+  },
   deleted: { name: "deleted", label: "Deleted by {actor}", endsSubject: true },
   versionsRemoved: {
     name: "versions-removed",

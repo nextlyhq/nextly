@@ -3,16 +3,11 @@
  * much it says out loud.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
-import { useEffect, useState, type JSX, type ReactNode } from "react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { useEffect, type JSX, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { LOADING_FRAME_TIMES } from "@admin/components/shared/loading-frame/delayed-reveal";
 import { DASHBOARD_LAYOUT_KEY } from "@admin/hooks/queries/useDashboardLayout";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import {
@@ -20,9 +15,9 @@ import {
   registerComponents,
 } from "@admin/lib/plugins/component-registry";
 import type { AdminBranding } from "@admin/types/branding";
+import type { DashboardLayoutResponse } from "@admin/types/dashboard/widgets";
 
-import { useCardCollapsed } from "../frame/collapse";
-import { GRID_CLASS } from "../sizes";
+import { cardSpanClass, GRID_CLASS } from "../sizes";
 import { WidgetGrid } from "../WidgetGrid";
 
 import { stubDashboardWidth, unstubDashboardWidth } from "./dashboard-width";
@@ -592,7 +587,7 @@ describe("WidgetGrid — sizing", () => {
     size: { default: { w, h } },
   });
 
-  it("gives every cell a full-width base span whatever its w", () => {
+  it("gives every cell a full-width base span but a quarter one, half the row on a phone", () => {
     registerComponents({ "@acme/admin#A": () => <div>a</div> });
     mockBranding = brandingWith([
       sized("w3", 3),
@@ -602,28 +597,38 @@ describe("WidgetGrid — sizing", () => {
       sized("w12", 12),
     ]);
     renderGrid();
-    for (const id of ["w3", "w4", "w6", "w8", "w12"]) {
+    // The phone's base span: half the row for a quarter card, which pairs with another there,
+    // and the whole row for every wider one.
+    for (const id of ["w4", "w6", "w8", "w12"]) {
       const cell = screen.getByTestId(`widget-cell-${id}`);
       expect(cell.className.split(" ")).toContain("col-span-12");
     }
+    const quarter = screen.getByTestId("widget-cell-w3").className.split(" ");
+    expect(quarter).toContain("col-span-6");
+    expect(quarter).not.toContain("col-span-12");
   });
 
-  it("spans a card's w columns and h rows, its columns by the DASHBOARD's width, not the window", () => {
+  it("spans a card's w columns by the DASHBOARD's width, not the window, and no rows: it is as tall as its content", () => {
     registerComponents({ "@acme/admin#A": () => <div>a</div> });
     mockBranding = brandingWith([sized("narrow", 3, 4), sized("wide", 8, 2)]);
     renderGrid();
     const narrow = screen.getByTestId("widget-cell-narrow");
     expect(narrow).toHaveClass(
-      "col-span-12",
-      "@min-[640px]/dashboard:col-span-6",
+      "col-span-6",
       "@min-[1024px]/dashboard:col-span-3"
     );
-    expect(narrow.style.gridRow).toBe("span 4 / span 4");
+    expect(narrow).not.toHaveClass("col-span-12");
+    // 🔴 No row span and nothing that clips: a card's height is its content's, not its `h`.
+    expect(narrow.style.gridRow).toBe("");
+    expect(narrow).toHaveClass("relative", "min-w-0");
+    expect(narrow).not.toHaveClass("overflow-hidden");
+    expect(narrow).not.toHaveClass("min-h-0");
+    expect(narrow).not.toHaveClass("contain-size");
     const wide = screen.getByTestId("widget-cell-wide");
     // Wider than six columns: the whole row in the middle band, so no 640 px class at all.
     expect(wide).toHaveClass("@min-[1024px]/dashboard:col-span-8");
     expect(wide.className).not.toMatch(/@min-\[640px\]/);
-    expect(wide.style.gridRow).toBe("span 2 / span 2");
+    expect(wide.style.gridRow).toBe("");
     // The container those classes answer to is the dashboard's own, so a
     // dashboard narrowed by a sidebar draws the band that fits it.
     expect(
@@ -633,52 +638,121 @@ describe("WidgetGrid — sizing", () => {
     ).toBe(screen.getByTestId("dashboard-container"));
   });
 
-  it("draws a card its body collapsed one row tall, its header the one line, and its own rows again once opened", async () => {
-    // A body that collapses itself to one line, as the setup card does, with a control to open it.
-    function Collapsible() {
-      const [collapsed, setCollapsed] = useState(true);
-      useCardCollapsed(collapsed);
-      return (
-        <button type="button" onClick={() => setCollapsed(open => !open)}>
-          {collapsed ? "Expand" : "Collapse"}
-        </button>
-      );
-    }
-    registerComponents({ "@acme/admin#A": Collapsible });
-    mockBranding = brandingWith([{ ...sized("bar", 12, 3), title: "Bar" }]);
-    renderGrid();
-    const cell = screen.getByTestId("widget-cell-bar");
-    const card = within(cell).getByRole("region");
-    // Its body is drawn once its answer arrives, and collapses itself then.
-    await within(cell).findByRole("button", { name: "Expand" });
-    expect(cell.style.gridRow).toBe("span 1 / span 1");
-    expect(card).toHaveAttribute("data-collapsed");
-    // Its border, padding and one header-high line make exactly one row.
-    expect(card).toHaveClass("py-[15px]");
-    // The header is the one line, drawn, so the title names the card on screen and no control in
-    // it is hidden yet focusable; no footer takes room under the line.
-    expect(within(cell).getByTestId("widget-card-header")).not.toHaveClass(
-      "sr-only"
-    );
-    expect(card).toHaveAccessibleName(/Bar/);
-    expect(within(cell).queryByTestId("widget-card-footer")).toBeNull();
+  /**
+   * A stored arrangement holding one placement of `acme/one`, twelve columns wide (its widget
+   * declares six) and `h` rows high as stored.
+   */
+  function storedLayout(h: number): DashboardLayoutResponse {
+    return {
+      placements: [
+        { id: "p-one", widgetId: "acme/one", w: 12, h, removed: false },
+      ],
+      widgets: { "acme/one": { allowsSeveral: false } },
+      available: [],
+      defaultPlacements: [],
+      version: 2,
+      source: "own",
+      arranged: true,
+      scope: "tok",
+      audience: "aud",
+    };
+  }
 
-    // The must-differ half: opened, the card spans its stored rows and draws its whole frame.
-    fireEvent.click(within(cell).getByRole("button", { name: "Expand" }));
-    expect(cell.style.gridRow).toBe("span 3 / span 3");
-    expect(card).not.toHaveAttribute("data-collapsed");
-    expect(card).not.toHaveClass("py-[15px]");
-    expect(within(cell).getByTestId("widget-card-footer")).toBeInTheDocument();
+  /** The grid drawn from `layout`, read and fresh, with its query client. */
+  function renderStored(layout: DashboardLayoutResponse) {
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+          retryDelay: 0,
+          gcTime: 0,
+          staleTime: Infinity,
+        },
+      },
+    });
+    client.setQueryData(DASHBOARD_LAYOUT_KEY, layout);
+    const Wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    return { client, ...render(<WidgetGrid />, { wrapper: Wrapper }) };
+  }
+
+  it("draws its outline at the stored arrangement's widths while the widgets are on their way", () => {
+    // The arrangement answered, the workspace's declarations not yet: the
+    // outline stands in, and its cards take the stored cards' spans, so the
+    // cards land where it drew them. A removed card takes no place.
+    mockBranding = brandingWith([]);
+    mockBrandingStatus = { ...mockBrandingStatus, isPending: true };
+    const layout = storedLayout(4);
+    layout.placements = [
+      { id: "a", widgetId: "acme/one", w: 3, h: 2, removed: false },
+      { id: "b", widgetId: "acme/one", w: 3, h: 2, removed: true },
+      { id: "c", widgetId: "acme/one", w: 8, h: 4, removed: false },
+    ];
+    // The outline is drawn once its 0.4 s have passed.
+    vi.useFakeTimers();
+    renderStored(layout);
+    act(() => {
+      vi.advanceTimersByTime(LOADING_FRAME_TIMES.outline);
+    });
+    vi.useRealTimers();
+    const outline = within(screen.getByTestId("widget-grid-loading"));
+    expect(
+      outline
+        .getAllByTestId("dashboard-card-outline")
+        .map(card => card.getAttribute("data-span"))
+    ).toEqual([cardSpanClass(3), cardSpanClass(8)]);
   });
 
-  it("lays its cards on twelve columns in rows of 72 px, in order, with the gaps a card's predicted width counts", () => {
+  it("draws a layout stored with any h alike, keeping the stored h and setting no height from it", async () => {
+    // 🔴 Fails where a stored `h` still sizes the cell: a row span, or a height asked for, of two
+    // rows for one and of the widget's six-row maximum for the other.
+    registerComponents({ "@acme/admin#A": () => <div>answered</div> });
+    mockBranding = brandingWith([
+      {
+        id: "acme/one",
+        title: "One",
+        component: "@acme/admin#A",
+        size: { default: { w: 6, h: 3 }, max: { w: 12, h: 6 } },
+      },
+    ]);
+    const drawn: { style: string | null; className: string }[] = [];
+    // Two rows, within the widget's bounds, and ten, past its maximum of six.
+    for (const h of [2, 10]) {
+      const { client, unmount } = renderStored(storedLayout(h));
+      const cell = screen.getByTestId("widget-cell-acme/one");
+      await within(cell).findByText("answered");
+      // The stored placement is the one drawn: full width at every band, not the declared half.
+      expect(cell).toHaveClass("col-span-12");
+      expect(cell.className).not.toMatch(/col-span-6/);
+      expect(cell.style.gridRow).toBe("");
+      expect(cell.style.height).toBe("");
+      expect(cell.style.minHeight).toBe("");
+      drawn.push({
+        style: cell.getAttribute("style"),
+        className: cell.className,
+      });
+      // Drawing reads the stored value and never rewrites it.
+      expect(
+        client.getQueryData<DashboardLayoutResponse>(DASHBOARD_LAYOUT_KEY)
+          ?.placements[0]?.h
+      ).toBe(h);
+      unmount();
+    }
+    expect(drawn[1]).toEqual(drawn[0]);
+  });
+
+  it("lays its cards on twelve columns in rows as tall as their cards, in order, with the gaps a card's predicted width counts", () => {
     // A card is first asked for at a size predicted with these gaps. A gap in rem would
     // follow the page's root font size and draw cards at another width than predicted.
+    // 🔴 Fails on rows of 72 px, where no card can be drawn at its content's height.
     registerComponents({ "@acme/admin#A": () => <div>a</div> });
     mockBranding = brandingWith([sized("one", 3)]);
     renderGrid();
     const grid = screen.getByLabelText("Dashboard widgets");
     for (const cls of GRID_CLASS.split(" ")) expect(grid).toHaveClass(cls);
+    expect(grid).toHaveClass("auto-rows-auto");
+    expect(grid).not.toHaveClass("auto-rows-[72px]");
     expect(grid.className).not.toMatch(/dense/);
   });
 });
@@ -1092,7 +1166,10 @@ describe("the grid distinguishes 'nothing to draw' from 'nothing has arrived'", 
     // that supplied widgets.
     mockBrandingStatus = { ...mockBrandingStatus, isPending: true };
     renderGrid();
-    expect(screen.getByTestId("widget-grid-loading")).toBeInTheDocument();
+    // The dashboard's outline stands in the grid's place: the screen's wait,
+    // drawn from 0.4 s by the frame's one outline, never an empty page.
+    const loading = screen.getByTestId("widget-grid-loading");
+    expect(loading).toContainElement(screen.getByTestId("screen-outline"));
   });
 
   it("says so when the workspace never answered", () => {

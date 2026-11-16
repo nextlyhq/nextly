@@ -69,7 +69,7 @@ describe("webhook recording opt-out (integration)", () => {
     // the outbox event) — otherwise ISR consumers would serve the stale value.
     const updated = await handler.updateEntry(
       { collectionName: "leads", entryId: leadId, overrideAccess: true },
-      { title: "secret-2" }
+      { title: "secret-2", _overwrite: true }
     );
     expect(updated.success).toBe(true);
     expect(updated.revalidationIntent).toBeDefined();

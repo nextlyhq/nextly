@@ -130,6 +130,7 @@
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
 import { CORE_TABLE_NAMES } from "../../../schemas/core-schema";
+import { SCHEMA_OWNERS_TABLE } from "../../../schemas/schema-owners";
 import { scanSql, type SqlSegment } from "../migrate/sql-scan";
 import type { ContributedElements, TableSpec } from "../pipeline/diff/types";
 import { plainMysqlEquivalents } from "../pipeline/sql-templates/mysql-live-restate";
@@ -3320,6 +3321,12 @@ function modelsStatement(
     prefix.every((word, at) => words[at] === word)
   );
   if (!begins) return false;
+  // A SQLite rebuild's guard row is inserted into a table the same list
+  // creates and drops (`sqliteTableRebuildStatements`), from a query over
+  // the schema catalogue whose `il.name` and `ix.key` are column
+  // references, not qualified tables. It writes nothing a followed table
+  // holds, so a DOWN that rebuilds a table is followed like any other.
+  if (dialect !== "postgresql" && insertsIntoRebuildGuard(tokens)) return true;
   return !tokens.some(
     (token, at) =>
       token.kind === "punct" &&
@@ -3327,6 +3334,28 @@ function modelsStatement(
       isNameToken(tokens[at - 1]) &&
       isNameToken(tokens[at + 1])
   );
+}
+
+/** The guard table a SQLite rebuild or swap creates for itself and drops. */
+const REBUILD_GUARD_NAME = /^__nextly_(?:rebuild|swap)_.+_guard$/;
+
+/**
+ * Whether a statement is `INSERT INTO <guard> ...` for a rebuild's or a
+ * swap's own guard table, named as the SQL templates name it.
+ */
+function insertsIntoRebuildGuard(tokens: readonly Token[]): boolean {
+  const [insert, into, target] = tokens;
+  return (
+    isWord(insert, "INSERT") &&
+    isWord(into, "INTO") &&
+    REBUILD_GUARD_NAME.test(plainName(target) ?? "")
+  );
+}
+
+/** A bare or quoted name's text, or undefined for any other token. */
+function plainName(token: Token | undefined): string | undefined {
+  if (token?.kind === "name") return token.name;
+  return token?.kind === "word" ? token.text : undefined;
 }
 
 /**
@@ -5114,11 +5143,18 @@ function shapeKept(
       twin.unique.has(set) ||
       set.split(",").some(column => !twin.columns.has(column))
   );
+  // Only the columns the table has can be stripped. A twin column the live
+  // table lacks is one an earlier statement of the list adds (an `ADD
+  // COLUMN` before the rebuild that puts a contributed key on it), which
+  // takes nothing from the table: the live columns the twin leaves out are
+  // judged as drops on their own, and a copy naming a column that exists
+  // nowhere fails before a row moves.
   return (
     keptUnique &&
-    [...twin.columns].every(([name, column]) =>
-      columnKept(live.columns.get(name), column)
-    )
+    [...twin.columns].every(([name, column]) => {
+      const before = live.columns.get(name);
+      return before === undefined || columnKept(before, column);
+    })
   );
 }
 
@@ -5377,7 +5413,9 @@ export function assertNoForeignDrops(args: {
    * change, never a drop or a rename. The caller decides the value family the
    * change must stay within; this guard does not read the column types.
    */
-  columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
+  columnOverrides?:
+    | ReadonlyArray<{ table: string; column: string }>
+    | undefined;
 }): void {
   const read = readOrRefuse(args);
   const holders = new OwnershipView(args);
@@ -6000,7 +6038,9 @@ function refuseInPlaceChanges(
     stream: MigrationStream;
     source: string;
     liveIndexTables?: ReadonlyMap<string, string>;
-    columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
+    columnOverrides?:
+      | ReadonlyArray<{ table: string; column: string }>
+      | undefined;
   }
 ): void {
   for (const change of read.alteredColumns) {
@@ -6127,7 +6167,9 @@ function refuseIndexNamed(
 function overridden(
   args: {
     stream: MigrationStream;
-    columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
+    columnOverrides?:
+      | ReadonlyArray<{ table: string; column: string }>
+      | undefined;
   },
   table: string,
   column: string
@@ -6254,19 +6296,52 @@ export function dropsPluginMigratedTable(
  * registry. Undefined when the registry cannot be read (a database that
  * predates it, or a fresh install before core reconcile), which callers read
  * as "nothing is claimed" — the pre-registry behaviour exactly.
+ *
+ * Whether the registry exists is asked of the catalog first, never learned
+ * from a failed read: `db` may be a schema apply's open transaction, and on
+ * PostgreSQL a statement that fails there aborts it, so every statement the
+ * apply runs after it would be refused.
  */
 export async function pluginMigratedTableSet(
   db: unknown,
   dialect: SupportedDialect
 ): Promise<ReadonlySet<string> | undefined> {
   try {
-    const rows = await new SchemaOwnersRepository(db, dialect).read();
-    return new Set(
-      rows
-        .filter(row => row.migratedBy.startsWith("plugin:"))
-        .map(row => row.tableName.toLowerCase())
+    const { introspectTableNames } = await import(
+      "../pipeline/diff/introspect-live"
+    );
+    const registry = await introspectTableNames(db, dialect, [
+      SCHEMA_OWNERS_TABLE,
+    ]);
+    if (registry.length === 0) return undefined;
+    return pluginMigratedTablesOf(
+      await new SchemaOwnersRepository(db, dialect).read()
     );
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The tables whose own owner row names a plugin's migration stream,
+ * lower-cased.
+ *
+ * Table-level rows only. An element row says who added a column, index, key
+ * or check to a table, not who carries the table: read as a table claim, a
+ * plugin's column on the app's table made every drop of that table count as a
+ * plugin table's, the drop inside a SQLite rebuild of it included, which then
+ * left the rebuild's twin with nowhere to be renamed to.
+ */
+export function pluginMigratedTablesOf(
+  rows: readonly OwnerRecord[]
+): Set<string> {
+  return new Set(
+    rows
+      .filter(
+        row =>
+          (row.elementKind ?? "table") === "table" &&
+          row.migratedBy.startsWith("plugin:")
+      )
+      .map(row => row.tableName.toLowerCase())
+  );
 }

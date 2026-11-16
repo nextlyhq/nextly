@@ -1,22 +1,25 @@
 name: Main catch-up
 
-# Every two hours, starts CI and Integration on main's newest commit when no
-# run has tested it. On a busy day each push supersedes the one before and
-# skips its tests (its gate then refuses rather than passes), so without this
-# main could go untested for as long as merges keep coming. A look that finds
-# the commit tested, or a run still on its way, starts nothing, unless main's
-# last verdict is over three hours old: under runner starvation every push's
-# run is still queued when this looks, so it then tests main anyway.
+# Every two hours, starts CI and Integration on the newest commit of `main`
+# and of `dev` (the branch pull requests merge into) when no run has tested
+# it, each branch looked at on its own. On a busy day each push supersedes the
+# one before and skips its tests (its gate then refuses rather than passes), so
+# without this
+# a branch could go untested for as long as merges keep coming. A look that
+# finds the commit tested, or a run still on its way, starts nothing, unless
+# the branch's last verdict is over three hours old: under runner starvation
+# every push's run is still queued when this looks, so it then tests the
+# branch anyway.
 # `scripts/main-catch-up.mjs` has the rule.
 #
-# Also on every push to main: under load GitHub delays or drops scheduled
-# runs (three of about six ran in one ten-hour stretch), and a look costs a
-# few seconds. The concurrency group keeps at most one look waiting.
+# Also on every push to either branch: under load GitHub delays or drops
+# scheduled runs (three of about six ran in one ten-hour stretch), and a look
+# costs a few seconds. The concurrency group keeps at most one look waiting.
 on:
   schedule:
     - cron: "23 */2 * * *"
   push:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:
 
 permissions: {}
@@ -27,7 +30,7 @@ concurrency:
 
 jobs:
   catch-up:
-    name: Test main's newest commit if no run has
+    name: Test the newest commits if no run has
     if: github.repository == 'nextlyhq/nextly'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -50,4 +53,11 @@ jobs:
       - name: Start what main's newest commit is missing
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/main-catch-up.mjs
+        run: node scripts/main-catch-up.mjs main
+      # Whatever main's look concluded, so one branch's failure to read or
+      # dispatch does not leave the other unlooked at.
+      - name: Start what dev's newest commit is missing
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/main-catch-up.mjs dev

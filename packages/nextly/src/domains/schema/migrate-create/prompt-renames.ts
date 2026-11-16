@@ -5,12 +5,18 @@
 // collapses the matching (drop_column, add_column) pair into a
 // rename_column op. On decline, the pair stays as drop+add.
 //
+// A field-group field renamed is asked about the same way (`fieldGroupTables`): accepting
+// re-keys its stored rows to the new name instead of renaming a column.
+//
 // Non-interactive (CI / piped stdin):
-//   - Default behaviour: decline all (conservative).
+//   - Default behaviour: decline all (conservative). A declined field-group
+//     rename is warned about, since no data-loss consent will name it.
 //   - With `--accept-renames`: accept all (advanced; documented).
 
 import * as p from "@clack/prompts";
 
+import { migrationCreateCancelled } from "../../../cli/errors/areas/migrate-create";
+import { answered } from "../../../cli/utils/prompt-cancelled";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
 
 export interface RenameDecision {
@@ -32,11 +38,9 @@ export interface PromptRenamesOptions {
 }
 
 /**
- * F11 PR 3 review fix #3: typed error thrown when the operator cancels
- * a prompt mid-flow (Ctrl-C). The CLI catches this and calls
- * `process.exit(1)`. Keeping the exit out of the domain layer makes
- * promptRenames testable without spying on `process.exit` (a Ctrl-C in
- * a unit test would otherwise terminate the test runner).
+ * The error a cancelled rename prompt once ended `migrate:create` with. A
+ * cancel now ends the run with exit 130 through `promptCancelled`, so
+ * `promptRenames` no longer throws it; `migrate:create` still recognises it.
  */
 export class PromptCancelledError extends Error {
   constructor() {
@@ -55,6 +59,9 @@ export class PromptCancelledError extends Error {
  * stays `rename` — it is the smaller loss, not a safe one.
  */
 function renamePromptMessage(c: RenameCandidate): string {
+  if (c.fieldGroupTables !== undefined) {
+    return `Detected possible field group rename: ${c.tableName}.${c.fromColumn} → ${c.tableName}.${c.toColumn}. Apply as rename? Its stored rows in ${c.fieldGroupTables.join(", ")} move to the new name (declining leaves them under "${c.fromColumn}", where nothing reads them, and "${c.toColumn}" starts empty)`;
+  }
   const move = `${c.tableName}.${c.fromColumn} → ${c.tableName}.${c.toColumn}`;
   if (c.preservesValues) {
     return `Detected possible rename: ${move}. Apply as rename? (declining will treat as DROP + ADD, losing data)`;
@@ -71,6 +78,14 @@ export async function promptRenames(
   for (const c of candidates) {
     if (opts.nonInteractive) {
       const accepted = opts.autoAccept === true;
+      // A declined column rename drops the column, which the data-loss consent then asks about. A
+      // declined field-group rename drops nothing, so nothing else would say its rows are left
+      // where nothing reads them.
+      if (!accepted && c.fieldGroupTables !== undefined) {
+        p.log.warn(
+          `Field group ${c.tableName}.${c.fromColumn} → ${c.toColumn} is not applied as a rename: its rows in ${c.fieldGroupTables.join(", ")} stay under "${c.fromColumn}", where nothing reads them, and "${c.toColumn}" starts empty. If it is a rename, run migrate:create at a terminal to answer, or pass --accept-renames.`
+        );
+      }
       if (accepted && !c.preservesValues) {
         p.log.warn(
           `Accepted rename ${c.tableName}.${c.fromColumn} → ${c.toColumn} changes the stored values: ${c.valueChangeReason ?? "the stored values change"}`
@@ -83,13 +98,11 @@ export async function promptRenames(
       message: renamePromptMessage(c),
       initialValue: c.defaultSuggestion === "rename",
     });
-    if (p.isCancel(answer)) {
-      // User pressed Ctrl-C mid-prompt. Throw the typed error; the CLI
-      // entry point catches and exits.
-      p.cancel("Cancelled by user.");
-      throw new PromptCancelledError();
-    }
-    decisions.push({ candidate: c, accepted: answer });
+    // Ctrl+C mid-prompt is not a decline: the run ends as interrupted, exit
+    // 130, saying in the shape that no migration was written.
+    if (p.isCancel(answer)) p.cancel("Cancelled by user.");
+    const accepted = await answered(answer, migrationCreateCancelled());
+    decisions.push({ candidate: c, accepted });
   }
   return decisions;
 }

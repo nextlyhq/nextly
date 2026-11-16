@@ -274,6 +274,73 @@ every push, as the merge queue does. A documentation-only change (files under
 3. Stamp `ctx.prefix` on every schema, database, or table name your test creates.
 4. Drop everything you created in `afterAll`.
 
+### The upgrade gate
+
+An existing site that upgrades Nextly must meet no schema change nobody chose.
+`apps/playground/upgrade-gate/` holds the playground as the last published
+release built it, on each dialect: its database, schema and rows, and the app
+migrations that release wrote (`baseline/`, named in `baseline/meta.json`).
+`upgrade-plan.integration.test.ts` restores it, upgrades it with your checkout
+the way a site does (`nextly migrate:create`, `nextly migrate`, then
+`nextly migrate:check`), and compares the database's catalog before and after.
+Every table, column, index, constraint and trigger the upgrade added, dropped
+or changed is an operation, and the operations must be exactly the ones
+`upgrade-gate/allowlist.ts` holds for that dialect, no more and no fewer.
+
+It runs on every integration leg, after the fixture plugin's test, and takes
+about ten seconds a dialect. To run it locally, first build what the
+playground's config loads:
+
+```bash
+pnpm turbo build --filter=nextly --filter="@nextlyhq/adapter-*" \
+  --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-form-builder \
+  --filter=@nextlyhq/plugin-seo
+```
+
+then, from `apps/playground`:
+
+```bash
+pnpm test:integration upgrade-gate                         # SQLite
+TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5435/<your test db> \
+  pnpm test:integration upgrade-gate                       # PostgreSQL
+TEST_MYSQL_URL=mysql://root:root@127.0.0.1:3307/<your test db> \
+  pnpm test:integration upgrade-gate                       # MySQL
+```
+
+**When it fails with operations the allowlist does not hold**, your change makes
+existing sites meet them on upgrade. The failure names each one, for example
+`create index user_roles.user_roles_stray_idx: (role_id, user_id)`, and prints
+the entry to add. Then either:
+
+- change the code so the upgrade no longer plans it, or
+- if it is intended, add the entry to `allowlist.ts` with a `reason` that says
+  what it does to an existing site's data and why that is safe (a new nullable
+  column, an index over an existing column), on each dialect the failure names.
+  A reviewer judges that reason as part of the pull request.
+
+A change to one of the playground's own collections, Singles or field groups,
+or to a first-party plugin's collections, shows up here too, since the
+baseline was built from the release's playground. Allowlist it the same way.
+
+**When it fails with operations the upgrade no longer plans**, remove those
+entries.
+
+**After a release**, record the baseline again from it and empty the allowlist
+of what the release now ships:
+
+```bash
+cd apps/playground
+TEST_POSTGRES_URL=... TEST_MYSQL_URL=... pnpm upgrade-gate:record \
+  [--release 0.0.2-alpha.76] [--pg-dump-container nextly-postgres17-test]
+```
+
+It installs that release's packages from npm (by default the `alpha` tag) beside
+the playground of the commit that versioned it, builds the playground with that
+release's `nextly migrate:create` and `nextly migrate` on each dialect, and
+writes the dumps. Then run the gate on each dialect and bring the allowlist to
+what it reports. `pg_dump` must be at least the server's major version;
+`--pg-dump-container` runs the one inside the test container instead.
+
 ### Test conventions
 
 - Tests are co-located with source files in `__tests__/` directories
@@ -383,31 +450,31 @@ These keywords auto-close the linked issue when the PR merges.
 
 ## Submitting a pull request
 
-Every change reaches `main` the same way: a short-lived branch off `main`, one pull request into `main`, squash-merged. There are no long-lived branches — no `dev`, release or integration branch — because lint, type-checking, the unit and integration tests and the secret scan never run on a pull request into any other branch, and a branch that gathers weeks of work is too large to review.
+Every change reaches `dev`, the default branch, the same way: a short-lived branch off `dev`, one pull request into `dev`, squash-merged. CI and the integration tests run on the pull request and on every push to `dev`, but merging does not wait for them, so run `git fetch origin dev` and then `pnpm check:quick` first: it type-checks the packages your branch affects and runs the unit tests of the packages it changes, compared with your local `origin/dev`, usually in a minute or two. A stale `origin/dev` can hide a package your branch changed, so fetch it first; if your fork tracks this repository under another remote, fetch from that one and pass the ref, as in `pnpm check:quick upstream/dev`. Once a day, when `dev`'s CI and integration runs are green, `dev` is promoted to `main` through a pull request that `main`'s merge queue tests; a red `dev` holds the promotion back until the commit that broke it is fixed. Releases are cut from `main` only. There are no other long-lived branches — no release or integration branch — because the checks never run on a pull request into one, and a branch that gathers weeks of work is too large to review.
 
-1. **Fork** the repo and create a branch off `main`, one branch per pull request.
+1. **Fork** the repo and create a branch off `dev`, one branch per pull request.
 2. **Make your change.** Add or update tests when relevant.
 3. **Run locally**: `pnpm lint && pnpm check-types && pnpm test`.
 4. **Add a changeset** if your PR touches any publishable package (see [Release process](#release-process) below).
-5. **Open the PR against `main`.** Fill out the [PR template](.github/pull_request_template.md) — it's auto-applied when you open a PR.
-6. **Watch CI.** Lint, typecheck, build, unit tests, and the integration matrix all need to be green before merge.
+5. **Open the PR against `dev`.** Fill out the [PR template](.github/pull_request_template.md) — it's auto-applied when you open a PR.
+6. **Watch CI.** Lint, typecheck, build, unit tests, and the integration matrix run on the PR; a red one is yours to fix, before or after the merge.
 
 ### Landing a large feature in slices
 
-A feature too large for one pull request lands as several, each complete, tested and merged into `main` on its own. Until the feature is complete, the public API it adds is marked with the TSDoc `@experimental` tag, which carries no compatibility guarantee; [`packages/ui/STABILITY.md`](packages/ui/STABILITY.md) shows the convention. Don't collect the slices on a branch of their own.
+A feature too large for one pull request lands as several, each complete, tested and merged into `dev` on its own. Until the feature is complete, the public API it adds is marked with the TSDoc `@experimental` tag, which carries no compatibility guarantee; [`packages/ui/STABILITY.md`](packages/ui/STABILITY.md) shows the convention. Don't collect the slices on a branch of their own.
 
 ### Reviewer expectations
 
 - At least one maintainer approval is required before merge, from a code owner for the files [`.github/CODEOWNERS`](.github/CODEOWNERS) names.
 - All conversations resolved.
 - All CI checks passing (no `continue-on-error` workarounds).
-- No need to bring a branch up to date with `main` by hand: the merge queue tests it on top of the latest `main` (see [Merge strategy](#merge-strategy)).
+- No need to bring a branch up to date with `dev` by hand unless it conflicts: the next push to `dev` tests it on top of everything merged before it (see [Merge strategy](#merge-strategy)).
 
 ### Merge strategy
 
-Every pull request is squash-merged into `main`, the Version Packages pull request included. Its title becomes the commit message, so make sure it follows [Conventional Commits](#commit-messages).
+Every pull request is squash-merged into `dev`. Its title becomes the commit message, so make sure it follows [Conventional Commits](#commit-messages).
 
-Every pull request merges through GitHub's merge queue: it runs the required checks on each pull request combined with the latest `main`, and squash-merges only what passes. Once a pull request is approved and its checks are green, choose **Merge when ready** to add it to the queue.
+Two pull requests go to `main` instead, through GitHub's merge queue, which runs the required checks on each combined with the latest `main` and merges only what passes: the daily promotion of `dev`, merged with a merge commit so the two branches keep one history, and the Version Packages pull request. After a release, `main` is merged back into `dev`.
 
 ### Branch protection
 
@@ -447,8 +514,8 @@ Commit the generated `.changeset/*.md` file with your PR.
 
 ### How a release happens
 
-1. You merge your PR (with its changeset) into `main`.
-2. [`.github/workflows/release.yml`](.github/workflows/release.yml) runs on `push` to `main` and opens a `Version Packages` PR that bumps every `fixed[]` package by the same amount and rewrites per-package `CHANGELOG.md` files.
+1. You merge your PR (with its changeset) into `dev`, and the daily promotion carries it to `main`.
+2. [`.github/workflows/release.yml`](.github/workflows/release.yml) runs on `main` and opens a `Version Packages` PR that bumps every `fixed[]` package by the same amount and rewrites per-package `CHANGELOG.md` files.
 3. The Version Packages PR accumulates as more PRs land — so all pending changes ship together when it's merged.
 4. A maintainer reviews and merges the Version Packages PR.
 5. The release workflow runs again, this time publishing to npm:
@@ -456,6 +523,7 @@ Commit the generated `.changeset/*.md` file with your PR.
    - `changeset publish` — publishes each package to `@nextlyhq/*` with `--provenance` attestation
    - Creates one git tag `vX.Y.Z`
    - Creates one consolidated GitHub Release containing all package CHANGELOGs
+6. Record the upgrade gate's baseline from the new release and trim its allowlist ([The upgrade gate](#the-upgrade-gate)).
 
 ### Pre-releases (alpha / beta / rc)
 

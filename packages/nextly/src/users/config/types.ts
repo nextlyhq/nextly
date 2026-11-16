@@ -37,7 +37,17 @@ interface UserSurfaceFieldBase {
   /** Minimum string length. */
   minLength?: number;
   /** Admin presentation options. */
-  admin?: { placeholder?: string; description?: string };
+  admin?: {
+    placeholder?: string;
+    description?: string;
+    /**
+     * Hide the field from the Admin UI entirely.
+     * The field still exists in the schema and can be set via API. A Direct
+     * API read passing `showHiddenFields: false` leaves it out, as it does a
+     * hidden canonical field.
+     */
+    hidden?: boolean;
+  };
 }
 
 /** A validated web address stored as text. */

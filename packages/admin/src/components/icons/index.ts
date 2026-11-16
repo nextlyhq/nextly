@@ -179,6 +179,7 @@ export {
   Sun,
   Table, // Rich text editor: table
   Tag, // Collection Settings: icon picker
+  Terminal, // Email: the Log provider, which writes to the server log
   Target, // Collection Settings: icon picker
   ToggleLeft, // useFields: boolean
   Trash,
@@ -189,6 +190,7 @@ export {
   Type, // useFields: text
   Underline, // Rich text editor
   Undo, // Rich text editor
+  Unlink, // Plugin menu: the icon @nextlyhq/plugin-page-builder declares for Bindings to fix
   Upload,
   User, // useFields: user
   UserPlus,

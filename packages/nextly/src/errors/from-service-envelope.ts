@@ -18,6 +18,7 @@ import {
 import { NextlyError } from "./nextly-error";
 import { originalErrorOf, withOriginalError } from "./original-error";
 import type { PublicData } from "./public-data";
+import { ruleCouldNotRunIn } from "./rule-could-not-run";
 
 /** The failure fields a service envelope can carry. */
 export interface ServiceErrorEnvelope {
@@ -39,6 +40,8 @@ export interface ServiceErrorEnvelope {
     field?: string;
     code?: string;
     message: string;
+    /** The language the issue is in, where it is about one language's own value. */
+    locale?: string;
   }>;
   /**
    * Whether the write this envelope reports committed before it failed. A
@@ -82,6 +85,9 @@ function validationFromEnvelope(
         path: e.path ?? e.field ?? "",
         code: e.code ?? "INVALID",
         message: e.message,
+        // An issue in one language keeps naming it, so a refusal of several languages says
+        // which language each issue is in.
+        ...(typeof e.locale === "string" ? { locale: e.locale } : {}),
       }))
     : [
         {
@@ -290,6 +296,16 @@ export function errorEnvelopeFields(
   // bound for a connection, and the caller should be told DATABASE_BUSY and
   // when to retry, not the 500 a service gives an unexpected failure.
   if (!NextlyError.is(error)) {
+    // A rule that could not run, re-wrapped on its way out of a transaction,
+    // keeps its own answer: the request ends saying which rule, not as a
+    // busy database or an internal error.
+    const couldNotRun = ruleCouldNotRunIn(error);
+    if (couldNotRun) {
+      recordFlattenedError(couldNotRun);
+      return error instanceof Error
+        ? withOriginalError(publicFieldsOf(couldNotRun), error)
+        : publicFieldsOf(couldNotRun);
+    }
     if (!isDatabaseBusy(error)) {
       return error instanceof Error ? withOriginalError({}, error) : {};
     }

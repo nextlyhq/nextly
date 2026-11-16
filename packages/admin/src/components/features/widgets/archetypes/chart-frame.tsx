@@ -13,9 +13,10 @@
  *   and exposing both would announce the chart twice.
  * - The TABLE holds the real numbers in HTML, the only form that can be
  *   navigated cell by cell and compared. It is always in the accessibility tree
- *   and never drawn: a card has a fixed height and no scrollbar, so a table
- *   that opened inside it would push the card past its height, and a closed
- *   disclosure would hide the numbers from assistive tech until opened. Sight
+ *   and never drawn: a card has no scrollbar and is as tall as its content, so
+ *   a table that opened inside it would make the card as tall as the table,
+ *   and a closed disclosure would hide the numbers from assistive tech until
+ *   opened. Sight
  *   reads the same numbers from the chart's tooltips.
  *
  * A `group` and not `role="application"`, which is what the popular chart
@@ -105,8 +106,8 @@ export function ChartFrame({
   const titleId = `${base}-title`;
   const descId = `${base}-desc`;
 
-  // Filling the card's body, whose height the card's size fixes, so the chart is drawn at that
-  // height rather than as a strip at its top.
+  // Filling the card's body, which is as tall as the chart's least height or as its row's tallest
+  // card, so the chart is drawn at that height rather than as a strip at its top.
   return (
     <figure className="m-0 flex min-h-0 min-w-0 flex-1 flex-col gap-2">
       {children({ titleId, descId, title, description })}

@@ -23,7 +23,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
@@ -31,6 +31,7 @@ import { afterEach, expect, it, vi } from "vitest";
 
 import { defineCollection, fieldGroup, text } from "../../../config";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
+import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { NextlyError } from "../../../errors/nextly-error";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
@@ -64,8 +65,12 @@ const notes = defineCollection({
   ],
 });
 
-/** Where the harness writes the Builder's drop migrations (gitignored). */
-const DROP_MIGRATIONS_DIR = path.resolve("src/db/migrations/dynamic");
+/**
+ * Where the Builder writes an instance's migrations, a collection's delete
+ * among them: below the instance's own directory, one file per collection.
+ */
+const dropMigrationsDir = (t: TestNextly) =>
+  path.join(t.basePath, "src/db/migrations");
 
 let current: TestNextly | undefined;
 
@@ -83,24 +88,41 @@ const registryOf = (t: TestNextly) =>
 async function bootPair(dialect: TestDialect): Promise<TestNextly> {
   const t = await createTestNextly({
     dialect,
-    collections: [tags, notes],
-    fieldGroups: [metaGroup],
     localization: { locales: ["en", "de"], defaultLocale: "en" },
   });
+  current = t;
+  // Created through the Builder, which records each one's migration: a
+  // translated collection whose table no migration records is refused a
+  // Builder delete, with the steps to record it first. In development, as the
+  // Builder runs, so each save is applied with its translations table.
+  vi.stubEnv("NODE_ENV", "development");
+  // Their field group too, so every table they reach is one a migration records.
+  await dispatchComponents(
+    "createComponent",
+    {},
+    { slug: META, label: META, fields: metaGroup.fields }
+  );
+  for (const collection of [tags, notes]) {
+    await dispatchCollections(
+      {} as ServiceContainer,
+      "createCollection",
+      {},
+      {
+        name: collection.slug,
+        label: collection.slug,
+        localized: true,
+        fields: collection.fields,
+      }
+    );
+  }
+  vi.unstubAllEnvs();
   for (const collection of [TAGS, NOTES]) {
     await t.nextly.create({
       collection,
       data: { label: "kept", meta: { note: "n" } },
     });
   }
-  // Code-first rows are locked; the Builder's delete reaches only unlocked ones.
-  await t.adapter.update(
-    "dynamic_collections",
-    { locked: 0 },
-    { and: [{ column: "slug", op: "IN", value: [TAGS, NOTES] }] }
-  );
   clearRegistryRowCache();
-  current = t;
   return t;
 }
 
@@ -192,10 +214,14 @@ function failStatements(t: TestNextly, pattern: RegExp): () => number {
   return () => failed;
 }
 
-/** A DROP of exactly `table` (not its companion): quoted, then the statement's end. */
+/**
+ * A DROP of exactly `table` (not its companion): quoted, then the statement's
+ * end. `IF EXISTS` where the teardown drops it, without it where a written
+ * migration does.
+ */
 function dropOf(table: string): RegExp {
   return new RegExp(
-    `DROP TABLE IF EXISTS [\`"]${table}[\`"](\\s+CASCADE)?;?\\s*$`
+    `DROP TABLE (IF EXISTS )?[\`"]${table}[\`"](\\s+CASCADE)?;?\\s*$`
   );
 }
 
@@ -221,14 +247,23 @@ async function failureOf(attempt: Promise<unknown>): Promise<NextlyError> {
   return outcome;
 }
 
-/** Drop migrations written since `since` that name `table`. */
-function dropMigrationsNaming(table: string, since: number): string[] {
-  return readdirSync(DROP_MIGRATIONS_DIR).filter(name => {
-    const stamp = Number(name.split("_")[0]);
-    if (!(stamp >= since)) return false;
-    return readFileSync(path.join(DROP_MIGRATIONS_DIR, name), "utf8").includes(
-      table
-    );
+/**
+ * Migrations written since `since` that name `table`, by the time each file
+ * was written: a file's name carries its date, not a time to compare. A
+ * folder the Builder never created holds none.
+ */
+function dropMigrationsNaming(
+  t: TestNextly,
+  table: string,
+  since: number
+): string[] {
+  const dir = dropMigrationsDir(t);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter(name => {
+    if (!name.endsWith(".sql")) return false;
+    const file = path.join(dir, name);
+    if (statSync(file).mtimeMs < since) return false;
+    return readFileSync(file, "utf8").includes(table);
   });
 }
 
@@ -245,7 +280,7 @@ describeEachDialect("deleting collections together fails whole", dialect => {
     }
     expect(await stateOf(t, TAGS, TAGS_TABLE)).toEqual(INTACT);
     expect(await stateOf(t, NOTES, NOTES_TABLE)).toEqual(INTACT);
-    expect(dropMigrationsNaming(NOTES_TABLE, since)).toEqual([]);
+    expect(dropMigrationsNaming(t, NOTES_TABLE, since)).toEqual([]);
   }
 
   /** The delete run again without the failure: it writes its drop migration and removes both. */
@@ -257,7 +292,9 @@ describeEachDialect("deleting collections together fails whole", dialect => {
     if (development) vi.stubEnv("NODE_ENV", "development");
     await builderBulkDelete([TAGS, NOTES]);
     vi.unstubAllEnvs();
-    expect(dropMigrationsNaming(NOTES_TABLE, since).length).toBeGreaterThan(0);
+    expect(dropMigrationsNaming(t, NOTES_TABLE, since).length).toBeGreaterThan(
+      0
+    );
     for (const [slug, table] of [
       [TAGS, TAGS_TABLE],
       [NOTES, NOTES_TABLE],
@@ -306,7 +343,30 @@ describeEachDialect("deleting collections together fails whole", dialect => {
     await expectDeletingAgainFinishes(t, since, false);
   }, 120_000);
 
-  it("keeps both collections whole when, in development, dropping the second one's table fails", async () => {
+  it("refuses a development delete with an invalid lock timeout before it removes anything", async () => {
+    const t = await bootPair(dialect);
+    const since = Date.now();
+
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "soon");
+    const failure = await failureOf(builderBulkDelete([TAGS, NOTES]));
+    vi.unstubAllEnvs();
+
+    // Refused while the drop migrations are prepared, before the registry rows, the translations
+    // and the field-group values go: both collections stand as they were, on every dialect.
+    expect(failure.code).toBe("INVALID_INPUT");
+    expect(await stateOf(t, TAGS, TAGS_TABLE)).toEqual(INTACT);
+    expect(await stateOf(t, NOTES, NOTES_TABLE)).toEqual(INTACT);
+    expect(dropMigrationsNaming(t, NOTES_TABLE, since)).toEqual([]);
+    await expectDeletingAgainFinishes(t, since, true);
+  }, 120_000);
+
+  // In development the collections' registry rows and what they hold go in
+  // one transaction, and each table is then dropped by its written delete
+  // migration, the durable record `nextly migrate` applies on deploy. A drop
+  // that fails there leaves its collection unregistered with its table, its
+  // rows and its file in place: nothing else is lost.
+  it("leaves a table whose drop failed in development to its written delete migration", async () => {
     const t = await bootPair(dialect);
     const since = Date.now();
     const failed = failStatements(t, dropOf(NOTES_TABLE));
@@ -317,8 +377,27 @@ describeEachDialect("deleting collections together fails whole", dialect => {
     vi.restoreAllMocks();
 
     expect(failed()).toBe(1);
-    await expectNothingRemoved(t, since);
-    expectTheFailureSays(failure);
-    await expectDeletingAgainFinishes(t, since, true);
+    expect(failure.statusCode).toBe(500);
+    // The registry rows and what the collections held went in the delete's
+    // transaction, and TAGS's own file dropped its table.
+    expect(await stateOf(t, TAGS, TAGS_TABLE)).toEqual({
+      table: false,
+      rows: 0,
+      translations: 0,
+      fieldGroupValues: 0,
+      registry: false,
+    });
+    // NOTES keeps its table and its row, and its delete migration stays
+    // written: nothing else of it is lost.
+    expect(await stateOf(t, NOTES, NOTES_TABLE)).toEqual({
+      table: true,
+      rows: 1,
+      translations: 0,
+      fieldGroupValues: 0,
+      registry: false,
+    });
+    expect(dropMigrationsNaming(t, NOTES_TABLE, since).length).toBeGreaterThan(
+      0
+    );
   }, 120_000);
 });

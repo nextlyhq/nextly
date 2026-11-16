@@ -14,9 +14,12 @@ const SHA = n => String(n).repeat(40).slice(0, 40);
 const PR = "refs/pull/7/merge";
 const OTHER_PR = "refs/pull/8/merge";
 const MAIN = "refs/heads/main";
+const DEV = "refs/heads/dev";
 let nextId = 1;
 const cache = (ref, key, created, size = 1024 * 1024, version = "v1") => ({ id: nextId++, ref, key, created_at: created, size_in_bytes: size, version });
-const planned = caches => sweepPlan(caches).map(({ cache: entry, reason }) => `${entry.ref} ${entry.key} ${reason}`);
+/** The plan, as text, with both pull requests targeting `main` unless a case says otherwise. */
+const planned = (caches, bases = new Map([[PR, "main"], [OTHER_PR, "main"]])) =>
+  sweepPlan(caches, { bases }).map(({ cache: entry, reason }) => `${entry.ref} ${entry.key} ${reason}`);
 
 describe("familyOf", () => {
   it("drops a trailing commit or content hash in a namespace restored by prefix, and has no family for any other key", () => {
@@ -80,8 +83,22 @@ describe("sweepPlan", () => {
     expect(planned(caches)).toEqual([`${PR} ${key} a copy of main's`]);
   });
 
-  it("never deletes from main, the merge queue or a tag, however many keys of a family they hold", () => {
-    const refs = [MAIN, "refs/heads/gh-readonly-queue/main/pr-7-abc", "refs/tags/v1"];
+  it("deletes a pull request's copy of a key its base branch holds, and keeps its copy of another branch's", () => {
+    const fromDev = `pnpm-store-v1-Linux-X64-${"d".repeat(64)}`;
+    const fromMain = `pnpm-store-v1-Linux-X64-${"e".repeat(64)}`;
+    const caches = [cache(DEV, fromDev, "2026-10-27T01:00:00Z"), cache(MAIN, fromMain, "2026-10-27T01:00:00Z"), cache(PR, fromDev, "2026-10-27T05:00:00Z"), cache(PR, fromMain, "2026-10-27T05:00:00Z")];
+    // A pull request into dev cannot restore main's entries, so its copy of one is what it reads.
+    expect(planned(caches, new Map([[PR, "dev"]]))).toEqual([`${PR} ${fromDev} a copy of dev's`]);
+  });
+
+  it("deletes no copy of a pull request whose base is unknown", () => {
+    const key = `pnpm-store-v1-macOS-ARM64-${"b".repeat(64)}`;
+    const caches = [cache(MAIN, key, "2026-10-27T01:00:00Z"), cache(DEV, key, "2026-10-27T01:00:00Z"), cache(PR, key, "2026-10-27T05:00:00Z")];
+    expect(planned(caches, new Map())).toEqual([]);
+  });
+
+  it("never deletes from main, dev, the merge queue or a tag, however many keys of a family they hold", () => {
+    const refs = [MAIN, DEV, "refs/heads/gh-readonly-queue/main/pr-7-abc", "refs/tags/v1"];
     const caches = refs.flatMap(ref => [
       cache(ref, `turbo-v2-Linux-ci-${SHA(1)}`, "2026-10-27T01:00:00Z"),
       cache(ref, `turbo-v2-Linux-ci-${SHA(2)}`, "2026-10-27T02:00:00Z"),
@@ -125,7 +142,9 @@ function api(pages, deleteStatus = () => 204, states = {}) {
     const pull = /^repos\/[^/]+\/[^/]+\/pulls\/(\d+)$/.exec(path);
     if (pull) {
       const state = states[pull[1]];
-      return state === undefined ? { ok: false, status: 404, json: async () => ({}) } : { ok: true, status: 200, json: async () => ({ state }) };
+      return state === undefined
+        ? { ok: false, status: 404, json: async () => ({}) }
+        : { ok: true, status: 200, json: async () => ({ state, base: { ref: "dev" } }) };
     }
     const page = Number(/[?&]page=(\d+)/.exec(path)?.[1]);
     const answer = path.startsWith(`repos/${REPO}/actions/caches?per_page=100&page=`) ? pages[page - 1] : undefined;
@@ -184,6 +203,16 @@ describe("main", () => {
     expect(stub.deleted).toEqual([closed.id]);
   });
 
+  it("reads an open pull request's base, deleting its copy of that branch's key and keeping its copy of another's", async () => {
+    const fromDev = cache(DEV, `pnpm-store-v1-Linux-X64-${"d".repeat(64)}`, "2026-10-27T01:00:00Z");
+    const fromMain = cache(MAIN, `pnpm-store-v1-Linux-X64-${"e".repeat(64)}`, "2026-10-27T01:00:00Z");
+    const copyOfDev = cache(PR, fromDev.key, "2026-10-27T05:00:00Z");
+    const copyOfMain = cache(PR, fromMain.key, "2026-10-27T05:00:00Z");
+    const stub = api([{ total_count: 4, actions_caches: [fromDev, fromMain, copyOfDev, copyOfMain] }], () => 204, { 7: "open" });
+    expect((await run(stub)).code).toBe(0);
+    expect(stub.deleted).toEqual([copyOfDev.id]);
+  });
+
   it("fails when the list came back shorter than GitHub's total, after sweeping what it held", async () => {
     const a = cache(PR, `turbo-v2-Linux-ci-${SHA(1)}`, "2026-10-27T01:00:00Z");
     const b = cache(PR, `turbo-v2-Linux-ci-${SHA(2)}`, "2026-10-27T02:00:00Z");
@@ -203,9 +232,9 @@ describe("the sweep workflow", () => {
     expect(Object.keys(on).sort()).toEqual(["schedule", "workflow_dispatch"]);
   });
 
-  it("runs only on main, so a dispatch of another branch cannot run that branch's script with write access", () => {
+  it("runs only on dev and main, so a dispatch of another branch cannot run that branch's script with write access", () => {
     const [job] = Object.values(workflow.jobs);
-    expect(job.if).toBe("github.repository == 'nextlyhq/nextly' && github.ref == 'refs/heads/main'");
+    expect(job.if).toBe("github.repository == 'nextlyhq/nextly' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')");
   });
 
   it("grants actions: write to its one job only, and runs the sweep there", () => {

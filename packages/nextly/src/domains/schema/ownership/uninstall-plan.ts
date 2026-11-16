@@ -19,6 +19,22 @@ import { NextlyError } from "../../../errors/nextly-error";
 
 import type { OwnerRecord } from "./owner-registry";
 
+/**
+ * Something another owner built on, or into, the schema a full uninstall
+ * drops: a column, index, foreign key or check on the plugin's tables, a key
+ * or a relationship field elsewhere pointing into them, or an element that
+ * uses a column the plugin contributed to someone else's table.
+ */
+export interface UninstallDependent {
+  /** What it is, as the refusal names it: "column", "foreign key", "relationship field". */
+  kind: string;
+  name: string;
+  /** The table it is on, or the entity whose field it is. */
+  table: string;
+  /** Who owns it, as the refusal names them: "the app", "plugin sso". */
+  owner: string;
+}
+
 export interface UninstallInput {
   pluginName: string;
   /** Enabled plugins and what each declares a dependency on. */
@@ -32,12 +48,12 @@ export interface UninstallInput {
   /** This plugin's owner rows. */
   owned: readonly OwnerRecord[];
   /**
-   * ELEMENT rows on this plugin's tables that somebody else owns — an
-   * app-contributed index, say. A full uninstall drops the table, so the
-   * element goes with it; the plan lists it so the confirmation can say so
-   * instead of discovering it afterwards.
+   * What other owners built on or into the schema a full uninstall would
+   * drop, read by the command before anything changes. Any of it refuses a
+   * full uninstall: dropping it deletes another owner's data, which no
+   * consent from this plugin's operator can give away.
    */
-  foreignElements?: readonly OwnerRecord[];
+  dependents?: readonly UninstallDependent[];
   /** Each module's name and whether it has DOWN statements, in apply order. */
   modules: ReadonlyArray<{ name: string; reversible: boolean }>;
   /**
@@ -55,13 +71,6 @@ export interface UninstallPlan {
   downModules: string[];
   /** Tables the operator is about to lose. Empty when keeping data. */
   tablesDropped: string[];
-  /**
-   * Foreign-owned elements that go with those tables, as
-   * `<name> (<kind>, <owner>)`. Empty when keeping data.
-   */
-  elementsDropped: string[];
-  /** Ledger rows to supersede. */
-  supersedeFilenames: string[];
 }
 
 /**
@@ -80,11 +89,10 @@ export function planUninstall(input: UninstallInput): UninstallPlan {
       finalState: "orphaned",
       downModules: [],
       tablesDropped: [],
-      elementsDropped: [],
-      supersedeFilenames: [],
     };
   }
 
+  assertNothingOfOthersIsDropped(input);
   assertEveryAppliedModuleShipped(input);
   assertEveryModuleReversible(input);
 
@@ -101,13 +109,6 @@ export function planUninstall(input: UninstallInput): UninstallPlan {
     finalState: "uninstalled",
     downModules: reversed,
     tablesDropped: [...new Set(tableRows.map(row => row.tableName))],
-    elementsDropped: (input.foreignElements ?? []).map(
-      row =>
-        `${row.elementName ?? ""} (${row.elementKind ?? "element"}, ${row.migratedBy})`
-    ),
-    supersedeFilenames: reversed.map(
-      name => `plugin:${input.pluginName}/${name}`
-    ),
   };
 }
 
@@ -140,6 +141,38 @@ function assertNoEnabledDependents(input: UninstallInput): void {
     code: "PLUGIN_HAS_DEPENDENTS",
     publicMessage: `"${input.pluginName}" cannot be uninstalled while ${dependents.map(d => `"${d}"`).join(", ")} ${dependents.length === 1 ? "depends" : "depend"} on it. Uninstall ${dependents.length === 1 ? "it" : "those"} first, or remove ${dependents.length === 1 ? "it" : "them"} from the config.`,
     logContext: { plugin: input.pluginName, dependents },
+  });
+}
+
+/**
+ * Refuse a full uninstall that would drop something another owner built.
+ *
+ * A column the app added to the plugin's table goes with the table, with its
+ * values; a key elsewhere pointing in is stripped or blocks the drop,
+ * depending on the database; an index on a column the plugin contributed
+ * breaks when its DOWN removes the column. None of it is the plugin's to
+ * give away, so this refuses rather than asking for consent, and names
+ * everything at once so it can be cleared in one pass. Keeping the data
+ * drops nothing, so `--keep-data` is the way out that needs nobody else.
+ */
+function assertNothingOfOthersIsDropped(input: UninstallInput): void {
+  const found = input.dependents ?? [];
+  if (found.length === 0) return;
+  const named = found
+    .map(
+      dependent =>
+        `${dependent.kind} "${dependent.name}" on ${dependent.table} (${dependent.owner})`
+    )
+    .join("; ");
+  throw new NextlyError({
+    code: "PLUGIN_UNINSTALL_WOULD_DROP_OTHERS",
+    publicMessage:
+      `"${input.pluginName}" cannot be fully uninstalled: dropping its schema would take ${String(found.length)} thing(s) other owners built on it: ${named}. ` +
+      "Remove each from its owner's code (and migrate), or run the uninstall with --keep-data, which keeps the tables and drops nothing.",
+    logContext: {
+      plugin: input.pluginName,
+      dependents: found.map(dependent => ({ ...dependent })),
+    },
   });
 }
 

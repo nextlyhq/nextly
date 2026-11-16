@@ -79,13 +79,14 @@ jobs:
           # is anonymous. Making it private would turn every tag lookup into
           # "unknown" and this job into a daily exit 2, so restore the
           # credential in the same change.
-          # 🔴 Always the default branch, on every trigger. A `workflow_dispatch`
-          # from another branch or a tag would otherwise check that ref out, and
+          # 🔴 Always `main`, on every trigger. A `workflow_dispatch` from
+          # another branch or a tag would otherwise check that ref out, and
           # `github.sha` would name it too, so the job would grade an unreleased
           # branch manifest and file an upstream issue about a release `main`
-          # never declared. This workflow says it checks main; this is what
-          # makes that true.
-          ref: ${{ github.event.repository.default_branch || 'main' }}
+          # never declared. Named rather than read as the default branch: that
+          # is `dev`, where pull requests merge, and releases come from `main`.
+          # This workflow says it checks main; this is what makes that true.
+          ref: main
           persist-credentials: false
           # Full history, because a tag is judged by the version its target
           # commit declares. A shallow clone cannot read a commit older than its
@@ -115,17 +116,14 @@ jobs:
         id: check
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          # 🔴 The CHECKER comes from the default branch; the SUBJECT is passed
+          # 🔴 The CHECKER comes from `main`; the SUBJECT is passed
           # as an argument. Checking out the triggering commit would have run
           # whatever checker that commit carried, and commits older than this
           # feature carry none at all: `MODULE_NOT_FOUND` exits 1, which this
           # workflow reads as an unfinalized release and files an issue about.
           # Separating the two is what the script's ref argument is for, and it
           # is why the checkout above fetches full history.
-          SUBJECT: >-
-            ${{ github.event.workflow_run.head_sha
-                || github.event.repository.default_branch
-                || 'main' }}
+          SUBJECT: ${{ github.event.workflow_run.head_sha || 'main' }}
         run: |
           set +e
           report=$(node scripts/release/check-finalized.mjs "$SUBJECT" 2>&1)

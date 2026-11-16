@@ -37,7 +37,7 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
-import { toast } from "@admin/components/ui";
+import { toast } from "@admin/components/ui/toaster";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 import { singleApi, type SingleDocument } from "@admin/services/singleApi";
 import type { ApiSingle, UpdateSinglePayload } from "@admin/types/entities";
@@ -709,6 +709,13 @@ export function useUpdateSingleDocument(
      * serialize against and would only pay the wait.
      */
     scopeId?: string;
+    /**
+     * Asked as each update is sent: `true` sends it with `keepalive`, so the
+     * browser finishes it after the page is hidden or closed. A function
+     * rather than a flag, because whether the page is going away is known
+     * only at that moment. A body over 64 KB is sent as an ordinary request.
+     */
+    keepalive?: () => boolean;
   }
 ): UseMutationResult<SingleDocument, Error, Record<string, unknown>, unknown> {
   const queryClient = useQueryClient();
@@ -730,7 +737,10 @@ export function useUpdateSingleDocument(
     // i18n: route the save to the editor's active language so translatable values land on that
     // locale's companion row (shared columns still update). Omitted for non-localized singles.
     mutationFn: async (data: Record<string, unknown>) => {
-      return await singleApi.updateDocument(slug, data, { locale });
+      return await singleApi.updateDocument(slug, data, {
+        locale,
+        keepalive: options?.keepalive?.() === true,
+      });
     },
     onSuccess: () => {
       // Invalidate the document cache
@@ -741,6 +751,9 @@ export function useUpdateSingleDocument(
       void queryClient.invalidateQueries({
         queryKey: singleDocumentKeys.all(),
       });
+      // And the dashboard's reads, the Content overview's among them, which
+      // name who edited each Single last and when.
+      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     },
     // The editor reports the failure itself. A refusal because the Single was
     // removed from code also reads its schema again, so an editor opened

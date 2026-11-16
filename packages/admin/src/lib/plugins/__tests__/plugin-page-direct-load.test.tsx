@@ -43,9 +43,6 @@ vi.mock("@admin/context/providers/BrandingProvider", async importActual => ({
   >()),
   useBrandingStatus: () => brandingStatus,
 }));
-vi.mock("@admin/lib/plugins/component-registry", () => ({
-  autoRegisterPluginComponents: vi.fn(),
-}));
 
 const ADDRESS = "/admin/plugins/acme/reports";
 

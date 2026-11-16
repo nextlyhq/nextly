@@ -197,6 +197,31 @@ describe("NextlyError factories", () => {
     );
   });
 
+  it("forbidden without publicData serialises exactly as it always has, with no data key", () => {
+    const err = NextlyError.forbidden({ logContext: { reason: "no-grant" } });
+    expect(err.toResponseJSON("req_1")).toStrictEqual({
+      code: "FORBIDDEN",
+      message: "You don't have permission to perform this action.",
+      requestId: "req_1",
+    });
+  });
+
+  it("forbidden carries publicData into the response when given", () => {
+    const err = NextlyError.forbidden({
+      publicData: { reason: "no-permission", permission: "approve-posts" },
+    });
+    expect(err.publicData).toEqual({
+      reason: "no-permission",
+      permission: "approve-posts",
+    });
+    expect(err.toResponseJSON("req_1")).toStrictEqual({
+      code: "FORBIDDEN",
+      message: "You don't have permission to perform this action.",
+      requestId: "req_1",
+      data: { reason: "no-permission", permission: "approve-posts" },
+    });
+  });
+
   it("validation returns 400 with errors[] in publicData", () => {
     const err = NextlyError.validation({
       errors: [

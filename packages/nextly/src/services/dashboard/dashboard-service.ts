@@ -40,6 +40,7 @@ import {
   updateVerdict,
 } from "../../domains/widgets/reader-content";
 import type { ActivityEvent } from "../../domains/widgets/result";
+import { rethrowIfRuleCouldNotRun } from "../../errors/rule-could-not-run";
 import { entryHeading } from "../../lib/entry-heading";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
@@ -482,7 +483,13 @@ function updateDecision(
   caller: ReadCaller
 ): (slug: string) => Promise<boolean> {
   const verdict = updateVerdict(caller);
-  return slug => verdict(slug).catch(() => false);
+  return slug =>
+    verdict(slug).catch((error: unknown) => {
+      // A rule that could not run never answered: the request ends with
+      // that, not with a row offering no Edit as though refused.
+      rethrowIfRuleCouldNotRun(error);
+      return false;
+    });
 }
 
 /** Who made `save` and what it did, as a row of the table carries them. */
@@ -886,7 +893,7 @@ export class DashboardService extends BaseService {
   ): Promise<CollectionInfo[]> {
     try {
       const registryService = container.get<{
-        getAllCollections: () => Promise<
+        getAllCollectionsForRead: () => Promise<
           Array<{
             slug: string;
             tableName: string;
@@ -912,9 +919,10 @@ export class DashboardService extends BaseService {
 
       // A collection kept off the dashboard is neither listed nor counted here, for any caller,
       // a super-admin included; see `keptOffDashboard`.
-      const collections = (await registryService.getAllCollections()).filter(
-        c => !leftOut("collection", c, keptOff?.slugs)
-      );
+      // From the registry cache: read again only once the registry changes.
+      const collections = (
+        await registryService.getAllCollectionsForRead()
+      ).filter(c => !leftOut("collection", c, keptOff?.slugs));
       if (keptOff) keptOff.complete = true;
       const mapped = collections.map(c => ({
         slug: c.slug,
@@ -943,7 +951,7 @@ export class DashboardService extends BaseService {
   ): Promise<RegisteredSingle[]> {
     try {
       const singleRegistryService = container.get<{
-        getAllSingles: () => Promise<
+        getAllSinglesForRead: () => Promise<
           Array<
             RegisteredSingle & {
               /** Who defines it, read with `admin` by the kept-off rule. */
@@ -955,9 +963,9 @@ export class DashboardService extends BaseService {
       }>("singleRegistryService");
 
       // Kept off the dashboard, for the reason the collections above are.
-      const singles = (await singleRegistryService.getAllSingles()).filter(
-        single => !leftOut("single", single, keptOff?.slugs)
-      );
+      const singles = (
+        await singleRegistryService.getAllSinglesForRead()
+      ).filter(single => !leftOut("single", single, keptOff?.slugs));
       if (keptOff) keptOff.complete = true;
       return filterByResource(scope, singles, s => String(s.slug));
     } catch (error) {
@@ -1100,6 +1108,9 @@ export class DashboardService extends BaseService {
           keptOffCollections: keptOff.collection.slugs,
         });
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with a figure of no recent changes.
+      rethrowIfRuleCouldNotRun(error);
       this.logger.error("Failed to count recent changes", {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -1207,6 +1218,9 @@ export class DashboardService extends BaseService {
       });
       return result.total;
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with a count of zero.
+      rethrowIfRuleCouldNotRun(error);
       // A collection whose table is not yet created, or whose read the caller
       // is refused outright, contributes zero rather than failing the whole
       // dashboard -- the same posture `getRecentFromCollection` takes.
@@ -1319,6 +1333,88 @@ export class DashboardService extends BaseService {
     /** How many rows to draw; clamped as every widget query's limit is. */
     limit?: number;
   }): Promise<ContentTable> {
+    const { subjects, trail, byKind } = await this.contentSubjects(options);
+    // The trail's latest saves first: they decide which subjects are read for
+    // the ranking, and name who saved the drawn rows.
+    const recent = await this.latestSaves(trail, MAX_WIDGET_LIMIT);
+    const context = await this.rowContext(options.caller, trail, recent);
+    const { saved } = context;
+    const dated = await mapBounded(
+      rankingOrder(subjects, saved).slice(0, RANKING_READS),
+      READ_CONCURRENCY,
+      subject => this.withOwnUpdate(subject, options.caller)
+    );
+    // Ranked by the instant each row will show (`updateFields`), from the
+    // window's latest change of it, so the order is the Updated column's.
+    const shownAt = (subject: DatedSubject) =>
+      updateFields(
+        subject.own,
+        changeOf(subject, saved.get(subjectKey(subject.kind, subject.slug)))
+      ).updatedAt;
+    const page = inTableOrder(dated, shownAt).slice(
+      0,
+      effectiveWidgetLimit(options.limit)
+    );
+    // Bounded as the ranking's reads are, since each collection's row is four
+    // reads more.
+    const built = await mapBounded(page, READ_CONCURRENCY, async subject => ({
+      ...subject,
+      row: await this.contentRow(subject, context),
+    }));
+    return {
+      // In the order of the instants the rows show: a drawn row dated by a
+      // change past the window shows an instant the window could not rank it
+      // by, and is placed by what it shows.
+      rows: inTableOrder(built, item => item.row.updatedAt).map(
+        item => item.row
+      ),
+      total: subjects.length,
+      byKind,
+    };
+  }
+
+  /**
+   * Every row of the Content table this caller may read, unpaged: what the
+   * admin's Content overview lists, one row per collection and Single, in the
+   * registries' order.
+   *
+   * Each row is built exactly as a drawn row of the dashboard's table is
+   * (`contentRow`): the entries and drafts through the access-enforced count,
+   * the newest entry through the ordinary read, the create and update
+   * decisions a real write makes, and who saved it last from the one bounded
+   * read of the trail. Unlike the card, nothing is ranked or left out: the
+   * overview lists every collection and Single, so its reads grow with the
+   * install, at most `READ_CONCURRENCY` subjects at once, all in this one
+   * request rather than one request per row.
+   */
+  async getContentOverview(options: {
+    scope: ReadableResources;
+    caller: ReadCaller;
+  }): Promise<ContentTableRow[]> {
+    const { subjects, trail } = await this.contentSubjects(options);
+    const recent = await this.latestSaves(trail, MAX_WIDGET_LIMIT);
+    const context = await this.rowContext(options.caller, trail, recent);
+    return mapBounded(subjects, READ_CONCURRENCY, async subject =>
+      this.contentRow(
+        await this.withOwnUpdate(subject, options.caller),
+        context
+      )
+    );
+  }
+
+  /**
+   * The collections and Singles this caller may see on the dashboard, as the
+   * Content table's subjects, with the trail's view of them: one registry read
+   * of each kind, whatever the table then draws of them.
+   */
+  private async contentSubjects(options: {
+    scope: ReadableResources;
+    caller: ReadCaller;
+  }): Promise<{
+    subjects: ContentSubject[];
+    trail: TrailSubjects;
+    byKind: ContentTable["byKind"];
+  }> {
     const keptOffCollections: KeptOffRead = {
       slugs: new Set(),
       complete: false,
@@ -1363,49 +1459,26 @@ export class DashboardService extends BaseService {
         complete: keptOffCollections.complete,
       },
     };
-    // The trail's latest saves first: they decide which subjects are read for
-    // the ranking, and name who saved the drawn rows.
-    const recent = await this.latestSaves(trail, MAX_WIDGET_LIMIT);
-    const saved = latestSaveOf(recent.saves);
-    const dated = await mapBounded(
-      rankingOrder(subjects, saved).slice(0, RANKING_READS),
-      READ_CONCURRENCY,
-      subject => this.withOwnUpdate(subject, options.caller)
-    );
-    // Ranked by the instant each row will show (`updateFields`), from the
-    // window's latest change of it, so the order is the Updated column's.
-    const shownAt = (subject: DatedSubject) =>
-      updateFields(
-        subject.own,
-        changeOf(subject, saved.get(subjectKey(subject.kind, subject.slug)))
-      ).updatedAt;
-    const page = inTableOrder(dated, shownAt).slice(
-      0,
-      effectiveWidgetLimit(options.limit)
-    );
-    const context: RowContext = {
-      caller: options.caller,
+    return {
+      subjects,
+      trail,
+      byKind: { collection: collections.length, single: singles.length },
+    };
+  }
+
+  /** What building a row needs beside its subject, decided once per load. */
+  private async rowContext(
+    caller: ReadCaller,
+    trail: TrailSubjects,
+    recent: { saves: RecentEdit[]; complete: boolean }
+  ): Promise<RowContext> {
+    return {
+      caller,
       trail,
       complete: recent.complete,
-      saved,
-      mayCreate: await this.createDecision(options.caller),
-      mayUpdate: updateDecision(options.caller),
-    };
-    // Bounded as the ranking's reads are, since each collection's row is four
-    // reads more.
-    const built = await mapBounded(page, READ_CONCURRENCY, async subject => ({
-      ...subject,
-      row: await this.contentRow(subject, context),
-    }));
-    return {
-      // In the order of the instants the rows show: a drawn row dated by a
-      // change past the window shows an instant the window could not rank it
-      // by, and is placed by what it shows.
-      rows: inTableOrder(built, item => item.row.updatedAt).map(
-        item => item.row
-      ),
-      total: subjects.length,
-      byKind: { collection: collections.length, single: singles.length },
+      saved: latestSaveOf(recent.saves),
+      mayCreate: await this.createDecision(caller),
+      mayUpdate: updateDecision(caller),
     };
   }
 
@@ -1570,7 +1643,12 @@ export class DashboardService extends BaseService {
     return slug =>
       disabled.has(slug)
         ? Promise.resolve(false)
-        : verdict(slug).catch(() => false);
+        : verdict(slug).catch((error: unknown) => {
+            // A rule that could not run never answered: the request ends
+            // with that, not with no + drawn as though refused.
+            rethrowIfRuleCouldNotRun(error);
+            return false;
+          });
   }
 
   /**
@@ -1632,7 +1710,7 @@ export class DashboardService extends BaseService {
         // `entryHeading` walks the nominated field and then every conventional
         // name in `COMMON_TITLE_FIELDS`, but the Direct
         // API's `select` is a real projection (`applyFieldSelection` in
-        // `collection-query-service.ts` keeps only `id`, the system
+        // `shared/lib/field-selection.ts` keeps only `id`, the system
         // timestamps, and whatever key is named here) -- so `title` and
         // `name` reach the resolver only when they are asked for by name.
         // Without them the fallback candidates are simply absent from every
@@ -1691,6 +1769,9 @@ export class DashboardService extends BaseService {
         };
       });
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with the collection contributing nothing to the feed.
+      rethrowIfRuleCouldNotRun(error);
       // A collection whose table is not yet created, or which the caller
       // may not read at all, contributes nothing rather than failing the
       // feed.

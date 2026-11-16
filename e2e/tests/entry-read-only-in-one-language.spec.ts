@@ -87,7 +87,9 @@ test("edits the English and opens the Spanish read-only, showing no editor while
 
   // The page waits for the Spanish answer: no editor, so nothing that saves,
   // is shown on the English answer's word.
-  await expect(page.getByText("Setting up your workspace")).toBeVisible();
+  // Its outline, by CSS: it may not be drawn yet, and the suite's test-id
+  // locators see visible elements only.
+  await expect(page.locator('[data-testid="screen-outline"]')).toBeAttached();
   await expect(note()).toHaveCount(0);
   await expect(save()).toHaveCount(0);
 

@@ -24,6 +24,8 @@
  */
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
+import type { RequestActor } from "../../../auth/request-actor";
+import type { HookExemptRead } from "../../../services/collections/trust-grant";
 import type { RequestContext } from "../../../shared/types";
 
 /** What the entry service receives about the call it is being asked to make. */
@@ -61,6 +63,20 @@ export interface ForwardedContext {
    */
   locale: string | undefined;
   fallbackLocale: string | false | undefined;
+  /**
+   * A grant waiving the read hooks of the collections one plugin declared.
+   * Forwarded like the rest, and meaningful only to the query service, which
+   * honours it for a collection the grant covers and ignores it otherwise. A
+   * write receives and ignores it, so a write keeps every hook.
+   */
+  hookExemptRead: HookExemptRead | undefined;
+  /**
+   * Who a write is recorded under, when the context names one: the actor of
+   * the plugin route request a facade write was made for. Present only when
+   * set, so an actor passed beside the context is never cleared by an
+   * absent one.
+   */
+  actor?: RequestActor;
 }
 
 /** Read what the entry service needs off a {@link RequestContext}, whole. */
@@ -75,5 +91,7 @@ export function forwardedFromContext(
     request: context.request,
     locale: context.locale,
     fallbackLocale: context.fallbackLocale,
+    hookExemptRead: context.hookExemptRead,
+    ...(context.actor === undefined ? {} : { actor: context.actor }),
   };
 }

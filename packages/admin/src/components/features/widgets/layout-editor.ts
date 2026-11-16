@@ -28,6 +28,7 @@ import {
   type WidgetSizeBounds,
 } from "nextly/config";
 
+import { freshId } from "@admin/lib/fresh-id";
 import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
 
 /** The four ways a card moves from its menu. */
@@ -264,6 +265,18 @@ export function removePlacement(
   );
 }
 
+/**
+ * Takes a card out of the list altogether, as if it had never been added: for a card added this
+ * session whose adding the reader called off. Unlike `removePlacement`, nothing stays to be put
+ * back or saved as removed.
+ */
+export function discardPlacement(
+  placements: readonly WidgetPlacement[],
+  placementId: string
+): WidgetPlacement[] {
+  return placements.filter(placement => placement.id !== placementId);
+}
+
 /** Puts a removed card back, exactly where it was. */
 export function restorePlacement(
   placements: readonly WidgetPlacement[],
@@ -319,24 +332,11 @@ export function setPlacementConfig(
 }
 
 /**
- * A fresh placement id.
- *
- * `crypto.randomUUID` where it exists, and a counter-plus-random fallback where
- * it does not — jsdom without a secure context, and older browsers, both leave
- * it undefined. The fallback does not need to be unguessable: this id is opaque
- * within one arrangement and is never a secret, so uniqueness is the whole
- * requirement.
+ * A fresh placement id: opaque within one arrangement and never a secret, so
+ * the admin's one fresh-id maker (`freshId`) serves it.
  */
-let fallbackCounter = 0;
 export function newPlacementId(): string {
-  const generator = globalThis.crypto;
-  if (typeof generator?.randomUUID === "function") {
-    return generator.randomUUID();
-  }
-  fallbackCounter += 1;
-  return `placement-${Date.now()}-${fallbackCounter}-${Math.random()
-    .toString(36)
-    .slice(2, 10)}`;
+  return freshId("placement");
 }
 
 /**
@@ -411,7 +411,7 @@ export function addPlacement(
  * one order and the form rebuilt in another would compare as changed and leave
  * Save enabled on a card nobody touched.
  */
-function sameConfig(a: unknown, b: unknown): boolean {
+export function sameConfig(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (Array.isArray(a) && Array.isArray(b)) return sameItems(a, b);
   if (isRecord(a) && isRecord(b)) return sameEntries(a, b);

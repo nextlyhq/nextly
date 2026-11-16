@@ -1,6 +1,6 @@
 /**
- * `generate:types --check` as CI reads it: the exit status is the verdict (0 agrees, 1 out of
- * date, 2 could not check), and the report's first line says which before any detail. The config
+ * `generate:types --check` as CI reads it: the exit status is the verdict (0 agrees, 2 out of
+ * date, 1 could not check), and the report's first line says which before any detail. The config
  * loader is stubbed; the map's files are real, in a folder of their own.
  */
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -113,7 +113,7 @@ describe("the check's verdict", () => {
     expect(printed).toBe("");
   });
 
-  it("exits 1 when it does not, the verdict first, each disagreement, then the fix", async () => {
+  it("exits 2 when it does not, the verdict first, each disagreement, then the fix", async () => {
     await list(["@gone/old/admin#Chart"]);
     expect(await runComponentMapCheck({ cwd: root }, context())).toBe(
       COMPONENT_MAP_CHECK_EXIT.outOfDate
@@ -130,7 +130,7 @@ describe("the check's verdict", () => {
     );
   });
 
-  it("exits 1 when the map checks its widgets against another config than the one loaded", async () => {
+  it("exits 2 when the map checks its widgets against another config than the one loaded", async () => {
     vi.mocked(loadConfig).mockResolvedValueOnce({
       config: {
         plugins: [shop],
@@ -148,7 +148,7 @@ describe("the check's verdict", () => {
     );
   });
 
-  it("exits 2 when the config does not load, never reading as an answer about the map", async () => {
+  it("exits 1 when the config does not load, never reading as an answer about the map", async () => {
     vi.mocked(loadConfig).mockRejectedValueOnce(new Error("config threw"));
     expect(await runComponentMapCheck({ cwd: root }, context())).toBe(
       COMPONENT_MAP_CHECK_EXIT.couldNotCheck

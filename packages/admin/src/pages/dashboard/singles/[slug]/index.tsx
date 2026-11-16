@@ -16,7 +16,7 @@
  * @since 1.0.0
  */
 
-import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
+import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import type { FieldConfig } from "nextly/config";
 import type React from "react";
@@ -25,27 +25,32 @@ import { useCallback } from "react";
 import { usePinAction } from "@admin/components/features/dashboard/pin-action";
 import type { DocumentViewMount } from "@admin/components/features/entries/EntryForm";
 import { documentViewMount } from "@admin/components/features/entries/EntryForm/document-view-mount";
+import { DOCUMENT_COLUMN_INSET } from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
 import { DocumentViewGate } from "@admin/components/features/entries/EntryForm/DocumentViewGate";
 import {
   isRemovedFromCode,
   removedEntityHasNoTable,
 } from "@admin/components/features/entries/removed-from-code-notice";
 import { RemovedFromCodeNotice } from "@admin/components/features/entries/RemovedFromCodeNotice";
-import { useAddToReleaseAction } from "@admin/components/features/releases/AddToReleaseAction";
+import { useScheduleDocumentAction } from "@admin/components/features/releases/ScheduleDocumentAction";
 import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
-import { useSchedulePublishAction } from "@admin/components/features/releases/SchedulePublishAction";
 import {
   SingleForm,
   type SingleSchema,
 } from "@admin/components/features/singles";
-import { CONTENT_PAGE_MEASURE } from "@admin/components/layout/content-measure";
+import {
+  CONTENT_MEASURE_LENGTH,
+  CONTENT_PAGE_MEASURE,
+} from "@admin/components/layout/content-measure";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
+import { EditorOutline } from "@admin/components/shared/loading-frame/outlines";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { usePlaceStartupReads } from "@admin/hooks/queries/usePluginRoute";
 import { useSingleEditorDocument } from "@admin/hooks/queries/useSingleEditorDocument";
 import {
   singleDocumentKeys,
@@ -61,6 +66,7 @@ import {
 } from "@admin/hooks/useSharedFieldsRecovery";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
+import { staleVersionOf } from "@admin/lib/document-version";
 import { navigateTo } from "@admin/lib/navigation";
 import { documentViewMissing } from "@admin/lib/plugins/document-view-registry";
 
@@ -84,89 +90,15 @@ interface SingleEditPageProps {
  * Loading skeleton for the Single edit page.
  */
 function SingleEditPageSkeleton() {
+  // The editor's outline, the one the frame drew for this address while the
+  // session was checked: the bar's controls at once, then the fields and the
+  // side panel at the editor's own geometry.
   return (
-    <PageContainer width={CONTENT_PAGE_MEASURE}>
-      {/* Accessibility: Announce loading state to screen readers */}
-      <div className="sr-only" role="status" aria-live="polite">
-        Loading...
-      </div>
-
-      {/* Cancels the page's vertical inset only. The horizontal half would
-          pull this skeleton past the measured column, and the editor that
-          replaces it would then jump 64px narrower. */}
-      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-my-8">
-        {/* Main Content */}
-        {/* `min-w-0` as the editor that replaces this carries it: without it
-            this pane will not shrink and pushes the rail past the column. */}
-        <div className="flex-1 min-w-0 space-y-6 lg:p-8 pt-6">
-          {/* Breadcrumbs skeleton */}
-          <div className="mb-6">
-            <Skeleton className="h-5 w-64" />
-          </div>
-
-          {/* Header skeleton */}
-          <div className="mb-8">
-            <Skeleton className="h-10 w-48 mb-2" />
-            <Skeleton className="h-5 w-96" />
-          </div>
-
-          <div className="bg-card  border border-border rounded-lg p-6">
-            <div className="space-y-6">
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-32 w-full" />
-            </div>
-          </div>
-        </div>
-
-        {/* Sidebar */}
-        <div className="w-full lg:w-[360px] shrink-0  border-t border-border lg:border-t-0 lg:border-l border-border lg:border-border bg-card flex flex-col relative z-10">
-          <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] flex flex-col">
-            {/* Sidebar Header/Actions Skeleton */}
-            <div className="p-6  border-b border-border space-y-3">
-              <div className="flex gap-3">
-                <Skeleton className="h-10 flex-1" />
-                <Skeleton className="h-10 flex-1" />
-              </div>
-            </div>
-
-            {/* Sidebar Content Skeleton */}
-            <div className="p-6 space-y-8">
-              {/* Sidebar Fields / SEO */}
-              <div className="space-y-4">
-                <Skeleton className="h-6 w-32" />
-                <div className="space-y-2">
-                  <Skeleton className="h-12 w-full" />
-                  <Skeleton className="h-12 w-full" />
-                </div>
-              </div>
-
-              {/* Document Info Skeleton */}
-              <div className="pt-6  border-t border-border">
-                <div className="bg-primary/5 px-6 py-3 mb-4">
-                  <Skeleton className="h-4 w-32" />
-                </div>
-                <div className="px-6 space-y-4">
-                  <div className="space-y-1">
-                    <Skeleton className="h-3 w-20" />
-                    <Skeleton className="h-4 w-full" />
-                  </div>
-                  <div className="space-y-1">
-                    <Skeleton className="h-3 w-16" />
-                    <Skeleton className="h-4 w-2/3" />
-                  </div>
-                  <div className="space-y-1">
-                    <Skeleton className="h-3 w-24" />
-                    <Skeleton className="h-4 w-2/3" />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </PageContainer>
+    <EditorOutline
+      sideWidth={360}
+      columnClassName={DOCUMENT_COLUMN_INSET}
+      columnStyle={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+    />
   );
 }
 
@@ -203,12 +135,28 @@ export default function SingleEditPage({
   params,
 }: SingleEditPageProps): React.ReactElement {
   const slug = params?.slug;
+  // What the parts plugins add to this page read as they open, started as
+  // the page first renders, as the entry editor's are.
+  // The page's own place, and the form inside its editor, whose document id
+  // is not known until the Single has loaded: a read naming it is not
+  // started, and its part reads it on mounting.
+  const partsStartup = usePlaceStartupReads([
+    { place: "single.edit", ids: slug === undefined ? null : { single: slug } },
+    {
+      place: "entry.form",
+      ids: slug === undefined ? null : { kind: "single", slug, entryId: null },
+    },
+  ]);
 
   // i18n: active content language for this editor. `undefined` = the app's default locale (the
   // backend resolves it). Switching triggers a refetch (useSingleDocument is keyed by locale) and
   // routes saves to the chosen language. Inert for non-localized singles.
   const { locale, changeLocale, seedFromLocale, clearSeed } = useEditorLocale();
-  const { defaultLocale, enabled: localizationEnabled } = useLocalization();
+  const {
+    defaultLocale,
+    enabled: localizationEnabled,
+    locales,
+  } = useLocalization();
 
   // Fetch Single schema (field definitions)
   const {
@@ -231,6 +179,7 @@ export default function SingleEditPage({
     error: documentError,
     sourceDoc,
     isNonDefaultLocale,
+    latest,
   } = useSingleEditorDocument({
     slug,
     locale,
@@ -248,20 +197,13 @@ export default function SingleEditPage({
    * produces is only read once those guards pass; while the schema or the
    * document is still loading it reports no action, which is correct.
    */
-  // The reader's own pin of this Single, offered beside "Add to release".
+  // The reader's own pin of this Single, offered beside "Schedule…".
   const pin = usePinAction(
     document && slug ? { targetType: "single", targetSlug: slug } : null
   );
-  const release = useAddToReleaseAction({
-    scopeKind: "single",
-    scopeSlug: slug,
-    entryId: document?.id,
-    lifecycleEnabled: schema?.status,
-    onDefaultLocale: !isNonDefaultLocale,
-  });
-  // The Publish split's other way to publish: at a time, in a release of its
-  // own named after the Single.
-  const schedule = useSchedulePublishAction({
+  // Schedule…, on the Publish split: on its own at a time, with a release or
+  // in a new one. A release of its own is named after the Single.
+  const schedule = useScheduleDocumentAction({
     scopeKind: "single",
     scopeSlug: slug,
     entryId: document?.id,
@@ -272,6 +214,11 @@ export default function SingleEditPage({
     // With no drafts, a save of a live Single is published at once.
     savesGoLive:
       schema?.draftsEnabled !== true && document?.status === "published",
+    // A release moves every language of a translated Single together.
+    languages:
+      localizationEnabled && schema?.localized === true
+        ? locales.map(each => each.label)
+        : undefined,
   });
 
   // Update mutation — routes the save to the active language's companion row.
@@ -351,7 +298,8 @@ export default function SingleEditPage({
     );
   }
 
-  // Error state
+  // Error state: no Single to show. A failed re-read of the Single on screen
+  // keeps the editor, read-only until a read succeeds.
   if (error) {
     return (
       <PageContainer width={CONTENT_PAGE_MEASURE}>
@@ -442,10 +390,11 @@ export default function SingleEditPage({
           component reacts to that. A page that declared its own measure here
           would keep the two-pane translation surface inside the content
           measure while the entry editor beside it took the whole panel. */}
-        <MeasuredPageFrame>
-          {release.dialog}
+        <MeasuredPageFrame contentCarriesMeasure>
           {schedule.dialog}
           <SingleForm
+            revealOutline={<SingleEditPageSkeleton />}
+            revealWaiting={partsStartup.pending}
             /* Under the editor's header, for the reason the entry editor
              gives. */
             documentBanner={
@@ -490,9 +439,6 @@ export default function SingleEditPage({
                     ...(schedule.contributed === null
                       ? []
                       : [schedule.contributed]),
-                    ...(release.contributed === null
-                      ? []
-                      : [release.contributed]),
                     ...(pin === null ? [] : [pin]),
                   ]
             }
@@ -518,6 +464,7 @@ export default function SingleEditPage({
               navigateTo(buildRoute(ROUTES.SINGLE_API, { slug }))
             }
             documentView={singleDocumentView(params)}
+            latest={latest}
           />
         </MeasuredPageFrame>
       </QueryErrorBoundary>
@@ -570,13 +517,23 @@ function useSingleSaveFailure(args: {
   });
   return useCallback(
     (error: unknown, form: RefusedForm | undefined) => {
+      // A save made from an older version: the editor's conflict tells the
+      // author who changed it and offers what to do, so no toast says it
+      // twice. The Single is read again, so the current version reaches the
+      // editor, whose form keeps the refused edits until the author chooses.
+      if (staleVersionOf(error)) {
+        void queryClient.invalidateQueries({
+          queryKey: singleDocumentKeys.detail(slug),
+        });
+        return;
+      }
       if (!recover(error, form)) {
         toast.error(
           error instanceof Error ? error.message : "Failed to save changes"
         );
       }
     },
-    [recover]
+    [recover, queryClient, slug]
   );
 }
 

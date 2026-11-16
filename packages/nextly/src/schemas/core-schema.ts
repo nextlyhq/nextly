@@ -52,11 +52,22 @@ import {
   ONE_TIME_SECRETS_TABLE,
   oneTimeSecretsTables,
 } from "./one-time-secrets";
+import {
+  PLUGIN_EVENT_DELIVERIES_TABLE,
+  PLUGIN_EVENTS_TABLE,
+  pluginEventsTables,
+} from "./plugin-events";
 import { PLUGIN_SETTINGS_TABLE, pluginSettingsTables } from "./plugin-settings";
 import { previewLinksTables } from "./preview-links";
 import { rbacTables } from "./rbac";
 import { RBAC_EPOCH_TABLE, rbacEpochTables } from "./rbac-epoch";
+import {
+  RECEIVED_WEBHOOKS_TABLE,
+  receivedWebhooksTables,
+} from "./received-webhooks";
 import { releasesTables } from "./releases";
+import { reviewStatesTables } from "./review-states";
+import { scheduleWindowsTables } from "./schedule-windows";
 import { schemaEventsTables } from "./schema-events";
 import { SCHEMA_OWNERS_TABLE, schemaOwnersTables } from "./schema-owners";
 import {
@@ -70,6 +81,7 @@ import { versionViewsTables } from "./version-views";
 import { versionsTables } from "./versions";
 import { webhookTables } from "./webhooks";
 import { widgetLayoutTables } from "./widget-layout";
+import { workflowSettingsTables } from "./workflow-settings";
 
 // =============================================================================
 // Public API — populated incrementally by Plan A tasks 4–14.
@@ -198,6 +210,15 @@ export function getCoreSchema(
     // mint, each stored only as a keyed hash. Declared here for the same
     // reason as its neighbours.
     ...Object.values(oneTimeSecretsTables(dialect)),
+    // `nextly_received_webhooks` — the webhooks plugins have received, one
+    // claim per plugin, provider and delivery, with no payload kept. Declared
+    // here for the same reason as its neighbours.
+    ...Object.values(receivedWebhooksTables(dialect)),
+    // `nextly_plugin_events` and `nextly_plugin_event_deliveries` — the
+    // durable events plugins record, and one delivery of each to each
+    // subscriber, apart from the webhook outbox. Declared here for the same
+    // reason as their neighbours.
+    ...Object.values(pluginEventsTables(dialect)),
     // `nextly_limit_store` — the counts of the database limit store, used only
     // when a site selects it. Declared here for the same reason as its
     // neighbours: a table outside this set is never created on a real
@@ -238,6 +259,14 @@ export function getCoreSchema(
     // document and part. Nothing marks before the table exists, so
     // core-reconcile creating it is sufficient, as for `nextly_versions`.
     ...Object.values(versionViewsTables(dialect)),
+    // A workflow's review state per document and part, and what admins change for each workflow.
+    // Nothing writes them before they exist, so core-reconcile creating them is sufficient, as for
+    // `nextly_versions`.
+    ...Object.values(reviewStatesTables(dialect)),
+    ...Object.values(workflowSettingsTables(dialect)),
+    // A plugin schedule's windows. Nothing writes them before they exist, so
+    // core-reconcile creating them is sufficient.
+    ...Object.values(scheduleWindowsTables(dialect)),
     // The record of content events and the parts each one involved. Nothing
     // records into them before they exist, so core-reconcile creating them is
     // sufficient, as for `nextly_versions`.
@@ -340,6 +369,9 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   DELETED_PRINCIPALS_TABLE,
   PLUGIN_SETTINGS_TABLE,
   ONE_TIME_SECRETS_TABLE,
+  RECEIVED_WEBHOOKS_TABLE,
+  PLUGIN_EVENTS_TABLE,
+  PLUGIN_EVENT_DELIVERIES_TABLE,
   LIMIT_STORE_TABLE,
   CACHE_TAG_EXPIRIES_TABLE,
   SPENT_CHALLENGES_TABLE,
@@ -361,6 +393,9 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_i18n_archive",
   "nextly_versions",
   "nextly_version_views",
+  "nextly_review_states",
+  "nextly_workflow_settings",
+  "nextly_schedule_windows",
   "nextly_content_events",
   "nextly_content_event_parts",
   "nextly_preview_links",

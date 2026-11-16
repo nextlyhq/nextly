@@ -1,17 +1,17 @@
 /**
- * Which of the five shared chart colours a chart's groups take, and the order a
- * chart of groups draws them in.
+ * What colour a chart's groups take, and the order a chart of groups draws them in.
  *
- * A chart of statuses colours each bar by its status's pinned slot, so
- * Published is the same colour on every card and a status is recognised at a
- * glance. Slot 5 is red, the hue the theme uses for errors and destructive
- * actions, and is archived's alone. Any other chart of groups, an arbitrary
- * select or a column of text, draws every bar in slot 1: five colours cannot
- * name arbitrary values, and a card of them would be colour that says nothing.
- * So is a chart that mixes a status-like value with others, since the
- * status's colour would claim a meaning the field does not have. Either way
- * the name and count beside each bar are what identify it, never the colour
- * alone.
+ * A chart of statuses draws each bar in its status's own colour, the solid of
+ * the admin's status tokens, so Published is the same green on every card and
+ * beside every status chip: done in the success colour, scheduled in the info
+ * colour, changes waiting to be published in the warning colour, and a draft or
+ * an archived entry, which mark nothing to act on, in the muted ink. Any other
+ * chart of groups, an arbitrary select or a column of text, draws every bar in
+ * shared chart slot 1: five colours cannot name arbitrary values, and a card of
+ * them would be colour that says nothing. So is a chart that mixes a
+ * status-like value with others, since the status's colour would claim a
+ * meaning the field does not have. Either way the name and count beside each
+ * bar are what identify it, never the colour alone.
  *
  * @module components/features/widgets/charts/chart-colour
  */
@@ -21,33 +21,50 @@ import { chartColour, type ChartSlot } from "@nextlyhq/ui/format";
 // The slots and their tokens are the theme's, so a server names them as the admin does.
 export { chartColour, type ChartSlot };
 
-/** The status values' fixed slots. */
-const STATUS_SLOTS: Readonly<Record<string, ChartSlot>> = {
-  scheduled: 1,
-  draft: 2,
-  published: 3,
-  changes: 4,
-  archived: 5,
+/**
+ * A status's mark: the solid of its status token, or `neutral`, the muted ink, for a status that
+ * marks nothing to act on.
+ */
+export type StatusMark = "success" | "warning" | "info" | "neutral";
+
+/** What a chart's mark is drawn in: a shared chart slot, or a status's own mark. */
+export type ChartMark = ChartSlot | StatusMark;
+
+/** The status values' marks. */
+const STATUS_MARKS: Readonly<Record<string, StatusMark>> = {
+  scheduled: "info",
+  draft: "neutral",
+  published: "success",
+  changes: "warning",
+  archived: "neutral",
 };
 
-/** A status's pinned slot, or `undefined` for a value that is no status. */
-function statusSlot(value: string | null): ChartSlot | undefined {
+/** A status's mark, or `undefined` for a value that is no status. */
+function statusMark(value: string | null): StatusMark | undefined {
   return value !== null &&
-    Object.prototype.hasOwnProperty.call(STATUS_SLOTS, value)
-    ? STATUS_SLOTS[value]
+    Object.prototype.hasOwnProperty.call(STATUS_MARKS, value)
+    ? STATUS_MARKS[value]
     : undefined;
 }
 
 /**
- * The slot of each of one chart's groups, by their stored values, in order:
- * every status's pinned slot where all of them are statuses, and slot 1 for
- * all of them otherwise. `null`, the group with no value, is no status.
+ * The mark of each of one chart's groups, by their stored values, in order:
+ * every status's own mark where all of them are statuses, and slot 1 for all
+ * of them otherwise. `null`, the group with no value, is no status.
  */
-export function chartSlotsFor(values: readonly (string | null)[]): ChartSlot[] {
-  const pinned = values.map(statusSlot);
-  return pinned.every((slot): slot is ChartSlot => slot !== undefined)
-    ? pinned
-    : values.map((): ChartSlot => 1);
+export function chartMarksFor(values: readonly (string | null)[]): ChartMark[] {
+  const marks = values.map(statusMark);
+  return marks.every((mark): mark is StatusMark => mark !== undefined)
+    ? marks
+    : values.map((): ChartMark => 1);
+}
+
+/** The token a mark is drawn in: its slot's, its status's solid, or the muted ink. */
+export function markColour(mark: ChartMark): string {
+  if (typeof mark === "number") return chartColour(mark);
+  return mark === "neutral"
+    ? "var(--nx-muted-foreground)"
+    : `var(--nx-${mark}-solid)`;
 }
 
 /** A group of a grouped result, as a chart of groups reads it. */

@@ -33,7 +33,7 @@ const OVER_TIME_SETTINGS = {
   chartStyle: OVER_TIME_CHART_STYLE,
 };
 
-/** A made-up month of entries a day, rising, for the add gallery's tile and the preview page. */
+/** A made-up month of entries a day, rising, for the preview board. */
 const SAMPLE_DAILY = [
   2, 3, 2, 4, 3, 5, 4, 4, 6, 5, 7, 6, 5, 8, 7, 9, 8, 7, 10, 9, 11, 10, 12, 11,
   10, 13, 12, 14, 13, 15,
@@ -51,9 +51,11 @@ const SAMPLE_OVER_TIME: OverTimeWidgetData = {
 
 export const overTimeWidget = defineWidget({
   id: CORE_WIDGET_ID.overTime,
+  // Drawn beside its name in the add panel.
+  icon: "TrendingUp",
   title: "Over time",
-  description:
-    "How many entries a collection gained in each day, week or month of a range.",
+  // One line, as the add panel lists it.
+  description: "Entries added per day, week or month.",
   offered: "per-collection",
   // Half the row by default; from a third, where its chart still reads, to the full width.
   size: {

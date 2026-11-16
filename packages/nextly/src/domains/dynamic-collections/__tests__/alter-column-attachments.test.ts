@@ -67,7 +67,7 @@ function hasUniqueness(
 /** A plain (non-unique) index on this column, in either generator's spelling. */
 function hasPlainIndex(sql: string, column: string): boolean {
   return new RegExp(
-    `CREATE INDEX (?:IF NOT EXISTS )?\\S+ ON ${TABLE}\\(${column}\\)`
+    `CREATE INDEX (?:IF NOT EXISTS )?\\S+ ON ${TABLE} ?\\(${column}\\)`
   ).test(sql);
 }
 
@@ -218,17 +218,9 @@ describe.each(DIALECTS)(
       expect(added.notNull).toBe(created.notNull);
       expect(added.indexed).toBe(created.indexed);
 
-      if (definition.unique !== true && created.unique) {
-        // A one-to-one's uniqueness is the one attachment the two paths cannot yet agree on,
-        // and the disagreement is older than either of them: CREATE writes it inline, where the
-        // dialect names the index; the desired schema the diff compares against declares a
-        // NON-unique index for the same field. A named constraint here would be a third
-        // spelling that the next diff proposes dropping. Asserted rather than skipped, so
-        // converging them makes this fail and say so.
-        expect(added.unique).toBe(false);
-      } else {
-        expect(added.unique).toBe(created.unique);
-      }
+      // A one-to-one's uniqueness included: the desired schema declares the same named index
+      // for it as for a field marked unique, and both paths emit that one spelling.
+      expect(added.unique).toBe(created.unique);
 
       if (dialect === "sqlite" && created.referencesTable !== null) {
         // SQLite attaches a foreign key only in a CREATE TABLE: there is no statement that adds
@@ -244,7 +236,7 @@ describe.each(DIALECTS)(
 
 describe("the attachments the ADD path used to lose", () => {
   it.each(DIALECTS)(
-    "does not add a third spelling of a one-to-one's uniqueness (%s)",
+    "adds a one-to-one's uniqueness under the name the desired schema declares (%s)",
     dialect => {
       const oneToOne = field({
         name: "profile",
@@ -257,9 +249,10 @@ describe("the attachments the ADD path used to lose", () => {
         [oneToOne],
         { tableHasRows: false }
       );
-      // The desired schema declares a non-unique index for this field, so a named unique
-      // constraint here is drift the next diff proposes dropping.
-      expect(alterAttachments(sql, "profile").unique).toBe(false);
+      // The desired schema declares `uq_<table>_<column>` for a one-to-one as for a field marked
+      // unique, so the column it adds carries that index and the next diff plans nothing for it.
+      expect(alterAttachments(sql, "profile").unique).toBe(true);
+      expect(sql).toContain(`uq_${TABLE}_profile`);
     }
   );
 
@@ -274,17 +267,8 @@ describe("the attachments the ADD path used to lose", () => {
           { tableHasRows: false }
         );
 
-      // MySQL renders an unbounded `text` field as TEXT, which it can key in neither spelling.
-      // Because it commits each DDL statement separately, attempting the column and then its
-      // constraint would leave the column WITHOUT the guarantee, so the add is refused outright
-      // rather than half-applied. The other dialects key it and attach the constraint.
-      if (dialect === "mysql") {
-        const reported = refusalMessages(add);
-        expect(reported).toHaveLength(1);
-        expect(reported[0]).toContain("UNIQUE_NOT_ENFORCEABLE_ON_DIALECT");
-        return;
-      }
-
+      // A unique `text` field that states no width is the bounded default on MySQL, which MySQL
+      // can key, so every dialect keys it and attaches the constraint.
       expect(alterAttachments(add(), "sku").unique).toBe(true);
     }
   );
@@ -343,7 +327,7 @@ describe("the attachments the ADD path used to lose", () => {
       );
       const matches = sql.match(
         new RegExp(
-          `CREATE INDEX (?:IF NOT EXISTS )?\\S+ ON ${TABLE}\\(rank\\)`,
+          `CREATE INDEX (?:IF NOT EXISTS )?\\S+ ON ${TABLE} ?\\(rank\\)`,
           "g"
         )
       );
@@ -379,8 +363,28 @@ describe("an index the dialect can actually accept", () => {
     );
     // Without a key length MySQL rejects the statement outright: "BLOB/TEXT column used in key
     // specification without a key length".
-    expect(sql).toContain("ON dc_probe(note(191))");
+    expect(sql).toContain("ON dc_probe (note(191))");
   });
+
+  // Every TEXT and BLOB size needs the key length, not only the one spelled `text`: an index
+  // toggled on a column the database holds as MEDIUMTEXT is keyed by the same prefix.
+  it.each(["mediumtext", "longtext", "tinytext", "mediumblob"])(
+    "indexes a mysql %s column it toggles by prefix",
+    liveType => {
+      const sql = unquote(
+        service("mysql").generateAlterTableMigration(
+          TABLE,
+          [field({ name: "note", type: "text" })],
+          [field({ name: "note", type: "text", index: true })],
+          {
+            tableHasRows: false,
+            liveColumnTypes: new Map([["note", liveType]]),
+          }
+        )
+      );
+      expect(sql).toContain("ON dc_probe (note(191))");
+    }
+  );
 
   it("indexes a mysql varchar column whole, so the prefix is not applied to everything", () => {
     const sql = unquote(
@@ -397,7 +401,7 @@ describe("an index the dialect can actually accept", () => {
         { tableHasRows: false }
       )
     );
-    expect(sql).toContain("ON dc_probe(author)");
+    expect(sql).toContain("ON dc_probe (author)");
     expect(sql).not.toContain("author(191)");
   });
 
@@ -412,7 +416,7 @@ describe("an index the dialect can actually accept", () => {
           { tableHasRows: false }
         )
       );
-      expect(sql).toContain("ON dc_probe(note)");
+      expect(sql).toContain("ON dc_probe (note)");
     }
   );
 
@@ -467,7 +471,7 @@ describe("an index the dialect can actually accept", () => {
           { tableHasRows: false }
         )
       );
-      expect(sql).toContain("ON dc_probe(payload)");
+      expect(sql).toContain("ON dc_probe (payload)");
     }
   );
 

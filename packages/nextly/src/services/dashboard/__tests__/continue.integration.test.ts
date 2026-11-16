@@ -288,7 +288,10 @@ function save(
   when: Date
 ) {
   return written(t, when, () =>
-    handlerOf(t).updateEntry({ ...asPerson(person, collection), entryId }, data)
+    handlerOf(t).updateEntry(
+      { ...asPerson(person, collection), entryId },
+      { ...data, _overwrite: true }
+    )
   );
 }
 
@@ -499,7 +502,7 @@ describe.each(getConfiguredTestDialects())(
       await written(t, at(1), () =>
         singles.update(
           ABOUT,
-          { headline: "Draft words" },
+          { headline: "Draft words", _overwrite: true },
           { overrideAccess: true, actor: { type: "user", id: ANA.id } }
         )
       );
@@ -530,6 +533,7 @@ describe.each(getConfiguredTestDialects())(
             headline: "Live",
             hero: { heading: "Live", subheading: "Sub" },
             status: "published",
+            _overwrite: true,
           },
           by(BEN)
         )
@@ -538,7 +542,7 @@ describe.each(getConfiguredTestDialects())(
       await written(t, at(20), () =>
         singles.update(
           LANDING,
-          { hero: { heading: "Pending", subheading: "Sub" } },
+          { hero: { heading: "Pending", subheading: "Sub" }, _overwrite: true },
           by(ANA)
         )
       );
@@ -550,7 +554,11 @@ describe.each(getConfiguredTestDialects())(
       const [echo] = await written(t, at(10), () =>
         singles.update(
           LANDING,
-          { status: "published", hero: { heading: "Pending" } },
+          {
+            status: "published",
+            hero: { heading: "Pending" },
+            _overwrite: true,
+          },
           by(BEN)
         )
       );
@@ -561,14 +569,14 @@ describe.each(getConfiguredTestDialects())(
       await written(t, at(5), () =>
         singles.update(
           LANDING,
-          { hero: { heading: "Again", subheading: "Sub" } },
+          { hero: { heading: "Again", subheading: "Sub" }, _overwrite: true },
           by(ANA)
         )
       );
       const [edit] = await written(t, at(1), () =>
         singles.update(
           LANDING,
-          { status: "published", hero: { heading: "Ben's" } },
+          { status: "published", hero: { heading: "Ben's" }, _overwrite: true },
           by(BEN)
         )
       );
@@ -664,7 +672,13 @@ describe.each(getConfiguredTestDialects())(
         actor: { type: "user", id: ANA.id },
       };
       expect(
-        (await singles.update(HOME, { headline: "Hi" }, actor)).success
+        (
+          await singles.update(
+            HOME,
+            { headline: "Hi", _overwrite: true },
+            actor
+          )
+        ).success
       ).toBe(true);
       const outboxBefore = (await t.adapter.select("nextly_events")).length;
       // The control: with neither on, the first save recorded nothing either,
@@ -673,7 +687,11 @@ describe.each(getConfiguredTestDialects())(
       expect(outboxBefore).toBe(0);
 
       const [row] = await written(t, at(1), () =>
-        singles.update(HOME, { hero: { caption: "New caption" } }, actor)
+        singles.update(
+          HOME,
+          { hero: { caption: "New caption" }, _overwrite: true },
+          actor
+        )
       );
 
       // 🔴 A component-only edit: compared as raw rows it changes nothing, as
@@ -777,7 +795,7 @@ describe.each(getConfiguredTestDialects())(
       await written(t, at(5), () =>
         handlerOf(t).updateEntry(
           { ...asPerson(ANA, INTL), entryId: id, locale: "fr" },
-          { title: "Titre FR" }
+          { title: "Titre FR", _overwrite: true }
         )
       );
       // Ana's latest save of it, recorded in French: the row this case reads.

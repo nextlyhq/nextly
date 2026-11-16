@@ -8,10 +8,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { act, render, screen, within } from "@admin/__tests__/utils";
 
-const { barProps, paneProps, released } = vi.hoisted(() => ({
+const { barProps, paneProps, released, siteLocales } = vi.hoisted(() => ({
   barProps: vi.fn(),
   paneProps: vi.fn(),
   released: vi.fn(),
+  // The site's languages; none unless a case configures them.
+  siteLocales: { list: [] as { code: string; label: string }[] },
 }));
 
 vi.mock("@admin/components/features/entries/EntryForm/DocumentBar", () => ({
@@ -32,10 +34,11 @@ vi.mock("@admin/components/features/entries/PreviewMode/PreviewPanes", () => ({
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({
     enabled: true,
-    locales: [],
+    locales: siteLocales.list,
     defaultLocale: "en",
     fallback: true,
-    getLocale: () => undefined,
+    getLocale: (code: string) =>
+      siteLocales.list.find(locale => locale.code === code),
   }),
 }));
 vi.mock("@admin/hooks/queries/useReleases", async importOriginal => ({
@@ -95,10 +98,76 @@ const dockedPanel = () =>
 beforeEach(() => {
   vi.clearAllMocks();
   window.localStorage.clear();
+  siteLocales.list = [];
 });
 afterEach(() => vi.restoreAllMocks());
 
 describe("the Single editor's document panel", () => {
+  // The docked rail carries the language panel whenever the panel is docked,
+  // so the Single's pending shared change is said there too, not only in the
+  // inline panel the docked layout hides.
+  it("says in the docked panel while the Single's shared fields hold unpublished changes", () => {
+    siteLocales.list = [
+      { code: "en", label: "English" },
+      { code: "de", label: "German" },
+    ];
+    const withShared = (pending: boolean) =>
+      ({
+        id: "s1",
+        title: "Hello",
+        status: "published",
+        _sharedChangesPending: pending,
+        _translations: {
+          en: { translated: true, status: "published" },
+          de: { translated: true, status: "published" },
+        },
+      }) as never;
+    const { unmount } = render(
+      <SingleForm
+        schema={schema}
+        document={withShared(true)}
+        locale="de"
+        onSubmit={vi.fn()}
+      />
+    );
+    expect(
+      within(dockedPanel()!).getByRole("status", {
+        name: "Shared changes pending",
+      })
+    ).toBeInTheDocument();
+    // And the inline panel, kept in the page while the docked layout hides
+    // it, says it too: both read the one answer.
+    expect(
+      screen.getAllByRole("status", {
+        name: "Shared changes pending",
+        hidden: true,
+      })
+    ).toHaveLength(2);
+    unmount();
+
+    // The control: the same docked panel without a pending shared change.
+    render(
+      <SingleForm
+        schema={schema}
+        document={withShared(false)}
+        locale="de"
+        onSubmit={vi.fn()}
+      />
+    );
+    expect(dockedPanel()).toBeInTheDocument();
+    expect(
+      within(dockedPanel()!).queryByRole("status", {
+        name: "Shared changes pending",
+      })
+    ).toBeNull();
+    expect(
+      screen.queryAllByRole("status", {
+        name: "Shared changes pending",
+        hidden: true,
+      })
+    ).toHaveLength(0);
+  });
+
   it("reads Status, Publishing and Details beside the fields, addressing the Single's releases by its slug", () => {
     renderEditor();
     const sections = within(dockedPanel()!)
@@ -115,6 +184,68 @@ describe("the Single editor's document panel", () => {
       scopeSlug: "landing-page",
       entryId: "s1",
     });
+  });
+
+  // The entry's status is the language being edited's own, not the main
+  // row's. The plausible broken implementation reads the main row, so a
+  // German nobody has published reads "published" because English is.
+  it("shows the status of the language being edited, not the default's", () => {
+    siteLocales.list = [
+      { code: "en", label: "English" },
+      { code: "de", label: "German" },
+    ];
+    const published = {
+      id: "s1",
+      title: "Hello",
+      status: "published",
+      _translations: {
+        en: { translated: true, status: "published" },
+        de: { translated: false },
+      },
+    } as never;
+    render(
+      <SingleForm
+        schema={schema}
+        document={published}
+        locale="de"
+        onSubmit={vi.fn()}
+      />
+    );
+
+    expect(lastBar().documentStatus).toMatchObject({ status: "draft" });
+    // German has no content of its own: it is not a draft yet, as the
+    // Languages panel's "not translated" says of it.
+    expect(screen.getByRole("region", { name: "Status" })).toHaveTextContent(
+      "The German version isn't translated or published yet."
+    );
+  });
+
+  it("calls a language with its own unpublished content a draft", () => {
+    siteLocales.list = [
+      { code: "en", label: "English" },
+      { code: "de", label: "German" },
+    ];
+    const drafted = {
+      id: "s1",
+      title: "Hello",
+      status: "published",
+      _translations: {
+        en: { translated: true, status: "published" },
+        de: { translated: true, status: "draft" },
+      },
+    } as never;
+    render(
+      <SingleForm
+        schema={schema}
+        document={drafted}
+        locale="de"
+        onSubmit={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("region", { name: "Status" })).toHaveTextContent(
+      "The German version is a draft, not published yet."
+    );
   });
 
   it("folds while the preview is open, and closes the preview when it is shown again", () => {

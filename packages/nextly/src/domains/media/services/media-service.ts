@@ -51,6 +51,8 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
+import { visitorReadsSystemResource } from "../../../auth/resource-readable";
+import { SYSTEM_READ_POLICY } from "../../../domains/auth/system-write-policy";
 import type { RetentionRunner } from "../../../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../../../domains/webhooks/after-drain";
 import { isUnscopedRecordingActive } from "../../../domains/webhooks/recording-activation";
@@ -91,8 +93,15 @@ import {
   type MediaView,
   type Media as LegacyMedia,
 } from "../../../types/media";
+import {
+  copyOfMedia,
+  mediaCopyStorage,
+  mediaIdOfCopySource,
+  type MediaCopy,
+  type MediaCopySource,
+} from "../copies/media-copies";
 import type { MediaLibraryCounts } from "../media-library-query";
-import type { DeleteClaim } from "../pending-delete";
+import type { DeleteClaim, PendingMediaDeletes } from "../pending-delete";
 import { withMediaRevalidationBatch } from "../revalidate-media";
 import type { MediaFilesRecord } from "../stored-files";
 import type {
@@ -628,6 +637,81 @@ export class MediaService {
   }
 
   /**
+   * A resized copy of an image, by its address, at the allowed width nearest
+   * `width`: made the first time it is fetched and kept beside the original.
+   * `null` when no copy can be had, and the original is to be used: an
+   * address that is not a media item's, an image type that is not resized, a
+   * storage that cannot keep copies, or an install without the image library.
+   *
+   * Reads like `findById`, so a missing item is NOT_FOUND. Whoever calls it
+   * has decided the caller may read the item; the copy route serves it only
+   * to whoever may read the item.
+   *
+   * @experimental
+   */
+  async copyOf(
+    source: MediaCopySource,
+    width: number,
+    context: RequestContext = {}
+  ): Promise<MediaCopy | null> {
+    const id = mediaIdOfCopySource(source);
+    if (id === undefined) return null;
+    let item: MediaFile;
+    try {
+      item = await this.findById(id, context);
+    } catch (error) {
+      // An address naming an item that is gone is used as it is, like any
+      // other address that is not a media item's; an id asked for directly
+      // is not found, as `findById` answers.
+      if ("url" in source && NextlyError.isNotFound(error)) return null;
+      throw error;
+    }
+    // A copy's address is on the public media route, which serves copies
+    // only while a visitor may read media. Where one may not, the address
+    // could never load, so the original is used as it is.
+    if (
+      !(await visitorReadsSystemResource(
+        SYSTEM_READ_POLICY.media.read.resource
+      ))
+    ) {
+      return null;
+    }
+    return await copyOfMedia(item, width, {
+      storage: mediaCopyStorage(),
+      processor: this.imageProcessor,
+      logger: this.logger,
+    });
+  }
+
+  /**
+   * Several media files by id, in one read: each file found, once, in the
+   * order its id was first asked for; an id with no file has none. Judged
+   * by the caller as `findById` is: this answers what it is asked.
+   *
+   * @param mediaIds - The ids, at most a page of them
+   * @param context - Request context
+   * @returns The files found
+   */
+  async findByIds(
+    mediaIds: readonly string[],
+    _context: RequestContext
+  ): Promise<MediaFile[]> {
+    const asked = [...new Set(mediaIds)];
+    this.logger.debug("Finding media by ids", { count: asked.length });
+    const result = await this.legacyMediaService.getMediaByIds(asked);
+    if (!result.success || result.data === null) {
+      throw this.mapLegacyErrorToNextlyError(
+        { ...result, statusCode: result.statusCode, data: null },
+        { entity: "media" }
+      );
+    }
+    const found = new Map(
+      result.data.map(row => [row.id, this.mapToMediaFile(row)] as const)
+    );
+    return asked.flatMap(id => found.get(id) ?? []);
+  }
+
+  /**
    * List media files with pagination and filtering
    *
    * @param options - Query options (pagination, search, filters)
@@ -685,6 +769,19 @@ export class MediaService {
    */
   async countLibrary(_context: RequestContext): Promise<MediaLibraryCounts> {
     return this.legacyMediaService.countLibrary();
+  }
+
+  /**
+   * @experimental Whether anything uses the item: a document's field, or an
+   * avatar or logo that keeps its address. In use whenever that cannot be
+   * known yet (no usage record, or one not built for older content), so a
+   * caller deleting unused items never deletes on a guess.
+   */
+  // Reached through the plugin facade's read list (`PLUGIN_MEDIA_READS`),
+  // picked by name, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async isInUse(mediaId: string): Promise<boolean> {
+    return this.legacyMediaService.isInUse(mediaId);
   }
 
   /**
@@ -807,6 +904,33 @@ export class MediaService {
 
     // The delete committed a media.deleted outbox row; drain and prune it.
     await this.afterWrite();
+  }
+
+  /**
+   * Delete a media file now and remove its stored files durably: {@link delete},
+   * with the files recorded as left to remove in the delete's own
+   * transaction and the finalising job queued there, so a removal storage
+   * refuses, or one a stopped worker never started, is tried again until the
+   * files are gone (`PendingMediaDeletes.deleteNow`). What a plugin's
+   * `ctx.services.media.delete` runs.
+   *
+   * @throws NextlyError if deletion fails, not-found for an item already gone.
+   */
+  async deleteDurably(
+    mediaId: string,
+    context: RequestContext,
+    actor?: RequestActor
+  ): Promise<void> {
+    // Loaded when an item is deleted, not with the service.
+    const { bootedPendingDeletes } = await import("../booted-pending-deletes");
+    // Named by its type, the class whose method is called below.
+    const pending: PendingMediaDeletes = bootedPendingDeletes();
+    await pending.deleteNow(
+      mediaId,
+      actorForWrite(actor, context.user),
+      // The files go once the delete is durable, as an ordinary delete's do.
+      effect => this.legacyMediaService.whenCommitted(effect)
+    );
   }
 
   /**

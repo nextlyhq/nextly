@@ -14,7 +14,9 @@
  * export { GET, PATCH, DELETE } from 'nextly/api/email-providers-detail';
  * ```
  *
- * Auth is a header-only presence check; real verification lives downstream.
+ * Auth is the canonical route gate: a verified session or API key plus the
+ * permission each handler names, the same model the dispatcher's catch-all
+ * router enforces.
  *
  * @module api/email-providers-detail
  */
@@ -45,7 +47,9 @@ async function getEmailProviderService(): Promise<EmailProviderService> {
 /**
  * GET handler for retrieving a single email provider by ID.
  *
- * Requires authentication. Returns provider with masked configuration.
+ * Requires authentication. Returns the provider with masked configuration
+ * and its sending domain's status, the same document the catch-all router
+ * serves the admin.
  *
  * Response Codes:
  * - 200 OK: Provider retrieved successfully
@@ -63,7 +67,9 @@ export const GET = withErrorHandler(
 
     const { id } = await context.params;
     const service = await getEmailProviderService();
-    const provider = await service.getProvider(id);
+    // One lookup, so the record and the domain status cannot describe
+    // different saved states.
+    const provider = await service.getProviderWithDomainStatus(id);
 
     return respondDoc(provider);
   }

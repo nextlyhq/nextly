@@ -185,7 +185,11 @@ describe("GET /api/forms/:slug", () => {
     await current!.nextly.update({
       collection: "forms",
       id: (existing.items[0] as { id: string }).id,
-      data: { status: "closed", closedMessage: "Applications closed." },
+      data: {
+        status: "closed",
+        closedMessage: "Applications closed.",
+        _overwrite: true,
+      },
     });
 
     const res = await handlers.GET(
@@ -234,6 +238,30 @@ describe("POST /api/forms/:slug/submit", () => {
     };
     expect(body.message).toBe("Got it, thanks.");
     expect(body.submissionId).toEqual(expect.any(String));
+  });
+
+  it("keeps the page it was sent from, without its query", async () => {
+    const handlers = await bootWithForm(CONTACT);
+
+    const res = await handlers.POST(
+      new Request("http://localhost/api/forms/contact/submit", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          referer: "https://acme.test/contact?ref=ana%40mail.test#form",
+        },
+        body: JSON.stringify({ data: { message: "hello" } }),
+      }),
+      params("forms", "contact", "submit")
+    );
+
+    expect(res.status).toBe(201);
+    const { submissionId } = (await res.json()) as { submissionId: string };
+    const stored = (await current!.nextly.findByID({
+      collection: "form-submissions",
+      id: submissionId,
+    })) as { page?: string | null };
+    expect(stored.page).toBe("https://acme.test/contact");
   });
 
   it("answers 400 when the body carries no data object", async () => {
@@ -308,7 +336,7 @@ describe("POST /api/forms/:slug/submit?locale=", () => {
     await current.nextly.update({
       collection: "pages",
       id: pageId,
-      data: { slug: "merci" },
+      data: { slug: "merci", _overwrite: true },
       locale: "fr",
     });
     await current.nextly.create({

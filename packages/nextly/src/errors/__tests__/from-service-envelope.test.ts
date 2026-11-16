@@ -110,6 +110,36 @@ describe("validation issues reach the caller in either envelope shape", () => {
     ]);
   });
 
+  it("keeps the language each issue is in", () => {
+    // A publish of several languages refused in each names, per issue, the language it is in:
+    // two issues on one field would otherwise be indistinguishable.
+    const err = errorFromServiceEnvelope({
+      statusCode: 400,
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          {
+            path: "title",
+            code: "CUSTOM",
+            message: "Not allowed.",
+            locale: "es",
+          },
+          {
+            path: "title",
+            code: "CUSTOM",
+            message: "Not allowed.",
+            locale: "fr",
+          },
+        ],
+      },
+    });
+
+    expect((err.publicData as { errors: unknown[] }).errors).toEqual([
+      { path: "title", code: "CUSTOM", message: "Not allowed.", locale: "es" },
+      { path: "title", code: "CUSTOM", message: "Not allowed.", locale: "fr" },
+    ]);
+  });
+
   it("prefers the envelope's own errors when a write path lifted them", () => {
     // The write path normalises the legacy `{field}` key on the way out, so its
     // array is the more canonical of the two when both are present.

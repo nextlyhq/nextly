@@ -372,13 +372,14 @@ const SERVICE_CALLS: Record<
   create: (c, slug, _id, opts) => c.createEntry(slug, { title: "made" }, opts),
   "new-pub": (c, slug, _id, opts) =>
     c.createEntry(slug, { title: "made", status: "published" }, opts),
+  // Access is under test, not versions: every write overwrites.
   update: (c, slug, id, opts) =>
-    c.updateEntry(slug, id, { title: "changed" }, opts),
+    c.updateEntry(slug, id, { title: "changed", _overwrite: true }, opts),
   delete: (c, slug, id, opts) => c.deleteEntry(slug, id, opts),
   publish: (c, slug, id, opts) =>
-    c.updateEntry(slug, id, { status: "published" }, opts),
+    c.updateEntry(slug, id, { status: "published", _overwrite: true }, opts),
   unpublish: (c, slug, id, opts) =>
-    c.updateEntry(slug, id, { status: "draft" }, opts),
+    c.updateEntry(slug, id, { status: "draft", _overwrite: true }, opts),
   list: async (c, slug, _id, opts) =>
     probesRead(
       (await c.listEntries(slug, { where: PROBES_WHERE }, opts)).data.map(
@@ -458,6 +459,9 @@ function probePlugin() {
         })),
         {
           method: "GET" as const,
+          // The handler asks the caller's own access, which is what this
+          // world measures.
+          checksAccess: true as const,
           path: "/can/:slug/:action",
           handler: async (_req: Request, ctx: PluginRouteContext) => {
             const may: unknown = await ctx.caller?.can(
@@ -471,6 +475,9 @@ function probePlugin() {
         },
         {
           method: "GET" as const,
+          // The handler asks the caller's own access, which is what this
+          // world measures.
+          checksAccess: true as const,
           path: "/service/:slug/:action",
           handler: (req: Request, ctx: PluginRouteContext) =>
             outcome(() =>
@@ -744,14 +751,15 @@ async function seedCollections(
     });
   }
   for (const rule of RULES) {
+    // Seeded over whatever each Single holds.
     await t.nextly.updateSingle({
       slug: singleOf(rule, setup),
-      data: { headline: "probe" },
+      data: { headline: "probe", _overwrite: true },
     });
     // Its status is set before each publish or unpublish is asked.
     await t.nextly.updateSingle({
       slug: pubSingleOf(rule, setup),
-      data: { headline: "probe", status: "draft" },
+      data: { headline: "probe", status: "draft", _overwrite: true },
     });
   }
   return seeded;

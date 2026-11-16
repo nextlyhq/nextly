@@ -306,7 +306,10 @@ export function addressSnakeForm(address: string): string {
  * Single's from every collection's and Single's, a field group's from every
  * other field group's.
  */
-function sharesNamespace(kind: AddressKind, other: AddressKind): boolean {
+export function sharesNamespace(
+  kind: AddressKind,
+  other: AddressKind
+): boolean {
   return (kind === "fieldGroup") === (other === "fieldGroup");
 }
 
@@ -424,7 +427,7 @@ type Slugged = ReadonlyArray<{ slug: string; dbName?: string }>;
 type Registered = ReadonlyArray<{ slug: string; tableName?: string }>;
 
 /** The table a configured entity is stored in, as each kind's resolver names it. */
-function configuredTable(
+export function configuredTable(
   kind: AddressKind,
   entity: { slug: string; dbName?: string }
 ): string {

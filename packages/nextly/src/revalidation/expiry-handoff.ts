@@ -18,7 +18,15 @@ import { consoleLogger } from "../shared/types";
 
 /** Takes tags a request could not expire, to expire them from outside it. */
 export interface ExpiryHandoff {
-  handOff(tags: string[], reason: string): void | Promise<void>;
+  /**
+   * Resolves `true` only when the tags are recorded where every instance reads
+   * them, so they outlast this process. Anything else (nothing, `false`) says
+   * this process keeps them at most, and loses them if it stops first.
+   */
+  handOff(
+    tags: string[],
+    reason: string
+  ): void | boolean | Promise<void | boolean>;
 }
 
 /**

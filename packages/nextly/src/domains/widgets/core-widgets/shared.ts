@@ -14,13 +14,15 @@ import { MAX_WIDGET_ROWS } from "../query-limits";
 import { WIDGET_TABS, type WidgetTab } from "../sources";
 
 /**
- * A list card's "Number of items", from 1 to the most rows a card draws
+ * A list card's "Number of entries", from 1 to the most rows a card draws
  * (`MAX_WIDGET_ROWS`), so the editor never offers rows the card would not draw.
- * Keyed `limit` by every card that declares it; each card's `load` reads it to
- * size the rows it asks for.
+ * Keyed `limit` by every card that declares it; each card's `load` reads it
+ * through `listEntries` to size the rows it asks for, and the admin draws that
+ * many. A number from 1 to 20 rather than a fixed choice, so a value a reader
+ * saved before (7, say) is still read as saved.
  */
 export const LIST_ITEMS = setting.number({
-  label: "Number of items",
+  label: "Number of entries",
   defaultValue: 5,
   min: 1,
   max: MAX_WIDGET_ROWS,
@@ -35,33 +37,33 @@ const NOTE_MAX_LENGTH = 2000;
 
 /**
  * A note's text: Markdown over several lines, empty until its reader writes it.
- * A setting of the note's declaration, which names it by its key (`text`).
+ * A setting of the note's declaration, which names it by its key (`text`). Its
+ * help says what Markdown it takes, each example in backticks, which the
+ * settings drawer draws as code.
  */
 export const NOTE_TEXT = setting.textarea({
-  label: "Note",
+  label: "Text",
   defaultValue: "",
   maxLength: NOTE_MAX_LENGTH,
+  admin: {
+    description:
+      "Supports Markdown: `**bold**`, `_italic_`, `- lists` and `[links](https://…)`. Only you see this note.",
+  },
 });
 
 /**
- * Where every list card's Density is drawn: folded under Advanced in the
- * card's settings panel, since how tightly rows are spaced is a preference
- * few readers change.
- */
-const DENSITY_SECTION = "advanced";
-
-/**
- * Every list card's Density, as a declaration takes it: default or compact
- * rows, default unless chosen, one option for every density the admin sizes
- * rows by (`DENSITY_OPTIONS`), so core's list cards and a plugin's offer the
- * same choice. Keyed `density` by every card that declares it, the name the
- * admin reads to decide how many rows fit.
+ * Every list card's Row spacing, as a declaration takes it: comfortable or
+ * compact rows, comfortable unless chosen, one option for every density the
+ * admin spaces rows by (`DENSITY_OPTIONS`), so core's list cards and a plugin's
+ * offer the same choice. Keyed `density` by every card that declares it, the
+ * name the admin reads to space its rows. Drawn under Display, with how the
+ * card shows what it reads.
  */
 export const LIST_DENSITY_SETTING = setting.select({
-  label: "Density",
+  label: "Row spacing",
   options: DENSITY_OPTIONS,
   defaultValue: "default",
-  section: DENSITY_SECTION,
+  section: "display",
 });
 
 /** The card's Collection: the collection it reads, set from the group it is added from. */

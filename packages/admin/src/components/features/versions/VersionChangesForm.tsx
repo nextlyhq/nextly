@@ -18,10 +18,12 @@ import { Fragment } from "react";
 import type { JSX } from "react";
 
 import { ReadOnlyDocumentForm } from "@admin/components/features/entries/EntryForm/ReadOnlyDocumentForm";
+import { Button } from "@admin/components/ui";
 import { addressableFieldsWithin } from "@admin/lib/plugins/document-view-registry";
 import { cn } from "@admin/lib/utils";
 
 import { FieldDiffNode } from "./diff/FieldDiffNode";
+import type { RestoreRow } from "./restore-plan";
 import { UnchangedFieldsToggle } from "./UnchangedFieldsToggle";
 import type { NoChanges, VersionChanges } from "./version-changes";
 import { useHoldsWithheld } from "./withheld-fields-context";
@@ -158,16 +160,64 @@ export interface VersionChangesFormProps {
   current: string | null;
   showUnchanged: boolean;
   onToggleUnchanged: () => void;
+  /**
+   * "Restore this field" on each changed field: how the restore would treat
+   * a field (undefined where the editor already holds the version's value),
+   * and the restore of one. Absent where no restore is offered.
+   */
+  restoreField?: VersionFieldRestore;
+}
+
+/** The restore of one field, from a version's changes. */
+export interface VersionFieldRestore {
+  rowFor: (name: string) => RestoreRow | undefined;
+  restore: (name: string) => void;
+}
+
+/**
+ * The field's own restore, the same as "Restore…" for this field alone: a
+ * button where it can be restored, its reason where it cannot, nothing where
+ * the editor already holds the version's value.
+ */
+function RestoreThisField({
+  name,
+  label,
+  restoreField,
+}: {
+  name: string;
+  label: string;
+  restoreField: VersionFieldRestore;
+}) {
+  const row = restoreField.rowFor(name);
+  if (!row) return null;
+  if (row.disabled) {
+    return <p className="pb-3 text-xs text-muted-foreground">{row.reason}</p>;
+  }
+  return (
+    <div className="pb-3">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        aria-label={`Restore this field: ${label}`}
+        onClick={() => restoreField.restore(name)}
+      >
+        Restore this field
+      </Button>
+    </div>
+  );
 }
 
 function ChangedField({
   name,
   changes,
   current,
+  restoreField,
 }: {
   name: string;
   changes: VersionChanges;
   current: boolean;
+  restoreField?: VersionFieldRestore;
 }) {
   const node = changes.byField.get(name);
   if (node === undefined) return null;
@@ -187,6 +237,13 @@ function ChangedField({
       )}
     >
       <FieldDiffNode node={node} />
+      {restoreField ? (
+        <RestoreThisField
+          name={name}
+          label={label}
+          restoreField={restoreField}
+        />
+      ) : null}
     </section>
   );
 }
@@ -199,6 +256,7 @@ export function VersionChangesForm({
   current,
   showUnchanged,
   onToggleUnchanged,
+  restoreField,
 }: VersionChangesFormProps): JSX.Element {
   const inLayout = new Set(
     fields.flatMap(field =>
@@ -221,6 +279,7 @@ export function VersionChangesForm({
           name={name}
           changes={changes}
           current={current === name}
+          {...(restoreField ? { restoreField } : {})}
         />
       ))}
       {stretches.map((stretch, index) =>
@@ -230,6 +289,7 @@ export function VersionChangesForm({
             name={stretch.name}
             changes={changes}
             current={current === stretch.name}
+            {...(restoreField ? { restoreField } : {})}
           />
         ) : stretch.kind === "withheld" ? (
           // Through the editor's own renderer, which says in the field's

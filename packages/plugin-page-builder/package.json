@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/plugin-page-builder",
-  "version": "0.0.2-alpha.73",
+  "version": "0.0.2-alpha.78",
   "description": "Visual page builder plugin for Nextly (blocks, drag-and-drop, server-first rendering)",
   "license": "MIT",
   "type": "module",
@@ -31,6 +31,16 @@
       "import": "./dist/admin/index.js",
       "default": "./dist/admin/index.js"
     },
+    "./canvas": {
+      "types": "./dist/canvas/index.d.ts",
+      "import": "./dist/canvas/index.js",
+      "default": "./dist/canvas/index.js"
+    },
+    "./site": {
+      "types": "./dist/site/index.d.ts",
+      "import": "./dist/site/index.js",
+      "default": "./dist/site/index.js"
+    },
     "./styles/editor.css": "./dist/styles/editor.css"
   },
   "files": [
@@ -49,7 +59,7 @@
     "@nextlyhq/blocks-engine": "workspace:*",
     "@nextlyhq/blocks-react": "workspace:*",
     "css-tree": "^2.3.1",
-    "isomorphic-dompurify": "^2"
+    "parse5": "^8.0.0"
   },
   "peerDependencies": {
     "@nextlyhq/admin": "workspace:*",

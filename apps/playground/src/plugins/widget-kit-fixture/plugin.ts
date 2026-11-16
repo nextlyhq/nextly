@@ -41,7 +41,7 @@ export const kitCardWidget = defineWidget({
   }),
   view: { component: KIT_CARD_COMPONENT },
   isEmpty: data => data.groups.length === 0,
-  // What the development preview page draws its ready state from, so the
+  // What the widget check's page draws its ready state from, so the
   // widget-preview spec finds a plugin widget drawn from a case.
   preview: [
     {
@@ -103,15 +103,15 @@ const fullWidthWidget = defineWidget({
   size: { default: { w: 12, h: 2 }, min: { w: 12, h: 2 } },
   load: async () => ({ total: 12 }),
   view: "figure",
-  // A core view's case, for the preview page: drawn by the figure display.
+  // A core view's case, for the widget check's page: drawn by the figure display.
   preview: [{ name: "Twelve", data: { total: 12 } }],
 });
 
 /**
  * A card whose component draws a text input with no label, planted so the
- * widget-preview spec can prove the preview page's accessibility check fails
+ * widget-preview spec can prove the widget check's accessibility check fails
  * on a serious or critical finding. Never placed on a dashboard; met only in
- * the add panel and on the development preview page, named as a test fixture.
+ * the add panel and on the widget check's page, named as a test fixture.
  */
 export const unlabelledControlWidget = defineWidget({
   id: "widget-kit-fixture/unlabelled-control",

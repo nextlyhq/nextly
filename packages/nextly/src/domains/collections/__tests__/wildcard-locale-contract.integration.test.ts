@@ -207,13 +207,13 @@ async function germanStillLive(t: TestNextly): Promise<string> {
 
   await handlerOf(t).updateEntry(
     { collectionName: SLUG, entryId: id, overrideAccess: true, locale: "de" },
-    { title: "Seite DE", status: "published" }
+    { title: "Seite DE", status: "published", _overwrite: true }
   );
   // English down, German left alone — done with full authority, so this setup
   // is not itself the thing under test.
   await handlerOf(t).updateEntry(
     { collectionName: SLUG, entryId: id, overrideAccess: true },
-    { status: "draft" }
+    { status: "draft", _overwrite: true }
   );
   return id;
 }
@@ -240,7 +240,7 @@ describe.each(getConfiguredTestDialects())(
           user: EDITOR,
           locale: "*",
         },
-        { status: "draft" }
+        { status: "draft", _overwrite: true }
       );
 
       expect(refused.success).toBe(false);
@@ -268,7 +268,7 @@ describe.each(getConfiguredTestDialects())(
           user: EDITOR,
           locale: "*",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       expect(allowed.success).toBe(true);
@@ -288,18 +288,18 @@ describe.each(getConfiguredTestDialects())(
       const singles = singlesOf(t);
       await singles.update(
         SINGLE_SLUG,
-        { siteName: "EN v1", status: "published" },
+        { siteName: "EN v1", status: "published", _overwrite: true },
         { locale: "en", overrideAccess: true }
       );
       await singles.update(
         SINGLE_SLUG,
-        { siteName: "DE v1", status: "published" },
+        { siteName: "DE v1", status: "published", _overwrite: true },
         { locale: "de", overrideAccess: true }
       );
       // A status-less save in the NON-write language is held as pending.
       await singles.update(
         SINGLE_SLUG,
-        { siteName: "DE v2" },
+        { siteName: "DE v2", _overwrite: true },
         { locale: "de", overrideAccess: true }
       );
 
@@ -308,7 +308,7 @@ describe.each(getConfiguredTestDialects())(
 
       const refused = await singles.update(
         SINGLE_SLUG,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { locale: "*", overrideAccess: true }
       );
 
@@ -326,18 +326,18 @@ describe.each(getConfiguredTestDialects())(
       const singles = singlesOf(t);
       await singles.update(
         SINGLE_SLUG,
-        { siteName: "EN v1", status: "draft" },
+        { siteName: "EN v1", status: "draft", _overwrite: true },
         { locale: "en", overrideAccess: true }
       );
       await singles.update(
         SINGLE_SLUG,
-        { siteName: "DE v1", status: "draft" },
+        { siteName: "DE v1", status: "draft", _overwrite: true },
         { locale: "de", overrideAccess: true }
       );
 
       const ok = await singles.update(
         SINGLE_SLUG,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { locale: "*", overrideAccess: true }
       );
 
@@ -368,7 +368,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "de",
         },
-        { title: "Seite DE", status: "draft" }
+        { title: "Seite DE", status: "draft", _overwrite: true }
       );
 
       const before = await companionStatuses(t, `dc_${SLUG}_locales`);
@@ -393,7 +393,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       // Population control first: no listener firing at all would satisfy a
@@ -439,7 +439,7 @@ describe.each(getConfiguredTestDialects())(
       // lifecycle on the companion.
       await singles.update(
         SINGLE_SLUG,
-        { siteName: "DE live", status: "published" },
+        { siteName: "DE live", status: "published", _overwrite: true },
         { locale: "de", overrideAccess: true }
       );
 
@@ -460,7 +460,7 @@ describe.each(getConfiguredTestDialects())(
 
       await singles.update(
         SINGLE_SLUG,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { locale: "*", overrideAccess: true }
       );
 
@@ -485,7 +485,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "de",
         },
-        { title: "DE v1", status: "published" }
+        { title: "DE v1", status: "published", _overwrite: true }
       );
       // Held in the non-write language.
       await handlerOf(t).updateEntry(
@@ -495,7 +495,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "de",
         },
-        { title: "DE v2" }
+        { title: "DE v2", _overwrite: true }
       );
 
       const liveTitle = async (locale: string): Promise<string | undefined> => {
@@ -514,7 +514,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       expect(refused.success).toBe(false);
@@ -527,13 +527,13 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       await singlesOf(t).update(
         NO_LIFECYCLE_SINGLE,
-        { status: "keep me" },
+        { status: "keep me", _overwrite: true },
         { overrideAccess: true }
       );
 
       const refused = await singlesOf(t).update(
         NO_LIFECYCLE_SINGLE,
-        { status: "overwritten" },
+        { status: "overwritten", _overwrite: true },
         { locale: "*", overrideAccess: true }
       );
 
@@ -551,18 +551,18 @@ describe.each(getConfiguredTestDialects())(
       const singles = singlesOf(t);
       await singles.update(
         SINGLE_SLUG,
-        { siteName: "EN", status: "draft" },
+        { siteName: "EN", status: "draft", _overwrite: true },
         { locale: "en", overrideAccess: true }
       );
       await singles.update(
         SINGLE_SLUG,
-        { siteName: "DE", status: "draft" },
+        { siteName: "DE", status: "draft", _overwrite: true },
         { locale: "de", overrideAccess: true }
       );
 
       await singles.update(
         SINGLE_SLUG,
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { locale: "*", overrideAccess: true }
       );
 
@@ -596,7 +596,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: false as unknown as string }
+        { status: false as unknown as string, _overwrite: true }
       );
 
       expect(refused.success).toBe(false);
@@ -627,7 +627,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       expect(refused.success).toBe(false);
@@ -647,7 +647,7 @@ describe.each(getConfiguredTestDialects())(
 
       const ok = await handlerOf(t).updateEntry(
         { collectionName: STRIPS_SLUG, entryId: id, overrideAccess: true },
-        { title: "EN v2" }
+        { title: "EN v2", _overwrite: true }
       );
       expect(ok.success).toBe(true);
     });
@@ -678,7 +678,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       const after = await companionStatuses(t, `dc_${SLUG}_locales`);
@@ -728,7 +728,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: "draft" }
+        { status: "draft", _overwrite: true }
       );
 
       // It runs. A configured language holding work still blocks — that case is
@@ -757,7 +757,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       expect(refused.success).toBe(false);
@@ -788,7 +788,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: "overwritten" }
+        { status: "overwritten", _overwrite: true }
       );
 
       expect(refused.success).toBe(false);

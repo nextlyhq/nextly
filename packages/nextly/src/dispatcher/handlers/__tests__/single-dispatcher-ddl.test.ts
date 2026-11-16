@@ -16,6 +16,45 @@
  */
 import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
 
+// A Builder save's statements run through the busy-table runner, which waits for a table another
+// session holds; those tries are judged against real databases
+// (`busy-table-parity.integration.test.ts`). Here the save runs as one try that never waits,
+// sending each statement through the double's `executeQuery`, so these stay on the statements
+// the save hands over and the outcome it records.
+vi.mock(
+  "../../../domains/schema/busy-table/run-unit",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("../../../domains/schema/busy-table/run-unit")
+    >()),
+    runUnitInTries: (
+      await import(
+        "../../../domains/schema/busy-table/__tests__/helpers/run-unit-once"
+      )
+    ).runUnitOnce,
+  })
+);
+
+// Whether the created table holds every requested column is judged by the comparison a push makes,
+// tested on its own (`created-table-shape.test.ts`); this double runs no introspection, so the check
+// answers that nothing was left out and the test stays on the statements.
+vi.mock("../../../domains/schema/services/created-table-shape", () => ({
+  columnsTheCreateLeftOut: vi.fn(async () => []),
+  describeColumnsLeftOut: vi.fn(() => ""),
+}));
+
+// A registry write's transaction, and the schema version stored in it, are
+// the integration suite's subject (`schema-version-writers.integration.test.ts`):
+// here a registry write runs on the adapter itself, as it did before it had one.
+vi.mock("../../../domains/schema/schema-version", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../domains/schema/schema-version")
+  >()),
+  writeRegistryRows: (adapter: unknown, work: (tx: unknown) => unknown) =>
+    work(adapter),
+  writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
+}));
+
 vi.mock("../../helpers/di", () => ({
   getSingleRegistryFromDI: vi.fn(),
   getSingleEntryServiceFromDI: vi.fn(),
@@ -59,6 +98,14 @@ function makeAdapter(dialect: "postgresql" | "mysql" | "sqlite") {
         !name.includes("_locales") &&
         executed.some(sql => sql.includes("CREATE TABLE") && sql.includes(name))
     ),
+    // Read before any DDL to find field-group rows a removed Single of this name left behind: a
+    // fresh database has no tables to scan.
+    listTables: vi.fn(async (): Promise<string[]> => []),
+    // The same read asks a MySQL server how it compares table names, through Drizzle's `sql`
+    // template; answered in the mysql2 `[rows, fields]` shape, as a case-sensitive server would.
+    getDrizzle: () => ({
+      execute: vi.fn(async () => [[{ lower_case_table_names: 0 }], []]),
+    }),
     // Read by the slug guard the create runs before any DDL, to find whether another resource
     // already owns this slug. `null` is "nobody does", which is the state a successful create
     // starts from. The return type names the owner case too, so the conflict test can replace this

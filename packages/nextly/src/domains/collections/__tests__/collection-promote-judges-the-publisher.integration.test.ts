@@ -258,7 +258,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: BOSS,
         },
-        { body: "edited", guarded: "boss-secret" }
+        { body: "edited", guarded: "boss-secret", _overwrite: true }
       );
       expect(held.success, JSON.stringify(held)).toBe(true);
       // POPULATION CONTROL: the edit really was held. Without this a later
@@ -276,7 +276,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: CLERK,
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       expect(published.success).toBe(false);
@@ -323,7 +323,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: BOSS,
         },
-        { ops: { runbook: "boss-runbook" } }
+        { ops: { runbook: "boss-runbook" }, _overwrite: true }
       );
       const unchanged = await heldStill(t, SLUG, id);
 
@@ -334,7 +334,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: CLERK,
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       expect(published.success).toBe(false);
@@ -368,7 +368,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: CLERK,
         },
-        { body: "edited" }
+        { body: "edited", _overwrite: true }
       );
 
       const published = await h.updateEntry(
@@ -378,7 +378,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: CLERK,
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       expect(published.success, JSON.stringify(published)).toBe(true);
@@ -455,7 +455,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: CLERK,
         },
-        { body: "edited" }
+        { body: "edited", _overwrite: true }
       );
 
       const published = await h.updateEntry(
@@ -465,7 +465,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: CLERK,
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       expect(published.success, JSON.stringify(published)).toBe(true);
@@ -515,7 +515,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: CLERK,
         },
-        { body: "edited" }
+        { body: "edited", _overwrite: true }
       );
 
       const published = await h.updateEntry(
@@ -525,7 +525,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: CLERK,
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       expect(published.success, JSON.stringify(published)).toBe(true);
@@ -558,7 +558,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: BOSS,
         },
-        { body: "edited", guarded: null }
+        { body: "edited", guarded: null, _overwrite: true }
       );
       const unchanged = await heldStill(t, SLUG, id);
 
@@ -569,7 +569,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: CLERK,
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       expect(published.success).toBe(false);
@@ -638,7 +638,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: CLERK,
         },
-        { body: "edited" }
+        { body: "edited", _overwrite: true }
       );
 
       const published = await h.updateEntry(
@@ -648,7 +648,11 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: CLERK,
         },
-        { status: "published", goesLive: "2026-09-09T09:09:09.000Z" }
+        {
+          status: "published",
+          goesLive: "2026-09-09T09:09:09.000Z",
+          _overwrite: true,
+        }
       );
 
       expect(published.success, JSON.stringify(published)).toBe(true);
@@ -708,7 +712,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: CLERK,
         },
-        { body: "edited" }
+        { body: "edited", _overwrite: true }
       );
 
       const published = await h.updateEntry(
@@ -718,7 +722,11 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: CLERK,
         },
-        { status: "published", ops: { note: "published-note" } }
+        {
+          status: "published",
+          ops: { note: "published-note" },
+          _overwrite: true,
+        }
       );
 
       expect(published.success, JSON.stringify(published)).toBe(true);
@@ -762,7 +770,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: CLERK,
         },
-        { body: "edited" }
+        { body: "edited", _overwrite: true }
       );
 
       // CLERK sends the whole group: an allowed edit to `note`, and `runbook` at
@@ -777,6 +785,7 @@ describe.each(getConfiguredTestDialects())(
         {
           status: "published",
           ops: { note: "clerk-note", runbook: "live-runbook" },
+          _overwrite: true,
         }
       );
 
@@ -833,7 +842,7 @@ describe.each(getConfiguredTestDialects())(
             routeAuthorized: true,
             user: BOSS,
           },
-          { ops: { ...live, runbook: "boss-runbook" } }
+          { ops: { ...live, runbook: "boss-runbook" }, _overwrite: true }
         );
         const unchanged = await heldStill(t, slug, id);
 
@@ -844,7 +853,7 @@ describe.each(getConfiguredTestDialects())(
             routeAuthorized: true,
             user: CLERK,
           },
-          { status: "published", ops: sent }
+          { status: "published", ops: sent, _overwrite: true }
         );
 
         expect(published.success, JSON.stringify(published)).toBe(false);
@@ -887,7 +896,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: BOSS,
         },
-        { guarded: "boss-secret" }
+        { guarded: "boss-secret", _overwrite: true }
       );
       expect(JSON.stringify(await pendingDrafts(t, id))).toContain(
         "boss-secret"
@@ -901,7 +910,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: CLERK,
         },
-        { status: "published", guarded: "live-value" }
+        { status: "published", guarded: "live-value", _overwrite: true }
       );
 
       expect(published.success).toBe(false);
@@ -937,7 +946,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: BOSS,
         },
-        { body: "edited", guarded: "boss-secret" }
+        { body: "edited", guarded: "boss-secret", _overwrite: true }
       );
 
       const published = await h.updateEntry(
@@ -947,7 +956,7 @@ describe.each(getConfiguredTestDialects())(
           routeAuthorized: true,
           user: BOSS,
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       expect(published.success, JSON.stringify(published)).toBe(true);
@@ -998,7 +1007,7 @@ describe("a collection field rule is judged on the CALLER's own authority", () =
           permissions: [`update-${slug}`, "write-secret"],
         },
       } as never,
-      { body: "b2", secret: "after" }
+      { body: "b2", secret: "after", _overwrite: true }
     );
 
     expect(updated.success, JSON.stringify(updated)).toBe(true);

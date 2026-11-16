@@ -8,6 +8,9 @@ import type { Principal, PluginRoutePrincipal } from "../principals/types";
 
 import type { PluginRoutePermissionResolver } from "./route-permission";
 
+/** @experimental The most rows one request to an action's route may name. */
+export const MAX_ACTION_ROWS = 100;
+
 /**
  * @public HTTP methods a plugin route may declare.
  */
@@ -125,8 +128,34 @@ export interface PluginRouteCaller {
    * A UX and routing aid, not the enforcement point: the write itself is still
    * authorized independently, and a route that only asks this has authorized
    * nothing.
+   *
+   * Asked with no options, a rule that limits the action to the entries its
+   * filter matches answers yes for a read and no for any other action: the
+   * question names no entry, so it cannot say whether the caller may write
+   * one. Pass `{ anyEntry: true }` to ask the type-level question instead
+   * (see {@link PluginRouteCanOptions}).
    */
-  can(action: string, resource: string): Promise<boolean>;
+  can(
+    action: string,
+    resource: string,
+    options?: PluginRouteCanOptions
+  ): Promise<boolean>;
+}
+
+/**
+ * @public How a plugin route asks {@link PluginRouteCaller.can}. Intended to
+ * be stable.
+ *
+ * `anyEntry: true` asks whether the caller may perform the action on ANY
+ * entry at all: a type-level question, such as "may this author edit pages?",
+ * for deciding what to offer. It is the same access decision as plain `can`,
+ * with a rule's row filter counting as yes for every action, as it does for a
+ * read. It decides nothing about an entry, so it neither applies nor bypasses
+ * a rule's filter, and a caller it admits may still be refused every write
+ * the filter does not match.
+ */
+export interface PluginRouteCanOptions {
+  readonly anyEntry?: boolean;
 }
 
 /**
@@ -216,6 +245,28 @@ export interface PluginRoute {
   requiredPermission?: PermissionSlug | PluginRoutePermissionResolver;
   /** Opt out of auth — the route is publicly callable. */
   public?: boolean;
+  /**
+   * Declares that the route acts only on its caller's own record, or only
+   * reads: being signed in is all it asks. A route a staff session or an API
+   * key can reach declares exactly one of `requiredPermission`, `public`,
+   * `principal`, `checksAccess: true` or `siteWide: false`. One that declares
+   * none could act on the
+   * whole site for anyone signed in, a role-less account or a key with no
+   * grants included, so it is refused for every caller and named at startup
+   * until it declares one. Only `false` is accepted, and it cannot be combined
+   * with the others.
+   */
+  siteWide?: false;
+  /**
+   * Declares that the route acts on the site (or reads what not every signed-in
+   * caller may see), and its HANDLER decides, on every request, what this
+   * caller may do: through `ctx.caller.can(...)`, or by calling services as
+   * the user so the access gate judges each act. For a route whose check
+   * depends on the request, such as the collection it names, which a fixed
+   * `requiredPermission` cannot express. Signing in is still required. Only
+   * `true` is accepted, and it cannot be combined with the others.
+   */
+  checksAccess?: true;
   /**
    * @experimental Serve a plugin's kind of signed-in person instead of staff.
    *

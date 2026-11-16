@@ -54,6 +54,7 @@ import {
 } from "../../../errors/error-codes";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
+import { rethrowIfRuleCouldNotRun } from "../../../errors/rule-could-not-run";
 import {
   buildContext,
   type BuildContextOptions,
@@ -87,6 +88,7 @@ import {
   TRUSTS_EVERY_COLLECTION,
   assumedBound,
   narrows,
+  readHooksWaived,
 } from "../../../services/collections/trust-grant";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
@@ -103,23 +105,29 @@ import {
   cloneDefault,
 } from "../../../shared/lib/field-defaults";
 import {
+  anyFieldGroupHasAccessRule,
   applyFieldReadAccess,
   callerAccessGrants,
+  hasFieldAccessRule,
+  hasFieldHook,
   runFieldHooks,
   type ReadAccessRedactions,
   type VisitorGrantsLoader,
 } from "../../../shared/lib/field-level-registry";
+import { applyFieldSelection } from "../../../shared/lib/field-selection";
 import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import {
   reachesPasswordField,
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
+import { readLocksRows } from "../../../shared/lib/read-transaction-scope";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type { Logger } from "../../../shared/types";
 import { fieldTrustOf } from "../../collections/services/collection-query-service";
 import { recordWriteEvent } from "../../content-events/write-event";
 import { entityRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
+import { statedDefaultFits } from "../../dynamic-collections/services/stated-default";
 import {
   liveFieldGroupReadPass,
   withFieldGroupEvidence,
@@ -138,6 +146,10 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../../i18n/localization-source";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
@@ -155,20 +167,36 @@ import {
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
 import {
+  fieldsStoredOnRow,
   getColumnDescriptor,
   isTextStorageKind,
 } from "../../schema/services/field-column-descriptor";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
+  attachDocumentVersions,
+  chainCoversVersion,
+  languageCountersBeforeContent,
+  type SelectsRows,
+  languageRevisionsOf,
+  storedRevisionsOf,
+} from "../../versions/document-revision";
+import {
   draftDocumentFacts,
   resolveDraftOverlay,
 } from "../../versions/draft-overlay";
+import {
+  combinedDraft,
+  draftsKeptByPart,
+  findPartDrafts,
+  holdsPendingChange,
+  SHARED_DRAFT_SLOT,
+} from "../../versions/part-drafts";
 import { hasLifecycle } from "../../versions/recorded-status";
 import type { ComponentSchemas } from "../../versions/restore-snapshot";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import { shapeDraftSnapshot } from "../../versions/shape-draft-snapshot";
 import { VersionCaptureService } from "../../versions/version-capture-service";
-import { withVersionConflictRetry } from "../../versions/version-conflict";
+import { versionConflictRetries } from "../../versions/version-conflict";
 import { VersionsRepository } from "../../versions/versions-repository";
 import type {
   GetSingleOptions,
@@ -178,6 +206,8 @@ import type {
 } from "../types";
 
 import { resolveSingleForRequest } from "./ensure-runtime-table";
+import { readSingleForCreation } from "./single-first-row";
+import { singleReadPlan, tableProjection } from "./single-read-plan";
 import { applyReadShape } from "./single-read-shape";
 import type { SingleRegistryService } from "./single-registry-service";
 import {
@@ -191,6 +221,7 @@ import {
   getDefaultValue,
   shouldTreatAsJson,
   singleAbsentResult,
+  singleWithoutDocumentResult,
 } from "./single-utils";
 
 /**
@@ -238,6 +269,32 @@ function containsRelationField(
 
 /** Hook namespace prefix for Singles. */
 export const SINGLE_HOOK_NAMESPACE = "single";
+
+/**
+ * Whether a read skips field read rules. Document trust and FIELD trust are
+ * separate questions: `overrideAccess` alone means both, and a caller that
+ * asked for field rules to be enforced keeps its document bypass and gives up
+ * only the field one. One answer for the rules' own pass and for the read
+ * deciding whether a rule will see its row.
+ */
+function fieldRulesSkipped(options: GetSingleOptions): boolean {
+  return options.enforceFieldAccess === true
+    ? false
+    : options.overrideAccess === true;
+}
+
+/**
+ * The document as a read with `select` answers it, by the one meaning `select`
+ * has on every read (`shared/lib/field-selection`). The id and the system
+ * timestamps are always kept, so the answer is still a document; without a
+ * selection it is the document unchanged.
+ */
+function selectedAnswer(
+  doc: SingleDocument,
+  select: Record<string, boolean> | undefined
+): SingleDocument {
+  return select ? (applyFieldSelection(doc, select) as SingleDocument) : doc;
+}
 
 /**
  * Get the hook collection name for a Single.
@@ -855,13 +912,30 @@ export class SingleQueryService extends BaseService {
     });
     if (view === null) return doc;
 
-    const workingDraft = await new VersionsRepository(
-      this.adapter
-    ).findWorkingDraft(
-      { scopeKind: "single", scopeSlug: slug, entryId },
-      view.draftLocale
-    );
-    if (!workingDraft) return doc;
+    const draftRef = { scopeKind: "single" as const, scopeSlug: slug, entryId };
+    const draftRepo = new VersionsRepository(this.adapter);
+    // Kept by part, the pending change is the shared draft and this
+    // language's, read as the one change they make together: only the keys
+    // they hold, laid over the live document below.
+    const parts =
+      draftsKeptByPart() && view.draftLocale !== SHARED_DRAFT_SLOT
+        ? await findPartDrafts(draftRepo, draftRef, view.draftLocale)
+        : undefined;
+    // The shared part's pending change concerns every language, so each
+    // language's editor read says whether there is one.
+    const withSharedSignal = (document: SingleDocument): SingleDocument =>
+      parts
+        ? {
+            ...document,
+            _sharedChangesPending: parts.shared !== undefined,
+          }
+        : document;
+    const workingDraft = parts
+      ? holdsPendingChange(parts)
+        ? { snapshot: combinedDraft({}, parts) }
+        : undefined
+      : await draftRepo.findWorkingDraft(draftRef, view.draftLocale);
+    if (!workingDraft) return withSharedSignal(doc);
     // Shown on publish alone only where the field rules let this caller put
     // it live, so no pending value they could never publish reaches them.
     if (
@@ -877,7 +951,7 @@ export class SingleQueryService extends BaseService {
           authenticatedScope: options.authenticatedScope,
         })))
     ) {
-      return doc;
+      return withSharedSignal(doc);
     }
 
     const shaped = shapeDraftSnapshot({
@@ -899,17 +973,16 @@ export class SingleQueryService extends BaseService {
     // The snapshot stores JSON-backed fields serialized and relations as ids,
     // exactly as the live row does, so the same stages restore both.
     let overlaid = this.deserializeJsonFields(shaped, singleMeta.fields);
-    overlaid = await this.readUploadFields(
-      overlaid,
-      singleMeta.fields,
-      options
-    );
+    // The references the row holds, those inside a group with no name among them, as the live
+    // assembly reads them (`fieldsStoredOnRow`), so a draft and the live document match.
+    const rowFields = fieldsStoredOnRow(singleMeta.fields);
+    overlaid = await this.readUploadFields(overlaid, rowFields, options);
     // The SAME context the live document's relationships were read under,
     // so a related row is judged identically whether it arrived through the
     // live row or through the draft that replaces it.
     overlaid = await this.expandRelationshipFields(
       overlaid,
-      singleMeta.fields,
+      rowFields,
       options.depth,
       this.relatedRowAccess(
         options,
@@ -932,8 +1005,19 @@ export class SingleQueryService extends BaseService {
     // The flag the editor reads to show "Changed" and offer Discard. Set only
     // when a draft was actually overlaid, so a read of a language with no
     // pending change reports nothing — which is what makes it per-language.
+    // A draft kept by part holds only what it changes, so its values are
+    // laid over the live document rather than replacing it.
+    if (parts) {
+      const changed = workingDraft.snapshot as Record<string, unknown>;
+      overlaid = {
+        ...doc,
+        ...Object.fromEntries(
+          Object.entries(overlaid).filter(([key]) => key in changed)
+        ),
+      };
+    }
     (overlaid as Record<string, unknown>)._isWorkingDraft = true;
-    return overlaid;
+    return withSharedSignal(overlaid);
   }
 
   private async assembleStoredDocument(params: {
@@ -981,7 +1065,10 @@ export class SingleQueryService extends BaseService {
     }
 
     doc = this.deserializeJsonFields(doc, singleMeta.fields);
-    doc = await this.readUploadFields(doc, singleMeta.fields, options);
+    // The references the row holds, those inside a group with no name among them: their columns
+    // are on this row (`fieldsStoredOnRow`), so they are expanded as one beside the group is.
+    const rowFields = fieldsStoredOnRow(singleMeta.fields);
+    doc = await this.readUploadFields(doc, rowFields, options);
     // The language this read resolved to, shared by both expansions below so a
     // related row and a related row inside a component are judged alike.
     const readChain = resolveLocaleChain(
@@ -992,7 +1079,7 @@ export class SingleQueryService extends BaseService {
     const readLocale = readChain?.[0];
     doc = await this.expandRelationshipFields(
       doc,
-      singleMeta.fields,
+      rowFields,
       options.depth,
       this.relatedRowAccess(options, enforceRelatedFieldAccess, readChain),
       // The read path threads a caller, so the target collection's field rules
@@ -1062,6 +1149,65 @@ export class SingleQueryService extends BaseService {
   }
 
   /**
+   * What this read takes from the database. With a `select`, the row's other
+   * columns are left unread where nothing needs them, so a field whose column
+   * is not migrated yet fails only a read that selects it. `readMeta` is the
+   * Single as the read assembles it: its selected fields, or all of them.
+   */
+  private planRead(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    hookCollection: string,
+    hooksWaived: boolean,
+    options: GetSingleOptions
+  ): { readMeta: DynamicSingleRecord; columns: string[] | undefined } {
+    const plan = singleReadPlan({
+      fields: singleMeta.fields,
+      select: options.select,
+      wholeRow: this.readNeedsWholeRow(
+        slug,
+        hookCollection,
+        hooksWaived,
+        options
+      ),
+    });
+    return plan.columns === undefined
+      ? { readMeta: singleMeta, columns: undefined }
+      : {
+          readMeta: { ...singleMeta, fields: plan.fields },
+          columns: plan.columns,
+        };
+  }
+
+  /**
+   * Whether this read must take the Single's whole row whatever it selects.
+   * A read hook, the Single's own or a field's, is handed the document, and a
+   * field read rule that runs for this read is judged on it (a field group's
+   * beside it), so any of them may read a field the caller left out. Such a
+   * read takes every column, and only its answer is narrowed.
+   */
+  private readNeedsWholeRow(
+    slug: string,
+    hookCollection: string,
+    hooksWaived: boolean,
+    options: GetSingleOptions
+  ): boolean {
+    if (
+      !hooksWaived &&
+      (this.hookRegistry.hasHooks("beforeRead", hookCollection) ||
+        this.hookRegistry.hasHooks("afterRead", hookCollection) ||
+        hasFieldHook("single", slug, "afterRead"))
+    ) {
+      return true;
+    }
+    if (fieldRulesSkipped(options)) return false;
+    return (
+      hasFieldAccessRule("single", slug, "read") ||
+      anyFieldGroupHasAccessRule("read")
+    );
+  }
+
+  /**
    * Field read rules on one Single document, in place: its own fields, and
    * the fields inside the field groups it holds.
    */
@@ -1082,8 +1228,7 @@ export class SingleQueryService extends BaseService {
     // differently: `overrideAccess` alone means both; a caller that asked for
     // field rules to be enforced keeps its document bypass and gives up only
     // the field one.
-    const skipFieldRules =
-      options.enforceFieldAccess === true ? false : options.overrideAccess;
+    const skipFieldRules = fieldRulesSkipped(options);
     // The field-access identity, never the hook one. A preview judges these
     // fields as the sharer while the hooks go on seeing the anonymous bearer
     // who is actually asking.
@@ -1126,14 +1271,18 @@ export class SingleQueryService extends BaseService {
     await applyFieldReadAccess(fieldAccess, sourceRedactions);
     await fieldGroupPass?.(doc, fieldGroupCaller);
 
-    await runFieldHooks({
-      kind: "single",
-      slug,
-      phase: "afterRead",
-      data: doc,
-      operation: "read",
-      user: options.user,
-    });
+    // The fields' own afterRead hooks are read hooks like the Single's, and
+    // waived with them for the plugin that declared it.
+    if (!readHooksWaived(options.hookExemptRead, slug)) {
+      await runFieldHooks({
+        kind: "single",
+        slug,
+        phase: "afterRead",
+        data: doc,
+        operation: "read",
+        user: options.user,
+      });
+    }
 
     await withFieldGroupEvidence(doc, fieldGroupRedactions, () =>
       applyFieldReadAccess(fieldAccess, sourceRedactions)
@@ -1213,9 +1362,16 @@ export class SingleQueryService extends BaseService {
       // same thing about the caller.
       const requestFacts = resolveRequestFacts(options.request);
       const hookCollection = getSingleHookCollection(slug);
+      // A plugin reading a Single it declared carries a grant, and the grant
+      // waives every read hook below: these three phases and the fields'
+      // afterRead hooks. Related rows keep their own.
+      const hooksWaived = readHooksWaived(options.hookExemptRead, slug);
 
       // 3. Execute beforeOperation hook
-      if (this.hookRegistry.hasHooks("beforeOperation", hookCollection)) {
+      if (
+        !hooksWaived &&
+        this.hookRegistry.hasHooks("beforeOperation", hookCollection)
+      ) {
         await this.hookRegistry.executeBeforeOperation({
           collection: hookCollection,
           operation: "read",
@@ -1230,7 +1386,10 @@ export class SingleQueryService extends BaseService {
       }
 
       // 4. Execute beforeRead hooks
-      if (this.hookRegistry.hasHooks("beforeRead", hookCollection)) {
+      if (
+        !hooksWaived &&
+        this.hookRegistry.hasHooks("beforeRead", hookCollection)
+      ) {
         const beforeContext = buildSingleHookContext({
           collection: hookCollection,
           operation: "read",
@@ -1246,22 +1405,28 @@ export class SingleQueryService extends BaseService {
       // reusing the row an access decision loaded before them: a `beforeRead`
       // hook may write, and a response built from the earlier snapshot would
       // report values the read no longer finds.
-      const read = await this.readDocument(slug, singleMeta, options);
-      const { translations } = read;
-      let { doc } = read;
+      // With a `select`, only what the read needs (`planRead`).
+      const { readMeta, columns } = this.planRead(
+        slug,
+        singleMeta,
+        hookCollection,
+        hooksWaived,
+        options
+      );
+      const read = await this.readDocument(slug, readMeta, options, columns);
+      let { doc, translations } = read;
 
       // 6. Auto-create if document doesn't exist. Capture the initial version
       // when the Single is versioned so a first-read materialization still
       // starts a history (the mutation path records its own first version).
       if (!doc) {
-        // A Single removed from code is not given a document by a read:
-        // creating one is a write, which it refuses. It answers as a Single
-        // holding no document does.
-        if (await entityRemovedFromCode("single", slug)) {
-          return singleAbsentResult(slug);
-        }
-        this.logger.info("Auto-creating Single document", { slug });
-        doc = await this.createDefaultDocumentOnce(singleMeta);
+        const absent = await this.documentInPlaceOfNone(
+          slug,
+          singleMeta,
+          options
+        );
+        if ("answer" in absent) return absent.answer;
+        ({ doc, translations } = absent);
       }
 
       // 6.5. Apply Draft/Published auto-filter. For Singles the rule is
@@ -1290,9 +1455,18 @@ export class SingleQueryService extends BaseService {
       // of one of its field values, derived while the row is expanded, so
       // redacting afterwards would leave a withheld value standing in the label
       // it was copied into.
+      // The stored counter, taken before anything below strips it with the
+      // other server-only columns or overlays a held draft on the document.
+      const storedRevisions = storedRevisionsOf([doc]);
+      // Not joined with the document — including one this read just created —
+      // the translation counters now, before the translated content is read.
+      const countersFirst = translations
+        ? undefined
+        : await this.languageCountersFirst(singleMeta, doc);
+
       doc = await this.assembleStoredDocument({
         slug,
-        singleMeta,
+        singleMeta: readMeta,
         doc,
         options,
         statusFilterValues: statusFilter ? statusFilter.values : undefined,
@@ -1345,7 +1519,10 @@ export class SingleQueryService extends BaseService {
       stripServerOnlyColumns(doc, singleMeta.tableName);
 
       // 8. Execute afterRead hooks
-      if (this.hookRegistry.hasHooks("afterRead", hookCollection)) {
+      if (
+        !hooksWaived &&
+        this.hookRegistry.hasHooks("afterRead", hookCollection)
+      ) {
         const afterContext = buildSingleHookContext({
           collection: hookCollection,
           operation: "read",
@@ -1376,6 +1553,19 @@ export class SingleQueryService extends BaseService {
       }
       stripServerOnlyColumns(doc, singleMeta.tableName);
 
+      // The fields asked for: after every hook, rule and strip, so none of
+      // them can put back what was left out; before the version.
+      doc = selectedAnswer(doc, options.select);
+
+      // Last, so no hook can drop or forge it. The live row's version, a held
+      // draft overlaid on the document included.
+      this.attachVersion(doc, {
+        stored: storedRevisions,
+        translations,
+        countersFirst,
+        locale: options.locale,
+      });
+
       return {
         success: true,
         statusCode: 200,
@@ -1396,6 +1586,69 @@ export class SingleQueryService extends BaseService {
     }
   }
 
+  /**
+   * The Single's translation counters, read before its translated content
+   * (`languageCountersBeforeContent`); undefined without a document, or for a
+   * Single that keeps no translations or whose table is not there yet.
+   */
+  private async languageCountersFirst(
+    singleMeta: DynamicSingleRecord,
+    doc: { id?: unknown } | null
+  ) {
+    if (!doc || typeof doc.id !== "string") return undefined;
+    const table = `${singleMeta.tableName}_locales`;
+    const translated =
+      this.localization !== undefined && singleMeta.localized === true;
+    return languageCountersBeforeContent(
+      this.adapter.getDrizzle<SelectsRows>(),
+      {
+        dialect: this.adapter.dialect,
+        languagesTable:
+          translated && (await isCompanionReady(this.adapter, table))
+            ? table
+            : null,
+        localization: this.localization,
+        ids: [doc.id],
+      }
+    );
+  }
+
+  /**
+   * Publish the document's version on `doc`, from the counter read with it and
+   * the translation counters this read took: with the content in the joined
+   * read, or before it. A Single that keeps no translations, or whose table is
+   * not there yet, has none, and its version names no language.
+   */
+  private attachVersion(
+    doc: Record<string, unknown>,
+    args: {
+      stored: ReadonlyMap<string, unknown>;
+      translations: JoinedTranslations | undefined;
+      /** Counters read before the content, when it was not joined. */
+      countersFirst?: Awaited<ReturnType<typeof languageCountersBeforeContent>>;
+      locale: string | undefined;
+    }
+  ): void {
+    const joined = args.translations
+      ? languageRevisionsOf(args.translations.companionRows)
+      : undefined;
+    attachDocumentVersions([doc], {
+      stored: args.stored,
+      localization: this.localization,
+      locale: args.locale,
+      ...(args.translations && joined
+        ? {
+            known: {
+              revisions: joined,
+              locales: args.translations.localeChain,
+            },
+          }
+        : args.countersFirst
+          ? { known: args.countersFirst }
+          : {}),
+    });
+  }
+
   /** The Single's translations table, as its reads describe it; null when it has none. */
   private companionOf(
     slug: string,
@@ -1406,7 +1659,7 @@ export class SingleQueryService extends BaseService {
       tableName: singleMeta.tableName,
       fields: singleMeta.fields as { name: string; type: string }[],
       dialect: this.adapter.dialect,
-      status: (singleMeta as { status?: boolean }).status === true,
+      status: publishesPerLanguage(singleMeta),
     });
   }
 
@@ -1419,7 +1672,9 @@ export class SingleQueryService extends BaseService {
   private async readDocument(
     slug: string,
     singleMeta: DynamicSingleRecord,
-    options: GetSingleOptions
+    options: GetSingleOptions,
+    /** The columns of the Single's own table to read; undefined reads all. */
+    columns?: string[]
   ): Promise<{
     doc: SingleDocument | null;
     translations: JoinedTranslations | undefined;
@@ -1431,9 +1686,15 @@ export class SingleQueryService extends BaseService {
       options.fallbackLocale
     );
     if (!joinable) {
+      // Inside a read routed to a plugin's transaction the row is read with a
+      // shared lock (`readLocksRows`): the latest committed row, held until
+      // that transaction ends. A read that asked for no lock reads it plainly.
       const doc = await this.adapter.selectOne<SingleDocument>(
         singleMeta.tableName,
-        {}
+        {
+          ...(readLocksRows(this.adapter) ? { forShare: true } : {}),
+          ...(columns === undefined ? {} : { columns }),
+        }
       );
       return { doc, translations: undefined };
     }
@@ -1442,9 +1703,13 @@ export class SingleQueryService extends BaseService {
     const joined = await selectEntryWithCompanion({
       db: this.adapter.getDrizzle(),
       mainTable: joinable.mainTable,
+      ...(columns === undefined
+        ? {}
+        : { projection: tableProjection(joinable.mainTable, columns) }),
       where: undefined,
       companionTable: joinable.companion.table,
       localeChain: joinable.localeChain,
+      lockingOn: this.adapter,
     }).catch((error: unknown) => {
       throw translationLoadFailure(slug, error);
     });
@@ -1475,7 +1740,17 @@ export class SingleQueryService extends BaseService {
       locale,
       fallbackLocale
     );
-    if (!localeChain || singleMeta.localized !== true) return null;
+    if (!localeChain || !storesPerLanguage(singleMeta)) return null;
+    // Joined only when the chain holds every language the version names:
+    // otherwise the counters are read before the content, apart from it.
+    if (
+      !chainCoversVersion(localeChain, {
+        localization: this.localization,
+        locale,
+      })
+    ) {
+      return null;
+    }
     const companion = this.companionOf(slug, singleMeta);
     if (!companion) return null;
     if (
@@ -1530,7 +1805,7 @@ export class SingleQueryService extends BaseService {
     // Gate on THIS single's flag: a non-localized single has no companion table, and
     // buildCompanionSchema would otherwise classify its text fields as translatable and query a
     // `single_<slug>_locales` table that doesn't exist. (The read swallows that, but skip it.)
-    if (singleMeta.localized !== true) return;
+    if (!storesPerLanguage(singleMeta)) return;
     const companion = this.companionOf(slug, singleMeta);
     if (!companion) return;
     await populateCompanionFields({
@@ -1601,7 +1876,7 @@ export class SingleQueryService extends BaseService {
       tableName: singleMeta.tableName,
       fields: singleMeta.fields as { name: string; type: string }[],
       dialect: this.adapter.dialect,
-      status: (singleMeta as { status?: boolean }).status === true,
+      status: publishesPerLanguage(singleMeta),
     });
     if (!companion) return;
     // Which languages hold a pending change. One document here, but the same
@@ -1723,7 +1998,7 @@ export class SingleQueryService extends BaseService {
     // in-memory `document` and the returned `localizedDefaults`) but are kept OFF the main
     // insert below — inserting one would target a column that only exists on the companion.
     const localizedNames = new Set(
-      singleMeta.localized === true
+      storesPerLanguage(singleMeta)
         ? resolveLocalizedFieldNames(
             singleMeta.fields as { name: string; type: string }[],
             true
@@ -1739,9 +2014,13 @@ export class SingleQueryService extends BaseService {
     const codeFirstFields = this.singleRegistryService.getCodeFirstFields(
       singleMeta.slug
     );
+    // Both lists are read at the row's level (`fieldsStoredOnRow`): a field inside a group with no
+    // name is a column of this row, with a default like one beside the group, and a required one
+    // is NOT NULL, so leaving it out of this insert failed the first read.
+    const rowFields = fieldsStoredOnRow(singleMeta.fields);
     const codeFirstFieldByName = codeFirstFields
       ? new Map(
-          codeFirstFields
+          fieldsStoredOnRow(codeFirstFields)
             .filter(field => "name" in field && field.name)
             .map(field => [(field as { name: string }).name, field])
         )
@@ -1786,19 +2065,19 @@ export class SingleQueryService extends BaseService {
       // Resolve the field's default (explicit defaultValue, else a required
       // field's type-default) once, regardless of whether it is localized — a
       // localized field's default must reach the companion just the same.
-      if (
-        "defaultValue" in defaultSource &&
-        defaultSource.defaultValue !== undefined
-      ) {
+      const declared = declaredDefaultOf(defaultSource);
+      if (declared !== undefined) {
         // `defaultValue` may be a function `(data) => value`; evaluate it against
         // the document built so far so the stored default is a real value, not a
         // function object. A raw function would be bound as an SQL parameter for
         // the companion/main upsert and fail or persist its stringified form —
         // localized fields now flow through this block, so it must be resolved.
         const resolved =
-          typeof defaultSource.defaultValue === "function"
-            ? defaultSource.defaultValue(logicalDefaults)
-            : defaultSource.defaultValue;
+          typeof declared === "function"
+            ? (declared as (data: Record<string, unknown>) => unknown)(
+                logicalDefaults
+              )
+            : declared;
         // Same direct-insert reasoning for passwords: this path never runs
         // `hashPasswordFieldValues`, so a resolved password default would persist
         // in plaintext. Refuse it (a password must be set explicitly to be hashed).
@@ -1968,7 +2247,7 @@ export class SingleQueryService extends BaseService {
           : after;
     };
 
-    for (const field of singleMeta.fields) {
+    for (const field of rowFields) {
       if (!hasFieldName(field)) continue;
       // Prefer the live code-first field for the declared default: the
       // serialized `field` has lost any `defaultValue` function/structured value.
@@ -1986,7 +2265,7 @@ export class SingleQueryService extends BaseService {
     // `coerceDateFieldsToDate`, and this direct-insert path must do the same or
     // SQLite stores the string in an integer column and reads back an invalid
     // date. Idempotent: an existing `Date` passes through untouched.
-    coerceDateFieldsToDate(defaults, singleMeta.fields);
+    coerceDateFieldsToDate(defaults, rowFields);
 
     // A field can be translatable/required yet emit NO storage column — a
     // component or other layout-only ("skip") field type. Its default has nowhere
@@ -1996,7 +2275,7 @@ export class SingleQueryService extends BaseService {
     // (id/title/slug/timestamps/status) are not user fields, so they are never in
     // this set and always route to the main insert below.
     const noColumnFieldNames = new Set<string>();
-    for (const field of singleMeta.fields) {
+    for (const field of rowFields) {
       if (!("name" in field) || !field.name) continue;
       // Reserved identity keys are backed by the system text column even when a
       // same-named field emits none, so their seed must never be dropped here.
@@ -2050,14 +2329,14 @@ export class SingleQueryService extends BaseService {
     singleMeta: DynamicSingleRecord,
     localizedDefaults: Record<string, unknown>
   ) {
-    if (!this.localization || singleMeta.localized !== true) return null;
+    if (!this.localization || !storesPerLanguage(singleMeta)) return null;
     if (Object.keys(localizedDefaults).length === 0) return null;
     return buildCompanionSchema({
       slug: singleMeta.slug,
       tableName: singleMeta.tableName,
       fields: singleMeta.fields as { name: string; type: string }[],
       dialect: this.adapter.dialect,
-      status: (singleMeta as { status?: boolean }).status === true,
+      status: publishesPerLanguage(singleMeta),
     });
   }
 
@@ -2137,15 +2416,135 @@ export class SingleQueryService extends BaseService {
   }
 
   /**
+   * The answer for a read that found no document and must not create one, or
+   * `null` when the read should go on to create the default document.
+   *
+   * A Single removed from code is not given a document by a read: creating
+   * one is a write, which it refuses, so it answers as a Single holding no
+   * document does. A caller that asked to read without writing
+   * (`createIfMissing: false`) is answered here too, before the creation, so
+   * none of it runs: no row, no companion seed, no version snapshot and no
+   * created event.
+   */
+  private async answerWithoutCreating(
+    slug: string,
+    options: GetSingleOptions
+  ): Promise<SingleResult | null> {
+    if (await entityRemovedFromCode("single", slug)) {
+      return singleAbsentResult(slug);
+    }
+    return options.createIfMissing === false && options.whenAbsent !== "default"
+      ? singleWithoutDocumentResult()
+      : null;
+  }
+
+  /**
+   * What a read that found no stored document goes on with: the answer it
+   * gives instead when it must not create one, the default document it
+   * creates otherwise, or, for `whenAbsent: "default"`, that default
+   * document built and not stored, read on from here as the created one is.
+   */
+  private async documentInPlaceOfNone(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    options: GetSingleOptions
+  ): Promise<
+    | { answer: SingleResult }
+    | { doc: SingleDocument; translations: JoinedTranslations | undefined }
+  > {
+    const answered = await this.answerWithoutCreating(slug, options);
+    if (answered !== null) return { answer: answered };
+    if (options.createIfMissing === false) {
+      return this.unstoredDefaultDocument(slug, singleMeta, options);
+    }
+    this.logger.info("Auto-creating Single document", { slug });
+    return {
+      doc: await this.createDefaultDocumentOnce(singleMeta),
+      translations: undefined,
+    };
+  }
+
+  /**
+   * The default document a creating read would store, built by the same
+   * function and not written: the main row as it would be inserted, and, for a
+   * localized Single, the default-language translation row the creation would
+   * seed, so the rest of the read resolves its languages as it resolves the
+   * stored one's. Nothing is written: no row, no translation, no version and
+   * no event.
+   *
+   * The translation row is offered only where the creation would write one:
+   * the Single is localized, has translatable defaults, and its translations
+   * table exists. Otherwise the read goes on with no joined translations, as a
+   * read of the stored document would, and finds none.
+   */
+  private async unstoredDefaultDocument(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    options: GetSingleOptions
+  ): Promise<{
+    doc: SingleDocument;
+    translations: JoinedTranslations | undefined;
+  }> {
+    const built = await this.buildDefaultDocument(singleMeta);
+    const doc = { ...built.insertValues } as SingleDocument;
+    const localeChain = resolveLocaleChain(
+      this.localization,
+      options.locale,
+      options.fallbackLocale
+    );
+    const companion = this.companionOf(slug, singleMeta);
+    const seed = this.companionForDefaultsSeed(
+      singleMeta,
+      built.localizedDefaults
+    );
+    if (
+      !localeChain ||
+      !companion ||
+      !seed ||
+      !this.localization ||
+      !(await this.localizedDefaultsCompanionExists(
+        singleMeta,
+        built.localizedDefaults
+      ))
+    ) {
+      return { doc, translations: undefined };
+    }
+    const { companion: values } = splitLocalizedWrite(
+      built.localizedDefaults,
+      seed.localizedFields
+    );
+    const status = (built.document as { status?: string }).status;
+    return {
+      doc,
+      translations: {
+        mainTable: null,
+        companion,
+        localeChain,
+        companionRows: [
+          {
+            ...values,
+            _parent: doc.id,
+            _locale: this.localization.defaultLocale,
+            ...(seed.hasStatus ? { _status: status ?? "draft" } : {}),
+          },
+        ],
+      },
+    };
+  }
+
+  /**
    * Create a Single's default document on its first read, or take the one
    * another process created first.
    *
    * Several processes reading a Single for the first time at once, such as
-   * `next build`'s workers on a fresh database, each find no row and each try
-   * to create it. The table holds one row by its unique slug, so all but one
-   * insert fail; the row that won is the document every reader should get, so
-   * a loser reads it back rather than failing the read. Any other failure, or
-   * a violation that leaves no row behind, is still the read's failure.
+   * `next build`'s workers on a fresh database, each find no row and each go
+   * on to create it. The creation reads the row again under the Single's
+   * creation lock and takes the one another process created first (see
+   * `readSingleForCreation`). A process that inserts without that lock, such
+   * as one still running an earlier release during a deploy, can still win
+   * the table's unique slug first, so a loser that hits the duplicate reads
+   * the winner back rather than failing the read. Any other failure, or a
+   * violation that leaves no row behind, is still the read's failure.
    */
   private async createDefaultDocumentOnce(
     singleMeta: DynamicSingleRecord
@@ -2190,7 +2589,7 @@ export class SingleQueryService extends BaseService {
     // insert — so this forces the transactional path even when versioning is off.
     const needsCompanionSeed =
       !!this.localization &&
-      singleMeta.localized === true &&
+      storesPerLanguage(singleMeta) &&
       Object.keys(localizedDefaults).length > 0;
     // Probe companion existence BEFORE opening the transaction (a probe issued
     // while the tx holds a max:1-pool connection would deadlock); the seed calls
@@ -2213,18 +2612,102 @@ export class SingleQueryService extends BaseService {
       ? (this.localization?.defaultLocale ?? null)
       : null;
 
+    // Each creation first reads the row under the Single's creation lock, and
+    // takes the row it finds rather than inserting a second: another request
+    // may have created it since this one found none. Only the request whose
+    // insert runs seeds, snapshots and records the creation, so the defaults
+    // are written once and the creation is recorded once.
+    //
     // Non-versioned: insert the main row, seed the companion when the Single
     // is localized, and record its creation, in one transaction, so a failed
     // seed or event rolls the insert back rather than leaving a main row
     // without its localized defaults or its history.
     if (!shouldCapture) {
-      const inserted = await this.adapter.transaction(async tx => {
-        const row = await tx.insert<SingleDocument>(
-          singleMeta.tableName,
-          snakeCaseDefaults,
-          { returning: "*" }
-        );
-        if (needsCompanionSeed) {
+      const outcome = await this.adapter.transaction(tx =>
+        this.unlessStanding(tx, singleMeta, async () => {
+          const row = await tx.insert<SingleDocument>(
+            singleMeta.tableName,
+            snakeCaseDefaults,
+            { returning: "*" }
+          );
+          if (needsCompanionSeed) {
+            await this.seedLocalizedDefaultsCompanion(
+              tx,
+              singleMeta,
+              id,
+              localizedDefaults,
+              status,
+              companionExists
+            );
+          }
+          await this.recordCreated(tx, singleMeta.slug, row, null);
+          return row;
+        })
+      );
+      return this.createdOrFound(singleMeta.slug, outcome);
+    }
+
+    // Versioned Single: insert the default row and record its v1 snapshot in one
+    // transaction, so the Single never ends up with a live row but no history.
+    // Retry on a version_no allocation race, mirroring the write paths.
+    const outcome = await this.adapter.transaction(
+      tx =>
+        this.unlessStanding(tx, singleMeta, async () => {
+          const row = await tx.insert<SingleDocument>(
+            singleMeta.tableName,
+            snakeCaseDefaults,
+            { returning: "*" }
+          );
+          // Match the read shape: keep user field keys (which may contain
+          // underscores like `site_title`) exactly, converting only the timestamp
+          // columns; strip password hashes and the system owner column so history
+          // never retains them; parse JSON-backed fields (stored as strings on
+          // SQLite) so a restore equals a normal read. A freshly materialized
+          // default has no component subtrees yet, so components is empty.
+          const parentRow = convertTimestampsToCamelCase({
+            ...(row as Record<string, unknown>),
+          });
+          // Overlay the seeded localized defaults (keyed by field name) onto the
+          // snapshot so v1 carries the default locale's content, mirroring how a
+          // normal localized write overlays its companion values before capturing.
+          // Without this, restoring v1 could not bring back the seeded defaults
+          // (including a localized title/slug), since they live on the companion.
+          // Gated on `seedApplied`: when the companion table does not yet exist the
+          // seed no-ops, so overlaying here would record defaults that were never
+          // persisted.
+          if (seedApplied) {
+            for (const [name, value] of Object.entries(localizedDefaults)) {
+              parentRow[name] = value;
+            }
+          }
+          applyReadShape(
+            parentRow,
+            singleMeta.fields,
+            singleMeta.tableName,
+            await passwordReachOf(
+              singleMeta.fields,
+              this.fieldGroupDataService,
+              tx.getDrizzle()
+            )
+          );
+          const { versionNo } = await captureInTx(tx, this.versionCapture, {
+            lifecycle: hasLifecycle(singleMeta),
+            ref: {
+              scopeKind: "single",
+              scopeSlug: singleMeta.slug,
+              entryId: (row as { id: string }).id,
+            },
+            contentStatus: (parentRow as { status?: unknown }).status,
+            // System-materialized default: no authoring user.
+            parts: { parentRow, components: {} },
+            createdBy: null,
+            // Tagged with the default locale when the snapshot carries seeded
+            // translatable defaults; null for a non-localized single (main row only).
+            locale: seedLocale,
+            maxPerDoc: versionsConfig.maxPerDoc,
+          });
+          // Seed the default-locale companion with the localized defaults in the
+          // same transaction as the insert and version snapshot.
           await this.seedLocalizedDefaultsCompanion(
             tx,
             singleMeta,
@@ -2233,95 +2716,50 @@ export class SingleQueryService extends BaseService {
             status,
             companionExists
           );
-        }
-        await this.recordCreated(tx, singleMeta.slug, row, null);
-        return row;
-      });
-      this.logger.debug("Created default Single document", {
-        slug: singleMeta.slug,
-        id,
-      });
-      return inserted;
-    }
-
-    // Versioned Single: insert the default row and record its v1 snapshot in one
-    // transaction, so the Single never ends up with a live row but no history.
-    // Retry on a version_no allocation race, mirroring the write paths.
-    const inserted = await withVersionConflictRetry(() =>
-      this.adapter.transaction(async tx => {
-        const row = await tx.insert<SingleDocument>(
-          singleMeta.tableName,
-          snakeCaseDefaults,
-          { returning: "*" }
-        );
-        // Match the read shape: keep user field keys (which may contain
-        // underscores like `site_title`) exactly, converting only the timestamp
-        // columns; strip password hashes and the system owner column so history
-        // never retains them; parse JSON-backed fields (stored as strings on
-        // SQLite) so a restore equals a normal read. A freshly materialized
-        // default has no component subtrees yet, so components is empty.
-        const parentRow = convertTimestampsToCamelCase({
-          ...(row as Record<string, unknown>),
-        });
-        // Overlay the seeded localized defaults (keyed by field name) onto the
-        // snapshot so v1 carries the default locale's content, mirroring how a
-        // normal localized write overlays its companion values before capturing.
-        // Without this, restoring v1 could not bring back the seeded defaults
-        // (including a localized title/slug), since they live on the companion.
-        // Gated on `seedApplied`: when the companion table does not yet exist the
-        // seed no-ops, so overlaying here would record defaults that were never
-        // persisted.
-        if (seedApplied) {
-          for (const [name, value] of Object.entries(localizedDefaults)) {
-            parentRow[name] = value;
-          }
-        }
-        applyReadShape(
-          parentRow,
-          singleMeta.fields,
-          singleMeta.tableName,
-          await passwordReachOf(
-            singleMeta.fields,
-            this.fieldGroupDataService,
-            tx.getDrizzle()
-          )
-        );
-        const { versionNo } = await captureInTx(tx, this.versionCapture, {
-          lifecycle: hasLifecycle(singleMeta),
-          ref: {
-            scopeKind: "single",
-            scopeSlug: singleMeta.slug,
-            entryId: (row as { id: string }).id,
-          },
-          contentStatus: (parentRow as { status?: unknown }).status,
-          // System-materialized default: no authoring user.
-          parts: { parentRow, components: {} },
-          createdBy: null,
-          // Tagged with the default locale when the snapshot carries seeded
-          // translatable defaults; null for a non-localized single (main row only).
-          locale: seedLocale,
-          maxPerDoc: versionsConfig.maxPerDoc,
-        });
-        // Seed the default-locale companion with the localized defaults in the
-        // same transaction as the insert and version snapshot.
-        await this.seedLocalizedDefaultsCompanion(
-          tx,
-          singleMeta,
-          id,
-          localizedDefaults,
-          status,
-          companionExists
-        );
-        await this.recordCreated(tx, singleMeta.slug, row, versionNo);
-        return row;
-      })
+          await this.recordCreated(tx, singleMeta.slug, row, versionNo);
+          return row;
+        }),
+      versionConflictRetries()
     );
 
-    this.logger.debug("Created default Single document", {
-      slug: singleMeta.slug,
-      id,
-    });
-    return inserted;
+    return this.createdOrFound(singleMeta.slug, outcome);
+  }
+
+  /**
+   * The Single's document as `tx` finds it under the creation lock, or the
+   * one `create` inserts on `tx` when there is none. `create` runs only for
+   * the transaction that inserts, so what it writes beside the row (the
+   * translated defaults, the first version, the created event) is written
+   * once however many requests race to create the document.
+   */
+  private async unlessStanding(
+    tx: TransactionContext,
+    singleMeta: DynamicSingleRecord,
+    create: () => Promise<SingleDocument>
+  ): Promise<{ row: SingleDocument; created: boolean }> {
+    const standing = await readSingleForCreation<SingleDocument>(
+      tx,
+      singleMeta
+    );
+    if (standing) return { row: standing, created: false };
+    return { row: await create(), created: true };
+  }
+
+  /**
+   * The document a creation ends with: the one it inserted, or the one
+   * another request created first and the creation found under its lock.
+   */
+  private createdOrFound(
+    slug: string,
+    outcome: { row: SingleDocument; created: boolean }
+  ): SingleDocument {
+    this.logger.debug(
+      outcome.created
+        ? "Created default Single document"
+        : "Default Single document was created concurrently",
+      { slug, id: (outcome.row as { id?: unknown }).id }
+    );
+    return outcome.row;
   }
 
   /**
@@ -2494,6 +2932,9 @@ export class SingleQueryService extends BaseService {
       );
       return expandedDoc as SingleDocument;
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with the relationships returned as stored references.
+      rethrowIfRuleCouldNotRun(error);
       this.logger.error("Failed to expand relationship fields for Single", {
         error,
       });
@@ -2591,4 +3032,32 @@ export class SingleQueryService extends BaseService {
       });
     }
   }
+}
+
+/**
+ * The default a field states: `defaultValue`, as code and the Schema Builder spell it, or else
+ * `default`, as a field saved through the REST API may. A Single's table carries neither as a
+ * column default, so its first document is given the value here or not at all.
+ *
+ * The field payload checks `defaultValue` but keeps `default` as it was sent, so `default` is taken
+ * only where it fits the field as it is (`statedDefaultFits`, the answer the table's own fill
+ * gives): `null`, text for a number, or a value of a type whose default needs checking states
+ * nothing here. Taken as it was sent, it could put NULL in a required field's NOT NULL column, or
+ * text in a number column, and the first read could never write the document.
+ */
+function declaredDefaultOf(field: object): unknown {
+  const stated = field as {
+    type?: unknown;
+    hasMany?: unknown;
+    defaultValue?: unknown;
+    default?: unknown;
+  };
+  if (stated.defaultValue !== undefined) return stated.defaultValue;
+  return typeof stated.type === "string" &&
+    statedDefaultFits(
+      { type: stated.type, hasMany: stated.hasMany },
+      stated.default
+    )
+    ? stated.default
+    : undefined;
 }

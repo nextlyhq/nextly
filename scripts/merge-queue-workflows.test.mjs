@@ -304,7 +304,7 @@ describe("which runs a pull-request workflow's concurrency group cancels", () =>
 
   it("leaves a closed pull request's runs to one workflow, which cancels with the API", () => {
     const closing = read(".github/workflows/cancel-closed-pull-request-runs.yml");
-    expect(triggersOf(closing)).toEqual({ pull_request: { branches: ["main"], types: ["closed"] } });
+    expect(triggersOf(closing)).toEqual({ pull_request: { branches: ["main", "dev"], types: ["closed"] } });
     expect(closing.permissions).toEqual({});
     const [job] = Object.values(closing.jobs);
     expect(job.permissions).toEqual({ contents: "read", actions: "write" });
@@ -539,8 +539,9 @@ describe("a Version Packages pull request that went stale", () => {
 
 describe("Turborepo's shared remote cache", () => {
   /*
-   * Only `main`'s pushes write to it: every later run starts from what they
-   * built, and a pull request's own build must not become an entry another
+   * Only pushes to `main` and `dev` write to it: every later run starts from
+   * what they built (pull requests merge into `dev`, which is promoted to
+   * `main`), and a pull request's own build must not become an entry another
    * pull request replays. The merge queue runs the queued pull requests' code
    * (its branch is the base plus their changes), so it reads like a pull
    * request: with the signing key that code could sign an entry it never built. TURBO_CACHE asks for that,
@@ -553,6 +554,8 @@ describe("Turborepo's shared remote cache", () => {
     return evaluate(conditionTokens(expression), expression, known);
   };
   const MAIN = { "github.event_name": "push", "github.ref": "refs/heads/main" };
+  const DEV = { "github.event_name": "push", "github.ref": "refs/heads/dev" };
+  const OTHER_BRANCH = { "github.event_name": "push", "github.ref": "refs/heads/feature" };
   const QUEUE = { "github.event_name": "merge_group", "github.ref": "refs/heads/gh-readonly-queue/main/pr-1-abc" };
   const PULL = { "github.event_name": "pull_request", "github.ref": "refs/pull/1/merge" };
   const DISPATCH = { "github.event_name": "workflow_dispatch", "github.ref": "refs/heads/main" };
@@ -563,8 +566,10 @@ describe("Turborepo's shared remote cache", () => {
     const workflow = read(path);
     const holders = Object.entries(workflow.jobs).filter(([, job]) => CREDENTIAL.test(JSON.stringify(job.env ?? {})));
 
-    it(`${path}: main's pushes write, every other run only reads, the queue's included`, () => {
+    it(`${path}: pushes to main and dev write, every other run only reads, the queue's included`, () => {
       expect(valueOf(workflow.env.TURBO_CACHE, MAIN)).toBe("local:rw,remote:rw");
+      expect(valueOf(workflow.env.TURBO_CACHE, DEV)).toBe("local:rw,remote:rw");
+      expect(valueOf(workflow.env.TURBO_CACHE, OTHER_BRANCH)).toBe("local:rw,remote:r");
       expect(valueOf(workflow.env.TURBO_CACHE, QUEUE)).toBe("local:rw,remote:r");
       expect(valueOf(workflow.env.TURBO_CACHE, PULL)).toBe("local:rw,remote:r");
       expect(valueOf(workflow.env.TURBO_CACHE, DISPATCH)).toBe("local:rw,remote:r");
@@ -575,10 +580,12 @@ describe("Turborepo's shared remote cache", () => {
       expect(holders.length, "jobs that hold the cache credentials").toBeGreaterThan(0);
     });
 
-    it(`${path}: every job holding them names the write environment only for a push to main`, () => {
+    it(`${path}: every job holding them names the write environment only for a push to main or dev`, () => {
       for (const [name, job] of holders) {
         expect(job.environment, name).toMatchObject({ deployment: false });
         expect(valueOf(job.environment.name, MAIN), name).toBe("turbo-cache");
+        expect(valueOf(job.environment.name, DEV), name).toBe("turbo-cache");
+        expect(valueOf(job.environment.name, OTHER_BRANCH), name).toBe("turbo-cache-read");
         expect(valueOf(job.environment.name, QUEUE), name).toBe("turbo-cache-read");
         expect(valueOf(job.environment.name, PULL), name).toBe("turbo-cache-read");
         expect(valueOf(job.environment.name, DISPATCH), name).toBe("turbo-cache-read");

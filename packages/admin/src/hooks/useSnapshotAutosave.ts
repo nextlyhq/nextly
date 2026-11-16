@@ -104,6 +104,111 @@ export interface SnapshotSaveResult {
 }
 
 /**
+ * The recordings on their way to the server, by the document they belong to,
+ * from every recorder in this tab: an editor's form and a field recording its
+ * own state alike.
+ */
+const recordingsInFlight = new Map<string, Set<Promise<unknown>>>();
+
+/** Note a recording on its way, and take it off once it has landed. */
+function trackRecording(document: string, saving: Promise<unknown>): void {
+  const inFlight = recordingsInFlight.get(document) ?? new Set();
+  inFlight.add(saving);
+  recordingsInFlight.set(document, inFlight);
+  const landed = () => {
+    inFlight.delete(saving);
+    if (inFlight.size === 0 && recordingsInFlight.get(document) === inFlight) {
+      recordingsInFlight.delete(document);
+    }
+  };
+  void saving.then(landed, landed);
+}
+
+/** How long a save waits for recordings in flight: see `recordingsSettled`. */
+const RECORDINGS_WAIT_MS = 5000;
+
+/**
+ * Resolves once no recovery point for `document` is on its way to the server.
+ *
+ * A real save waits for this before it writes. The save deletes the author's
+ * recovery point, and a recording already sent could otherwise land after it:
+ * an older snapshot stored as if made from the saved document, which the
+ * editor would then offer as current work and a restore would revert the save
+ * with. Turning recording off for the save stops new recordings, not one
+ * already sent. Every recorder's, not one editor's, since a field recording
+ * its own state writes the same point; and only this document's, since
+ * another's cannot recreate the point this save deletes. Checked again after
+ * each wait, because a recording asked for meanwhile follows the one that
+ * finished.
+ *
+ * Waits `atMostMs` at most: a recording that never answers must not hold the
+ * author's save, which matters more than the point it would leave behind.
+ */
+export async function recordingsSettled(
+  document: string | null,
+  atMostMs: number = RECORDINGS_WAIT_MS
+): Promise<void> {
+  if (document === null) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  const deadline = new Promise<void>(resolve => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      resolve();
+    }, atMostMs);
+  });
+  try {
+    for (
+      let inFlight = recordingsInFlight.get(document);
+      inFlight !== undefined && !timedOut;
+      inFlight = recordingsInFlight.get(document)
+    ) {
+      await Promise.race([Promise.allSettled([...inFlight]), deadline]);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Run a write of a document once its recordings in flight have landed, for a
+ * write that does not go through a save: publishing every language. It must
+ * not be overtaken by a recording sent before it either: see
+ * `recordingsSettled`.
+ *
+ * `pending` is true from the ask until the write has finished (`writing`,
+ * the write's own pending state, covers the second half), so the action shows
+ * busy throughout, and a second ask while it waits is dropped: two would both
+ * run once the recordings land.
+ */
+export function useAfterRecordings(
+  document: string | null,
+  writing: boolean
+): {
+  run: (write: () => void) => void;
+  pending: boolean;
+} {
+  const [waiting, setWaiting] = useState(false);
+  // The latch itself, read synchronously: two asks inside one render both
+  // see the state as it was before either.
+  const waitingRef = useRef(false);
+  const run = useCallback(
+    (write: () => void) => {
+      if (waitingRef.current) return;
+      waitingRef.current = true;
+      setWaiting(true);
+      void recordingsSettled(document).then(() => {
+        waitingRef.current = false;
+        setWaiting(false);
+        write();
+      });
+    },
+    [document]
+  );
+  return { run, pending: waiting || writing };
+}
+
+/**
  * Whether a recording must NOT be made.
  *
  * One question with one implementation, asked at flush and only there. Checking
@@ -179,6 +284,12 @@ export interface UseSnapshotAutosaveOptions {
   identity: string | null;
 
   /**
+   * The document the recordings belong to, which a real save of it waits on:
+   * see `recordingsSettled`. Absent, the recordings are not waited for.
+   */
+  document?: string | null;
+
+  /**
    * Persist the current snapshot.
    *
    * Called AT flush time, not when it is handed over, so it must read the
@@ -231,6 +342,7 @@ export interface UseSnapshotAutosaveResult {
  */
 export function useSnapshotAutosave({
   identity,
+  document,
   save,
   debounceMs = DEFAULT_AUTOSAVE_DEBOUNCE_MS,
   enabled = true,
@@ -261,8 +373,8 @@ export function useSnapshotAutosave({
    * dependencies. The callback is created once per subscription, and closing
    * over these would pin the values they held when it was set up.
    */
-  const latestRef = useRef({ identity, enabled, save, stillWanted });
-  latestRef.current = { identity, enabled, save, stillWanted };
+  const latestRef = useRef({ identity, document, enabled, save, stillWanted });
+  latestRef.current = { identity, document, enabled, save, stillWanted };
   /*
    * The identity a recording was held for: one that came due while recording
    * was off, and so was not made. `null` when none is held. Turning recording
@@ -303,8 +415,10 @@ export function useSnapshotAutosave({
     inFlightRef.current = true;
     if (mountedRef.current) setStatus("saving");
 
+    const saving = latest.save();
+    if (latest.document != null) trackRecording(latest.document, saving);
     try {
-      const result = await latest.save();
+      const result = await saving;
       if (mountedRef.current) {
         setLastSavedAt(new Date(result.updatedAt));
         setStatus("saved");

@@ -20,6 +20,10 @@ import { createPluginSettingsStore } from "../domains/plugins/settings-store";
 import { NextlyError } from "../errors/nextly-error";
 import { env } from "../lib/env";
 import {
+  assertNoOpenTransaction,
+  type OpenTransactionProbe,
+} from "../shared/lib/open-transaction";
+import {
   afterCommit,
   type AfterCommitAdapter,
 } from "../shared/lib/run-adapter-transaction";
@@ -67,10 +71,15 @@ export function createPluginSettings(
     // in this process caching these values hears that they moved. The event
     // bus is in-process: other instances do not receive it. It has no request
     // actor, so it records no audit entry.
-    // Inside a plugin's `ctx.db.transaction` on SQLite the write is a
-    // savepoint of it, so the change is announced once that commits, and never
-    // when it rolls back.
+    // Refused inside an open transaction, before anything is read or written.
+    // A setting is not written through the transaction's handle, so it cannot
+    // be part of it alike everywhere: on PostgreSQL and MySQL it would commit
+    // on a connection of its own and outlive a rollback, and on SQLite it
+    // would join as a savepoint and be undone. The plugin writes the setting
+    // after its transaction instead, as it does a one-time secret or a limit.
+    // Outside one, the change is announced once the write has committed.
     set: async (patch, opts) => {
+      if (adapter) assertNoOpenTransaction(adapter(), "ctx.settings.set");
       const changedKeys = await service().set(patch, opts);
       const announce = () =>
         announcePluginSettingsChange({ plugin: plugin.name, changedKeys });
@@ -141,8 +150,13 @@ function settingsService(
   });
 }
 
-/** The adapter surface a plugin's settings write needs. */
-export interface SettingsAdapter extends AfterCommitAdapter {
+/**
+ * The adapter surface a plugin's settings write needs, including whether the
+ * calling flow is inside an open transaction, where the write is refused.
+ */
+export interface SettingsAdapter
+  extends AfterCommitAdapter,
+    OpenTransactionProbe {
   transaction<T>(work: () => Promise<T>): Promise<T>;
 }
 

@@ -11,13 +11,19 @@
  * @module domains/i18n/runtime/companion-io
  */
 
+import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 import type {
   SqlParam,
   SupportedDialect,
+  TransactionContext,
 } from "@nextlyhq/adapter-drizzle/types";
+import { and, eq, sql } from "drizzle-orm";
 
+import type { RequestActor } from "../../../auth/request-actor";
+import { isUniqueViolation } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
+import { readsOnTransaction } from "../../../shared/lib/read-transaction-scope";
 import type { ColumnSpec } from "../../schema/pipeline/diff/types";
 import {
   readIndexUniqueness,
@@ -27,6 +33,13 @@ import { quoteIdent } from "../../schema/pipeline/sql-templates/identifier-quoti
 import { restatedColumn } from "../../schema/pipeline/sql-templates/mysql-live-restate";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { toSnakeCase as toCanonicalSnakeCase } from "../../schema/services/field-column-descriptor";
+import { languageRevisionTable } from "../../schema/services/runtime-schema-generator";
+import {
+  CHANGED_AT_COLUMN,
+  changerColumns,
+  DOCUMENT_REVISION_COLUMN,
+  translationChangeColumns,
+} from "../../versions/document-revision";
 import { resolveLocalizedFieldNames } from "../classify-fields";
 import {
   COMPANION_STRUCTURAL_COLUMNS,
@@ -48,6 +61,7 @@ import type {
   I18nTransitionKind,
   TransitionStateStore,
 } from "../migration/transition-state";
+import { storesPerLanguage } from "../per-language-storage";
 
 import { buildCompanionRuntimeTable } from "./companion-registration";
 import { encodeStamp } from "./companion-stamp-column";
@@ -310,7 +324,23 @@ export async function upsertCompanionRow(
   locale: string,
   companionData: Record<string, unknown>,
   status?: string,
-  options: { now?: Date; updatedAt?: CompanionStampMode } = {}
+  options: {
+    now?: Date;
+    updatedAt?: CompanionStampMode;
+    /**
+     * Who made this save, when it is a save of the document: the row's version counter is then
+     * incremented (a row this creates starts at its default, 1) and its last changer recorded,
+     * in this same statement. Absent for a write that is not a save of the language, such as an
+     * archive replay.
+     */
+    savedBy?: RequestActor;
+    /**
+     * Set when this save already took the row's next version with
+     * {@link claimCompanionRevision}: the counter is then not moved a second
+     * time. The changer is still written, the same one the claim wrote.
+     */
+    revisionClaimed?: boolean;
+  } = {}
 ): Promise<void> {
   const withStatus =
     status !== undefined
@@ -377,7 +407,18 @@ export async function upsertCompanionRow(
               options.now
             ),
           };
-  const cols = Object.keys(withStamp);
+  const withChanger =
+    options.savedBy === undefined
+      ? withStamp
+      : {
+          ...withStamp,
+          ...translationChangeColumns(
+            options.savedBy,
+            adapter.dialect,
+            options.now
+          ),
+        };
+  const cols = Object.keys(withChanger);
 
   const isMysql = adapter.dialect === "mysql";
   const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
@@ -389,23 +430,150 @@ export async function upsertCompanionRow(
   const valuePlaceholders = allCols
     .map(c => {
       params.push(
-        c === "_parent" ? parentId : c === "_locale" ? locale : withStamp[c]
+        c === "_parent" ? parentId : c === "_locale" ? locale : withChanger[c]
       );
       return ph();
     })
     .join(", ");
 
+  // An existing row's counter moves by one in the conflict branch, from the row's own value under
+  // the lock the upsert holds; an inserted row takes the column default.
+  const increment =
+    options.savedBy === undefined || options.revisionClaimed
+      ? []
+      : [
+          isMysql
+            ? `${q(DOCUMENT_REVISION_COLUMN)} = ${q(DOCUMENT_REVISION_COLUMN)} + 1`
+            : `${q(DOCUMENT_REVISION_COLUMN)} = ${q(companionTableName)}.${q(DOCUMENT_REVISION_COLUMN)} + 1`,
+        ];
   const conflict = isMysql
-    ? `ON DUPLICATE KEY UPDATE ${cols.map(c => `${q(c)} = VALUES(${q(c)})`).join(", ")}`
-    : `ON CONFLICT (${q("_parent")}, ${q("_locale")}) DO UPDATE SET ${cols
-        .map(c => `${q(c)} = excluded.${q(c)}`)
-        .join(", ")}`;
+    ? `ON DUPLICATE KEY UPDATE ${[...cols.map(c => `${q(c)} = VALUES(${q(c)})`), ...increment].join(", ")}`
+    : `ON CONFLICT (${q("_parent")}, ${q("_locale")}) DO UPDATE SET ${[
+        ...cols.map(c => `${q(c)} = excluded.${q(c)}`),
+        ...increment,
+      ].join(", ")}`;
 
   await adapter.executeQuery(
     `INSERT INTO ${q(companionTableName)} (${allCols.map(q).join(", ")}) ` +
       `VALUES (${valuePlaceholders}) ${conflict}`,
     params
   );
+}
+
+/**
+ * Take a translation row's next version for a save judged on it, as that
+ * save's first write of the row, before it writes anything else: a
+ * compare-and-set, so it succeeds only when the row still holds the version
+ * the save was made from (`expected`), and a stale save is found with
+ * nothing of it written.
+ *
+ * `expected` 0 means the save was made with no row in this language: the
+ * row is inserted bare, with its counter at the column default (1) and this
+ * save's changer, and its values follow in {@link upsertCompanionRow}. A row
+ * already there means someone else's save created it since.
+ *
+ * Takes no lock on a row that is not there. A locking read of an absent
+ * translation row locks a range of the table's key on MySQL, and two
+ * documents' first translations that each lock the same range and then
+ * insert into it deadlock. Every writer of a document's translation rows
+ * holds the document's own row lock first, so nothing else moves this row
+ * between the claim and the write that follows it.
+ *
+ * @returns Whether the row was claimed; false when it is out of date.
+ */
+export async function claimCompanionRevision(
+  tx: Pick<TransactionContext, "getDrizzle" | "execute">,
+  dialect: SupportedDialect,
+  companionTableName: string,
+  parentId: string,
+  locale: string,
+  expected: number,
+  savedBy: RequestActor
+): Promise<boolean> {
+  if (expected > 0) {
+    // Through the translation table's revision model, which declares the
+    // counter, the changer and its time; it encodes the time as the row's
+    // other writes store it.
+    const table = languageRevisionTable(dialect, companionTableName);
+    const update = tx
+      .getDrizzle<ClaimsRows>()
+      .update(table as never)
+      .set({
+        [DOCUMENT_REVISION_COLUMN]: sql`${sql.identifier(DOCUMENT_REVISION_COLUMN)} + 1`,
+        ...changerColumns(savedBy),
+        [CHANGED_AT_COLUMN]: new Date(),
+      })
+      .where(
+        and(
+          eq(table._parent as never, parentId),
+          eq(table._locale as never, locale),
+          eq(table[DOCUMENT_REVISION_COLUMN] as never, expected)
+        )
+      );
+    // MySQL answers how many rows changed; the others return them.
+    if (dialect === "mysql") {
+      const result: unknown = await update;
+      const header = (Array.isArray(result) ? result[0] : result) as {
+        affectedRows?: number;
+      };
+      return header?.affectedRows === 1;
+    }
+    const rows = await update.returning({ parent: table._parent });
+    return rows.length === 1;
+  }
+
+  // The bare row, through the same revision model: its values follow in the
+  // upsert above, on the same transaction. Its counter takes the column's
+  // default, 1.
+  const table = languageRevisionTable(dialect, companionTableName);
+  const insert = tx
+    .getDrizzle<InsertsRows>()
+    .insert(table as never)
+    .values({
+      _parent: parentId,
+      _locale: locale,
+      ...changerColumns(savedBy),
+      [CHANGED_AT_COLUMN]: new Date(),
+    });
+  if (dialect === "mysql") {
+    // A duplicate fails this statement alone: MySQL keeps the transaction,
+    // which the rest of a batch goes on with.
+    try {
+      await insert;
+      return true;
+    } catch (error) {
+      if (isUniqueViolation(dialect, error)) return false;
+      throw error;
+    }
+  }
+  // PostgreSQL would abort the whole transaction on a failed insert, so the
+  // conflict is answered by the statement itself, with the row it inserted.
+  const rows = await insert
+    .onConflictDoNothing()
+    .returning({ parent: table._parent });
+  return rows.length === 1;
+}
+
+/** A Drizzle handle that updates rows, as `getDrizzle()` answers it. */
+/** A Drizzle handle that inserts rows, as `getDrizzle()` answers it. */
+interface InsertsRows {
+  insert(table: never): {
+    values(values: Record<string, unknown>): PromiseLike<unknown> & {
+      onConflictDoNothing(): {
+        returning(fields: Record<string, unknown>): PromiseLike<unknown[]>;
+      };
+    };
+  };
+}
+
+interface ClaimsRows {
+  update(table: never): {
+    set(values: Record<string, unknown>): {
+      where(condition: unknown): PromiseLike<unknown> & {
+        returning(fields: Record<string, unknown>): PromiseLike<unknown[]>;
+      };
+    };
+  };
 }
 
 /**
@@ -515,7 +683,9 @@ export async function refuseCompanionColumnsThatCannotHold(
     config
   )) {
     for (const entity of group) {
-      if (!entity.slug || entity.localized !== true) continue;
+      // Every entity kept per language: a translated one, or any under
+      // `experimental.perLanguageStorage`, whose translatable fields live in its companion too.
+      if (!entity.slug || !storesPerLanguage(entity)) continue;
       const tableName = resolveTableName(entity);
       const live = await liveCompanionColumns(adapter, tableName);
       if (live.length === 0) continue;
@@ -959,6 +1129,15 @@ function isMissingTableError(error: unknown): boolean {
   );
 }
 
+/** Whether `adapter` can ask the catalog for a table. */
+function hasTableExists(
+  adapter: object
+): adapter is { tableExists(tableName: string): Promise<boolean> } {
+  return (
+    typeof (adapter as { tableExists?: unknown }).tableExists === "function"
+  );
+}
+
 /**
  * Whether the companion `_locales` table physically exists (its migration has
  * run). Returns false ONLY for a verified missing-table error; any other probe
@@ -979,6 +1158,12 @@ export async function companionTableExists(
   adapter: CompanionWriteAdapter,
   companionTableName: string
 ): Promise<boolean> {
+  // Inside a read routed to a transaction, asked of the catalog: on
+  // PostgreSQL a statement naming a missing table aborts the transaction it
+  // runs in, and the read's caller holds that transaction open for its write.
+  if (readsOnTransaction(adapter) && hasTableExists(adapter)) {
+    return adapter.tableExists(companionTableName);
+  }
   const q =
     adapter.dialect === "mysql"
       ? `\`${companionTableName}\``
@@ -1029,7 +1214,7 @@ export async function liveCompanionColumns(
 }
 
 /** `tableName`'s columns as this database has them; empty when the table is missing. */
-async function liveColumnsOf(
+export async function liveColumnsOf(
   adapter: CompanionIntrospectAdapter,
   tableName: string
 ): Promise<readonly ColumnSpec[]> {
@@ -1077,13 +1262,15 @@ export async function liveCompanionShape(
   existingMainColumns: string[];
   presentOnCompanion?: string[];
   liveCompanionColumns?: string[];
+  liveCompanionDefinitions?: Readonly<Record<string, ColumnSpec>>;
   liveCompanionIndexes?: readonly string[];
   liveCompanionNotUnique?: readonly string[];
 }> {
   const { tableName, companionExists } = args;
-  const live = companionExists
-    ? await companionColumnNames(adapter, tableName)
+  const liveSpecs = companionExists
+    ? await liveCompanionColumns(adapter, tableName)
     : undefined;
+  const live = liveSpecs?.map(c => c.name);
   return {
     existingMainColumns: (
       await localizedColumnsOnMain(adapter, tableName, args.oldFields)
@@ -1097,6 +1284,15 @@ export async function liveCompanionShape(
             live
           ),
     liveCompanionColumns: live,
+    // Each companion column as it is, whose wider type and default a column restored to the main
+    // table takes back (`carriedDefinition`).
+    ...(liveSpecs
+      ? {
+          liveCompanionDefinitions: Object.fromEntries(
+            liveSpecs.map(c => [c.name, c] as const)
+          ),
+        }
+      : {}),
     // Only for a companion that exists: there are no indexes on a table that is about to be
     // created, and the transition plans its creates from that.
     ...(companionExists
@@ -1509,6 +1705,38 @@ export async function resolveCompanionSeedDebt(
 }
 
 /**
+ * Runs `statements` in order. On MySQL they run on one connection: a column restated from the
+ * database's own description of it (`restatedColumn`) is built in a session variable and run as a
+ * prepared statement, which another pooled connection cannot see. MySQL commits each schema
+ * statement as it runs, so this pins the connection and does not make the statements atomic.
+ * `afterEach` runs once each statement has landed.
+ */
+async function runStatementsInOrder(
+  adapter: CompanionIntrospectAdapter,
+  statements: readonly string[],
+  afterEach?: () => void
+): Promise<void> {
+  if (adapter.dialect !== "mysql") {
+    for (const statement of statements) {
+      await adapter.executeQuery(statement);
+      afterEach?.();
+    }
+    return;
+  }
+  const db = adapter.getDrizzle<{
+    transaction<T>(
+      run: (tx: { execute(query: unknown): Promise<unknown> }) => Promise<T>
+    ): Promise<T>;
+  }>();
+  await db.transaction(async tx => {
+    for (const statement of statements) {
+      await tx.execute(sql.raw(statement));
+      afterEach?.();
+    }
+  });
+}
+
+/**
  * Finish a copy that an earlier run started and did not complete.
  *
  * The companion already exists, so its CREATE is not reissued — only the copy is, and only for the
@@ -1597,13 +1825,11 @@ async function resumeInterruptedSeed(
         });
       }
     }
-    for (const statement of copy) {
-      // Issued as generated. The seed carries its guard from `buildLocalizationUpStatements`,
-      // which this path asks for — matching on a statement's leading text to decide whether to
-      // rewrite it made the guard a property of whoever executed the statement rather than of the
-      // statement itself.
-      await adapter.executeQuery(statement);
-    }
+    // Issued as generated. The seed carries its guard from `buildLocalizationUpStatements`,
+    // which this path asks for — matching on a statement's leading text to decide whether to
+    // rewrite it made the guard a property of whoever executed the statement rather than of the
+    // statement itself.
+    await runStatementsInOrder(adapter, copy);
     // The interrupted run's debt is discharged, so the record stops describing one.
     // A settlement that did not land means this run no longer holds the transition: someone took
     // it over while the copy ran. Reporting success would let the schema apply that follows drop
@@ -1712,6 +1938,22 @@ async function buildSeedingCreateStatements(
   });
   if (!spec) return null;
 
+  // Each companion column created from a main column takes what that column carries, as the
+  // database has it (`carriedDefinition`): a wider type, and a default.
+  const { carriedDefinition } = await import("../migration/carried-definition");
+  const liveMain = await liveColumnsOf(adapter, args.tableName);
+  const carriedSpec = {
+    ...spec,
+    columns: spec.columns.map(col => {
+      const carried = carriedDefinition(
+        liveMain.find(main => main.name === col.name),
+        col,
+        args.dialect
+      );
+      return carried ? { ...col, carried } : col;
+    }),
+  };
+
   const columnsOnMain = spec.columns
     .map(c => c.name)
     .filter(name => present.has(name));
@@ -1738,7 +1980,7 @@ async function buildSeedingCreateStatements(
   // something the next boot can put back. The copies left on main are inert once reads resolve
   // through the companion, and `nextly migrate` removes them under supervision.
   return buildLocalizationUpStatements(
-    { ...spec, columnsOnMain },
+    { ...carriedSpec, columnsOnMain },
     {
       dropSeededColumns: false,
       guardSeed: options.guardSeed,
@@ -1750,7 +1992,26 @@ async function buildSeedingCreateStatements(
   );
 }
 
-export async function ensureCompanionTable(
+/**
+ * Create a translated entity's translation table where it is missing, or
+ * finish what an existing one still owes (`createOrCompleteCompanionTable`).
+ *
+ * Not in `next build`, which creates no table: a translated entity whose
+ * translation table is missing is one the deploy has not migrated, and
+ * `nextly migrate` makes it. Nothing was created, which is what the answer
+ * says.
+ */
+export function ensureCompanionTable(
+  ...args: Parameters<typeof createOrCompleteCompanionTable>
+): Promise<boolean> {
+  if (isNextBuildPhase()) return Promise.resolve(false);
+  return createOrCompleteCompanionTable(...args);
+}
+
+// The body `ensureCompanionTable` had before the build gate moved in front of
+// it, unchanged; its size is that function's, not new branching.
+// fallow-ignore-next-line complexity
+async function createOrCompleteCompanionTable(
   adapter: CompanionIntrospectAdapter,
   args: {
     /**
@@ -1902,10 +2163,9 @@ export async function ensureCompanionTable(
         status: args.status === true,
         companionExists: false,
       });
-    for (const stmt of statements) {
-      await adapter.executeQuery(stmt);
+    await runStatementsInOrder(adapter, statements, () => {
       created = true;
-    }
+    });
     // Only once every statement landed. Settling earlier would mark a copy complete that a later
     // statement could still fail, and the record would then say the content is in the companion
     // when it is not.

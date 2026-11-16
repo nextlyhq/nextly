@@ -4,7 +4,7 @@ description: Add HTTP endpoints from a plugin — namespaced, secure by default,
 ---
 
 A plugin can contribute HTTP routes through `contributes.routes`. Each route is mounted
-under your plugin's namespace and is **secure by default** (D25/D28).
+under your plugin's namespace and is **secure by default**.
 
 ## Declare a route
 
@@ -52,6 +52,45 @@ a 404 with nothing to explain it. If your routes are not answering, check where 
 </Callout>
 
 Paths support `:param` segments (`/items/:id`), captured into `ctx.params`.
+
+## Answering a file at the site root
+
+Some files live at the very root of a site: `/robots.txt`, `/sitemap.xml`, `/llms.txt`. A plugin answers one with a route mounted at the root (`mount: "root"`), which is served behind the API handler at `<mount><path>`:
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+
+export default definePlugin({
+  name: "acme-robots",
+  version: "1.0.0",
+  nextly: ">=0.0.2",
+  contributes: {
+    routes: [
+      {
+        method: "GET",
+        path: "/robots.txt",
+        mount: "root",
+        public: true,
+        handler: () => new Response("User-agent: *\nAllow: /\n"),
+      },
+    ],
+  },
+});
+```
+
+`withNextly()` rewrites `/robots.txt`, `/sitemap.xml` and `/llms.txt` to that address, so they reach the plugin at the site root. The rewrite is checked after the site's own files and routes: a site that ships its own `public/robots.txt` or `app/robots.ts` keeps serving it. So does a site that rewrites one of these files itself, in any phase of its own `rewrites()`, including a pattern such as `/:path*` passing everything on to an older site: that file is left to the site's rewrite. Name more files, or a handler mounted somewhere other than `/admin/api`, with the second argument:
+
+```ts
+// next.config.ts
+import { withNextly } from "nextly/next";
+
+export default withNextly(
+  { reactStrictMode: true },
+  { apiRoute: "/admin/api", rootFiles: ["/humans.txt"] }
+);
+```
+
+A root route is matched only after core's own routes decline the path, so a plugin can never take over a core API address this way.
 
 ## The handler context
 
@@ -127,10 +166,24 @@ was not issued.
 Return a standard web `Response`. A thrown error is isolated into a JSON error response
 — a handler failure never crashes the server.
 
-## Secure by default (D28)
+## Secure by default
 
-- **Default:** the request must be authenticated. Add `requiredPermission` to also
-  enforce a permission (see [Permissions](/docs/plugins/permissions)).
+Every route says what reaching it takes, with exactly one of these. A route that
+declares none could act on the whole site for anyone signed in (an account with no
+role, or an API key with no grants), so it is refused for every caller, and named
+in a warning at startup, until it declares one.
+
+- **A permission:** `requiredPermission` names the permission a caller needs (see
+  [Permissions](/docs/plugins/permissions)). Use it for anything that changes or reveals
+  the site's content or settings.
+- **The handler judges each caller:** set `checksAccess: true` on a route that acts on
+  the site but whose check depends on the request (such as the collection it names),
+  so a fixed `requiredPermission` cannot express it. Its handler then decides on every
+  request what this caller may do, with `ctx.caller.can(...)` or by calling services
+  as the user. Signing in is still required.
+- **Only the caller's own record:** set `siteWide: false` on a route that acts only on
+  the signed-in caller's own record, or only reads what any signed-in caller may see.
+  Being signed in is then all it asks.
 - **Opt out:** set `public: true` to make a route callable without a session (e.g. a
   public sitemap or a webhook receiver). `ctx.user` will be `null`.
 - **Your own signed-in people:** set `principal: { kind }` to serve a kind of
@@ -145,6 +198,22 @@ unset, `csrf` checks only the request's origin, which a same-origin write passes
 `usePluginRouteMutation` works either way, because that hook sends the token on every
 write. A page that writes with its own `fetch` leaves `csrf` unset, or fetches
 `/admin/api/auth/csrf` and sends the token as `x-csrf-token`.
+
+`writePluginRoute({ plugin, path, method, body })` (experimental) makes one write
+outside React, with the same session handling and token. Where
+`usePluginRouteMutation` reports a failure on `error` at the next render,
+`writePluginRoute` rejects with the parsed error. Use it when you need the reason
+at the moment you await, such as to show it beside the field that was refused.
+
+A write through `usePluginRouteMutation` refreshes the reads it names in
+`invalidates`, in the same tab: a list your page reads with `usePluginRoute` shows
+the change as soon as the write succeeds. `writePluginRoute` refreshes nothing.
+Neither reaches another browser tab. Each tab keeps its own copy of what it read,
+so a list open in another tab of the admin still shows what it read before the
+write. Reloading that tab reads it again. Opening the page again reads it again
+only once its copy is older than the read's `staleTime`, five minutes by default,
+since the admin doesn't re-read on switching tabs. Pass `staleTime: 0` to
+`usePluginRoute` for a read that is fetched afresh each time its page opens.
 
 On a public route, `csrf: true` also checks the origin of a write no session
 authenticates, without asking it for a token; only such a write that sends an
@@ -237,7 +306,254 @@ ambient one:
 A session caller carries no scope at all, and resolves exactly as it always has —
 super-admin bypass included.
 
-## Middleware (D27)
+## Reading and writing your own route from the admin
+
+A plugin's admin components can call the routes the same plugin contributed
+through helpers exported from `@nextlyhq/plugin-sdk/admin`, so neither half of
+the plugin hand-rolls the session, its refresh or the error envelope:
+
+```ts
+import { usePluginRoute, readPluginRoute } from "@nextlyhq/plugin-sdk/admin";
+
+// In a component: cached and deduplicated like every other admin read.
+const list = usePluginRoute({ plugin: "@acme/p", path: "/summary" });
+// list.pending until an answer arrives; list.error is `Error | null`.
+
+// Outside React: one read per call. Abort the older read yourself when a
+// newer one starts — nothing does it for you, and a stale slow answer that
+// is never aborted can land last and overwrite the latest.
+let searchRead: AbortController | undefined;
+
+export async function searchPlugins(query: string) {
+  searchRead?.abort();
+  searchRead = new AbortController();
+  return readPluginRoute({
+    plugin: "@acme/p",
+    path: `/search?q=${encodeURIComponent(query)}`,
+    signal: searchRead.signal,
+  });
+}
+```
+
+`usePluginRoute` answers `{ data, pending, error, refetch, fetching }`, and
+`pending` is a real third state beside the data: `data` being `undefined` is
+both "the route answered nothing" and "the route has not answered yet".
+`error` is an `Error` or `null`: a refusal the route answered arrives parsed,
+with `status`, `code` and `data` to read, while a request that never got an
+answer — offline, a DNS or CORS failure, a cancelled read — stays a native
+`Error` with none of those. `readPluginRoute` is not cached, answers
+`undefined` for a route that answered with nothing, and rejects the same way:
+the parsed error on an HTTP refusal, a native error when the read never got
+one. Both go through the same session handling as the admin's own reads, so an
+expired session is renewed rather than surfacing as a failure.
+
+Both address the route through the dispatcher's own path builder, so the
+address agrees with where the route actually answers — a hand-spelled one is
+what drifts when the mount moves. On the default mount that address is
+`/plugins/<package name><path>`; a route the plugin declared with
+`mount: "root"` answers at the path it declared, and the package name plays no
+part in its address. The builder only builds: nothing checks that the name a
+call passes is the calling plugin's. A path no plugin route and no built-in
+endpoint serves is a request failure, not an empty answer — the admin's
+catch-all falls through to the built-in parser and refuses it. Writes have
+their own pair, `usePluginRouteMutation` and `writePluginRoute`, described with
+the `csrf` options above.
+
+## Receiving webhooks
+
+> **Experimental.** `ctx.security.webhooks` is new and ships `@experimental`.
+
+A route that receives webhooks is `public`, since the sender has no session, and
+reads the body as the exact bytes sent (`rawBody: true`). Verify the delivery's
+signature before reading anything in it:
+
+```ts
+import { definePlugin, standardWebhooks } from "@nextlyhq/plugin-sdk";
+
+// Your own record of the delivery ids already handled.
+declare function seen(deliveryId: string): Promise<boolean>;
+
+definePlugin({
+  name: "@acme/nextly-plugin-orders",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.0",
+  // ...
+  contributes: {
+    routes: [
+      {
+        method: "POST",
+        path: "/webhooks/orders",
+        public: true,
+        rawBody: true,
+        handler: async (req, ctx) => {
+          const result = await ctx.security.webhooks.verify(req, {
+            scheme: standardWebhooks,
+            // Every secret currently valid: during a rotation, the new and the old.
+            secrets: [process.env.ACME_ORDERS_SECRET ?? ""],
+          });
+          if (!result.verified) {
+            ctx.logger.warn("Refused an orders webhook", { reason: result.reason });
+            return new Response(null, { status: 401 });
+          }
+          // The same delivery can arrive twice: a sender's retry, or a
+          // replay. Claim it, so it is processed once.
+          const claimed = await ctx.security.webhooks.claimDelivery(result, {
+            provider: "acme-orders",
+          });
+          // Processed already: answer as the first time, change nothing.
+          if (claimed.status === "duplicate") {
+            return new Response(null, { status: 204 });
+          }
+          // Another handler holds it: ask the sender to try again later.
+          if (claimed.status === "in-progress") {
+            return new Response(null, { status: 503 });
+          }
+          let completed: boolean;
+          try {
+            const event = JSON.parse(result.body);
+            // ... work that is safe to repeat, keyed on result.deliveryId
+            ({ completed } = await claimed.claim.complete());
+          } catch (error) {
+            // Give it back, so the sender's retry is processed.
+            await claimed.claim.release();
+            throw error;
+          }
+          if (!completed) {
+            // The lease ran out and a retry took the claim over: it may be
+            // doing this work again right now, which is why the work must be
+            // safe to repeat. That retry records the outcome; this handler
+            // must not act on it a second time.
+            ctx.logger.warn("An orders webhook outlived its lease", {
+              deliveryId: result.deliveryId,
+            });
+          }
+          return new Response(null, { status: 204 });
+        },
+      },
+    ],
+  },
+});
+```
+
+Use `result.body`, the bytes that were verified, rather than reading the request
+again. `verify` reads a copy, so the request stays readable, but only the
+verified body is known to be what the sender signed. A verified delivery can
+still be a repeat, which is what `claimDelivery` is for: see
+[Handling a delivery once](#handling-a-delivery-once).
+
+What core checks, whatever the scheme:
+
+- **Age.** A delivery signed more than 5 minutes away from now, either way, is
+  refused as `expired`. Set `toleranceSeconds` to change that; it must be a
+  finite number.
+- **Signatures.** Every signature the delivery presents is compared with every
+  secret you pass, as bytes, in constant time. A delivery signed with the old
+  secret or the new one verifies while you pass both.
+- **Size.** A body over 1 MiB is refused as `too-large` before anything is
+  signed. Set `maxBytes` to change that.
+- **Nothing is verified by default.** No signature headers is `missing`, an
+  unreadable header is `malformed`, no usable secret is `no-secret`, and a
+  signature that matches no secret is `mismatch`. The reason is for your log;
+  answer the sender with a plain 400 or 401.
+
+### A provider's own scheme
+
+`standardWebhooks` is the scheme Nextly signs its own [webhooks](/docs/webhooks)
+with. For another provider, describe its scheme: where its signatures and
+timestamp are, which bytes it signs, and how one secret signs them. Core still
+does the age check and the comparison.
+
+```ts
+import { createHmac } from "node:crypto";
+import type { InboundWebhookScheme } from "@nextlyhq/plugin-sdk";
+
+/** `Provider-Signature: t=<seconds>,v1=<hex>`, signing "<t>.<body>". */
+const providerScheme: InboundWebhookScheme = {
+  read({ headers, bytes }) {
+    const header = headers.get("provider-signature");
+    if (header === null) return null; // not this scheme's delivery
+    const parts = header.split(",").map(part => part.split("="));
+    const t = parts.find(([key]) => key === "t")?.[1];
+    if (t === undefined || !/^\d+$/.test(t)) throw new Error("no timestamp"); // malformed
+    return {
+      timestamp: Number(t),
+      // The exact bytes sent, not text decoded and encoded again.
+      signed: Buffer.concat([Buffer.from(`${t}.`), bytes]),
+      signatures: parts
+        .filter(([key]) => key === "v1")
+        .map(([, value]) => Buffer.from(value, "hex")),
+    };
+  },
+  sign: (secret, signed) => createHmac("sha256", secret).update(signed).digest(),
+};
+```
+
+A provider that signs no time, such as one sending `sha256=<hex>` over the body
+alone, returns `timestamp: "none"`. It has to say so: a scheme that leaves the
+timestamp out is refused as `malformed`. Its verified result says
+`freshness: "unchecked"`, against `"checked"` for every other delivery.
+**`verify` gives such a delivery no replay protection**: someone who captured
+one can send it again at any time, and it still verifies. A `"checked"` delivery
+can be replayed too, but only within the tolerance. Claim every delivery
+(below): a claimed delivery sent again is a `duplicate` for as long as its
+record is kept, 30 days after it was processed, and after that the same bytes
+are new again. Require `result.freshness === "checked"` wherever a replay later
+than that would do harm.
+
+### Handling a delivery once
+
+`ctx.security.webhooks.claimDelivery(result, { provider })` claims a verified
+delivery once per plugin, `provider` and delivery. The delivery is the `id` you
+pass, for a provider that puts its id in the body; else the id the scheme read
+(`webhook-id` in Standard Webhooks); else a SHA-256 of the body. An `id` you
+pass overrides the scheme's.
+`provider` is your own name for the sender: an id is unique only within it.
+
+Pass it the result exactly as `verify` returned it. A copy, or an object built
+by hand, is refused, and the delivery claimed is always the one that was
+verified.
+
+It answers one of three:
+
+- **`first`**: process the delivery, then end the claim.
+- **`duplicate`**: it was processed already. Answer it as a success, so the
+  sender stops retrying.
+- **`in-progress`**: another handler holds it right now. Answer with a status
+  the sender retries, such as 503.
+
+**In your transaction.** Pass the `tx` that `ctx.db.transaction` hands its
+callback. The claim then commits with your writes, and is gone if they roll
+back, so a failed handler leaves the delivery for the sender's retry. There is
+nothing to end:
+
+```ts
+await ctx.db.transaction(async tx => {
+  const claimed = await ctx.security.webhooks.claimDelivery(result, {
+    provider: "acme-orders",
+    tx,
+  });
+  if (claimed.status !== "first") return;
+  // ... your writes, through tx
+});
+```
+
+**Without one.** The claim is a lease, 5 minutes by default (`leaseSeconds`,
+1 to 3600). End it with `claim.complete()` once the work is done, or
+`claim.release()` to give it back at once. Once completed, a delivery stays
+processed: `release()` then answers `{ released: false }`, so the catch in the
+example above is safe even when `complete()` itself threw. A handler that crashes holding it
+costs the sender one retry, never the delivery: a retry during the lease is
+`in-progress`, and the first one after it is `first`. Set `leaseSeconds` longer
+than your handler takes. Once-only holds while the lease does: a handler that
+outlives its lease may still be running when a retry takes the claim over, and
+its `complete()` then returns `{ completed: false }`. The work may have run
+twice, so keep its effects safe to repeat. Called without `tx`
+while your code has a transaction open, `claimDelivery` is refused.
+
+A processed delivery's record is kept 30 days, then removed; so is a claim
+whose lease ran out 30 days ago. No body is stored.
+
+## Middleware
 
 Routes support an ordered, typed middleware chain (onion model). Each middleware calls
 `next()` to continue or returns a `Response` to short-circuit:

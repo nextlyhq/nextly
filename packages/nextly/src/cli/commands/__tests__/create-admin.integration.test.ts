@@ -29,7 +29,11 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { SetupTokenMeta } from "../../../auth/setup-token/setup-token";
-import { createFirstAdministrator, firstAdminSetupFor } from "../create-admin";
+import {
+  createFirstAdministrator,
+  firstAdminSetupFor,
+  previewFirstAdministrator,
+} from "../create-admin";
 
 const ORIGIN = "http://localhost:3000";
 const PASSWORD = "Correct-Horse-Battery-9";
@@ -133,6 +137,58 @@ describe.each(getConfiguredTestDialects())(
         )
       ).toBe(true);
       expect(await signIn(t, "ada@example.com")).toBe(200);
+    });
+
+    it("a dry run takes no claim, names the account, and creates nothing", async () => {
+      const t = await emptyInstall();
+      let claimed = false;
+      const setup = setupOf(t);
+      const watched = {
+        ...setup,
+        claim: () => {
+          claimed = true;
+          return setup.claim();
+        },
+      };
+
+      const plan = await previewFirstAdministrator(watched, {
+        email: "ada@example.com",
+        name: "Ada",
+        password: PASSWORD,
+      });
+
+      expect(claimed).toBe(false);
+      expect(plan.refusals ?? []).toEqual([]);
+      expect(plan.changes.map(change => change.target).join(" ")).toContain(
+        "ada@example.com"
+      );
+      expect(await emails(t)).toEqual([]);
+      expect(
+        await superAdminRoleHeld(
+          t.adapter.getDrizzle() as unknown as Parameters<
+            typeof superAdminRoleHeld
+          >[0],
+          getDialectTables()
+        )
+      ).toBe(false);
+    });
+
+    it("a dry run names the refusal once the install has an administrator", async () => {
+      const t = await emptyInstall();
+      await createFirstAdministrator(setupOf(t), {
+        email: "ada@example.com",
+        name: "Ada",
+        password: PASSWORD,
+      });
+
+      const plan = await previewFirstAdministrator(setupOf(t), {
+        email: "eve@example.com",
+        name: "Eve",
+        password: PASSWORD,
+      });
+
+      expect(plan.changes).toEqual([]);
+      expect(plan.refusals?.length).toBe(1);
     });
 
     it("refuses, creating nothing, once the install has an administrator", async () => {

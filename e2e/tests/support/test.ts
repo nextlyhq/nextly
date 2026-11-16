@@ -100,9 +100,18 @@ export function documentsToFree(source: string, file: string): string[] {
  * Each step is asserted, so a changed lock route fails here rather than
  * leaving the next test to open the document read-only.
  */
-async function freeDocument(api: APIRequestContext, lock: string) {
+export async function freeDocument(api: APIRequestContext, lock: string) {
   const ref = await CLAIMED_DOCUMENTS[lock](api);
   if (ref === null) return;
+  await freeDocumentAt(api, ref, lock);
+}
+
+/** {@link freeDocument} for a document named directly, `what` for the failure. */
+export async function freeDocumentAt(
+  api: APIRequestContext,
+  ref: DocumentRef,
+  what: string
+): Promise<void> {
   const claimed = await api.post("/admin/api/document-lock", {
     data: { ...ref, takeover: true },
   });
@@ -110,7 +119,7 @@ async function freeDocument(api: APIRequestContext, lock: string) {
   const { item } = (await claimed.json()) as {
     item: { status: string; claimToken?: string };
   };
-  expect(item.status, `taking over the ${lock}`).toBe("acquired");
+  expect(item.status, `taking over the ${what}`).toBe("acquired");
 
   const released = await api.delete("/admin/api/document-lock", {
     data: { ...ref, claimToken: item.claimToken },
@@ -123,14 +132,17 @@ async function freeDocument(api: APIRequestContext, lock: string) {
   expect(read.ok(), await read.text()).toBe(true);
   expect(
     ((await read.json()) as { holder: unknown }).holder,
-    `the ${lock} is free`
+    `the ${what} is free`
   ).toBeNull();
 }
 
 /**
- * Each file's account, by file, retry attempt and seat. A worker is a
- * process of its own and runs a file's tests in order, so this module's map
+ * Each file's account, by file, retry attempt, repeat and seat. A worker is
+ * a process of its own and runs a file's tests in order, so this module's map
  * is per worker and enough to hand every test in a file the same account.
+ * Each `--repeat-each` repeat of a file has an account of its own, as a
+ * separate run would: through one account, the repeats spent the per-person
+ * request budget of a single run several times over within its minute.
  */
 const fileAccounts = new Map<string, Promise<StorageState>>();
 
@@ -142,10 +154,10 @@ const fileAccounts = new Map<string, Promise<StorageState>>();
  */
 export function fileAccount(
   baseURL: string,
-  testInfo: Pick<TestInfo, "file" | "retry">,
+  testInfo: Pick<TestInfo, "file" | "retry" | "repeatEachIndex">,
   seat = 0
 ): Promise<StorageState> {
-  const key = `${testInfo.file}#${testInfo.retry}#${seat}`;
+  const key = `${testInfo.file}#${testInfo.retry}#${testInfo.repeatEachIndex}#${seat}`;
   let made = fileAccounts.get(key);
   if (!made) {
     const documents =

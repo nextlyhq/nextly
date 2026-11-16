@@ -13,6 +13,7 @@
 import {
   DEFAULT_MIN_PASSWORD_LENGTH,
   MAX_MIN_PASSWORD_LENGTH,
+  type PasswordHasher,
 } from "../../auth/password/policy";
 import type { AuthStrategy } from "../../auth/pipeline/types";
 import type { CollectionConfig } from "../../collections/config/define-collection";
@@ -27,6 +28,7 @@ import {
 } from "../../domains/email/retention-config";
 import { normalizeLocalization } from "../../domains/i18n/config/normalize";
 import type {
+  LanguageAddressRule,
   LocalizationConfig,
   SanitizedLocalizationConfig,
 } from "../../domains/i18n/config/types";
@@ -67,6 +69,9 @@ import type { EmailConfig } from "../../services/email/types";
 import type { SingleConfig } from "../../singles/config/types";
 import type { StoragePlugin } from "../../storage/types";
 import type { UserConfig } from "../../users/config/types";
+
+import { DEFAULT_MIGRATIONS_DIR } from "./migrations-dir-default";
+import { DEFAULT_TYPESCRIPT_CONFIG } from "./typescript-config-defaults";
 
 // ============================================================
 // TypeScript Configuration
@@ -130,14 +135,19 @@ export interface DatabaseConfig {
     /**
      * The schema every managed table, index and enum lives in.
      *
-     * Only `"public"` is supported for now, and leaving it out means the
-     * same. Any other value is refused at boot and by every CLI command: the
-     * schema push cannot yet create tables outside `public`, so an
-     * installation pointed elsewhere would start with no core tables.
+     * Defaults to `"public"`. A named schema holds every table Nextly
+     * manages, plus the tables plugins and `db.schema.extend` add. It is
+     * applied as `search_path` on every connection, so one setting covers
+     * everything that resolves a name. The name must be lower-case letters,
+     * digits and underscores, start with a letter or underscore, be at most
+     * 63 characters, and not begin with `pg_`; anything else is refused at
+     * boot.
      *
-     * Reserved for placing an installation in its own namespace, applied as
-     * `search_path` on every connection so one setting covers everything
-     * that resolves a name.
+     * Moving the setting on an existing install is refused with
+     * `NEXTLY_POSTGRES_SCHEMA_MOVED`, because the new schema would start
+     * empty while the old one still holds the data. To start a second,
+     * separate installation in a new schema on purpose, set
+     * `NEXTLY_POSTGRES_SCHEMA_NEW_INSTALL=1` for its first start.
      *
      * MySQL and SQLite have no equivalent (MySQL's schema IS its database,
      * SQLite is one file) and ignore it with a warning, so a config shared
@@ -653,19 +663,14 @@ export interface AdminBrandingConfig {
   colors?: AdminBrandingColors;
 
   /**
-   * Toggle visibility of builder-related navigation (Collections/Singles/Components builders).
+   * Turn the schema builder (Collections, Singles and Field Groups builders) off outside
+   * production with `false`: its navigation is hidden and its schema writes are refused.
    *
-   * This is evaluated at runtime via the `/api/admin-meta` response.
+   * The builder is always off in production, whatever this says: schema reaches production
+   * through migrations, and a production start that finds `true` here logs that it has no
+   * effect. Evaluated at runtime and sent to the admin in the `/api/admin-meta` response.
    *
-   * Default behavior follows `NODE_ENV`:
-   * - `production` => hidden
-   * - `development` / `test` => visible
-   *
-   * Precedence:
-   * 1) `admin.branding.showBuilder` (this field)
-   * 2) `NODE_ENV` default mapping
-   *
-   * @default `process.env.NODE_ENV !== "production"`
+   * @default on outside production
    */
   showBuilder?: boolean;
 }
@@ -691,6 +696,13 @@ export interface PluginOverride {
     | "plugins"
     | "users"
     | "settings";
+  /**
+   * Override where a standalone plugin's rail item goes, written as the
+   * plugin's own `admin.landing` is: one of its pages or one of its
+   * collections. The collection may be named by the slug the plugin declares
+   * or by the one this site renamed it to.
+   */
+  landing?: string;
   /** Override or extend the plugin's sidebar appearance (shallow-merged) */
   appearance?: Partial<PluginAdminAppearance>;
 }
@@ -819,6 +831,52 @@ export interface AuthConfig {
    * in order; the built-in `password` strategy always runs last.
    */
   strategies?: AuthStrategy[];
+
+  /**
+   * @experimental Plugins allowed to finish logins, by name.
+   *
+   * A plugin that declares `capabilities.auth.login` — or contributes a
+   * `determineUser` auth hook, which decides who is signed in — finishes
+   * logins with `ctx.auth.completeLogin`, which signs in whichever account it
+   * names. Declaring it is not enough: the app lists the plugin here too, and
+   * an enabled plugin that declares it without being listed refuses the boot,
+   * naming the line to add.
+   *
+   * Not a sandbox: a plugin is trusted code, and its own code can still reach
+   * core's internals. The listing keeps the grant in the app's code review,
+   * so a plugin update cannot add it quietly.
+   *
+   * @default []
+   * @example
+   * ```ts
+   * auth: { loginPlugins: ["@acme/google-auth"] }
+   * ```
+   */
+  loginPlugins?: readonly string[];
+
+  /**
+   * Your own password hasher, for every account password: creating an
+   * account, setting, changing and resetting one, an invite, the first
+   * password, and every sign-in. Without one, core hashes with bcrypt.
+   *
+   * Set here, every way Nextly starts uses it: `getNextly`, the first request
+   * to the route handler, and the CLI. Accounts that hold a bcrypt password
+   * keep signing in, and the first sign-in stores the password again with
+   * this hasher.
+   *
+   * @example
+   * ```ts
+   * auth: {
+   *   passwordHasher: {
+   *     hash: password => argon2.hash(password),
+   *     verify: (password, stored) => argon2.verify(stored, password),
+   *     reach: "unbounded",
+   *     isHash: stored => stored.startsWith("$argon2"),
+   *   },
+   * }
+   * ```
+   */
+  passwordHasher?: PasswordHasher;
 }
 
 /**
@@ -833,6 +891,14 @@ export interface SanitizedAuthConfig {
   minPasswordLength: number;
   /** @experimental Opt-in auth strategies (D71); built-in password runs last. */
   strategies?: AuthStrategy[];
+  /**
+   * @experimental Plugins allowed to finish logins (`auth.loginPlugins`).
+   * Optional here so a consumer's existing `auth` object stays assignable;
+   * sanitization always fills it, defaulting to `[]`.
+   */
+  loginPlugins?: readonly string[];
+  /** The app's password hasher (`auth.passwordHasher`), when it brings one. */
+  passwordHasher?: PasswordHasher;
 }
 
 /**
@@ -842,6 +908,7 @@ export const DEFAULT_AUTH_CONFIG: SanitizedAuthConfig = {
   revealRegistrationConflict: false,
   allowRegistration: false,
   minPasswordLength: 8,
+  loginPlugins: [],
 };
 
 // ============================================================
@@ -941,10 +1008,45 @@ export interface NextlyConfig {
    */
   localization?: LocalizationConfig;
 
+  /**
+   * How each language's public address is formed: under a prefix
+   * (`/de/about`) or on a domain of its own. Kept apart from `localization`
+   * so a site whose languages are managed in Settings can declare it too.
+   * Omitted, a site with several languages has every language prefixed.
+   * @experimental
+   */
+  languageAddresses?: LanguageAddressRule;
+
   /** Outbound webhook configuration. */
   webhooks?: WebhookConfig;
   /** Audit and activity trail policy. */
   audit?: AuditConfig;
+
+  /**
+   * Settings that are not stable yet: each may change or be removed in a later release.
+   *
+   * @experimental
+   */
+  experimental?: ExperimentalConfig;
+}
+
+/**
+ * Settings that are not stable yet.
+ *
+ * @experimental
+ */
+export interface ExperimentalConfig {
+  /**
+   * Keep every translatable field in its per-language table from the start, for every collection,
+   * Single and component, whether or not it is marked translatable and whether or not the site
+   * declares languages; a site that declares none has one implicit language. Adding a language is
+   * then data only. Chosen when the site starts: a running site refuses a change until it is
+   * restarted, and a database that still keeps translatable values on its main tables is refused
+   * while it is on. Off by default.
+   *
+   * @experimental
+   */
+  perLanguageStorage?: boolean;
 }
 
 /**
@@ -1069,6 +1171,9 @@ export interface SanitizedNextlyConfig {
   /** Normalized multilingual content configuration (undefined when i18n is off). */
   localization?: SanitizedLocalizationConfig;
 
+  /** How each language's public address is formed, as declared. */
+  languageAddresses?: LanguageAddressRule;
+
   /**
    * Resolved webhook retention policy, or null when retention is switched off.
    * Always present after sanitization so consumers never re-resolve it.
@@ -1098,19 +1203,23 @@ export interface SanitizedNextlyConfig {
    * Always present after sanitization; defaults to false.
    */
   webhookAuditEnabled: boolean;
+
+  /**
+   * Whether every translatable field is kept per language from the start
+   * (`experimental.perLanguageStorage`). Always present after sanitization; defaults to false.
+   *
+   * @experimental
+   */
+  perLanguageStorage: boolean;
 }
 
 // ============================================================
 // Default Values
 // ============================================================
 
-/**
- * Default TypeScript configuration values.
- */
-export const DEFAULT_TYPESCRIPT_CONFIG: Required<TypeScriptConfig> = {
-  outputFile: "./src/types/generated/nextly-types.ts",
-  declare: true,
-};
+// Default TypeScript configuration values, defined in a module that imports
+// nothing at run time so a command's help can name them cheaply.
+export { DEFAULT_TYPESCRIPT_CONFIG };
 
 /**
  * Default database configuration values.
@@ -1123,7 +1232,8 @@ export const DEFAULT_DB_CONFIG: Required<DatabaseConfig> = {
   // and undefined is what "public" means here.
   postgres: {},
   schemasDir: "./src/db/schemas/collections",
-  migrationsDir: "./src/db/migrations",
+  // Read from its own module, which `withNextly` reads without this one.
+  migrationsDir: DEFAULT_MIGRATIONS_DIR,
   uiSchemaFile: "./ui-schema.json",
   runMigrationsOnBoot: false,
   // The schema lock's lease. A holder renews it, so it no longer has to outlast the longest
@@ -1408,6 +1518,15 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
       minPasswordLength: authMinPasswordLength(config.auth?.minPasswordLength),
       // Pass opt-in auth strategies through unchanged (D71).
       strategies: config.auth?.strategies,
+      // Copied and frozen like `db.rawSqlPlugins`: the boot and the CLI read
+      // the app's login grants from here, and plugin code that could add a
+      // name to this list would grant itself on the next read.
+      loginPlugins: Object.freeze([...(config.auth?.loginPlugins ?? [])]),
+      // Passed through as given: its contract is asserted where the services
+      // register it, the one place every start path meets.
+      ...(config.auth?.passwordHasher
+        ? { passwordHasher: config.auth.passwordHasher }
+        : {}),
     },
     storage: config.storage ?? [],
     plugins: config.plugins ?? [],
@@ -1426,6 +1545,7 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     localization: config.localization
       ? normalizeLocalization(config.localization)
       : undefined,
+    languageAddresses: config.languageAddresses,
     // Resolved once at boot so nothing downstream re-derives it. Null means the
     // user switched retention off; an absent `webhooks` key resolves to the
     // defaults, since the event ledger fills whether or not webhooks are used.
@@ -1443,5 +1563,11 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     // Off unless explicitly enabled; the org-wide audit log flips this to keep
     // recording events when an install has no delivery endpoints.
     webhookAuditEnabled: config.webhooks?.audit ?? false,
+    // Only `true` turns it on, so a stray value never moves a site's storage. A config sanitized
+    // already, as the CLI sanitizes an export written with `defineConfig` again, carries the
+    // result instead of the `experimental` block, and keeps it.
+    perLanguageStorage:
+      config.experimental?.perLanguageStorage === true ||
+      (config as { perLanguageStorage?: unknown }).perLanguageStorage === true,
   };
 }

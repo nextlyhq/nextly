@@ -9,8 +9,14 @@
  * @packageDocumentation
  */
 
+import {
+  parseFieldRewrite,
+  rewritesSingle,
+  type FieldRewriteResult,
+} from "../../domains/versions/field-rewrite";
 import { NextlyError } from "../../errors/nextly-error";
 import { collectingWarnings } from "../../hooks/side-effect-warnings";
+import type { HiddenFieldPaths } from "../../shared/lib/filterable-fields";
 import type { PaginatedResponse } from "../../types/pagination";
 import type {
   BulkDeleteArgs,
@@ -31,6 +37,10 @@ import type {
   FindByIDArgs,
   ListResult,
   MutationResult,
+  PublishArgs,
+  PublishResult,
+  RewriteFieldArgs,
+  RewriteSingleFieldArgs,
   UpdateArgs,
 } from "../types/index";
 
@@ -40,9 +50,11 @@ import {
   buildMutationMessage,
   callerAccess,
   createErrorFromResult,
+  createErrorFromSingleResult,
   isNotFoundError,
   mergeConfig,
 } from "./helpers";
+import { hiddenFieldRead } from "./hidden-fields";
 
 /**
  * Find multiple documents in a collection.
@@ -60,10 +72,21 @@ export async function find<TSlug extends CollectionSlug>(
   args: FindArgs<TSlug>
 ): Promise<ListResult<RowFromCollectionSlug<TSlug>>> {
   const config = mergeConfig(ctx.defaultConfig, args);
+  // One per call: the refusal and every row returned read each source's
+  // declarations once.
+  const hiding = hiddenFieldRead(config);
+  const source = { kind: "collection", slug: args.collection } as const;
 
   const result = await ctx.collectionsHandler.listEntries({
     collectionName: args.collection,
     page: args.page,
+    offset: args.offset,
+    unknownSort: args.unknownSort,
+    // A filter or a sort on a field this read leaves out is refused past the
+    // read gate, since the rows it keeps would reveal the value. Handed as a
+    // lookup the read resolves past its gate, so a refused caller costs no
+    // declaration read.
+    hiddenFields: () => hiding.pathsOf(source),
     limit: args.limit,
     where: args.where,
     // From `args`, never from `config`: an exemption that `mergeConfig` could
@@ -75,6 +98,7 @@ export async function find<TSlug extends CollectionSlug>(
     select: args.select,
     sort: args.sort,
     richTextFormat: config.richTextFormat,
+    richTextStyles: config.richTextStyles,
     ...accessOptions(config),
     // i18n M4: forward the content locale + fallback so localized fields resolve.
     locale: config.locale,
@@ -98,7 +122,9 @@ export async function find<TSlug extends CollectionSlug>(
     legacy.totalPages ?? Math.max(1, Math.ceil(total / Math.max(limit, 1)));
 
   return {
-    items: legacy.docs,
+    items: await Promise.all(
+      legacy.docs.map(doc => hiding.without(doc, source))
+    ),
     meta: {
       total,
       page,
@@ -118,7 +144,6 @@ export async function findByID<TSlug extends CollectionSlug>(
   args: FindByIDArgs<TSlug>
 ): Promise<RowFromCollectionSlug<TSlug> | null> {
   const config = mergeConfig(ctx.defaultConfig, args);
-
   try {
     const result = await ctx.collectionsHandler.getEntry({
       collectionName: args.collection,
@@ -126,6 +151,7 @@ export async function findByID<TSlug extends CollectionSlug>(
       depth: config.depth,
       select: args.select,
       richTextFormat: config.richTextFormat,
+      richTextStyles: config.richTextStyles,
       ...accessOptions(config),
       // Overlay the pending working draft when the caller opts in; the service
       // still gates it on an update-capability probe.
@@ -141,13 +167,18 @@ export async function findByID<TSlug extends CollectionSlug>(
     });
 
     if (!result.success) {
-      if (config.disableErrors) {
+      // A rule that could not run never answered, so `disableErrors` does not
+      // read it as a missing document: the call ends with that answer.
+      if (config.disableErrors && result.code !== "RULE_COULD_NOT_RUN") {
         return null;
       }
       throw createErrorFromResult(result);
     }
 
-    return result.data as RowFromCollectionSlug<TSlug>;
+    return await hiddenFieldRead(config).without(
+      result.data as RowFromCollectionSlug<TSlug>,
+      { kind: "collection", slug: args.collection }
+    );
   } catch (error) {
     if (config.disableErrors && isNotFoundError(error)) {
       return null;
@@ -311,6 +342,63 @@ export async function update<TSlug extends CollectionSlug>(
 }
 
 /**
+ * Publish or unpublish the parts of one entry `args` chooses, or say what doing so would do.
+ *
+ * @experimental
+ */
+async function moveParts(
+  ctx: NextlyContext,
+  args: PublishArgs,
+  direction: "publish" | "unpublish"
+): Promise<MutationResult<PublishResult>> {
+  const config = mergeConfig(ctx.defaultConfig, args);
+  const { result, warnings } = await collectingWarnings(() =>
+    ctx.collectionsHandler.publishParts(
+      {
+        collectionName: args.collection,
+        entryId: args.id,
+        ...accessOptions(config),
+        context: config.context,
+        disableRevalidate: config.disableRevalidate,
+        data: args.data,
+      },
+      {
+        direction,
+        locales: args.locales,
+        shared: args.shared,
+        describe: args.describe,
+      }
+    )
+  );
+  if (!result.success) {
+    throw createErrorFromResult(result);
+  }
+  return {
+    message:
+      result.message ??
+      `${direction === "publish" ? "Published" : "Unpublished"}.`,
+    item: result.data as PublishResult,
+    ...(warnings ? { warnings } : {}),
+  };
+}
+
+/** Publish the chosen parts of one entry. @experimental */
+export function publish(
+  ctx: NextlyContext,
+  args: PublishArgs
+): Promise<MutationResult<PublishResult>> {
+  return moveParts(ctx, args, "publish");
+}
+
+/** Unpublish the chosen parts of one entry. @experimental */
+export function unpublish(
+  ctx: NextlyContext,
+  args: PublishArgs
+): Promise<MutationResult<PublishResult>> {
+  return moveParts(ctx, args, "unpublish");
+}
+
+/**
  * Delete a document by ID or by `where` clause.
  *
  * matching the wire API's `respondMutation` envelope. The by-where path
@@ -397,6 +485,21 @@ export async function deleteEntry<
 }
 
 /**
+ * The fields an aggregate refuses in its filter or its key, where its call
+ * passes `showHiddenFields: false`: the count, the buckets or the timeline
+ * would reveal the value a read leaves out. A lookup, not the paths: the read
+ * resolves it past its gate, as `find`'s, so a caller the gate refuses never
+ * reaches the declarations.
+ */
+function aggregateHiddenFields(
+  config: Parameters<typeof hiddenFieldRead>[0],
+  collection: string
+): HiddenFieldPaths {
+  const hiding = hiddenFieldRead(config);
+  return () => hiding.pathsOf({ kind: "collection", slug: collection });
+}
+
+/**
  * Count documents matching a query.
  *
  * `collectionsHandler.countEntries()` service still produces the legacy
@@ -411,6 +514,7 @@ export async function count(
 
   const result = await ctx.collectionsHandler.countEntries({
     collectionName: args.collection,
+    hiddenFields: aggregateHiddenFields(config, args.collection),
     where: args.where,
     // From `args`, never `config` -- same reason as `find`: an inheritable
     // exemption would reach nested reads a caller's own `where` travels into.
@@ -451,6 +555,7 @@ export async function group(
 
   const result = await ctx.collectionsHandler.groupEntries({
     collectionName: args.collection,
+    hiddenFields: aggregateHiddenFields(config, args.collection),
     groupBy: args.groupBy,
     where: args.where,
     // From `args`, never `config`, for the reason `count` takes it from
@@ -515,6 +620,7 @@ export async function timeseries(
 
   const result = await ctx.collectionsHandler.timeseriesEntries({
     collectionName: args.collection,
+    hiddenFields: aggregateHiddenFields(config, args.collection),
     dateField: args.dateField,
     interval: args.interval,
     where: args.where,
@@ -603,5 +709,64 @@ export async function duplicate<TSlug extends CollectionSlug>(
     message: buildMutationMessage(args.collection, "duplicated"),
     item: result.data as RowFromCollectionSlug<TSlug>,
     ...(warnings ? { warnings } : {}),
+  };
+}
+
+/**
+ * @experimental Rewrite one field of an entry, or of a Single, on its live
+ * copy and on every pending draft that holds it, in one transaction, without
+ * publishing: each draft stays a draft and the status is unchanged. Refused with
+ * `STALE_VERSION`, changing nothing, unless the entry is still at
+ * `expectedVersion`. Runs no save hooks; records one history event with the
+ * reason, and the `entry.updated` event for the live change.
+ */
+export async function rewriteField(
+  ctx: NextlyContext,
+  args: RewriteFieldArgs | RewriteSingleFieldArgs
+): Promise<MutationResult<FieldRewriteResult>> {
+  const config = mergeConfig(ctx.defaultConfig, args);
+  // The request is the call's own fields alone: the instance's default
+  // language would otherwise reach a shared field, which takes none.
+  const request = parseFieldRewrite({
+    ...("single" in args
+      ? { single: args.single }
+      : { collection: args.collection, id: args.id }),
+    field: args.field,
+    ...(args.locale === undefined ? {} : { locale: args.locale }),
+    expectedVersion: args.expectedVersion,
+    set: args.set,
+    reason: args.reason,
+  });
+  const access = accessOptions(config);
+  const caller = {
+    user: access.user,
+    // Trusted unless the call says otherwise, as every Direct API call is.
+    overrideAccess: access.overrideAccess !== false,
+    authenticatedScope: access.authenticatedScope,
+  };
+  // A Single's rewrite goes through the Single's own write path.
+  if (rewritesSingle(request)) {
+    const result = await ctx.singleEntryService.rewriteField({
+      request,
+      ...caller,
+    });
+    if (!result.success) {
+      throw createErrorFromSingleResult(result);
+    }
+    return {
+      message: buildMutationMessage(request.single, "updated"),
+      item: result.data as FieldRewriteResult,
+    };
+  }
+  const result = await ctx.collectionsHandler.rewriteField({
+    request,
+    ...caller,
+  });
+  if (!result.success) {
+    throw createErrorFromResult(result);
+  }
+  return {
+    message: buildMutationMessage(request.collection, "updated"),
+    item: result.data as FieldRewriteResult,
   };
 }

@@ -158,25 +158,25 @@ describe("core widget definitions", () => {
    * of these hides a card every authenticated admin can see today, which is the
    * behaviour change that docblock exists to prevent.
    */
-  it("declares the setup card first on the default, full width and two rows, shown by its own rule", () => {
+  it("declares the setup card first on the default, half the row by default and up to the whole row, shown by its own rule", () => {
     const card = CORE_DECLARATIONS.find(w => w.id === "core/setup");
     expect(card).toBeDefined();
     // Whether it is there is its `shows`, judged per reader before it loads,
     // never a condition or the frame's dismissal.
     expect(card?.shows).toBeTypeOf("function");
     expect(card).not.toHaveProperty("lifecycle");
+    // 50% by default, never narrower (its buttons no longer fit beside the hints), up to 100%.
     expect(card?.size).toEqual({
-      default: { w: 12, h: 2 },
-      min: { w: 12, h: 2 },
-      max: { w: 12, h: 4 },
+      default: { w: 6, h: 4 },
+      min: { w: 6, h: 2 },
+      max: { w: 12, h: 6 },
     });
-    // First on core's default, across the row at its one row of steps: it addresses a reader
+    // First on core's default, at half the row beside Needs attention: it addresses a reader
     // who has just arrived.
-    expect(CORE_DEFAULT_LAYOUT[0]).toEqual({
-      widget: "core/setup",
-      w: 12,
-      h: 2,
-    });
+    expect(CORE_DEFAULT_LAYOUT.slice(0, 2)).toEqual([
+      { widget: "core/setup", w: 6, h: 4 },
+      { widget: "core/needs-attention", w: 6, h: 4 },
+    ]);
   });
 
   it("no longer declares the old Get started card, or the cards it replaced", () => {
@@ -298,6 +298,24 @@ describe("the list cards' Density", () => {
   );
 });
 
+describe("the list cards' Number of entries", () => {
+  it.each([
+    "core/recent-entries",
+    "core/continue",
+    "core/team-activity",
+    "core/upcoming-releases",
+    "core/content-table",
+  ])("%s offers five rows to start, from one to twenty", id => {
+    expect(card(id).settings?.find(s => s.name === "limit")).toMatchObject({
+      type: "number",
+      label: "Number of entries",
+      defaultValue: 5,
+      min: 1,
+      max: 20,
+    });
+  });
+});
+
 describe("a new card's defaults, before its reader touches a setting", () => {
   /** A declared core card as the registry publishes it to the admin. */
   function published(id: string) {
@@ -333,11 +351,10 @@ describe("a new card's defaults, before its reader touches a setting", () => {
     "core/continue",
     "core/team-activity",
     "core/upcoming-releases",
-  ])("folds %s's Density under Advanced", id => {
+  ])("draws %s's Row spacing under Display, by that name", id => {
     expect(
       published(id).settings?.find(setting => setting.name === "density")
-        ?.section
-    ).toBe("advanced");
+    ).toMatchObject({ label: "Row spacing", section: "display" });
   });
 
   it("draws Continue's Tab with the card's data, since it narrows whose work the card reads", () => {
@@ -440,9 +457,9 @@ describe("the default dashboard", () => {
   // a row: the onboarding card; Needs attention beside Upcoming releases; Continue beside
   // Content; New form submissions, the form-builder plugin's, beside Team activity.
   const DEFAULT = [
-    ["core/setup", 12, 2],
-    ["core/needs-attention", 8, 4],
-    ["core/upcoming-releases", 4, 4],
+    ["core/setup", 6, 4],
+    ["core/needs-attention", 6, 4],
+    ["core/upcoming-releases", 6, 4],
     ["core/continue", 6, 4],
     ["core/content-table", 6, 4],
     ["form-builder/new-submissions", 6, 4],
@@ -470,9 +487,9 @@ describe("the default dashboard", () => {
     // Written out in full rather than read from any list of what is registered, so a card
     // added to or dropped from core's widgets cannot move the default with it.
     expect(CORE_DEFAULT_LAYOUT).toEqual([
-      { widget: "core/setup", w: 12, h: 2 },
-      { widget: "core/needs-attention", w: 8, h: 4 },
-      { widget: "core/upcoming-releases", w: 4, h: 4 },
+      { widget: "core/setup", w: 6, h: 4 },
+      { widget: "core/needs-attention", w: 6, h: 4 },
+      { widget: "core/upcoming-releases", w: 6, h: 4 },
       { widget: "core/continue", w: 6, h: 4 },
       { widget: "core/content-table", w: 6, h: 4 },
       { widget: "form-builder/new-submissions", w: 6, h: 4, optional: true },
@@ -545,30 +562,37 @@ describe("the default dashboard", () => {
   });
 
   /** The heights of each row, laid out as the grid lays the cards: in order, twelve to a row. */
-  const rowHeights = (cards: ReadonlyArray<{ w?: number; h?: number }>) => {
-    const rows: number[][] = [[]];
-    let used = 0;
-    for (const { w = 0, h = 0 } of cards) {
-      if (used + w > 12) {
-        rows.push([]);
-        used = 0;
-      }
-      rows[rows.length - 1].push(h);
-      used += w;
+  /** The columns each row uses, as the grid lays cards out: in order, a card that does not fit starting the next row. */
+  const rowWidths = (cards: ReadonlyArray<{ w?: number }>) => {
+    const rows: number[] = [0];
+    for (const { w = 0 } of cards) {
+      if (rows[rows.length - 1] + w > 12) rows.push(0);
+      rows[rows.length - 1] += w;
     }
     return rows;
   };
 
-  it("tiles: the cards that share a row share a height, with the form submissions card or without it", () => {
-    // 🔴 A card beside a taller one leaves a gap below it; no later card is moved up to fill it.
-    const withForms = rowHeights(CORE_DEFAULT_LAYOUT);
-    // The control: the rows are the agreed four, so a single-row answer cannot pass.
-    expect(withForms).toEqual([[2], [4, 4], [4, 4], [4, 4]]);
-    const withoutForms = rowHeights(
-      CORE_DEFAULT_LAYOUT.filter(entry => entry.widget !== FORM_SUBMISSIONS)
-    );
-    for (const heights of [...withForms, ...withoutForms]) {
-      expect(new Set(heights).size).toBe(1);
+  it("leaves no gap whichever of its cards a reader does not see: every row full but the last", () => {
+    // 🔴 The grid never backfills, so a card left out (the setup card for anyone but a
+    // super-admin or once hidden, an empty Needs attention or Upcoming releases, the form
+    // submissions without their plugin) must not leave a short row behind it.
+    const mayBeLeftOut = [
+      "core/setup",
+      "core/needs-attention",
+      "core/upcoming-releases",
+      FORM_SUBMISSIONS,
+    ];
+    // The control: the default as written is the agreed four rows.
+    expect(rowWidths(CORE_DEFAULT_LAYOUT)).toEqual([12, 12, 12, 6]);
+    for (let mask = 0; mask < 1 << mayBeLeftOut.length; mask += 1) {
+      const out = new Set(mayBeLeftOut.filter((_, bit) => mask & (1 << bit)));
+      const rows = rowWidths(
+        CORE_DEFAULT_LAYOUT.filter(entry => !out.has(entry.widget))
+      );
+      expect([[...out], rows.slice(0, -1)]).toEqual([
+        [...out],
+        rows.slice(0, -1).map(() => 12),
+      ]);
     }
   });
 

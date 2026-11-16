@@ -3,9 +3,11 @@
  * configurations declare them.
  *
  * A many-to-many field keeps its links in a junction table whose name and
- * columns are spelled from both collections' slugs, and a rename keeps every
+ * columns are spelled from both sides' slugs, and a rename keeps every
  * physical name. A rename therefore asks this which relationships use the
  * collection it would rename, on either side, and refuses when there are any.
+ * A Builder collection, Single or field group can declare one, so every
+ * registry of stored field configurations is asked.
  *
  * @module domains/entity-rename/many-to-many-links
  */
@@ -16,6 +18,7 @@ import { NextlyError } from "../../errors";
 import { usesJunctionTable } from "../schema/services/field-column-descriptor";
 
 import type { EntitySlugMove } from "./move-entity-slug";
+import { storedFieldConfigurationTables } from "./slug-columns";
 
 /** One many-to-many field: the collection declaring it, its name, its target. */
 export interface ManyToManyLink {
@@ -33,9 +36,10 @@ export interface StoredCollectionFields {
 /**
  * A stored `fields` value, from either form a driver returns. Text that is not
  * JSON throws, as it does where the registries read it: read as no fields, it
- * would let through a rename that a relationship in it forbids.
+ * would let through a rename that a relationship in it forbids. Shared with the
+ * rename's other reader of stored fields (`relationship-targets`).
  */
-function fieldsOf(value: unknown): unknown[] {
+export function fieldsOf(value: unknown): unknown[] {
   const parsed: unknown =
     typeof value === "string" ? (JSON.parse(value) as unknown) : value;
   return Array.isArray(parsed) ? parsed : [];
@@ -90,6 +94,34 @@ export function manyToManyLinks(
 }
 
 /**
+ * The many-to-many fields that use the collection `slug`: those pointing at it, in any registry
+ * `present` holds (a collection's, a Single's or a field group's), and the collection's own.
+ * Only the collection registry's rows are collections, so only there does a declaring slug name
+ * it: a Single or field group with the same slug is another entity.
+ */
+async function linksUsing(
+  tx: TransactionContext,
+  slug: string,
+  present: ReadonlySet<string>
+): Promise<ManyToManyLink[]> {
+  const found: ManyToManyLink[] = [];
+  for (const table of storedFieldConfigurationTables()) {
+    // Checked first: on PostgreSQL a read of a table that is not there aborts the transaction.
+    if (!present.has(table)) continue;
+    const rows = await tx.select<StoredCollectionFields>(table, {
+      columns: ["slug", "fields"],
+    });
+    const declaresIt = table === "dynamic_collections";
+    found.push(
+      ...manyToManyLinks(rows).filter(
+        link => link.target === slug || (declaresIt && link.collection === slug)
+      )
+    );
+  }
+  return found;
+}
+
+/**
  * Refuse to rename a collection that a many-to-many relationship uses, as the
  * collection declaring the field or as its target, with a CONFLICT naming the
  * fields, so the links stay readable and the caller knows what to change.
@@ -100,14 +132,11 @@ export function manyToManyLinks(
  */
 export async function refuseManyToManyLinks(
   tx: TransactionContext,
-  move: EntitySlugMove
+  move: EntitySlugMove,
+  present: ReadonlySet<string>
 ): Promise<void> {
   if (move.kind !== "collection" || move.from === move.to) return;
-  const rows = await tx.select<StoredCollectionFields>("dynamic_collections", {
-    columns: ["slug", "fields"],
-  });
-  const named = manyToManyLinks(rows)
-    .filter(link => link.collection === move.from || link.target === move.from)
+  const named = (await linksUsing(tx, move.from, present))
     .map(link => `${link.collection}.${link.field}`)
     .sort();
   if (named.length === 0) return;

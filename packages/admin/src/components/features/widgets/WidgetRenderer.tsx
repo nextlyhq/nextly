@@ -66,13 +66,18 @@ function skeletonDisplayOf(definition: DashboardWidget): string {
 const DECLARED_TABLE_COLUMNS = 2;
 
 /**
- * The items setting a list or table card's skeleton holds the place of: `null`, the default
- * number, since a card's rows are what its widget's `load` reads for its size; `undefined` for
- * any other card, whose skeleton draws its default rows.
+ * The "Number of entries" a list or table card's skeleton holds the place of: the card's own
+ * `limit` setting, the rows its `load` reads and the card then draws (`rowsDrawn`), so a full
+ * answer lands at the height the card loaded at; the default number (`null`) for a card that
+ * declares none. `undefined` for any other card, whose skeleton draws its default rows.
  */
-function skeletonItemsFor(definition: DashboardWidget): unknown {
+function skeletonItemsFor(
+  definition: DashboardWidget,
+  settings: Record<string, unknown> | undefined
+): unknown {
   const display = skeletonDisplayOf(definition);
-  return display === "list" || display === "table" ? null : undefined;
+  if (display !== "list" && display !== "table") return undefined;
+  return settings?.limit ?? null;
 }
 
 /**
@@ -86,6 +91,19 @@ function skeletonFieldsFor(definition: DashboardWidget): number | undefined {
   if (display === "table") return DECLARED_TABLE_COLUMNS;
   return display === "list" ? 0 : undefined;
 }
+
+/**
+ * Whether a card loads as a checklist of steps: core's setup card, whose body is one. Its
+ * declaration says only that it loads as a list (the shapes a declaration may state), and five
+ * list rows are taller than the four steps it usually draws, so the frame draws its own loading
+ * shape for it, as tall as its checklist.
+ */
+function loadsAsChecklist(definition: DashboardWidget): boolean {
+  return definition.id === SETUP_WIDGET_ID;
+}
+
+/** Core's setup card's id, as the dashboard's other core cards are named here. */
+const SETUP_WIDGET_ID = "core/setup";
 
 function skeletonFor(archetype: string): SkeletonShape {
   switch (archetype) {
@@ -211,12 +229,6 @@ export interface WidgetRendererProps {
   subtitle?: string | undefined;
   /** The card's one quick setting, which the frame draws before `headerAction`. */
   quick?: ReactNode;
-  /**
-   * Draws the card's title as a control: the dashboard's cards open their quick popover from it.
-   *
-   * @internal Set by the dashboard grid only, never part of the widget kit.
-   */
-  titleTrigger?: ((title: string) => ReactNode) | undefined;
   /** The drag handle in customise mode, drawn before the title. */
   leading?: ReactNode;
   /** Customise mode: the card's content stays visible but out of reach. */
@@ -290,7 +302,6 @@ function sharedCardProps(
     WidgetRendererProps,
     | "headerAction"
     | "quick"
-    | "titleTrigger"
     | "leading"
     | "customizing"
     | "answerSize"
@@ -311,8 +322,12 @@ function sharedCardProps(
     ...(placement?.size === undefined ? {} : { h: placement.size.h }),
     // The display the widget says it looks like, else its archetype's: a
     // declared card's `skeleton`, published as its `sketch`.
-    skeleton: skeletonFor(skeletonDisplayOf(definition)),
-    skeletonItems: skeletonItemsFor(definition),
+    skeleton: loadsAsChecklist(definition)
+      ? "checklist"
+      : skeletonFor(skeletonDisplayOf(definition)),
+    skeletonItems: loadsAsChecklist(definition)
+      ? undefined
+      : skeletonItemsFor(definition, placement?.settings),
     // The density the card's list rows, and the skeleton holding their place, are drawn at.
     listDensity: listDensityOf(placement?.settings),
     skeletonFields: skeletonFieldsFor(definition),
@@ -449,7 +464,6 @@ export function WidgetRenderer({
   placement,
   headerAction,
   quick,
-  titleTrigger,
   leading,
   customizing = false,
   onRetry,
@@ -466,7 +480,6 @@ export function WidgetRenderer({
   const shared = sharedCardProps(definition, placement, {
     headerAction,
     quick,
-    titleTrigger,
     leading,
     customizing,
     answerSize,

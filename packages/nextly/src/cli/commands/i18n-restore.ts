@@ -30,17 +30,28 @@ import {
   kindOption,
   resolveEntityTables,
 } from "../../domains/i18n/migration/resolve-entity-table";
-import { restoreI18nArchive } from "../../domains/i18n/migration/restore-archive";
+import {
+  restoreI18nArchive,
+  type RestoreArchiveResult,
+} from "../../domains/i18n/migration/restore-archive";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
+import { NextlyError } from "../../errors/nextly-error";
+import { createContext, type CommandContext } from "../context";
+import { reportDryRun, type DryRunChange } from "../dry-run";
 import { exitWithError } from "../errors";
 import {
   restoreCollectionRequired,
   restoreEntityRefusal,
 } from "../errors/areas/sync";
-import { createContext, type CommandContext } from "../context";
-import { withAdapter } from "../utils/adapter";
+import { openCommandAdapter, withAdapter } from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
+import {
+  judgeDataLossAtTerminal,
+  readDataLossConsent,
+  requireConsented,
+  type AcceptDataLossOption,
+} from "../utils/data-loss-consent";
 
 export interface I18nRestoreCommandOptions {
   /** Entity slug to restore, as recorded in the archive's `collection` column. */
@@ -56,6 +67,10 @@ export interface I18nRestoreCommandOptions {
   field?: string;
   /** Delete the replayed rows from the archive once written. */
   purge?: boolean;
+  /** The data-loss consent `--purge` needs, which deletes from the archive. */
+  acceptDataLoss?: AcceptDataLossOption;
+  /** `--dry-run`: read and check as a restore does, name its writes, make none. */
+  dryRun?: boolean;
   config?: string;
   cwd?: string;
   verbose?: boolean;
@@ -119,18 +134,46 @@ export async function runI18nRestore(
   if (options.locale) logger.keyValue("Locale", options.locale);
   if (options.field) logger.keyValue("Field", options.field);
 
+  // What a restore reads and checks, the same for a real run and a dry run.
+  const restoreArgs = {
+    collection: slug,
+    kind: entity.kind,
+    // Naming the kind is what lets a restore take rows whose owner the archive does not know.
+    claimUnknown: options.kind !== undefined,
+    companionTableName,
+    locale: options.locale,
+    field: options.field,
+    purge: options.purge,
+  };
+
+  // A dry run deletes nothing, so it needs no consent, and opens read-only.
+  if (options.dryRun === true) {
+    await previewRestore(restoreArgs, logger);
+    return;
+  }
+
+  // `--purge` deletes the replayed rows from the archive, so it takes the
+  // data-loss consent, decided before the database is reached: without it, a
+  // person is asked where one can be, and otherwise nothing changes, not even
+  // the restore, and the run names the consent.
+  if (options.purge) {
+    requireConsented(
+      await judgeDataLossAtTerminal({
+        deletions: [{ kind: "rows", table: "nextly_i18n_archive" }],
+        consent: readDataLossConsent({
+          flag: options.acceptDataLoss,
+          warn: message => logger.warn(message),
+        }),
+        print: line => logger.info(line),
+      })
+    );
+  }
+
   await withAdapter(
     async adapter => {
       const result = await restoreI18nArchive({
         adapter: adapter as unknown as DrizzleAdapter,
-        collection: slug,
-        kind: entity.kind,
-        // Naming the kind is what lets a restore take rows whose owner the archive does not know.
-        claimUnknown: options.kind !== undefined,
-        companionTableName,
-        locale: options.locale,
-        field: options.field,
-        purge: options.purge,
+        ...restoreArgs,
       });
 
       const reportUnattributed = () => {
@@ -172,49 +215,103 @@ export async function runI18nRestore(
   );
 }
 
-export function registerI18nRestoreCommand(program: Command): void {
-  program
-    .command("i18n:restore")
-    .description(
-      "Replay archived translations back onto an entity after a localization disable"
-    )
-    .requiredOption(
-      "--collection <slug>",
-      "Collection, single, or field group slug to restore"
-    )
-    .option(
-      "--kind <kind>",
-      "collection, single or field-group: which entity the slug names, when more than one has it"
-    )
-    .option(
-      "--locale <code>",
-      "Restore only this language (default: every archived language)"
-    )
-    .option(
-      "--field <name>",
-      "Restore only this field's archived values (default: every archived field)"
-    )
-    .option(
-      "--purge",
-      "Remove the replayed rows from the archive once restored",
-      false
-    )
-    .action(async (cmdOptions: I18nRestoreCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
-      try {
-        await runI18nRestore(
-          {
-            ...cmdOptions,
-            config: globalOpts.config,
-            verbose: globalOpts.verbose,
-            quiet: globalOpts.quiet,
-            cwd: globalOpts.cwd,
-          },
-          context
-        );
-      } catch (error) {
-        exitWithError(context.logger, error);
-      }
+/**
+ * The changes a restore's dry run names, in the order the restore makes them: the archive brought
+ * up to date (created, its kind column added, its legacy rows labelled), then the translation rows
+ * written, the values claimed and, with `--purge`, those deleted.
+ */
+export function restoreDryRunChanges(
+  result: RestoreArchiveResult,
+  restoreArgs: { companionTableName: string; purge?: boolean }
+): DryRunChange[] {
+  const changes: DryRunChange[] = [];
+  const upgrade = result.archiveUpgrade;
+  if (upgrade?.createTable !== undefined) {
+    changes.push({
+      action: "create",
+      target: `the archive table ${upgrade.createTable}`,
     });
+  }
+  if (upgrade?.addColumn !== undefined) {
+    changes.push({
+      action: "add",
+      target: `the ${upgrade.addColumn.column} column to ${upgrade.addColumn.table}`,
+    });
+  }
+  for (const { kind, rows } of upgrade?.labels ?? []) {
+    changes.push({ action: "label", target: `${rows} legacy rows as ${kind}` });
+  }
+  if (result.rowsRestored > 0) {
+    changes.push({
+      action: "write",
+      target: `${result.rowsRestored} translation row(s) into ${restoreArgs.companionTableName} (${result.locales.join(", ")})`,
+    });
+  }
+  if (result.rowsClaimed > 0) {
+    changes.push({
+      action: "record",
+      target: `${result.rowsClaimed} archived value(s) of unknown kind as this entity's`,
+    });
+  }
+  if (restoreArgs.purge && result.rowsRead > 0) {
+    changes.push({
+      action: "remove",
+      target: `${result.rowsRead} archived value(s) from the archive`,
+    });
+  }
+  return changes;
+}
+
+/**
+ * What a restore would do, named and not done: the translation rows it writes,
+ * the archived values it claims, and with `--purge` the ones it deletes, from
+ * the database opened read-only. A field the restore refuses is named as the
+ * real run's refusal.
+ */
+async function previewRestore(
+  restoreArgs: Omit<Parameters<typeof restoreI18nArchive>[0], "adapter">,
+  logger: CommandContext["logger"]
+): Promise<void> {
+  const adapter = await openCommandAdapter({ dryRun: true }, logger);
+  // Its database is not there, which the open has already said.
+  if (adapter === undefined) return;
+  try {
+    const result = await restoreI18nArchive({
+      adapter: adapter as unknown as DrizzleAdapter,
+      ...restoreArgs,
+      dryRun: true,
+    });
+    reportDryRun(logger, {
+      changes: restoreDryRunChanges(result, restoreArgs),
+    });
+  } catch (error) {
+    // A field not translated now: the real restore's refusal.
+    if (!NextlyError.is(error) || error.code !== "CONFLICT") throw error;
+    reportDryRun(logger, { changes: [], refusals: [error.publicMessage] });
+  } finally {
+    await adapter.disconnect();
+  }
+}
+
+/** The action of `nextly i18n:restore`, loaded when it runs. */
+export async function i18nRestoreAction(
+  cmdOptions: I18nRestoreCommandOptions,
+  cmd: Command
+) {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
+  try {
+    await runI18nRestore(
+      {
+        ...cmdOptions,
+        config: globalOpts.config,
+        verbose: globalOpts.verbose,
+        quiet: globalOpts.quiet,
+        cwd: globalOpts.cwd,
+      },
+      context
+    );
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }

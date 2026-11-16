@@ -124,4 +124,10 @@ export interface CacheRevalidator {
 export interface FlushOutcome {
   /** Tags handed to the out-of-request path after a failed retry. */
   deferredTags: string[];
+  /**
+   * Of this write's tags, those no out-of-request path recorded where every
+   * instance reads them: kept by this process at most, for its next flush or a
+   * retry, and lost if it stops first. Absent when there are none.
+   */
+  keptInProcess?: string[];
 }

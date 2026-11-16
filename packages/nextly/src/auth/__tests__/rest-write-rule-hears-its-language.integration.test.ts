@@ -108,7 +108,7 @@ async function draft(): Promise<string> {
       collection: POSTS,
       id,
       locale,
-      data: { title: `t-${locale}`, status: "draft" },
+      data: { title: `t-${locale}`, status: "draft", _overwrite: true },
     } as never);
   }
   return id;
@@ -120,7 +120,7 @@ async function draftHome(): Promise<void> {
     await trusted().updateSingle({
       slug: HOME,
       locale,
-      data: { headline: `h-${locale}`, status: "draft" },
+      data: { headline: `h-${locale}`, status: "draft", _overwrite: true },
     } as never);
   }
 }
@@ -169,14 +169,20 @@ describe.each(getConfiguredTestDialects())(
       const id = await draft();
       const entry = ["collections", POSTS, "entries", id];
 
-      expect(await patch(PUBLISHER, entry, "de", { status: "published" })).toBe(
-        403
-      );
+      expect(
+        await patch(PUBLISHER, entry, "de", {
+          status: "published",
+          _overwrite: true,
+        })
+      ).toBe(403);
       heard = [];
 
-      expect(await patch(PUBLISHER, entry, "fr", { status: "published" })).toBe(
-        200
-      );
+      expect(
+        await patch(PUBLISHER, entry, "fr", {
+          status: "published",
+          _overwrite: true,
+        })
+      ).toBe(200);
       // Every ask, at the route and in the service, heard French alone.
       expect(heard.length).toBeGreaterThan(0);
       expect(heard).toEqual(
@@ -193,6 +199,7 @@ describe.each(getConfiguredTestDialects())(
         await patch(MAINTAINER, entry, "de", {
           title: "edited",
           status: "published",
+          _overwrite: true,
         })
       ).toBe(403);
       heard = [];
@@ -201,6 +208,7 @@ describe.each(getConfiguredTestDialects())(
         await patch(MAINTAINER, entry, "fr", {
           title: "edited",
           status: "published",
+          _overwrite: true,
         })
       ).toBe(200);
       // Every ask, at the route and in the service, heard French alone.
@@ -216,12 +224,18 @@ describe.each(getConfiguredTestDialects())(
       const single = ["singles", HOME];
 
       expect(
-        await patch(PUBLISHER, single, "de", { status: "published" })
+        await patch(PUBLISHER, single, "de", {
+          status: "published",
+          _overwrite: true,
+        })
       ).toBe(403);
       heard = [];
 
       expect(
-        await patch(PUBLISHER, single, "fr", { status: "published" })
+        await patch(PUBLISHER, single, "fr", {
+          status: "published",
+          _overwrite: true,
+        })
       ).toBe(200);
       // Every ask, at the route and in the service, heard French alone.
       expect(heard.length).toBeGreaterThan(0);
@@ -239,6 +253,7 @@ describe.each(getConfiguredTestDialects())(
         await patch(MAINTAINER, single, "de", {
           headline: "edited",
           status: "published",
+          _overwrite: true,
         })
       ).toBe(403);
       heard = [];
@@ -247,6 +262,7 @@ describe.each(getConfiguredTestDialects())(
         await patch(MAINTAINER, single, "fr", {
           headline: "edited",
           status: "published",
+          _overwrite: true,
         })
       ).toBe(200);
       // Every ask, at the route and in the service, heard French alone.

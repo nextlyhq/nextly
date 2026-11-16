@@ -181,11 +181,17 @@ describe.each(getConfiguredTestDialects())(
           fallback: false,
         },
         fieldGroups: [
+          // Placed directly in `usagehero`: its instance is a row of its own.
+          defineFieldGroup({
+            slug: "usageinner",
+            fields: [upload({ name: "photo", relationTo: "media" })],
+          }),
           defineFieldGroup({
             slug: "usagehero",
             fields: [
               text({ name: "heading" }),
               upload({ name: "image", relationTo: "media" }),
+              fieldGroup({ name: "badge", component: "usageinner" }),
             ],
           }),
         ],
@@ -274,7 +280,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale,
         },
-        data
+        { ...data, _overwrite: true }
       );
       expect(updated).toMatchObject({ success: true });
     }
@@ -302,6 +308,20 @@ describe.each(getConfiguredTestDialects())(
           ["items.photo", "", A.id],
           ["hero.image", "", B.id],
           ["layout", "", C.id],
+        ])
+      );
+    });
+
+    it("records an item used by a field group placed directly in another", async () => {
+      const id = await createPost({
+        title: "Nested",
+        hero: { heading: "Hi", image: B.id, badge: { photo: E.id } },
+      });
+
+      expect(await recordedFor(t, "collection", "usageposts", id)).toEqual(
+        expected("collection", "usageposts", id, [
+          ["hero.image", "", B.id],
+          ["hero.badge.photo", "", E.id],
         ])
       );
     });
@@ -355,7 +375,7 @@ describe.each(getConfiguredTestDialects())(
         entries.updateEntryInTransaction(
           tx as never,
           { collectionName: "usageposts", entryId: id, overrideAccess: true },
-          { cover: B.id }
+          { cover: B.id, _overwrite: true }
         )
       );
       expect(await recordedFor(t, "collection", "usageposts", id)).toEqual(
@@ -373,7 +393,7 @@ describe.each(getConfiguredTestDialects())(
               entryId: id,
               overrideAccess: true,
             },
-            { cover: C.id }
+            { cover: C.id, _overwrite: true }
           );
           throw new Error("the write after it failed");
         })
@@ -407,6 +427,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: "usageposts",
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(published).toMatchObject({ success: true });
       expect(await recordedFor(t, "collection", "usageposts", id)).toEqual(
@@ -416,6 +437,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: "usageposts",
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       expect(unpublished).toMatchObject({ success: true });
       expect(await recordedFor(t, "collection", "usageposts", id)).toEqual(
@@ -438,7 +460,7 @@ describe.each(getConfiguredTestDialects())(
     it("records a Single's uses, under the Single alone", async () => {
       await t.nextly.updateSingle({
         slug: "usagesite",
-        data: { logo: A.id },
+        data: { logo: A.id, _overwrite: true },
         overrideAccess: true,
       });
       expect(await recordedFor(t, "single", "usagesite", "")).toEqual(
@@ -447,7 +469,7 @@ describe.each(getConfiguredTestDialects())(
 
       await t.nextly.updateSingle({
         slug: "usagesite",
-        data: { logo: B.id },
+        data: { logo: B.id, _overwrite: true },
         overrideAccess: true,
       });
       expect(await recordedFor(t, "single", "usagesite", "")).toEqual(
@@ -1277,7 +1299,7 @@ describe.each(getConfiguredTestDialects())(
           await entries.updateEntryInTransaction(
             tx as never,
             { collectionName: "usagewide", entryId: id, overrideAccess: true },
-            { gallery: [Q.id] }
+            { gallery: [Q.id], _overwrite: true }
           );
           entered();
           await held;
@@ -1379,7 +1401,10 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "fr",
         },
-        { promo: { caption: "Salut", blurb: imageText(H.url) } }
+        {
+          promo: { caption: "Salut", blurb: imageText(H.url) },
+          _overwrite: true,
+        }
       );
       expect(french.success, JSON.stringify(french)).toBe(true);
       const both = expected("collection", "usagekeptposts", id, [
@@ -1400,7 +1425,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "en",
         },
-        { title: "Kept, saved again" }
+        { title: "Kept, saved again", _overwrite: true }
       );
       expect(saved.success, JSON.stringify(saved)).toBe(true);
       expect(await recordedFor(t, "collection", "usagekeptposts", id)).toEqual(

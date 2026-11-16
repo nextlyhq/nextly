@@ -39,13 +39,15 @@ import { expireTags, publishTagExpiryLedger } from "./tag-expiry-view";
  * them with this process's next flush, as the default hand-off would.
  */
 export class LedgerExpiryHandoff implements ExpiryHandoff {
-  async handOff(tags: string[], _reason: string): Promise<void> {
+  async handOff(tags: string[], _reason: string): Promise<boolean> {
     // Kept for this process's next flush unless the ledger took them: it
     // expires them in a request here, the most a write outside one can get
     // without the ledger. A refused record is retried by a timer as well.
     const outcome = await expireTags(tags);
     if (outcome === "failed") holdFailedRecord(tags);
     else if (outcome !== "recorded") holdForNextFlush(tags);
+    // Only a record outlasts this process; what is held dies with it.
+    return outcome === "recorded";
   }
 }
 

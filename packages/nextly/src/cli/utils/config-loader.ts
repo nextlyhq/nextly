@@ -31,6 +31,8 @@ import {
 } from "../../collections/config/define-config";
 import type { NextlyServiceConfig } from "../../di/register";
 import { emailRetentionAfterTransform } from "../../domains/email/retention-config";
+import { judgeFieldGroupCyclesAtStart } from "../../domains/field-groups/field-group-cycles";
+import { adoptPerLanguageStorage } from "../../domains/i18n/per-language-storage";
 import {
   clearFieldTypes,
   registerFieldType,
@@ -39,11 +41,16 @@ import {
   withoutDisabledBehavior,
 } from "../../domains/schema/field-types/field-type-registry";
 import {
+  currentWithheldScopeFields,
+  publishWithheldScopeFields,
+} from "../../domains/schema/pipeline/withheld-scope-fields";
+import {
   resolvePostgresSchema,
   setActivePostgresSchema,
 } from "../../domains/schema/services/postgres-schema";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { manifestToBuilderEntities } from "../../domains/schema/ui-schema/merge";
+import { publishWebhookEventTypes } from "../../domains/webhooks/event-type-registry";
 import { NextlyError, describeError } from "../../errors/index";
 import type { PluginFieldType } from "../../plugins/contributions";
 import { getCoreVersion } from "../../plugins/core-version";
@@ -64,6 +71,7 @@ import {
   applyPluginSchemaContributionsDeferred,
   type BuilderEntities,
   type DeferredExtend,
+  type FieldsAddedByPlugins,
   assertRegisteredKeepTheirKind,
   resolveBuilderExtends,
 } from "../../plugins/schema/apply-contributions";
@@ -73,13 +81,33 @@ import {
   validateCrossPluginRelations,
 } from "../../plugins/schema/validate-relations";
 import { assertSettingsPermissionsOwned } from "../../plugins/settings-permission";
+import { assertFieldTypeSettings } from "../../plugins/validate-field-type-settings";
 import {
   CONFIG_FILE_NAMES,
   CONFIG_SEARCH_DIRS,
   findConfigFile,
 } from "../../shared/lib/config-file";
+import { consoleLogger } from "../../shared/types";
 
 import { bundleAndRequire } from "./config-bundler";
+
+/**
+ * The Builder's entities from the app's ui-schema file, empty when there is none. A malformed file
+ * is surfaced by migrate:create and migrate:check, which load it again; loading the configuration
+ * for any other command does not fail on it.
+ */
+async function readBuilderEntities(
+  projectRoot: string,
+  uiSchemaFile: Parameters<typeof loadUiSchema>[0]["uiSchemaFile"]
+): Promise<BuilderEntities> {
+  try {
+    return manifestToBuilderEntities(
+      await loadUiSchema({ projectRoot, uiSchemaFile })
+    );
+  } catch {
+    return {};
+  }
+}
 
 /** Builder collection slugs (the only valid relationTo targets among Builder entities). */
 function builderCollectionSlugs(builder: BuilderEntities): string[] {
@@ -98,7 +126,13 @@ export function orderConfigPlugins(
   plugins: PluginDefinition[],
   consent: PluginConsent
 ): ReturnType<typeof resolveDeclaredPlugins> {
-  if (plugins.length === 0) return { plugins: [], preSetup: [] };
+  if (plugins.length === 0) {
+    // Resolution is skipped for an empty list, so nothing it would publish is
+    // published. The webhook event types are published empty here, so a config
+    // reloaded down to no plugins stops offering the last one's types.
+    publishWebhookEventTypes([]);
+    return { plugins: [], preSetup: [] };
+  }
   return resolveDeclaredPlugins(plugins, {
     coreVersion: getCoreVersion(),
     consent,
@@ -121,6 +155,11 @@ function applyFoldedToBase(
     fieldGroups: folded.fieldGroups ?? base.fieldGroups,
     plugins: transformed.plugins ?? base.plugins,
     storage: transformed.storage ?? base.storage,
+    // The app's own declared permissions as the boot collects them: from the transformed config,
+    // which a plugin's setup() may add to, replace or clear. Left at the base, `migrate:create`
+    // recorded a list the running server does not declare, and the permission check below judged
+    // one the boot never sees.
+    permissions: transformed.permissions,
     // The admin block as the boot registers it: a plugin's setup() may add or
     // replace the site's dashboard widgets, and `generate:types` and its
     // `--check` list their components from this config. Left at the base, the
@@ -237,6 +276,13 @@ export interface LoadConfigResult {
    * materialize the extra columns onto the Builder tables without re-folding.
    */
   deferredExtends?: DeferredExtend[];
+
+  /**
+   * The fields plugins added to entities they do not own, by `extend` or a
+   * transform, as the fold's ownership ledgers recorded them: what a full
+   * uninstall of a plugin takes with it. Absent when no plugin is configured.
+   */
+  fieldsAddedByPlugins?: FieldsAddedByPlugins;
 
   /**
    * The plugin field types this config registered, captured at the end of its
@@ -550,6 +596,10 @@ async function loadConfigInternal(
   // `db:sync` watcher, the HMR reload — would otherwise resolve that config's
   // plugin field types against an empty registry.
   const previousFieldTypes = snapshotFieldTypes();
+  // So is what the fold publishes as held back from switched-off types: a
+  // refused load leaves the previous config running, whose kept columns a
+  // sync must still keep.
+  const previousWithheld = currentWithheldScopeFields();
 
   try {
     // bundleAndRequire is our Turbopack-safe alternative to the
@@ -606,6 +656,7 @@ async function loadConfigInternal(
     const appConfig = defineConfig(rawConfig);
     let config = appConfig;
     let deferredExtends: DeferredExtend[] | undefined;
+    let fieldsAddedByPlugins: FieldsAddedByPlugins | undefined;
 
     // Resolve (validate + topo order) before running setups, mirroring the
     // runtime boot (register.ts) so both paths agree (D5/D6/D7).
@@ -624,6 +675,14 @@ async function loadConfigInternal(
     // process-global registry, so its `validateOptions` would keep running and
     // later Builder saves would keep treating the type as registered.
     clearFieldTypes();
+
+    // The Builder's field groups, set by the plugin block, which reads them anyway.
+    let builderFieldGroups:
+      | {
+          stored: NonNullable<BuilderEntities["components"]>;
+          registered: NonNullable<BuilderEntities["components"]>;
+        }
+      | undefined;
 
     if (plugins.length > 0) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -677,18 +736,26 @@ async function loadConfigInternal(
       // entities are DEFERRED (candidate Builder/UI-schema targets) rather than
       // thrown, so a plugin may extend/relate to a Builder-made collection
       // (P8/D3/R2).
+      // The configuration's per-language storage choice, adopted before the fold judges a
+      // transform of another plugin's entity by where its fields keep their values. The same
+      // adoption runs again once the config is installed, and agrees.
+      adoptPerLanguageStorage(config.perLanguageStorage);
       const folded = applyPluginSchemaContributionsDeferred(
         transformedConfig,
         transformedPlugins
       );
       config = applyFoldedToBase(config, folded.config, transformedConfig);
       deferredExtends = folded.deferredExtends;
+      fieldsAddedByPlugins = folded.fieldsAddedByPlugins;
 
       // Register plugin custom field types (C7/D16) so the CLI's column
       // classifier (getColumnDescriptor) resolves each plugin type to its
       // storage primitive when reading ui-schema.json — parity with runtime boot
       // (di/register.ts). Clear-and-rebuild; ALL plugins (incl. disabled, per
       // D49) since field types are declarative + schema-affecting.
+      // Their declared settings are judged first, as the boot judges them, so
+      // a malformed list refuses the CLI and a development reload too.
+      assertFieldTypeSettings(transformedPlugins);
       for (const fieldTypePlugin of transformedPlugins) {
         for (const fieldType of fieldTypePlugin.contributes?.fieldTypes ?? []) {
           registerFieldType(
@@ -702,22 +769,24 @@ async function loadConfigInternal(
       // runs (D50). Eager fail-fast is preserved: a target in NEITHER code/plugin
       // NOR the Builder set still throws. ui-schema is optional (empty manifest
       // when absent), so non-Builder apps behave exactly as before.
-      let builderEntities: BuilderEntities = {};
-      try {
-        const manifest = await loadUiSchema({
-          projectRoot: cwd,
-          uiSchemaFile: config.db?.uiSchemaFile,
-        });
-        builderEntities = manifestToBuilderEntities(manifest);
-      } catch {
-        // A malformed ui-schema is surfaced by migrate-create/-check (which
-        // re-load it); loading config for other commands shouldn't hard-fail here.
-      }
+      const builderEntities = await readBuilderEntities(
+        cwd,
+        config.db?.uiSchemaFile
+      );
       // One slug, one kind, now that the Builder's entities are readable: the
       // fold could not see them, and the runtime boot makes the same check
       // against the registry rows (register.ts), so the two paths agree (D50).
       assertRegisteredKeepTheirKind(config, builderEntities);
-      resolveBuilderExtends(folded.deferredExtends, builderEntities);
+      // Kept for the cycle judgement below: the Builder's field groups as stored, and with each
+      // plugin's extension onto them, as the boot judges them.
+      const extended = resolveBuilderExtends(
+        folded.deferredExtends,
+        builderEntities
+      );
+      builderFieldGroups = {
+        stored: builderEntities.components ?? [],
+        registered: extended.components ?? [],
+      };
       finalizeRelationTargets(
         collectUnresolvedRelationTargets(
           config as unknown as NextlyServiceConfig
@@ -744,7 +813,28 @@ async function loadConfigInternal(
         options,
         `Applied config transformers from ${plugins.length} plugin(s)`
       );
+    } else {
+      // No plugin, so no fold runs to publish what scopes hold back: a config
+      // whose last plugin was removed holds nothing back, and its fields stop
+      // being kept by the schema changes that read this (`kept-scope-fields`).
+      publishWithheldScopeFields(new Map());
     }
+
+    // Field groups placed in a cycle are judged over code and the Builder's field groups whether
+    // or not a plugin is configured, as the boot judges them, so a command does not pass what a
+    // start refuses. Without plugins nothing above read the Builder's field groups.
+    if (builderFieldGroups === undefined) {
+      const stored =
+        (await readBuilderEntities(cwd, config.db?.uiSchemaFile)).components ??
+        [];
+      builderFieldGroups = { stored, registered: stored };
+    }
+    judgeFieldGroupCyclesAtStart({
+      code: config.fieldGroups ?? [],
+      registered: builderFieldGroups.registered,
+      stored: builderFieldGroups.stored,
+      warn: message => consoleLogger.warn(message),
+    });
 
     debugLog(options, "Config loaded successfully");
     debugLog(options, "Dependencies:", dependencies);
@@ -756,6 +846,7 @@ async function loadConfigInternal(
       projectRoot: cwd,
       dependencies,
       deferredExtends,
+      fieldsAddedByPlugins,
       pluginConsent,
       // Captured after registration, so it holds exactly what this config
       // contributed rather than whatever the live set becomes later.
@@ -765,6 +856,7 @@ async function loadConfigInternal(
     // The load owns the registry from the clear above until it returns, so
     // every failure between them leaves it half-built or empty.
     restoreFieldTypes(previousFieldTypes);
+    publishWithheldScopeFields(previousWithheld);
 
     if (NextlyError.is(error)) {
       throw error;
@@ -879,6 +971,9 @@ export async function loadConfig(
     // pipeline both read the active value, so `migrate` cannot end up applying
     // DDL to `public` while the application it is migrating runs in `cms`.
     publishConfiguredPostgresSchema(loaded.config);
+    // Likewise its per-language storage choice, so a command's DDL lays tables out as the site
+    // does. A booted site already chose and keeps its choice.
+    adoptPerLanguageStorage(loaded.config.perLanguageStorage);
     return loaded;
   });
 

@@ -5,16 +5,15 @@
  * The verdict comes first and the exit status says it, since a gate's reader skims:
  *
  * - **0** the map agrees.
- * - **1** it does not: each missing component (with its owner, and its widget for a widget),
+ * - **2** it does not: each missing component (with its owner, and its widget for a widget),
  *   each path no longer declared, each file absent or unreadable, and a map that does not
- *   register what its list names, then the fix.
- * - **2** the check could not be asked: the config did not load, or a file there could not be
- *   read. Not an answer about the map, so never read as one.
+ *   register what its list names, then the fix. A check that found something out of step
+ *   exits 2, as every command that checks does.
+ * - **1** the check could not be asked: the config did not load, or a file there could not be
+ *   read. Not an answer about the map, so it exits as any run that failed does.
  *
  * @module cli/commands/component-map-check-command
  */
-
-import { relative, sep } from "node:path";
 
 import {
   checkComponentMapFiles,
@@ -22,7 +21,12 @@ import {
   type ComponentMapAgreement,
 } from "../../plugins/codegen/check-component-map";
 import { describeComponentUse } from "../../plugins/codegen/component-import-map";
+import {
+  describeUnbackedContribution,
+  unbackedContributions,
+} from "../../plugins/codegen/unbacked-contributions";
 import { generatedTypesFile } from "../../shared/lib/generated-output-paths";
+import { projectPath } from "../dry-run";
 import { componentMapOutOfDate } from "../errors/areas/commands";
 import { printCliError } from "../errors/report";
 import type { CommandContext } from "../program";
@@ -31,8 +35,8 @@ import { loadConfig } from "../utils/config-loader";
 /** The exit status of each verdict. */
 export const COMPONENT_MAP_CHECK_EXIT = {
   agrees: 0,
-  outOfDate: 1,
-  couldNotCheck: 2,
+  outOfDate: 2,
+  couldNotCheck: 1,
 } as const;
 
 /**
@@ -50,14 +54,30 @@ export async function runComponentMapCheck(
   let found: ComponentMapAgreement;
   try {
     const loaded = await loadConfig({ configPath: options.config, cwd });
+    const typesFile = generatedTypesFile(
+      cwd,
+      loaded.config.typescript.outputFile
+    );
     found = await checkComponentMapFiles(
       loaded.config.plugins ?? [],
-      generatedTypesFile(cwd, loaded.config.typescript.outputFile),
+      typesFile,
       cwd,
       loaded.configPath,
       // The site's own widgets, which the map lists beside the plugins'.
-      loaded.config.admin?.dashboard
+      loaded.config.admin?.dashboard,
+      // And the views the site's own collections name.
+      loaded.config.collections
     );
+    // The contributions the map leaves out, named as `generate:types` names
+    // them: the check passes without them, and their places draw fallbacks.
+    for (const each of unbackedContributions(
+      loaded.config.plugins ?? [],
+      typesFile,
+      cwd,
+      loaded.config.admin?.dashboard
+    )) {
+      logger.warn(describeUnbackedContribution(each));
+    }
   } catch (error) {
     // What stopped the check, in the error shape; the status still says it was not an answer.
     printCliError(logger, error);
@@ -76,7 +96,7 @@ function outOfDateReport(
   found: ComponentMapAgreement,
   cwd: string
 ): { files: string; disagreements: string[] } {
-  const shown = (file: string) => relative(cwd, file).split(sep).join("/");
+  const shown = (file: string) => projectPath(cwd, file);
   const [map, list] = found.files.map(shown) as [string, string];
   return {
     files: `${map} and ${list}`,

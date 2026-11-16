@@ -4,6 +4,7 @@ import {
   Alert,
   AlertDescription,
   Button,
+  PageHeader,
   Skeleton,
   Spinner,
 } from "@nextlyhq/ui";
@@ -23,6 +24,7 @@ import { UserCustomFields } from "@admin/components/features/users/UserCustomFie
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
+import { PlaceTabs, TargetSlot } from "@admin/components/shared/target-slot";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { FORM_MIN_HEIGHT } from "@admin/constants/forms";
@@ -36,6 +38,7 @@ import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useLogout } from "@admin/hooks/useLogout";
 import { useRouter } from "@admin/hooks/useRouter";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
+import { useT } from "@admin/lib/i18n/I18nProvider";
 import { navigateTo } from "@admin/lib/navigation";
 import { validateUUID } from "@admin/lib/validation";
 import {
@@ -122,6 +125,7 @@ export default function EditUserPage(): ReactElement {
 
   // The signed-in user, to tell an edit of your own account from another's.
   const { user: signedInUser } = useDashboardUser();
+  const t = useT();
   const logout = useLogout();
 
   // React Hook Form
@@ -268,7 +272,7 @@ export default function EditUserPage(): ReactElement {
   // Error state: Invalid user ID
   if (!userId) {
     return (
-      <PageContainer width="form">
+      <PageContainer type="form">
         <Alert variant="destructive">
           <AlertDescription>{USER_MESSAGES.INVALID_USER_ID}</AlertDescription>
         </Alert>
@@ -284,7 +288,7 @@ export default function EditUserPage(): ReactElement {
   // Loading state: Fetching user data
   if (isLoadingUser || isLoadingRoles) {
     return (
-      <PageContainer width="form">
+      <PageContainer type="form">
         {/* Accessibility: Announce loading state to screen readers */}
         <div className="sr-only" role="status" aria-live="polite">
           Loading user data
@@ -311,7 +315,7 @@ export default function EditUserPage(): ReactElement {
   // Error state: Failed to fetch user
   if (userError) {
     return (
-      <PageContainer width="form">
+      <PageContainer type="form">
         <Alert variant="destructive">
           <AlertDescription className="flex items-center justify-between">
             <span>
@@ -341,7 +345,7 @@ export default function EditUserPage(): ReactElement {
   // Error state: User not found
   if (!user) {
     return (
-      <PageContainer width="form">
+      <PageContainer type="form">
         <Alert variant="destructive">
           <AlertDescription>{USER_MESSAGES.USER_NOT_FOUND}</AlertDescription>
         </Alert>
@@ -354,111 +358,134 @@ export default function EditUserPage(): ReactElement {
     );
   }
 
+  // What a plugin's block or tab on this page is told: who is looking, and
+  // at whom. Held while the viewer is not known yet, so no contribution is
+  // handed an id that is not theirs.
+  const placeContext = signedInUser
+    ? { userId: signedInUser.id, shownUserId: user.id }
+    : null;
+
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer width="form">
+      <PageContainer type="form">
         {/* Breadcrumbs */}
-        <div className="mb-6">
+        <div className="mb-6 empty:hidden">
           <UserBreadcrumbs currentPage="edit" />
         </div>
 
         {/* Page Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight">Edit User</h1>
-            {/* Muted foreground so this secondary subtitle meets contrast (a faint primary alpha did not). */}
-            <p className="text-sm font-normal text-muted-foreground mt-1">
-              Update user details, change roles, or reset the password.
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <Link href={ROUTES.USERS}>
-              <Button type="button" variant="outline" disabled={isUpdating}>
-                Cancel
-              </Button>
-            </Link>
-            <Button
-              type="submit"
-              form="edit-user-form"
-              disabled={isUpdating || !!rolesError}
-            >
-              {isUpdating ? (
-                <>
-                  <Spinner size="md" className="mr-2" />
-                  Saving Changes...
-                </>
-              ) : rolesError ? (
-                "Cannot Save (Roles Failed)"
-              ) : (
-                "Save Changes"
-              )}
-            </Button>
-          </div>
-        </div>
+        <PageHeader
+          title="Edit User"
+          description="Update user details, change roles, or reset the password."
+          actions={
+            <>
+              <div className="flex items-center gap-3">
+                <Link href={ROUTES.USERS}>
+                  <Button type="button" variant="outline" disabled={isUpdating}>
+                    Cancel
+                  </Button>
+                </Link>
+                <Button
+                  type="submit"
+                  form="edit-user-form"
+                  disabled={isUpdating || !!rolesError}
+                >
+                  {isUpdating ? (
+                    <>
+                      <Spinner size="md" className="mr-2" />
+                      Saving Changes...
+                    </>
+                  ) : rolesError ? (
+                    "Cannot Save (Roles Failed)"
+                  ) : (
+                    "Save Changes"
+                  )}
+                </Button>
+              </div>
+            </>
+          }
+        />
 
-        {/* Form Card */}
-        <div className="bg-card  border border-border rounded-lg p-6  ">
-          {/* Avatar Section */}
-          <div className="flex items-center gap-4 mb-8 pb-8  border-b border-border">
-            <AvatarUploader
-              value={watchedAvatar ?? ""}
-              onChange={url =>
-                setValue("avatarUrl", url, {
-                  shouldDirty: true,
-                  shouldValidate: true,
-                })
-              }
-              fullName={watchedFullName || user?.name || ""}
-              disabled={isUpdating}
-              className="border border-border"
-              // Keep text-primary in both modes: on the dark bg-primary/20 tint it
-              // reads ~11:1, whereas the old dark:text-primary-foreground/80 (a
-              // color meant for solid primary fills) fell to ~1.45:1 on the tint.
-              fallbackClassName="bg-primary/5 text-primary dark:bg-primary/20"
-            />
-            <div className="flex-1">
-              <h2 className="text-xl font-semibold text-foreground">
-                {watchedFullName || user.name}
-              </h2>
-              <p className="text-sm text-muted-foreground">{user.email}</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                User ID: {user.id}
-              </p>
-            </div>
-          </div>
+        {/* The page's own card is the `content` built-in: plugins' blocks
+            draw around it and their tabs beside it, in the order sent. */}
+        <PlaceTabs
+          place="user.detail"
+          context={placeContext}
+          contentLabel={t("nextly.places.userDetail.content")}
+        >
+          <TargetSlot
+            place="user.detail"
+            context={placeContext}
+            builtIns={{
+              content: (
+                <div className="bg-card  border border-border rounded-lg p-6  ">
+                  {/* Avatar Section */}
+                  <div className="flex items-center gap-4 mb-8 pb-8  border-b border-border">
+                    <AvatarUploader
+                      value={watchedAvatar ?? ""}
+                      onChange={url =>
+                        setValue("avatarUrl", url, {
+                          shouldDirty: true,
+                          shouldValidate: true,
+                        })
+                      }
+                      fullName={watchedFullName || user?.name || ""}
+                      disabled={isUpdating}
+                      className="border border-border"
+                      // Keep text-primary in both modes: on the dark bg-primary/20 tint it
+                      // reads ~11:1, whereas the old dark:text-primary-foreground/80 (a
+                      // color meant for solid primary fills) fell to ~1.45:1 on the tint.
+                      fallbackClassName="bg-primary/5 text-primary dark:bg-primary/20"
+                    />
+                    <div className="flex-1">
+                      <h2 className="text-xl font-semibold text-foreground">
+                        {watchedFullName || user.name}
+                      </h2>
+                      <p className="text-sm text-muted-foreground">
+                        {user.email}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        User ID: {user.id}
+                      </p>
+                    </div>
+                  </div>
 
-          {/* Form */}
-          <FormProvider {...form}>
-            <form
-              id="edit-user-form"
-              onSubmit={e => {
-                void handleSubmit(onSubmit)(e);
-              }}
-              className="space-y-8"
-            >
-              {/* Form Fields */}
-              <UserFormFields
-                mode="edit"
-                register={register}
-                control={control}
-                errors={errors}
-                roles={roles}
-                isLoadingRoles={isLoadingRoles}
-                rolesError={rolesError}
-                onRetryRoles={() => {
-                  void refetchRoles();
-                }}
-                showActiveAccount={true}
-              />
+                  {/* Form */}
+                  <FormProvider {...form}>
+                    <form
+                      id="edit-user-form"
+                      onSubmit={e => {
+                        void handleSubmit(onSubmit)(e);
+                      }}
+                      className="space-y-8"
+                    >
+                      {/* Form Fields */}
+                      <UserFormFields
+                        mode="edit"
+                        register={register}
+                        control={control}
+                        errors={errors}
+                        roles={roles}
+                        isLoadingRoles={isLoadingRoles}
+                        rolesError={rolesError}
+                        onRetryRoles={() => {
+                          void refetchRoles();
+                        }}
+                        showActiveAccount={true}
+                      />
 
-              <UserCustomFields
-                control={control as unknown as Control<FieldValues>}
-                errors={errors}
-                disabled={isUpdating}
-              />
-            </form>
-          </FormProvider>
-        </div>
+                      <UserCustomFields
+                        control={control as unknown as Control<FieldValues>}
+                        errors={errors}
+                        disabled={isUpdating}
+                      />
+                    </form>
+                  </FormProvider>
+                </div>
+              ),
+            }}
+          />
+        </PlaceTabs>
       </PageContainer>
     </QueryErrorBoundary>
   );

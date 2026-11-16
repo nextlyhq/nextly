@@ -5,7 +5,7 @@
  * RESULT, because the server strips fields a reader may not see before it
  * answers — so the table names only the columns its rows can fill.
  */
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type {
@@ -122,13 +122,18 @@ describe("the table archetype", () => {
     expect(screen.queryByTestId("list-card-table")).not.toBeInTheDocument();
   });
 
-  it("draws the card's number of items, five when it names none", () => {
-    const many = Array.from({ length: 12 }, (_, i) => ({
-      title: `Row ${i}`,
-      views: i,
-    }));
-    draw(listOf(many, [{ name: "title" }, { name: "views" }]), widget());
-    expect(screen.getAllByTestId("list-card-table-row")).toHaveLength(5);
+  it("draws every row its answer holds, at most twenty", () => {
+    // 🔴 Capped at the default five, the card drew five of these twelve.
+    const rows = (count: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        title: `Row ${i}`,
+        views: i,
+      }));
+    draw(listOf(rows(12), [{ name: "title" }, { name: "views" }]), widget());
+    expect(screen.getAllByTestId("list-card-table-row")).toHaveLength(12);
+    cleanup();
+    draw(listOf(rows(25), [{ name: "title" }, { name: "views" }]), widget());
+    expect(screen.getAllByTestId("list-card-table-row")).toHaveLength(20);
   });
 
   it("does NOT stringify an object cell into [object Object]", () => {

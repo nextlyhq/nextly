@@ -15,7 +15,9 @@
 
 import {
   defineWidget,
-  rowsThatFit,
+  listEntries,
+  MAX_WIDGET_ROWS,
+  setting,
   type AnyWidget,
 } from "@nextlyhq/plugin-sdk";
 
@@ -81,9 +83,20 @@ export function newSubmissionsWidget(
     shows: async ({ services, signal }) =>
       (await services.count(declared.forms, { status: "all", signal })) > 0,
     skeleton: "list",
-    load: async ({ services, size, signal, scope }) =>
+    // How many submissions the card lists before its "View all": its reader's
+    // choice, not its size, as a card is as tall as its content.
+    settings: {
+      limit: setting.number({
+        label: "Number of entries",
+        defaultValue: 5,
+        min: 1,
+        max: MAX_WIDGET_ROWS,
+      }),
+    },
+    load: async ({ services, settings, signal, scope }) =>
       readNewSubmissions(services, declared, {
-        limit: rowsThatFit(size, { density: "default" }),
+        // Exactly the rows the card draws: the read counts the rest apart.
+        limit: listEntries(settings.limit),
         signal,
         scope,
         submissionsPath: submissionsPath(),

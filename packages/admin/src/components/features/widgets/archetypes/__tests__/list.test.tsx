@@ -5,7 +5,7 @@
  * here are about ONE payload and one declaration — which field is the label,
  * what a non-printable cell becomes, what an empty result reads as.
  */
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type {
@@ -113,10 +113,15 @@ describe("the list archetype", () => {
     expect(screen.queryByTestId("entity-row")).not.toBeInTheDocument();
   });
 
-  it("caps the rows it draws", () => {
+  it("draws every row its answer holds, at most twenty", () => {
+    // 🔴 Capped at the default five, the card drew five of these twelve.
     const many = Array.from({ length: 12 }, (_, i) => ({ title: `Row ${i}` }));
     draw(listOf(many), widget());
-    expect(screen.getAllByTestId("entity-row")).toHaveLength(5);
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(12);
+    cleanup();
+    const more = Array.from({ length: 25 }, (_, i) => ({ title: `Row ${i}` }));
+    draw(listOf(more), widget());
+    expect(screen.getAllByTestId("entity-row")).toHaveLength(20);
   });
 
   it("does NOT stringify an object cell into [object Object]", () => {

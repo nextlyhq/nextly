@@ -112,14 +112,7 @@ export async function reindexMediaUsage(
   deps: ReindexUsageDeps
 ): Promise<ReindexUsageResult> {
   const { adapter } = deps;
-  if (!(await adapter.tableExists(MEDIA_USAGE_TABLE))) {
-    throw NextlyError.conflict({
-      reason: "state",
-      message:
-        "The media usage table does not exist yet. Run `nextly migrate` to create it, then run this again.",
-      logContext: { table: MEDIA_USAGE_TABLE },
-    });
-  }
+  await assertUsageTableExists(adapter);
   await deps.meta.delete(MEDIA_USAGE_RECORDED_KEY);
   await adapter.delete(MEDIA_USAGE_TABLE, {
     and: [{ column: "id", op: "IS NOT NULL" }],
@@ -150,4 +143,55 @@ export async function reindexMediaUsage(
   });
   const rows = await adapter.count(MEDIA_USAGE_TABLE);
   return { documents, rows };
+}
+
+/**
+ * Refuses, changing nothing, a rebuild before `nextly migrate` has created the
+ * record's table: the rebuild and its plan alike.
+ */
+async function assertUsageTableExists(
+  adapter: Pick<ReindexUsageDeps["adapter"], "tableExists">
+): Promise<void> {
+  if (await adapter.tableExists(MEDIA_USAGE_TABLE)) return;
+  throw NextlyError.conflict({
+    reason: "state",
+    message:
+      "The media usage table does not exist yet. Run `nextly migrate` to create it, then run this again.",
+    logContext: { table: MEDIA_USAGE_TABLE },
+  });
+}
+
+/** What a rebuild would do, worked out without changing anything. */
+export interface ReindexUsagePlan {
+  /** The rows the record holds now, which the rebuild replaces. */
+  rowsNow: number;
+  /** The collections whose entries it reads. */
+  collections: string[];
+  /** The Singles it reads. */
+  singles: string[];
+  /** The email templates it reads. */
+  templates: number;
+}
+
+/**
+ * `reindexMediaUsage`'s plan, read-only: refused where the rebuild is, and
+ * otherwise the rows the record holds now and the sources the rebuild reads,
+ * from the same slug lists. What the rebuilt record holds is not worked out:
+ * a rebuild reads each document to find it.
+ */
+export async function planMediaUsageReindex(deps: {
+  adapter: Pick<ReindexUsageDeps["adapter"], "tableExists" | "count">;
+  collections: Pick<ReindexUsageDeps["collections"], "slugs">;
+  singles: Pick<ReindexUsageDeps["singles"], "slugs">;
+}): Promise<ReindexUsagePlan> {
+  const { adapter } = deps;
+  await assertUsageTableExists(adapter);
+  return {
+    rowsNow: await adapter.count(MEDIA_USAGE_TABLE),
+    collections: await deps.collections.slugs(),
+    singles: await deps.singles.slugs(),
+    templates: (await adapter.tableExists("email_templates"))
+      ? await adapter.count("email_templates")
+      : 0,
+  };
 }

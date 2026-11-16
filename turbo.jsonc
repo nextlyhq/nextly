@@ -208,9 +208,11 @@
     "USE_HTTPS", // nextly HMR listener: dev server protocol
     "__NEXT_ASSET_PREFIX", // nextly HMR listener: Next.js asset prefix
     "__NEXT_CACHE_COMPONENTS", // nextly release window: Cache Components on, as Next.js inlines it
+    "__NEXT_ROUTER_BASEPATH", // page builder <SiteCode>: the app's base path, as Next.js inlines it
     "NEXTLY_DISABLE_HMR", // nextly HMR listener: opt-out escape hatch
     "NEXTLY_HMR_URL_OVERRIDE", // nextly HMR listener: custom URL for proxy setups
-    "NEXTLY_GENERATED_FILES_WRITE" // checkAdminComponents: 0 or false stops the running app rewriting generated files
+    "NEXTLY_GENERATED_FILES_WRITE", // checkAdminComponents: 0 or false stops the running app rewriting generated files
+    "NEXTLY_BUILD_SCHEMA_VERSION" // nextly production start: the build's newest migration, which withNextly sets
   ],
 
   "tasks": {
@@ -655,9 +657,12 @@
       // E2E_SERVER and E2E_PRODUCTION_PREBUILT choose the server the suite
       // runs against (dev or production) and whether that build is reused;
       // E2E_DEV_SPECS_ONLY runs only the specs that need the dev server.
+      // E2E_FONT_CATALOGUE_PORT: where the stand-in font catalogue the fonts
+      // spec reads is served, beside E2E_PORT by default.
       "env": [
         "CI",
         "E2E_DEV_SPECS_ONLY",
+        "E2E_FONT_CATALOGUE_PORT",
         "E2E_PORT",
         "E2E_PROD_PORT",
         "E2E_PRODUCTION_PREBUILT",

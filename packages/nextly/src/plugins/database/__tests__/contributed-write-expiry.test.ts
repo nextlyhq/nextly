@@ -17,7 +17,7 @@ import { col } from "../../../domains/schema/extension/dsl";
 import type { SchemaOwner } from "../../../domains/schema/extension/types";
 import * as logger from "../../../observability/logger";
 import type { ContributedColumn } from "../access";
-import { type ContentTarget, MAX_COMPONENT_DEPTH } from "../content-target";
+import type { ContentTarget } from "../content-target";
 import { createPluginDatabase } from "../plugin-database";
 
 const FX: SchemaOwner = { kind: "plugin", id: "fx" };
@@ -141,11 +141,21 @@ function surface(
     relationalDb: () => db,
     // better-sqlite3 refuses an async callback, so the transaction is opened
     // and closed by statement, as the adapter's SQLite path does.
+    // What the surface asks to run after commit is held until COMMIT and
+    // dropped on ROLLBACK, as the adapter's `afterCommit` holds it.
     transaction: async fn => {
       sqlite.exec("BEGIN");
+      const held: Array<() => unknown> = [];
       try {
-        const result = await fn({ db, relationalDb: db });
+        const result = await fn({
+          db,
+          relationalDb: db,
+          afterCommit: effect => {
+            held.push(effect);
+          },
+        });
         sqlite.exec("COMMIT");
+        for (const effect of held) await effect();
         return result;
       } catch (error) {
         sqlite.exec("ROLLBACK");
@@ -193,7 +203,7 @@ describe("a contributed write expires its document's cached reads", () => {
     expect(expired).toEqual([{ kind: "collection", slug: "posts", id: "p1" }]);
   });
 
-  it(`climbs ${MAX_COMPONENT_DEPTH} field groups, and stops at one more`, async () => {
+  it("climbs field groups nested at any depth to their entry", async () => {
     const warn = vi.fn();
     vi.spyOn(logger, "getNextlyLogger").mockReturnValue({
       error: vi.fn(),
@@ -202,29 +212,26 @@ describe("a contributed write expires its document's cached reads", () => {
       debug: vi.fn(),
     } as never);
 
-    sqlite.exec(chainOf(MAX_COMPONENT_DEPTH));
+    // Twenty levels: well past any fixed bound a walk might keep.
+    sqlite.exec(chainOf(20));
     await setFlag("comp_chain", "k0");
     expect(expired).toEqual([{ kind: "collection", slug: "posts", id: "p1" }]);
     expect(warn).not.toHaveBeenCalled();
-
-    expired = [];
-    sqlite.exec("DELETE FROM comp_chain;" + chainOf(MAX_COMPONENT_DEPTH + 1));
-    expect(await setFlag("comp_chain", "k0")).toBe(1);
-    expect(expired).toEqual([]);
-    expect(warn).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "contributed-write-parent-too-deep" })
-    );
   });
 
-  it("ends a parent chain that loops, expiring nothing", async () => {
+  it("ends a parent chain that loops, expiring nothing, and says so", async () => {
+    const warn = vi.fn();
     vi.spyOn(logger, "getNextlyLogger").mockReturnValue({
       error: vi.fn(),
-      warn: vi.fn(),
+      warn,
       info: vi.fn(),
       debug: vi.fn(),
     } as never);
     expect(await setFlag("comp_cta", "loop")).toBe(1);
     expect(expired).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "contributed-write-parent-loops" })
+    );
   });
 
   it("expires nothing for a field group's row that names no parent", async () => {

@@ -471,3 +471,16 @@ describe("a caller's drawless predicate that misbehaves", () => {
     expect(compileWith(() => hostile).css).toContain("color: red");
   });
 });
+
+describe("an overlay's reset with every image gated", () => {
+  it("stays in the sheet, so the reassembled page is the ungated one", () => {
+    const background = styles({ background: { url: "/a.png" } });
+    const gatedRun = compile(page([conditioned({ styles: background })]));
+    const ungated = compile(page([node({ styles: background })]));
+    expect(gatedRun.css).toContain("--nx-pb-overlay: initial");
+    const reassembled = [gatedRun.css, gatedRun.gated?.n1 ?? ""]
+      .filter(part => part !== "")
+      .join("\n");
+    expect(reassembled).toBe(ungated.css);
+  });
+});

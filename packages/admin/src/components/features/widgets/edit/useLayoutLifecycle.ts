@@ -21,9 +21,11 @@ import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
 import {
   hasChanges,
   setPlacementConfig,
+  setPlacementSize,
   withinSubmissionLimit,
 } from "../layout-editor";
 
+import type { PanelKept } from "./panel-values";
 import type { LayoutDraft } from "./useLayoutEditor";
 
 /** What a save may say beyond the draft itself. */
@@ -37,31 +39,51 @@ export interface SaveOptions {
   /**
    * Cards' settings changes still in their open settings panels, as each panel's Done would keep
    * them, saved with the draft: the unsaved-changes prompt's Save, which would otherwise leave
-   * them behind. Applied by the editor's own `setPlacementConfig`, as Done applies them.
+   * them behind. Applied by the editor's own `setPlacementConfig` and `setPlacementSize`, as the
+   * drawer's Save applies them.
    */
   staged?: readonly StagedSettings[];
+  /**
+   * Cards added this session that are not saved: the card the add panel added as one the reader
+   * already has, while it still matches it (`useProvisionalCard`). Taken out of what is sent, as
+   * if never added.
+   */
+  leaveOut?: readonly string[];
 }
 
-/** One card's settings and own title, as its settings panel's Done would keep them. */
+/**
+ * One card's settings, own title and, where the reader chose another width, its size, as its
+ * settings drawer's Save would keep them.
+ */
 export interface StagedSettings {
   placementId: string;
   config: Record<string, unknown>;
   ownTitle: string;
+  resize?: PanelKept["resize"];
 }
 
-/** The draft's placements with each staged panel's change applied, as Done applies one. */
+/** The draft's placements with each staged drawer's change applied, as its Save applies one. */
 function withStaged(
   placements: readonly WidgetPlacement[],
   staged: readonly StagedSettings[] | undefined
 ): WidgetPlacement[] {
   return (staged ?? []).reduce(
-    (current, change) =>
-      setPlacementConfig(
+    (current, change) => {
+      const configured = setPlacementConfig(
         current,
         change.placementId,
         change.config,
         change.ownTitle
-      ),
+      );
+      return change.resize === undefined
+        ? configured
+        : setPlacementSize(
+            configured,
+            change.placementId,
+            change.resize.size,
+            change.resize.bounds
+          );
+    },
     [...placements]
   );
 }
@@ -146,7 +168,11 @@ export function useLayoutLifecycle(
     async (options: SaveOptions = {}): Promise<SaveOutcome> => {
       // Nothing held is nothing lost: there is no draft to keep.
       if (!draft) return "saved";
-      const placements = withStaged(draft.placements, options.staged);
+      const leftOut = new Set(options.leaveOut);
+      const placements = withStaged(
+        draft.placements.filter(placement => !leftOut.has(placement.id)),
+        options.staged
+      );
       try {
         if (savesAsReset(draft, placements)) {
           // The guards the reset was staged against, so a stale tab cannot

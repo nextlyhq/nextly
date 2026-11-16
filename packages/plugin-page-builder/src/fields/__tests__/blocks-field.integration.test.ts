@@ -94,8 +94,10 @@ const DOCUMENT = {
       version: 1,
       props: { width: "wide" },
       styles: { base: { base: { paddingBlockStart: "2rem" } } },
+      // The slot Section declares and draws: content filed under any other
+      // name would be stored and never shown, which a save now refuses.
       slots: {
-        default: [
+        children: [
           {
             id: "22222222-2222-4222-8222-222222222222",
             type: "core/heading",
@@ -197,7 +199,7 @@ describeEachDialect("blocks field storage", dialect => {
         userId: "u1",
         overrideAccess: true,
       },
-      { content: emptied }
+      { content: emptied, _overwrite: true }
     );
 
     const read = await handler.getEntry({
@@ -244,7 +246,7 @@ describeEachDialect("blocks field storage", dialect => {
 
     const written = await singles.update(
       "homepage",
-      { title: "Home", content: DOCUMENT },
+      { title: "Home", content: DOCUMENT, _overwrite: true },
       { overrideAccess: true }
     );
     expect((written as { success?: boolean }).success).toBe(true);

@@ -9,13 +9,13 @@
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
-import type { ResolvedColumn } from "../dsl";
+import { col, type ResolvedColumn } from "../dsl";
 import {
   assertAddableToExistingRows,
   assertMayAddColumns,
   assertMayOverride,
-  assertOverrideCompatible,
   EXTENDABLE_CORE_TABLES,
+  resolveColumnOverride,
 } from "../extension-columns";
 
 const column = (over: Partial<ResolvedColumn> = {}): ResolvedColumn => ({
@@ -135,16 +135,27 @@ describe("which tables may take columns", () => {
 
 describe("overrides", () => {
   it("allows the app to narrow text storage", () => {
-    // Payload's `varchar('city', { length: 10 })` case.
-    expect(() =>
-      assertOverrideCompatible("text", "varchar", "dc_posts", "city")
-    ).not.toThrow();
+    // Payload's `varchar('city', { length: 10 })` case, bounded on every
+    // dialect that enforces a width.
+    expect(
+      resolveColumnOverride(
+        { kind: "text" },
+        col.varchar(10),
+        "dc_posts",
+        "city"
+      )
+    ).toEqual({ kind: "shortText", length: 10 });
   });
 
   it("allows widening an integer", () => {
-    expect(() =>
-      assertOverrideCompatible("integer", "bigint", "dc_posts", "views")
-    ).not.toThrow();
+    expect(
+      resolveColumnOverride(
+        { kind: "integer" },
+        col.bigint(),
+        "dc_posts",
+        "views"
+      )
+    ).toEqual({ kind: "bigint" });
   });
 
   it("refuses crossing value families", () => {
@@ -152,7 +163,12 @@ describe("overrides", () => {
     // hold what it accepts.
     expect(
       refusal(() =>
-        assertOverrideCompatible("text", "integer", "dc_posts", "title")
+        resolveColumnOverride(
+          { kind: "text" },
+          col.integer(),
+          "dc_posts",
+          "title"
+        )
       )
     ).toMatch(/cannot be overridden/);
   });

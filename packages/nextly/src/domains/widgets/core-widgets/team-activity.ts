@@ -7,16 +7,15 @@
  * Its `load` reads `system:activity` as the caller its read services were
  * bound for, the same read the activity endpoint makes: it leaves out every
  * event about an entry, collection or Single the reader may not read, so the
- * card neither draws nor counts one. Asked as core's own lists are: the rows
- * the card's size and density hold, at most its "Number of items", and one
- * more, so the card can say more exist at every size.
+ * card neither draws nor counts one. Asked as core's own lists are: its
+ * "Number of entries" (`listEntries`), and one more, so the card can say more
+ * exist.
  *
  * @module domains/widgets/core-widgets/team-activity
  */
 
-import { rowsThatFit } from "../card-geometry";
 import { defineWidget } from "../declaration/define-widget";
-import { effectiveWidgetLimit } from "../query-limits";
+import { listEntries } from "../query-limits";
 import { ACTIVITY_SOURCE_ID } from "../system-source-ids";
 
 import type { CoreListWidgetData } from "./data";
@@ -26,6 +25,8 @@ import { readCoreList } from "./system-read";
 
 export const teamActivityWidget = defineWidget({
   id: CORE_WIDGET_ID.teamActivity,
+  // Drawn beside its name in the add panel.
+  icon: "Activity",
   title: "Team activity",
   description: "Who changed what in your content, newest first.",
   // Half the row by default; from a third, where its rows still read, to the full width. Five
@@ -39,7 +40,6 @@ export const teamActivityWidget = defineWidget({
   load: async ({
     settings,
     services,
-    size,
     signal,
     now,
   }): Promise<CoreListWidgetData> =>
@@ -47,13 +47,8 @@ export const teamActivityWidget = defineWidget({
       {
         source: ACTIVITY_SOURCE_ID,
         op: "list",
-        // The rows the card's height holds at its density, at most its "Number of items", and
-        // the one more that says more exist: the rule the card's own rows are drawn by.
-        limit:
-          Math.min(
-            effectiveWidgetLimit(settings.limit),
-            rowsThatFit(size, { density: settings.density })
-          ) + 1,
+        // Its "Number of entries", and the one more that says more exist (`listEntries`).
+        limit: listEntries(settings.limit) + 1,
       },
       { services, signal, now }
     ),

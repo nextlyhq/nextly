@@ -29,11 +29,11 @@ name: Code hygiene
 # package.json of their own, composed into a project by create-nextly-app at
 # scaffold time, so read in place every specifier in them is unresolvable.
 #
-# pull_request only. A push to main has no base to compare against.
+# pull_request only. A push to main or dev has no base to compare against.
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 permissions:
   contents: read

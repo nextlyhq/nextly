@@ -107,12 +107,12 @@ async function seedBothLanguages(t: TestNextly): Promise<void> {
   const singles = singlesOf(t);
   await singles.update(
     "preferences",
-    { siteName: "Prefs EN", region: "eu", status: "draft" },
+    { siteName: "Prefs EN", region: "eu", status: "draft", _overwrite: true },
     { locale: "en", overrideAccess: true }
   );
   await singles.update(
     "preferences",
-    { siteName: "Prefs DE", status: "draft" },
+    { siteName: "Prefs DE", status: "draft", _overwrite: true },
     { locale: "de", overrideAccess: true }
   );
 }
@@ -131,6 +131,7 @@ describe("publishAllLocales (singles)", () => {
 
     const res = await singlesOf(t).publishAllLocales("preferences", {
       overrideAccess: true,
+      data: { _overwrite: true },
     });
     expect(res.success).toBe(true);
 
@@ -149,6 +150,7 @@ describe("publishAllLocales (singles)", () => {
 
     const res = await singlesOf(t).publishAllLocales("preferences", {
       overrideAccess: true,
+      data: { _overwrite: true },
     });
     expect(res.committed).toBe(true);
     expect(res.revalidationIntent).toBeDefined();
@@ -160,6 +162,7 @@ describe("publishAllLocales (singles)", () => {
 
     await singlesOf(t).publishAllLocales("preferences", {
       overrideAccess: true,
+      data: { _overwrite: true },
     });
     const published = await mainRow(t);
     expect(published?.first_published_at).toBeTruthy();
@@ -182,18 +185,19 @@ describe("publishAllLocales (singles)", () => {
     // already-set check removed — the clause this test exists for.
     await singlesOf(t).update(
       "preferences",
-      { status: "draft" },
+      { status: "draft", _overwrite: true },
       { locale: "en", overrideAccess: true }
     );
     await singlesOf(t).update(
       "preferences",
-      { status: "draft" },
+      { status: "draft", _overwrite: true },
       { locale: "de", overrideAccess: true }
     );
     expect(await companionStatuses(t)).toEqual({ en: "draft", de: "draft" });
 
     await singlesOf(t).publishAllLocales("preferences", {
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     const secondMarker = (await mainRow(t))?.first_published_at;
@@ -215,7 +219,7 @@ describe("publishAllLocales (singles)", () => {
     // main row keeps the default language's draft status and stamps nothing.
     await singlesOf(t).update(
       "preferences",
-      { status: "published" },
+      { status: "published", _overwrite: true },
       { locale: "de", overrideAccess: true }
     );
     expect((await companionStatuses(t)).de).toBe("published");
@@ -224,6 +228,7 @@ describe("publishAllLocales (singles)", () => {
 
     await singlesOf(t).publishAllLocales("preferences", {
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     expect((await mainRow(t))?.status).toBe("published");
@@ -258,12 +263,12 @@ describe("publishAllLocales (singles)", () => {
     const t = current;
     await singlesOf(t).update(
       "preferences",
-      { siteName: "EN", status: "draft" },
+      { siteName: "EN", status: "draft", _overwrite: true },
       { locale: "en", overrideAccess: true }
     );
     await singlesOf(t).update(
       "preferences",
-      { siteName: "DE", status: "draft" },
+      { siteName: "DE", status: "draft", _overwrite: true },
       { locale: "de", overrideAccess: true }
     );
 
@@ -272,6 +277,7 @@ describe("publishAllLocales (singles)", () => {
     const res = await singlesOf(t).publishAllLocales("preferences", {
       user: { id: "user-1" },
       routeAuthorized: true,
+      data: { _overwrite: true },
     });
     expect(res.success).toBe(false);
     expect(res.statusCode).toBe(403);
@@ -288,6 +294,7 @@ describe("publishAllLocales (singles)", () => {
 
     const res = await singlesOf(t).publishAllLocales("preferences", {
       overrideAccess: true,
+      data: { _overwrite: true },
     });
     expect(res.success).toBe(false);
     expect(res.statusCode).toBe(404);
@@ -309,12 +316,13 @@ describe("publishAllLocales (singles)", () => {
     const t = current;
     await singlesOf(t).update(
       "preferences",
-      { region: "eu" },
+      { region: "eu", _overwrite: true },
       { overrideAccess: true }
     );
 
     const res = await singlesOf(t).publishAllLocales("preferences", {
       overrideAccess: true,
+      data: { _overwrite: true },
     });
     expect(res.success).toBe(true);
     expect(res.message).toMatch(/nothing to publish/i);
@@ -326,6 +334,7 @@ describe("publishAllLocales (singles)", () => {
     const t = await bootLocalized();
     const res = await singlesOf(t).publishAllLocales("no-such-single", {
       overrideAccess: true,
+      data: { _overwrite: true },
     });
     expect(res.success).toBe(false);
     expect(res.statusCode).toBe(404);

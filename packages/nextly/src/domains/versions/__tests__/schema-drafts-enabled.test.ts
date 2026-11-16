@@ -25,15 +25,18 @@ vi.mock("../../../di", () => ({
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import {
+  collectionDraftSplit,
   resetUnresolvableComponentReports,
   schemaDraftSplit,
   schemaDraftsEnabled,
 } from "../draft-split-eligibility";
 
+/** A localized drafts collection with `fields`. */
 const draftsCollection = (fields: FieldConfig[]) => ({
   status: true,
   versions: { drafts: { enabled: true } },
   fields,
+  localized: true,
 });
 
 const componentFields = [
@@ -81,6 +84,66 @@ describe("schemaDraftsEnabled", () => {
     ).resolves.toBe(true);
   });
 
+  // An unlocalized collection's draft has no language, while the component
+  // stores one value per language: the schema read says why drafts are off.
+  it("reports the localized-component rule for an unlocalized collection", async () => {
+    getComponentBySlugSpy.mockResolvedValue({
+      fields: [{ name: "heading", type: "text" }],
+      localized: true,
+    });
+
+    await expect(
+      schemaDraftSplit({
+        ...draftsCollection(componentFields),
+        localized: false,
+      })
+    ).resolves.toEqual({
+      eligible: false,
+      reason: "localized-component",
+      componentSlug: "hero",
+    });
+  });
+
+  // `localized` is optional on this published input. A caller that leaves it
+  // out (a plugin built against the earlier input) keeps the answer it had
+  // before the rule covered collections: the rule is not asked of it.
+  it("keeps a collection without `localized` eligible, as before the rule covered collections", async () => {
+    getComponentBySlugSpy.mockResolvedValue({
+      fields: [{ name: "heading", type: "text" }],
+      localized: true,
+    });
+    const { status, versions, fields } = draftsCollection(componentFields);
+
+    await expect(
+      schemaDraftSplit({ status, versions, fields })
+    ).resolves.toEqual({
+      eligible: true,
+      reason: null,
+      componentSlug: null,
+    });
+  });
+
+  // The authored config is authoritative: no `localized` there means the
+  // collection is untranslated, so the public authored form asks the rule.
+  it("reports the localized-component rule for an authored collection without `localized`", async () => {
+    getComponentBySlugSpy.mockResolvedValue({
+      fields: [{ name: "heading", type: "text" }],
+      localized: true,
+    });
+
+    await expect(
+      collectionDraftSplit({
+        status: true,
+        versions: { drafts: true },
+        fields: componentFields,
+      })
+    ).resolves.toEqual({
+      eligible: false,
+      reason: "localized-component",
+      componentSlug: "hero",
+    });
+  });
+
   it("never touches the registry when the collection has no components", async () => {
     await expect(
       schemaDraftsEnabled(draftsCollection(plainFields))
@@ -94,6 +157,7 @@ describe("schemaDraftsEnabled", () => {
         status: true,
         versions: null,
         fields: componentFields,
+        localized: true,
       })
     ).resolves.toBe(false);
     expect(getComponentBySlugSpy).not.toHaveBeenCalled();

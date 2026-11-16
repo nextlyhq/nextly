@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, fieldGroup, text } from "../../../config";
+import { installRegistryResolver } from "../../../cli/utils/registry-resolver";
 import { createAdapter } from "../../../database/factory";
 import { clearServices } from "../../../di/register";
 import {
@@ -111,6 +112,10 @@ async function storedFieldNames(
 describe("a boot refused for its workflows, beside a Builder reconcile (sqlite)", () => {
   it("adds no plugin field to a Builder collection", async () => {
     const adapter = await adapterOnFile();
+    // What boot does before first-run setup: the schema lock seeds its row
+    // through an insert, which an adapter refuses for a table its resolver
+    // does not hold.
+    installRegistryResolver(adapter);
     await ensureFirstRunSetup({
       adapter,
       logger: silentLogger,

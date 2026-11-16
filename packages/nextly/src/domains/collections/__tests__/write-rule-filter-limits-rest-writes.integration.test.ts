@@ -217,11 +217,17 @@ describe("a REST update or delete whose rule answers a filter", () => {
     const { own, others } = await seed(t, POSTS);
     const before = await stored(t, POSTS, others);
 
-    expect(await rest("PATCH", entry(POSTS, own), { title: "renamed" })).toBe(
-      200
-    );
     expect(
-      await rest("PATCH", entry(POSTS, others), { title: "renamed" })
+      await rest("PATCH", entry(POSTS, own), {
+        title: "renamed",
+        _overwrite: true,
+      })
+    ).toBe(200);
+    expect(
+      await rest("PATCH", entry(POSTS, others), {
+        title: "renamed",
+        _overwrite: true,
+      })
     ).toBe(403);
     expect((await stored(t, POSTS, own))?.title).toBe("renamed");
     expect(await stored(t, POSTS, others)).toEqual(before);
@@ -233,7 +239,10 @@ describe("a REST update or delete whose rule answers a filter", () => {
     const before = await stored(t, OWN_POSTS, others);
 
     expect(
-      await rest("PATCH", entry(OWN_POSTS, others), { title: "renamed" })
+      await rest("PATCH", entry(OWN_POSTS, others), {
+        title: "renamed",
+        _overwrite: true,
+      })
     ).toBe(404);
     expect(await rest("DELETE", entry(OWN_POSTS, others))).toBe(404);
     expect(await stored(t, OWN_POSTS, others)).toEqual(before);
@@ -244,7 +253,9 @@ describe("a REST update or delete whose rule answers a filter", () => {
     const { own } = await seed(t, POSTS);
     const before = await stored(t, POSTS, own);
 
-    expect(await rest("PATCH", entry(POSTS, own), { owner: OTHER })).toBe(403);
+    expect(
+      await rest("PATCH", entry(POSTS, own), { owner: OTHER, _overwrite: true })
+    ).toBe(403);
     expect(await stored(t, POSTS, own)).toEqual(before);
   });
 
@@ -294,7 +305,7 @@ describe.each(getConfiguredTestDialects())(
         await rest(
           "PATCH",
           entry(LOCALIZED, own),
-          { title: "deutsch" },
+          { title: "deutsch", _overwrite: true },
           "?locale=de"
         )
       ).toBe(200);
@@ -302,7 +313,7 @@ describe.each(getConfiguredTestDialects())(
         await rest(
           "PATCH",
           entry(LOCALIZED, others),
-          { title: "deutsch" },
+          { title: "deutsch", _overwrite: true },
           "?locale=de"
         )
       ).toBe(403);
@@ -317,15 +328,16 @@ describe("an editor's write through an entry's versions whose update rule answer
     const before = await stored(t, DRAFTED, others);
 
     expect(
-      await rest("POST", [...entry(DRAFTED, own), "versions", "1", "restore"])
+      await rest("POST", [...entry(DRAFTED, own), "versions", "1", "restore"], {
+        _overwrite: true,
+      })
     ).toBe(200);
     expect(
-      await rest("POST", [
-        ...entry(DRAFTED, others),
-        "versions",
-        "1",
-        "restore",
-      ])
+      await rest(
+        "POST",
+        [...entry(DRAFTED, others), "versions", "1", "restore"],
+        { _overwrite: true }
+      )
     ).toBe(403);
     expect(await stored(t, DRAFTED, others)).toEqual(before);
   });
@@ -338,23 +350,25 @@ describe("an editor's write through an entry's versions whose update rule answer
       await t.nextly.update({
         collection: DRAFTED,
         id,
-        data: { title: "held" },
+        data: { title: "held", _overwrite: true },
       } as never);
     }
 
     expect(
-      await rest("DELETE", [
-        ...entry(DRAFTED, own),
-        "versions",
-        "working-draft",
-      ])
+      await rest(
+        "DELETE",
+        [...entry(DRAFTED, own), "versions", "working-draft"],
+        undefined,
+        "?_overwrite=true"
+      )
     ).toBe(200);
     expect(
-      await rest("DELETE", [
-        ...entry(DRAFTED, others),
-        "versions",
-        "working-draft",
-      ])
+      await rest(
+        "DELETE",
+        [...entry(DRAFTED, others), "versions", "working-draft"],
+        undefined,
+        "?_overwrite=true"
+      )
     ).toBe(403);
   });
 
@@ -387,7 +401,7 @@ describe("an editor's write through an entry's versions whose update rule answer
         collection: LOCALIZED_DRAFTS,
         id,
         locale: "de",
-        data: { title: "entwurf" },
+        data: { title: "entwurf", _overwrite: true },
       } as never);
     }
     const takeLive = (id: string) =>
@@ -399,7 +413,7 @@ describe("an editor's write through an entry's versions whose update rule answer
           "working-draft",
           "take-live",
         ],
-        {},
+        { _overwrite: true },
         "?locale=de"
       );
 
@@ -450,13 +464,18 @@ describe.each(getConfiguredTestDialects())(
         collection,
         id,
         locale: "de",
-        data: { title: "meins", owner: OTHER, status: "published" },
+        data: {
+          title: "meins",
+          owner: OTHER,
+          status: "published",
+          _overwrite: true,
+        },
       } as never);
       await t.nextly.update({
         collection,
         id,
         locale: "de",
-        data: { title: "entwurf" },
+        data: { title: "entwurf", _overwrite: true },
       } as never);
       return id;
     }
@@ -556,14 +575,19 @@ describe.each(getConfiguredTestDialects())(
         collection: SLUG,
         id,
         locale: "de",
-        data: { title: "meins", owner: AUTHOR, status: "published" },
+        data: {
+          title: "meins",
+          owner: AUTHOR,
+          status: "published",
+          _overwrite: true,
+        },
       } as never);
       for (const locale of ["en", "de"]) {
         await t.nextly.update({
           collection: SLUG,
           id,
           locale,
-          data: { title: "held" },
+          data: { title: "held", _overwrite: true },
         } as never);
       }
       const discard = (query: string) =>
@@ -574,8 +598,8 @@ describe.each(getConfiguredTestDialects())(
           query
         );
 
-      expect(await discard("?locale=en")).toBe(403);
-      expect(await discard("?locale=de")).toBe(200);
+      expect(await discard("?locale=en&_overwrite=true")).toBe(403);
+      expect(await discard("?locale=de&_overwrite=true")).toBe(200);
     });
 
     it("takes the live values into a held edit the filter matches in its language", async () => {
@@ -606,20 +630,25 @@ describe.each(getConfiguredTestDialects())(
         collection: SLUG,
         id,
         locale: "de",
-        data: { title: "meins", owner: AUTHOR, status: "published" },
+        data: {
+          title: "meins",
+          owner: AUTHOR,
+          status: "published",
+          _overwrite: true,
+        },
       } as never);
       await t.nextly.update({
         collection: SLUG,
         id,
         locale: "de",
-        data: { title: "entwurf" },
+        data: { title: "entwurf", _overwrite: true },
       } as never);
 
       expect(
         await rest(
           "POST",
           [...entry(SLUG, id), "versions", "working-draft", "take-live"],
-          {},
+          { _overwrite: true },
           "?locale=de"
         )
       ).toBe(200);
@@ -653,7 +682,12 @@ describe.each(getConfiguredTestDialects())(
         collection: SLUG,
         id,
         locale: "de",
-        data: { title: "meins", owner: AUTHOR, status: "published" },
+        data: {
+          title: "meins",
+          owner: AUTHOR,
+          status: "published",
+          _overwrite: true,
+        },
       } as never);
       const german = (
         await new VersionsRepository(t.adapter).newestVersionNoByLocale(
@@ -664,12 +698,11 @@ describe.each(getConfiguredTestDialects())(
       expect(german).toBeDefined();
 
       expect(
-        await rest("POST", [
-          ...entry(SLUG, id),
-          "versions",
-          String(german),
-          "restore",
-        ])
+        await rest(
+          "POST",
+          [...entry(SLUG, id), "versions", String(german), "restore"],
+          { _overwrite: true }
+        )
       ).toBe(200);
     });
 
@@ -704,7 +737,7 @@ describe.each(getConfiguredTestDialects())(
         collection: SLUG,
         id,
         locale: "de",
-        data: { title: "entwurf" },
+        data: { title: "entwurf", _overwrite: true },
       } as never);
       const entries = t
         .getService("collectionsHandler")
@@ -717,6 +750,7 @@ describe.each(getConfiguredTestDialects())(
         locale: "de",
         user: { id: AUTHOR },
         overrideAccess: false,
+        version: { _overwrite: true },
       });
 
       expect(gave.given).toBe(1);
@@ -745,15 +779,16 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: SLUG,
         id: own,
-        data: { title: "held" },
+        data: { title: "held", _overwrite: true },
       } as never);
       const gave = giveAwayAtLock(t, SLUG, own);
 
-      const status = await rest("DELETE", [
-        ...entry(SLUG, own),
-        "versions",
-        "working-draft",
-      ]);
+      const status = await rest(
+        "DELETE",
+        [...entry(SLUG, own), "versions", "working-draft"],
+        undefined,
+        "?_overwrite=true"
+      );
 
       expect(gave.given).toBe(1);
       expect(status).toBe(403);

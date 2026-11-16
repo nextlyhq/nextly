@@ -3,9 +3,11 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
+import type { ColumnSpec } from "../../schema/pipeline/diff/types";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { isFieldLocalized } from "../classify-fields";
 
+import { carriedDefinition } from "./carried-definition";
 import {
   companionUniqueIndexName,
   companionUniqueIndexChanges,
@@ -21,6 +23,7 @@ import {
   buildFieldLeavesTranslationArchiveStatement,
   buildFieldLeavesTranslationStatements,
   buildLocalizationDownStatements,
+  copyLiveness,
 } from "./generate-down";
 import {
   buildCompanionCreateOnlySql,
@@ -115,6 +118,19 @@ export interface ReconcileCompanionArgs {
    * already published. Omit to skip the back-fill (e.g. a migrate path with no live default locale).
    */
   defaultLocale?: string;
+  /**
+   * Back-fill EVERY language's `_status` from the main row's `status` when `_status` is added, not
+   * only the default language's. For a translation turned on under
+   * `experimental.perLanguageStorage`: the values were per language already, and every language was
+   * published with the entry until now, so each takes the entry's state.
+   */
+  statusFromEntryInEveryLanguage?: boolean;
+  /**
+   * The site's languages in its order, which decides, with `companionHasStatus`, the language a
+   * field leaving translation takes its shared value from (`copyLiveness`). Omitted, the default
+   * language's value, else the first by code.
+   */
+  languageOrder?: readonly string[];
   /**
    * Names of fields that leave the companion because they stop being translated while still
    * existing as shared fields. Before such a column is dropped, its non-default values are
@@ -389,6 +405,25 @@ function companionColumnDrops(
 }
 
 /**
+ * `drops` with the translations table locked against writes first, on PostgreSQL, for the rest of
+ * the transaction they run in. Without it a value written to a leaving column after its final copy
+ * and before its drop would be lost; held, such a write waits and then fails on the dropped column.
+ * Reads go on. MySQL commits each schema statement, so no transaction can hold the lock across the
+ * drop there, and SQLite's one connection runs nothing beside the drops.
+ */
+function lockedAgainstWrites(
+  dialect: SupportedDialect,
+  companionTable: string,
+  drops: string[]
+): string[] {
+  if (dialect !== "postgresql" || drops.length === 0) return drops;
+  return [
+    `LOCK TABLE ${q(companionTable, dialect)} IN SHARE ROW EXCLUSIVE MODE`,
+    ...drops,
+  ];
+}
+
+/**
  * The drops a plan with `holdLeavingDrops` left out: for each field leaving translation, its other
  * languages archived and its default language's value copied again, right before its column goes,
  * so a value written since the first copy is kept too. Both are safe to repeat.
@@ -468,6 +503,8 @@ function keepLeavingFieldValues(
       mainTable: args.tableName,
       companionTable,
       defaultLocale: args.defaultLocale,
+      // What the entry's readers saw decides the shared value, and so what is archived.
+      liveness: copyLiveness(args.languageOrder, args.companionHasStatus),
     },
     archiveOwnerOf(args.slug, args.kind),
     column,
@@ -548,13 +585,18 @@ function companionStatusStatements(
       // Only the default-locale row: other locales are genuinely per-locale and
       // correctly start at 'draft'. The subquery targets a different table (main)
       // than the one updated, so it is valid on Postgres, MySQL and SQLite.
-      if (args.defaultLocale !== undefined) {
+      const fromEntry =
+        `UPDATE ${q(companionTable, dialect)} SET ${q("_status", dialect)} = ` +
+        `(SELECT ${q("status", dialect)} FROM ${q(tableName, dialect)} ` +
+        `WHERE ${q(tableName, dialect)}.${q("id", dialect)} = ${q(companionTable, dialect)}.${q("_parent", dialect)})`;
+      if (args.statusFromEntryInEveryLanguage === true) {
+        // Every language was live with the entry until now, so each takes its state.
+        stmts.push(fromEntry);
+      } else if (args.defaultLocale !== undefined) {
         const literalLocale = args.defaultLocale.replace(/'/g, "''");
         stmts.push(
-          `UPDATE ${q(companionTable, dialect)} SET ${q("_status", dialect)} = ` +
-            `(SELECT ${q("status", dialect)} FROM ${q(tableName, dialect)} ` +
-            `WHERE ${q(tableName, dialect)}.${q("id", dialect)} = ${q(companionTable, dialect)}.${q("_parent", dialect)}) ` +
-            `WHERE ${q(companionTable, dialect)}.${q("_locale", dialect)} = '${literalLocale}'`
+          fromEntry +
+            ` WHERE ${q(companionTable, dialect)}.${q("_locale", dialect)} = '${literalLocale}'`
         );
       }
     } else if (!status && args.companionHasStatus) {
@@ -580,6 +622,8 @@ export interface CompanionTransitionArgs {
   builtBy: ColumnOrigin;
   /** Default locale — the language seeded onto/restored from the companion. */
   defaultLocale: string;
+  /** See `ReconcileCompanionArgs.languageOrder`. */
+  languageOrder?: readonly string[];
   /** Desired Draft/Published state (companion `_status`). */
   status: boolean;
   /** Localization state BEFORE this save (persisted). */
@@ -625,6 +669,8 @@ export interface CompanionTransitionArgs {
   wasStatus: boolean;
   /** Whether the existing companion physically has `_status` (see ReconcileCompanionArgs). */
   companionHasStatus?: boolean;
+  /** Seed every language's added `_status` from the entry (see ReconcileCompanionArgs). */
+  statusFromEntryInEveryLanguage?: boolean;
   /** Companion columns this database already has for added translated fields (see ReconcileCompanionArgs). */
   presentOnCompanion?: readonly string[];
   /**
@@ -656,6 +702,13 @@ export interface CompanionTransitionArgs {
    * migration file is planned without it (`buildCompanionTransitionPlans`).
    */
   liveCompanionColumns?: readonly string[];
+  /**
+   * Each companion column as this database has it, by column. A column turning translation off
+   * restores to the main table takes back what it carries (`carriedDefinition`): its type where
+   * wider than the field's own, and its default. Describes one database only, like
+   * `liveCompanionColumns`.
+   */
+  liveCompanionDefinitions?: Readonly<Record<string, ColumnSpec>>;
   /**
    * The companion's index names as this database has them, so a per-language unique index is
    * created only where missing and dropped only where present. Left out, they are planned from
@@ -728,6 +781,10 @@ export function buildLeavingFieldsArchiveStatements(args: {
   dialect: SupportedDialect;
   builtBy: ColumnOrigin;
   defaultLocale: string;
+  /** See `ReconcileCompanionArgs.languageOrder`. */
+  languageOrder?: readonly string[];
+  /** Whether each language has its own publish state, which the ranking reads with the order. */
+  companionHasStatus?: boolean;
   oldFields: readonly CompanionFieldLike[];
   newFields: readonly CompanionFieldLike[];
   /**
@@ -751,6 +808,11 @@ export function buildLeavingFieldsArchiveStatements(args: {
                 dialect: args.dialect,
                 companionTable,
                 defaultLocale: args.defaultLocale,
+                // Every language but the one the copy takes the shared value from.
+                liveness: copyLiveness(
+                  args.languageOrder,
+                  args.companionHasStatus
+                ),
               },
               { slug: args.slug, kind: args.kind },
               args.renamedFrom?.get(col.name) ?? col.name,
@@ -880,6 +942,22 @@ export function buildCompanionTransitionStatements(
     });
     // Nothing to restore (no companion, or the entity had no translatable columns).
     if (!spec || !companionExists) return none;
+    // Each entry keeps the value its readers saw, as when one field stops being translated: the
+    // copy and the archive both read this spec, so they choose the same row. Whether each language
+    // had its own `_status` is the history fact `wasStatus` where the caller read no physical
+    // shape, as a disable's callers don't: the companion of a translated Draft/Published entity
+    // carries one.
+    spec.liveness = copyLiveness(
+      args.languageOrder,
+      args.companionHasStatus ?? args.wasStatus
+    );
+    // A restored main column takes back what its companion column carries, by the rule turning
+    // translation on gave the companion column its own (`carriedDefinition`).
+    const definitions = args.liveCompanionDefinitions ?? {};
+    spec.columns = spec.columns.map(c => {
+      const carried = carriedDefinition(definitions[c.name], c, dialect);
+      return carried ? { ...c, carried } : c;
+    });
     return {
       statements: buildLocalizationDownStatements(spec, {
         existingMainColumns: args.existingMainColumns,
@@ -932,6 +1010,8 @@ export function buildCompanionTransitionStatements(
             dialect,
             builtBy,
             defaultLocale,
+            languageOrder: args.languageOrder,
+            companionHasStatus: args.companionHasStatus,
             oldFields: before,
             newFields,
           }),
@@ -955,10 +1035,13 @@ export function buildCompanionTransitionStatements(
       status,
       companionExists,
       companionHasStatus: args.companionHasStatus,
+      statusFromEntryInEveryLanguage: args.statusFromEntryInEveryLanguage,
       // Carry the default locale so a newly-added `_status` back-fills the
       // default-locale companion row from the main row's status, and a field leaving
       // translation keeps its default language's value.
       defaultLocale,
+      // With the order, the value its readers saw (`copyLiveness`).
+      languageOrder: args.languageOrder,
       sharedAfter,
       sharedAfterArchived: archiveFirst,
       joinedBefore: args.joinedBefore,
@@ -978,11 +1061,11 @@ export function buildCompanionTransitionStatements(
         ...(held?.creates ?? []),
       ],
       ...(held && {
-        leavingDrops: [
+        leavingDrops: lockedAgainstWrites(dialect, `${tableName}_locales`, [
           // Before the columns, which SQLite and MySQL refuse to drop under an index.
           ...held.drops,
           ...heldLeavingColumnDrops(reconcile, `${tableName}_locales`),
-        ],
+        ]),
       }),
       needsArchive: sharedAfter.length > 0,
       companionDropped: false,

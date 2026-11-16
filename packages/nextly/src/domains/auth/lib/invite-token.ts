@@ -14,6 +14,7 @@
 import { randomBytes, createHash } from "crypto";
 
 import { getBaseUrl } from "../../../shared/lib/get-base-url";
+import { wholeSecondExpiry } from "../services/token-account-binding";
 
 /**
  * How long a set-password link stays valid. Seven days is the self-hosted
@@ -53,8 +54,11 @@ export function generateInviteTokenValue(): InviteTokenValue {
   return {
     token,
     tokenHash: hashInviteToken(token),
-    expiresAt: new Date(
-      Date.now() + INVITE_TOKEN_EXPIRY_HOURS * 60 * 60 * 1000
+    // The whole second the instant falls in: a column that keeps whole
+    // seconds rounds milliseconds rather than cutting them, which would
+    // store an expiry later than the one computed.
+    expiresAt: wholeSecondExpiry(
+      new Date(Date.now() + INVITE_TOKEN_EXPIRY_HOURS * 60 * 60 * 1000)
     ),
   };
 }

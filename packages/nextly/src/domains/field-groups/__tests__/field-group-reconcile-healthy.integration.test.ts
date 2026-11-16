@@ -15,28 +15,39 @@
  * real creator, introspect the real tables, and require the planner to report NO changes and NO
  * blockers. Anything it reports here is by construction false, because nothing has drifted.
  *
- * 🔴 The types the creator emits are NOT what the column descriptor reports, which is exactly how
- * this class of defect arises. Measured on live databases: a `date` field is `datetime` on MySQL and
- * `timestamp` on PostgreSQL, while the descriptor answers `timestamp` for both; relations are `UUID`
- * on PostgreSQL and `VARCHAR(36)` on MySQL while the descriptor answers `text`. A comparison built
- * against the descriptor therefore reports drift on healthy groups, and only a live database says so.
+ * 🔴 Two creators have built these tables, and they spell some columns differently. A Builder
+ * create now builds its table through the save writer's migration, from the column descriptor; the
+ * creator before it gave a PostgreSQL `email` `VARCHAR(255)` where the descriptor gives `text`, and a
+ * MySQL `date` `DATETIME` where it gives `timestamp`. Tables of both kinds exist, so the planner
+ * accepts either spelling and nothing else: the planted cases below hold each half of that.
  *
  * Self-skips per dialect on the standard rule: SQLite always runs, the servers run when their URL
  * is set, and each dialect gets its own throwaway database.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createTestNextly,
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { indexNameForColumn } from "../../schema/services/index-name";
+import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 
 let current: TestNextly | undefined;
+
+// A field group's Builder create builds its table in development only; anywhere else it writes the
+// migration for the deploy's `nextly migrate` and records the group pending, with no table. These
+// cases judge the table a create leaves, so they run as a development server does. `vi.stubEnv`
+// rather than assigning: `NODE_ENV` is declared read-only.
+beforeEach(() => {
+  vi.stubEnv("NODE_ENV", "development");
+});
 
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  vi.unstubAllEnvs();
 });
 
 /**
@@ -59,6 +70,9 @@ const EVERY_SHAPE = [
   { name: "a_checkbox", type: "checkbox" },
   { name: "a_date", type: "date" },
   { name: "a_json", type: "json" },
+  // A short id string whose column the creator takes from the column descriptor rather than its
+  // own type map: `text` on PostgreSQL and SQLite, `varchar(255)` on MySQL.
+  { name: "a_icon", type: "icon" },
 ];
 
 for (const dialect of getConfiguredTestDialects()) {
@@ -101,5 +115,173 @@ for (const dialect of getConfiguredTestDialects()) {
     // harness does not declare; a fixture that created the row without moving the columns would
     // never reach the mechanism, and would pass while proving nothing. Stated rather than faked,
     // and the expectation map covers the companion so the check itself is wired for it.
+  });
+}
+
+/**
+ * One column per server planted in the spelling the creator before the Builder's save writer gave
+ * it, which reconcile accepts, and in a third spelling, which it still refuses. SQLite is not asked:
+ * both creators spell these columns alike there.
+ */
+const PLANTED = {
+  postgresql: {
+    field: "a_email",
+    earlier: "ALTER TABLE {t} ALTER COLUMN a_email TYPE varchar(255)",
+    third: "ALTER TABLE {t} ALTER COLUMN a_email TYPE integer USING NULL",
+  },
+  mysql: {
+    field: "a_date",
+    earlier: "ALTER TABLE {t} MODIFY a_date DATETIME NULL",
+    third: "ALTER TABLE {t} MODIFY a_date INT NULL",
+  },
+} as const;
+
+for (const dialect of getConfiguredTestDialects()) {
+  if (dialect === "sqlite") continue;
+  const planted = PLANTED[dialect];
+  describe(`a field group's column in another spelling — ${dialect}`, () => {
+    /** A healthy group with one column then altered by `statement`, and the reconcile's answer. */
+    async function reconcileAfter(statement: string) {
+      current = await createTestNextly({ dialect });
+      const slug = `planted_${dialect.slice(0, 2)}`;
+      await current.nextly.fieldGroups.create({
+        slug,
+        label: "Planted",
+        fields: EVERY_SHAPE,
+      });
+      await current.adapter.executeQuery(
+        statement.replace("{t}", resolveComponentTableName(slug))
+      );
+      const { reconcileFieldGroup } = await import(
+        "../services/field-group-reconcile-service"
+      );
+      return reconcileFieldGroup({
+        registry: current.getService("fieldGroupRegistryService"),
+        adapter: current.adapter,
+        logger: current.getService("logger"),
+        slug,
+      });
+    }
+
+    it("accepts the spelling the creator before the Builder's save writer gave", async () => {
+      const report = await reconcileAfter(planted.earlier);
+
+      expect(report.removed.map(r => r.fieldName)).toEqual([]);
+      expect(report.repaired.map(r => `${r.fieldName}.${r.attribute}`)).toEqual(
+        []
+      );
+      expect(report.unchanged).toBe(true);
+    });
+
+    it("refuses a spelling neither creator gives, naming the field", async () => {
+      await expect(reconcileAfter(planted.third)).rejects.toMatchObject({
+        code: "CONFLICT",
+        message: expect.stringContaining(`"${planted.field}" is declared`),
+      });
+    });
+  });
+}
+
+/**
+ * Fields whose index or default the generator decides beyond the flag the field carries.
+ *
+ * A single reference is indexed whether or not it declares `index`, by the rule the desired table
+ * and the creator share, so the undeclared index on `a_ref` is part of a healthy table. A Builder
+ * save writes no column DEFAULT for a user field (the default is filled when an instance is saved),
+ * so `a_flag` has none on the table even though its field declares one. `a_count` asks for nothing,
+ * and is the control for the index cases below.
+ */
+const GENERATOR_DECIDED = [
+  { name: "a_ref", type: "relationship", relationTo: "users" },
+  { name: "a_flag", type: "checkbox", defaultValue: true },
+  { name: "a_count", type: "number" },
+];
+
+/** The statement that changes `a_flag`'s column DEFAULT, on the servers that can alter one in place. */
+const SET_FLAG_DEFAULT: Partial<Record<string, string>> = {
+  postgresql: "ALTER TABLE {t} ALTER COLUMN a_flag SET DEFAULT false",
+  mysql: "ALTER TABLE {t} ALTER COLUMN a_flag SET DEFAULT 0",
+};
+
+/** The statement that drops the index `name` from `{t}`, as each dialect spells it. */
+function dropIndexSql(dialect: string, name: string): string {
+  return dialect === "mysql"
+    ? `DROP INDEX ${name} ON {t}`
+    : `DROP INDEX "${name}"`;
+}
+
+for (const dialect of getConfiguredTestDialects()) {
+  describe(`a Builder field group's generator-decided index and default — ${dialect}`, () => {
+    const slug = `decided_${dialect.slice(0, 2)}`;
+    const table = resolveComponentTableName(slug);
+
+    /** A Builder-made group with the fields above, altered by `statements`, and its reconcile. */
+    async function reconcileAfter(...statements: string[]) {
+      current = await createTestNextly({ dialect });
+      await current.nextly.fieldGroups.create({
+        slug,
+        label: "Decided",
+        fields: GENERATOR_DECIDED,
+      });
+      for (const statement of statements) {
+        await current.adapter.executeQuery(statement.replaceAll("{t}", table));
+      }
+      const { reconcileFieldGroup } = await import(
+        "../services/field-group-reconcile-service"
+      );
+      return reconcileFieldGroup({
+        registry: current.getService("fieldGroupRegistryService"),
+        adapter: current.adapter,
+        logger: current.getService("logger"),
+        slug,
+      });
+    }
+
+    it("reports nothing to repair for a single reference and a checkbox default", async () => {
+      const report = await reconcileAfter();
+
+      expect(report.removed.map(r => r.fieldName)).toEqual([]);
+      expect(report.repaired.map(r => `${r.fieldName}.${r.attribute}`)).toEqual(
+        []
+      );
+      expect(report.adopted.map(a => a.fieldName)).toEqual([]);
+      expect(report.unchanged).toBe(true);
+    });
+
+    // The break-checks: each of these is a table that no longer matches the definition, and the
+    // healthy answer above must not have been bought by ceasing to look.
+    it("still records an index the definition does not ask for", async () => {
+      const report = await reconcileAfter(
+        `CREATE INDEX extra_${slug}_count ON {t} (a_count)`
+      );
+
+      expect(report.repaired.map(r => `${r.fieldName}.${r.attribute}`)).toEqual(
+        ["a_count.index"]
+      );
+    });
+
+    it("refuses a single reference whose index is gone, naming the field", async () => {
+      await expect(
+        reconcileAfter(
+          dropIndexSql(dialect, indexNameForColumn(table, "a_ref"))
+        )
+      ).rejects.toMatchObject({
+        code: "CONFLICT",
+        message: expect.stringContaining('"a_ref"'),
+      });
+    });
+
+    const setDefault = SET_FLAG_DEFAULT[dialect];
+    // SQLite cannot change a column's DEFAULT without rebuilding the table, so it is asked only on
+    // the servers.
+    it.skipIf(setDefault === undefined)(
+      "refuses a checkbox column whose default differs from the declared one",
+      async () => {
+        await expect(reconcileAfter(setDefault ?? "")).rejects.toMatchObject({
+          code: "CONFLICT",
+          message: expect.stringContaining('"a_flag"'),
+        });
+      }
+    );
   });
 }

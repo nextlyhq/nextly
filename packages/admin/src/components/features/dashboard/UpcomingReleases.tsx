@@ -13,6 +13,12 @@
  * entries it holds, and whether its checks found it Ready or "N issues", and
  * leads to its release.
  *
+ * With fewer releases than its rows hold, the card asks for the height its line and rows take
+ * rather than its stored rows (`frame/fit`), so the dashboard row it shares with Needs your
+ * attention is as tall as the taller of the two, not always as tall as their stored rows. Its
+ * rows are counted from its stored height, never measured, so a card drawn shorter draws the
+ * same rows.
+ *
  * With nothing scheduled, stopped or overdue the answer is empty: the widget
  * hides when empty, so the dashboard takes it out, and the frame draws its
  * empty state where customise mode shows it. The frame also drew loading and
@@ -34,7 +40,7 @@ import {
 import { useListDensity } from "@admin/components/features/widgets/frame/list-rows";
 import {
   LeadingChip,
-  StatusPill,
+  StatusChip,
 } from "@admin/components/features/widgets/frame/row-parts";
 import {
   useCardTier,
@@ -83,13 +89,6 @@ function attentionHref(reason: Reason): string {
   return `${ROUTES.RELEASES}?tab=attention&reason=${reason}`;
 }
 
-/**
- * The attention line's height and the gap under it, in pixels: what the rows under it may not
- * take. One line that never wraps (20 px, `h-5`) and a 12 px gap (`gap-3`), so the room it takes
- * is known before it is drawn.
- */
-const ATTENTION_LINE_PX = 20 + 12;
-
 /** "1 stopped · 2 overdue": one part per reason with any, each a link to its list. */
 const AttentionLine: React.FC<{
   counts: readonly { reason: Reason; count: number }[];
@@ -120,20 +119,13 @@ export type UpcomingReleasesCardProps = Omit<DeclaredComponentProps, "data"> & {
 
 export const UpcomingReleasesCard: React.FC<UpcomingReleasesCardProps> = ({
   data,
+  settings,
 }) => {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
   const density = useListDensity();
-  // At most five rows, the most its `load` asks for before the one that says more exist: the
-  // card declares no "Number of items", so the rule's own default stands for it here and there.
-  const drawn = useRowsDrawn(tier, undefined, density);
-  // With the attention line above them, the rows have its room the less.
-  const drawnUnderLine = useRowsDrawn(
-    tier,
-    undefined,
-    density,
-    ATTENTION_LINE_PX
-  );
+  // Its "Number of entries", the rows its `load` asked for before the one that says more exist.
+  const drawn = useRowsDrawn(settings.limit);
 
   const { attention, releases } = rowsOf(data.items);
   if (attention.length === 0 && releases.length === 0) {
@@ -161,7 +153,7 @@ export const UpcomingReleasesCard: React.FC<UpcomingReleasesCardProps> = ({
         <ListCard
           model={RELEASE_LIST_MODEL}
           rows={releases}
-          drawn={attention.length > 0 ? drawnUnderLine : drawn}
+          drawn={drawn}
           viewAllHref={ROUTES.RELEASES}
           tier={tier}
           density={density}
@@ -195,11 +187,11 @@ function entriesText(value: unknown): string | undefined {
 function statusOf(value: unknown): React.ReactNode {
   const issues = countOf(value);
   if (issues === undefined) return undefined;
-  if (issues === 0) return <StatusPill tone="good">Ready</StatusPill>;
+  if (issues === 0) return <StatusChip tone="good">Ready</StatusChip>;
   return (
-    <StatusPill tone="bad">
+    <StatusChip tone="bad">
       {issues} {issues === 1 ? "issue" : "issues"}
-    </StatusPill>
+    </StatusChip>
   );
 }
 

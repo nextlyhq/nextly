@@ -41,12 +41,17 @@
  *   punctuation ("(data preserved)") is read as a continuation, so its first
  *   word is not required to be capitalised.
  */
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import userEvent from "@testing-library/user-event";
 import { DndContext } from "@dnd-kit/core";
 import type { ComponentProps, ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { cleanup, render, screen } from "@admin/__tests__/utils";
+import { buildOutline } from "@admin/lib/builder/outline/outline-model";
 import type {
   SchemaPreviewChange,
   SchemaPreviewLeavingTranslation,
@@ -55,13 +60,14 @@ import type {
   SchemaPreviewResponse,
 } from "@admin/services/schemaApi";
 
-import { BuilderFieldList } from "../BuilderFieldList";
+import { Outline } from "../outline/Outline";
 import { BuilderSchemaChangeDialogs } from "../BuilderSchemaChangeDialogs";
 import { BuilderSettingsModal } from "../BuilderSettingsModal";
 import { BuilderToolbar } from "../BuilderToolbar";
+import { NO_PENDING_CHANGES } from "./no-pending-changes";
 import type { BuilderConfig, BuilderKind } from "../builder-config";
-import { FieldEditorSheet } from "../FieldEditorSheet";
-import { FieldPickerModal } from "../FieldPickerModal";
+import { BuilderFieldPicker } from "../BuilderFieldPicker";
+import { BuilderFieldSettings } from "../BuilderFieldSettings";
 import { FIELD_TYPES_CATALOG } from "../field-picker-modal/field-types-catalog";
 import type { BuilderField, SchemaChangeConfirmation } from "../types";
 
@@ -133,6 +139,8 @@ const FIXTURE_NAMES = new Set([
   "Hero",
   "Users",
   "Draft",
+  // A field's own label, which the between-rows add names as its place.
+  "Cover",
 ]);
 
 /** Type ids that are not already their own plain name, read from the catalog. */
@@ -187,9 +195,12 @@ function confirmation(
     previewId: 1,
     isOpen: true,
     isApplying: false,
+    isBusy: false,
     request: () => {},
     setOpen: () => {},
     settle: () => {},
+    beginPreview: () => {},
+    endPreview: () => {},
     beginApply: () => {},
     endApply: () => {},
   };
@@ -331,22 +342,26 @@ const review = (
 
 const sheet = (
   name: string,
-  props: Partial<ComponentProps<typeof FieldEditorSheet>> & {
+  props: {
     field: BuilderField;
+    /** A field just added, not yet saved; saved otherwise. */
+    mode?: "create" | "edit";
+    readOnly?: boolean;
   },
   then?: Surface["then"]
 ): Surface => ({
   name,
   ui: (
-    <FieldEditorSheet
-      open
-      mode="edit"
+    <BuilderFieldSettings
       kind="collection"
-      siblingFields={[]}
-      onCancel={() => {}}
-      onApply={() => {}}
-      onDelete={() => {}}
-      {...props}
+      fields={[props.field]}
+      fieldId={props.field.id}
+      savedFieldIds={new Set(props.mode === "create" ? [] : [props.field.id])}
+      readOnly={props.readOnly ?? false}
+      docked={false}
+      onFieldChange={() => {}}
+      onFieldDelete={() => {}}
+      onClose={() => {}}
     />
   ),
   then,
@@ -431,6 +446,7 @@ const SURFACES: readonly Surface[] = [
   sheet("field sheet, general", { field: field({}) }),
   sheet("field sheet, validation", { field: field({}) }, tab("Validation")),
   sheet("field sheet, display", { field: field({}) }, tab("Display")),
+  sheet("field sheet, conditions", { field: field({}) }, tab("Conditions")),
   sheet("field sheet, advanced", { field: field({}) }, tab("Advanced")),
   sheet("field sheet, new field", { field: field({}), mode: "create" }),
   sheet("field sheet, read-only", { field: field({}), readOnly: true }),
@@ -471,11 +487,14 @@ const SURFACES: readonly Surface[] = [
   {
     name: "field picker",
     ui: (
-      <FieldPickerModal
-        open
-        excludedTypes={[]}
+      <BuilderFieldPicker
+        config={configFor("collection")}
+        fields={[]}
+        position={{}}
+        entitySlug="posts"
         onCancel={() => {}}
-        onSelect={() => {}}
+        onFieldsChange={() => {}}
+        onAdded={() => {}}
       />
     ),
   },
@@ -489,6 +508,8 @@ const SURFACES: readonly Surface[] = [
           config={configFor(kind)}
           name="Posts"
           unsavedCount={1}
+          pending={NO_PENDING_CHANGES}
+          onAddField={() => {}}
           onOpenSettings={() => {}}
           onSave={() => {}}
         />
@@ -498,29 +519,50 @@ const SURFACES: readonly Surface[] = [
       name: `field outline, ${kind}`,
       ui: (
         <DndContext>
-          <BuilderFieldList
+          <Outline
             kind={kind}
-            fields={[
+            nodes={buildOutline(
+              [
+                field({ id: "u1", type: "richText" }),
+                field({
+                  id: "u2",
+                  type: "upload",
+                  name: "cover",
+                  label: "Cover",
+                }),
+              ],
+              { entityReadOnly: false, fieldGroups: new Map() }
+            )}
+            systemFields={[
               field({
                 id: "system_title",
                 name: "title",
                 label: "Title",
                 isSystem: true,
               }),
-              field({ id: "u1", type: "richText" }),
-              field({
-                id: "u2",
-                type: "upload",
-                name: "cover",
-                label: "Cover",
-              }),
             ]}
-            onAddAt={() => {}}
-            onEditField={() => {}}
-            onDeleteField={() => {}}
-            onDuplicateField={() => {}}
-            onReorder={() => {}}
-            onAddInsideParent={() => {}}
+            errors={new Map()}
+            foldKey={`test:copy:${kind}`}
+            selectedId={null}
+            readOnly={false}
+            callbacks={{
+              select: () => {},
+              addAt: () => {},
+              // Nothing here moves: the copy is read, not changed.
+              fields: [],
+              judgeMove: () => ({
+                allowed: false,
+                reason: "not-found",
+                message: "",
+              }),
+              moveDestinations: () => [],
+              commitMove: () => {},
+              duplicate: () => {},
+              remove: () => {},
+              setHidden: () => {},
+              openFieldGroup: () => {},
+            }}
+            renderPreview={() => null}
           />
         </DndContext>
       ),
@@ -691,4 +733,61 @@ describe("the Builder's wording convention", () => {
     });
     expect(found).toEqual([]);
   }, 60_000);
+});
+
+/**
+ * The Builder's own source, under the admin's `src`: its editor and its lists
+ * of collections, Singles and field groups.
+ */
+const ADMIN_SRC = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../../.."
+);
+const BUILDER_DIRS = [
+  "components/features/schema-builder",
+  "pages/dashboard/collection",
+  "pages/dashboard/singles",
+  "pages/dashboard/field-group",
+];
+
+/** Every source file under a directory, tests left out. */
+function sourceFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      return entry.name === "__tests__" ? [] : sourceFiles(path);
+    }
+    return /\.(ts|tsx)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)
+      ? [path]
+      : [];
+  });
+}
+
+describe("the Builder's strings", () => {
+  // Read from the SOURCE rather than the rendered page: an action that only
+  // promises a feature does so in what it shows when chosen (a toast), which
+  // no render above opens.
+  it("no 'coming soon'", () => {
+    const promise = /coming soon|future update|not (yet )?implemented/i;
+    const found = BUILDER_DIRS.flatMap(dir =>
+      sourceFiles(join(ADMIN_SRC, dir))
+    ).flatMap(file =>
+      readFileSync(file, "utf8")
+        .split("\n")
+        .flatMap((line, index) =>
+          promise.test(line)
+            ? [
+                `${file.slice(ADMIN_SRC.length + 1)}:${index + 1}: ${line.trim()}`,
+              ]
+            : []
+        )
+    );
+    // The scan's own positive control: it reads the directories it names.
+    expect(
+      BUILDER_DIRS.flatMap(dir => sourceFiles(join(ADMIN_SRC, dir))).some(
+        file => file.endsWith("CollectionTable.tsx")
+      )
+    ).toBe(true);
+    expect(found).toEqual([]);
+  });
 });

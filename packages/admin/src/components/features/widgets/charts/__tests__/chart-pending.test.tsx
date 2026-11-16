@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CardTierContext } from "../../frame/tier";
 import {
   CHART_DATES_HEIGHT,
-  CHART_PLOT_HEIGHT,
+  CHART_PLOT_HEIGHTS,
   CHART_ROW_HEIGHT,
 } from "../chart-config";
 import { GroupsChart } from "../groups-chart";
@@ -47,8 +47,9 @@ const DAYS = [
 
 describe("a chart while the engine loads", () => {
   it.each([
-    ["small", CHART_PLOT_HEIGHT],
-    ["medium", CHART_PLOT_HEIGHT + CHART_DATES_HEIGHT],
+    ["small", CHART_PLOT_HEIGHTS.small],
+    ["medium", CHART_PLOT_HEIGHTS.medium + CHART_DATES_HEIGHT],
+    ["large", CHART_PLOT_HEIGHTS.large + CHART_DATES_HEIGHT],
   ] as const)(
     "over time holds at least its marks' height at %s",
     (tier, height) => {

@@ -41,6 +41,22 @@
       "supports": {
         "color": true
       }
+    },
+    {
+      "name": "fixture/teaser",
+      "version": 1,
+      "description": "Exists for the e2e suite: a contributed block that points at one post.",
+      "source": "block-fixture",
+      "example": {
+        "props": {}
+      },
+      "props": {
+        "post": {
+          "type": "relation",
+          "relationTo": "posts",
+          "role": "content"
+        }
+      }
     }
   ]
 }

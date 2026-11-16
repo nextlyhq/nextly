@@ -7,7 +7,7 @@
  *
  * Drawn from the data its `load` answers, by the widget kit's table (`Widget.Table`), as core's
  * lists are: stacked rows with when each was updated and its status, or a table at the large
- * tier. It draws the rows its size and density hold, at most the reader's "Number of items"; the
+ * tier. It draws the reader's "Number of entries", whatever its size; the
  * load asked one more, which says more exist. The frame drew loading, no permission and error
  * before this is reached.
  *
@@ -22,7 +22,6 @@ import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useNowTick } from "@admin/hooks/useNowTick";
 
 import { FrameState } from "../widgets/frame/card-state";
-import { useCollectionLabel } from "../widgets/frame/collection-label";
 import { listViewHref } from "../widgets/frame/list-view-href";
 import {
   WidgetTable,
@@ -60,7 +59,6 @@ export const RecentEntriesCard: React.FC<RecentEntriesCardProps> = ({
 }) => {
   // The clock ticks, so "5m ago" moves on as time passes.
   const now = useNowTick();
-  const labelOf = useCollectionLabel();
   const sources = useBranding().widgetSources;
   const slug =
     typeof settings.collection === "string" ? settings.collection : undefined;
@@ -92,7 +90,6 @@ export const RecentEntriesCard: React.FC<RecentEntriesCardProps> = ({
     data.title,
     data.columns,
     now,
-    labelOf,
     lifecycle
   );
   return (
@@ -101,7 +98,6 @@ export const RecentEntriesCard: React.FC<RecentEntriesCardProps> = ({
       titleLabel={model.titleLabel}
       title={model.titleOf}
       {...(model.hrefOf === undefined ? {} : { href: model.hrefOf })}
-      {...(model.leadingOf === undefined ? {} : { leading: model.leadingOf })}
       columns={upToThree(
         model.fields.map(field => ({
           key: field.key,
@@ -120,7 +116,7 @@ export const RecentEntriesCard: React.FC<RecentEntriesCardProps> = ({
  * The table's parts the data and settings supply, each only where it has one:
  * how many entries there are, the list the rows come from (under the card's
  * Filter and Sort as its settings name them, the values its rows were read
- * under), and the reader's "Number of items".
+ * under), and the reader's "Number of entries".
  */
 function tableExtras(
   slug: string,

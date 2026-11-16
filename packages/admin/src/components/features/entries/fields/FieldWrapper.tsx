@@ -129,7 +129,9 @@ const WIDTH_STYLES: Record<string, string> = {
  * the same way on the page-builder `pages` collection, and belongs here for the
  * same reason rich text does: the editor is a scrolling surface built from
  * several elements, and the one that takes focus is created by the editor at
- * runtime rather than being the element an id could be placed on.
+ * runtime rather than being the element an id could be placed on. `icon` is
+ * two buttons, one opening the picker and one clearing it, and the picker
+ * button names itself with the label and the chosen icon.
  *
  * The list covers the types this codebase has evidence for. It is deliberately
  * NOT a guess at the rest: `useFieldLabelLandingCheck` below fires in
@@ -142,6 +144,7 @@ const GROUP_FIELD_TYPES: ReadonlySet<string> = new Set([
   "relationship",
   "upload",
   "code",
+  "icon",
 ]);
 
 /**
@@ -388,7 +391,7 @@ export function FieldWrapper({
           >
             {label}
             {isRequired && (
-              <span className="text-destructive-500 ml-1" aria-hidden="true">
+              <span className="text-danger-text ml-1" aria-hidden="true">
                 *
               </span>
             )}
@@ -401,7 +404,7 @@ export function FieldWrapper({
           {error && (
             <p
               id={errorId}
-              className="text-sm text-destructive-500! font-medium"
+              className="text-sm text-danger-text! font-medium"
               role="alert"
             >
               {error}
@@ -475,7 +478,7 @@ export function FieldWrapper({
         >
           {label}
           {isRequired && (
-            <span className="text-destructive-500 ml-1" aria-hidden="true">
+            <span className="text-danger-text ml-1" aria-hidden="true">
               *
             </span>
           )}
@@ -490,7 +493,7 @@ export function FieldWrapper({
         >
           {label}
           {isRequired && (
-            <span className="text-destructive-500 ml-1" aria-hidden="true">
+            <span className="text-danger-text ml-1" aria-hidden="true">
               *
             </span>
           )}
@@ -528,7 +531,7 @@ export function FieldWrapper({
       {error && (
         <p
           id={errorId}
-          className="text-sm text-destructive-500! font-medium"
+          className="text-sm text-danger-text! font-medium"
           role="alert"
         >
           {error}

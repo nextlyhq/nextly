@@ -431,29 +431,188 @@ describe("the host can drive it", () => {
     expect(screen.queryByText("Should not appear")).toBeNull();
   });
 
-  it("flattens groups while searching so ranking is global", () => {
+  it("keeps each group under its heading while searching, best match first within it", () => {
     mount(
       <CommandPalette
         commands={[
           { id: "1", label: "Zulu zebra", group: "Zulu", run: noop },
-          { id: "2", label: "Alpha zebra", group: "Alpha", run: noop },
-          { id: "3", label: "Unrelated", group: "Alpha", run: noop },
+          { id: "2", label: "Alpha", group: "Alpha", run: noop },
+          {
+            id: "3",
+            label: "Zebra crossing",
+            group: "Alpha",
+            keywords: [],
+            run: noop,
+          },
+          { id: "4", label: "Unrelated", group: "Alpha", run: noop },
         ]}
       />
     );
     pressPaletteKey();
 
-    // Headings are gone: cmdk orders items WITHIN a group and leaves the groups in their own
-    // order, so keeping them would pin a better match below a weaker one from an earlier group.
+    // The groups are kinds of thing, so a match is read under its kind: the headings stay, in the
+    // host's order, and only matching rows are shown under them.
     fireEvent.change(screen.getByRole("combobox"), {
       target: { value: "zebra" },
     });
 
-    expect(screen.queryByText("Zulu")).toBeNull();
-    expect(screen.queryByText("Alpha")).toBeNull();
-    expect(screen.queryByText("Unrelated")).toBeNull();
-    expect(screen.getByText("Zulu zebra")).toBeTruthy();
-    expect(screen.getByText("Alpha zebra")).toBeTruthy();
+    const headings = [...document.querySelectorAll("[cmdk-group-heading]")].map(
+      heading => heading.textContent
+    );
+    expect(headings).toEqual(["Zulu", "Alpha"]);
+    expect(screen.queryByRole("option", { name: "Unrelated" })).toBeNull();
+    expect(screen.queryByRole("option", { name: "Alpha" })).toBeNull();
+    expect(screen.getByRole("option", { name: "Zebra crossing" })).toBeTruthy();
+  });
+
+  it("caps a group's matches and orders them best first", () => {
+    mount(
+      <CommandPalette
+        groups={[{ name: "Add", limit: 2 }]}
+        commands={[
+          { id: "a", label: "Section heading", group: "Add", run: noop },
+          { id: "b", label: "Heading", group: "Add", run: noop },
+          { id: "c", label: "Heading block", group: "Add", run: noop },
+          { id: "d", label: "Headline", group: "Add", run: noop },
+        ]}
+      />
+    );
+    pressPaletteKey();
+    fireEvent.change(screen.getByRole("combobox"), {
+      target: { value: "heading" },
+    });
+
+    const rows = screen.getAllByRole("option").map(row => row.textContent);
+    expect(rows).toHaveLength(2);
+    // An exact label outranks the same word later in a longer one.
+    expect(rows[0]).toBe("Heading");
+  });
+
+  it("keeps a host's own matches as given, and says a search still running", () => {
+    const { rerender } = mount(
+      <CommandPalette
+        groups={[{ name: "Pages", matched: true, status: "Searching pages…" }]}
+        commands={[]}
+      />
+    );
+    pressPaletteKey();
+    fireEvent.change(screen.getByRole("combobox"), {
+      target: { value: "hq" },
+    });
+    // A search still on its way is not "nothing matches".
+    expect(screen.getByRole("status").textContent).toBe("Searching pages…");
+    expect(screen.queryByText("No matching commands.")).toBeNull();
+
+    rerender(
+      <ShortcutProvider>
+        <CommandPalette
+          groups={[{ name: "Pages", matched: true }]}
+          commands={[
+            // Matched by the server on something the label does not show.
+            { id: "p1", label: "Head office", group: "Pages", run: noop },
+          ]}
+        />
+      </ShortcutProvider>
+    );
+    expect(screen.getByRole("option", { name: "Head office" })).toBeTruthy();
+  });
+
+  it("bolds the typed text only where it begins a word", () => {
+    mount(
+      <CommandPalette
+        commands={[
+          { id: "1", label: "Select the block", run: noop },
+          { id: "2", label: "Careers at headquarters", run: noop },
+        ]}
+      />
+    );
+    pressPaletteKey();
+    fireEvent.change(screen.getByRole("combobox"), {
+      target: { value: "he" },
+    });
+
+    const marked = [...document.querySelectorAll("mark")].map(
+      mark => mark.textContent
+    );
+    // "headquarters" begins with it; "the" only contains it, so that row is offered but plain.
+    expect(marked).toEqual(["he"]);
+    expect(
+      screen.getByRole("option", { name: "Select the block" })
+    ).toBeTruthy();
+  });
+
+  it("names Enter's action after the highlighted row, and quotes a search that found nothing", () => {
+    mount(
+      <CommandPalette
+        emptyMessage={query => `Nothing matches “${query}”.`}
+        commands={[
+          {
+            id: "1",
+            label: "Heading",
+            verb: "Add",
+            detail: "Adding after Hero",
+            run: noop,
+          },
+        ]}
+      />
+    );
+    pressPaletteKey();
+    expect(screen.getByText("Adding after Hero")).toBeTruthy();
+    expect(screen.getByText("Add")).toBeTruthy();
+
+    fireEvent.change(screen.getByRole("combobox"), {
+      target: { value: "xyzzy" },
+    });
+    expect(screen.getByText("Nothing matches “xyzzy”.")).toBeTruthy();
+    // No rows, so no keys to move between them.
+    expect(screen.queryByText("Move")).toBeNull();
+  });
+
+  it("tells the host a new search before drawing it, so its old rows never show under it", () => {
+    // A host's own rows answer the search they came from. Told only after the
+    // new search is drawn, the host would leave them on screen under it for a
+    // render, where Enter could choose one. The bolded match shows which search
+    // the palette has drawn, so at the moment the host is told "zz" it must
+    // still be the old one.
+    const drawnWhenTold: Record<string, string | null> = {};
+    function Host(): React.JSX.Element {
+      const [found, setFound] = React.useState(false);
+      return (
+        <CommandPalette
+          groups={[{ name: "Pages", matched: true }]}
+          onSearchChange={query => {
+            drawnWhenTold[query] =
+              document.querySelector("mark")?.textContent ?? null;
+            setFound(query !== "");
+          }}
+          commands={
+            found
+              ? [{ id: "page", label: "hq zz", group: "Pages", run: noop }]
+              : []
+          }
+        />
+      );
+    }
+    mount(<Host />);
+    pressPaletteKey();
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "hq" } });
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "zz" } });
+    expect(drawnWhenTold.zz).toBe("hq");
+  });
+
+  it("tells the host what is being searched for", () => {
+    const searched: string[] = [];
+    mount(
+      <CommandPalette
+        onSearchChange={query => searched.push(query)}
+        commands={[{ id: "1", label: "Heading", run: noop }]}
+      />
+    );
+    pressPaletteKey();
+    fireEvent.change(screen.getByRole("combobox"), {
+      target: { value: "  hea " },
+    });
+    expect(searched.at(-1)).toBe("hea");
   });
 
   it("keeps two commands separable when their fields concatenate alike", () => {
@@ -762,7 +921,8 @@ describe("the host can drive it", () => {
       target: { value: "Renamed" },
     });
 
-    expect(screen.getByText("Renamed thing")).toBeTruthy();
+    // By the row's name: the typed text is drawn in bold, so the label is split across elements.
+    expect(screen.getByRole("option", { name: "Renamed thing" })).toBeTruthy();
   });
 
   it("remounts on a rename that a delimited key could not tell apart", () => {

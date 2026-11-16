@@ -29,19 +29,43 @@
 import type { Metadata } from "next";
 
 import { runWithAccessMemo } from "../../auth/access/request-memo";
-import { requireNextly } from "../../direct-api/nextly";
+import { requireNextlyOnceStarted } from "../../direct-api/nextly";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import { NextlyError } from "../../errors/nextly-error";
 import { consoleLogger } from "../../shared/types";
+import { nextlyTags } from "../cache/nextly-tags";
+import {
+  knownNoPageMetadataProvider,
+  pageMetadataFor,
+  pageMetadataProviderToAsk,
+  pageStructuredDataFor,
+  type PageMetadataRequest,
+} from "../seo/page-metadata";
+import type {
+  PageMetadataValues,
+  PageStructuredDataHints,
+} from "../seo/page-metadata-contract";
 
-import { triggerNotFound } from "./not-found";
+import { answerNotFound, triggerPermanentRedirect } from "./not-found";
+import {
+  confirmedLanguage,
+  requestLanguage,
+  servedAddress,
+  type RequestLanguage,
+} from "./request-language";
 import { isReservedPath } from "./reserved-paths";
 import {
   resolveContent,
   type ContentEntry,
   type NextlyContentReader,
 } from "./resolve-content";
-import { slugToStaticParam } from "./slug-param";
+import {
+  LIST_PAGE_SEGMENT,
+  listPageNumber,
+  listPageOf,
+  slugToPath,
+  slugToStaticParam,
+} from "./slug-param";
 
 // Re-exported, not defined here. It moved to a LEAF module so that importing
 // the one pure function this file exports does not drag this file's graph — the
@@ -57,7 +81,8 @@ export interface ResolvedContext {
   /** The joined slug path (no leading slash), e.g. `"about/team"`. */
   slug: string;
   /**
-   * The locale this route was configured to read in, verbatim.
+   * The locale this request is read in: the route's `[locale]` segment where
+   * it has one, otherwise the locale it was configured to read in, verbatim.
    *
    * Carried explicitly rather than read back off the row: the companion overlay
    * copies localized values ONTO the entry without stamping which locale they
@@ -69,8 +94,8 @@ export interface ResolvedContext {
    * different locale than the read that follows authorizes one translation and
    * serves another.
    *
-   * Absent when {@link ContentRouteConfig.locale} was not set — which a
-   * localized site must not do, for the reason documented there.
+   * Absent when neither a segment nor {@link ContentRouteConfig.locale} names
+   * one — which a localized site must not do, for the reason documented there.
    */
   locale?: string;
 }
@@ -89,7 +114,57 @@ export interface ResolvedContext {
  * `nextly` and uses it directly, where the posture is visibly theirs to choose
  * rather than inherited from a field that looks like a convenience.
  */
-export type RenderContext = ResolvedContext;
+export interface RenderContext extends ResolvedContext {
+  /**
+   * Which page of the entry's paginated list the request asked for, from 2;
+   * absent on the entry's own address, which is the list's first page.
+   *
+   * Set only by a route given {@link ContentRouteConfig.listPages}, and only
+   * for a page that exists: a number past the list's last page, or written
+   * any way but the one, is answered as not found before `render` runs.
+   *
+   * @experimental Settles with list pagination.
+   */
+  page?: number;
+  /**
+   * The address of page `page` of the entry's paginated list, as this route
+   * serves it (its {@link ContentRouteConfig.mountPath} included): the
+   * entry's own address for page 1. Present on a route given
+   * {@link ContentRouteConfig.listPages}, so a list's links name exactly the
+   * addresses the route answers.
+   *
+   * @experimental Settles with list pagination.
+   */
+  listPagePath?: (page: number) => string;
+  /**
+   * How many pages the entry's paginated list has, as the route counted them
+   * to serve this later page; absent on the entry's own address, where the
+   * list counts its own.
+   *
+   * @experimental Settles with list pagination.
+   */
+  listPages?: number;
+  /**
+   * The page's structured data, as JSON-LD text written so that no value can
+   * end its element: place it as the body of a JSON-LD script element, so it
+   * is in the HTML a crawler receives.
+   *
+   * ```tsx
+   * {context.structuredData && (
+   *   <script
+   *     type="application/ld+json"
+   *     dangerouslySetInnerHTML={{ __html: context.structuredData }}
+   *   />
+   * )}
+   * ```
+   *
+   * Read from the same answer as the page's head. Given to `render` only, and
+   * only where a plugin provides page metadata and its answer has some.
+   *
+   * @experimental Settles with the page-metadata contract.
+   */
+  structuredData?: string;
+}
 
 /**
  * Config for {@link createContentRoute}. `TNode` is the render output (your
@@ -109,11 +184,44 @@ export interface ContentRouteConfig<TNode> {
     entry: ContentEntry,
     context: RenderContext
   ) => TNode | Promise<TNode>;
-  /** Optional per-entry metadata (e.g. via `buildMetadata`). */
+  /**
+   * Optional per-entry metadata (e.g. via `buildMetadata`).
+   *
+   * Where a plugin provides page metadata, such as `@nextlyhq/plugin-seo`, its
+   * answer decides the page's head and this is one of its inputs: the title,
+   * description and social values set here are used where nobody set them for
+   * the page; its `robots` may hide the page, never list one the answer hides,
+   * and its other robots directives are kept; its canonical is kept only where
+   * the answer names none. Without such a plugin, this is served as returned.
+   */
   buildMetadata?: (
     entry: ContentEntry,
     context: RenderContext
   ) => Metadata | Promise<Metadata>;
+  /**
+   * @experimental What the entry's own content offers for its head, such as
+   * the title and image a Page Builder page's blocks show. Asked only where a
+   * plugin provides page metadata, and handed to it as the level below every
+   * value somebody set.
+   */
+  derivedMetadata?: (
+    entry: ContentEntry,
+    context: RenderContext
+  ) => PageMetadataValues | Promise<PageMetadataValues>;
+  /**
+   * @experimental What the route knows about the entry's page for its
+   * structured data and the entry does not hold: what kind of page it is,
+   * its own name, the entries it lists, the questions it answers. Asked only
+   * where a plugin provides page metadata, and only for the structured data,
+   * never the head, so a list read here costs nothing in `generateMetadata`.
+   */
+  structuredDataHints?: (
+    entry: ContentEntry,
+    context: RenderContext
+  ) =>
+    | PageStructuredDataHints
+    | undefined
+    | Promise<PageStructuredDataHints | undefined>;
   /** Field holding the slug (default `"slug"`). */
   slugField?: string;
   /**
@@ -190,6 +298,10 @@ export interface ContentRouteConfig<TNode> {
    * the first request of a cold process than on the next one.
    *
    * Omit it only where the site configures no localization at all.
+   *
+   * A route under a `[locale]` segment (`app/[locale]/[[...slug]]`) reads the
+   * language from the segment instead, so one route serves every language:
+   * leave this out there.
    */
   locale?: string;
   /**
@@ -249,7 +361,7 @@ export interface ContentRouteConfig<TNode> {
    * would see beside the page being previewed.
    */
   trustedCollections?: string[];
-  /** A booted Nextly instance (defaults to `requireNextly()`). */
+  /** A booted Nextly instance (defaults to `requireNextly()`, once any start in flight has finished). */
   nextly?: NextlyContentReader;
   /**
    * Extra cache tags attached to every resolved read, so a write to a related
@@ -271,6 +383,51 @@ export interface ContentRouteConfig<TNode> {
    * (default `1000`). The rest render on demand via `dynamicParams`.
    */
   staticParamsLimit?: number;
+  /**
+   * How many pages the entry's paginated list has, or null when the entry
+   * paginates none. Given, the route also serves `<address>/page/<n>`:
+   *
+   * - page `n` from 2 renders the entry with `context.page` set to `n`;
+   * - `/page/1` redirects permanently to the entry's own address, so the
+   *   first page has one;
+   * - a number past the last page, or written any other way (`0`, `02`,
+   *   `1.5`), answers not found, as does any `/page/<n>` of an entry that
+   *   paginates nothing.
+   *
+   * An entry stored at such an address itself (`news/page/2`) is served as
+   * itself, ahead of the list's page. On the public route, each page from 2
+   * up to the count at build is pre-rendered too, within
+   * {@link staticParamsLimit}; pages that come to exist later render on their
+   * first request.
+   *
+   * Counted when a later page is requested, so it should read as the render
+   * reads: the same visitor, language and cache.
+   *
+   * @experimental Settles with list pagination.
+   */
+  listPages?: (
+    entry: ContentEntry,
+    context: ResolvedContext
+  ) => Promise<number | null>;
+  /**
+   * The path this route's catch-all is mounted under, for the addresses it
+   * redirects and links to: `/blocks` for `app/blocks/[[...slug]]`. Absent,
+   * the route serves the site root. Written with a leading slash and none
+   * at the end.
+   *
+   * @experimental Settles with list pagination.
+   */
+  mountPath?: string /**
+   * How this route answers a request it has nothing for, in place of
+   * Next.js's `notFound()`: a site passes its own to do something for each
+   * miss, such as logging the address. The page and `generateMetadata` may
+   * both call it for one request. A handler that returns is
+   * followed by Next.js's `notFound()`; without one the route answers as
+   * before.
+   *
+   * @experimental Its name and shape may change before 1.0.
+   */;
+  notFound?: () => never | Promise<never>;
 }
 
 /**
@@ -314,9 +471,31 @@ export type DraftGrant =
       readAs?: UserContext;
     };
 
+/**
+ * The route's params: the optional catch-all's `slug`, and `locale` where the
+ * route sits under a `[locale]` segment.
+ */
+export interface ContentRouteParams {
+  slug?: string[];
+  /**
+   * The language the request names, from a `[locale]` segment. Read in place
+   * of the route's configured `locale`; a value naming none of the site's
+   * languages answers not found.
+   */
+  locale?: string;
+}
+
 /** The optional-catch-all route arg: `{ params: Promise<{ slug?: string[] }> }`. */
 export interface ContentRouteArgs {
-  params: Promise<{ slug?: string[] }> | { slug?: string[] };
+  params: Promise<ContentRouteParams> | ContentRouteParams;
+}
+
+/**
+ * What Next hands `generateStaticParams` under a `[locale]` segment whose
+ * layout lists the languages: the parent's params, the language among them.
+ */
+export interface ContentStaticParamsArgs {
+  params?: Promise<{ locale?: string }> | { locale?: string };
 }
 
 /**
@@ -345,7 +524,9 @@ export interface ContentRoute<TNode> {
  * enforced route does not compile.
  */
 export interface StaticContentRoute<TNode> extends ContentRoute<TNode> {
-  generateStaticParams: () => Promise<Array<{ slug: string[] }>>;
+  generateStaticParams: (
+    args?: ContentStaticParamsArgs
+  ) => Promise<Array<{ slug: string[] }>>;
 }
 
 const MAX_STATIC_PARAMS_PER_PAGE = 500;
@@ -364,6 +545,44 @@ function buildRoute<TNode>(
   const staticParamsLimit = config.staticParamsLimit ?? 1000;
 
   const collections = [...new Set(config.collections)];
+  const mountPath = checkedMountPath(config.mountPath);
+
+  /** The path this route serves `slug` at, under its mount. */
+  function mountedPathOf(slug: string): string {
+    const path = slugToPath(slug) ?? "/";
+    if (mountPath === "") return path;
+    return path === "/" ? mountPath : `${mountPath}${path}`;
+  }
+
+  /**
+   * The address this route serves `slug` at in `language`: under its mount,
+   * and formed by the site's language rule where the language came from the
+   * route's `[locale]` segment.
+   */
+  function addressOf(slug: string, language: RequestLanguage): Promise<string> {
+    return servedAddress(mountedPathOf(slug), language);
+  }
+
+  /**
+   * `context` with the addresses of its entry's list pages, when listed, in
+   * the request's language. `listPagePath` answers at once, so the language's
+   * address for the entry is formed here and the page's own part appended.
+   */
+  async function withListPaths(
+    context: RenderContext,
+    language: RequestLanguage
+  ): Promise<RenderContext> {
+    if (config.listPages === undefined) return context;
+    const base = context.slug;
+    const first = await addressOf(base, language);
+    return {
+      ...context,
+      listPagePath: page =>
+        page <= 1
+          ? first
+          : `${first === "/" ? "" : first}/${LIST_PAGE_SEGMENT}/${String(page)}`,
+    };
+  }
 
   // The set this route's bypass may reach, defaulting to the collections it
   // serves — which is what the guide has always claimed this config means.
@@ -393,8 +612,10 @@ function buildRoute<TNode>(
   // The predicate form, for the reads this module issues directly.
   const trusted = (name: string): boolean => trustedSet.has(name);
 
-  const getInstance = (): NextlyContentReader =>
-    config.nextly ?? requireNextly();
+  // Waits for a start in flight, as the start-up hook no longer holds requests
+  // until Nextly has started.
+  const getInstance = async (): Promise<NextlyContentReader> =>
+    config.nextly ?? (await requireNextlyOnceStarted());
 
   /** Whether this request may see unpublished edits at one collection + slug. */
   /**
@@ -477,9 +698,13 @@ function buildRoute<TNode>(
     return typeof decision === "function" ? decision(context) : decision;
   }
 
-  /** Resolve the joined slug across the configured collections (first match wins). */
+  /**
+   * Resolve the joined slug across the configured collections (first match
+   * wins), read in `locale`.
+   */
   async function resolve(
-    slug: string
+    slug: string,
+    locale: string | undefined
   ): Promise<{ entry: ContentEntry; context: RenderContext } | null> {
     for (const collection of collections) {
       // Built once and handed to both the draft decision and the render, so the
@@ -498,7 +723,7 @@ function buildRoute<TNode>(
       const context: ResolvedContext = {
         collection,
         slug,
-        ...(config.locale ? { locale: config.locale } : {}),
+        ...(locale ? { locale } : {}),
       };
       // Asked per collection, not once per request: the answer is scoped to a
       // document, and the same slug can name a different document in each
@@ -535,7 +760,7 @@ function buildRoute<TNode>(
       const entry = await resolveContent(collection, slug, {
         nextly: config.nextly,
         slugField,
-        ...(config.locale ? { locale: config.locale } : {}),
+        ...(locale ? { locale } : {}),
         // `status` is left to widen itself when a draft is asked for, so a
         // route cannot end up previewing with only one of the two draft layers
         // switched on.
@@ -582,16 +807,103 @@ function buildRoute<TNode>(
     return null;
   }
 
-  async function generateStaticParams(): Promise<Array<{ slug: string[] }>> {
+  /**
+   * What a request path serves: an entry, with the page of its list when the
+   * path names a later one; a redirect, when the path is the list's first
+   * page under a second spelling; or nothing.
+   *
+   * The path is first looked up as it is, so an entry stored at an address
+   * that looks like a page (`news/page/2`) is served as itself. Only when
+   * none matches is it read as a page of the entry at its front.
+   */
+  async function resolvePath(
+    slug: string,
+    language: RequestLanguage
+  ): Promise<
+    | { entry: ContentEntry; context: RenderContext }
+    | { redirect: string }
+    | null
+  > {
+    const exact = await resolve(slug, language.locale);
+    if (exact)
+      return {
+        entry: exact.entry,
+        context: await withListPaths(exact.context, language),
+      };
+    const listPages = config.listPages;
+    const later = listPages === undefined ? null : listPageOf(slug);
+    if (listPages === undefined || later === null) return null;
+    // Checked before anything is read, so a malformed number costs no query.
+    const page = listPageNumber(later.segment);
+    if (page === null) return null;
+    const base = await resolve(later.base, language.locale);
+    if (!base) return null;
+    const pages = pageCount(await listPages(base.entry, base.context));
+    if (pages === null) return null;
+    if (page === 1) return { redirect: await addressOf(later.base, language) };
+    if (page > pages) return null;
+    return {
+      entry: base.entry,
+      context: {
+        ...(await withListPaths(base.context, language)),
+        page,
+        listPages: pages,
+      },
+    };
+  }
+
+  /**
+   * The later pages of the paginated lists among `params`, page 2 onward,
+   * at most `room` of them, as the lists count at build.
+   */
+  async function listPageParams(
+    params: readonly { slug: string[] }[],
+    room: number,
+    locale: string | undefined
+  ): Promise<Array<{ slug: string[] }>> {
+    const listPages = config.listPages;
+    if (listPages === undefined || room <= 0) return [];
+    const extra: Array<{ slug: string[] }> = [];
+    for (const param of params) {
+      const resolved = await resolve(param.slug.join("/"), locale);
+      if (!resolved) continue;
+      const pages = pageCount(
+        await listPages(resolved.entry, resolved.context)
+      );
+      for (let page = 2; pages !== null && page <= pages; page += 1) {
+        if (extra.length >= room) return extra;
+        extra.push({
+          slug: [...param.slug, LIST_PAGE_SEGMENT, String(page)],
+        });
+      }
+    }
+    return extra;
+  }
+
+  async function generateStaticParams(
+    args?: ContentStaticParamsArgs
+  ): Promise<Array<{ slug: string[] }>> {
     // A non-positive limit disables pre-rendering entirely — every path then
     // renders on demand via `dynamicParams`. Return before querying so a `0`
     // limit yields zero params instead of one-per-collection.
     if (staticParamsLimit <= 0) return [];
-    const nextly = getInstance();
+    const nextly = await getInstance();
+    // Under a `[locale]` segment whose layout lists the languages, Next hands
+    // each language here in turn: its paths are scanned in it, and a value
+    // naming none of the site's languages has none to build.
+    const language = await requestLanguage(
+      (await args?.params)?.locale,
+      config.locale,
+      () => Promise.resolve(nextly)
+    );
+    if (language === null) return [];
+    const locale = language.locale;
     const params: Array<{ slug: string[] }> = [];
     for (const collection of collections) {
       let page = 1;
       let collected = 0;
+      // This collection's own paths, whose lists' later pages it pays for.
+      const own: Array<{ slug: string[] }> = [];
       for (;;) {
         let result;
         try {
@@ -611,7 +923,7 @@ function buildRoute<TNode>(
             // route pre-renders DEFAULT-locale slugs — paths its own resolver
             // then answers with `notFound()` — while the slugs it does serve
             // are absent from the scan and left to render on demand.
-            ...(config.locale ? { locale: config.locale } : {}),
+            ...(locale ? { locale } : {}),
             select: { [slugField]: true },
             // `id` is unique and present on every collection; `createdAt` may be
             // absent (timestamps off) or non-unique, letting rows shift between
@@ -649,45 +961,228 @@ function buildRoute<TNode>(
           const param = slugToStaticParam(item[slugField]);
           if (!param) continue;
           params.push(param);
+          own.push(param);
           collected += 1;
           if (collected >= staticParamsLimit) break;
         }
         if (collected >= staticParamsLimit || !result.meta.hasNext) break;
         page += 1;
       }
+      // The lists' later pages come out of the same collection's limit, after
+      // its entries, so a very long list never makes the build enumerate
+      // without bound, nor borrows another collection's share; the rest
+      // render on their first request.
+      params.push(
+        ...(await runWithAccessMemo(() =>
+          listPageParams(own, staticParamsLimit - own.length, locale)
+        ))
+      );
     }
+    // A language read before Nextly had started has no paths to build if it
+    // is not one of the site's.
+    if (!(await confirmedLanguage(language))) return [];
     return params;
   }
 
-  async function generateMetadata(args: ContentRouteArgs): Promise<Metadata> {
-    const buildMetadata = config.buildMetadata;
-    if (!buildMetadata) return {};
-    const slug = joinSlug(await args.params);
-    if (isReservedPath(`/${slug}`)) return {};
-    // One memo of access lookups for the resolution and the callback, so the
-    // person a preview was shared by, the field rules of the draft read as
-    // them, and any read the callback makes look that person up once.
+  /** What the route resolved an address it serves to: an entry or a redirect. */
+  type Served = NonNullable<Awaited<ReturnType<typeof resolvePath>>>;
+
+  /**
+   * The address the request names, resolved, then handed to `use`; not found
+   * where the route does not serve it: a framework or metadata path, or one
+   * nothing holds. The page and its head answer alike, so a crawler, which is
+   * answered once the head is ready, gets a 404 rather than a 200 carrying a
+   * not-found body. One memo of access lookups for the resolution and `use`,
+   * so the person a preview was shared by, the field rules of the draft read
+   * as them, and any read `use` makes look that person up once.
+   */
+  async function servedAt<T>(
+    args: ContentRouteArgs,
+    use: (served: Served, language: RequestLanguage) => T | Promise<T>
+  ): Promise<T> {
+    const params = await args.params;
+    const slug = joinSlug(params);
+    if (isReservedPath(`/${slug}`)) return answerNotFound(config.notFound);
+    // A `[locale]` naming none of the site's languages is not a page here.
+    const language = await requestLanguage(
+      params.locale,
+      config.locale,
+      getInstance
+    );
+    if (language === null) return answerNotFound(config.notFound);
     return runWithAccessMemo(async () => {
-      const resolved = await resolve(slug);
-      if (!resolved) return {};
-      return buildMetadata(resolved.entry, resolved.context);
+      const resolved = await resolvePath(slug, language);
+      // A language read before Nextly had started is confirmed now the read
+      // has started it, before anything is served in it.
+      if (!(await confirmedLanguage(language))) {
+        return answerNotFound(config.notFound);
+      }
+      if (!resolved) return answerNotFound(config.notFound);
+      return use(resolved, language);
     });
   }
 
+  async function generateMetadata(args: ContentRouteArgs): Promise<Metadata> {
+    // Nothing of its own to serve and no provider to ask: the page is not
+    // resolved for its head at all, as before providers existed.
+    if (!config.buildMetadata && knownNoPageMetadataProvider()) return {};
+    return servedAt(args, async (resolved, language) => {
+      // A redirect's metadata is never read: the page answers with it.
+      if ("redirect" in resolved) return {};
+      const { entry, context } = resolved;
+      return contentPageMetadata(
+        config,
+        entry,
+        context,
+        await servedPathOf(context, language)
+      );
+    });
+  }
+
+  /**
+   * The address a request was served at: a later page of the entry's list is
+   * its own address, not the list's first page.
+   */
+  function servedPathOf(
+    context: RenderContext,
+    language: RequestLanguage
+  ): Promise<string> {
+    return context.page !== undefined && context.listPagePath !== undefined
+      ? Promise.resolve(context.listPagePath(context.page))
+      : addressOf(context.slug, language);
+  }
+
   async function ContentPage(args: ContentRouteArgs): Promise<TNode> {
-    const slug = joinSlug(await args.params);
-    // Never serve content at a framework/metadata path.
-    if (isReservedPath(`/${slug}`)) triggerNotFound();
-    // One memo of access lookups for the resolution and the render; see
-    // `generateMetadata`.
-    return runWithAccessMemo(async () => {
-      const resolved = await resolve(slug);
-      if (!resolved) triggerNotFound();
-      return config.render(resolved.entry, resolved.context);
+    return servedAt(args, async (resolved, language) => {
+      if ("redirect" in resolved) triggerPermanentRedirect(resolved.redirect);
+      const { entry, context } = resolved;
+      // Asked only where a provider may answer: a site with none renders as
+      // it always has, and works nothing out for it.
+      const structuredData = knownNoPageMetadataProvider()
+        ? undefined
+        : await contentPageStructuredData(
+            config,
+            entry,
+            context,
+            await servedPathOf(context, language)
+          );
+      return config.render(
+        entry,
+        structuredData === undefined ? context : { ...context, structuredData }
+      );
     });
   }
 
   return { generateStaticParams, generateMetadata, ContentPage };
+}
+
+/** The parts of a content route's config a page's answer is asked with. */
+type PageAnswerConfig<TNode> = Pick<
+  ContentRouteConfig<TNode>,
+  | "buildMetadata"
+  | "derivedMetadata"
+  | "structuredDataHints"
+  | "tags"
+  | "revalidate"
+>;
+
+/**
+ * What the page-metadata provider is asked about a page this route resolved,
+ * with the route's own metadata; null for a process known to have no
+ * provider, where only that metadata is needed.
+ *
+ * The head and the page's structured data are both asked with this, so they
+ * read one answer.
+ */
+async function contentPageRequest<TNode>(
+  config: PageAnswerConfig<TNode>,
+  entry: ContentEntry,
+  context: RenderContext,
+  path: string
+): Promise<{
+  code: Metadata | undefined;
+  request: PageMetadataRequest | null;
+}> {
+  const code = config.buildMetadata
+    ? await config.buildMetadata(entry, context)
+    : undefined;
+  // What the content offers costs reads of its own, so it is worked out only
+  // where a provider can be asked: Nextly is started first where nothing has
+  // started it, and with no provider, or none reachable, the route's own
+  // metadata is served without the content being read for one.
+  if (!(await pageMetadataProviderToAsk(path))) return { code, request: null };
+  const derived = config.derivedMetadata
+    ? await config.derivedMetadata(entry, context)
+    : undefined;
+  return {
+    code,
+    request: {
+      path,
+      ...(context.locale === undefined ? {} : { locale: context.locale }),
+      source: { kind: "entry", collection: context.collection, entry },
+      ...(derived === undefined ? {} : { derived }),
+      code,
+      // The tags the page's own read carries, so a write to its document
+      // expires its head as it expires its body.
+      tags: [...nextlyTags(context.collection), ...(config.tags ?? [])],
+      ...(config.revalidate === undefined
+        ? {}
+        : { revalidate: config.revalidate }),
+    },
+  };
+}
+
+/**
+ * The head of a page this route resolved: the page-metadata provider's answer
+ * where a plugin provides one, otherwise the route's own `buildMetadata`, as
+ * returned.
+ *
+ * Exported for a route that resolves its entries its own way and serves them
+ * with a content route's config, so its pages ask the provider exactly as the
+ * content route's do. `path` is the address the request was served at.
+ *
+ * @experimental Settles with the page-metadata contract.
+ */
+export async function contentPageMetadata<TNode>(
+  config: PageAnswerConfig<TNode>,
+  entry: ContentEntry,
+  context: RenderContext,
+  path: string
+): Promise<Metadata> {
+  const { code, request } = await contentPageRequest(
+    config,
+    entry,
+    context,
+    path
+  );
+  return request === null ? (code ?? {}) : pageMetadataFor(request);
+}
+
+/**
+ * The structured data of a page this route resolved, as the JSON-LD text a
+ * content route hands its `render` as `context.structuredData`: read from the
+ * same answer as {@link contentPageMetadata}, and nothing without a provider.
+ *
+ * Exported for a route that resolves its entries its own way, so its pages
+ * carry the same structured data a content route's do.
+ *
+ * @experimental Settles with the page-metadata contract.
+ */
+export async function contentPageStructuredData<TNode>(
+  config: PageAnswerConfig<TNode>,
+  entry: ContentEntry,
+  context: RenderContext,
+  path: string
+): Promise<string | undefined> {
+  // Nobody to answer, or nobody reachable once Nextly's start was tried: the
+  // route's own metadata is not worked out for nothing.
+  if (!(await pageMetadataProviderToAsk(path))) return undefined;
+  const { request } = await contentPageRequest(config, entry, context, path);
+  if (request === null) return undefined;
+  const hints = await config.structuredDataHints?.(entry, context);
+  return pageStructuredDataFor(
+    hints === undefined ? request : { ...request, structuredDataHints: hints }
+  );
 }
 
 /**
@@ -763,6 +1258,18 @@ export function createPublicContentRoute<TNode>(
       },
     });
   }
+  // A whole number, so a limit read from the environment as `NaN` or given
+  // as `Infinity` cannot leave every list's pages to be built unbounded.
+  if (
+    config.staticParamsLimit !== undefined &&
+    !Number.isSafeInteger(config.staticParamsLimit)
+  ) {
+    throw NextlyError.invalidInput({
+      message:
+        "createPublicContentRoute() needs a whole number for staticParamsLimit, " +
+        "such as 1000.",
+    });
+  }
   if (config.staticParamsLimit !== undefined && config.staticParamsLimit <= 0) {
     throw NextlyError.invalidInput({
       message:
@@ -801,7 +1308,41 @@ export function createPublicContentRoute<TNode>(
   );
 }
 
+/**
+ * A list's page count as the route may trust it: a whole number from 1, or
+ * null for anything else (none, zero, a fraction, `NaN`, `Infinity`). A
+ * `listPages` is the site's own code, and an answer past these would serve
+ * every number as a page or redirect page one of a list with no pages.
+ */
+function pageCount(pages: number | null): number | null {
+  return typeof pages === "number" && Number.isSafeInteger(pages) && pages >= 1
+    ? pages
+    : null;
+}
+
+/**
+ * A route's mount path as given, or a refusal naming what is wrong with it:
+ * a path that does not start with a slash, ends with one, or holds a query,
+ * a fragment or an empty segment would put every redirect and link it
+ * builds somewhere the route does not answer.
+ */
+function checkedMountPath(mountPath: string | undefined): string {
+  if (mountPath === undefined || mountPath === "") return "";
+  // Each segment as a browser sends it: no query, fragment, space,
+  // backslash or percent-encoding, and no `.` or `..`, which URL parsing
+  // resolves away, moving every link and redirect out of the mount.
+  if (
+    !/^(\/[^/?#\s\\%]+)+$/.test(mountPath) ||
+    mountPath.split("/").some(segment => segment === "." || segment === "..")
+  ) {
+    throw NextlyError.invalidInput({
+      message: `The route's mountPath "${mountPath}" is not a path such as "/blocks": start it with a slash, end it without one.`,
+    });
+  }
+  return mountPath;
+}
+
 /** Join the optional-catch-all segments into a slug path (no leading slash). */
-function joinSlug(params: { slug?: string[] }): string {
+function joinSlug(params: ContentRouteParams): string {
   return (params.slug ?? []).join("/");
 }

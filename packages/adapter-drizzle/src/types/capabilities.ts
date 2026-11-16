@@ -86,7 +86,9 @@ export interface DatabaseCapabilities {
    * Case-insensitive ILIKE operator support (PostgreSQL only).
    *
    * @remarks
-   * Other databases must emulate with LOWER(column) LIKE LOWER(value).
+   * Other databases emulate it by folding both sides, then LIKE: `lower()` on MySQL, and
+   * Nextly's own `nextly_fold_case` on SQLite, whose `lower()` folds ASCII only (see
+   * `caseFolded` in text-match).
    */
   supportsIlike: boolean;
 
@@ -168,6 +170,23 @@ export interface DatabaseCapabilities {
    * @experimental
    */
   functionalIndexes?: boolean;
+
+  /**
+   * Whether the server enforces CHECK constraints, not merely accepts the
+   * syntax: MySQL from 8.0.16, always on PostgreSQL and SQLite, and reported
+   * as not enforcing on the MySQL-compatible variants. Absent means unknown.
+   *
+   * @experimental
+   */
+  enforcesCheckConstraints?: boolean;
+
+  /**
+   * The server's own version string, as it answered `version()`, so a refusal
+   * that depends on the version can name the server that answered.
+   *
+   * @experimental
+   */
+  serverVersion?: string;
 }
 
 /**
@@ -191,4 +210,43 @@ export interface PoolStats {
 
   /** Number of connections currently in use */
   active: number;
+}
+
+/**
+ * Whether a connection's traffic is encrypted.
+ *
+ * - `"encrypted"` / `"unencrypted"`: whether this process's own connection
+ *   negotiated TLS, read from its socket, once the database session has
+ *   answered; the session's own answer where the socket cannot be read.
+ * - `"unknown"`: the read failed, or the server would not say. Never a pass.
+ * - `"not-applicable"`: there is no network connection to encrypt (a local file).
+ *
+ * @public
+ */
+export type ConnectionEncryption =
+  | "encrypted"
+  | "unencrypted"
+  | "unknown"
+  | "not-applicable";
+
+/**
+ * What an adapter can say about the connection it holds, for a health check.
+ *
+ * Holds no address: whether the database is on this machine is judged inside
+ * the adapter, from its own configuration, and only the answer leaves it.
+ *
+ * @public
+ */
+export interface ConnectionInspection {
+  /** Whether a session's connection is encrypted, read from the session itself. */
+  encryption: ConnectionEncryption;
+  /**
+   * Whether the database runs on this machine: a loopback address, a local
+   * socket or a file. `false` when the address could not be judged.
+   */
+  local: boolean;
+  /** The database server's version, such as "17.2"; absent when it could not be read. */
+  serverVersion?: string;
+  /** How long one small query took, in whole milliseconds; absent when it failed. */
+  roundTripMs?: number;
 }

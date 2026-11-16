@@ -97,11 +97,9 @@ export function BulkDeleteDialog({
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={isLoading}>Cancel</AlertDialogCancel>
-          {/* Hover darkens the fill by one ramp step, not two. `destructive-700`
-              drops the on-color label to 3.70:1 in dark mode, under the 4.5:1
-              text minimum, so hovering the confirm button made its own label
-              harder to read. `destructive-600` holds 5.67:1 dark and 5.92:1
-              light while still shifting visibly from the resting fill. */}
+          {/* Hover darkens the fill to `destructive-hover`, one step deeper than
+              the resting fill: the label holds 5.92:1 light and 5.67:1 dark,
+              where a deeper step would drop it under the 4.5:1 text minimum. */}
           <AlertDialogAction
             onClick={onConfirm}
             disabled={isLoading}

@@ -9,9 +9,9 @@
  * Running the bars left-to-right gives every label a full line of its own.
  *
  * Length encodes the count, because length is judged accurately at a glance.
- * Colour names the category, not the count: each bar takes its group's value's
- * shared chart colour, so Published is the same colour on every card, and the
- * name beside each bar is what identifies it for a reader who cannot tell the
+ * Colour names the category, not the count: a status's bar takes its status's
+ * own colour, so Published is the same colour on every card, and the name
+ * beside each bar is what identifies it for a reader who cannot tell the
  * colours apart.
  *
  * This is the adapter from a grouped answer to `GroupsChart`, which draws it:

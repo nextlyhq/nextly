@@ -24,7 +24,7 @@ import { useCardTier } from "../frame/tier";
 import { chartColour, type ChartSlot } from "./chart-colour";
 import {
   CHART_DATES_HEIGHT,
-  CHART_PLOT_HEIGHT,
+  CHART_PLOT_HEIGHTS,
   seriesKey,
   type ChartConfig,
 } from "./chart-config";
@@ -141,9 +141,8 @@ export function OverTimeChart({
       : "";
   const shownAt = reach.shown ? intervals[reach.shown.index] : undefined;
   const axes = tier !== "small";
-  const height = axes
-    ? CHART_PLOT_HEIGHT + CHART_DATES_HEIGHT
-    : CHART_PLOT_HEIGHT;
+  // The marks' height follows the card's width tier; the dates under them add their own row.
+  const height = CHART_PLOT_HEIGHTS[tier] + (axes ? CHART_DATES_HEIGHT : 0);
 
   return (
     <ChartFrame
@@ -207,7 +206,7 @@ export function OverTimeChart({
                       lines={series.map((line, index) => ({
                         key: line.key,
                         name: series.length > 1 ? line.name : undefined,
-                        slot: seriesSlot(index),
+                        mark: seriesSlot(index),
                         value: drawnValueAt(line, shownAt.key, unit),
                       }))}
                       className="static"
@@ -273,7 +272,7 @@ function configOf(series: readonly OverTimeSeries[]): ChartConfig {
   return Object.fromEntries(
     series.map((line, index) => [
       seriesKey(index),
-      { label: line.name, slot: seriesSlot(index) },
+      { label: line.name, mark: seriesSlot(index) },
     ])
   );
 }

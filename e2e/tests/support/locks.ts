@@ -39,6 +39,22 @@ export const LOCK = {
    */
   homepage: "homepage",
   /**
+   * The `site-style` single: the site's tokens, classes, fonts and
+   * breakpoints. Its writers change what every page and every editor's device
+   * buttons show; its readers assert the devices or a stored token.
+   */
+  siteStyle: "site-style",
+  /**
+   * The site's default Layout, which every page naming none is drawn inside.
+   * Its writers make a Layout the default and put the previous one back.
+   */
+  siteDefaultLayout: "site-default-layout",
+  /**
+   * The site's code, which every page of the playground carries. Its writer
+   * stores code and clears it again; readers assert what a page runs.
+   */
+  siteCode: "site-code",
+  /**
    * The schema: collections created at runtime, which also write migration
    * files into the playground, and readers of the whole collection set.
    */
@@ -61,6 +77,17 @@ export const LOCK = {
   siteSettings: "site-settings",
   /** The `landing-page` single's form, claimed as `siteSettings` is. */
   landingPage: "landing-page",
+  /**
+   * The `posts` collection's one template: a collection has one, so the
+   * specs that create it, give it a design and preview it with posts take
+   * this.
+   */
+  postsTemplate: "posts-template",
+  /**
+   * The `entry-articles` fixture collection's one template, which the Entry
+   * content specs give a design and publish.
+   */
+  entryArticlesTemplate: "entry-articles-template",
   /**
    * A second `next dev` of the playground, with the files it snapshots and
    * restores in the playground root.

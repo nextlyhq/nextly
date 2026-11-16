@@ -172,3 +172,40 @@ describe("a declaration as a reader is told it", () => {
     expect(collectionDefaultForReader(bare, new Set())).toBe(bare);
   });
 });
+
+describe("a Collection setting that offers Users", () => {
+  const offers: AnyWidgetSetting = { ...countSetting, users: true };
+  const withUsers = collectionWidgets([
+    { id: "core/count", collectionSetting: offers },
+    { id: "acme/pinned", collectionSetting: pinnedSetting },
+  ]);
+
+  it("withholds a card set to Users from a reader who may not read users", () => {
+    const people = card("core/count", { collection: "users" });
+    expect(unreadableCollectionCard(withUsers, new Set(), false)(people)).toBe(
+      true
+    );
+    // The must-differ half: the same card, for a reader who may.
+    expect(unreadableCollectionCard(withUsers, new Set(), true)(people)).toBe(
+      false
+    );
+  });
+
+  it("withholds Users set on a setting that does not offer it, from everyone", () => {
+    // `users` names no collection anyone may read.
+    const guessed = card("acme/pinned", { source: "users" });
+    expect(unreadableCollectionCard(withUsers, new Set(), true)(guessed)).toBe(
+      true
+    );
+  });
+
+  it("tells the setting without its offer to a reader who may not read users", () => {
+    const declaration = { id: "core/count", settings: [offers] };
+    const told = collectionDefaultForReader(declaration, new Set(), false);
+    expect(told.settings).toEqual([countSetting]);
+    // The must-differ half: kept whole for a reader who may.
+    expect(collectionDefaultForReader(declaration, new Set(), true)).toBe(
+      declaration
+    );
+  });
+});

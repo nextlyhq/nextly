@@ -12,23 +12,31 @@
  * @module components/features/widgets/charts/chart-config
  */
 
+import type { SizeTier } from "@nextlyhq/ui/format";
 import type { CSSProperties } from "react";
 
-import { chartColour, type ChartSlot } from "./chart-colour";
+import { markColour, type ChartMark } from "./chart-colour";
 
 /**
  * A chart's sizes in pixels, here rather than beside the drawing so a chart can hold its place
- * while the engine loads without importing the engine: a chart over time's marks and the row of
- * dates under them, and one row of a chart of groups, its name, bar and count with the gap below.
+ * while the engine loads without importing the engine: a chart over time's marks at each of its
+ * card's size tiers and the row of dates under them, and one row of a chart of groups, its name,
+ * bar and count with the gap below.
+ *
+ * A card is as tall as its content, so a chart's marks are as tall as these make them: taller as
+ * the card is wider, since the tier is read from the card's drawn width, and never set by a row
+ * count. A wider chart spreads its points further apart, and a taller plot keeps their slope
+ * readable.
  */
-export const CHART_PLOT_HEIGHT = 64;
+export const CHART_PLOT_HEIGHTS: Readonly<Record<SizeTier, number>> =
+  Object.freeze({ small: 96, medium: 160, large: 220 });
 export const CHART_DATES_HEIGHT = 18;
 export const CHART_ROW_HEIGHT = 22;
 
-/** One series: what it is called, and the chart colour it is drawn in. */
+/** One series: what it is called, and the mark it is drawn in. */
 export interface ChartSeriesConfig {
   label: string;
-  slot: ChartSlot;
+  mark: ChartMark;
 }
 
 /** Every series of one chart, by its key in the drawn data. */
@@ -39,12 +47,12 @@ export function seriesKey(index: number): string {
   return `s${index}`;
 }
 
-/** The CSS variables a chart's container sets: one colour per series, from its slot's token. */
+/** The CSS variables a chart's container sets: one colour per series, from its mark's token. */
 export function chartConfigStyle(config: ChartConfig): CSSProperties {
   return Object.fromEntries(
     Object.entries(config).map(([key, series]) => [
       `--color-${key}`,
-      chartColour(series.slot),
+      markColour(series.mark),
     ])
   );
 }

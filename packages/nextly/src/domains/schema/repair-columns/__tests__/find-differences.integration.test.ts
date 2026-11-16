@@ -19,6 +19,10 @@ import { DynamicCollectionSchemaService } from "../../../dynamic-collections/ser
 import { FieldGroupSchemaService } from "../../../field-groups/services/field-group-schema-service";
 import { UserExtSchemaService } from "../../../users/services/user-ext-schema-service";
 import { deriveCompanionSpec } from "../../../i18n/migration/derive-companion-spec";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../../i18n/per-language-storage";
 import { buildCompanionCreateOnlySql } from "../../../i18n/migration/generate-up";
 import { typesDiffer } from "../../pipeline/diff/declared-size";
 import { introspectLiveColumns } from "../../pipeline/diff/introspect-live";
@@ -296,7 +300,6 @@ describe.each(getConfiguredTestDialects())(
         [`${ARTICLES}.links`]: "legacy:structured-as-text",
         [`${ARTICLES}.hero`]: "legacy:structured-as-text",
         [`${ARTICLES}.price`]: "legacy:float-as-decimal",
-        [`${ARTICLES}.author`]: "current-generator",
         [`${ARTICLES}.ratings`]: "current-generator",
         [`${CARDS}.related`]: "legacy:component-list-in-scalar",
       },
@@ -307,14 +310,12 @@ describe.each(getConfiguredTestDialects())(
         [`${ARTICLES}.category`]: "legacy:mysql-text-fallback",
         [`${ARTICLES}.tone`]: "legacy:mysql-text-fallback",
         [`${ARTICLES}.cover`]: "legacy:mysql-text-fallback",
-        [`${ARTICLES}.author`]: "current-generator",
         [`${ARTICLES}.ratings`]: "current-generator",
         [`${CARDS}.related`]: "legacy:component-list-in-scalar",
         [`${CARDS}.caption`]: "legacy:mysql-text-fallback",
       },
       // SQLite keeps JSON as text, so a repeater, group or component list holds no other type.
       sqlite: {
-        [`${ARTICLES}.author`]: "current-generator",
         [`${ARTICLES}.ratings`]: "current-generator",
       },
     };
@@ -474,15 +475,16 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("reports a legacy shape under a pending field as two differences", async () => {
-      const applied = [
+      // A NOT NULL column under a relationship that is now optional.
+      const author = (required: boolean) =>
         f({
           name: "author",
           type: "relationship",
           relationTo: "users",
-          required: true,
-        }),
-      ];
-      await createBuilderTable("dc_rc_pending", applied);
+          required,
+        });
+      const applied = [author(false)];
+      await createBuilderTable("dc_rc_pending", [author(true)]);
       const findings = await find([
         {
           ...entity(
@@ -564,6 +566,60 @@ describe.each(getConfiguredTestDialects())(
       expect(await find([localized])).toEqual([]);
     });
 
+    // Under `experimental.perLanguageStorage` an entity that is not marked translatable keeps its
+    // translatable fields in its translation table all the same, so that is where they are looked for.
+    it("looks for an untranslated entity's translatable column in its translation table under the setting", async () => {
+      const fields = [
+        f({ name: "summary", type: "number" }),
+        f({ name: "headline", type: "text" }),
+      ];
+      // Laid out as the setting lays it out: the main table without the translatable field, and
+      // the translation table holding it.
+      const main = new DynamicCollectionSchemaService(
+        undefined,
+        dialect
+      ).generateMigrationSQL(LOCALIZED, fields, { localized: true });
+      for (const statement of statements(main)) await run(statement);
+      const spec = deriveCompanionSpec({
+        slug: "rc-localized",
+        kind: "collection",
+        dbName: LOCALIZED,
+        fields,
+        dialect,
+        builtBy: "collection",
+        defaultLocale: "en",
+        collectionLocalized: true,
+      });
+      if (spec === null) throw new Error("the fixture translates no field");
+      for (const statement of statements(buildCompanionCreateOnlySql(spec))) {
+        await run(statement);
+      }
+      const untranslated: RepairEntity = {
+        ...entity(
+          {
+            kind: "collection",
+            slug: "rc-localized",
+            table: LOCALIZED,
+            origin: "collection",
+          },
+          fields
+        ),
+        applied: {
+          fields,
+          localized: false,
+          origin: "collection",
+          source: "snapshot",
+        },
+        configured: { fields, localized: false, origin: "collection" },
+      };
+      setPerLanguageStorage(true);
+      try {
+        expect(await find([untranslated])).toEqual([]);
+      } finally {
+        _resetPerLanguageStorage();
+      }
+    });
+
     it("reports a table awaiting its first migration as pending, never as not migrated", async () => {
       // Only the configuration declares it: no migration file creates it yet, so the next step is
       // `migrate:create`, not `nextly migrate`.
@@ -626,7 +682,6 @@ describe.each(getConfiguredTestDialects())(
       expect(
         Object.fromEntries(differs(findings).map(x => [at(x), causeLabel(x)]))
       ).toEqual({
-        "dc_rc_pending.author": "current-generator",
         "dc_rc_pending.ratings": "current-generator",
       });
       // Code-first bounds an unbounded MySQL text field where the Builder does not, so on MySQL the
@@ -699,8 +754,8 @@ describe.each(getConfiguredTestDialects())(
         articles(ARTICLE_FIELDS, { plugin: "seo-kit" }),
       ]);
       // A shape each dialect holds: a float in decimal(10,2) where the legacy map gave one, else
-      // the required relationship's NOT NULL.
-      const column = `${ARTICLES}.${dialect === "sqlite" ? "author" : "price"}`;
+      // a number list's column.
+      const column = `${ARTICLES}.${dialect === "sqlite" ? "ratings" : "price"}`;
       const finding = findings.find(x => at(x) === column);
       expect(finding?.kind).toBe("differs");
       expect(finding?.plugin).toBe("seo-kit");

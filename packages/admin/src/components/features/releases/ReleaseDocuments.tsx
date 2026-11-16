@@ -23,16 +23,10 @@ import {
   EyeOff,
   Info,
   MoreHorizontal,
+  Plus,
 } from "@admin/components/icons";
 import { SectionErrorFallback } from "@admin/components/shared/error-fallbacks";
 import {
-  AlertDialog,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
   Button,
   DropdownMenu,
   DropdownMenuContent,
@@ -49,7 +43,6 @@ import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import {
   useChangeReleaseMemberAction,
-  useRemoveReleaseMember,
   type ReleaseDocumentNames,
 } from "@admin/hooks/queries/useReleases";
 import { cn } from "@admin/lib/utils";
@@ -61,6 +54,8 @@ import type {
   ReleaseReadiness,
 } from "@admin/types/releases";
 
+import { documentKey } from "./add-documents";
+import { LazyAddDocumentsDialog } from "./LazyAddDocumentsDialog";
 import {
   documentLabel,
   documentStatusLine,
@@ -80,6 +75,7 @@ import {
   type ProblemWords,
 } from "./release-problems";
 import { relativeTime } from "./release-time";
+import { ReleaseMemberRemoveDialog } from "./ReleaseMemberRemoveDialog";
 
 /** What the readiness read gave, as the section reads it. */
 export interface ReadinessState {
@@ -160,6 +156,10 @@ function documentsView({
 export function ReleaseDocuments(props: ReleaseDocumentsProps): JSX.Element {
   const { release, readiness } = props;
   const view = documentsView(props);
+  const [adding, setAdding] = useState(false);
+  // Several documents are added here to an ordinary release the server says
+  // the reader may add to; a single-document release holds its one document.
+  const mayAdd = release.can?.addMember === true && release.kind !== "single";
   return (
     <section
       aria-labelledby="release-documents"
@@ -173,7 +173,19 @@ export function ReleaseDocuments(props: ReleaseDocumentsProps): JSX.Element {
           firstProblemId={view.firstProblem ? FIRST_PROBLEM_ID : null}
         />
       ) : null}
-      <DocumentsHeading total={view.total} actionsLine={view.actionsLine} />
+      <DocumentsHeading
+        total={view.total}
+        actionsLine={view.actionsLine}
+        onAdd={mayAdd ? () => setAdding(true) : undefined}
+      />
+      {mayAdd ? (
+        <LazyAddDocumentsDialog
+          open={adding}
+          onOpenChange={setAdding}
+          release={release}
+          inRelease={new Set(props.members.map(documentKey))}
+        />
+      ) : null}
       <DocumentsBody
         {...props}
         groups={view.groups}
@@ -188,9 +200,12 @@ export function ReleaseDocuments(props: ReleaseDocumentsProps): JSX.Element {
 function DocumentsHeading({
   total,
   actionsLine,
+  onAdd,
 }: {
   total: number;
   actionsLine: string;
+  /** Opens Add documents, where the reader may add to this release. */
+  onAdd?: () => void;
 }) {
   return (
     <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
@@ -208,6 +223,12 @@ function DocumentsHeading({
       </h2>
       {actionsLine ? (
         <p className="text-sm text-muted-foreground">{actionsLine}</p>
+      ) : null}
+      {onAdd ? (
+        <Button type="button" variant="outline" size="sm" onClick={onAdd}>
+          <Plus aria-hidden className="mr-1 h-4 w-4" />
+          Add documents
+        </Button>
       ) : null}
     </div>
   );
@@ -230,10 +251,7 @@ function DocumentsBody({
 }) {
   if (membersFailed) {
     return (
-      <p
-        role="alert"
-        className="text-sm text-destructive-700 dark:text-destructive"
-      >
+      <p role="alert" className="text-sm text-danger-text">
         The documents in this release could not be loaded.
       </p>
     );
@@ -313,15 +331,13 @@ function ReadinessPanel({
         "flex flex-col gap-3 rounded-lg border px-4 py-3 sm:flex-row sm:items-center",
         headline.tone === "ready"
           ? "border-border bg-card"
-          : "border-destructive bg-destructive/5"
+          : "border-danger-border bg-danger-surface"
       )}
     >
       <Icon
         className={cn(
           "hidden size-5 shrink-0 sm:block",
-          headline.tone === "ready"
-            ? "text-success-600 dark:text-success-400"
-            : "text-destructive-700 dark:text-destructive"
+          headline.tone === "ready" ? "text-success-text" : "text-danger-text"
         )}
         aria-hidden
       />
@@ -412,7 +428,7 @@ function DocumentGroup({
             <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
               <span>{group.hiddenLine}</span>
               {group.hiddenNeedFix > 0 ? (
-                <span className="inline-flex items-center gap-1 font-medium text-destructive-700 dark:text-destructive">
+                <span className="inline-flex items-center gap-1 font-medium text-danger-text">
                   <AlertCircle className="size-3.5 shrink-0" aria-hidden />
                   {describeUnshownNeedFix(group.hiddenNeedFix)}
                 </span>
@@ -557,9 +573,9 @@ function DocumentRow({
       </div>
 
       {controls.remove.offered ? (
-        <RemoveDialog
-          release={release}
-          member={member}
+        <ReleaseMemberRemoveDialog
+          releaseId={release.id}
+          memberId={member.id}
           title={label.text}
           cancelsRelease={controls.remove.cancelsRelease}
           open={removing}
@@ -595,9 +611,7 @@ function ProblemList({
           key={problem.text}
           className={cn(
             "flex items-start gap-1.5 text-xs",
-            tone === "hard"
-              ? "text-destructive-700 dark:text-destructive"
-              : "text-muted-foreground"
+            tone === "hard" ? "text-danger-text" : "text-muted-foreground"
           )}
         >
           <Icon className="mt-px size-3.5 shrink-0" aria-hidden />
@@ -672,12 +686,12 @@ function ReadinessMark({
     );
   }
   return ready ? (
-    <span className="inline-flex min-w-[5.75rem] items-center gap-1 text-xs font-medium text-success-700 dark:text-success-400">
+    <span className="inline-flex min-w-[5.75rem] items-center gap-1 text-xs font-medium text-success-text">
       <CheckCircle2 className="size-3.5" aria-hidden />
       Ready
     </span>
   ) : (
-    <span className="inline-flex min-w-[5.75rem] items-center gap-1 text-xs font-medium text-destructive-700 dark:text-destructive">
+    <span className="inline-flex min-w-[5.75rem] items-center gap-1 text-xs font-medium text-danger-text">
       <AlertCircle className="size-3.5" aria-hidden />
       Needs a fix
     </span>
@@ -753,10 +767,7 @@ function ActionControl({
         </DropdownMenuContent>
       </DropdownMenu>
       {change.isError ? (
-        <p
-          role="alert"
-          className="max-w-[16rem] text-xs text-destructive-700 dark:text-destructive"
-        >
+        <p role="alert" className="max-w-[16rem] text-xs text-danger-text">
           {releaseErrorMessage(change.error, "It was not changed.")}
         </p>
       ) : null}
@@ -835,7 +846,7 @@ function RemoveMenuItem({
         onSelect={onRemove}
         disabled={reason !== null}
         aria-describedby={reason ? reasonId : undefined}
-        className="flex-col items-start gap-0.5 text-destructive-700 dark:text-destructive"
+        className="flex-col items-start gap-0.5 text-danger-text"
       >
         {remove.cancelsRelease
           ? "Remove and cancel release…"
@@ -847,84 +858,5 @@ function RemoveMenuItem({
         </p>
       ) : null}
     </>
-  );
-}
-
-/**
- * The confirmation before a document leaves the release. Held open while the
- * removal is failing, so a refusal is read by the person who asked for it.
- * Taking the only document out of a single-document release cancels the
- * release, and the confirmation says so before anything happens.
- */
-function RemoveDialog({
-  release,
-  member,
-  title,
-  cancelsRelease,
-  open,
-  onOpenChange,
-}: {
-  release: Release;
-  member: ReleaseMember;
-  title: string;
-  cancelsRelease: boolean;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const remove = useRemoveReleaseMember(release.id);
-  return (
-    <AlertDialog
-      open={open || remove.isError}
-      onOpenChange={next => {
-        if (!next) remove.reset();
-        onOpenChange(next);
-      }}
-    >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          {/* A title that names the document runs to two lines; the theme's
-              snug leading keeps them apart where the shared style sets none. */}
-          <AlertDialogTitle className="leading-snug">
-            {cancelsRelease
-              ? `Remove “${title}” and cancel this release?`
-              : `Remove “${title}” from this release?`}
-          </AlertDialogTitle>
-          <AlertDialogDescription>
-            {cancelsRelease
-              ? "This is a single-document release: it holds only this document. This cancels the release. It moves to Done as cancelled, and nothing in it goes live or comes down. The document itself is not changed."
-              : "The document itself is not changed. It simply stops being part of what this release does."}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        {remove.isError ? (
-          <p
-            role="alert"
-            className="text-sm text-destructive-700 dark:text-destructive"
-          >
-            {releaseErrorMessage(
-              remove.error,
-              "This document was not removed. It is still in the release."
-            )}
-          </p>
-        ) : null}
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={remove.isPending}>
-            Keep it
-          </AlertDialogCancel>
-          <Button
-            variant="destructive"
-            disabled={remove.isPending}
-            onClick={() =>
-              remove.mutate(member.id, { onSuccess: () => onOpenChange(false) })
-            }
-          >
-            {remove.isPending
-              ? "Removing…"
-              : cancelsRelease
-                ? "Remove and cancel release"
-                : "Remove"}
-          </Button>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
   );
 }

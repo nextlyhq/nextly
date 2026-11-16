@@ -174,8 +174,10 @@ export function fieldToColumnDef(
   const mappedType = storageType ?? field.type;
 
   switch (mappedType) {
+    // An icon id is a short string, stored like an email.
     case "text":
     case "email":
+    case "icon":
     case "code":
     case "textarea":
       // A field that declared its own width gets the bounded column the descriptor binds and a
@@ -290,7 +292,8 @@ async function getExistingColumns(
 
   switch (dialect) {
     case "postgresql":
-      sql = `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1`;
+      // The installation's schema, which `search_path` makes current.
+      sql = `SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1`;
       params.push(tableName);
       break;
     case "mysql":

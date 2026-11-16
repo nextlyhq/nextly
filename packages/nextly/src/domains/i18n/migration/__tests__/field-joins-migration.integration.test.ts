@@ -30,6 +30,8 @@ import {
   migrateDownCore,
 } from "../../../../cli/commands/migrate-down";
 import { createLogger } from "../../../../cli/utils/logger";
+import { installRegistryResolver } from "../../../../cli/utils/registry-resolver";
+import { loadDialectTables } from "../../../../database/dialect-tables";
 import { reconcileCore } from "../../../schema/migrate/core-reconcile";
 import { marksNoTransaction } from "../../../schema/migrate/split-sql";
 import {
@@ -123,6 +125,10 @@ for (const entry of DIALECTS) {
             : await createScratchDatabase(dialect, "field_joins");
         adapter = entry.make(scratch?.url ?? entry.url ?? "");
         await adapter.connect();
+        await loadDialectTables(dialect);
+        // The static resolver every production adapter carries: the lock seeds its row through a
+        // transaction insert, which an adapter refuses for a table its resolver does not hold.
+        installRegistryResolver(adapter as unknown as DrizzleAdapter);
         // What `nextly migrate` creates first: the ledger, the owner registry and the archive.
         await reconcileCore({
           db: adapter.getDrizzle(),
@@ -210,7 +216,7 @@ for (const entry of DIALECTS) {
         );
       }
 
-      it("rolls back to a shared field with English's value, keeping the others archived", async () => {
+      it("rolls back to a shared field with English's value, keeping every language archived", async () => {
         await seedShared();
         await migrateCreate(translated);
         await migrate();
@@ -230,9 +236,13 @@ for (const entry of DIALECTS) {
           locale: string;
           value: string | null;
         }>(
-          `SELECT ${q("locale")} AS locale, ${q("value")} AS value FROM ${q("nextly_i18n_archive")} WHERE ${q("collection")} = '${slug}' AND ${q("field")} = 'body'`
+          `SELECT ${q("locale")} AS locale, ${q("value")} AS value FROM ${q("nextly_i18n_archive")} WHERE ${q("collection")} = '${slug}' AND ${q("field")} = 'body' ORDER BY ${q("locale")}`
         );
-        expect(archived).toEqual([{ locale: "es", value: "Hola" }]);
+        // English, kept as the shared value, is archived too, so the way back can restore it.
+        expect(archived).toEqual([
+          { locale: "en", value: "Hello" },
+          { locale: "es", value: "Hola" },
+        ]);
 
         // Translated again, the value moves back as English's.
         await migrate();

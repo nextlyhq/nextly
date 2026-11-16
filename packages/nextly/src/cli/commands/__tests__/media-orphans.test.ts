@@ -899,9 +899,9 @@ describe("referencedStoredPaths", () => {
       .set({ thumbnailUrl: "https://cdn.example.com/renamed/abc123" })
       .where(eq(db.schema.media.id, "media-3"));
 
-    const now = await referencedNowIn(db.adapter as never)([
-      "2026/10/0b7f-thumb_left.png",
-    ]);
+    const now = await referencedNowIn(db.adapter as never, {
+      getType: () => "local",
+    })(["2026/10/0b7f-thumb_left.png"]);
 
     expect(now).toBeNull();
   });
@@ -910,12 +910,30 @@ describe("referencedStoredPaths", () => {
     const { referencedNowIn } = await import("../media");
     const db = await mediaTable();
 
-    const now = await referencedNowIn(db.adapter as never)([
-      "2026/10/b4-thumb_p.png",
-      "2026/10/0b7f-thumb_left.png",
-    ]);
+    const now = await referencedNowIn(db.adapter as never, {
+      getType: () => "local",
+    })(["2026/10/b4-thumb_p.png", "2026/10/0b7f-thumb_left.png"]);
 
     expect(now ? [...now] : now).toEqual(["2026/10/b4-thumb_p.png"]);
+  });
+
+  // On a storage that keeps keys as written two spellings of a key are two
+  // objects, and only the one an item names is in use; on local disk both
+  // are the one file.
+  it("compares exactly where the storage keeps keys as written, and canonically on local disk", async () => {
+    const { referencedNowIn } = await import("../media");
+    const db = await mediaTable();
+    const asked = ["2026/10//b4-thumb_p.png"];
+
+    const onS3 = await referencedNowIn(db.adapter as never, {
+      getType: () => "s3",
+    })(asked);
+    const onDisk = await referencedNowIn(db.adapter as never, {
+      getType: () => "local",
+    })(asked);
+
+    expect(onS3 ? [...onS3] : onS3).toEqual([]);
+    expect(onDisk ? [...onDisk] : onDisk).toEqual(asked);
   });
 
   // A page read by offset after an item on an earlier page went would start

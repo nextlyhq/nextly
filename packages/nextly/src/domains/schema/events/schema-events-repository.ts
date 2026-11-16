@@ -11,7 +11,7 @@
  * @since v0.0.3-alpha (Plan B)
  */
 
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors";
 import { schemaEventsTables } from "../../../schemas/schema-events";
@@ -22,9 +22,19 @@ import type {
   SchemaEventStatus,
   SchemaEventType,
 } from "../../../schemas/schema-events/types";
+import { assertSchemaLockHeld } from "../pipeline/schema-lock";
 
+import { pluginOfLedgerRow } from "./ledger-scope";
 import { standingOf } from "./migration-state";
+import { newestEventsByFilename } from "./newest-event";
 import { asRepositoryDb, type RepositoryDb } from "./repository-db";
+
+/**
+ * Ids deleted per statement. Each binds one parameter, and SQLite's default
+ * SQLITE_MAX_VARIABLE_NUMBER of 999 is the lowest across the supported
+ * dialects; the same run the versions repository deletes in.
+ */
+const DELETE_CHUNK_SIZE = 500;
 
 type Dialect = "postgresql" | "mysql" | "sqlite";
 
@@ -202,6 +212,8 @@ export class SchemaEventsRepository {
 
   /** Insert an in_progress event and return its generated id. */
   async recordStart(input: RecordStartInput): Promise<string> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
     const id = crypto.randomUUID();
     const values: Record<string, unknown> = {
       id,
@@ -231,6 +243,8 @@ export class SchemaEventsRepository {
    * not "now".
    */
   async insertEvent(values: Record<string, unknown>): Promise<string> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
     const id = (values.id as string | undefined) ?? crypto.randomUUID();
     const startedAt =
       values.startedAt ??
@@ -260,6 +274,8 @@ export class SchemaEventsRepository {
    * in `migrate:status`). Without `uniqueFilename` it always applies.
    */
   async markApplied(id: string, input: MarkAppliedInput): Promise<boolean> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
     const set: Record<string, unknown> = {
       status: "applied",
       endedAt: new Date(),
@@ -321,6 +337,8 @@ export class SchemaEventsRepository {
    * that has reached any other status is left as it is.
    */
   async discardAttempt(id: string): Promise<void> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
     await this.db
       .delete(this.table)
       .where(and(eq(this.table.id, id), eq(this.table.status, "in_progress")));
@@ -328,10 +346,32 @@ export class SchemaEventsRepository {
 
   /** Transition a row to failed. */
   async markFailed(id: string, input: MarkFailedInput): Promise<void> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
     await this.db
       .update(this.table)
       .set({
         status: "failed",
+        endedAt: new Date(),
+        errorCode: input.errorCode ?? null,
+        errorMessage: input.errorMessage ?? null,
+        errorJson: input.errorJson ?? null,
+      })
+      .where(sql`id = ${id}`);
+  }
+
+  /**
+   * Transition an attempt to `nothing_applied`: it ended knowing nothing of its unit took effect
+   * (a busy table waited out before anything was made durable), which resolves it, so the next run
+   * applies the unit as usual. The reason is kept as a failure's is.
+   */
+  async markNothingApplied(id: string, input: MarkFailedInput): Promise<void> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
+    await this.db
+      .update(this.table)
+      .set({
+        status: "nothing_applied",
         endedAt: new Date(),
         errorCode: input.errorCode ?? null,
         errorMessage: input.errorMessage ?? null,
@@ -370,6 +410,8 @@ export class SchemaEventsRepository {
     supersededEventIds: string[];
     byEventId: string;
   }): Promise<void> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
     await this.db
       .update(this.table)
       .set({ supersededEventIds: args.supersededEventIds })
@@ -396,6 +438,8 @@ export class SchemaEventsRepository {
     retentionDays: number;
     now: Date;
   }): Promise<string[]> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
     const rows = (await this.db
       .select()
       .from(this.table)) as unknown as SchemaEventRow[];
@@ -418,6 +462,37 @@ export class SchemaEventsRepository {
   }
 
   /**
+   * Delete every migration row a plugin's modules recorded, whatever the
+   * event (applies, rollbacks, failures) and whichever modules are still
+   * applied: a resumed uninstall no longer lists the modules it already
+   * undid, and their rows must go too, so a later install applies every
+   * module from the first. Matched by the ledger's own scope rule
+   * (`pluginOfLedgerRow`), never by a prefix a longer plugin name could
+   * share. `plugin_lifecycle` rows are never matched, so the record the boot
+   * reads stays.
+   */
+  async deletePluginModuleRows(pluginName: string): Promise<void> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
+    const rows = (await this.db
+      .select()
+      .from(this.table)
+      .where(
+        sql`event_type <> 'plugin_lifecycle' AND filename LIKE 'plugin:%'`
+      )) as unknown as SchemaEventRow[];
+    const ids = rows
+      .filter(row => pluginOfLedgerRow(row.filename) === pluginName)
+      .map(row => row.id);
+    // In runs: each id binds one parameter, and a plugin's rows can number
+    // more than one statement may bind.
+    for (let at = 0; at < ids.length; at += DELETE_CHUNK_SIZE) {
+      await this.db
+        .delete(this.table)
+        .where(inArray(this.table.id, ids.slice(at, at + DELETE_CHUNK_SIZE)));
+    }
+  }
+
+  /**
    * Every `plugin_lifecycle` row, which `plugin-lifecycle-state.ts` reads the
    * newest of per plugin.
    */
@@ -428,6 +503,36 @@ export class SchemaEventsRepository {
       .where(
         sql`event_type = 'plugin_lifecycle'`
       )) as unknown as SchemaEventRow[];
+  }
+
+  /**
+   * Mark that a ledger row names a file an earlier Schema Builder wrote, with
+   * the file's checksum. A one-shot record that is not an outcome: it changes
+   * no migration's state, which `file_apply` rows alone decide.
+   */
+  async recordOldBuilderMark(input: {
+    filename: string;
+    sha256: string;
+    source: SchemaEventSource;
+  }): Promise<string> {
+    return this.insertEvent({
+      eventType: "old_builder_file",
+      status: "applied",
+      source: input.source,
+      filename: input.filename,
+      sha256: input.sha256,
+    });
+  }
+
+  /** The newest mark for each file that has one, by file name. */
+  async currentOldBuilderMarks(): Promise<Map<string, SchemaEventRow>> {
+    const rows = (await this.db
+      .select()
+      .from(this.table)
+      .where(
+        sql`event_type = 'old_builder_file'`
+      )) as unknown as SchemaEventRow[];
+    return newestEventsByFilename(rows);
   }
 
   /** All `file_apply` rows, for `nextly migrate:status` (spec §4.3.1). */
@@ -452,6 +557,34 @@ export class SchemaEventsRepository {
       .where(sql`event_type = 'file_rollback'`)) as unknown as SchemaEventRow[];
   }
 
+  /**
+   * Record that an applied app migration's file was removed from the folder
+   * on purpose (`migrate:resolve --removed`), with the checksum its applied
+   * outcome recorded. Its own event type, so no reader of a migration's state,
+   * which reads `file_apply` rows alone, takes it for an outcome.
+   */
+  async recordRemoval(input: {
+    filename: string;
+    sha256: string | null;
+  }): Promise<string> {
+    return this.insertEvent({
+      eventType: "file_removed",
+      status: "recorded",
+      source: "cli-migrate",
+      filename: input.filename,
+      sha256: input.sha256,
+      endedAt: new Date(),
+    });
+  }
+
+  /** Every recorded removal of an app migration's file (`recordRemoval`). */
+  async listFileRemovals(): Promise<SchemaEventRow[]> {
+    return (await this.db
+      .select()
+      .from(this.table)
+      .where(sql`event_type = 'file_removed'`)) as unknown as SchemaEventRow[];
+  }
+
   /** All `file_apply` rows for a single filename (applied + failed + rolled_back). */
   async findFileApplies(filename: string): Promise<SchemaEventRow[]> {
     return (await this.db
@@ -459,6 +592,41 @@ export class SchemaEventsRepository {
       .from(this.table)
       .where(
         sql`filename = ${filename} AND event_type = 'file_apply'`
+      )) as unknown as SchemaEventRow[];
+  }
+
+  /**
+   * Record a checksum on a row in place, with `note` added after any note it
+   * has: the checksum of an applied migration's file as it now stands, where
+   * `migrate:resolve --applied` accepts an edit to it, or where the row was
+   * recorded without one. Only the checksum and the note change, so the row
+   * is the same outcome it was, read the same way by every build.
+   */
+  async recordChecksum(
+    id: string,
+    sha256: string,
+    note: string
+  ): Promise<void> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
+    const row = await this.findById(id);
+    if (!row) return;
+    await this.db
+      .update(this.table)
+      .set({ sha256, note: appendNote(row.note, note) })
+      .where(sql`id = ${id}`);
+  }
+
+  /**
+   * Every `file_rollback` row for one filename: its down section's attempts,
+   * which `migrate:resolve --failed-cleanup` clears beside its UP's.
+   */
+  async findFileRollbacks(filename: string): Promise<SchemaEventRow[]> {
+    return (await this.db
+      .select()
+      .from(this.table)
+      .where(
+        sql`filename = ${filename} AND event_type = 'file_rollback'`
       )) as unknown as SchemaEventRow[];
   }
 
@@ -474,6 +642,8 @@ export class SchemaEventsRepository {
     id: string,
     input: { note?: string | null } = {}
   ): Promise<void> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
     const row = await this.findById(id);
     if (!row) return;
     const set: Record<string, unknown> = { status: "rolled_back" };

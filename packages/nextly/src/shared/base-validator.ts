@@ -21,7 +21,14 @@
  */
 
 import type { FieldAccess } from "../collections/fields/types/base";
+import { isIconIdShape } from "../collections/fields/types/icon";
 import { MIGRATION_TARGET } from "../domains/field-groups/migration/target";
+import { neverTranslatable } from "../domains/i18n/classify-fields";
+import {
+  configuredSiblingClashes,
+  siblingClashMessage,
+  type SiblingEntityKind,
+} from "../domains/schema/sibling-fields";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 
 import {
@@ -87,6 +94,7 @@ export const VALID_FIELD_TYPES = [
   "email",
   "password",
   "code",
+  "icon",
   // Numeric types
   "number",
   // Selection types
@@ -177,14 +185,14 @@ export function validateSlugShared(
 
 /**
  * Validate a single field name against the standard Nextly rules:
- * required, string, pattern-conformant, not a SQL keyword, unique within
- * its level (tracked via `seenNames`).
+ * required, string, pattern-conformant, not a SQL keyword. Whether it clashes
+ * with a sibling's is the sibling rule's question, asked once for the whole
+ * entity (`validateSiblingFieldsShared`).
  */
 export function validateFieldNameShared(
   name: unknown,
   path: string,
   errors: BaseValidationError[],
-  seenNames: Set<string>,
   sqlKeywordsSet: Set<string> = DEFAULT_SQL_KEYWORDS_SET
 ): void {
   if (!name) {
@@ -220,16 +228,28 @@ export function validateFieldNameShared(
       code: "FIELD_NAME_SQL_KEYWORD",
     });
   }
+}
 
-  const nameLower = name.toLowerCase();
-  if (seenNames.has(nameLower)) {
+/**
+ * Refuse, for a `define*` call, the pairs of sibling fields the one sibling
+ * rule refuses that configuration refused before it (`configuredSiblingClashes`):
+ * no entity configured in code can already hold one. The rest wait for the
+ * start and the migrate commands, which know the definition the entity last
+ * had, so an existing pair keeps working.
+ */
+export function validateSiblingFieldsShared(
+  kind: SiblingEntityKind,
+  slug: unknown,
+  fields: unknown,
+  errors: BaseValidationError[]
+): void {
+  const entity = { kind, slug: typeof slug === "string" ? slug : "" };
+  for (const clash of configuredSiblingClashes(kind, fields)) {
     errors.push({
-      path: `${path}.name`,
-      message: `Duplicate field name '${name}' at this level`,
+      path: "fields",
+      message: siblingClashMessage(entity, clash),
       code: "FIELD_NAME_DUPLICATE",
     });
-  } else {
-    seenNames.add(nameLower);
   }
 }
 
@@ -410,6 +430,29 @@ export function validateNumberDecimalDimensionsShared(
       path: `${path}.scale`,
       message: "Decimal 'scale' cannot exceed 'precision'",
       code: "DECIMAL_SCALE_EXCEEDS_PRECISION",
+    });
+  }
+}
+
+/**
+ * Validate an icon field's `defaultValue`. The default is written into the
+ * column's DDL and onto every new entry, so a value that is not an icon id
+ * (`<set>:<name>`, see {@link isIconIdShape}) is refused at config time.
+ * Only the shape is checked: whether the set and the icon exist is answered
+ * at runtime, once icon sets are registered. Non-icon fields are ignored.
+ */
+export function validateIconDefaultShared(
+  field: Record<string, unknown>,
+  path: string,
+  errors: BaseValidationError[]
+): void {
+  if (field.type !== "icon" || field.defaultValue === undefined) return;
+  if (!isIconIdShape(field.defaultValue)) {
+    errors.push({
+      path: `${path}.defaultValue`,
+      message:
+        "Icon 'defaultValue' must be an icon id of the form '<set>:<name>', for example 'lucide:star'",
+      code: "ICON_DEFAULT_INVALID",
     });
   }
 }
@@ -694,7 +737,7 @@ export const FIELD_ACCESS_KEYS = [
 
 /**
  * What every field is checked for, whatever its type and whichever entity it
- * belongs to: a usable, unique name, and its own access rules, each a function
+ * belongs to: a usable name, and its own access rules, each a function
  * or a boolean with no key a field does not have.
  *
  * Checked before the type, because a contributed type defers its own checks
@@ -705,10 +748,22 @@ export function validateFieldBasicsShared(
   field: Record<string, unknown>,
   path: string,
   errors: BaseValidationError[],
-  seenNames: Set<string>,
   sqlKeywordsSet: Set<string> = DEFAULT_SQL_KEYWORDS_SET
 ): void {
-  validateFieldNameShared(field.name, path, errors, seenNames, sqlKeywordsSet);
+  validateFieldNameShared(field.name, path, errors, sqlKeywordsSet);
+  // Refused rather than quietly stored as shared: a field the author marked translatable that
+  // can never be would otherwise read as translated in the configuration and be shared in fact.
+  if (
+    field.localized === true &&
+    typeof field.type === "string" &&
+    neverTranslatable(field as { type: string })
+  ) {
+    errors.push({
+      path: `${path}.localized`,
+      message: `Field "${String(field.name)}" cannot be translatable: a password or a virtual field is the same in every language. Remove \`localized: true\`.`,
+      code: "FIELD_NEVER_TRANSLATABLE",
+    });
+  }
   validateAccessShared(
     field.access,
     FIELD_ACCESS_KEYS,

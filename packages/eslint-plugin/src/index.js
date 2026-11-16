@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 
+import noExperimentalSdk from "./rules/no-experimental-sdk.js";
 import noHardcodedColors from "./rules/no-hardcoded-colors.js";
 import noPaletteClasses from "./rules/no-palette-classes.js";
 import noStaticInlineStyle from "./rules/no-static-inline-style.js";
@@ -28,17 +29,21 @@ const plugin = {
     "no-hardcoded-colors": noHardcodedColors,
     "no-static-inline-style": noStaticInlineStyle,
     "no-token-alpha-suffix": noTokenAlphaSuffix,
+    "no-experimental-sdk": noExperimentalSdk,
   },
   configs: {},
 };
 
 Object.assign(plugin.configs, {
   /**
-   * Every rule at `error`.
+   * The design-token rules at `error`, and `no-experimental-sdk` at `warn`.
    *
-   * There is no graduated "strict" tier above this one: each rule marks code
-   * that cannot follow a retheme, so a warning would describe the same defect
-   * while letting it ship.
+   * There is no graduated "strict" tier above this one: each design-token rule
+   * marks code that cannot follow a retheme, so a warning would describe the
+   * same defect while letting it ship. An experimental SDK surface is not a
+   * defect but a choice with a cost, an upgrade that may break it, so that
+   * rule warns: the author sees each use and decides, and `allow` records the
+   * ones adopted on purpose.
    */
   recommended: [
     {
@@ -49,6 +54,7 @@ Object.assign(plugin.configs, {
         "@nextlyhq/no-hardcoded-colors": "error",
         "@nextlyhq/no-static-inline-style": "error",
         "@nextlyhq/no-token-alpha-suffix": "error",
+        "@nextlyhq/no-experimental-sdk": "warn",
       },
     },
   ],

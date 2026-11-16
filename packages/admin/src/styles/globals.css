@@ -41,6 +41,7 @@
  * dropped from the build and becomes a no-op at runtime. */
 @source "../../../plugin-form-builder/src/admin";
 @source "../../../plugin-page-builder/src/admin";
+@source "../../../plugin-seo/src/admin";
 
 /*
  * Native controls (scrollbars, inputs, date pickers) follow the admin's own
@@ -58,6 +59,14 @@
 .nextly-admin {
   overflow-x: hidden;
   --sidebar-width-safe: var(--sidebar-width, 20.5rem);
+  /*
+   * The height of the admin's one top bar, at every width. Declared here, as
+   * plain CSS, so whatever measures against the bar (the editors' sticky
+   * panels, a page that fills the window below it, an outline drawn before
+   * the admin's scripts run) reads the same number the bar is drawn at. A
+   * layout knob rather than a palette token, so it sits outside `--nx-*`.
+   */
+  --admin-bar-height: 3.5rem;
 }
 
 /*

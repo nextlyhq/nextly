@@ -35,6 +35,8 @@ type FakeRepo = ReconcileRepo & {
    */
   startedThrough: unknown[];
   failed: number;
+  /** How many attempts ended with nothing applied. */
+  nothingApplied: number;
   /** Attempts deleted after a lost race rolled back whole. */
   discarded: number;
   superseded: Array<{ supersededEventIds: string[]; byEventId: string }>;
@@ -53,6 +55,7 @@ function fakeRepo(
   const state = {
     starts: 0,
     failed: 0,
+    nothingApplied: 0,
     discarded: 0,
     bound: [] as unknown[],
     startedThrough: [] as unknown[],
@@ -77,6 +80,10 @@ function fakeRepo(
     },
     markFailed: () => {
       repo.failed++;
+      return Promise.resolve();
+    },
+    markNothingApplied: () => {
+      repo.nothingApplied++;
       return Promise.resolve();
     },
     discardAttempt: () => {
@@ -487,6 +494,95 @@ describe("reconcileFile (Phase 2 three-state)", () => {
     expect(order).toEqual(["statements", "recordApplied:1", "commit"]);
   });
 
+  // What is written with a file (a type change's registry row) lands after
+  // its statements and before it is recorded applied, inside the executor's
+  // work: in a transaction the two commit together.
+  it("IN_SYNC: writes what goes with the file after its statements, before it is recorded applied", async () => {
+    const repo = fakeRepo();
+    const order: string[] = [];
+    const beforeRecorded = vi.fn(async () => {
+      order.push(`beforeRecorded:${String(repo.applied.length)}`);
+    });
+    const executeSql = vi.fn(
+      async (
+        _sql: string,
+        _unit: unknown,
+        after: (db: unknown, statementsExecuted: number) => Promise<void>
+      ) => {
+        order.push("statements");
+        await after(TX_HANDLE, 1);
+        order.push("commit");
+        return 1;
+      }
+    );
+    await reconcileFile({
+      file,
+      before: snap("a"),
+      target: snap("a", "b"),
+      live: snap("a"),
+      repo,
+      executeSql,
+      beforeRecorded,
+    });
+    expect(order).toEqual(["statements", "beforeRecorded:0", "commit"]);
+    expect(repo.applied).toHaveLength(1);
+  });
+
+  it("IN_SYNC: a write that goes with the file and fails fails the file, which is never recorded applied", async () => {
+    const repo = fakeRepo();
+    const executeSql = vi.fn(
+      async (
+        _sql: string,
+        _unit: unknown,
+        after: (db: unknown, statementsExecuted: number) => Promise<void>
+      ) => {
+        await after(TX_HANDLE, 1);
+        return 1;
+      }
+    );
+    await expect(
+      reconcileFile({
+        file,
+        before: snap("a"),
+        target: snap("a", "b"),
+        live: snap("a"),
+        repo,
+        executeSql,
+        beforeRecorded: () => Promise.reject(new Error("registry row failed")),
+      })
+    ).rejects.toThrow(/registry row failed/);
+    expect(repo.applied).toEqual([]);
+  });
+
+  it("ALREADY_APPLIED: writes what goes with the file before recording it", async () => {
+    const repo = fakeRepo();
+    const beforeRecorded = vi.fn(async () => {
+      expect(repo.applied).toEqual([]);
+    });
+    const executeSql = vi.fn(
+      async (
+        _sql: string,
+        _unit: unknown,
+        after: (db: unknown, statementsExecuted: number) => Promise<void>
+      ) => {
+        await after(TX_HANDLE, 0);
+        return 0;
+      }
+    );
+    const r = await reconcileFile({
+      file,
+      before: snap("a"),
+      target: snap("a", "b"),
+      live: snap("a", "b"),
+      repo,
+      executeSql,
+      beforeRecorded,
+    });
+    expect(r.state).toBe("already_applied");
+    expect(beforeRecorded).toHaveBeenCalledOnce();
+    expect(repo.applied).toHaveLength(1);
+  });
+
   it("IN_SYNC: an applied-row write that fails fails the executor's work, so its transaction rolls back with the attempt written in it", async () => {
     const repo = fakeRepo();
     repo.markApplied = () => Promise.reject(new Error("ledger write failed"));
@@ -539,6 +635,35 @@ describe("reconcileFile (Phase 2 three-state)", () => {
       ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
       expect(repo.starts).toBe(1);
       expect(repo.failed).toBe(1);
+    }
+  );
+
+  it.each([
+    ["nothing changed", { kind: "nothing-changed" }, 1, 0],
+    ["stopped part-way", { kind: "part-way", committed: [1] }, 0, 1],
+  ] as const)(
+    "ends a busy-table stop's attempt that %s as nothing applied only where nothing stayed",
+    async (_, outcome, nothingApplied, failed) => {
+      const repo = fakeRepo();
+      const busy = new NextlyError({
+        code: "NEXTLY_TABLE_BUSY",
+        publicMessage: "0006_x.sql stopped: table busy.",
+        logContext: { reason: "table busy", stop: { outcome } },
+      });
+      await expect(
+        reconcileFile({
+          file: { ...file, transaction: false },
+          // A busy-table stop on SQLite, as the file's other no-transaction cases run.
+          dialect: "sqlite",
+          before: snap("a"),
+          target: snap("a", "b"),
+          live: snap("a"),
+          repo,
+          executeSql: vi.fn().mockRejectedValue(busy),
+        })
+      ).rejects.toMatchObject({ code: "NEXTLY_TABLE_BUSY" });
+      expect(repo.nothingApplied).toBe(nothingApplied);
+      expect(repo.failed).toBe(failed);
     }
   );
 

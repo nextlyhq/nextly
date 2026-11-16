@@ -40,6 +40,7 @@ import {
   migrationChecksum,
   type PluginMigration,
 } from "../../../domains/schema/migrate/plugin/plugin-migration";
+import { checksumOf } from "../../../domains/schema/migrate/applied-checksums";
 import { resolveMigration } from "../../../domains/schema/migrate/resolve";
 import { marksNoTransaction } from "../../../domains/schema/migrate/split-sql";
 import { introspectLiveSnapshot } from "../../../domains/schema/pipeline/diff/introspect-live";
@@ -56,6 +57,38 @@ const ALL = ["postgresql", "mysql", "sqlite"] as const;
 
 /** The data statement the failed attempt never reached. */
 const BACKFILL = "INSERT INTO ntr_backfill (id) VALUES ('backfilled')";
+
+/**
+ * A trigger giving every `ntr_t` row one label when the backfill inserts: a change no reading of a
+ * migration's statements can see, so the unique index after the backfill is refused by the
+ * database itself, part-way.
+ */
+const REPEAT_ON_BACKFILL: Record<"sqlite" | "postgresql" | "mysql", string[]> =
+  {
+    sqlite: [
+      "CREATE TRIGGER ntr_repeat AFTER INSERT ON ntr_backfill BEGIN UPDATE ntr_t SET label = 'same'; END",
+    ],
+    postgresql: [
+      "CREATE FUNCTION ntr_repeat() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN UPDATE ntr_t SET label = 'same'; RETURN NULL; END $$",
+      "CREATE TRIGGER ntr_repeat AFTER INSERT ON ntr_backfill FOR EACH ROW EXECUTE FUNCTION ntr_repeat()",
+    ],
+    mysql: [
+      "CREATE TRIGGER ntr_repeat AFTER INSERT ON ntr_backfill FOR EACH ROW UPDATE ntr_t SET label = 'same'",
+    ],
+  };
+
+/** `REPEAT_ON_BACKFILL` undone. */
+const DROP_REPEAT_ON_BACKFILL: Record<
+  "sqlite" | "postgresql" | "mysql",
+  string[]
+> = {
+  sqlite: ["DROP TRIGGER ntr_repeat"],
+  postgresql: [
+    "DROP TRIGGER ntr_repeat ON ntr_backfill",
+    "DROP FUNCTION ntr_repeat()",
+  ],
+  mysql: ["DROP TRIGGER ntr_repeat"],
+};
 
 /**
  * A module creating the plugin's table, then backfilling another table:
@@ -212,6 +245,8 @@ describe.each(getConfiguredTestDialects())(
         fileExists: () => Promise.resolve(true),
         loadTargetSnapshot: () => Promise.resolve(null),
         marksNoTransaction: () => Promise.resolve(false),
+        // Read only by --applied.
+        fileChecksum: () => Promise.reject(new Error("not read by this mode")),
         introspectLive: () => Promise.resolve({ tables: [] }),
       });
       await expect(migratePlugin([module])).resolves.toMatchObject({
@@ -262,6 +297,10 @@ describe.each(getConfiguredTestDialects())(
           fileExists: () => Promise.resolve(true),
           loadTargetSnapshot: () => Promise.resolve(target),
           marksNoTransaction: () => Promise.resolve(true),
+          fileChecksum: () =>
+            Promise.resolve(
+              checksumOf(readFileSync(join(migrationsDir, filename), "utf8"))
+            ),
           introspectLive: () =>
             introspectLiveSnapshot(handle.adapter.getDrizzle(), dialect, [
               "ntr_t",
@@ -380,11 +419,20 @@ describe.each(getConfiguredTestDialects())(
       await handle.adapter.executeQuery(
         "CREATE TABLE ntr_backfill (id varchar(36))"
       );
+      // The labels differ before the run, so nothing refuses the file before it starts; the
+      // backfill's trigger makes them repeat as the file runs, and the database refuses the
+      // index part-way, after the backfill.
       await handle.adapter.executeQuery(
-        "INSERT INTO ntr_t (id, label) VALUES ('a', 'same'), ('b', 'same')"
+        "INSERT INTO ntr_t (id, label) VALUES ('a', 'same'), ('b', 'other')"
       );
+      for (const statement of REPEAT_ON_BACKFILL[dialect]) {
+        await handle.adapter.executeQuery(statement);
+      }
       await expect(migrate()).rejects.toThrow();
       // The cause is fixed; the index can now be built.
+      for (const statement of DROP_REPEAT_ON_BACKFILL[dialect]) {
+        await handle.adapter.executeQuery(statement);
+      }
       await handle.adapter.executeQuery("DELETE FROM ntr_t WHERE id = 'b'");
       return `${second}.sql`;
     }
@@ -421,6 +469,9 @@ describe.each(getConfiguredTestDialects())(
             fileExists: () => Promise.resolve(true),
             loadTargetSnapshot: () => Promise.resolve(null),
             marksNoTransaction: () => Promise.resolve(false),
+            // Read only by --applied.
+            fileChecksum: () =>
+              Promise.reject(new Error("not read by this mode")),
             introspectLive: () => Promise.resolve({ tables: [] }),
           });
           await expect(migrate()).resolves.toBe(1);
@@ -481,6 +532,8 @@ describe.each(getConfiguredTestDialects())(
               loadTargetSnapshot: () => Promise.resolve(null),
               marksNoTransaction: () =>
                 Promise.resolve(marksNoTransaction(readFileSync(path, "utf8"))),
+              fileChecksum: () =>
+                Promise.resolve(checksumOf(readFileSync(path, "utf8"))),
               introspectLive: () =>
                 Promise.reject(new Error("nothing to compare it with")),
             });
@@ -531,6 +584,9 @@ describe.each(getConfiguredTestDialects())(
           fileExists: () => Promise.resolve(true),
           loadTargetSnapshot: () => Promise.resolve(null),
           marksNoTransaction: () => Promise.resolve(true),
+          // Read only by --applied.
+          fileChecksum: () =>
+            Promise.reject(new Error("not read by this mode")),
           introspectLive: () => Promise.resolve({ tables: [] }),
         });
         await expect(migrate()).resolves.toBe(1);

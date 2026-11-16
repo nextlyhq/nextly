@@ -9,7 +9,10 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { appLocalization } from "../../domains/i18n/configured-locales";
+import {
+  appLanguageOrder,
+  appLocalization,
+} from "../../domains/i18n/configured-locales";
 import { offeredCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { previewBodyWithLeavingTranslation } from "../../domains/i18n/migration/preview-leaving-translation";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
@@ -28,8 +31,8 @@ export async function builderSchemaPreviewBody(args: {
   slug: string;
   tableName: string;
   builtBy: ColumnOrigin;
-  /** The entity's registry record, which says whether it is translated now. */
-  entity: { localized?: unknown };
+  /** The entity's registry record, which says whether it is translated now, and publishes so. */
+  entity: { localized?: unknown; status?: unknown };
   currentFields: FieldDefinition[];
   newFields: FieldDefinition[];
   /** The request's localized flag, when the Builder sent one. */
@@ -54,6 +57,9 @@ export async function builderSchemaPreviewBody(args: {
     // A translated field's values live in the companion table; without this
     // its removal was counted on the main table, failed, and read as empty.
     localized: args.entity.localized === true,
+    // What the save asks for, so turning translation on or off reads as the change it is.
+    requestedLocalized:
+      args.requestedLocalized ?? args.entity.localized === true,
   });
   // Detected by the same pipeline run, so they describe the same diff; a translated field's
   // rename, which the pipeline cannot see on the main table, is offered on its companion.
@@ -75,6 +81,7 @@ export async function builderSchemaPreviewBody(args: {
       tableName,
       builtBy: args.builtBy,
       defaultLocale: appLocalization()?.defaultLocale ?? "en",
+      languageOrder: appLanguageOrder(),
       oldFields: currentFields,
       newFields,
       entity: args.entity,

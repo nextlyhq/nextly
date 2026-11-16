@@ -31,6 +31,7 @@ import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
 import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 
+import { asWritten } from "../../../../__tests__/helpers/statement-as-written";
 import { loadDialectTables } from "../../../../database/dialect-tables";
 import { ensureSchemaEventsTable } from "../../../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../../../domains/schema/events/schema-events-repository";
@@ -38,7 +39,7 @@ import { marksNoTransaction } from "../../../../domains/schema/migrate/split-sql
 import { withMigrateLock } from "../../../../domains/schema/pipeline/locks";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { createLogger } from "../../../utils/logger";
-import { migrateCore } from "../../migrate";
+import { assertAppHistoryHolds, migrateCore } from "../../migrate";
 import { parseSqlSections } from "../../../../domains/schema/migrate/sql-sections";
 import { downDatabaseDeps, migrateDownCore } from "../../migrate-down";
 
@@ -92,7 +93,7 @@ async function watch<T>(statement: unknown, run: () => Promise<T>): Promise<T> {
   const isWatched =
     !paused &&
     typeof statement === "string" &&
-    statement.trimStart().startsWith(watched as string);
+    asWritten(statement).startsWith(watched as string);
   if (isWatched && when === "before") await pause();
   const result = await run();
   if (isWatched && when === "after") await pause();
@@ -187,6 +188,17 @@ try {
           transaction: !marksNoTransaction(content),
         });
       },
+      // As the command supplies it.
+      checkAppHistory: ({ recordChecksums }) =>
+        assertAppHistoryHolds({
+          adapter: raw as never,
+          db: raw.getDrizzle(),
+          dialect,
+          migrationsDir,
+          logger,
+          command: "nextly migrate:down",
+          recordChecksums,
+        }),
       withLock: (lockAdapter, d, fn, opts) =>
         withMigrateLock(lockAdapter, d, fn, {
           ...opts,

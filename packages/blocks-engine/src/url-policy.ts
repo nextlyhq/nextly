@@ -138,6 +138,52 @@ export function isLinkableUrl(value: unknown): boolean {
   return LINKABLE_SCHEMES.includes(name.toLowerCase());
 }
 
+/** Whether a value names HTTP or HTTPS as its scheme. */
+const HTTP_SCHEME = /^https?:/i;
+
+/**
+ * An absolute HTTP or HTTPS address the URL parser reads, with a host:
+ * `https://?x`, `https://#y` and `https:// host/a.png` name none, and an
+ * `<img>` drawn from them requests nothing useful.
+ */
+function isHttpImageAddress(normalized: string): boolean {
+  // Written with its two slashes and a host after them: the parser would
+  // also read `https:a.png` and `https:///a.png` as a host, which an author
+  // writing them did not mean.
+  if (!/^https?:\/\/[^/]/i.test(normalized)) return false;
+  try {
+    const parsed = new URL(normalized);
+    return (
+      (parsed.protocol === "https:" || parsed.protocol === "http:") &&
+      parsed.hostname !== ""
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a value is an address an image may be drawn from: absolute over
+ * HTTP or HTTPS, or a path on this site (`/media/a.png`).
+ *
+ * Narrower than {@link isLinkableUrl} on purpose. `mailto:` and `tel:` are
+ * links but never pictures, a relative `a.png` resolves against whichever
+ * page draws it, and `//host/x` reaches another host while naming no scheme.
+ * Read as the browser's parser reads it, so a backslash or a hidden control
+ * character cannot turn a site path into another host. Which hosts a block
+ * may load from is a separate question, asked of the host policy.
+ *
+ * @param value - anything a field or a binding's fallback might hold
+ * @returns whether an image may be drawn from it
+ */
+export function isImageAddress(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const normalized = normalizeUrl(value);
+  if (normalized === "" || hasControlCharacter(normalized)) return false;
+  if (HTTP_SCHEME.test(normalized)) return isHttpImageAddress(normalized);
+  return normalized.startsWith("/") && !normalized.startsWith("//");
+}
+
 export function isRemoteUrl(value: string): boolean {
   const normalized = normalizeUrl(value);
   if (URL_SCHEME.test(normalized)) return true;

@@ -1,10 +1,12 @@
 import type {
   PluginCollectionService,
+  PluginContext,
   QueryOptions,
   PaginatedResult,
   BatchOperationResult,
   ServiceOpts,
 } from "@nextlyhq/plugin-sdk";
+import { expectTypeOf } from "vitest";
 
 // QueryOptions carries the rich-query options the facade now threads (D56):
 // filters, sort, pagination, relation depth, and field projection.
@@ -36,5 +38,82 @@ const bulk: Promise<BatchOperationResult> = svc.createMany(
   sys
 );
 
+// ownCollections reads the plugin's own declared collections with no hook
+// shaping the read. It takes the same query options and only data options.
+declare const ctx: PluginContext;
+const own = ctx.services.ownCollections;
+const ownList: Promise<PaginatedResult<unknown>> = own.listEntries(
+  "ledger",
+  q,
+  {
+    locale: "fr",
+  }
+);
+const ownTotal: Promise<number> = own.count("ledger", { where: q.where });
+const ownBuckets: Promise<{
+  buckets: { value: string | null; count: number }[];
+  truncated: boolean;
+}> = own.group("ledger", { groupBy: "kind" });
+
+// The same reads on a transaction the plugin holds take its token first, with
+// the same options after it and the same answer.
+declare const tx: Parameters<Parameters<typeof svc.withTransaction>[0]>[0];
+const ownTxList: Promise<PaginatedResult<unknown>> =
+  own.listEntriesInTransaction(tx, "ledger", q, { locale: "fr" });
+const ownTxSingle: Promise<Record<string, unknown>> =
+  own.getSingleInTransaction(tx, "settings");
+// Each may read with no row lock, for a caller holding a lock of its own.
+const ownTxPlain: Promise<PaginatedResult<unknown>> =
+  own.listEntriesInTransaction(tx, "ledger", q, { lock: "none" });
+const ownTxPlainSingle: Promise<Record<string, unknown>> =
+  own.getSingleInTransaction(tx, "settings", { lock: "none" });
+// The host reads take the same arguments, of content holding the plugin's
+// field type, and answer the same.
+const hostTxList: Promise<PaginatedResult<unknown>> =
+  own.listHostEntriesInTransaction(tx, "pages", q, { lock: "update" });
+const hostTxSingle: Promise<Record<string, unknown>> =
+  own.getHostSingleInTransaction(tx, "home");
+// Which content those reads accept: the collections and Singles, as the
+// plugin's own listings of them name them.
+const hostTypes: Promise<{
+  collections: readonly { name: string }[];
+  singles: readonly { slug: string }[];
+}> = own.listHostTypesInTransaction(tx);
+
+// A collection's record on a transaction the plugin holds: the token first,
+// then the slug, answered as `getCollection` answers it.
+expectTypeOf<
+  PluginCollectionService["getCollectionInTransaction"]
+>().parameters.toEqualTypeOf<[typeof tx, string]>();
+expectTypeOf<
+  ReturnType<PluginCollectionService["getCollectionInTransaction"]>
+>().toEqualTypeOf<ReturnType<PluginCollectionService["getCollection"]>>();
+
+// An entry list on a transaction the plugin holds: the token first, then
+// exactly what `listEntries` takes, answered as `listEntries` answers it.
+expectTypeOf<
+  PluginCollectionService["listEntriesInTransaction"]
+>().parameters.toEqualTypeOf<
+  [typeof tx, ...Parameters<PluginCollectionService["listEntries"]>]
+>();
+expectTypeOf<
+  ReturnType<PluginCollectionService["listEntriesInTransaction"]>
+>().toEqualTypeOf<ReturnType<PluginCollectionService["listEntries"]>>();
+
 // Exported so eslint does not flag the assertions as unused.
-export const __d56TypeCheck = { q, list, total, bulk };
+export const __d56TypeCheck = {
+  q,
+  list,
+  total,
+  bulk,
+  ownList,
+  ownTotal,
+  ownBuckets,
+  ownTxList,
+  ownTxSingle,
+  ownTxPlain,
+  ownTxPlainSingle,
+  hostTxList,
+  hostTxSingle,
+  hostTypes,
+};

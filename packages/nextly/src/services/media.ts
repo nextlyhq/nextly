@@ -29,7 +29,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { count, desc, asc, sql } from "drizzle-orm";
+import { and, count, desc, asc, eq, inArray, sql } from "drizzle-orm";
 
 import {
   getMediaStorage,
@@ -51,9 +51,11 @@ import type {
 } from "../domains/media/media-library-query";
 import type { DeleteClaim } from "../domains/media/pending-delete";
 import {
+  filesToRemoveOf,
   errorForLog,
   filesKeptByOthers,
   removeStoredFiles,
+  storageReadingOf,
   type StoredFileSearch,
 } from "../domains/media/remove-stored-files";
 import { storedSizesOf } from "../domains/media/retired-image-sizes-store";
@@ -62,13 +64,11 @@ import {
   withMediaRevalidationBatch,
 } from "../domains/media/revalidate-media";
 import { StoredFileSearchReader } from "../domains/media/stored-file-search";
-import {
-  storedFilesOf,
-  type MediaFilesRecord,
-} from "../domains/media/stored-files";
+import type { MediaFilesRecord } from "../domains/media/stored-files";
 import type { RetentionRunner } from "../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
+import { NEXTLY_ERROR_STATUS } from "../errors/error-codes";
 import { keysToSnakeCase } from "../lib/case-conversion";
 import { withoutStoredSizes } from "../lib/media-variant";
 import { inPluginTransaction } from "../shared/lib/plugin-transaction-scope";
@@ -79,6 +79,7 @@ import type {
   MediaParams,
   MediaListResponse,
   MediaResponse,
+  MediaManyResponse,
   DeleteMediaResponse,
   UploadMediaInput,
   UpdateMediaInput,
@@ -283,6 +284,51 @@ export class MediaService extends BaseService {
   }
 
   /**
+   * Whether anything uses the item `mediaId`: a document's field, by the usage
+   * record, or a record outside content that keeps it by its address (an
+   * avatar, a logo). The `unused` view's own condition, asked of one item, so
+   * the two cannot come to answer differently.
+   *
+   * In use whenever that cannot be known: before `nextly migrate` has made
+   * the usage table, and while the record is unbuilt for content written
+   * before it existed (or a rebuild starts or ends during the read). An id
+   * no item has also reads as in use, since there is nothing to free. A
+   * caller deleting what nothing uses therefore never deletes on a guess.
+   * Asked on the pool.
+   */
+  async isInUse(mediaId: string): Promise<boolean> {
+    const unused = await this.unusedSources();
+    if (unused === null) return true;
+    const { media } = this.tables;
+    // Loaded when it is asked, not with the service.
+    const [{ notPendingDelete, unusedItem }, { readWithinOneBuild }] =
+      await Promise.all([
+        import("../domains/media/media-library-query"),
+        import("../domains/media/usage/media-usage-store"),
+      ]);
+    // How many items with this id nothing uses: one when it is free.
+    const countUnused = async (): Promise<number> => {
+      const [row] = await this.db
+        .select({ value: count() })
+        .from(media)
+        .where(
+          and(
+            eq(media.id, mediaId),
+            notPendingDelete(media),
+            unusedItem(media, unused)
+          )
+        );
+      return Number(row?.value ?? 0);
+    };
+    const { value, recorded } = await readWithinOneBuild(
+      this.adapter,
+      countUnused
+    );
+    if (!recorded) return true;
+    return value === 0;
+  }
+
+  /**
    * The sidebar's counts, in one query: every folder's items (and the items
    * in no folder), and each view's. Grouped by folder, with each view's
    * condition summed inside the group, so the whole library is read once
@@ -358,15 +404,19 @@ export class MediaService extends BaseService {
         "../domains/media/media-library-query"
       );
       const unused = view === "unused" ? await this.unusedSources() : null;
-      const whereClause = mediaQueryCondition(media, unused, {
-        folderId,
-        search,
-        type,
-        view,
-      });
+      const whereClause = mediaQueryCondition(
+        media,
+        unused,
+        { folderId, search, type, view },
+        this.dialect
+      );
 
+      // The id breaks ties: files sharing the sorted value (an upload time,
+      // which MySQL keeps to the second, or a size) are otherwise ordered as
+      // the database likes, which may differ from page to page, so one file
+      // shows on two pages and another on none.
       const orderFn = sortOrder === "asc" ? asc : desc;
-      const orderByClause = orderFn(media[sortBy]);
+      const orderByClause = [orderFn(media[sortBy]), orderFn(media.id)];
 
       const offset = (page - 1) * limit;
 
@@ -380,7 +430,7 @@ export class MediaService extends BaseService {
           query = query.where(whereClause);
         }
         const rows = await query
-          .orderBy(orderByClause)
+          .orderBy(...orderByClause)
           .limit(limit)
           .offset(offset);
         return { total: Number(countResult[0]?.value ?? 0), rows };
@@ -470,6 +520,45 @@ export class MediaService extends BaseService {
       return {
         success: false,
         statusCode: 500,
+        code: "INTERNAL_ERROR",
+        message: "Failed to retrieve media",
+        data: null,
+      };
+    }
+  }
+
+  /**
+   * Several media files by id, in one query: what `getMediaById` answers for
+   * each, without the ids that have no file. The caller bounds how many ids
+   * one call asks for.
+   */
+  async getMediaByIds(mediaIds: readonly string[]): Promise<MediaManyResponse> {
+    if (mediaIds.length === 0) {
+      return {
+        success: true,
+        statusCode: 200,
+        message: "Media retrieved successfully",
+        data: [],
+      };
+    }
+    try {
+      const { media } = this.tables;
+      const rows = await this.db
+        .select()
+        .from(media)
+        .where(inArray(media.id, [...mediaIds]));
+      return {
+        success: true,
+        statusCode: 200,
+        message: "Media retrieved successfully",
+        data: rows.map((row: StoredMediaRow) => withoutStoredSizes(row)),
+      };
+    } catch (error) {
+      this.logger.error("[MediaService] Get media by ids error", { error });
+      return {
+        success: false,
+        // The canonical table's status for the code, never one of its own.
+        statusCode: NEXTLY_ERROR_STATUS.INTERNAL_ERROR,
         code: "INTERNAL_ERROR",
         message: "Failed to retrieve media",
         data: null,
@@ -1025,10 +1114,15 @@ export class MediaService extends BaseService {
     mediaId: string,
     record: MediaFilesRecord
   ): Promise<boolean> {
+    // The files the removal below takes, a size recorded by URL alone among
+    // them where this storage serves it, so each is asked about first, with
+    // every other item's record read against the same storage.
+    const reading = storageReadingOf(this.storage);
     const kept = await filesKeptByOthers(
       this.storedFileSearch,
-      storedFilesOf(record).paths,
-      [mediaId]
+      filesToRemoveOf(record, reading),
+      [mediaId],
+      reading
     );
     const ownFilesGone = kept
       ? await removeStoredFiles(this.storage, record, mediaId, kept)

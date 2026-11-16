@@ -534,6 +534,12 @@ describe.runIf(process.platform !== "win32")("the whole-tree step, run as GitHub
     expect(read("sub/.claude/rules/nested.md")).toBeNull();
   });
 
+  it("records the base branch as `refs/review/base`, which the gateway's base-side reads use", () => {
+    const result = runStep();
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(git("rev-parse", "refs/review/base")).toBe(git("rev-parse", "origin/main"));
+  });
+
   it("fails the job when files are still left out", () => {
     // A `git` whose config and sparse-checkout commands change nothing leaves
     // the tree as the checkouts made it.
@@ -931,6 +937,43 @@ describe.runIf(process.platform !== "win32")("the skip step, run as GitHub runs 
   });
 });
 
+describe.runIf(process.platform !== "win32")("the resolve step, run as GitHub runs it", () => {
+  let dir;
+  /** Runs the step against a stand-in `gh` answering with a pull request into `base`. */
+  function resolve(base) {
+    dir = mkdtempSync(join(tmpdir(), "review-bot-resolve-"));
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    const pr = { state: "open", draft: false, base: { ref: base }, head: { sha: "d".repeat(40), repo: { full_name: "o/r" } } };
+    writeFileSync(join(bin, "gh"), `#!/usr/bin/env bash\nprintf '%s' '${JSON.stringify(pr)}'\n`);
+    chmodSync(join(bin, "gh"), 0o755);
+    writeFileSync(join(dir, "step.sh"), gateSteps.find(step => step.id === "pr").run);
+    const output = join(dir, "output");
+    writeFileSync(output, "");
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(dir, "step.sh")], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { PATH: `${bin}:${process.env.PATH}`, HOME: dir, GITHUB_OUTPUT: output, REPO: "o/r", NUMBER: "7", GH_TOKEN: "t" },
+    });
+    return { status: result.status, stdout: result.stdout, output: readFileSync(output, "utf8") };
+  }
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it.each(["main", "dev"])("takes a pull request into %s, and passes its base on", base => {
+    const { status, output } = resolve(base);
+    expect(status).toBe(0);
+    expect(output).toContain(`base=${base}\n`);
+  });
+
+  it("refuses a pull request into any other branch, naming the two it takes", () => {
+    const { status, stdout, output } = resolve("feature");
+    expect(status).not.toBe(0);
+    expect(stdout).toContain("::error::PR #7 targets feature, not main or dev");
+    expect(output).toBe("");
+  });
+});
+
 describe.runIf(process.platform !== "win32")("the log step, run as GitHub runs it", () => {
   // Every message's text carries this; none of it may reach the log.
   const CONTENT = "the-text-of-a-message";
@@ -1199,7 +1242,7 @@ describe.runIf(process.platform !== "win32")("the prefetch step, run as GitHub r
       "diff --git a/c b/c",
       "--- a/c",
       "+++ /dev/null",
-      "GitHub shows no patch for this deleted file: read it as main has it, with base-file",
+      "GitHub shows no patch for this deleted file: read it as the base branch has it, with base-file",
       "diff --git a/d b/d",
       "--- /dev/null",
       "+++ b/d",

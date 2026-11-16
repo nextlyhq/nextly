@@ -1,7 +1,9 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { and, asc, eq, getColumns, type SQL } from "drizzle-orm";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldGroupFieldConfig } from "../../../collections/fields/types/component";
+import { rethrowIfRuleCouldNotRun } from "../../../errors/rule-could-not-run";
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
@@ -17,9 +19,11 @@ import {
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import {
+  fillCompanionFields,
   type LocalizedFieldRef,
-  populateCompanionFields,
   populateCompanionFieldsAllLocales,
+  populateCompanionFieldsByLanguage,
+  selectRowsWithCompanion,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
@@ -30,6 +34,7 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../../i18n/localization-source";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import {
   resolveLocaleChain,
   resolveRequestedLocale,
@@ -40,12 +45,17 @@ import {
   resolveCompanionSchemaReadiness,
   type CompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { fieldsStoredOnRow } from "../../schema/services/field-column-descriptor";
+import { directFieldGroupFields } from "../field-group-write-access";
 import { passwordReachOf } from "../password-reach";
 import {
   isFieldGroupFieldType,
   withResolvedFieldGroupReferences,
 } from "../storage/field-group-field-type";
-import { currentFieldGroupTypeKey } from "../storage/field-group-type-key";
+import {
+  currentFieldGroupTypeKey,
+  readFieldGroupType,
+} from "../storage/field-group-type-key";
 
 import {
   DEFAULT_COMPONENT_DEPTH,
@@ -83,6 +93,60 @@ export type ComponentFallbackLocale =
  * declaration of it.
  */
 export type ComponentReadAccess = RelatedRowReadContext;
+
+/** The registered tables, by physical name: the schema registry the adapter resolves through. */
+export interface InstanceTables {
+  hasTable(tableName: string): boolean;
+  getTable(tableName: string): unknown;
+}
+
+/** What reading one language of a component's translations takes (`translationPlan`). */
+interface TranslationPlan {
+  companion: NonNullable<ReturnType<typeof buildCompanionSchema>>;
+  localeChain: string[];
+  readiness: CompanionReadiness | undefined;
+}
+
+/** A component's translations, read in the same statement as its instances. */
+interface JoinedTranslations {
+  plan: TranslationPlan;
+  rows: Record<string, unknown>[];
+}
+
+/**
+ * One language a component read is asked for: the locale, and the fallback
+ * it is read with, as {@link PopulateComponentDataParams} names them.
+ */
+export interface ComponentReadLanguage {
+  locale?: string;
+  fallbackLocale?: ComponentFallbackLocale;
+}
+
+/**
+ * The languages a one-language component read falls back through. An absent `locale` is the
+ * default, as the parent read treats no explicit `?locale`, so a default-language read still
+ * overlays the component's translations instead of returning the omitted main-table columns. A
+ * language read exactly as stored is taken as named, active or not: a removed language is kept,
+ * and validating it would read the default's values in its place. Otherwise the chain comes from
+ * the shared resolver, so a component read falls back exactly as the collection and Single reads
+ * around it do; `requested` is resolved and never `all` here, so the chain is never null, and the
+ * fallback keeps the contract this path always had rather than asserting.
+ */
+function componentLocaleChain(
+  localization: SanitizedLocalizationConfig,
+  locale: string | undefined,
+  fallbackLocale: ComponentFallbackLocale | undefined
+): string[] {
+  const exact = fallbackLocale === EXACT_STORED_LANGUAGE;
+  const requested =
+    exact && locale !== undefined
+      ? locale
+      : resolveRequestedLocale(localization, locale);
+  if (exact) return [requested];
+  return (
+    resolveLocaleChain(localization, requested, fallbackLocale) ?? [requested]
+  );
+}
 
 export interface PopulateComponentDataParams {
   /** The entry to populate with component data */
@@ -178,12 +242,88 @@ export interface PopulateComponentDataManyParams {
    * taking the field's default: see PopulateComponentDataParams.strict.
    */
   strict?: boolean;
+  /**
+   * Optional transaction-bound executor: see PopulateComponentDataParams.executor.
+   * A batch judged inside a write's transaction reads on its connection, both
+   * to see what the transaction wrote and because a pooled read there waits on
+   * the connection the transaction holds.
+   */
+  executor?: unknown;
+}
+
+/** One deserialized instance of a dynamic zone, with the kind it is. */
+interface ZoneInstance {
+  data: Record<string, unknown>;
+  fields: FieldConfig[];
+  slug: string;
+}
+
+/**
+ * How a batch populate reads each of its component fields: the expansion
+ * depth, the language, who related rows are read for, whether a failed read
+ * propagates, and the connection it reads on. One object rather than seven
+ * arguments, so the three per-kind readers cannot take them in a different
+ * order.
+ */
+interface BatchPopulateRead {
+  depth: number;
+  currentDepth: number;
+  locale?: string;
+  fallbackLocale?: ComponentFallbackLocale;
+  access: ComponentReadAccess;
+  strict: boolean;
+  executor?: unknown;
+}
+
+/**
+ * `instances` by the field group each is an instance of: the one `field` names, or, in a zone,
+ * the one each instance says it is, among those the zone allows.
+ */
+function instancesBySlug(
+  instances: Record<string, unknown>[],
+  field: FieldGroupFieldConfig
+): Map<string, Record<string, unknown>[]> {
+  const bySlug = new Map<string, Record<string, unknown>[]>();
+  if (!field.components || field.components.length === 0) {
+    if (field.component) bySlug.set(field.component, instances);
+    return bySlug;
+  }
+  for (const instance of instances) {
+    const slug = readFieldGroupType(instance);
+    if (slug === undefined || !field.components.includes(slug)) continue;
+    bySlug.set(slug, [...(bySlug.get(slug) ?? []), instance]);
+  }
+  return bySlug;
+}
+
+/** The instance objects one field-group field's read values hold: a single one, a list's, or none. */
+function instancesIn(values: readonly unknown[]): Record<string, unknown>[] {
+  const found: Record<string, unknown>[] = [];
+  for (const value of values) {
+    for (const item of Array.isArray(value) ? value : [value]) {
+      if (item !== null && typeof item === "object" && !Array.isArray(item)) {
+        found.push(item as Record<string, unknown>);
+      }
+    }
+  }
+  return found;
 }
 
 // Duplicated here (and in the mutation service) to avoid a cross-domain
 // import into collections just for a type predicate.
 function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
   return isFieldGroupFieldType(field.type);
+}
+
+/**
+ * The field-group fields whose instances are rows read at this level: those at the top of
+ * `fields`, and those in a group with no name, which only lays them out and stores them where it
+ * sits. The same fields the write stores rows for, from the same walk.
+ */
+function fieldGroupFieldsAt(
+  fields: readonly FieldConfig[]
+): FieldGroupFieldConfig[] {
+  return directFieldGroupFields(fields).filter(isFieldGroupField);
 }
 
 /**
@@ -243,7 +383,11 @@ export class FieldGroupQueryService extends BaseService {
     relationshipService?: CollectionRelationshipService,
     // i18n: when set and an embedded component is localized, its translatable fields
     // resolve/write per language via the component's companion `comp_<slug>_locales` table.
-    private readonly localizationSource?: LocalizationSource
+    private readonly localizationSource?: LocalizationSource,
+    // The tables registered for this database, so a component's instances can be read with their
+    // translations in one statement. Without it they are read first and translated after. Named
+    // apart from the base service's `tables`, the dialect's own tables, which it would shadow.
+    private readonly instanceTables?: InstanceTables
   ) {
     super(adapter, logger);
     this.registryService = registryService;
@@ -291,22 +435,204 @@ export class FieldGroupQueryService extends BaseService {
    * `executor` mirrors the one the instance read uses: a snapshot assembled inside
    * a write transaction has just written these companion rows on that connection,
    * and a pooled read would not see them.
+   *
+   * The one-language case of {@link overlayLocalizedComponentByLanguage}.
    */
-  private async overlayLocalizedComponent(
+  private overlayLocalizedComponent(
     meta: DynamicFieldGroupRecord,
     dataArray: Record<string, unknown>[],
     locale: string | undefined,
     fallbackLocale?: ComponentFallbackLocale,
-    executor?: unknown
+    executor?: unknown,
+    /** A failed translation read propagates rather than returning shared values. */
+    strict = false
   ): Promise<void> {
-    if (
-      !this.localization ||
-      meta.localized !== true ||
-      dataArray.length === 0
-    ) {
+    return this.overlayLocalizedComponentByLanguage(
+      meta,
+      [{ dataArray, locale, fallbackLocale }],
+      executor,
+      strict
+    );
+  }
+
+  /**
+   * {@link overlayLocalizedComponent} for several languages at once, each over
+   * its own copy of the instances and with its own fallback: the companion is
+   * read ONCE for every language's chain, and each copy is then resolved by
+   * its own chain, as an overlay of that language alone resolves it.
+   */
+  private async overlayLocalizedComponentByLanguage(
+    meta: DynamicFieldGroupRecord,
+    byLanguage: readonly (ComponentReadLanguage & {
+      dataArray: Record<string, unknown>[];
+    })[],
+    executor?: unknown,
+    /** A failed translation read propagates rather than returning shared values. */
+    strict = false,
+    // The translations the instances were read with, when they came in the same statement: only
+    // for a read of one language, whose chain the join was planned for.
+    joined?: JoinedTranslations | null
+  ): Promise<void> {
+    const localization = this.localization;
+    const languages = byLanguage.filter(
+      language => language.dataArray.length > 0
+    );
+    if (joined) {
+      // Read with the instances, so there is nothing left to query.
+      const { localizedFields } = joined.plan.companion;
+      for (const { dataArray } of languages) {
+        fillCompanionFields({
+          rows: dataArray,
+          companionRows: joined.rows,
+          localizedFields,
+          localeChain: joined.plan.localeChain,
+          idKey: "id",
+        });
+        this.decodeJsonLocalizedValues(meta, localizedFields, dataArray, false);
+        await this.stripOverlaidPasswords(
+          meta,
+          localizedFields,
+          dataArray,
+          false,
+          executor
+        );
+      }
       return;
     }
-    const companion = buildCompanionSchema({
+    // Whether its values are kept per language at all: when it is translated, or under
+    // per-language storage for every component.
+    if (!localization || !storesPerLanguage(meta) || languages.length === 0) {
+      return;
+    }
+    const companion = this.companionOf(meta);
+    if (!companion) return;
+
+    const named: {
+      dataArray: Record<string, unknown>[];
+      localeChain: string[];
+    }[] = [];
+    for (const { dataArray, locale, fallbackLocale } of languages) {
+      // `?locale=all` (admin/export): the parent read projects its own localized fields as
+      // language-keyed maps, so mirror that for the embedded component's translatable fields —
+      // otherwise they would be missing entirely (the main comp_* table omits those columns).
+      if (locale === EVERY_TRANSLATION) {
+        await this.overlayEveryTranslation(
+          meta,
+          companion,
+          dataArray,
+          localization.locales.map(l => l.code),
+          executor,
+          strict
+        );
+        continue;
+      }
+      named.push({
+        dataArray,
+        localeChain: componentLocaleChain(localization, locale, fallbackLocale),
+      });
+    }
+    if (named.length === 0) return;
+    // Resolved before the overlay runs, because inside a transaction it can only be read and the
+    // read itself must not be what fails.
+    const readiness = await this.companionReadiness(companion, executor);
+    // Within the database's limit on a statement's parameters, in as many
+    // reads as that takes; the rows are filled only once every read has
+    // succeeded, so a contained failure leaves none half translated, with a
+    // raw value or a password the strip below never saw.
+    const overlay = () =>
+      populateCompanionFieldsByLanguage({
+        db: (executor ?? this.adapter.getDrizzle()) as Parameters<
+          typeof populateCompanionFieldsByLanguage
+        >[0]["db"],
+        companionTable: companion.table,
+        localizedFields: companion.localizedFields,
+        byLanguage: named.map(({ dataArray, localeChain }) => ({
+          rows: dataArray,
+          localeChain,
+        })),
+        idKey: "id",
+        readiness,
+        maxParams: this.adapter.getCapabilities().maxParamsPerQuery,
+      });
+
+    const ran = await this.runContainedOverlay(
+      meta.slug,
+      companion.companionTableName,
+      executor,
+      strict,
+      overlay
+    );
+    if (!ran) return;
+    for (const { dataArray } of named) {
+      this.decodeJsonLocalizedValues(
+        meta,
+        companion.localizedFields,
+        dataArray,
+        false
+      );
+      await this.stripOverlaidPasswords(
+        meta,
+        companion.localizedFields,
+        dataArray,
+        false,
+        executor
+      );
+    }
+  }
+
+  /**
+   * The overlay of a read of every translation: each translatable field as a
+   * map by language, for every configured language.
+   */
+  private async overlayEveryTranslation(
+    meta: DynamicFieldGroupRecord,
+    companion: NonNullable<ReturnType<typeof buildCompanionSchema>>,
+    dataArray: Record<string, unknown>[],
+    configuredLocales: string[],
+    executor: unknown,
+    strict: boolean
+  ): Promise<void> {
+    const allReadiness = await this.companionReadiness(companion, executor);
+    const ran = await this.runContainedOverlay(
+      meta.slug,
+      companion.companionTableName,
+      executor,
+      strict,
+      () =>
+        populateCompanionFieldsAllLocales({
+          db: (executor ?? this.adapter.getDrizzle()) as Parameters<
+            typeof populateCompanionFieldsAllLocales
+          >[0]["db"],
+          companionTable: companion.table,
+          localizedFields: companion.localizedFields,
+          rows: dataArray,
+          locales: configuredLocales,
+          idKey: "id",
+          readiness: allReadiness,
+          maxParams: this.adapter.getCapabilities().maxParamsPerQuery,
+        })
+    );
+    if (!ran) return;
+    this.decodeJsonLocalizedValues(
+      meta,
+      companion.localizedFields,
+      dataArray,
+      true
+    );
+    await this.stripOverlaidPasswords(
+      meta,
+      companion.localizedFields,
+      dataArray,
+      true,
+      executor
+    );
+  }
+
+  /** The component's per-language table, or null when it has no translatable field. */
+  private companionOf(
+    meta: DynamicFieldGroupRecord
+  ): ReturnType<typeof buildCompanionSchema> {
+    return buildCompanionSchema({
       slug: meta.slug,
       tableName: meta.tableName,
       fields: meta.fields as { name: string; type: string }[],
@@ -314,106 +640,54 @@ export class FieldGroupQueryService extends BaseService {
       // Components are never Draft/Published — companion has no `_status`.
       status: false,
     });
-    if (!companion) return;
+  }
 
-    // `?locale=all` (admin/export): the parent read projects its own localized fields as
-    // language-keyed maps, so mirror that for the embedded component's translatable fields —
-    // otherwise they would be missing entirely (the main comp_* table omits those columns).
-    if (locale === EVERY_TRANSLATION) {
-      const allReadiness = await this.companionReadiness(companion, executor);
-      // Read out here: the narrowing the guard above established does not survive into the
-      // closure, and re-asserting it there would be a cast rather than a check.
-      const configuredLocales = this.localization.locales.map(l => l.code);
-      const ran = await this.runContainedOverlay(
-        meta.slug,
-        companion.companionTableName,
-        executor,
-        () =>
-          populateCompanionFieldsAllLocales({
-            db: (executor ?? this.adapter.getDrizzle()) as Parameters<
-              typeof populateCompanionFieldsAllLocales
-            >[0]["db"],
-            companionTable: companion.table,
-            localizedFields: companion.localizedFields,
-            rows: dataArray,
-            locales: configuredLocales,
-            idKey: "id",
-            readiness: allReadiness,
-          })
-      );
-      if (!ran) return;
-      this.decodeJsonLocalizedValues(
-        meta,
-        companion.localizedFields,
-        dataArray,
-        true
-      );
-      await this.stripOverlaidPasswords(
-        meta,
-        companion.localizedFields,
-        dataArray,
-        true,
-        executor
-      );
-      return;
+  /**
+   * What reading one language of a component's translations takes: its companion, the language
+   * chain the read falls back through, and whether the companion is there to read. Null when there
+   * is nothing to read in one language: localization is off, the component keeps no translatable
+   * value per language, or the read asks for every translation at once.
+   */
+  private async translationPlan(
+    meta: DynamicFieldGroupRecord,
+    locale: string | undefined,
+    fallbackLocale: ComponentFallbackLocale | undefined,
+    executor: unknown
+  ): Promise<TranslationPlan | null> {
+    const localization = this.localization;
+    if (
+      !localization ||
+      !storesPerLanguage(meta) ||
+      locale === EVERY_TRANSLATION
+    ) {
+      return null;
     }
-
-    // Resolve an absent `locale` to the default (the parent read treats no explicit `?locale` as
-    // the default locale), so a default-locale read still overlays the component's companion
-    // values instead of returning the omitted main-table columns.
-    // A language read exactly as stored is taken as named, active or not: a
-    // removed language is kept, and validating it would read the default's
-    // values in its place.
-    const exact = fallbackLocale === EXACT_STORED_LANGUAGE;
-    const requested =
-      exact && locale !== undefined
-        ? locale
-        : resolveRequestedLocale(this.localization, locale);
-    // Through the shared resolver, so a component read falls back exactly as
-    // the collection and single reads around it do. `requested` is already
-    // resolved and is never `all` here, so the chain is never null; the
-    // fallback keeps the contract this path always had rather than asserting.
-    const localeChain = exact
-      ? [requested]
-      : (resolveLocaleChain(this.localization, requested, fallbackLocale) ?? [
-          requested,
-        ]);
-    // Resolved before the overlay runs, because inside a transaction it can only be read and the
-    // read itself must not be what fails.
+    const companion = this.companionOf(meta);
+    if (!companion) return null;
+    const localeChain = componentLocaleChain(
+      localization,
+      locale,
+      fallbackLocale
+    );
+    // Resolved before anything reads the companion, because inside a transaction it can only be
+    // read and the read itself must not be what fails.
     const readiness = await this.companionReadiness(companion, executor);
-    const overlay = () =>
-      populateCompanionFields({
-        db: (executor ?? this.adapter.getDrizzle()) as Parameters<
-          typeof populateCompanionFields
-        >[0]["db"],
-        companionTable: companion.table,
-        localizedFields: companion.localizedFields,
-        rows: dataArray,
-        localeChain,
-        idKey: "id",
-        readiness,
-      });
+    return { companion, localeChain, readiness };
+  }
 
-    const ran = await this.runContainedOverlay(
-      meta.slug,
-      companion.companionTableName,
-      executor,
-      overlay
-    );
-    if (!ran) return;
-    this.decodeJsonLocalizedValues(
-      meta,
-      companion.localizedFields,
-      dataArray,
-      false
-    );
-    await this.stripOverlaidPasswords(
-      meta,
-      companion.localizedFields,
-      dataArray,
-      false,
-      executor
-    );
+  /**
+   * The plan for reading a component's translations with its instances, when the read asks for
+   * one language. Several languages are read from one instance read with a chain each, so their
+   * translations are read after it, together.
+   */
+  private oneLanguagePlan(
+    meta: DynamicFieldGroupRecord,
+    languages: readonly ComponentReadLanguage[],
+    executor: unknown
+  ): Promise<TranslationPlan | null> {
+    if (languages.length !== 1) return Promise.resolve(null);
+    const [{ locale, fallbackLocale }] = languages;
+    return this.translationPlan(meta, locale, fallbackLocale, executor);
   }
 
   /**
@@ -465,9 +739,12 @@ export class FieldGroupQueryService extends BaseService {
     slug: string,
     companionTableName: string,
     executor: unknown,
+    strict: boolean,
     overlay: () => Promise<unknown>
   ): Promise<boolean> {
-    if (executor !== undefined) {
+    // On a transaction a failed read has aborted it, and a strict reader
+    // judges what is stored: either way the failure is the caller's to see.
+    if (executor !== undefined || strict) {
       await overlay();
       return true;
     }
@@ -536,10 +813,37 @@ export class FieldGroupQueryService extends BaseService {
 
   /**
    * Populate component data for a single parent entry.
+   *
+   * The one-language case of {@link populateComponentDataByLanguage}.
    */
   async populateComponentData(
     params: PopulateComponentDataParams
   ): Promise<Record<string, unknown>> {
+    const [populated] = await this.populateComponentDataInEach(params, [
+      { locale: params.locale, fallbackLocale: params.fallbackLocale },
+    ]);
+    return populated;
+  }
+
+  /**
+   * {@link populateComponentData} for several languages at once, each with its
+   * own fallback: every component table is read once for them all, and each
+   * localized one's companion once for every language's chain. Each language
+   * gets its own copy of the entry, resolved as a read of that language alone
+   * resolves it. In the order the languages were asked.
+   */
+  async populateComponentDataByLanguage(
+    params: Omit<PopulateComponentDataParams, "locale" | "fallbackLocale"> & {
+      languages: readonly ComponentReadLanguage[];
+    }
+  ): Promise<Record<string, unknown>[]> {
+    return this.populateComponentDataInEach(params, params.languages);
+  }
+
+  private async populateComponentDataInEach(
+    params: Omit<PopulateComponentDataParams, "locale" | "fallbackLocale">,
+    languages: readonly ComponentReadLanguage[]
+  ): Promise<Record<string, unknown>[]> {
     const {
       entry,
       parentTable,
@@ -547,19 +851,16 @@ export class FieldGroupQueryService extends BaseService {
       depth = DEFAULT_COMPONENT_DEPTH,
       currentDepth = 0,
       select,
-      locale,
-      fallbackLocale,
       executor,
       strict = false,
       access = { trusted: TRUSTS_EVERY_COLLECTION },
     } = params;
     const entryId = entry.id as string;
-    if (!entryId) return entry;
+    if (!entryId) return languages.map(() => entry);
 
-    const result = { ...entry };
+    const results = languages.map(() => ({ ...entry }));
 
-    for (const field of fields) {
-      if (!isFieldGroupField(field)) continue;
+    for (const field of fieldGroupFieldsAt(fields)) {
       const fieldName = field.name;
 
       if (!this.shouldPopulateField(fieldName, select)) {
@@ -571,52 +872,62 @@ export class FieldGroupQueryService extends BaseService {
       // catch below can only answer that from the resolved field.
       const f = withResolvedFieldGroupReferences(field);
       try {
+        let values: unknown[] | undefined;
         if (f.components && f.components.length > 0) {
-          result[fieldName] = await this.populateMultiComponentField(
+          values = await this.populateMultiComponentField(
             entryId,
             parentTable,
             fieldName,
             f,
             depth,
             currentDepth,
-            locale,
-            fallbackLocale,
+            languages,
             executor,
             strict,
             access
           );
         } else if (f.component) {
-          if (f.repeatable) {
-            result[fieldName] = await this.populateRepeatableField(
-              entryId,
-              parentTable,
-              fieldName,
-              f.component,
-              depth,
-              currentDepth,
-              locale,
-              fallbackLocale,
-              executor,
-              strict,
-              access
-            );
-          } else {
-            result[fieldName] = await this.populateSingleField(
-              entryId,
-              parentTable,
-              fieldName,
-              f.component,
-              depth,
-              currentDepth,
-              locale,
-              fallbackLocale,
-              executor,
-              strict,
-              access
-            );
-          }
+          values = f.repeatable
+            ? await this.populateRepeatableField(
+                entryId,
+                parentTable,
+                fieldName,
+                f.component,
+                depth,
+                currentDepth,
+                languages,
+                executor,
+                strict,
+                access
+              )
+            : await this.populateSingleField(
+                entryId,
+                parentTable,
+                fieldName,
+                f.component,
+                depth,
+                currentDepth,
+                languages,
+                executor,
+                strict,
+                access
+              );
         }
+        values?.forEach((value, index) => {
+          results[index][fieldName] = value;
+        });
+        // The field groups placed directly in what was read, at every depth.
+        await this.populateNestedInEachLanguage(values, f, languages, {
+          depth,
+          currentDepth,
+          access,
+          strict,
+          executor,
+        });
       } catch (error) {
+        // A rule that could not run never answered: the request ends with
+        // that, not with the component replaced by a default.
+        rethrowIfRuleCouldNotRun(error);
         // In strict mode a read failure must roll the write back rather than
         // ship a payload with silently-missing component data.
         if (strict) throw error;
@@ -624,11 +935,68 @@ export class FieldGroupQueryService extends BaseService {
           fieldName,
           error: error instanceof Error ? error.message : String(error),
         });
-        result[fieldName] = this.getPopulateDefaultValue(f);
+        for (const result of results) {
+          result[fieldName] = this.getPopulateDefaultValue(f);
+        }
       }
     }
 
-    return result;
+    return results;
+  }
+
+  /**
+   * Read, into each of `instances` under its field's name, the field groups placed directly in its
+   * fields, at every depth. The instances are what one field-group field read: one field group's,
+   * or a zone's of several. Each field group's are read together, through the batch read, so a
+   * level costs one read per field group placed in it however many instances hold one, and that
+   * read descends in turn. A level whose instances hold no rows below ends the descent, so a
+   * definition that places a field group inside itself ends with the data.
+   *
+   * Nesting is not a relationship hop: each level keeps the relationship depth of the one above.
+   */
+  private async populateNestedInstances(
+    instances: Record<string, unknown>[],
+    field: FieldGroupFieldConfig,
+    read: BatchPopulateRead
+  ): Promise<void> {
+    if (instances.length === 0) return;
+    for (const [slug, group] of instancesBySlug(instances, field)) {
+      const meta = await this.registryService.getComponent(slug, read.executor);
+      if (fieldGroupFieldsAt(meta.fields).length === 0) continue;
+      const filled = await this.populateComponentDataMany({
+        entries: group,
+        parentTable: meta.tableName,
+        fields: meta.fields,
+        depth: read.depth,
+        currentDepth: read.currentDepth,
+        locale: read.locale,
+        fallbackLocale: read.fallbackLocale,
+        access: read.access,
+        strict: read.strict,
+        executor: read.executor,
+      });
+      filled.forEach((value, index) => Object.assign(group[index], value));
+    }
+  }
+
+  /**
+   * {@link populateNestedInstances} for what one field read in each language: each language's copy
+   * holds its own instances, so each is read in its own language.
+   */
+  private async populateNestedInEachLanguage(
+    values: readonly unknown[] | undefined,
+    field: FieldGroupFieldConfig,
+    languages: readonly ComponentReadLanguage[],
+    read: Omit<BatchPopulateRead, "locale" | "fallbackLocale">
+  ): Promise<void> {
+    if (values === undefined) return;
+    for (const [index, language] of languages.entries()) {
+      await this.populateNestedInstances(instancesIn([values[index]]), field, {
+        ...read,
+        locale: language.locale,
+        fallbackLocale: language.fallbackLocale,
+      });
+    }
   }
 
   /**
@@ -648,6 +1016,7 @@ export class FieldGroupQueryService extends BaseService {
       fallbackLocale,
       access = { trusted: TRUSTS_EVERY_COLLECTION },
       strict = false,
+      executor,
     } = params;
     if (entries.length === 0) return entries;
 
@@ -657,21 +1026,28 @@ export class FieldGroupQueryService extends BaseService {
     if (entryIds.length === 0) return entries;
 
     const componentFields: FieldGroupFieldConfig[] = [];
-    for (const field of fields) {
-      if (isFieldGroupField(field)) {
-        if (!this.shouldPopulateField(field.name, select)) {
-          continue;
-        }
-        // Resolved once, at collection: every reader below — the dispatch,
-        // the slug reads, and the populate default for a failed or absent
-        // entry — sees the references on the keys it opens, whichever
-        // spelling the stored definition carries.
-        componentFields.push(withResolvedFieldGroupReferences(field));
+    for (const field of fieldGroupFieldsAt(fields)) {
+      if (!this.shouldPopulateField(field.name, select)) {
+        continue;
       }
+      // Resolved once, at collection: every reader below — the dispatch,
+      // the slug reads, and the populate default for a failed or absent
+      // entry — sees the references on the keys it opens, whichever
+      // spelling the stored definition carries.
+      componentFields.push(withResolvedFieldGroupReferences(field));
     }
     if (componentFields.length === 0) return entries;
 
     const fieldDataMaps = new Map<string, Map<string, unknown>>();
+    const read: BatchPopulateRead = {
+      depth,
+      currentDepth,
+      locale,
+      fallbackLocale,
+      access,
+      strict,
+      executor,
+    };
 
     for (const field of componentFields) {
       try {
@@ -681,11 +1057,7 @@ export class FieldGroupQueryService extends BaseService {
             parentTable,
             field.name,
             field,
-            depth,
-            currentDepth,
-            locale,
-            fallbackLocale,
-            access
+            read
           );
           fieldDataMaps.set(field.name, dataMap);
         } else if (field.component) {
@@ -695,11 +1067,7 @@ export class FieldGroupQueryService extends BaseService {
               parentTable,
               field.name,
               field.component,
-              depth,
-              currentDepth,
-              locale,
-              fallbackLocale,
-              access
+              read
             );
             fieldDataMaps.set(field.name, dataMap);
           } else {
@@ -708,19 +1076,27 @@ export class FieldGroupQueryService extends BaseService {
               parentTable,
               field.name,
               field.component,
-              depth,
-              currentDepth,
-              locale,
-              fallbackLocale,
-              access
+              read
             );
             fieldDataMaps.set(field.name, dataMap);
           }
         }
+        // The field groups placed directly in what was read, at every depth, every entry's at once.
+        await this.populateNestedInstances(
+          instancesIn([...(fieldDataMaps.get(field.name)?.values() ?? [])]),
+          field,
+          read
+        );
       } catch (error) {
+        // A rule that could not run never answered: see the catch above.
+        rethrowIfRuleCouldNotRun(error);
         // A caller judging a document by what it holds cannot take a default
         // for a field it failed to read.
         if (strict) throw error;
+        // A field read only in part, its instances without what is placed in
+        // them, takes its default whole, as the one-entry read gives it: what
+        // was read of it is not returned.
+        fieldDataMaps.delete(field.name);
         this.logger.debug("Could not batch populate component field", {
           fieldName: field.name,
           error: error instanceof Error ? error.message : String(error),
@@ -747,6 +1123,11 @@ export class FieldGroupQueryService extends BaseService {
     });
   }
 
+  /**
+   * A single component field's instance, in each language asked: the row is
+   * read once and deserialized for each language, so no language's overlay
+   * reaches another's copy.
+   */
   private async populateSingleField(
     parentId: string,
     parentTable: string,
@@ -754,54 +1135,69 @@ export class FieldGroupQueryService extends BaseService {
     componentSlug: string,
     depth: number,
     currentDepth: number,
-    locale?: string,
-    fallbackLocale?: ComponentFallbackLocale,
+    languages: readonly ComponentReadLanguage[],
     executor?: unknown,
     strict = false,
     access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
-  ): Promise<Record<string, unknown> | null> {
+  ): Promise<(Record<string, unknown> | null)[]> {
     const meta = await this.registryService.getComponent(
       componentSlug,
       executor
     );
     const componentFields = meta.fields;
-    const rows = await this.getExistingInstances(
+    // Read with its translations when it has any in one language.
+    const { rows, joined } = await this.getExistingInstances(
       meta.tableName,
       parentId,
       parentTable,
       fieldName,
       executor,
-      strict
+      strict,
+      await this.oneLanguagePlan(meta, languages, executor)
     );
 
-    if (rows.length === 0) return null;
+    if (rows.length === 0) return languages.map(() => null);
 
-    let data = this.deserializeComponentRow(
-      rows[0],
-      componentFields,
-      false,
-      await this.passwordReach(componentFields, executor)
-    );
-    // i18n: overlay translatable fields from the companion for the requested locale.
-    await this.overlayLocalizedComponent(
+    const reach = await this.passwordReach(componentFields, executor);
+    const byLanguage = languages.map(language => ({
+      ...language,
+      dataArray: [
+        this.deserializeComponentRow(
+          ownCopy(rows[0], languages.length),
+          componentFields,
+          false,
+          reach
+        ),
+      ],
+    }));
+    // i18n: overlay translatable fields from the companion for each requested locale.
+    await this.overlayLocalizedComponentByLanguage(
       meta,
-      [data],
-      locale,
-      fallbackLocale,
-      executor
+      byLanguage,
+      executor,
+      strict,
+      joined
     );
-    data = await this.expandComponentRelationships(
-      data,
-      componentSlug,
-      componentFields,
-      depth,
-      currentDepth + 1,
-      access
-    );
-
-    return data;
+    const results: Record<string, unknown>[] = [];
+    for (const { dataArray } of byLanguage) {
+      results.push(
+        await this.expandComponentRelationships(
+          dataArray[0],
+          componentSlug,
+          componentFields,
+          depth,
+          currentDepth + 1,
+          access
+        )
+      );
+    }
+    return results;
   }
 
+  /**
+   * A repeatable component field's instances, in each language asked: the
+   * rows are read once and deserialized for each language.
+   */
   private async populateRepeatableField(
     parentId: string,
     parentTable: string,
@@ -809,52 +1205,70 @@ export class FieldGroupQueryService extends BaseService {
     componentSlug: string,
     depth: number,
     currentDepth: number,
-    locale?: string,
-    fallbackLocale?: ComponentFallbackLocale,
+    languages: readonly ComponentReadLanguage[],
     executor?: unknown,
     strict = false,
     access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
-  ): Promise<Record<string, unknown>[]> {
+  ): Promise<Record<string, unknown>[][]> {
     const meta = await this.registryService.getComponent(
       componentSlug,
       executor
     );
     const componentFields = meta.fields;
-    const rows = await this.getExistingInstances(
+    // Read with their translations when they have any in one language.
+    const { rows, joined } = await this.getExistingInstances(
       meta.tableName,
       parentId,
       parentTable,
       fieldName,
       executor,
-      strict
+      strict,
+      await this.oneLanguagePlan(meta, languages, executor)
     );
 
     const reach = await this.passwordReach(componentFields, executor);
-    let dataArray = rows.map(row =>
-      this.deserializeComponentRow(row, componentFields, false, reach)
-    );
+    const byLanguage = languages.map(language => ({
+      ...language,
+      dataArray: rows.map(row =>
+        this.deserializeComponentRow(
+          ownCopy(row, languages.length),
+          componentFields,
+          false,
+          reach
+        )
+      ),
+    }));
 
     // i18n: overlay translatable fields per instance from the companion.
-    await this.overlayLocalizedComponent(
+    await this.overlayLocalizedComponentByLanguage(
       meta,
-      dataArray,
-      locale,
-      fallbackLocale,
-      executor
+      byLanguage,
+      executor,
+      strict,
+      joined
     );
 
-    dataArray = await this.expandComponentRelationshipsMany(
-      dataArray,
-      componentSlug,
-      componentFields,
-      depth,
-      currentDepth + 1,
-      access
-    );
-
-    return dataArray;
+    const results: Record<string, unknown>[][] = [];
+    for (const { dataArray } of byLanguage) {
+      results.push(
+        await this.expandComponentRelationshipsMany(
+          dataArray,
+          componentSlug,
+          componentFields,
+          depth,
+          currentDepth + 1,
+          access
+        )
+      );
+    }
+    return results;
   }
 
+  /**
+   * A dynamic zone's instances, in each language asked: each allowed
+   * component's rows are read once, and each instance deserialized for each
+   * language.
+   */
   private async populateMultiComponentField(
     parentId: string,
     parentTable: string,
@@ -862,12 +1276,11 @@ export class FieldGroupQueryService extends BaseService {
     field: FieldGroupFieldConfig,
     depth: number,
     currentDepth: number,
-    locale?: string,
-    fallbackLocale?: ComponentFallbackLocale,
+    languages: readonly ComponentReadLanguage[],
     executor?: unknown,
     strict = false,
     access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
-  ): Promise<Record<string, unknown>[]> {
+  ): Promise<Record<string, unknown>[][]> {
     const allowedSlugs = field.components ?? [];
     const allRows: {
       row: ComponentRow;
@@ -878,7 +1291,8 @@ export class FieldGroupQueryService extends BaseService {
     for (const slug of allowedSlugs) {
       try {
         const meta = await this.registryService.getComponent(slug, executor);
-        const rows = await this.getExistingInstances(
+        // Read alone: each component type's translations are read per row below.
+        const { rows } = await this.getExistingInstances(
           meta.tableName,
           parentId,
           parentTable,
@@ -890,6 +1304,8 @@ export class FieldGroupQueryService extends BaseService {
           allRows.push({ row, fields: meta.fields, slug });
         }
       } catch (error) {
+        // A rule that could not run never answered: see the catches above.
+        rethrowIfRuleCouldNotRun(error);
         // In strict mode surface the failure so a durable payload is not built
         // from a partial dynamic-zone read.
         if (strict) throw error;
@@ -906,34 +1322,42 @@ export class FieldGroupQueryService extends BaseService {
         (b.row[STORAGE_FORMAT.columns.order] ?? 0)
     );
 
-    const results: Record<string, unknown>[] = [];
+    const results: Record<string, unknown>[][] = languages.map(() => []);
     for (const { row, fields, slug } of allRows) {
-      let data = this.deserializeComponentRow(
-        row,
-        fields,
-        true,
-        await this.passwordReach(fields, executor)
-      );
+      const reach = await this.passwordReach(fields, executor);
+      const byLanguage = languages.map(language => ({
+        ...language,
+        dataArray: [
+          this.deserializeComponentRow(
+            ownCopy(row, languages.length),
+            fields,
+            true,
+            reach
+          ),
+        ],
+      }));
       // i18n: overlay translatable fields from the row's component companion. getComponent
       // is registry-cached, so the per-row meta lookup is cheap; dynamic-zone instances
       // may span several component types, each with its own companion.
       const meta = await this.registryService.getComponent(slug, executor);
-      await this.overlayLocalizedComponent(
+      await this.overlayLocalizedComponentByLanguage(
         meta,
-        [data],
-        locale,
-        fallbackLocale,
-        executor
+        byLanguage,
+        executor,
+        strict
       );
-      data = await this.expandComponentRelationships(
-        data,
-        slug,
-        fields,
-        depth,
-        currentDepth + 1,
-        access
-      );
-      results.push(data);
+      for (const [index, { dataArray }] of byLanguage.entries()) {
+        results[index].push(
+          await this.expandComponentRelationships(
+            dataArray[0],
+            slug,
+            fields,
+            depth,
+            currentDepth + 1,
+            access
+          )
+        );
+      }
     }
 
     return results;
@@ -947,21 +1371,26 @@ export class FieldGroupQueryService extends BaseService {
     componentSlug: string,
     parentIds: string[],
     parentTable: string,
-    fieldName: string
+    fieldName: string,
+    read: Pick<BatchPopulateRead, "strict" | "executor">
   ) {
-    const meta = await this.registryService.getComponent(componentSlug);
+    const meta = await this.registryService.getComponent(
+      componentSlug,
+      read.executor
+    );
     const componentFields = meta.fields;
     const rows = await this.batchGetInstances(
       meta.tableName,
       parentIds,
       parentTable,
-      fieldName
+      fieldName,
+      read
     );
     return {
       meta,
       componentFields,
       rows,
-      reach: await this.passwordReach(componentFields),
+      reach: await this.passwordReach(componentFields, read.executor),
     };
   }
 
@@ -970,17 +1399,14 @@ export class FieldGroupQueryService extends BaseService {
     parentTable: string,
     fieldName: string,
     componentSlug: string,
-    depth: number,
-    currentDepth: number,
-    locale?: string,
-    fallbackLocale?: ComponentFallbackLocale,
-    access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
+    read: BatchPopulateRead
   ): Promise<Map<string, unknown>> {
     const { meta, componentFields, rows, reach } = await this.batchRead(
       componentSlug,
       parentIds,
       parentTable,
-      fieldName
+      fieldName,
+      read
     );
 
     // Deserialize first (one per parent), i18n-overlay the whole batch in a single
@@ -1004,8 +1430,10 @@ export class FieldGroupQueryService extends BaseService {
     await this.overlayLocalizedComponent(
       meta,
       collected.map(c => c.data),
-      locale,
-      fallbackLocale
+      read.locale,
+      read.fallbackLocale,
+      read.executor,
+      read.strict
     );
 
     const result = new Map<string, unknown>();
@@ -1016,9 +1444,9 @@ export class FieldGroupQueryService extends BaseService {
           data,
           componentSlug,
           componentFields,
-          depth,
-          currentDepth + 1,
-          access
+          read.depth,
+          read.currentDepth + 1,
+          read.access
         )
       );
     }
@@ -1030,17 +1458,14 @@ export class FieldGroupQueryService extends BaseService {
     parentTable: string,
     fieldName: string,
     componentSlug: string,
-    depth: number,
-    currentDepth: number,
-    locale?: string,
-    fallbackLocale?: ComponentFallbackLocale,
-    access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
+    read: BatchPopulateRead
   ): Promise<Map<string, unknown>> {
     const { rows, reach, meta, componentFields } = await this.batchRead(
       componentSlug,
       parentIds,
       parentTable,
-      fieldName
+      fieldName,
+      read
     );
 
     // Deserialize all (rows arrive ordered by (_parent_id, _order)), overlay the whole
@@ -1053,8 +1478,10 @@ export class FieldGroupQueryService extends BaseService {
     await this.overlayLocalizedComponent(
       meta,
       entries.map(e => e.data),
-      locale,
-      fallbackLocale
+      read.locale,
+      read.fallbackLocale,
+      read.executor,
+      read.strict
     );
 
     const grouped = new Map<string, Record<string, unknown>[]>();
@@ -1067,9 +1494,9 @@ export class FieldGroupQueryService extends BaseService {
             data,
             componentSlug,
             componentFields,
-            depth,
-            currentDepth + 1,
-            access
+            read.depth,
+            read.currentDepth + 1,
+            read.access
           )
         );
     }
@@ -1081,11 +1508,7 @@ export class FieldGroupQueryService extends BaseService {
     parentTable: string,
     fieldName: string,
     field: FieldGroupFieldConfig,
-    depth: number,
-    currentDepth: number,
-    locale?: string,
-    fallbackLocale?: ComponentFallbackLocale,
-    access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
+    read: BatchPopulateRead
   ): Promise<Map<string, unknown>> {
     const allowedSlugs = field.components ?? [];
 
@@ -1096,12 +1519,16 @@ export class FieldGroupQueryService extends BaseService {
 
     for (const slug of allowedSlugs) {
       try {
-        const meta = await this.registryService.getComponent(slug);
+        const meta = await this.registryService.getComponent(
+          slug,
+          read.executor
+        );
         const rows = await this.batchGetInstances(
           meta.tableName,
           parentIds,
           parentTable,
-          fieldName
+          fieldName,
+          read
         );
         for (const row of rows) {
           const parentId = row[STORAGE_FORMAT.columns.parentId];
@@ -1115,6 +1542,11 @@ export class FieldGroupQueryService extends BaseService {
           });
         }
       } catch (error) {
+        // As the single and repeatable reads do: a strict reader is told,
+        // since a zone read without one of its kinds is not the zone stored.
+        // A missing table is already read as empty by the instance read, so
+        // what reaches here is a failed lookup, whatever its message says.
+        if (read.strict) throw error;
         this.logger.debug("Could not load component for batch populate", {
           slug,
           error: error instanceof Error ? error.message : String(error),
@@ -1122,46 +1554,96 @@ export class FieldGroupQueryService extends BaseService {
       }
     }
 
+    // Deserialized first, then overlaid kind by kind, then expanded: the
+    // overlay mutates each instance in place, and expansion may return a new
+    // object.
+    const deserialized = await this.deserializeZoneInstances(
+      groupedByParent,
+      read
+    );
+    await this.overlayZoneByKind(deserialized, read);
+
     const result = new Map<string, unknown>();
+    for (const [parentId, instances] of deserialized) {
+      const expandedItems: Record<string, unknown>[] = [];
+      for (const { data, fields, slug } of instances) {
+        expandedItems.push(
+          await this.expandComponentRelationships(
+            data,
+            slug,
+            fields,
+            read.depth,
+            read.currentDepth + 1,
+            read.access
+          )
+        );
+      }
+      result.set(parentId, expandedItems);
+    }
+
+    return result;
+  }
+
+  /** A zone's instances per parent, deserialized in their stored order. */
+  private async deserializeZoneInstances(
+    groupedByParent: Map<
+      string,
+      { row: ComponentRow; fields: FieldConfig[]; slug: string }[]
+    >,
+    read: Pick<BatchPopulateRead, "executor">
+  ): Promise<Map<string, ZoneInstance[]>> {
+    const deserialized = new Map<string, ZoneInstance[]>();
     for (const [parentId, items] of groupedByParent) {
       items.sort(
         (a, b) =>
           (a.row[STORAGE_FORMAT.columns.order] ?? 0) -
           (b.row[STORAGE_FORMAT.columns.order] ?? 0)
       );
-
-      const expandedItems: Record<string, unknown>[] = [];
+      const instances: ZoneInstance[] = [];
       for (const { row, fields, slug } of items) {
-        let data = this.deserializeComponentRow(
-          row,
+        instances.push({
+          data: this.deserializeComponentRow(
+            row,
+            fields,
+            true,
+            await this.passwordReach(fields, read.executor)
+          ),
           fields,
-          true,
-          await this.passwordReach(fields)
-        );
-        // i18n: overlay the instance's translatable fields from its component companion
-        // before relationship expansion (registry-cached meta lookup).
-        const itemMeta = await this.registryService.getComponent(slug);
-        await this.overlayLocalizedComponent(
-          itemMeta,
-          [data],
-          locale,
-          fallbackLocale
-        );
-        data = await this.expandComponentRelationships(
-          data,
           slug,
-          fields,
-          depth,
-          currentDepth + 1,
-          access
-        );
-        expandedItems.push(data);
+        });
       }
-
-      result.set(parentId, expandedItems);
+      deserialized.set(parentId, instances);
     }
+    return deserialized;
+  }
 
-    return result;
+  /**
+   * i18n: overlay a zone's translatable fields from each kind's companion in
+   * one read for every instance of that kind across the batch, not one read
+   * per instance. Each instance is mutated in place.
+   */
+  private async overlayZoneByKind(
+    instancesByParent: Map<string, ZoneInstance[]>,
+    read: BatchPopulateRead
+  ): Promise<void> {
+    const bySlug = new Map<string, Record<string, unknown>[]>();
+    for (const instances of instancesByParent.values()) {
+      for (const { data, slug } of instances) {
+        const ofSlug = bySlug.get(slug);
+        if (ofSlug) ofSlug.push(data);
+        else bySlug.set(slug, [data]);
+      }
+    }
+    for (const [slug, dataArray] of bySlug) {
+      await this.overlayLocalizedComponent(
+        await this.registryService.getComponent(slug, read.executor),
+        dataArray,
+        read.locale,
+        read.fallbackLocale,
+        read.executor,
+        read.strict
+      );
+    }
   }
 
   private async getExistingInstances(
@@ -1177,7 +1659,99 @@ export class FieldGroupQueryService extends BaseService {
     // When true, only a MISSING component table is tolerated; any other read
     // failure propagates so a durable webhook/version payload is not built from
     // a component silently read as empty.
-    strict = false
+    strict = false,
+    // Reading the instances' translations in one language, when there are any to read.
+    plan: TranslationPlan | null = null
+  ): Promise<{ rows: ComponentRow[]; joined: JoinedTranslations | null }> {
+    const joined = await this.instancesWithTranslations(
+      tableName,
+      instanceKey(parentId, parentTable, fieldName),
+      plan,
+      executor
+    );
+    if (joined) return joined;
+    return {
+      rows: await this.instancesAlone(
+        tableName,
+        parentId,
+        parentTable,
+        fieldName,
+        executor,
+        strict
+      ),
+      joined: null,
+    };
+  }
+
+  /**
+   * One parent field's instances and their translations in `plan`'s languages, in one statement,
+   * where reading the translations after the instances took two. Null when the read cannot be
+   * joined: nothing to translate, a companion not there yet, or a table the registry does not
+   * hold. A joined read that fails off a transaction is logged and answered null, so the caller
+   * reads the instances alone and translates them after, with that read's own containment; on a
+   * transaction's connection it propagates, because the failure has already aborted it.
+   */
+  private async instancesWithTranslations(
+    tableName: string,
+    key: Record<string, string>,
+    plan: TranslationPlan | null,
+    executor: unknown
+  ): Promise<{ rows: ComponentRow[]; joined: JoinedTranslations } | null> {
+    if (
+      !plan ||
+      plan.readiness !== "ready" ||
+      !this.instanceTables?.hasTable(tableName)
+    ) {
+      return null;
+    }
+    const table = this.instanceTables.getTable(tableName);
+    const columns = Object.values(getColumns(table as never)) as {
+      name: string;
+    }[];
+    const column = (name: string) => columns.find(c => c.name === name);
+    const conditions = Object.entries(key).map(([name, value]) => {
+      const found = column(name);
+      return found ? eq(found as never, value) : undefined;
+    });
+    const order = INSTANCE_ORDER.map(({ column: name }) => column(name));
+    if (conditions.some(c => c === undefined) || order.some(c => !c)) {
+      return null;
+    }
+    try {
+      const read = await selectRowsWithCompanion({
+        db: executor ?? this.adapter.getDrizzle(),
+        mainTable: table,
+        where: and(...(conditions as SQL[])),
+        orderBy: order.map(c => asc(c as never)),
+        companionTable: plan.companion.table,
+        localeChain: plan.localeChain,
+      });
+      return {
+        rows: this.withoutServerOnlyColumns(
+          read.rows as ComponentRow[],
+          tableName
+        ),
+        joined: { plan, rows: read.companionRows },
+      };
+    } catch (error) {
+      if (executor !== undefined) throw error;
+      this.logger.error(
+        `Could not read component instances with their translations from ` +
+          `${plan.companion.companionTableName}; reading them alone: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+      );
+      return null;
+    }
+  }
+
+  /** One parent field's instances, read alone. */
+  private async instancesAlone(
+    tableName: string,
+    parentId: string,
+    parentTable: string,
+    fieldName: string,
+    executor: unknown,
+    strict: boolean
   ): Promise<ComponentRow[]> {
     try {
       const rows = await this.adapter.select<ComponentRow>(
@@ -1210,38 +1784,54 @@ export class FieldGroupQueryService extends BaseService {
     tableName: string,
     parentIds: string[],
     parentTable: string,
-    fieldName: string
+    fieldName: string,
+    // As `getExistingInstances` takes them: only a missing table is read as
+    // empty under `strict`, and `executor` reads on a write's transaction.
+    read: Pick<BatchPopulateRead, "strict" | "executor">
   ): Promise<ComponentRow[]> {
     if (parentIds.length === 0) return [];
 
     try {
-      const rows = await this.adapter.select<ComponentRow>(tableName, {
-        where: {
-          and: [
-            {
-              column: STORAGE_FORMAT.columns.parentId,
-              op: "IN",
-              value: parentIds,
-            },
-            {
-              column: STORAGE_FORMAT.columns.parentTable,
-              op: "=",
-              value: parentTable,
-            },
-            {
-              column: STORAGE_FORMAT.columns.parentField,
-              op: "=",
-              value: fieldName,
-            },
+      const rows = await this.adapter.select<ComponentRow>(
+        tableName,
+        {
+          where: {
+            and: [
+              {
+                column: STORAGE_FORMAT.columns.parentId,
+                op: "IN",
+                value: parentIds,
+              },
+              {
+                column: STORAGE_FORMAT.columns.parentTable,
+                op: "=",
+                value: parentTable,
+              },
+              {
+                column: STORAGE_FORMAT.columns.parentField,
+                op: "=",
+                value: fieldName,
+              },
+            ],
+          },
+          orderBy: [
+            { column: STORAGE_FORMAT.columns.parentId, direction: "asc" },
+            { column: STORAGE_FORMAT.columns.order, direction: "asc" },
           ],
         },
-        orderBy: [
-          { column: STORAGE_FORMAT.columns.parentId, direction: "asc" },
-          { column: STORAGE_FORMAT.columns.order, direction: "asc" },
-        ],
-      });
+        read.executor
+      );
       return this.withoutServerOnlyColumns(rows, tableName);
     } catch (error) {
+      // On a transaction a failed statement has aborted it on PostgreSQL, so
+      // reading on as though the table were empty is possible on the other
+      // dialects only: every dialect refuses alike instead.
+      if (
+        read.executor !== undefined ||
+        (read.strict && !isMissingComponentTableError(error))
+      ) {
+        throw error;
+      }
       this.logger.debug("Could not batch query component table", {
         tableName,
         error: error instanceof Error ? error.message : String(error),
@@ -1285,8 +1875,10 @@ export class FieldGroupQueryService extends BaseService {
     // A row's keys may be the field's name or its snake_case column name, so
     // a field is found under either. Missed, a JSON field such as a to-many
     // relationship named `cardTags` comes back as its stored text.
+    // Through `fieldsStoredOnRow`: a field inside a group with no name is a column of this row,
+    // returned at the instance's level as the write took it.
     const fieldByColumn = new Map<string, FieldConfig>();
-    for (const field of componentFields) {
+    for (const field of fieldsStoredOnRow(componentFields)) {
       if ("name" in field && field.name) {
         fieldByColumn.set(toSnakeCase(field.name), field);
         fieldByColumn.set(field.name, field);
@@ -1370,8 +1962,10 @@ export class FieldGroupQueryService extends BaseService {
       // over as the row-backed list it is on a component, so its related
       // entries are found from the ids on the row rather than a junction table
       // a component does not have.
+      // Through `fieldsStoredOnRow`, so a relationship inside a group with no name, whose value
+      // sits at the instance's level, is expanded as one beside the group is.
       const fields = asRowBackedRelationFields(
-        componentFields
+        fieldsStoredOnRow(componentFields)
       ) as unknown as Parameters<
         typeof this.relationshipService.expandRelationships
       >[2];
@@ -1415,6 +2009,9 @@ export class FieldGroupQueryService extends BaseService {
 
       return expanded;
     } catch (error) {
+      // A rule that could not run never answered: the request ends with
+      // that, not with the component's relationships left unexpanded.
+      rethrowIfRuleCouldNotRun(error);
       this.logger.debug("Could not expand relationships in component data", {
         componentSlug,
         error: error instanceof Error ? error.message : String(error),
@@ -1448,4 +2045,15 @@ export class FieldGroupQueryService extends BaseService {
       )
     );
   }
+}
+
+/**
+ * The row a language's copy is built from: its own deep copy when several
+ * languages are read from one row, so a driver's already-parsed JSON value is
+ * never one object shared by every language's copy, where a change made to
+ * one language's copy would reach the others. One language reads the row as
+ * it is, as a one-language read always has.
+ */
+function ownCopy<Row>(row: Row, languages: number): Row {
+  return languages > 1 ? structuredClone(row) : row;
 }

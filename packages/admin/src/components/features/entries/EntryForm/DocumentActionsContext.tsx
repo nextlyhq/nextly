@@ -19,6 +19,8 @@ import {
   createContext,
   useContext,
   useLayoutEffect,
+  useMemo,
+  useState,
   type JSX,
   type ReactNode,
   type RefObject,
@@ -27,31 +29,123 @@ import {
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 
 import { DocumentActionConfirmations } from "./DocumentActionConfirmations";
+import { hasPendingWorkingDraft } from "./EntryFormContext";
 import {
   EntryFormProvider,
   type EntryFormProviderProps,
 } from "./EntryFormProvider";
+import type { RecoveryPointState, StoredDocument } from "./SaveStateIndicator";
+import { useReportUnsavedWork } from "./UnsavedWorkContext";
 import {
   useDocumentActionBindings,
   type DocumentActionBindings,
   type DocumentActionBindingsInput,
+  type PendingRecovery,
 } from "./useDocumentActionBindings";
 
 const DocumentActionsContext = createContext<DocumentActionBindings | null>(
   null
 );
 
+/** No recovery point is recorded: a host that keeps none. */
+const NO_RECOVERY_POINT: RecoveryPointState = {
+  enabled: false,
+  storedAt: null,
+  pendingOfferAt: null,
+};
+
+/**
+ * The document's recovery point, beside its actions, so a surface that draws
+ * the save state without the header reads the same one the header's chip
+ * reads: a recovery point newer than the stored document keeps the work
+ * "unsaved" wherever the save state is shown.
+ */
+const RecoveryPointContext =
+  createContext<RecoveryPointState>(NO_RECOVERY_POINT);
+
+/**
+ * How the hosted document stands in storage, so a surface can report it saved
+ * from the moment it opens. Null for a new document, or one with no readable
+ * time.
+ */
+const StoredContext = createContext<StoredDocument | null>(null);
+
+/**
+ * How a document view hands its recovery offer up to the actions, and how its
+ * save chip says it is drawn. Save keeps the offer (see `pendingRecovery`)
+ * only while both hold: the offer is made below the host, in the view's body,
+ * and the actions are decided here, above it. A view with no save chip leaves
+ * the offer to its banner, and its Save waits for an edit.
+ */
+interface PendingRecoverySlot {
+  offer: (recovery: PendingRecovery | null) => void;
+  /** Marks a save chip as drawn; returns the release for when it goes. */
+  chipDrawn: () => () => void;
+}
+
+const PendingRecoveryContext = createContext<PendingRecoverySlot | null>(null);
+
+/**
+ * How a document as read stands in storage. A pending working draft is stored,
+ * but its row's `updatedAt` is the published version's (a draft save leaves it
+ * frozen), so its time is unknown rather than wrong.
+ */
+function storedStateOf(
+  entry: DocumentActionBindingsInput["entry"]
+): StoredDocument | null {
+  const updatedAt = entry?.updatedAt;
+  if (updatedAt === undefined) return null;
+  const time = Date.parse(updatedAt);
+  if (Number.isNaN(time)) return null;
+  return { at: hasPendingWorkingDraft(entry) ? null : new Date(time) };
+}
+
 export function DocumentActionsHost({
   input,
+  recovery = NO_RECOVERY_POINT,
   children,
 }: {
   input: DocumentActionBindingsInput;
+  /** The document's recovery point, for a save state drawn without the header. */
+  recovery?: RecoveryPointState;
   children: ReactNode;
 }): JSX.Element {
-  const documentActions = useDocumentActionBindings(input);
+  // Handed up by a document view's body, and kept by Save only while the
+  // view draws a save chip; see `PendingRecoverySlot`.
+  const [offered, setOffered] = useState<PendingRecovery | null>(null);
+  const [chips, setChips] = useState(0);
+  const slot = useMemo<PendingRecoverySlot>(
+    () => ({
+      offer: setOffered,
+      chipDrawn: () => {
+        setChips(count => count + 1);
+        return () => setChips(count => count - 1);
+      },
+    }),
+    []
+  );
+  const documentActions = useDocumentActionBindings({
+    ...input,
+    pendingRecovery: chips > 0 ? offered : null,
+  });
+  /*
+   * A write the document depends on, still on its way, is unsaved work: the
+   * page would be left with it unfinished. Reported here, where the writes
+   * are tracked for as long as the form lives, so the leave guard asks even
+   * after the surface that started one (the page builder) has closed.
+   */
+  useReportUnsavedWork("tracked-writes", documentActions.writesPending);
+  const { entry } = input;
+  const stored = useMemo(() => storedStateOf(entry), [entry]);
   return (
     <DocumentActionsContext.Provider value={documentActions}>
-      {children}
+      <RecoveryPointContext.Provider value={recovery}>
+        <StoredContext.Provider value={stored}>
+          <PendingRecoveryContext.Provider value={slot}>
+            {children}
+          </PendingRecoveryContext.Provider>
+        </StoredContext.Provider>
+      </RecoveryPointContext.Provider>
       <DocumentActionConfirmations
         confirmations={documentActions.confirmations}
         entry={input.entry}
@@ -59,6 +153,43 @@ export function DocumentActionsHost({
       />
     </DocumentActionsContext.Provider>
   );
+}
+
+/**
+ * Offers the actions a recovery point their Save can keep, for as long as the
+ * caller is mounted and passes one; see `PendingRecoverySlot`. For a document
+ * view's body. Nothing outside a host.
+ */
+export function useOfferPendingRecovery(
+  recovery: PendingRecovery | null
+): void {
+  const slot = useContext(PendingRecoveryContext);
+  // A layout effect, so Save is offered in the same paint as the chip.
+  useLayoutEffect(() => {
+    if (slot === null) return;
+    slot.offer(recovery);
+    return () => slot.offer(null);
+  }, [slot, recovery]);
+}
+
+/**
+ * Marks the document's save chip as drawn, for as long as the caller is
+ * mounted: the chip makes the recovery offer, so Save may keep it; see
+ * `PendingRecoverySlot`. Nothing outside a host.
+ */
+export function useSaveChipDrawn(): void {
+  const slot = useContext(PendingRecoveryContext);
+  useLayoutEffect(() => slot?.chipDrawn(), [slot]);
+}
+
+/** The document's recovery point, or none outside a host that records one. */
+export function useHostedRecoveryPoint(): RecoveryPointState {
+  return useContext(RecoveryPointContext);
+}
+
+/** How the hosted document stands in storage, or null outside a host. */
+export function useHostedStored(): StoredDocument | null {
+  return useContext(StoredContext);
 }
 
 /**
@@ -106,13 +237,14 @@ export function DocumentSaveShortcuts({
   hasUnsavedWork: boolean;
   isSubmitting: boolean;
 }): null {
-  const { run } = useHostedDocumentActions();
+  const { run, keepsOffer } = useHostedDocumentActions();
   useEntryFormShortcuts({
     onSave: () => {
       void run("save");
     },
     onCancel,
-    isDirty: hasUnsavedWork,
+    // Changes on offer that Save keeps are work to save, as the control says.
+    isDirty: hasUnsavedWork || keepsOffer,
     isSubmitting,
   });
   return null;

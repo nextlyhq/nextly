@@ -20,8 +20,9 @@ import {
   CollapsibleTrigger,
 } from "@nextlyhq/ui";
 import type { RepeaterFieldConfig, FieldConfig } from "nextly/config";
+import { declaresOwnId } from "nextly/field-catalog";
 import type { JSX } from "react";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   useFieldArray,
   useFormContext,
@@ -31,6 +32,7 @@ import {
 } from "react-hook-form";
 
 import { Plus, ChevronDown, ChevronRight } from "@admin/components/icons";
+import { freshId } from "@admin/lib/fresh-id";
 import { cn } from "@admin/lib/utils";
 
 import {
@@ -184,6 +186,62 @@ function RepeaterAddButton({
 }
 
 /**
+ * Where the field array keeps each row's render key. A dot splits a form
+ * path, so no field that works in a form can be named this, and the key can
+ * never hide an authored value. The row's own `id` is its saved identity,
+ * which the default key name, `id`, would hide.
+ */
+const RENDER_KEY = "nx.renderKey";
+
+/**
+ * A repeater's rows as a field array: their render keys, drag-and-drop, and
+ * adding a row, which carries its saved id from the start, so the server
+ * keeps it rather than matching the row against stored ones.
+ */
+function useRepeaterRows<TFieldValues extends FieldValues>(
+  control: Control<TFieldValues>,
+  name: FieldArrayPath<TFieldValues>,
+  fields: FieldConfig[]
+) {
+  const {
+    fields: items,
+    append,
+    remove,
+    move,
+  } = useFieldArray({
+    control,
+    name,
+    keyName: RENDER_KEY,
+  });
+
+  // The drag-and-drop list identifies rows by their render key, which every
+  // row has, where a row's saved id is absent until it is first saved.
+  const sortableItems = useMemo(
+    () => items.map(item => ({ id: item[RENDER_KEY] })),
+    [items]
+  );
+
+  const { sensors, handleDragEnd } = useSortableFieldArray(sortableItems, move);
+
+  // Rows whose schema declares its own `id` field hold the author's value
+  // there, so they are given none, as the server gives them none.
+  const ownId = useMemo(() => declaresOwnId(fields), [fields]);
+  const handleAdd = useCallback(() => {
+    const defaults = createDefaultFieldValues(fields);
+    append(
+      (ownId
+        ? defaults
+        : {
+            id: freshId("row"),
+            ...defaults,
+          }) as TFieldValues[FieldArrayPath<TFieldValues>][number]
+    );
+  }, [append, fields, ownId]);
+
+  return { items, remove, sortableItems, sensors, handleDragEnd, handleAdd };
+}
+
+/**
  * RepeaterInput provides a repeater field for managing lists of structured data.
  *
  * Features:
@@ -242,24 +300,8 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
     );
   }
 
-  const {
-    fields: items,
-    append,
-    remove,
-    move,
-  } = useFieldArray({
-    control,
-    name,
-  });
-
-  const { sensors, handleDragEnd } = useSortableFieldArray(items, move);
-
-  const handleAdd = useCallback(() => {
-    const defaultValues = createDefaultFieldValues(
-      field.fields as FieldConfig[]
-    );
-    append(defaultValues as TFieldValues[FieldArrayPath<TFieldValues>][number]);
-  }, [append, field.fields]);
+  const { items, remove, sortableItems, sensors, handleDragEnd, handleAdd } =
+    useRepeaterRows(control, name, field.fields as FieldConfig[]);
 
   const { canAdd, canRemove, isSortable } = getFieldArrayConstraints({
     count: items.length,
@@ -289,7 +331,7 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
         <CollapsibleContent>
           <CardContent className="p-3 space-y-3">
             <SortableFieldArrayContainer
-              items={items}
+              items={sortableItems}
               // The words each row's handle is named with.
               describeItem={(_, index) => `${singularLabel} ${index + 1}`}
               sensors={sensors}
@@ -300,8 +342,8 @@ export function RepeaterInput<TFieldValues extends FieldValues = FieldValues>({
             >
               {items.map((item, index) => (
                 <RepeaterRow
-                  key={item.id}
-                  id={item.id}
+                  key={item[RENDER_KEY]}
+                  id={item[RENDER_KEY]}
                   index={index}
                   field={field}
                   basePath={`${name}.${index}`}

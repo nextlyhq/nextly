@@ -25,6 +25,7 @@ import {
   availableDialects,
   createScratchDatabase,
 } from "../../__tests__/helpers/fresh-database";
+import { installRegistryResolver } from "../../cli/utils/registry-resolver";
 import { getDialectTables } from "../../database/index";
 import { loadDialectTables } from "../../database/dialect-tables";
 import { ensureFirstRunSetup, firstStartSchemaLock } from "../first-run";
@@ -55,6 +56,10 @@ async function connect(
         pool: { max: 2 },
       })) as unknown as DrizzleAdapter;
   await adapter.connect();
+  // What boot does before first-run setup: the schema lock seeds its row
+  // through an insert, which an adapter refuses for a table its resolver
+  // does not hold.
+  installRegistryResolver(adapter);
   return adapter;
 }
 

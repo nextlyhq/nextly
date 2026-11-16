@@ -10,7 +10,6 @@ import {
   Puzzle,
   Settings,
   Shield,
-  SlidersHorizontal,
   Users,
   Webhook,
   type LucideIcon,
@@ -31,8 +30,7 @@ import { ROUTES } from "./routes";
  * - `media`: Media Library (standalone, NIS)
  * - `plugins`: Plugin entries (dynamic — DynamicPluginNav)
  * - `settings`: Configuration pages (grouped sub-sections: system, email) plus
- *   User Management (Users, Roles, Custom Fields), which moved here from the
- *   former standalone Users section.
+ *   Users and Roles, which moved here from the former standalone Users section.
  * - `builder`: Developer tools (Collections, Singles, Field Groups) — untouched
  */
 export type NavigationCategory =
@@ -42,7 +40,6 @@ export type NavigationCategory =
   | "media"
   | "releases"
   | "translations"
-  | "email"
   | "plugins"
   | "settings"
   | "builder";
@@ -98,8 +95,8 @@ export type SidebarNavigation = NavigationItem[];
  * Items are grouped by category into sidebar sections:
  * - main: Dashboard (NIS)
  * - media: Media Library (NIS)
- * - settings: General, API Keys, Email Providers, Email Templates, plus User
- *   Management (Users, Roles, Custom Fields) (IS with sub-groups)
+ * - settings: General, API Keys, Webhooks, Email, plus Users and Roles (IS
+ *   with sub-groups)
  * - builder: Collections, Singles, Field Groups (IS)
  *
  * Dynamic items (collections, singles, plugins) are rendered by their
@@ -180,22 +177,13 @@ export const SIDEBAR_NAVIGATION: SidebarNavigation = [
   // No `requiredPermission`: the page lists only what the caller may already
   // read, and every row is filtered by the collection's own read rules. Gating
   // the entry on a permission that does not exist would hide it from everyone.
+  // The rail shows it only on a site with two or more locales
+  // (`isMultilingual`).
   {
     title: "Translations",
     href: ROUTES.TRANSLATIONS,
     icon: Languages,
     category: "translations",
-  },
-
-  // === EMAIL ===
-  // One hub for every email the site sends, how they look and how they're
-  // sent. Any grant that shows one of its tabs shows the entry.
-  {
-    title: "Email",
-    href: ROUTES.EMAIL,
-    icon: Mail,
-    category: "email",
-    requiredPermission: [...EMAIL_HUB_PERMISSIONS],
   },
 
   // === USERS (now filed under the settings section — no standalone Users icon) ===
@@ -212,13 +200,6 @@ export const SIDEBAR_NAVIGATION: SidebarNavigation = [
     icon: Shield,
     category: "settings",
     requiredPermission: "read-roles",
-  },
-  {
-    title: "Custom Fields",
-    href: ROUTES.USERS_FIELDS,
-    icon: SlidersHorizontal,
-    category: "settings",
-    requiredPermission: READ_SETTINGS,
   },
 
   // === SETTINGS (IS with sub-groups) ===
@@ -247,6 +228,17 @@ export const SIDEBAR_NAVIGATION: SidebarNavigation = [
     // Any webhook grant reveals the item and the list route accepts them all —
     // read/update view the list, create reaches the create form from there.
     requiredPermission: ["read-webhooks", "update-webhooks", "create-webhooks"],
+  },
+  // One hub for every email the site sends, how they look and how they're
+  // sent, filed under Settings. Any grant that shows one of its tabs shows
+  // the entry.
+  {
+    title: "Email",
+    href: ROUTES.EMAIL,
+    icon: Mail,
+    category: "settings",
+    subGroup: "email",
+    requiredPermission: [...EMAIL_HUB_PERMISSIONS],
   },
 
   // === BUILDER (IS) ===

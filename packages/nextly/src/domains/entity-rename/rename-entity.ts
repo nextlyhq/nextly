@@ -21,6 +21,8 @@ import { collectionTag, singleTag } from "../../revalidation/compute-tags";
 import type { CacheRevalidator } from "../../revalidation/types";
 import { writingPermissions } from "../../services/lib/permissions";
 import type { Logger } from "../../shared/types";
+import { clearRegistryRowCache } from "../dynamic-collections/services/collection-row-cache";
+import { countRegistryWriteOn } from "../schema/schema-version";
 import { withSchemaChangeExcluded } from "../schema/services/schema-change-exclusion";
 import type { WebhookEndpointRegistry } from "../webhooks/endpoint-registry";
 import {
@@ -34,6 +36,10 @@ import {
   slugKeyedTablesPresent,
   type EntitySlugMove,
 } from "./move-entity-slug";
+import {
+  moveRelationshipTargets,
+  refuseUnmovableTargets,
+} from "./relationship-targets";
 
 /**
  * Write the registry row with `writeRegistry` and move every declared table
@@ -49,6 +55,13 @@ import {
  * at once, before anything is read or written. It writes rows and no DDL, so
  * it creates no lock table where there is none.
  *
+ * The new slug is judged first inside that lock (`judgeTarget`), so a collection
+ * or Single created or renamed onto the same address while this rename waited
+ * is seen, and one that tries while it holds the lock is refused. Required, so
+ * no road renames without judging where it is going. The lock is released when
+ * the transaction ends, before the post-commit work below, which may wait on
+ * the cache.
+ *
  * The transaction runs inside the permissions gate, because it moves the
  * entity's permission rows: every cached answer about who may do what is
  * retired once it has finished, committed or not, as for any permission
@@ -63,10 +76,15 @@ export async function renameEntity<T>(
     dialect: SupportedDialect;
     move: EntitySlugMove;
     writeRegistry: (tx: TransactionContext) => Promise<T | null>;
+    /**
+     * Refuse the new slug (by throwing) when the address rule does: run inside
+     * the schema lock, before anything is read or written.
+     */
+    judgeTarget: () => Promise<void>;
     logger: Logger;
   }
 ): Promise<T | null> {
-  const { dialect, move, writeRegistry, logger } = input;
+  const { dialect, move, writeRegistry, judgeTarget, logger } = input;
   const written = await withSchemaChangeExcluded(
     {
       adapter,
@@ -75,13 +93,26 @@ export async function renameEntity<T>(
       issuesDdl: false,
     },
     async () => {
+      await judgeTarget();
       const present = await slugKeyedTablesPresent(adapter);
       return writingPermissions(getDialectTables(dialect).permissions, () =>
         adapter.transaction(async tx => {
-          await refuseManyToManyLinks(tx, move);
+          await refuseManyToManyLinks(tx, move, present);
+          // What the stored relationships point at, refused before anything is written.
+          await refuseUnmovableTargets(tx, move, present);
           const row = await writeRegistry(tx);
+          // Cleared as the row moves, so the reads below and any later in the
+          // transaction find the row under its new slug, not the old one read
+          // before it.
+          clearRegistryRowCache();
           if (row === null) return null;
+          // The stored schema version's count moves with the row, in this
+          // transaction (or the registry write it runs inside).
+          await countRegistryWriteOn(tx, dialect);
           await moveEntitySlug(tx, { dialect, present, move });
+          // Read after the registry row is written, so a collection relating to itself is
+          // pointed at its new slug too.
+          await moveRelationshipTargets(tx, move, present);
           return row;
         })
       );

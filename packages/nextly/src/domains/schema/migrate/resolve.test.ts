@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
 import { getCoreSchema } from "../../../schemas";
+import { migrationStanding } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 
@@ -15,6 +16,8 @@ import { resolveMigration } from "./resolve";
 const FULL = getCoreSchema("sqlite");
 const EMPTY: NextlySchemaSnapshot = { tables: [] };
 const ONE_TABLE: NextlySchemaSnapshot = { tables: FULL.tables.slice(0, 1) };
+/** The checksum of the file as it stands, as `fileChecksum` reads it. */
+const SUM = "a".repeat(64);
 
 function makeDeps(
   testDb: TestDb,
@@ -30,6 +33,7 @@ function makeDeps(
       loadTargetSnapshot: () => Promise.resolve(ONE_TABLE),
       introspectLive: () => Promise.resolve(ONE_TABLE),
       marksNoTransaction: () => Promise.resolve(false),
+      fileChecksum: () => Promise.resolve(SUM),
       ...over,
     },
   };
@@ -55,6 +59,8 @@ describe("resolveMigration", () => {
       expect(rows[0].status).toBe("applied");
       expect(rows[0].statementsExecuted).toBe(0);
       expect(rows[0].note).toBe("manual-resolve");
+      // The file's checksum, as a run records it, so a later edit is caught.
+      expect(rows[0].sha256).toBe(SUM);
     });
 
     it("refuses a plugin module, naming the recovery that records it", async () => {
@@ -82,6 +88,35 @@ describe("resolveMigration", () => {
       });
       const rows = await repo.findFileApplies("plugin:@acme/fx/001_init");
       expect(rows.map(row => row.status)).toEqual(["failed"]);
+    });
+
+    it("leaves a same-named plugin module ledger row untouched", async () => {
+      // An app migration and a plugin module can share a module name (e.g.
+      // `001_add_posts`). Resolving the app migration operates on its `.sql`
+      // key and leaves the qualified `plugin:<name>/<module>` row untouched.
+      const { repo, base } = makeDeps(testDb);
+      const pluginFile = "plugin:@acme/fx/001_add_posts";
+      const pluginEventId = await repo.insertEvent({
+        eventType: "file_apply",
+        status: "applied",
+        source: "cli-migrate",
+        filename: pluginFile,
+        startedAt: new Date(1),
+        endedAt: new Date(2),
+      });
+
+      const r = await resolveMigration({
+        mode: "applied",
+        filename: "001_add_posts.sql",
+        ...base,
+      });
+      expect(r.kind).toBe("applied");
+
+      const pluginRow = await repo.findById(pluginEventId);
+      expect(pluginRow?.status).toBe("applied");
+      expect(pluginRow?.supersededBy).toBeNull();
+      const appRows = await repo.findFileApplies("001_add_posts.sql");
+      expect(appRows).toHaveLength(1);
     });
 
     it("supersedes a prior failed row", async () => {
@@ -129,13 +164,14 @@ describe("resolveMigration", () => {
       }
     });
 
-    it("is idempotent when already applied (no new row)", async () => {
+    it("is idempotent when already applied with the file's checksum (no new row)", async () => {
       const { repo, base } = makeDeps(testDb);
       await repo.insertEvent({
         eventType: "file_apply",
         status: "applied",
         source: "cli-migrate",
         filename: "001_add_posts.sql",
+        sha256: SUM,
         startedAt: new Date(1),
       });
       const r = await resolveMigration({
@@ -144,7 +180,173 @@ describe("resolveMigration", () => {
         ...base,
       });
       expect(r.kind).toBe("noop");
-      expect(await repo.findFileApplies("001_add_posts.sql")).toHaveLength(1);
+      const rows = await repo.findFileApplies("001_add_posts.sql");
+      expect(rows.map(row => [row.sha256, row.note])).toEqual([[SUM, null]]);
+    });
+
+    it.each([
+      ["a changed file", "b".repeat(64)],
+      ["a row recorded without a checksum", null],
+    ] as const)(
+      "accepts %s already applied: its new checksum on the applied row, in place",
+      async (_name, recorded) => {
+        const { repo, base } = makeDeps(testDb);
+        const applied = await repo.insertEvent({
+          eventType: "file_apply",
+          status: "applied",
+          source: "cli-migrate",
+          filename: "001_add_posts.sql",
+          sha256: recorded,
+          startedAt: new Date(1),
+        });
+        const r = await resolveMigration({
+          mode: "applied",
+          filename: "001_add_posts.sql",
+          ...base,
+        });
+        expect(r).toEqual({
+          kind: "checksum-accepted",
+          eventId: applied,
+          previous: recorded,
+        });
+        // The same outcome row, now naming the file as it stands; no new
+        // record, so every build reads the migration as applied still.
+        const rows = await repo.findFileApplies("001_add_posts.sql");
+        expect(
+          rows.map(row => [row.id, row.status, row.sha256, row.note])
+        ).toEqual([
+          [
+            applied,
+            "applied",
+            SUM,
+            `checksum accepted (was ${recorded ?? "none"})`,
+          ],
+        ]);
+      }
+    );
+
+    // A marked old Schema Builder file accepted as it now stands: its
+    // checksum is recorded and its mark withdrawn in the same write, so the
+    // file and its rows are judged as any after it. Each control is the
+    // same call on a file no mark names, which leaves the marks alone.
+    it.each([
+      ["its content changed", "b".repeat(64)],
+      ["a snapshot placed beside it, its content unchanged", SUM],
+    ] as const)(
+      "withdraws the mark of an old Builder file accepted after %s",
+      async (_name, recorded) => {
+        const { repo, base } = makeDeps(testDb);
+        const file = "1730000000000_create_posts.sql";
+        await repo.insertEvent({
+          eventType: "file_apply",
+          status: "applied",
+          source: "cli-migrate",
+          filename: file,
+          sha256: recorded,
+          startedAt: new Date(1),
+        });
+        await repo.recordOldBuilderMark({
+          filename: file,
+          sha256: recorded,
+          source: "cli-migrate",
+        });
+        const r = await resolveMigration({
+          mode: "applied",
+          filename: file,
+          ...base,
+        });
+        expect(r.kind).toBe("checksum-accepted");
+        expect(
+          (await repo.findFileApplies(file)).map(row => row.sha256)
+        ).toEqual([SUM]);
+        expect((await repo.currentOldBuilderMarks()).get(file)).toMatchObject({
+          status: "superseded",
+        });
+      }
+    );
+
+    it("leaves the marks alone when the file accepted has none", async () => {
+      const { repo, base } = makeDeps(testDb);
+      await repo.insertEvent({
+        eventType: "file_apply",
+        status: "applied",
+        source: "cli-migrate",
+        filename: "001_add_posts.sql",
+        sha256: "b".repeat(64),
+        startedAt: new Date(1),
+      });
+      await resolveMigration({
+        mode: "applied",
+        filename: "001_add_posts.sql",
+        ...base,
+      });
+      expect((await repo.currentOldBuilderMarks()).size).toBe(0);
+    });
+
+    it("refuses to accept an edit the live schema does not stand at, changing nothing; --skip-verify accepts it", async () => {
+      const { repo, base } = makeDeps(testDb, {
+        introspectLive: () => Promise.resolve(EMPTY),
+      });
+      const old = "b".repeat(64);
+      await repo.insertEvent({
+        eventType: "file_apply",
+        status: "applied",
+        source: "cli-migrate",
+        filename: "001_add_posts.sql",
+        sha256: old,
+        startedAt: new Date(1),
+      });
+      await expect(
+        resolveMigration({
+          mode: "applied",
+          filename: "001_add_posts.sql",
+          ...base,
+        })
+      ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_RESOLVE_DRIFT" });
+      expect(
+        (await repo.findFileApplies("001_add_posts.sql")).map(r => r.sha256)
+      ).toEqual([old]);
+      expect(
+        await resolveMigration({
+          mode: "applied",
+          filename: "001_add_posts.sql",
+          skipVerify: true,
+          ...base,
+        })
+      ).toMatchObject({ kind: "checksum-accepted", previous: old });
+    });
+
+    it("refuses to accept a changed file while it has an unresolved attempt, changing nothing", async () => {
+      // A stopped down section is judged against the text the applied row's
+      // checksum names; accepting first would make it judge the new text.
+      const { repo, base } = makeDeps(testDb);
+      const old = "b".repeat(64);
+      await repo.insertEvent({
+        eventType: "file_apply",
+        status: "applied",
+        source: "cli-migrate",
+        filename: "001_add_posts.sql",
+        sha256: old,
+        startedAt: new Date(1),
+      });
+      await repo.insertEvent({
+        eventType: "file_rollback",
+        status: "in_progress",
+        source: "cli-migrate",
+        filename: "001_add_posts.sql",
+        startedAt: new Date(2),
+      });
+      await expect(
+        resolveMigration({
+          mode: "applied",
+          filename: "001_add_posts.sql",
+          ...base,
+        })
+      ).rejects.toMatchObject({
+        code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+      });
+      const rows = await repo.findFileApplies("001_add_posts.sql");
+      expect(rows.map(row => row.sha256)).toEqual([old]);
     });
 
     it("throws FILE_MISSING when the .sql is absent", async () => {
@@ -404,11 +606,18 @@ describe("resolveMigration", () => {
       });
       const stopsBeforeRetiring = {
         findFileApplies: (f: string) => repo.findFileApplies(f),
+        findFileRollbacks: (f: string) => repo.findFileRollbacks(f),
+        recordChecksum: (id: string, sha256: string, note: string) =>
+          repo.recordChecksum(id, sha256, note),
         insertEvent: (values: Record<string, unknown>) =>
           repo.insertEvent(values),
         markRolledBack: (id: string, input?: { note?: string | null }) =>
           repo.markRolledBack(id, input),
+        recordRemoval: (input: { filename: string; sha256: string | null }) =>
+          repo.recordRemoval(input),
+        listFileRemovals: () => repo.listFileRemovals(),
         supersede: () => Promise.reject(new Error("process stopped")),
+        currentOldBuilderMarks: () => repo.currentOldBuilderMarks(),
       };
       await expect(
         resolveMigration({
@@ -455,6 +664,219 @@ describe("resolveMigration", () => {
         resolveMigration({
           mode: "rolled-back",
           filename: "001_add_posts.sql",
+          ...base,
+        })
+      ).rejects.toMatchObject({
+        code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+      });
+    });
+  });
+
+  describe("a migration whose file is gone", () => {
+    const FILE = "002_newer.sql";
+    const absent = { fileExists: () => Promise.resolve(false) };
+    const applied = (repo: SchemaEventsRepository, at = 1) =>
+      repo.insertEvent({
+        eventType: "file_apply",
+        status: "applied",
+        source: "cli-migrate",
+        filename: FILE,
+        sha256: SUM,
+        startedAt: new Date(at),
+      });
+
+    it("refuses --rolled-back without --file-missing, naming the flag", async () => {
+      const { repo, base } = makeDeps(testDb, absent);
+      await applied(repo);
+      await expect(
+        resolveMigration({ mode: "rolled-back", filename: FILE, ...base })
+      ).rejects.toMatchObject({
+        code: "NEXTLY_MIGRATION_FILE_MISSING",
+        publicMessage: expect.stringContaining("--file-missing"),
+      });
+    });
+
+    it("records an applied migration rolled back with --file-missing", async () => {
+      const { repo, base } = makeDeps(testDb, absent);
+      await applied(repo);
+      const r = await resolveMigration({
+        mode: "rolled-back",
+        filename: FILE,
+        fileMissing: true,
+        ...base,
+      });
+      expect(r.kind).toBe("rolled-back");
+      const standing = migrationStanding(await repo.findFileApplies(FILE));
+      expect(standing.state).toBe("rolled_back");
+    });
+
+    it("records rolled back a migration a newer build tried and did not finish, resolving the attempt", async () => {
+      const { repo, base } = makeDeps(testDb, absent);
+      await repo.insertEvent({
+        eventType: "file_apply",
+        status: "failed",
+        source: "cli-migrate",
+        filename: FILE,
+        startedAt: new Date(1),
+      });
+      await resolveMigration({
+        mode: "rolled-back",
+        filename: FILE,
+        fileMissing: true,
+        ...base,
+      });
+      const standing = migrationStanding(await repo.findFileApplies(FILE));
+      expect(standing.state).toBe("rolled_back");
+      expect(standing.unresolvedAttempt).toBeUndefined();
+    });
+
+    it("retires an attempt newer than a rolled-back outcome with --file-missing", async () => {
+      const { repo, base } = makeDeps(testDb, absent);
+      await applied(repo);
+      await resolveMigration({
+        mode: "rolled-back",
+        filename: FILE,
+        fileMissing: true,
+        ...base,
+      });
+      await repo.insertEvent({
+        eventType: "file_apply",
+        status: "failed",
+        source: "cli-migrate",
+        filename: FILE,
+      });
+      expect(
+        migrationStanding(await repo.findFileApplies(FILE)).unresolvedAttempt
+      ).toBeDefined();
+
+      await resolveMigration({
+        mode: "rolled-back",
+        filename: FILE,
+        fileMissing: true,
+        ...base,
+      });
+      const standing = migrationStanding(await repo.findFileApplies(FILE));
+      expect(standing.state).toBe("rolled_back");
+      expect(standing.unresolvedAttempt).toBeUndefined();
+    });
+
+    it("refuses --file-missing while the file is in the folder", async () => {
+      const { repo, base } = makeDeps(testDb);
+      await applied(repo);
+      await expect(
+        resolveMigration({
+          mode: "rolled-back",
+          filename: FILE,
+          fileMissing: true,
+          ...base,
+        })
+      ).rejects.toMatchObject({
+        code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+      });
+    });
+
+    it("records an applied migration's removal with --removed, keeping it applied", async () => {
+      const { repo, base } = makeDeps(testDb, absent);
+      await applied(repo);
+      const r = await resolveMigration({
+        mode: "removed",
+        filename: FILE,
+        ...base,
+      });
+      expect(r.kind).toBe("removed");
+      expect(migrationStanding(await repo.findFileApplies(FILE)).state).toBe(
+        "applied"
+      );
+      expect(
+        (await repo.listFileRemovals()).map(row => [row.filename, row.sha256])
+      ).toEqual([[FILE, SUM]]);
+      // Recorded once: asked again, nothing more is written.
+      await expect(
+        resolveMigration({ mode: "removed", filename: FILE, ...base })
+      ).resolves.toMatchObject({ kind: "noop" });
+      expect(await repo.listFileRemovals()).toHaveLength(1);
+    });
+
+    it("refuses --removed while the file is in the folder, for a migration not applied, and over an unresolved attempt", async () => {
+      const present = makeDeps(testDb);
+      await applied(present.repo);
+      await expect(
+        resolveMigration({ mode: "removed", filename: FILE, ...present.base })
+      ).rejects.toMatchObject({
+        code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+      });
+
+      const { repo, base } = makeDeps(testDb, absent);
+      await expect(
+        resolveMigration({
+          mode: "removed",
+          filename: "003_never.sql",
+          ...base,
+        })
+      ).rejects.toMatchObject({
+        code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+      });
+
+      await repo.insertEvent({
+        eventType: "file_apply",
+        status: "failed",
+        source: "cli-migrate",
+        filename: FILE,
+        startedAt: new Date(5),
+      });
+      await expect(
+        resolveMigration({ mode: "removed", filename: FILE, ...base })
+      ).rejects.toMatchObject({
+        publicMessage: expect.stringContaining("--rolled-back"),
+      });
+    });
+
+    it("refuses --removed for an applied row with no recorded checksum, which a returning file could not be held to", async () => {
+      const { repo, base } = makeDeps(testDb, absent);
+      for (const sha256 of [null, "null"]) {
+        const file = `00${sha256 === null ? "4" : "5"}_legacy.sql`;
+        await repo.insertEvent({
+          eventType: "file_apply",
+          status: "applied",
+          source: "cli-migrate",
+          filename: file,
+          sha256,
+          startedAt: new Date(1),
+        });
+        await expect(
+          resolveMigration({ mode: "removed", filename: file, ...base })
+        ).rejects.toMatchObject({
+          code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+          publicMessage: expect.stringContaining("checksum"),
+        });
+      }
+      expect(await repo.listFileRemovals()).toEqual([]);
+    });
+
+    it("refuses --removed over a rollback attempt that did not finish", async () => {
+      const { repo, base } = makeDeps(testDb, absent);
+      await applied(repo);
+      await repo.insertEvent({
+        eventType: "file_rollback",
+        status: "failed",
+        source: "cli-migrate",
+        filename: FILE,
+        startedAt: new Date(5),
+      });
+      await expect(
+        resolveMigration({ mode: "removed", filename: FILE, ...base })
+      ).rejects.toMatchObject({
+        code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+      });
+      expect(await repo.listFileRemovals()).toEqual([]);
+    });
+
+    it("refuses --removed for a plugin module", async () => {
+      const { base } = makeDeps(testDb, absent);
+      await expect(
+        resolveMigration({
+          mode: "removed",
+          filename: "plugin:@acme/fx/001_init",
           ...base,
         })
       ).rejects.toMatchObject({
@@ -601,6 +1023,78 @@ describe("resolveMigration", () => {
       const row = await repo.findById(id);
       expect(row?.status).toBe("rolled_back");
       expect(row?.endedAt).not.toBeNull();
+    });
+
+    it.each(["in_progress", "failed"] as const)(
+      "clears a down section's attempt that %s, leaving the migration applied and resolved",
+      async status => {
+        // A stopped DOWN is a `file_rollback` row. Read from the `file_apply`
+        // rows alone, it is never found, and the refusal it causes can never
+        // be cleared; flipped to rolled_back it retires nothing, so the
+        // migration stays applied.
+        const { repo, base } = makeDeps(testDb);
+        const file = "001_add_posts.sql";
+        await repo.insertEvent({
+          eventType: "file_apply",
+          status: "applied",
+          source: "cli-migrate",
+          filename: file,
+          startedAt: new Date(1),
+        });
+        const down = await repo.insertEvent({
+          eventType: "file_rollback",
+          status,
+          source: "cli-migrate",
+          filename: file,
+          startedAt: new Date(2),
+        });
+        const r = await resolveMigration({
+          mode: "failed-cleanup",
+          filename: file,
+          ...base,
+        });
+        expect(r).toEqual({ kind: "failed-cleanup", updatedIds: [down] });
+        const rows = [
+          ...(await repo.findFileApplies(file)),
+          ...(await repo.findFileRollbacks(file)),
+        ];
+        expect(migrationStanding(rows)).toMatchObject({
+          state: "applied",
+          unresolvedAttempt: undefined,
+        });
+        expect(
+          await resolveMigration({
+            mode: "failed-cleanup",
+            filename: file,
+            ...base,
+          })
+        ).toMatchObject({ kind: "noop" });
+      }
+    );
+
+    it("leaves a plugin module's down-section rows to its history's rule", async () => {
+      const { repo, base } = makeDeps(testDb);
+      const file = "plugin:@acme/fx/001_init";
+      await repo.insertEvent({
+        eventType: "file_apply",
+        status: "applied",
+        source: "cli-migrate",
+        filename: file,
+        startedAt: new Date(1),
+      });
+      const down = await repo.insertEvent({
+        eventType: "file_rollback",
+        status: "failed",
+        source: "cli-migrate",
+        filename: file,
+        startedAt: new Date(2),
+      });
+      await expect(
+        resolveMigration({ mode: "failed-cleanup", filename: file, ...base })
+      ).rejects.toMatchObject({
+        code: "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+      });
+      expect((await repo.findById(down))?.status).toBe("failed");
     });
 
     it("is idempotent when already rolled_back", async () => {

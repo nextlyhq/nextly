@@ -67,18 +67,33 @@ describe("a field leaving translation, its drop held for last", () => {
     expect(plan.statements.some(archives)).toBe(false);
   });
 
-  it("drops the index, archives, copies again and drops the column, in that order", () => {
+  // On PostgreSQL the translations table is held against writes first, so nothing written after
+  // the final copy is dropped with the column.
+  it("locks the translations table, then drops the index, archives, copies again and drops the column, in that order", () => {
     const { leavingDrops } = buildCompanionTransitionStatements({
       ...change,
       holdLeavingDrops: true,
     });
     const at = (match: (s: string) => boolean) =>
       (leavingDrops ?? []).findIndex(match);
-    expect(at(s => dropsIndex(s, codeIndex))).toBe(0);
-    expect(at(archives)).toBe(1);
-    expect(at(copies)).toBe(2);
-    expect(at(s => dropsColumn(s, "code"))).toBe(3);
-    expect(leavingDrops).toHaveLength(4);
+    expect(leavingDrops?.[0]).toBe(
+      `LOCK TABLE "${companion}" IN SHARE ROW EXCLUSIVE MODE`
+    );
+    expect(at(s => dropsIndex(s, codeIndex))).toBe(1);
+    expect(at(archives)).toBe(2);
+    expect(at(copies)).toBe(3);
+    expect(at(s => dropsColumn(s, "code"))).toBe(4);
+    expect(leavingDrops).toHaveLength(5);
+  });
+
+  // MySQL commits each schema statement, so no transaction could hold such a lock to the drop.
+  it("takes no lock on MySQL", () => {
+    const { leavingDrops } = buildCompanionTransitionStatements({
+      ...change,
+      dialect: "mysql",
+      holdLeavingDrops: true,
+    });
+    expect(leavingDrops?.some(s => s.startsWith("LOCK"))).toBe(false);
   });
 
   it("drops a field removed outright with the other statements, as before", () => {

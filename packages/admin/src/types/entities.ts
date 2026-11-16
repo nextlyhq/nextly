@@ -177,6 +177,12 @@ export interface ApiCollection extends RemovedFromCodeMark {
   /** Display labels for singular/plural forms */
   labels?: CollectionLabels;
 
+  /**
+   * Whether the collection has the Draft / Published lifecycle: its entries
+   * carry a `status`, and its list offers the Draft filter.
+   */
+  status?: boolean;
+
   /** Admin UI configuration */
   admin?: {
     group?: string;
@@ -195,6 +201,12 @@ export interface ApiCollection extends RemovedFromCodeMark {
      * submissions do): no "New" is offered for it anywhere in the admin.
      */
     disableCreate?: boolean;
+    /**
+     * Whether this collection's documents are deleted through an action of
+     * their own, which a plugin draws: the admin offers no Delete of its own
+     * for them (not in the editor, on a list row or in the selection bar).
+     */
+    disableDelete?: boolean;
     /** Custom component configuration for plugin views */
     components?: {
       /** Custom view components */
@@ -483,4 +495,12 @@ export interface ApiFieldGroup {
 
   /** Number of fields in the Component */
   fieldCount?: number;
+
+  /**
+   * How many fields place this field group (a field group field naming it),
+   * across collections, Singles and other field groups: the count a delete of
+   * it would be refused over. `null` when the list could not read it, which
+   * is not the same as unused.
+   */
+  placedBy?: number | null;
 }

@@ -1,10 +1,10 @@
 /**
- * Unit tests for version_no conflict detection and the retry wrapper.
+ * Unit tests for version_no conflict detection and the adapter retry options.
  *
  * Concurrency itself can only be exercised on Postgres/MySQL (SQLite serializes
  * transactions), so these tests pin the pure logic: capture raises a distinct
- * VersionConflictError on a unique violation, the retry re-runs only on that
- * error, and the cause-chain walk finds a wrapped conflict.
+ * VersionConflictError on a unique violation, the retry options ask for a re-run
+ * only on that error, and the cause-chain walk finds a wrapped conflict.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -16,7 +16,7 @@ import {
   VersionConflictError,
   hasVersionConflict,
   isUniqueViolation,
-  withVersionConflictRetry,
+  versionConflictRetries,
 } from "../version-conflict";
 
 const ref = {
@@ -33,35 +33,25 @@ function uniqueViolation(): DbError {
   });
 }
 
-describe("withVersionConflictRetry", () => {
-  it("returns the result without retrying on success", async () => {
-    const fn = vi.fn().mockResolvedValue("ok");
-    await expect(withVersionConflictRetry(fn)).resolves.toBe("ok");
-    expect(fn).toHaveBeenCalledTimes(1);
+describe("versionConflictRetries", () => {
+  it("asks the adapter for up to three attempts, with no delay between them", () => {
+    const { retryCount, retryDelayMs } = versionConflictRetries();
+    expect(retryCount).toBe(2);
+    expect(retryDelayMs).toBe(0);
   });
 
-  it("retries a version conflict and succeeds on a later attempt", async () => {
-    const fn = vi
-      .fn()
-      .mockRejectedValueOnce(new VersionConflictError())
-      .mockResolvedValue("ok");
-    await expect(withVersionConflictRetry(fn)).resolves.toBe("ok");
-    expect(fn).toHaveBeenCalledTimes(2);
+  it("retries a version conflict, also one nested in the cause chain", () => {
+    const { retryWhen } = versionConflictRetries();
+    expect(retryWhen?.(new VersionConflictError())).toBe(true);
+    expect(
+      retryWhen?.(new Error("wrapped", { cause: new VersionConflictError() }))
+    ).toBe(true);
   });
 
-  it("gives up after the attempt budget and throws the last conflict", async () => {
-    const fn = vi.fn().mockRejectedValue(new VersionConflictError());
-    await expect(
-      withVersionConflictRetry(fn, { attempts: 3 })
-    ).rejects.toBeInstanceOf(VersionConflictError);
-    expect(fn).toHaveBeenCalledTimes(3);
-  });
-
-  it("propagates a non-conflict error immediately without retrying", async () => {
-    const boom = new Error("boom");
-    const fn = vi.fn().mockRejectedValue(boom);
-    await expect(withVersionConflictRetry(fn)).rejects.toBe(boom);
-    expect(fn).toHaveBeenCalledTimes(1);
+  it("does not retry any other error", () => {
+    const { retryWhen } = versionConflictRetries();
+    expect(retryWhen?.(new Error("boom"))).toBe(false);
+    expect(retryWhen?.(NextlyError.validation({ errors: [] }))).toBe(false);
   });
 });
 

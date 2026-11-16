@@ -34,6 +34,7 @@ import {
   readAccessCaller,
 } from "../../../auth/entity-read-access";
 import { NextlyError } from "../../../errors/nextly-error";
+import { rethrowIfRuleCouldNotRun } from "../../../errors/rule-could-not-run";
 import { getNextlyLogger } from "../../../observability/logger";
 import type { PluginDashboardSnapshot } from "../../../plugins/dashboard-declarations";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
@@ -47,6 +48,7 @@ import {
 import { isPermissionName } from "../declaration/permission-name";
 import { bindReadServices } from "../declaration/read-services";
 import type { WidgetDeclarationFault } from "../declaration/validate";
+import { processHeld } from "../process-held";
 import { validateWidgetQuery } from "../query";
 import { readableCollectionSlugs } from "../reader-content";
 import { getSource } from "../sources";
@@ -77,10 +79,30 @@ interface RegisteredAttentionItem {
   renames?: Readonly<Record<string, string>>;
 }
 
-let registered: readonly RegisteredAttentionItem[] = [];
+/** What startup kept of the plugins' items, shared by every copy of this module. */
+interface HeldAttentionItems {
+  items: readonly RegisteredAttentionItem[];
+  /** Items already warned about for naming a collection the site does not have. */
+  readonly warnedMissing: Set<string>;
+}
 
-/** Items already warned about for naming a collection the site does not have. */
-const warnedMissing = new Set<string>();
+/**
+ * The registered items, held for the process (`processHeld`) rather than in
+ * this module: Next.js and Turbopack can evaluate it in more than one server
+ * graph, and the copy boot registers through need not be the copy a request
+ * reads. The dashboard header's summary reads the digest through its own
+ * copy, and with module state found no plugin item there while the Needs
+ * your attention card, which reads through boot's, listed them.
+ */
+const held = processHeld(
+  "nextly.dashboard.attentionItems",
+  (): HeldAttentionItems => ({ items: [], warnedMissing: new Set<string>() }),
+  (value): value is HeldAttentionItems =>
+    typeof value === "object" &&
+    value !== null &&
+    Array.isArray((value as { items?: unknown }).items) &&
+    (value as { warnedMissing?: unknown }).warnedMissing instanceof Set
+);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -254,7 +276,7 @@ function slotFaults(
 export function registerAttentionItems(
   dashboards: readonly PluginDashboardSnapshot[]
 ): void {
-  registered = dashboards.flatMap(({ owner, attention, collections }) =>
+  held.items = dashboards.flatMap(({ owner, attention, collections }) =>
     Array.isArray(attention)
       ? (attention as AttentionItem[]).map(item => ({
           owner,
@@ -274,8 +296,8 @@ export function registerAttentionItems(
 
 /** Forget every plugin's items, with the rest of the registries on a reset. */
 export function clearAttentionItems(): void {
-  registered = [];
-  warnedMissing.clear();
+  held.items = [];
+  held.warnedMissing.clear();
 }
 
 /**
@@ -288,8 +310,8 @@ function collectionsExist(entry: RegisteredAttentionItem): boolean {
   );
   if (missing.length === 0) return true;
   const key = `${entry.owner}\u0000${entry.item.id}`;
-  if (!warnedMissing.has(key)) {
-    warnedMissing.add(key);
+  if (!held.warnedMissing.has(key)) {
+    held.warnedMissing.add(key);
     getNextlyLogger().warn({
       kind: "attention-item-collection-missing",
       owner: entry.owner,
@@ -378,19 +400,24 @@ export function pluginItemReaders(
   caller: ReadCaller,
   now: Date
 ): DigestReader[] {
-  if (registered.length === 0) return [];
+  if (held.items.length === 0) return [];
   let readableOnce: Promise<ReadonlySet<string>> | undefined;
   // Read once for every item. A read that fails denies, as a permission check
-  // that fails does: no item is shown on an unknown answer.
+  // that fails does: no item is shown on an unknown answer. A rule that could
+  // not run never answered, so the kept read rejects with that rather than
+  // holding an empty set, and every item asking it ends the request with it.
   const readable = () =>
     (readableOnce ??= readableCollectionSlugs(caller).then(
       slugs => new Set(slugs),
-      () => new Set<string>()
+      (error: unknown) => {
+        rethrowIfRuleCouldNotRun(error);
+        return new Set<string>();
+      }
     ));
   // One scope per answer, each plugin with its own keys, so two items of one
   // plugin can share a scan and no plugin reads another's.
   const scopes = createBatchScope();
-  return registered.map(entry => ({
+  return held.items.map(entry => ({
     id: entry.item.id,
     kind: "plugin" as const,
     label: entry.item.label,

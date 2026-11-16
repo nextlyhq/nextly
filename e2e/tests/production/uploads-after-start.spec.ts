@@ -1,6 +1,7 @@
 import { expect } from "@playwright/test";
 
 import { test } from "../support/visible";
+import { signIn } from "../support/production-sign-in";
 
 import { dropFiles, pngBuffer } from "../support/media-files";
 
@@ -21,21 +22,12 @@ import { dropFiles, pngBuffer } from "../support/media-files";
  * @module tests/production/uploads-after-start
  */
 
-const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
-
 test("an image uploaded after the server started is served at its URL straight away", async ({
   page,
   request,
 }) => {
-  // Signed in through the real form: dev auto-login is blocked here.
-  await page.goto("/admin");
-  await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
-  // By role, because a label match also finds the "Show password" toggle.
-  await page
-    .getByRole("textbox", { name: /password/i })
-    .fill(DEV_USER.password);
-  await page.getByRole("button", { name: /sign in|log in/i }).click();
-  await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
+  // Signed in as the file's one sign-in: dev auto-login is blocked here.
+  await signIn(page);
 
   await page.goto("/admin/media");
   // The upload's own answer carries the URL the file was given, so the

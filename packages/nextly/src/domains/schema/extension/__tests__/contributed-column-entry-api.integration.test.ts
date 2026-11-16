@@ -136,7 +136,11 @@ function expectNoContributedColumn(entry: unknown): void {
 async function expectSingleColumnHidden(handle: TestNextly): Promise<void> {
   await handle.nextly.updateSingle({
     slug: "site",
-    data: { tagline: "first", searchVector: "from-first-write" },
+    data: {
+      tagline: "first",
+      searchVector: "from-first-write",
+      _overwrite: true,
+    },
     overrideAccess: true,
   });
   // The column exists physically: the runtime table names it, so this read
@@ -147,7 +151,12 @@ async function expectSingleColumnHidden(handle: TestNextly): Promise<void> {
 
   const updated = await handle.nextly.updateSingle({
     slug: "site",
-    data: { tagline: "second", searchVector: "a", search_vector: "b" },
+    data: {
+      tagline: "second",
+      searchVector: "a",
+      search_vector: "b",
+      _overwrite: true,
+    },
     overrideAccess: true,
   });
   expect((updated.item as { tagline?: unknown }).tagline).toBe("second");
@@ -215,7 +224,11 @@ describe.each(getConfiguredTestDialects())(
         const updated = await handle.nextly.update({
           collection: "posts",
           id,
-          data: { title: "second", search_vector: "from-update" },
+          data: {
+            title: "second",
+            search_vector: "from-update",
+            _overwrite: true,
+          },
           overrideAccess: true,
         });
         expect((updated.item as { title?: unknown }).title).toBe("second");
@@ -254,7 +267,11 @@ describe.each(getConfiguredTestDialects())(
         const updated = await handle.nextly.update({
           collection: "posts",
           id,
-          data: { title: "second", searchVector: "overwritten" },
+          data: {
+            title: "second",
+            searchVector: "overwritten",
+            _overwrite: true,
+          },
           overrideAccess: true,
         });
         expect((updated.item as { title?: unknown }).title).toBe("second");
@@ -654,7 +671,7 @@ describe("a column a schema hook contributed to a table an earlier boot made wit
       await current.nextly.update({
         collection: "posts",
         id,
-        data: { title: "second" },
+        data: { title: "second", _overwrite: true },
         overrideAccess: true,
       });
       expect(await seconds()).toBeGreaterThan(Date.now() / 1000 - 60);

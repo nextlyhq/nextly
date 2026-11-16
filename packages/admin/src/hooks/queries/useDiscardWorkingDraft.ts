@@ -17,10 +17,15 @@
 import {
   useMutation,
   useQueryClient,
+  type QueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
+import {
+  DISCARD_CHANGED_SINCE,
+  staleVersionOf,
+} from "@admin/lib/document-version";
 import { entryKeys } from "@admin/services/entryApi";
 import {
   versionApi,
@@ -62,20 +67,22 @@ export function useDiscardWorkingDraft({
 }: UseDiscardWorkingDraftOptions): UseMutationResult<
   DiscardWorkingDraftResponse,
   Error,
-  void,
+  string | void,
   unknown
 > {
   const queryClient = useQueryClient();
 
-  return useMutation<DiscardWorkingDraftResponse, Error, void>({
-    mutationFn: () =>
+  return useMutation<DiscardWorkingDraftResponse, Error, string | void>({
+    // Called with the version the editor's copy started from.
+    mutationFn: version =>
       versionApi.discardWorkingDraft(
         {
           kind: "collection",
           slug: collectionSlug,
           entryId,
         },
-        locale
+        locale,
+        version || undefined
       ),
 
     onSuccess: data => {
@@ -124,17 +131,41 @@ export function useDiscardWorkingDraft({
     },
 
     onError: (error: Error) => {
-      refreshRemovedFromCodeSchema(queryClient, error);
-      if (showToast) {
-        // The refusal for an entity removed from code is a whole sentence of
-        // its own, so nothing goes in front of it.
-        toast.error(
-          removedFromCodeRefusal(error) ??
-            `Failed to discard working draft: ${error.message}`
-        );
-      }
+      tellDiscardRefused(
+        queryClient,
+        error,
+        entryKeys.detail(collectionSlug, entryId),
+        showToast
+      );
 
       onError?.(error);
     },
   });
+}
+
+/**
+ * A discard's refusal, told: the schema read again where the document's
+ * collection or Single was removed from code, and the document read again
+ * where it changed since the editor's copy, so a second discard starts from
+ * the version on screen. `detail` is the document's detail key.
+ */
+export function tellDiscardRefused(
+  queryClient: QueryClient,
+  error: Error,
+  detail: readonly unknown[],
+  showToast: boolean
+): void {
+  refreshRemovedFromCodeSchema(queryClient, error);
+  const stale = staleVersionOf(error) !== undefined;
+  if (stale) void queryClient.invalidateQueries({ queryKey: detail });
+  if (showToast) {
+    // The refusal for an entity removed from code is a whole sentence of its
+    // own, so nothing goes in front of it.
+    toast.error(
+      removedFromCodeRefusal(error) ??
+        (stale
+          ? DISCARD_CHANGED_SINCE
+          : `Failed to discard working draft: ${error.message}`)
+    );
+  }
 }

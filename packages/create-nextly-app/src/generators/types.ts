@@ -3,6 +3,10 @@ import path from "path";
 import type { ProjectInfo } from "../types";
 
 import type { GeneratedFiles } from "./generated-files";
+import {
+  ADMIN_COMPONENT_MAP_FILES,
+  type MediaRouteTemplates,
+} from "./media-routes";
 import { nothingYet, writeNew } from "./write-new";
 
 /**
@@ -16,6 +20,15 @@ export function typesOutputFile(projectInfo: ProjectInfo): string {
 }
 
 /**
+ * The folder the generated files go in, relative to the project root, as
+ * {@link typesOutputFile} names it: the admin layout and page import the
+ * component map from here.
+ */
+export function typesOutputFolder(projectInfo: ProjectInfo): string {
+  return path.posix.dirname(path.posix.normalize(typesOutputFile(projectInfo)));
+}
+
+/**
  * Create the types directory structure for generated TypeScript types.
  * This mirrors what `nextly init` does - creates the directory and a placeholder file.
  * The actual types are generated when running `next dev` (which boots Nextly
@@ -23,11 +36,12 @@ export function typesOutputFile(projectInfo: ProjectInfo): string {
  */
 export async function generateTypesDirectory(
   cwd: string,
-  projectInfo: ProjectInfo
+  projectInfo: ProjectInfo,
+  templates: MediaRouteTemplates
 ): Promise<GeneratedFiles> {
   const files = nothingYet();
   const typesFile = path.posix.normalize(typesOutputFile(projectInfo));
-  const typesDir = path.posix.dirname(typesFile);
+  const typesDir = typesOutputFolder(projectInfo);
   // A .gitkeep so the directory is tracked, and a placeholder until the first
   // `next dev` or `nextly generate:types` writes the real types. Either one
   // already there is kept.
@@ -50,5 +64,25 @@ export {};
   await writeNew(cwd, typesFile, placeholderContent, files, {
     why: "it is already there; Nextly writes the types into it when they are generated",
   });
+  // The admin component map, empty, as the base template commits it: the admin
+  // layout and page import it, so without it the admin does not build, and
+  // `next dev` rewrites it as plugins are added.
+  for (const file of ADMIN_COMPONENT_MAP_FILES) {
+    const text = templates.get(file);
+    if (text === undefined) {
+      throw new Error(
+        `The templates read for this app hold no ${file}, so Nextly's admin component map cannot be written.`
+      );
+    }
+    await writeNew(
+      cwd,
+      `${typesDir}/${path.posix.basename(file)}`,
+      text,
+      files,
+      {
+        why: "it is already there; `next dev` and `nextly generate:types` keep it current",
+      }
+    );
+  }
   return files;
 }

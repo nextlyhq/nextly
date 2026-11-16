@@ -16,6 +16,9 @@
  */
 
 import { randomBytes } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { CollectionConfig } from "../collections/config/define-collection";
 import { createAdapter } from "../database/factory";
@@ -35,8 +38,12 @@ import { requireNextly, resetNextlyInstance } from "../direct-api/nextly";
 import type { Nextly } from "../direct-api/nextly";
 import { resetEmailProviderRegistry } from "../domains/email/services/email-provider-registry";
 import { normalizeLocalization } from "../domains/i18n/config/normalize";
-import type { LocalizationConfig } from "../domains/i18n/config/types";
+import type {
+  LanguageAddressRule,
+  LocalizationConfig,
+} from "../domains/i18n/config/types";
 import { clearActiveExtensionSchema } from "../domains/schema/extension/active-schema";
+import type { SchemaHook } from "../domains/schema/extension/draft";
 import { clearFieldTypes } from "../domains/schema/field-types/field-type-registry";
 import {
   refreshEndpointPresence,
@@ -56,6 +63,7 @@ import {
   clearLiveSnapshots,
 } from "../init/schema-snapshot-cache";
 import { seedPermissionsAndRolePresets } from "../init/seed-permissions";
+import { companionReadinessWarmedForTests } from "../init/warm-companion-readiness";
 import { resetDispatcherForTests } from "../route-handler/auth-handler";
 import type { Logger } from "../services/shared";
 import { _resetEnvCache } from "../shared/lib/env";
@@ -274,6 +282,12 @@ export interface CreateTestNextlyOptions {
    * variable for `dialect`. The database named in it is only used to connect.
    */
   serverUrl?: string;
+  /**
+   * The PostgreSQL schema the installation lives in, as `db.postgres.schema`
+   * gives it: the provisioned adapter is built on it and the config names it.
+   * Only meaningful with `dialect: "postgresql"`.
+   */
+  postgresSchema?: string;
   /** Plugins to boot (their full lifecycle runs). */
   plugins?: PluginDefinition[];
   /**
@@ -299,6 +313,28 @@ export interface CreateTestNextlyOptions {
   fieldGroups?: FieldGroupConfig[];
   /** Content-localization config (i18n). Normalized and wired so localized reads resolve. */
   localization?: LocalizationConfig;
+  /** How each language's public address is formed, as an app declares it. */
+  languageAddresses?: LanguageAddressRule;
+  /**
+   * The config's `db` block, for a test of where the Schema Builder's
+   * definition file and migrations go: both paths resolve below `basePath`.
+   * Absent, the defaults (`./ui-schema.json`, `./migrations`).
+   */
+  db?: {
+    migrationsDir: string;
+    uiSchemaFile: string;
+    /** Apply pending migrations at a production start, as `db.runMigrationsOnBoot` does. */
+    runMigrationsOnBoot?: boolean;
+    /** The app's schema hooks, as `db.schema.extend` declares them. */
+    schema?: { extend?: SchemaHook[] };
+  };
+  /**
+   * Keep every translatable field per language from the start, as a config's
+   * `experimental.perLanguageStorage` does. Off by default.
+   *
+   * @experimental
+   */
+  perLanguageStorage?: boolean;
   /** Override the adapter (defaults to a fresh in-memory SQLite adapter). */
   adapter?: TestAdapter;
   /** Override the logger (defaults to a near-silent test logger). */
@@ -317,6 +353,15 @@ export interface CreateTestNextlyOptions {
    * own roles meets no preset of the same slug.
    */
   seedPublic?: boolean;
+  /**
+   * The directory the instance writes generated files under, as
+   * `registerServices` takes it: the Builder's migrations go to
+   * `src/db/migrations/dynamic` below it. Used as given and left in place.
+   *
+   * Absent, the instance gets a new temporary directory of its own, removed
+   * by `destroy()`, so a test run writes nothing into the working directory.
+   */
+  basePath?: string;
 }
 
 export interface TestNextly {
@@ -338,6 +383,12 @@ export interface TestNextly {
   events: EventBus;
   /** The underlying adapter (raw DB inspection). */
   adapter: TestAdapter;
+  /**
+   * The directory this instance writes generated files under: the
+   * `basePath` option when one was given, otherwise the temporary directory
+   * made for it, which `destroy()` removes.
+   */
+  readonly basePath: string;
   /** Tear down: run plugin destroy (T9), disconnect, reset all singletons. */
   destroy(): Promise<void>;
 }
@@ -426,9 +477,46 @@ function secretForCallerAdapter(
  *
  * `provisioned` is set for a server-backed boot (its `release` restores the
  * environment itself); `restoreEnv` is set for a SQLite boot, which changes
- * the environment but provisions nothing.
+ * the environment but provisions nothing. `scratchDir` is the temporary
+ * directory made for an instance given no `basePath`.
  */
-let active: { provisioned?: ProvisionedDatabase; restoreEnv?: () => void } = {};
+let active: {
+  provisioned?: ProvisionedDatabase;
+  restoreEnv?: () => void;
+  scratchDir?: string;
+} = {};
+
+/**
+ * A temporary directory for an instance's generated files.
+ *
+ * `registerServices` falls back to `process.cwd()` for them, which under a
+ * test runner is the package being tested: a Builder save would write its
+ * migration into that package's `src/db/migrations/dynamic` and leave it
+ * there, and a later boot in that package reads the folder as the app's own.
+ */
+function makeScratchDir(): Promise<string> {
+  return mkdtemp(join(tmpdir(), "nextly-test-"));
+}
+
+/**
+ * Where an instance writes its generated files: the caller's directory as
+ * given, or a temporary one the instance owns (`scratchDir`) and removes.
+ */
+interface InstanceDirs {
+  basePath: string;
+  scratchDir?: string;
+}
+
+async function instanceDirs(given: string | undefined): Promise<InstanceDirs> {
+  if (given !== undefined) return { basePath: given };
+  const scratchDir = await makeScratchDir();
+  return { basePath: scratchDir, scratchDir };
+}
+
+/** Remove an instance's temporary directory; gone already counts as removed. */
+function removeScratchDir(dir: string | undefined): Promise<void> {
+  return dir ? rm(dir, { recursive: true, force: true }) : Promise.resolve();
+}
 
 /**
  * Finish the work an instance started and did not await.
@@ -477,6 +565,8 @@ async function releaseActiveDatabase(): Promise<(() => void) | undefined> {
   const previous = active;
   active = {};
   await previous.provisioned?.release().catch(() => {});
+  // The temporary directory goes with the database, on the same terms.
+  await removeScratchDir(previous.scratchDir).catch(() => {});
   return previous.restoreEnv;
 }
 
@@ -492,7 +582,8 @@ async function releaseActiveDatabase(): Promise<(() => void) | undefined> {
  */
 async function provisionDatabase(
   dialect: ProvisionableDialect,
-  serverUrl: string
+  serverUrl: string,
+  postgresSchema?: string
 ): Promise<ProvisionedDatabase> {
   // Random, not derived from the process id: containers routinely run node as
   // PID 1, so two runners sharing one server would pick the same name and
@@ -528,6 +619,7 @@ async function provisionDatabase(
     const adapter = await createAdapter({
       type: dialect,
       url: databaseUrl.toString(),
+      ...(postgresSchema === undefined ? {} : { schema: postgresSchema }),
     });
 
     // A handle destroyed twice — an explicit cleanup plus an `afterEach` — must
@@ -688,7 +780,8 @@ export async function createTestNextly(
     try {
       provisioned = await provisionDatabase(
         opts.dialect,
-        resolveServerUrl(opts.dialect, opts.serverUrl)
+        resolveServerUrl(opts.dialect, opts.serverUrl),
+        opts.postgresSchema
       );
     } catch (error) {
       // `provisionDatabase` restores its own snapshot; this is the abandoned
@@ -706,7 +799,24 @@ export async function createTestNextly(
   active = { provisioned, restoreEnv };
 
   try {
-    return await bootServices(adapter, logger, opts, provisioned, restoreEnv);
+    // Made inside the try, and recorded on `active` before the boot uses it,
+    // so a boot that fails removes it with the database below.
+    const dirs = await instanceDirs(opts.basePath);
+    active.scratchDir = dirs.scratchDir;
+    const booted = await bootServices(
+      adapter,
+      logger,
+      opts,
+      provisioned,
+      restoreEnv,
+      dirs
+    );
+    // The boot resolves each translation table in the background once it has taken its turn
+    // (`init/warm-companion-readiness`). Settled before the instance is handed over, so a test
+    // that counts or watches what follows the boot meets none of that warm-up's reads among its
+    // own, landing there or not by the machine's timing.
+    await companionReadinessWarmedForTests();
+    return booted;
   } catch (error) {
     // Two different failures reach here, and each needs a different half.
     //
@@ -785,13 +895,17 @@ async function bootServices(
   logger: Logger,
   opts: CreateTestNextlyOptions,
   provisioned: ProvisionedDatabase | undefined,
-  restoreEnv: (() => void) | undefined
+  restoreEnv: (() => void) | undefined,
+  dirs: InstanceDirs
 ): Promise<TestNextly> {
   // A consent refusal names the `pluginConsent` option to pass rather than
   // the `nextly.config.ts` line a test has no file to write.
   try {
     await registerServices({
       adapter,
+      // Every generated-file path (migrations, schemas) is derived from this;
+      // left out, it would be the working directory.
+      basePath: dirs.basePath,
       imageProcessor: getImageProcessor(),
       logger,
       // Wire the (freshly reset) global hook registry into the collection
@@ -809,9 +923,24 @@ async function bootServices(
         : {}),
       singles: opts.singles,
       fieldGroups: opts.fieldGroups,
+      ...(opts.db === undefined && opts.postgresSchema === undefined
+        ? {}
+        : {
+            db: {
+              migrationsDir: "./migrations",
+              uiSchemaFile: "./ui-schema.json",
+              ...opts.db,
+              ...(opts.postgresSchema === undefined
+                ? {}
+                : { postgres: { schema: opts.postgresSchema } }),
+            },
+          }),
       localization: opts.localization
         ? normalizeLocalization(opts.localization)
         : undefined,
+      ...(opts.languageAddresses === undefined
+        ? {}
+        : { languageAddresses: opts.languageAddresses }),
       security: opts.security,
       passwordHasher: opts.passwordHasher,
       // Record every event by default so machinery tests are independent of
@@ -819,6 +948,7 @@ async function bootServices(
       // off. Passed through the config (not set after) so it is published before
       // plugin init() runs, and boot-time plugin events are recorded too.
       webhookAuditEnabled: true,
+      perLanguageStorage: opts.perLanguageStorage === true,
     });
   } catch (error) {
     throw namingTestConsentOption(error, opts.pluginConsent);
@@ -858,6 +988,7 @@ async function bootServices(
     hooks: getHookRegistry(),
     events: getEventBus(),
     adapter,
+    basePath: dirs.basePath,
     async destroy() {
       // Everything the instance started but did not await has to finish while
       // the connection is still open.
@@ -894,6 +1025,9 @@ async function bootServices(
       if (!opts.adapter) await adapter.disconnect().catch(() => {});
       await provisioned?.release();
       restoreEnv?.();
+      // Last, after nothing can write to it any more. A removal that throws
+      // leaves `active` set, so the next boot's recovery tries it again.
+      await removeScratchDir(dirs.scratchDir);
       active = {};
     },
   };

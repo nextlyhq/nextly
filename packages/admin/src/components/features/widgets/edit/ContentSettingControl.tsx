@@ -347,7 +347,7 @@ function FilterControl({
         />
       )}
       {fieldState.error?.message === undefined ? null : (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" className="text-sm text-danger-text">
           {fieldState.error.message}
         </p>
       )}

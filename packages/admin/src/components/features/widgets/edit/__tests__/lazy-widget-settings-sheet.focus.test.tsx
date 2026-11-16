@@ -102,7 +102,7 @@ describe("the panel's code arriving while its stand-in is open", () => {
     render(<Opened />);
     // The stand-in, while the code is held back, with focus in it.
     const standIn = await screen.findByRole("dialog", {
-      name: /Note settings/,
+      name: "Note",
     });
     await waitFor(() =>
       expect(standIn).toContainElement(document.activeElement as HTMLElement)

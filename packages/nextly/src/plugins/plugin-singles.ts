@@ -155,21 +155,11 @@ export interface PluginSingleRecord {
 /*
  * `createdAt` and `updatedAt` are deliberately ABSENT.
  *
- * The registry stores them by passing the driver's value through
- * `normalizeDbTimestamp`, whose own contract says it "assumes every `Date` is
- * naive and always un-offsets" and points at `dbTimestampToInstant` as the
- * dialect-aware alternative that is "safe for SQLite". SQLite's columns are
- * epoch-backed, so its driver already builds the correct instant and
- * un-offsetting it a second time shifts it by the server's timezone.
- *
- * Publishing them here would republish that as plugin API, correct on two
- * dialects of three and silently wrong on the third — and wrong only on a
- * non-UTC server, so it would read as correct wherever it was checked.
- * Recovering the instant needs the dialect, which belongs with the registry
- * that already knows it rather than being plumbed to a caller that does not.
- *
- * Nothing this surface exists for reads them. A member omitted can be added
- * once the registry can answer correctly; one published cannot be withdrawn.
+ * The registry hands them over as ISO strings cast to `Date` (above), so a
+ * caller calling a date method on one throws. Publishing them would make that
+ * cast plugin API, and nothing this surface exists for reads them. A member
+ * omitted can be added once the registry answers a real `Date`; one published
+ * cannot be withdrawn.
  */
 
 /** What a plugin gets back from listing Singles. */
@@ -260,7 +250,14 @@ function toSerializedField(
   return serialized;
 }
 
-function toPluginRecord(record: DynamicSingleRecord): PluginSingleRecord {
+/**
+ * One registry row as this listing describes it. Exported for a reader that
+ * takes the rows from the registry itself, so a Single it names is described
+ * exactly as the listing describes it.
+ */
+export function toPluginSingleRecord(
+  record: DynamicSingleRecord
+): PluginSingleRecord {
   return {
     id: record.id,
     slug: record.slug,
@@ -280,7 +277,10 @@ export function wrapSinglesForPlugin(
   return {
     list: async options => {
       const result = await registry.listSingles(options);
-      return { data: result.data.map(toPluginRecord), total: result.total };
+      return {
+        data: result.data.map(toPluginSingleRecord),
+        total: result.total,
+      };
     },
   };
 }

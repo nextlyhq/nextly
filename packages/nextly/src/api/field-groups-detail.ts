@@ -157,8 +157,11 @@ export const PATCH = withErrorHandler(
     }
 
     if (body.fields !== undefined) {
-      // Same rules as the ui-schema.json mirror (see api/fields-payload).
-      assertValidFieldsPayload(body.fields);
+      // Same rules as the ui-schema.json mirror (see api/fields-payload). A field name the field
+      // group already holds keeps working whatever its case; one this save creates is the
+      // Builder's own.
+      const stored = await (await getComponentRegistry()).getComponent(slug);
+      assertValidFieldsPayload(body.fields, { stored: stored?.fields ?? [] });
     }
 
     // 🔴 Through the metadata service, not the registry. Writing the registry directly is what made

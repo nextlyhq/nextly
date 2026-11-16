@@ -17,11 +17,10 @@
  *
  * ## Modes are in the model from the start
  *
- * Not because dark mode is being built here, but because retrofitting a second
- * value onto a one-value token is a data migration, and adding it now costs one
- * optional field. What activates a mode is the HOST's decision — it owns the
- * document, and it may already have a theme toggle — so this emits the values
- * under a strategy and takes no position on who flips it.
+ * A token may carry a dark value beside its light one. The emitted sheet
+ * applies dark values when the visitor's device prefers dark, and a host can
+ * override that either way with the `data-nx-theme` marker, so a site works
+ * with no setup and a host with its own theme toggle keeps control.
  *
  * ## Identity is `id` when there is one, and the name otherwise
  *
@@ -77,13 +76,14 @@ export type TokenMode = "light" | "dark";
 export const TOKEN_MODES: readonly TokenMode[] = ["light", "dark"];
 
 /**
- * How a dark-mode token block is made to apply.
+ * How a dark-mode token block was once chosen to apply.
  *
- * `attribute` is the default because it is the only one the site can control:
- * a host with a theme toggle sets `data-nx-theme="dark"` and the values follow.
- * `media` follows the operating system instead, which is right for a site with
- * no toggle and wrong for one that has it — hence a choice rather than a
- * constant.
+ * @deprecated Dark values are now always written twice: under
+ * `@media (prefers-color-scheme:dark)`, so a visitor's device decides with no
+ * setup, and under `[data-nx-theme="dark"]`, so a host's own switch still
+ * works. The `data-nx-theme="light"` marker pins light on a dark device. A
+ * stored strategy is still accepted, so existing records stay valid, and it no
+ * longer changes the emitted sheet.
  */
 export type DarkModeStrategy = "attribute" | "media";
 
@@ -102,6 +102,15 @@ export interface SiteToken {
   id?: string;
   /** Dot-path name, as authors read and write it. Free to change. */
   name: string;
+  /**
+   * The name in plain words, as the editor shows it: "Brand", "Heading 1".
+   *
+   * Optional and display-only. It never reaches a stylesheet or a stored
+   * reference, so it can hold any one line of text. Absent, a label is derived
+   * from the code name by {@link tokenDisplayLabel}, which is why sites stored
+   * before this field existed need no migration.
+   */
+  label?: string;
   kind: TokenKind;
   /**
    * The value for each mode.
@@ -154,6 +163,10 @@ export interface SiteTokenSet {
   tokens: readonly SiteToken[];
   /** Custom-property prefix; `--site-` when unset. */
   prefix?: string;
+  /**
+   * @deprecated Accepted for stored records and ignored by the emitter: see
+   * {@link DarkModeStrategy}.
+   */
   darkMode?: DarkModeStrategy;
 }
 
@@ -210,6 +223,80 @@ export function renameSiteToken(token: SiteToken, name: string): SiteToken {
   return { ...token, id: current, name };
 }
 
+/** The longest plain label a variable may carry. */
+export const MAX_TOKEN_LABEL_LENGTH = 80;
+
+/**
+ * Why a label cannot be stored, or nothing.
+ *
+ * A label is one line of text for people, so the rules are only what keeps it
+ * that: text, not blank, no line breaks or other control characters, and short
+ * enough to sit in a row. Absent is fine: the derived label stands in.
+ */
+export function tokenLabelIssue(label: unknown): string | undefined {
+  if (label === undefined) return undefined;
+  if (typeof label !== "string") return "A label must be text.";
+  if (label.trim() === "") return "A label cannot be empty.";
+  // A control character, a line break among them, would break the one line a
+  // label is drawn on, and a screen reader would read it out as a pause.
+  for (const char of label) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code < 0x20 || (code >= 0x7f && code < 0xa0)) {
+      return "A label is one line of text.";
+    }
+  }
+  if (label.length > MAX_TOKEN_LABEL_LENGTH) {
+    return `A label is at most ${MAX_TOKEN_LABEL_LENGTH} characters.`;
+  }
+  return undefined;
+}
+
+/**
+ * The leading words of a code name that say which group a variable is in.
+ *
+ * Dropped from a derived label because the editor already groups by them:
+ * "Colours" over a row reading "Color brand" says it twice.
+ */
+const GROUP_WORDS: ReadonlySet<string> = new Set([
+  "color",
+  "colour",
+  "font",
+  "font-size",
+  "line-height",
+  "text",
+  "space",
+  "spacing",
+  "radius",
+  "shadow",
+  "size",
+  "weight",
+  "duration",
+]);
+
+/**
+ * The plain name the editor shows for a variable.
+ *
+ * Its own label when it has one; otherwise words made from the code name:
+ * `color.brand` reads "Brand", `content.width` reads "Content width", and
+ * `space.4` keeps its group word ("Space 4"), because a number alone names
+ * nothing.
+ */
+export function tokenDisplayLabel(token: {
+  name: string;
+  label?: string;
+}): string {
+  const own = token.label?.trim();
+  if (own !== undefined && own !== "") return own;
+  const parts = token.name.split(".");
+  const rest = parts.slice(1);
+  const dropGroup =
+    parts.length > 1 &&
+    GROUP_WORDS.has(parts[0] ?? "") &&
+    !rest.every(part => /^\d+$/.test(part));
+  const words = (dropGroup ? rest : parts).join(" ").replaceAll("-", " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 /** One file a font face can be loaded from. */
 export interface FontSource {
   /**
@@ -221,6 +308,32 @@ export interface FontSource {
   format?: string;
 }
 
+/**
+ * Where a self-hosted face came from, for the editor to say so.
+ *
+ * Metadata only: the stylesheet never reads it, so a face loads the same with
+ * or without it. `google` is a face the server downloaded from the Google
+ * Fonts catalogue into the site's media; `upload` is a file an author uploaded.
+ */
+export interface FontFaceOrigin {
+  kind: "google" | "upload";
+  /** The catalogue's id for the family, such as `inter`. */
+  id?: string;
+  /** The licence as the catalogue names it, such as `OFL-1.1`. */
+  licence?: string;
+  /**
+   * The catalogue's category: `sans-serif`, `serif`, `display`,
+   * `handwriting` or `monospace`. The generic family a picker stores after
+   * the name comes from it.
+   */
+  category?: string;
+  /**
+   * The catalogue's script the file covers, such as `latin`, so the editor
+   * can tell a face the site has from the same cut in another script.
+   */
+  subset?: string;
+}
+
 /** A `@font-face` a site self-hosts. */
 export interface FontFaceDef {
   family: string;
@@ -230,10 +343,16 @@ export interface FontFaceDef {
   /** Defaults to `swap`: text is readable while the file loads. */
   display?: string;
   unicodeRange?: string;
+  /** Where the face came from. Never emitted. */
+  source?: FontFaceOrigin;
 }
 
 /**
- * The attribute a host sets to activate dark values.
+ * The marker a host sets to choose a mode: `"dark"` or `"light"`.
+ *
+ * Without it the visitor's device decides. With it the marker wins both ways:
+ * `"dark"` shows dark values on a light device and `"light"` keeps light values
+ * on a dark one.
  *
  * Named rather than themed: it says what it selects and belongs to no design
  * system, so a host wiring its own toggle to it is not adopting anything else.
@@ -265,9 +384,27 @@ const ROOT_TOKEN_SELECTOR = ":root";
  * correct.
  */
 function darkSelectorFor(selector: string, dark: readonly string[]): string {
-  const body = `{${dark.join(";")}}`;
+  return markerBlockFor(selector, "dark", dark);
+}
+
+/**
+ * Declarations under the marker for one mode, on whichever element carries it.
+ *
+ * The light block is the same shape as the dark one, for the same reason: the
+ * device block above is guarded only against a marker on the root itself, so a
+ * `data-nx-theme="light"` on `<body>` or a wrapper would otherwise inherit the
+ * dark values from the root. Declaring the light values on the marked element
+ * puts them nearer than anything inherited.
+ */
+function markerBlockFor(
+  selector: string,
+  mode: TokenMode,
+  declarations: readonly string[]
+): string {
+  const body = `{${declarations.join(";")}}`;
+  const marker = `[${DARK_MODE_ATTRIBUTE}="${mode}"]`;
   if (selector === ROOT_TOKEN_SELECTOR) {
-    return `[${DARK_MODE_ATTRIBUTE}="dark"]${body}`;
+    return `${marker}${body}`;
   }
   // `:is()` around the whole selector, because this one may be a LIST. Appending
   // the attribute to `.preview-a,.preview-b` yields `.preview-a` bare and only
@@ -276,10 +413,36 @@ function darkSelectorFor(selector: string, dark: readonly string[]): string {
   // takes the specificity of its most specific argument, so a list of single
   // classes weighs exactly what one of them did.
   const scoped = `:is(${selector})`;
-  return `[${DARK_MODE_ATTRIBUTE}="dark"] ${scoped},${scoped}[${DARK_MODE_ATTRIBUTE}="dark"]${body}`;
+  // The NEAREST marker decides. A light and a dark block would otherwise
+  // match with equal weight under nested markers, and whichever was written
+  // last would win however the markers nest. So a block that applies through
+  // an ancestor's marker stands down where the other mode's marker is on the
+  // scope itself, or sits between that ancestor and the scope.
+  const other = `[${DARK_MODE_ATTRIBUTE}="${mode === "dark" ? "light" : "dark"}"]`;
+  return `${scoped}${marker},${marker} ${scoped}:not(${other},${marker} ${other} *)${body}`;
 }
 
-/** The `format()` hints a face may declare: plain keywords, nothing else. */
+/**
+ * The dark block written for the visitor's device preference.
+ *
+ * Guarded by a `not` on the light marker, so a host (or the editor's preview)
+ * can keep light values on a device that prefers dark. On `:root` the guard
+ * reads the root element alone, because nothing sits above it; a scoped
+ * selector is guarded against the marker on itself or on any ancestor, which
+ * is where a host puts the switch for a scoped sheet.
+ *
+ * Wrapped in `:is()` for the same reason as the attribute form: the selector
+ * may be a list, and `:not()` appended to it would guard only its last member.
+ */
+function deviceDarkBlockFor(selector: string, dark: readonly string[]): string {
+  const light = `[${DARK_MODE_ATTRIBUTE}="light"]`;
+  const guarded =
+    selector === ROOT_TOKEN_SELECTOR
+      ? `${ROOT_TOKEN_SELECTOR}:not(${light})`
+      : `:is(${selector}):not(${light},${light} *)`;
+  return `@media (prefers-color-scheme:dark){${guarded}{${dark.join(";")}}}`;
+}
+
 /**
  * The longest font format this engine will write.
  *
@@ -792,7 +955,94 @@ export function defaultSiteTokens(): SiteToken[] {
     },
     { name: "font.body", kind: "fontFamily", values: { light: "system-ui" } },
     { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+    ...SPACING_DEFAULTS.map(
+      ({ name, value, description }): SiteToken => ({
+        name,
+        kind: "dimension",
+        values: { light: spacingValue(value) },
+        description,
+      })
+    ),
   ];
+}
+
+/**
+ * A spacing default: one length, or a fluid one that grows with the viewport
+ * from `min` to `max` along `preferred`.
+ */
+type SpacingValue =
+  | string
+  | { readonly min: string; readonly preferred: string; readonly max: string };
+
+/** One row of {@link SPACING_DEFAULTS}. */
+interface SpacingDefault {
+  readonly name: string;
+  readonly value: SpacingValue;
+  readonly description: string;
+}
+
+/**
+ * The spacing every block starts from, in ONE table.
+ *
+ * Blocks carry no outer margin: the space between two blocks is their
+ * container's gap, and the space inside a band is its padding. Each row is a
+ * site token, so the blocks reference it by name and a site changing one value
+ * moves every block reading it, with no block changed.
+ *
+ * Responsive through `clamp()` rather than per breakpoint, because a token has
+ * one value per colour mode and none per width. `vw` resolves against the
+ * device being previewed in the editor too, since the canvas is its own frame.
+ * What each row resolves to at a phone, tablet and desktop width is pinned in
+ * `site-tokens.test.ts`.
+ */
+const SPACING_DEFAULTS: readonly SpacingDefault[] = [
+  {
+    name: "space.stack",
+    value: { min: "1rem", preferred: "0.875rem + 0.5vw", max: "1.25rem" },
+    description: "The space a container puts between the blocks it holds.",
+  },
+  {
+    name: "space.section-y",
+    value: { min: "3rem", preferred: "2rem + 4vw", max: "5rem" },
+    description: "A section's padding above and below its content.",
+  },
+  {
+    name: "space.gutter",
+    value: { min: "1rem", preferred: "4vw", max: "2rem" },
+    description: "A section's padding beside its content.",
+  },
+  {
+    name: "space.columns",
+    value: { min: "1rem", preferred: "0.5rem + 2vw", max: "2rem" },
+    description: "The space between columns, and between gallery images.",
+  },
+  {
+    name: "space.card",
+    value: { min: "1rem", preferred: "0.75rem + 1vw", max: "1.5rem" },
+    description: "A card's padding around its content.",
+  },
+  {
+    name: "space.paragraph",
+    value: "1em",
+    description: "The space between the paragraphs of rich text.",
+  },
+  {
+    name: "button.padding-y",
+    value: "0.75rem",
+    description: "A button's padding above and below its label.",
+  },
+  {
+    name: "button.padding-x",
+    value: "1.25rem",
+    description: "A button's padding beside its label.",
+  },
+];
+
+/** A spacing default as the CSS a token stores. */
+function spacingValue(value: SpacingValue): string {
+  return typeof value === "string"
+    ? value
+    : `clamp(${value.min}, ${value.preferred}, ${value.max})`;
 }
 
 /**
@@ -858,6 +1108,12 @@ export function validateFontFace(
     }
   }
 
+  if (face.source !== undefined && !usableOrigin(face.source)) {
+    fail(
+      `"${face.family}" says where it came from in a way that cannot be read.`
+    );
+  }
+
   for (const source of face.src) {
     const rejection = checkUrlValue(source.url, "raw");
     if (rejection !== null) {
@@ -872,6 +1128,22 @@ export function validateFontFace(
   }
 
   return issues;
+}
+
+/**
+ * The longest word a face's origin may carry. A catalogue id, a licence name
+ * and a category are all short; this only stops data that is already wrong.
+ */
+const MAX_FONT_ORIGIN_LENGTH = 100;
+
+/** Whether a face's origin is one of the two kinds, with short words. */
+function usableOrigin(origin: FontFaceOrigin): boolean {
+  if (origin.kind !== "google" && origin.kind !== "upload") return false;
+  return [origin.id, origin.licence, origin.category, origin.subset].every(
+    word =>
+      word === undefined ||
+      (typeof word === "string" && word.length <= MAX_FONT_ORIGIN_LENGTH)
+  );
 }
 
 /**
@@ -964,7 +1236,7 @@ export type TokenNamingProblem =
  * grammar decides what those keys may contain and its DEPTH decides how far the
  * reader has to descend to find the token underneath them.
  */
-export function labelProblem(name: unknown): TokenNamingProblem | undefined {
+function labelProblem(name: unknown): TokenNamingProblem | undefined {
   // Persisted settings reach here unvalidated, and `RegExp.test` COERCES: a
   // stored `123` becomes "123" and satisfies the grammar, after which the value
   // travels on as a number and throws where a string was assumed.
@@ -993,7 +1265,7 @@ export function labelProblem(name: unknown): TokenNamingProblem | undefined {
  * subjects take different rules and a caller holding a bare string cannot be
  * relied on to say which it has.
  */
-export function identityProblem(
+function identityProblem(
   identity: unknown,
   field: "name" | "id"
 ): TokenNamingProblem | undefined {
@@ -1050,6 +1322,9 @@ export function emitTokenBlocks(
 
   const light: string[] = [];
   const dark: string[] = [];
+  // The light values of the variables that have a dark one: what a light
+  // marker has to restore, and nothing else.
+  const undoDark: string[] = [];
   const seen = new Map<string, string>();
   /*
    * The tokens this call actually WROTE.
@@ -1159,6 +1434,7 @@ export function emitTokenBlocks(
     light.push(`${property}:${token.values.light}`);
     if (token.values.dark !== undefined) {
       dark.push(`${property}:${token.values.dark}`);
+      undoDark.push(`${property}:${token.values.light}`);
     }
   }
 
@@ -1181,12 +1457,17 @@ export function emitTokenBlocks(
   if (light.length === 0) return { css: "", issues, emitted: [] };
 
   let css = `${selector}{${light.join(";")}}`;
+  // Both forms, always, and in this order. The device block makes dark values
+  // work with no setup; the marker block after it lets a host choose dark on a
+  // light device. `set.darkMode` is deliberately not read: it once picked one
+  // of the two, and its default picked the form nothing set.
+  // The light marker block comes last, so where a light marker sits inside a
+  // dark one the nearer marker decides.
   if (dark.length > 0) {
-    const body = `${selector}{${dark.join(";")}}`;
     css +=
-      (set.darkMode ?? "attribute") === "media"
-        ? `@media (prefers-color-scheme:dark){${body}}`
-        : darkSelectorFor(selector, dark);
+      deviceDarkBlockFor(selector, dark) +
+      darkSelectorFor(selector, dark) +
+      markerBlockFor(selector, "light", undoDark);
   }
   return { css, issues, emitted };
 }

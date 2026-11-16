@@ -51,6 +51,19 @@ export interface LocalizedColumnSpec {
   /** precision/scale for the `decimal` kind (DECIMAL/NUMERIC); ignored otherwise. */
   precision?: number;
   scale?: number;
+  /**
+   * What the column the values come from carries into this one as translation is turned on or
+   * off (`carriedDefinition`); absent, the column is the field's own (`ddlType`).
+   */
+  carried?: CarriedDefinition;
+}
+
+/** A receiving column's type and default, taken from the column its values come from. */
+export interface CarriedDefinition {
+  /** The source's type, where it holds every value the field's own type holds and more. */
+  type?: string;
+  /** The source's default, as DDL. */
+  default?: string;
 }
 
 /**
@@ -65,7 +78,31 @@ export interface LocalizedColumnSpec {
 export type CompanionCopyRef = Pick<
   CompanionMigrationSpec,
   "dialect" | "mainTable" | "companionTable" | "defaultLocale"
->;
+> & {
+  /**
+   * What decides which language's row an entry's shared value is taken from, when its readers
+   * are to keep seeing what they saw (`restoredValue`). Absent, the default language's row is
+   * taken, else the first by language code.
+   */
+  liveness?: CopyLiveness;
+};
+
+/**
+ * Which of an entry's translation rows its readers see, and the site's order of languages, as a
+ * copy ranks them: the default language where it is live, else the first live language in the
+ * site's order, else the default language's row, else the first in the site's order.
+ */
+export interface CopyLiveness {
+  /** The site's languages in its own order (the configuration's, or Settings'). */
+  languageOrder: readonly string[];
+  /** The publish states a reader sees (`publicStateNames`). */
+  publicStates: readonly string[];
+  /**
+   * Whether each language has a publish state of its own (the companion's `_status`). Without
+   * one, every language of an entry is as live as the entry, so none is preferred for it.
+   */
+  companionHasStatus: boolean;
+}
 
 /**
  * Everything the generator needs to emit an enable/disable localization migration for
@@ -73,6 +110,8 @@ export type CompanionCopyRef = Pick<
  */
 export interface CompanionMigrationSpec {
   dialect: SupportedDialect;
+  /** See {@link CompanionCopyRef.liveness}. */
+  liveness?: CopyLiveness;
   /** collection slug (for archive rows + file header). */
   collection: string;
   /**
@@ -111,4 +150,18 @@ export interface CompanionMigrationSpec {
    * a value twice or the server cannot build the index. Present only on a `unique` file.
    */
   unique?: { field: string; column: string }[];
+  /**
+   * The settings fields leaving translation take on once their default language's values are on
+   * the main table: the Required ones, and those a one-column unique index covers, each with its
+   * companion column. Recorded so `nextly migrate` can refuse the move, before its first file runs,
+   * where those values cannot take them. Present only on an `archive` or `shared` file whose fields
+   * carry one.
+   */
+  settings?: LeavingSettingsSpec;
+}
+
+/** The settings a move out of translation applies after its copy, as `CompanionMigrationSpec` records them. */
+export interface LeavingSettingsSpec {
+  required: { field: string; column: string }[];
+  unique: { field: string; column: string }[];
 }

@@ -5,10 +5,11 @@
  * What only a database can settle:
  * - the number is the same read either way: a lifecycle collection's status
  *   split sums to the plain count;
- * - the trend, a series over the last 30 days, and the period before it, a
- *   count over the window as long that ends where the series starts, are
- *   adjacent, so an entry is in one of them at most;
- * - the chart's bars sum to the figure a count over the same window gives.
+ * - every line under the number counts what the number counts: the change this
+ *   week and the trend count only the entries its Count setting counts, so a
+ *   week of new published entries is no change to the drafts;
+ * - the trend ends at the number, each week before it taking off what was made
+ *   after it.
  *
  * Rows are backdated on the stored row, since a write stamps its own instant.
  */
@@ -32,10 +33,11 @@ import type { ReadCaller } from "../../../services/dashboard/readable-resources"
 import { refreshContentSources } from "../content-sources";
 import { countWidget } from "../core-widgets/count";
 import type { CountWidgetData } from "../core-widgets/data";
+import type { WidgetLoadSize } from "../declaration/define-widget";
 import { executeWidgetQuery } from "../execute";
 import { validateWidgetQuery } from "../query";
 
-import { loadCard, servicesFor } from "./core-card-load";
+import { loadCard } from "./core-card-load";
 
 let current: TestNextly | undefined;
 
@@ -49,16 +51,11 @@ const NOTES = "cnt_notes";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** The batch's one instant, mid-morning so no row sits on today's midnight. */
+/** The batch's one instant: a Monday mid-morning, so this week began today. */
 const NOW = new Date("2026-06-15T10:00:00.000Z");
-/** The start of NOW's UTC day, where the series' last day starts. */
-const TODAY = new Date("2026-06-15T00:00:00.000Z");
-/** The first instant of the last 30 days: the series' window, from the instant 30 days back. */
-const RECENT_START = new Date(NOW.getTime() - 30 * DAY_MS);
-/** The UTC day the series' first, partial, point starts. */
-const FIRST_DAY = new Date("2026-05-16T00:00:00.000Z");
-/** The first instant of the 30 days before them: the window as long, ending where they start. */
-const PRIOR_START = new Date(NOW.getTime() - 60 * DAY_MS);
+
+/** `days` before the batch's instant. */
+const daysBack = (days: number) => new Date(NOW.getTime() - days * DAY_MS);
 
 /** A reader the gate finds holding super-admin, seeded at each boot. */
 const admin: ReadCaller = { user: { id: "admin" } };
@@ -70,43 +67,33 @@ interface Row {
 }
 
 /**
- * Posts placed on each side of both boundaries, in each status. Each is named
- * by where it must be counted.
+ * Posts each named by when they were made. Every post of the last 7 days is
+ * published; the drafts are older.
  */
 const POST_ROWS: Record<string, Row> = {
-  // The first instant of the recent period: in the trend, not the prior.
-  recentFirst: { status: "published", createdAt: RECENT_START },
-  // A second before it, in the prior period. A second, not a millisecond:
-  // a dialect storing whole seconds would round a millisecond onto the line.
-  priorLast: {
-    status: "draft",
-    createdAt: new Date(RECENT_START.getTime() - 1000),
-  },
-  // Today, before the batch's instant.
+  // This week: today, before the batch's instant.
   today: { status: "published", createdAt: new Date(NOW.getTime() - 60_000) },
-  // Two days back, a draft: in the trend.
-  recentDraft: {
-    status: "draft",
-    createdAt: new Date(TODAY.getTime() - 2 * DAY_MS),
-  },
-  // The first instant of the prior period: in it.
-  priorFirst: { status: "draft", createdAt: PRIOR_START },
-  // A second before it: in neither period, still in the total.
-  older: {
-    status: "published",
-    createdAt: new Date(PRIOR_START.getTime() - 1000),
-  },
+  // Last week, and in the last 7 days.
+  saturday: { status: "published", createdAt: daysBack(2) },
+  friday: { status: "published", createdAt: daysBack(3) },
+  // Older than 7 days.
+  tenDays: { status: "draft", createdAt: daysBack(10) },
+  twentyDays: { status: "published", createdAt: daysBack(20) },
+  fortyDays: { status: "draft", createdAt: daysBack(40) },
+  // Before the 8 weeks a trend draws.
+  longAgo: { status: "published", createdAt: daysBack(200) },
 };
 
-/** What a Count card set to `collection` answers, at `tier`, at the batch's instant. */
+/** Small and wide: a quarter and two thirds of the dashboard. */
+const SMALL: WidgetLoadSize = { w: 3, h: 2, tier: "small" };
+const WIDE: WidgetLoadSize = { w: 8, h: 3, tier: "large" };
+
+/** What a Count card holding `stored` answers, at the batch's instant. */
 function count(
-  collection: string,
-  tier: "small" | "medium" | "large"
+  stored: Record<string, unknown>,
+  size: WidgetLoadSize = SMALL
 ): Promise<CountWidgetData> {
-  return loadCard(countWidget, { collection }, admin, {
-    size: { w: 8, h: 3, tier },
-    now: NOW,
-  });
+  return loadCard(countWidget, stored, admin, { size, now: NOW });
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -158,8 +145,9 @@ describe.each(getConfiguredTestDialects())(
 
     it("states one number whichever read gives it: the split's buckets sum to the count", async () => {
       await boot();
-      const card = await count(POSTS, "medium");
-      expect(card.split).toEqual({ published: 3, draft: 3 });
+      const card = await count({ collection: POSTS, show: "split" });
+      expect(card.line).toBe("split");
+      expect(card.split).toMatchObject({ published: 5, draft: 2 });
       const plain = await executeWidgetQuery(
         validateWidgetQuery({
           source: `collection:${POSTS}`,
@@ -173,46 +161,64 @@ describe.each(getConfiguredTestDialects())(
       expect(card.total).toBe(Object.keys(POST_ROWS).length);
     });
 
-    it("counts a collection without a lifecycle plainly", async () => {
+    it("counts the change this week from the set the number counts", async () => {
       await boot();
-      expect(await count(NOTES, "medium")).toEqual({ total: 2 });
-    });
-
-    it("puts each entry in one of the trend and the period before it at most, the two windows adjacent", async () => {
-      await boot();
-      const trend = (await count(POSTS, "large")).trend;
-      if (trend === undefined) throw new Error("a large card draws its trend");
-      // A bar for each of the 31 UTC days the window overlaps, the first of
-      // them partial, and the last being today.
-      expect(trend.points).toHaveLength(31);
-      expect(new Date(trend.points[0].start).getTime()).toBe(
-        FIRST_DAY.getTime()
-      );
-      expect(new Date(trend.points[30].start).getTime()).toBe(TODAY.getTime());
-      // recentFirst, recentDraft and today; not priorLast, a second earlier,
-      // on the same first day.
-      expect(trend.points[0].count).toBe(1);
-      expect(trend.points.reduce((sum, p) => sum + p.count, 0)).toBe(3);
-
-      // priorFirst and priorLast; not recentFirst, nor older a second before
-      // the period opens.
-      expect(trend.prior).toBe(2);
-    });
-
-    it("draws bars that sum to the recent figure a count over the same window gives", async () => {
-      await boot();
-      const trend = (await count(POSTS, "large")).trend;
-      if (trend === undefined) throw new Error("a large card draws its trend");
-      const recent = await servicesFor(admin, NOW).count(POSTS, {
-        status: "all",
-        window: { range: "30d" },
+      expect(await count({ collection: POSTS })).toEqual({
+        total: 7,
+        counted: "all",
+        line: "change",
+        change: 3,
       });
-      expect(recent).toBe(trend.points.reduce((sum, p) => sum + p.count, 0));
+      expect(await count({ collection: POSTS, count: "published" })).toEqual({
+        total: 5,
+        counted: "published",
+        line: "change",
+        change: 3,
+      });
     });
 
-    it("reads no trend for a card narrower than large", async () => {
+    it("draws no change for the drafts when the week's new entries are all published", async () => {
+      // 🔴 Counted from every entry, the drafts' line would say "+3 this week"
+      // under a number that did not move.
       await boot();
-      expect((await count(POSTS, "medium")).trend).toBeUndefined();
+      expect(await count({ collection: POSTS, count: "draft" })).toEqual({
+        total: 2,
+        counted: "draft",
+        line: "change",
+        change: 0,
+      });
+    });
+
+    it("ends the trend at the number, each week before it without what was made after it", async () => {
+      await boot();
+      const all = await count({ collection: POSTS, show: "trend" });
+      // From the end of the week 8 weeks back, then now. Monday 15 June began
+      // this week: today's post; the week before held Saturday's and Friday's,
+      // and each earlier post its own week.
+      expect(all.trend).toEqual([1, 1, 2, 2, 2, 3, 4, 6, 7]);
+      expect(all.trend?.at(-1)).toBe(all.total);
+      const drafts = await count({
+        collection: POSTS,
+        count: "draft",
+        show: "trend",
+      });
+      expect(drafts.trend).toEqual([0, 0, 1, 1, 1, 1, 2, 2, 2]);
+    });
+
+    it("counts a collection without a lifecycle plainly, even asked for a split", async () => {
+      await boot();
+      expect(await count({ collection: NOTES, show: "split" })).toMatchObject({
+        total: 2,
+        counted: "all",
+        line: "change",
+      });
+    });
+
+    it("answers the same at a quarter and at two thirds of the dashboard", async () => {
+      await boot();
+      expect(await count({ collection: POSTS }, WIDE)).toEqual(
+        await count({ collection: POSTS }, SMALL)
+      );
     });
   }
 );

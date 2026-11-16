@@ -62,31 +62,29 @@
  * @module spacing-overlay
  */
 
+import { registeredBlocks, type BlockResolver } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
-import {
-  clipPathOf,
-  scaleCornerRadii,
-  SQUARE_CORNERS,
-  usedCornerRadii,
-  type CornerRadii,
-} from "./border-radii";
+import { clipPathOf, scaleCornerRadii } from "./border-radii";
 import { BASE_BREAKPOINT } from "./breakpoints";
 import { CANVAS_ROOT_CLASS, nodeElement } from "./canvas";
+import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
 import type { EditorState } from "./editor-state";
-import type { Rect, Scale } from "./geometry";
+import type { Scale } from "./geometry";
 import {
   canvasContentRect,
   canvasPaintedScale,
-  canvasRootFrom,
   clippedByAncestor,
   hasScrollbarGutter,
   layoutFragments,
+  overlaySpaceOf,
   renderedScale,
+  usedRadiiOf,
   viewportPositioned,
   type RenderedScale,
 } from "./geometry-dom";
+import { designIsWritable, lockViewOf } from "./inspector";
 import { orientationOfElement, type SideOrientation } from "./side-orientation";
 import {
   applicableEdges,
@@ -100,12 +98,56 @@ import {
   type SpacingBox,
   type SpacingSide,
 } from "./spacing-bands";
+import { blockStartSide, gapOwnerOf } from "./spacing-gap";
 import {
   SpacingHandles,
   type SpacingScrubContext,
   type SpacingSubject,
 } from "./spacing-handles";
 import { spacingRespondsOutward, styleCapable } from "./spacing-response";
+
+/** The root's size and the frame's scale, for bands drawn over a frame. */
+interface FramedLayer {
+  readonly width: number;
+  readonly height: number;
+  readonly scale: number;
+}
+
+function sameFramedLayer(
+  a: FramedLayer | null,
+  b: FramedLayer | null
+): boolean {
+  if (a === null || b === null) return a === b;
+  return a.width === b.width && a.height === b.height && a.scale === b.scale;
+}
+
+/**
+ * The layer's own style: how far its clip may extend, and over a frame, the
+ * root's box scaled to the frame's zoom.
+ *
+ * Over a frame the layer is laid out at the root's size in the root's own
+ * coordinates and scaled as a whole, so every band, its clip and its rounded
+ * corners stay in the units they were measured in. `--nx-spacing-scale` is
+ * what the chips and handles undo to keep their own size.
+ */
+function framedLayerStyle(
+  escape: number,
+  framed: FramedLayer | null
+): React.CSSProperties {
+  const clip = { "--nx-spacing-escape": `${String(escape)}px` };
+  if (framed === null) return clip as React.CSSProperties;
+  return {
+    ...clip,
+    "--nx-spacing-scale": String(framed.scale),
+    inset: "auto",
+    left: 0,
+    top: 0,
+    width: framed.width,
+    height: framed.height,
+    transform: `scale(${String(framed.scale)})`,
+    transformOrigin: "0 0",
+  } as React.CSSProperties;
+}
 
 export interface SpacingOverlayProps {
   /** The editor whose primary selection is measured. */
@@ -128,6 +170,13 @@ export interface SpacingOverlayProps {
    * moving. A host that draws tiers or scopes must pass this.
    */
   scrub?: SpacingScrubContext;
+  /**
+   * The block resolver the canvas renders with, which is what decides whether a
+   * container spaces its children. The renderer's own default when omitted,
+   * the process registry, so the overlay asks the same source the page was
+   * drawn from.
+   */
+  blocks?: BlockResolver;
 }
 
 /**
@@ -179,45 +228,6 @@ function boxesOf(style: CSSStyleDeclaration): {
       left: lengthOf(style.borderLeftWidth),
     },
   };
-}
-
-/**
- * The block's USED border-box corner radii, in LAYOUT pixels.
- *
- * A percentage radius resolves against the border box's own size, and the size
- * that governs is the one the element was LAID OUT at rather than the one it is
- * drawn at — `border-radius: 50%` on a block under `scale(2)` is half its layout
- * width, which then renders doubled like everything else inside the transform.
- *
- * That layout size is the measured rectangle divided back out by the scale it
- * was measured at, rather than a second reading from the element. `offsetWidth`
- * would answer the same question in whole pixels only, and `getComputedStyle`
- * reports whichever box `box-sizing` selects — so both are a second answer to a
- * question `renderedScale` has already answered exactly.
- *
- * A scale that is zero on either axis leaves nothing to resolve against and no
- * band to draw; `describable` refuses that block anyway, and answering square
- * here keeps this from dividing by it on the way to that refusal.
- *
- * UNDEFINED when a corner cannot be resolved at all — a percentage inside a
- * `calc()` stays unresolved in the computed value — which the caller treats as a
- * shape it cannot describe rather than as a square one.
- */
-function radiiOf(
-  style: CSSStyleDeclaration,
-  border: Rect,
-  scale: Scale
-): CornerRadii | undefined {
-  if (!(scale.x > 0) || !(scale.y > 0)) return SQUARE_CORNERS;
-  return usedCornerRadii(
-    {
-      topLeft: style.borderTopLeftRadius,
-      topRight: style.borderTopRightRadius,
-      bottomRight: style.borderBottomRightRadius,
-      bottomLeft: style.borderBottomLeftRadius,
-    },
-    { width: border.width / scale.x, height: border.height / scale.y }
-  );
 }
 
 /**
@@ -545,7 +555,11 @@ export function SpacingOverlay({
   editor,
   hidden = false,
   scrub = RESTING_BASE,
+  blocks,
 }: SpacingOverlayProps): React.JSX.Element | null {
+  // The renderer's default when the host names none, so a canvas drawn with
+  // the process registry is asked about through that same registry.
+  const resolver = React.useMemo(() => blocks ?? registeredBlocks(), [blocks]);
   const layer = React.useRef<HTMLDivElement | null>(null);
   const [bands, setBands] = React.useState<readonly SpacingBand[]>([]);
   /*
@@ -576,6 +590,13 @@ export function SpacingOverlay({
    * LAYER's size, which only the measurement has.
    */
   const [escape, setEscape] = React.useState(0);
+  /*
+   * Over a canvas in a frame, the root's size and the frame's scale. The
+   * bands are areas of the page, so the layer holding them is laid out in the
+   * root's own coordinates and scaled with the page as a whole; the value
+   * chips and the handles inside it keep their own size.
+   */
+  const [framed, setFramed] = React.useState<FramedLayer | null>(null);
 
   const { document, selectedId } = editor;
 
@@ -593,6 +614,16 @@ export function SpacingOverlay({
    * a true thing to report about a selection that includes it.
    */
   const singular = editor.selection.ids.length <= 1;
+  /*
+   * No handles either for a block whose design is held — its own Layers lock,
+   * or an area locked to its content: they write its spacing, which either
+   * lock fixes. Asked of the rule the inspector holds its Style tab read-only
+   * by, so the panel and the canvas agree. The bands stay, for the reason
+   * above.
+   */
+  const designHeld =
+    selectedId !== null &&
+    !designIsWritable(document, selectedId, lockViewOf(editor));
 
   /*
    * Measured before the browser paints, so the bands never appear over the
@@ -625,13 +656,22 @@ export function SpacingOverlay({
       apply(NO_BANDS);
       return;
     }
-    // Resolved through `canvasRootFrom`, which answers in the ROOT's own realm —
-    // see there for why `instanceof HTMLElement` is the wrong question.
-    const root = canvasRootFrom(element, CANVAS_ROOT_CLASS);
-    if (root === null) {
+    // The canvas the bands describe, in the ROOT's own realm, whether the
+    // layer sits inside the root or over the frame the root is in.
+    const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+    if (space === null) {
       apply(NO_BANDS);
       return;
     }
+    const { root } = space;
+    const rootBox = canvasContentRect(root, root);
+    const nextFramed: FramedLayer | null =
+      space.frame === null
+        ? null
+        : { width: rootBox.width, height: rootBox.height, scale: space.scale };
+    setFramed(current =>
+      sameFramedLayer(current, nextFramed) ? current : nextFramed
+    );
     const block = nodeElement(root, selectedId);
     if (block === null) {
       apply(NO_BANDS);
@@ -661,7 +701,7 @@ export function SpacingOverlay({
      */
     const border = canvasContentRect(block, root);
     const scaledBy: Scale = { x: scale.x, y: scale.y };
-    const radii = radiiOf(style, border, scaledBy);
+    const radii = usedRadiiOf(style, border, scaledBy);
     /*
      * A block whose own radii cannot be resolved is a shape this cannot
      * describe, and drawing nothing is the answer it already gives for every
@@ -730,24 +770,39 @@ export function SpacingOverlay({
           )
         : false;
 
-    const layerBox = canvasContentRect(root, root);
+    const layerBox = rootBox;
+    /*
+     * Whose space the block-start margin is. Asked once per measurement, after
+     * every reading above, because answering it takes the gap marker off the
+     * block's container for one synchronous read.
+     */
+    const gapFrom = gapOwnerOf(block, document, type => resolver.get(type));
+    const gapSide = blockStartSide(style.writingMode);
+    const attributed = (bands: readonly SpacingBand[]): SpacingBand[] =>
+      bands.map(band =>
+        gapFrom !== undefined && band.box === "margin" && band.side === gapSide
+          ? { ...band, gapFrom }
+          : band
+      );
     apply(
-      spacingBands({
-        border,
-        borderWidths: boxes.borderWidths,
-        margin: boxes.margin,
-        padding: boxes.padding,
-        // Composed from the real transform between the block and the root, so
-        // a scaled ancestor counts and no rounded layout value is involved.
-        scale: scaledBy,
-        // Margins take the ancestors' scale ALONE — a transform does not scale
-        // the space a margin reserves, only the box it is drawn beside.
-        marginScale: { x: scale.ancestor.x, y: scale.ancestor.y },
-        // Resolved against the LAYOUT box, which is why the scale goes in with
-        // it: a rounded block's bands have to be cut to the curve, and the curve
-        // is stated in the units the author declared it in.
-        radii,
-      }),
+      attributed(
+        spacingBands({
+          border,
+          borderWidths: boxes.borderWidths,
+          margin: boxes.margin,
+          padding: boxes.padding,
+          // Composed from the real transform between the block and the root, so
+          // a scaled ancestor counts and no rounded layout value is involved.
+          scale: scaledBy,
+          // Margins take the ancestors' scale ALONE — a transform does not scale
+          // the space a margin reserves, only the box it is drawn beside.
+          marginScale: { x: scale.ancestor.x, y: scale.ancestor.y },
+          // Resolved against the LAYOUT box, which is why the scale goes in with
+          // it: a rounded block's bands have to be cut to the curve, and the curve
+          // is stated in the units the author declared it in.
+          radii,
+        })
+      ),
       layerBox,
       {
         nodeId: selectedId,
@@ -788,12 +843,14 @@ export function SpacingOverlay({
         },
       }
     );
-    // The document is NOT one of these. Nothing here is remembered across a
-    // measurement any more, so this reads the tree as it stands whenever it is
-    // called; what makes it run again after an edit is the effect below, which
-    // does depend on the document.
-  }, [selectedId]);
+    // The document and the resolver are read for one thing: which container a
+    // gap belongs to, so a block moved into another container is named against
+    // the right one. The rendered tree is still read as it stands.
+  }, [selectedId, document, resolver]);
 
+  // A zoom, or a page loading into the frame, moves the block on screen while
+  // nothing in the document changes.
+  const canvasFrame = useCanvasFrame();
   React.useLayoutEffect(() => {
     if (hidden) {
       setBands(current => (current.length === 0 ? current : NO_BANDS));
@@ -803,12 +860,11 @@ export function SpacingOverlay({
       return;
     }
     measure();
-    // `document` is NOT one of `measure`'s own dependencies — it reads the tree
-    // as it stands — and is listed here because this effect is what has to run
-    // again after an edit: an edit resizes the selected block, which is most of
+    // `document` is listed here as well as on `measure` because this effect is
+    // what has to run again after an edit: an edit resizes the selected block, which is most of
     // what the inspector does, and an effect keyed on the selection alone would
     // leave the bands describing the layout it had.
-  }, [measure, hidden, document]);
+  }, [measure, hidden, document, canvasFrame]);
 
   /*
    * Re-measure when the layout moves for a reason no render reports — an image
@@ -836,7 +892,7 @@ export function SpacingOverlay({
      * the selection alone — would keep watching the old ones. Their later resizes
      * fire nothing, and the bands stay at the size the block had before the edit.
      */
-  }, [measure, hidden, selectedId, document]);
+  }, [measure, hidden, selectedId, document, canvasFrame]);
 
   return (
     <div
@@ -862,9 +918,7 @@ export function SpacingOverlay({
        * legitimately sit outside the canvas — a collapsed top margin does — and
        * any constant allowance is too small for some legal value.
        */
-      style={
-        { "--nx-spacing-escape": `${String(escape)}px` } as React.CSSProperties
-      }
+      style={framedLayerStyle(escape, framed)}
     >
       {bands.map(band => (
         <div
@@ -873,14 +927,19 @@ export function SpacingOverlay({
           data-box={band.box}
           data-side={band.side}
           data-negative={band.negative ? "" : undefined}
+          data-gap={band.gapFrom === undefined ? undefined : ""}
           // See the layer above: the report is hidden, the control is not.
           aria-hidden="true"
           style={bandStyle(band)}
         >
-          <span className="nx-spacing-overlay__value">{band.label}</span>
+          <span className="nx-spacing-overlay__value">
+            {band.gapFrom === undefined
+              ? band.label
+              : `${band.label} · Gap · from ${band.gapFrom}`}
+          </span>
         </div>
       ))}
-      {subject === null || !singular ? null : (
+      {subject === null || !singular || designHeld ? null : (
         <SpacingHandles
           editor={editor}
           bands={bands}

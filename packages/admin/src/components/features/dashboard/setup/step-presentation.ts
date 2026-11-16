@@ -1,6 +1,6 @@
 /**
- * What each setup step is called, what its tile says under the title, and
- * where it leads.
+ * What each setup step is called, what its line says under the name while it
+ * is open, and where it leads.
  *
  * Exhaustive over the step kinds core publishes, so a kind added there with no
  * entry here does not compile. The copy lives in the admin because it is UI
@@ -16,16 +16,13 @@ import { buildRoute, ROUTES } from "@admin/constants/routes";
 export interface StepPresentation {
   label: string;
   /**
-   * The words under the label, before the step's actions: what is done, or what the step asks.
-   * Short, so a tile reads in full at narrow widths; absent where the actions say it all
-   * ("Invite · Skip").
+   * The hint under the name while the step is open: what it asks, or how far it is ("2 of 5
+   * filled in"). A step done or skipped says so instead.
    */
-  detail?: string;
-  /** The detail as read aloud, where the drawn one is shortened ("2 of 5 filled in"). */
-  spoken?: string;
-  /** Where the step is done, when it is a link; the Singles open a list instead. */
+  detail: string;
+  /** Where the step is done, when its button is a link; the Singles open a list instead. */
   href?: string;
-  /** The link's own words, for an open step. */
+  /** The button's own words, for an open step. */
   action?: string;
 }
 
@@ -45,16 +42,15 @@ const BY_KIND: {
     step: Extract<SetupStep, { kind: K }>
   ) => StepPresentation;
 } = {
-  // The run itself, its outcome and its failures are drawn by the tile's own
-  // sample-content control, so the presentation holds only the words.
-  sample: step => ({
+  // The run itself, its outcome and its failures are drawn by the step's own
+  // sample-content controls, so the presentation holds only the words.
+  sample: () => ({
     label: "Start with sample content",
-    detail:
-      step.status === "done" ? "Answered" : "A ready-made site to look around",
+    detail: "A ready-made site to look around",
   }),
-  collection: step => ({
+  collection: () => ({
     label: "Create a collection",
-    detail: step.status === "done" ? "Done" : "Define your first content type",
+    detail: "Define your first content type",
     href: ROUTES.BUILDER_COLLECTIONS_NEW,
     action: "Create",
   }),
@@ -63,29 +59,26 @@ const BY_KIND: {
   // added.
   entry: step => ({
     label: "Add your first entry",
-    detail: step.status === "done" ? "Done" : "Write something to publish",
+    detail: "Write something to publish",
     ...(step.collection === undefined
       ? {}
       : {
           href: buildRoute(ROUTES.COLLECTION_ENTRY_CREATE, {
             slug: step.collection,
           }),
-          action: "Add",
+          action: "Add entry",
         }),
   }),
   singles: step => {
     const { done, total } = filledIn(step);
     return {
       label: "Fill in your Singles",
-      // "2 of 5 · Open · Skip" on the tile, and the whole of it to assistive technology.
-      detail: `${done} of ${total}`,
-      spoken: `${done} of ${total} filled in`,
+      detail: `${done} of ${total} filled in`,
     };
   },
-  // Open, its actions say it all: Skip already says it is optional.
-  invite: step => ({
+  invite: () => ({
     label: "Invite a teammate",
-    ...(step.status === "done" ? { detail: "Done" } : {}),
+    detail: "Optional",
     href: ROUTES.USERS_CREATE,
     action: "Invite",
   }),
@@ -94,7 +87,7 @@ const BY_KIND: {
 /** A step's words and link. */
 export function stepPresentation(step: SetupStep): StepPresentation {
   // A server newer than this admin can send a kind it has no words for: drawn
-  // as a plain tile naming the kind, never a crash that takes the card with it.
+  // as a plain line naming the kind, never a crash that takes the card with it.
   const present = BY_KIND[step.kind] as
     | ((step: SetupStep) => StepPresentation)
     | undefined;

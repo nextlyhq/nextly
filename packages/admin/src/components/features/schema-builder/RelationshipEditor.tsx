@@ -218,6 +218,7 @@ export function RelationshipEditor({
                     <span className="text-xs">{collection?.label || slug}</span>
                     <button
                       type="button"
+                      aria-label={`Remove ${collection?.label || slug}`}
                       onClick={() => handleRemoveCollection(slug)}
                       className="ml-0.5 rounded-md p-0.5 hover-subtle-row"
                     >
@@ -252,6 +253,7 @@ export function RelationshipEditor({
                 <div className="relative">
                   <Icons.Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                   <Input
+                    aria-label="Search collections"
                     value={collectionSearch}
                     onChange={e => setCollectionSearch(e.target.value)}
                     placeholder="Search collections..."
@@ -328,6 +330,7 @@ export function RelationshipEditor({
             />
           </div>
           <Switch
+            aria-label="Allow multiple"
             checked={hasMany || false}
             onCheckedChange={onHasManyChange}
           />
@@ -378,6 +381,8 @@ export function RelationshipEditor({
             <div className="inline-flex divide-x divide-border rounded-sm border border-border overflow-hidden">
               <button
                 type="button"
+                // aria-pressed says which one is chosen, which the fill alone does not.
+                aria-pressed={(appearance ?? "select") === "select"}
                 onClick={() => onAppearanceChange("select")}
                 className={`px-3 py-1 text-xs ${
                   (appearance ?? "select") === "select"
@@ -389,6 +394,7 @@ export function RelationshipEditor({
               </button>
               <button
                 type="button"
+                aria-pressed={appearance === "drawer"}
                 onClick={() => onAppearanceChange("drawer")}
                 className={`px-3 py-1 text-xs ${
                   appearance === "drawer"
@@ -412,6 +418,7 @@ export function RelationshipEditor({
             />
           </div>
           <Switch
+            aria-label="Allow create"
             checked={allowCreate !== false}
             onCheckedChange={onAllowCreateChange}
           />
@@ -427,6 +434,7 @@ export function RelationshipEditor({
             />
           </div>
           <Switch
+            aria-label="Allow edit"
             checked={allowEdit !== false}
             onCheckedChange={onAllowEditChange}
           />
@@ -443,6 +451,7 @@ export function RelationshipEditor({
               />
             </div>
             <Switch
+              aria-label="Sortable"
               checked={isSortable !== false}
               onCheckedChange={onIsSortableChange}
             />
@@ -478,12 +487,14 @@ export function RelationshipEditor({
             </p>
             <div className="grid grid-cols-2 gap-2">
               <Input
+                aria-label="Filter field"
                 value={filterOptions.field || ""}
                 onChange={e => handleFilterUpdate({ field: e.target.value })}
                 placeholder="Field name"
                 className="h-8 text-sm font-mono"
               />
               <Input
+                aria-label="Filter value"
                 value={filterOptions.equals || ""}
                 onChange={e => handleFilterUpdate({ equals: e.target.value })}
                 placeholder="equals value"

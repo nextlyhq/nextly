@@ -17,7 +17,15 @@ import { drizzle as drizzleMysql } from "drizzle-orm/mysql2";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
 import { createPool, type Pool as MysqlPool } from "mysql2";
 import { Pool } from "pg";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { makeTestContext } from "../../../database/__tests__/integration/helpers/test-db";
 import {
@@ -171,9 +179,14 @@ describe.each(getConfiguredTestDialects())(
     afterEach(async () => {
       await handle?.destroy();
       handle = undefined;
+      vi.unstubAllEnvs();
     });
 
     it("reads back a group and a repeater as they were written", async () => {
+      // A Single's Builder create builds its table in development only; anywhere else it writes
+      // the migration for `nextly migrate` and leaves the Single pending, with no table to write
+      // the values into.
+      vi.stubEnv("NODE_ENV", "development");
       handle = await createTestNextly(dialect === "sqlite" ? {} : { dialect });
       const metadata = handle.getService(
         "singleMetadataService" as never
@@ -196,14 +209,19 @@ describe.each(getConfiguredTestDialects())(
       };
       await handle.nextly.updateSingle({
         slug: "site",
-        data: written,
+        data: { ...written, _overwrite: true },
       } as never);
       const read = (await handle.nextly.findSingle({
         slug: "site",
       } as never)) as Record<string, unknown>;
 
       expect(read.hero).toEqual(written.hero);
-      expect(read.links).toEqual(written.links);
+      // Every write gives a repeater row a saved id, beside the values written.
+      expect(read.links).toEqual(
+        [{ url: "https://example.com" }, { url: "https://example.org" }].map(
+          row => ({ ...row, id: expect.any(String) })
+        )
+      );
     });
   }
 );

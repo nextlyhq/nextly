@@ -97,6 +97,49 @@ describe("useUpdateEntry", () => {
     });
   });
 
+  it("leaves a save refused because the entry changed since to the conflict, and reads the current version", async () => {
+    const { toast } = await import("@admin/components/ui");
+    const client = makeClient();
+    const key = entryKeys.detailScoped("posts", "e1", {
+      locale: undefined,
+      fallbackLocale: undefined,
+      translationStatus: false,
+      draft: true,
+    });
+    client.setQueryData(key, { id: "e1", title: "old", _rev: "3" });
+    updateSpy.mockRejectedValue(
+      Object.assign(
+        new Error("This document changed since the version you gave."),
+        {
+          status: 409,
+          code: "STALE_VERSION",
+          data: { currentVersion: "4" },
+        }
+      )
+    );
+
+    const { result } = renderHook(
+      () =>
+        useUpdateEntry({
+          collectionSlug: "posts",
+          entryId: "e1",
+          draft: true,
+          showToast: true,
+        }),
+      { wrapper: makeWrapper(client) }
+    );
+
+    await expect(
+      result.current.mutateAsync({ title: "mine", _rev: "3" })
+    ).rejects.toMatchObject({ code: "STALE_VERSION" });
+
+    // The editor's conflict says it, with the choices; a toast would say it twice.
+    expect(toast.error).not.toHaveBeenCalled();
+    // The entry is read again, so the current version reaches the editor,
+    // whose pinned form keeps the refused edits until the author chooses.
+    expect(client.getQueryState(key)?.isInvalidated).toBe(true);
+  });
+
   it("clears a stale _isWorkingDraft when the response omits it (publish)", async () => {
     const client = makeClient();
     const key = entryKeys.detailScoped("posts", "e1", {

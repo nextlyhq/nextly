@@ -38,9 +38,15 @@
 
 import { useCallback, useMemo, useRef } from "react";
 
-import { useDocumentIdentity } from "@admin/components/features/entries/EntryForm/EntryFormContext";
+import {
+  useDocumentIdentity,
+  useDocumentKeepsRecoveryPoints,
+} from "@admin/components/features/entries/EntryForm/EntryFormContext";
 import { useEntryLocale } from "@admin/components/features/entries/EntryLocaleContext";
-import { autosaveScopeFor } from "@admin/hooks/useDocumentAutosave";
+import {
+  autosaveScopeFor,
+  documentRecordingKey,
+} from "@admin/hooks/useDocumentAutosave";
 import {
   useSnapshotAutosave,
   type AutosaveStatus,
@@ -61,10 +67,11 @@ export interface UseDocumentCheckpointOptions {
   /**
    * Turns recording off without unmounting.
    *
-   * Not a substitute for the owner's setting, which is enforced on the server
-   * and never inferred here. Use it for a moment when recording is wrong even
-   * though it is allowed — while a real save is in flight, for instance, when
-   * the document is about to change underneath the snapshot.
+   * Not for the owner's setting: where the document keeps no recovery points
+   * the editor around this hook says so and it records nothing, whatever this
+   * is. Use it for a moment when recording is wrong even though it is allowed
+   * — while a real save is in flight, for instance, when the document is about
+   * to change underneath the snapshot.
    */
   enabled?: boolean;
 
@@ -98,6 +105,9 @@ export function useDocumentCheckpoint({
   debounceMs = DEFAULT_AUTOSAVE_DEBOUNCE_MS,
 }: UseDocumentCheckpointOptions): UseDocumentCheckpointResult {
   const identity = useDocumentIdentity();
+  // The editor's reading of the autosave setting: where the document keeps no
+  // recovery points, a recording would only be refused by the server.
+  const keepsRecoveryPoints = useDocumentKeepsRecoveryPoints();
   // The active content language, read here rather than asked of the caller: a
   // plugin field has no way to know it, and a recording made under the wrong
   // language would overwrite the row the form's own recording writes.
@@ -135,14 +145,14 @@ export function useDocumentCheckpoint({
    * document — or another language — would store this document's content under
    * that one's key.
    */
-  const recordingKey = scope
-    ? `${scope.kind}:${scope.slug}:${"entryId" in scope ? scope.entryId : scope.documentId}:${locale ?? ""}`
-    : null;
+  const document = documentRecordingKey(scope);
+  const recordingKey = document === null ? null : `${document}:${locale ?? ""}`;
 
   return useSnapshotAutosave({
     identity: recordingKey,
+    document,
     save,
     debounceMs,
-    enabled,
+    enabled: enabled && keepsRecoveryPoints,
   });
 }

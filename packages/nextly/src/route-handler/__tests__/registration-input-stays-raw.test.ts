@@ -22,17 +22,38 @@ import type { PluginDefinition } from "../../plugins/plugin-context";
 const registerServices = vi.fn();
 const isServicesRegistered = vi.fn(() => false);
 
+/**
+ * A service that answers every property and call with itself, so each step of
+ * the start after registration runs through without what it reads mattering.
+ * Not thenable, so awaiting it does not hang, and printable, for the start's
+ * log lines.
+ */
+const anything: unknown = new Proxy(function anyService() {}, {
+  get: (_target, key) =>
+    key === "then"
+      ? undefined
+      : key === Symbol.toPrimitive
+        ? () => "stand-in"
+        : anything,
+  apply: () => anything,
+});
+
 vi.mock("../../di/register", () => ({
-  registerServices: (config: unknown) => registerServices(config),
+  registerServices: (config: unknown) => {
+    registerServices(config);
+    isServicesRegistered.mockReturnValue(true);
+  },
   shutdownServices: vi.fn(),
 }));
-vi.mock("../../di", () => ({
+// The lookup the start reads, as well as the route handler: a cold request
+// with a config runs `getNextly`'s start.
+vi.mock("../../di/service-access", () => ({
   isServicesRegistered: () => isServicesRegistered(),
   // A permissive stub, deliberately. The assertion below is about the argument
   // `registerServices` receives, which is decided BEFORE any of these post-
   // registration steps run — so what they resolve to cannot affect it, and a
   // stub that throws only stops the walk short of the steps that follow.
-  getService: () => new Proxy({}, { get: () => () => undefined }),
+  getService: () => anything,
 }));
 
 vi.mock("../../runtime/hmr-listener", () => ({ ensureHmrListener: vi.fn() }));

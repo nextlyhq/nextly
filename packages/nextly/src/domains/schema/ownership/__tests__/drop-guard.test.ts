@@ -13,6 +13,7 @@ import { generateSQL } from "../../pipeline/sql-templates";
 import {
   assertNoForeignDrops,
   dropsPluginMigratedTable,
+  pluginMigratedTablesOf,
   pushMayDropTable,
   tablesDroppedBy,
 } from "../drop-guard";
@@ -160,6 +161,27 @@ describe("pushMayDropTable", () => {
 
   it("resolves rebuild twins through the owner lookup", () => {
     expect(pushMayDropTable("__new_auth__identities", owners)).toBe(false);
+  });
+});
+
+describe("pluginMigratedTablesOf", () => {
+  it("reads table rows only: a plugin's element on the app's table does not make the table the plugin's", () => {
+    // Read as a table claim, the element row withheld the DROP inside a
+    // SQLite rebuild of the app's table, and the rebuild's twin was then
+    // renamed onto a table that was still there.
+    const element: OwnerRecord = {
+      ...owner("plugin:seo"),
+      tableName: "app_notes",
+      elementKind: "column",
+      elementName: "stamp",
+    };
+    const table: OwnerRecord = {
+      ...owner("plugin:seo"),
+      tableName: "SEO__Meta",
+    };
+    expect([...pluginMigratedTablesOf([element, table])]).toEqual([
+      "seo__meta",
+    ]);
   });
 });
 

@@ -1,6 +1,6 @@
 /**
  * Scheduling from the panel's Publishing section, end to end inside the
- * admin: "Not scheduled." with Schedule publish…, the dialog, the one
+ * admin: "Not scheduled." with Schedule…, the dialog, the one
  * request, and then the new release shown where the editor looks for it, in
  * the scheduled-release banner and in the Publishing section.
  *
@@ -17,9 +17,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@admin/__tests__/utils";
 import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
 import {
-  useSchedulePublishAction,
-  type SchedulePublishProps,
-} from "@admin/components/features/releases/SchedulePublishAction";
+  useScheduleDocumentAction,
+  type ScheduleDocumentProps,
+} from "@admin/components/features/releases/ScheduleDocumentAction";
 
 import { acceptContributions } from "../../DocumentActionBar";
 import type { DocumentActionBindings } from "../../useDocumentActionBindings";
@@ -88,14 +88,14 @@ function json(status: number, body: unknown): Response {
 
 /** The page's contribution, handed to the section as the editor hands it. */
 function Editor(props: { children: ReactNode }) {
-  const PROPS: SchedulePublishProps = {
+  const PROPS: ScheduleDocumentProps = {
     ...DOCUMENT,
     lifecycleEnabled: true,
     onDefaultLocale: true,
     documentTitle: () => "Spring launch",
     savesGoLive: false,
   };
-  const schedule = useSchedulePublishAction(PROPS);
+  const schedule = useScheduleDocumentAction(PROPS);
   const contributed = schedule.contributed;
   // Folded in as the editor folds a page's contribution, so the section
   // runs the same control the split's row runs.
@@ -148,31 +148,36 @@ const publishing = () =>
   screen.getByRole("heading", { name: "Publishing" }).parentElement!;
 
 describe("scheduling from the Publishing section", () => {
-  it("offers Schedule publish… under Not scheduled", async () => {
+  it("offers Schedule… under Not scheduled", async () => {
     showEditor();
     expect(await screen.findByText("Not scheduled.")).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Schedule publish…" })
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Schedule…" })).toBeTruthy();
   });
 
   it("shows the new release in the banner and the section once it lands", async () => {
     showEditor();
     await userEvent.click(
-      await screen.findByRole("button", { name: "Schedule publish…" })
+      await screen.findByRole("button", { name: "Schedule…" })
     );
     const dialog = await screen.findByRole("dialog", {
-      name: "Schedule publish",
+      name: /^Schedule “/,
     });
     await userEvent.click(
-      within(dialog).getByRole("button", { name: "Schedule publish" })
+      within(dialog).getByRole("button", { name: /^Schedule for/ })
     );
 
     // The banner, which says the document now changes on its own.
-    const banner = await screen.findByText(/This document/, {
-      selector: "li",
+    // A single-document release is said as the document's own schedule.
+    const banner = await waitFor(() => {
+      const line = screen
+        .getAllByRole("listitem")
+        .find(item => /This document/.test(item.textContent ?? ""));
+      expect(line).toBeDefined();
+      return line as HTMLElement;
     });
-    expect(banner.textContent).toMatch(/goes live .+, with Spring launch\./);
+    expect(banner.textContent).toMatch(
+      /goes live .+ on its own, as Spring launch\./
+    );
     // The section, which names the release and when, in place of the offer.
     await waitFor(() =>
       expect(screen.queryByText("Not scheduled.")).toBeNull()
@@ -183,7 +188,7 @@ describe("scheduling from the Publishing section", () => {
     ).toBeTruthy();
     expect(within(section).getByText(/^Goes live /)).toBeTruthy();
     expect(
-      within(section).queryByRole("button", { name: "Schedule publish…" })
+      within(section).queryByRole("button", { name: "Schedule…" })
     ).toBeNull();
     // The dialog closed.
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -192,13 +197,13 @@ describe("scheduling from the Publishing section", () => {
   it("leaves focus in the section, not on the page, once the offer it came from is gone", async () => {
     showEditor();
     await userEvent.click(
-      await screen.findByRole("button", { name: "Schedule publish…" })
+      await screen.findByRole("button", { name: "Schedule…" })
     );
     const dialog = await screen.findByRole("dialog", {
-      name: "Schedule publish",
+      name: /^Schedule “/,
     });
     await userEvent.click(
-      within(dialog).getByRole("button", { name: "Schedule publish" })
+      within(dialog).getByRole("button", { name: /^Schedule for/ })
     );
     await waitFor(() =>
       expect(screen.queryByText("Not scheduled.")).toBeNull()
@@ -227,19 +232,63 @@ describe("scheduling from the Publishing section", () => {
     );
   });
 
-  it("holds the offer, saying why, from a person who may not create releases", async () => {
+  it("holds the offer's place, unseen, while the schedule is checked, so the sections under it stay put", async () => {
+    // The releases read never answers: the section stays on its check.
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(() => {}));
+    showEditor();
+    const checking = await screen.findByText("Checking releases");
+    const body = checking.parentElement!;
+    expect(body.getAttribute("aria-busy")).toBe("true");
+    // The same button "Not scheduled." is drawn over, at its own size (its
+    // height is its size's, whatever it says), but neither seen, reached nor
+    // read while it only holds the place.
+    const held = within(body).getByRole("button", { hidden: true });
+    expect(held.getAttribute("data-slot")).toBe("button.outline");
+    expect(held.className.split(/\s+/)).toContain("invisible");
+    expect(held.getAttribute("tabindex")).toBe("-1");
+    expect(held.getAttribute("aria-hidden")).toBe("true");
+    expect(screen.queryByRole("button", { name: "Schedule…" })).toBeNull();
+  });
+
+  it("holds the place of the reason the offer is off, too, while the schedule is checked", async () => {
+    // A reader who may not schedule now (a colleague holds the document):
+    // the answer draws the offer with the reason under it, so the place
+    // held for it must be as tall.
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(() => {}));
+    function Withheld(props: { children: ReactNode }) {
+      const inner = Editor({ children: props.children });
+      if (hosted.current !== null) {
+        const [id] = Object.keys(hosted.current.bindings ?? {});
+        hosted.current = {
+          ...hosted.current,
+          bindings: {
+            ...hosted.current.bindings,
+            [id]: {
+              ...hosted.current.bindings![id]!,
+              disabledReason: "Someone else is editing this document.",
+            },
+          },
+        } as typeof hosted.current;
+      }
+      return inner;
+    }
+    render(
+      <Withheld>
+        <PublishingSection document={DOCUMENT} />
+      </Withheld>
+    );
+    const checking = await screen.findByText("Checking releases");
+    const body = checking.parentElement!;
+    const held = body.querySelector("p.text-xs");
+    expect(held?.textContent).toBe("Someone else is editing this document.");
+    expect(held?.className.split(/\s+/)).toContain("invisible");
+    expect(held?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("offers nothing to a person who may not create releases, since every way makes or joins one", async () => {
     grants.missing = ["create-content-releases"];
     showEditor();
-    const button = (await screen.findByRole("button", {
-      name: "Schedule publish…",
-    })) as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
-    const reason = "You do not have permission to schedule releases.";
-    expect(screen.getByText(reason)).toBeTruthy();
-    // Said to a screen reader with the button, not only beside it.
-    expect(
-      document.getElementById(button.getAttribute("aria-describedby") ?? "")
-        ?.textContent
-    ).toBe(reason);
+    expect(await screen.findByText("Not scheduled.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Schedule…" })).toBeNull();
   });
 });

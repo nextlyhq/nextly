@@ -310,7 +310,7 @@ describe("an Authorization header on an anonymous write to a csrf: true route", 
     } as never);
     const res = await runPluginRoute(
       write({ authorization: "Bearer nx_live_abc" }),
-      match({ csrf: true, public: false })
+      match({ csrf: true, public: false, siteWide: false })
     );
     expectAdmitted(res);
   });

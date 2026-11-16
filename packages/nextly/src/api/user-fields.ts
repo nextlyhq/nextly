@@ -24,12 +24,13 @@
 
 import { z } from "zod";
 
-import { container } from "../di";
+import { container, getService } from "../di";
 import type { NextlyServiceConfig } from "../di/register";
 import {
   SYSTEM_READ_POLICY,
   SYSTEM_WRITE_POLICY,
 } from "../domains/auth/system-write-policy";
+import { withSchemaChangeExcluded } from "../domains/schema/services/schema-change-exclusion";
 import { getCachedNextly } from "../init";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 import { checkUserFieldType } from "../users/config/validate-user-config";
@@ -199,11 +200,19 @@ export const POST = withErrorHandler(
       if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
       throw err;
     }
-    // Force source to 'ui'; code-sourced fields are managed via defineConfig().
-    const field = await service.createField({
-      ...validated,
-      source: "ui",
-    });
+    // The service's checks against the stored definitions and its row write hold the schema lock
+    // together, refused at once while a migration holds it. This route writes the definition row
+    // alone, so it issues no DDL and must not create the lock table on a role without DDL rights.
+    const field = await withSchemaChangeExcluded(
+      {
+        adapter: getService("adapter"),
+        logger: getService("logger"),
+        label: `create user field "${validated.name}"`,
+        issuesDdl: false,
+      },
+      // Force source to 'ui'; code-sourced fields are managed via defineConfig().
+      () => service.createField({ ...validated, source: "ui" })
+    );
 
     return respondMutation("User field created.", field, { status: 201 });
   }

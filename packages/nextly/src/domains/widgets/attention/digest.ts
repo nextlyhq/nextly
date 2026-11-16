@@ -24,11 +24,15 @@
  * rather than failing it: a failed item still shows its label, which a reader
  * not proven to see the item must not be shown.
  *
+ * An access rule that could not run, for want of a database connection, is
+ * neither: it never answered, so the whole digest ends with that answer.
+ *
  * @module domains/widgets/attention/digest
  * @experimental The digest's items may change until the card that draws them
  *   is built on them.
  */
 
+import { rethrowIfRuleCouldNotRun } from "../../../errors/rule-could-not-run";
 import { getNextlyLogger } from "../../../observability/logger";
 import type { AttentionCount } from "../declaration/dashboard";
 
@@ -61,6 +65,10 @@ export interface DigestReader {
   link?: string;
   /** One line saying why it is waiting, carried onto its item as it is. */
   reason?: string;
+  /** The documentation saying how to fix it, carried onto its item as it is. */
+  help?: string;
+  /** One thing, not a count: its row says the label alone. */
+  single?: true;
   /** Who declared it, named in the log when it fails: core, or a plugin. */
   owner: string;
   /**
@@ -153,6 +161,9 @@ async function isVisible(
   try {
     return (await visible(signal)) === true;
   } catch (error) {
+    // A rule that could not run never answered: the request ends with that,
+    // not with the item hidden as though refused.
+    rethrowIfRuleCouldNotRun(error);
     getNextlyLogger().warn({
       kind: "attention-item-access-failed",
       owner: reader.owner,
@@ -177,6 +188,9 @@ async function countOf(
     if (value === null) return null;
     return parseAttentionCount(value) ?? { failure: "not-a-count" };
   } catch (error) {
+    // A rule that could not run never answered: the request ends with that,
+    // not with the item drawn as failed with nothing saying why.
+    rethrowIfRuleCouldNotRun(error);
     return { failure: "threw", error };
   }
 }
@@ -211,13 +225,14 @@ export async function runDigest(
 
 /**
  * What a reader's item is, whatever its count: the same on a failed item, so
- * a reader is told which item went unchecked and why it would matter. A link
- * or a reason the reader did not give is left out, not carried as undefined.
+ * a reader is told which item went unchecked and why it would matter. A link,
+ * a reason or a help page the reader did not give is left out, not carried as
+ * undefined.
  */
 function itemIdentity(
   reader: DigestReader
 ): Omit<AttentionDigestItem, "count" | "atLeast" | "failed"> {
-  const { id, kind, label, severity, link, reason } = reader;
+  const { id, kind, label, severity, link, reason, help, single } = reader;
   return {
     id,
     kind,
@@ -225,6 +240,8 @@ function itemIdentity(
     severity,
     ...(link === undefined ? {} : { link }),
     ...(reason === undefined ? {} : { reason }),
+    ...(help === undefined ? {} : { help }),
+    ...(single === undefined ? {} : { single }),
   };
 }
 

@@ -30,7 +30,7 @@ import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef } from "react";
 
 import { RecoverySaveRefused } from "@admin/components/features/entries/EntryForm/useRefusedForm";
-import { toast } from "@admin/components/ui";
+import { toast } from "@admin/components/ui/toaster";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { apiErrorMessage, isApiError } from "@admin/lib/api/parseApiError";
 import { fieldLabel, humanizeFieldName } from "@admin/lib/field-label";
@@ -100,6 +100,11 @@ export interface RefusedForm {
    * has run. Rejects with the Save's outcome when the Save didn't store.
    */
   recover: (take: () => Promise<void>) => Promise<void>;
+  /**
+   * The version the editor's copy started from, which a take sends: once the
+   * recovery's own Save has stored, the version that Save answered.
+   */
+  version?: () => string | undefined;
 }
 
 /** How a recovery's hold ends when the editor moves to another document. */
@@ -356,7 +361,8 @@ export function useSharedFieldsRecovery(args: {
             try {
               ({ item: taken } = await versionApi.takeLiveSharedValues(
                 scope,
-                locale
+                locale,
+                form.version?.()
               ));
             } catch (failure) {
               // The request went out, and its answer can be lost after the
