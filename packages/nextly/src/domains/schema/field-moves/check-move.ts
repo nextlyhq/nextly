@@ -64,6 +64,7 @@ export type MoveRefusalReason =
   | "no-column"
   | "unique"
   | "into-repeater"
+  | "within-repeater"
   | "out-of-repeater"
   | "field-group"
   | "blocks"
@@ -197,6 +198,24 @@ export function checkMove(
       `The move names a field that is not at ${(from ? request.to : request.from).join(".")}.`
     );
   }
+  const refusal =
+    storageRefusal(from, to) ??
+    placesRefusal(from, to) ??
+    valuesRefusal(from, to, entity);
+  if (refusal) return refusal;
+  return {
+    ok: true,
+    move: {
+      field: to.field,
+      from: from.place,
+      to: to.place,
+      perLanguage: keptPerLanguage(from, entity),
+    },
+  };
+}
+
+/** The refusal of a field whose storage changes with the move, or that has no column to move. */
+function storageRefusal(from: PlacedField, to: PlacedField): MoveCheck | null {
   if (
     from.field.type !== to.field.type ||
     !sameStorage(from.field, to.field)
@@ -212,14 +231,48 @@ export function checkMove(
       `${label(to.field)} keeps its values outside the entry's row, so it is not moved into or out of a group.`
     );
   }
-  // Only the containers the move leaves or enters are judged, not those it stays inside.
+  return null;
+}
+
+/** The refusal of a move between places its values cannot be carried between. */
+function placesRefusal(from: PlacedField, to: PlacedField): MoveCheck | null {
   const shared = sharedDepth(from.containers, to.containers);
+  // A move that stays inside repeating rows would have to move the value in every row of the
+  // list its column holds, which these statements do not do yet.
+  const rowsAround = from.containers
+    .slice(0, shared)
+    .find(each => each.type === "repeater");
+  if (rowsAround) {
+    return refuse(
+      "within-repeater",
+      `Moving ${label(to.field)} within the repeating rows ${label(rowsAround)} is not available yet.`
+    );
+  }
+  // Only the containers the move leaves or enters are judged here, not those it stays inside.
   const crossing = crossingRefusal(
     to.field,
     from.containers.slice(shared),
     to.containers.slice(shared)
   );
   if (crossing) return crossing;
+  // A group that stores nothing (a virtual one) has no column for its fields' values to be in.
+  const emptyHolder = [from.containers[0], to.containers[0]].find(
+    holder => holder !== undefined && !fieldProducesColumn(holder)
+  );
+  return emptyHolder
+    ? refuse(
+        "no-column",
+        `${label(to.field)} cannot be moved into or out of ${label(emptyHolder)}: it stores no values of its own.`
+      )
+    : null;
+}
+
+/** The refusal of a move whose destination cannot keep what the field's values are. */
+function valuesRefusal(
+  from: PlacedField,
+  to: PlacedField,
+  entity: MoveEntity
+): MoveCheck | null {
   if (to.place.kind === "json" && builderColumnIsUnique(to.field)) {
     return refuse(
       "unique",
@@ -227,18 +280,13 @@ export function checkMove(
     );
   }
   const perLanguage = keptPerLanguage(from, entity);
-  if (perLanguage !== keptPerLanguage(to, entity)) {
-    return refuse(
-      "translation-changes",
-      perLanguage
-        ? `${label(to.field)} keeps a value for each language, and the group it would move into keeps one value for every language, so moving it would lose languages. This is not available yet.`
-        : `${label(to.field)} keeps one value for every language, and where it would move keeps a value for each language. This is not available yet.`
-    );
-  }
-  return {
-    ok: true,
-    move: { field: to.field, from: from.place, to: to.place, perLanguage },
-  };
+  if (perLanguage === keptPerLanguage(to, entity)) return null;
+  return refuse(
+    "translation-changes",
+    perLanguage
+      ? `${label(to.field)} keeps a value for each language, and the group it would move into keeps one value for every language, so moving it would lose languages. This is not available yet.`
+      : `${label(to.field)} keeps one value for every language, and where it would move keeps a value for each language. This is not available yet.`
+  );
 }
 
 /**
