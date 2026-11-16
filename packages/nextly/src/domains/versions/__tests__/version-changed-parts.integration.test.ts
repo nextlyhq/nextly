@@ -14,7 +14,14 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, defineSingle, number, text } from "../../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  defineSingle,
+  fieldGroup,
+  number,
+  text,
+} from "../../../config";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -27,6 +34,9 @@ import type { SingleEntryService } from "../../singles/services/single-entry-ser
 
 const POSTS = "partversions";
 const SITE = "partversionsite";
+/** No translatable field of its own; only its component is kept per language. */
+const BANNERED = "partversionbanners";
+const BANNER = "partversionbanner";
 
 let handle: TestNextly | undefined;
 
@@ -47,6 +57,22 @@ async function boot(dialect: TestDialect): Promise<CollectionEntryService> {
         versions: { drafts: true },
         // Translatable: `title`. Shared: `views`.
         fields: [text({ name: "title" }), number({ name: "views" })],
+      }),
+      defineCollection({
+        slug: BANNERED,
+        status: true,
+        versions: { drafts: true },
+        fields: [
+          number({ name: "views" }),
+          fieldGroup({ name: "banner", component: BANNER }),
+        ],
+      }),
+    ],
+    fieldGroups: [
+      defineFieldGroup({
+        slug: BANNER,
+        localized: true,
+        fields: [text({ name: "words" })],
       }),
     ],
     singles: [
@@ -109,6 +135,21 @@ async function save(
     { ...data, _overwrite: true }
   );
   expect(saved.success, JSON.stringify(saved)).toBe(true);
+}
+
+/**
+ * A document in English and Spanish that was never published, so every save
+ * of it is written in place rather than held as a draft.
+ */
+async function draftInBoth(entries: CollectionEntryService): Promise<string> {
+  const created = await entries.createEntry(
+    { collectionName: POSTS, overrideAccess: true, locale: "en" },
+    { title: "en title", views: 10, status: "draft" }
+  );
+  expect(created.success, JSON.stringify(created)).toBe(true);
+  const id = (created.data as { id: string }).id;
+  await save(entries, id, "es", { title: "es title" });
+  return id;
 }
 
 /** A document published in English and Spanish. */
@@ -359,6 +400,98 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await newestVersionParts(id)).toEqual({
         locales: ["es"],
+        shared: true,
+      });
+    }, 90_000);
+
+    it("names the language a create wrote a translated component in", async () => {
+      const entries = await boot(dialect);
+      const created = await entries.createEntry(
+        { collectionName: BANNERED, overrideAccess: true, locale: "es" },
+        { views: 1, banner: { words: "hola" } }
+      );
+      expect(created.success, JSON.stringify(created)).toBe(true);
+
+      expect(
+        await newestVersionParts((created.data as { id: string }).id)
+      ).toEqual({ locales: ["es"], shared: true });
+    }, 90_000);
+
+    it("names the language a create in a caller's transaction wrote a translated component in", async () => {
+      const entries = await boot(dialect);
+      const created = await handle!.adapter.transaction(tx =>
+        entries.createEntryInTransaction(
+          tx,
+          { collectionName: BANNERED, overrideAccess: true },
+          { views: 1, banner: { words: "hello" } }
+        )
+      );
+      expect(created.success, JSON.stringify(created)).toBe(true);
+
+      // Written in the default language, as a write that names none is.
+      expect(
+        await newestVersionParts((created.data as { id: string }).id)
+      ).toEqual({ locales: ["en"], shared: true });
+    }, 90_000);
+
+    it("names only the shared part for a save in place of a shared value in a language that has values", async () => {
+      const entries = await boot(dialect);
+      const id = await draftInBoth(entries);
+
+      await save(entries, id, "es", { views: 40 });
+
+      expect(await newestVersionParts(id)).toEqual({
+        locales: [],
+        shared: true,
+      });
+    }, 90_000);
+
+    it("names the language, and not the shared part, for a save in place of a translated value", async () => {
+      const entries = await boot(dialect);
+      const id = await draftInBoth(entries);
+
+      await save(entries, id, "es", { title: "es 2" });
+
+      expect(await newestVersionParts(id)).toEqual({
+        locales: ["es"],
+        shared: false,
+      });
+    }, 90_000);
+
+    it("names only the shared part for a save in place, in a caller's transaction, of a shared value", async () => {
+      const entries = await boot(dialect);
+      const id = await draftInBoth(entries);
+
+      const updated = await handle!.adapter.transaction(tx =>
+        entries.updateEntryInTransaction(
+          tx,
+          { collectionName: POSTS, entryId: id, overrideAccess: true },
+          { views: 41, _overwrite: true }
+        )
+      );
+      expect(updated.success, JSON.stringify(updated)).toBe(true);
+
+      expect(await newestVersionParts(id)).toEqual({
+        locales: [],
+        shared: true,
+      });
+    }, 90_000);
+
+    it("names only the shared part for a save in place of a shared value of a Single in a language that has values", async () => {
+      await boot(dialect);
+      await saveSingle("en", { title: "en title", views: 10, status: "draft" });
+      await saveSingle("es", { title: "es title" });
+      const read = await singlesOf().get(SITE, {
+        locale: "en",
+        overrideAccess: true,
+      });
+      expect(read.success, JSON.stringify(read)).toBe(true);
+      const id = (read.data as { id: string }).id;
+
+      await saveSingle("es", { views: 40 });
+
+      expect(await newestVersionParts(id)).toEqual({
+        locales: [],
         shared: true,
       });
     }, 90_000);

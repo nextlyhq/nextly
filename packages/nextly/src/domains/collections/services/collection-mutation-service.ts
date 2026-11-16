@@ -2765,8 +2765,12 @@ export class CollectionMutationService extends BaseService {
       onlyIfChanged?: boolean;
       /** Whether the collection has the Draft/Published lifecycle. */
       lifecycle: boolean;
-      /** The parts this write changed, which the version records. */
-      changedParts: ChangedParts;
+      /**
+       * The parts this write changed, which the version records, given the
+       * language the snapshot is recorded in: the one resolved below, so the
+       * language a write names is never worked out a second way.
+       */
+      changedParts: (snapshotLocale: string | null) => ChangedParts;
     }
   ): Promise<number | null> {
     // The version recorded, or null when versioning is off or the save
@@ -2774,6 +2778,18 @@ export class CollectionMutationService extends BaseService {
     if (!args.versionsConfig?.enabled) {
       return null;
     }
+    // The locale this snapshot belongs to: the one the write put translatable
+    // parent values in, when it did. Otherwise the component rule — the
+    // subtrees were read at the default locale (these paths pass no write
+    // locale), so tag the version with it when there are any, exactly as the
+    // interactive create/update paths do. Null when the snapshot carries
+    // neither, since there is then one set of values and nothing to
+    // disambiguate.
+    const snapshotLocale =
+      args.localeTag ??
+      (carriesComponentValues(args.fields)
+        ? this.componentSnapshotLocale(undefined)
+        : null);
     try {
       const { versionNo } = await captureInTx(tx, this.versionCapture, {
         onlyIfChanged: args.onlyIfChanged === true,
@@ -2788,19 +2804,8 @@ export class CollectionMutationService extends BaseService {
         // event carries, and that payload is read shape.
         parts: await this.snapshotPartsFor(args.documentParts, args.fields, tx),
         createdBy: args.createdBy,
-        // The locale this snapshot belongs to: the one the write put
-        // translatable parent values in, when it did. Otherwise the component
-        // rule — the subtrees were read at the default locale (these paths
-        // pass no write locale), so tag the version with it when there are
-        // any, exactly as the interactive create/update paths do. Null when
-        // the snapshot carries neither, since there is then one set of values
-        // and nothing to disambiguate.
-        locale:
-          args.localeTag ??
-          (carriesComponentValues(args.fields)
-            ? this.componentSnapshotLocale(undefined)
-            : null),
-        changedParts: args.changedParts,
+        locale: snapshotLocale,
+        changedParts: args.changedParts(snapshotLocale),
         maxPerDoc: args.versionsConfig.maxPerDoc,
       });
       return versionNo;
@@ -2932,7 +2937,9 @@ export class CollectionMutationService extends BaseService {
       // them in one language, and an untagged snapshot of them reads as
       // shared.
       localeTag: args.localeTag,
-      changedParts: partsCreated(args.localeTag),
+      // The language the snapshot is recorded in: the one its translatable
+      // values or its translated components went into.
+      changedParts: partsCreated,
     });
     const eventFields = await this.webhookFieldTreeIfRecording(
       args.collectionName,
@@ -7032,7 +7039,7 @@ export class CollectionMutationService extends BaseService {
       documentParts: parts.documentParts,
       fields,
       ...(translatedIn === null ? {} : { localeTag: translatedIn }),
-      changedParts: partOfRewrittenField(translatedIn),
+      changedParts: () => partOfRewrittenField(translatedIn),
       onlyIfChanged: true,
       lifecycle: (args.collection as { status?: boolean }).status === true,
     });
@@ -9217,6 +9224,18 @@ export class CollectionMutationService extends BaseService {
         // event below.
         let createdVersionNo: number | null = null;
         if (versionsConfig?.enabled) {
+          // Set only when localized values were actually routed, for the
+          // same reason the update path is careful about it.
+          // Set when locale-specific state was actually captured. A
+          // collection whose translatable content lives only in embedded
+          // components routes nothing through `localizedWrite`, yet the
+          // components above were read as this locale — so without counting
+          // them the version would be unlabelled and unrestorable.
+          const createdLocale =
+            localizedWrite?.writeLocale ??
+            (carriesComponentValues(fields)
+              ? this.componentSnapshotLocale(params.locale)
+              : null);
           const captured = await captureInTx(tx, this.versionCapture, {
             lifecycle: hasLifecycle(collection),
             ref: {
@@ -9237,21 +9256,11 @@ export class CollectionMutationService extends BaseService {
             // outbox event below carries, and that payload is read shape.
             parts: await this.snapshotPartsFor(documentParts, fields, tx),
             createdBy: params.user?.id ?? null,
-            // Set only when localized values were actually routed, for the
-            // same reason the update path is careful about it.
-            // Set when locale-specific state was actually captured. A
-            // collection whose translatable content lives only in embedded
-            // components routes nothing through `localizedWrite`, yet the
-            // components above were read as this locale — so without counting
-            // them the version would be unlabelled and unrestorable.
-            locale:
-              localizedWrite?.writeLocale ??
-              (carriesComponentValues(fields)
-                ? this.componentSnapshotLocale(params.locale)
-                : null),
-            // The shared row the create begins, and the language its
-            // translatable values went into.
-            changedParts: partsCreated(localizedWrite?.writeLocale),
+            locale: createdLocale,
+            // The shared row the create begins, and the language the snapshot
+            // is recorded in: the one its translatable values or its
+            // translated components went into.
+            changedParts: partsCreated(createdLocale),
             maxPerDoc: versionsConfig.maxPerDoc,
           });
           createdVersionNo = captured.versionNo;
@@ -17571,15 +17580,16 @@ export class CollectionMutationService extends BaseService {
                 ...(params.restoredFrom
                   ? { restoredFrom: params.restoredFrom }
                   : {}),
-                // Written in place: the language it wrote in, where the
-                // collection stores translations of its own, and the shared
-                // part where it wrote a shared value. A pending change it put
-                // live is folded into what it wrote, so the shared draft's
+                // Written in place: the language where it wrote a translated
+                // value, a component or the language's status, and the
+                // shared part where it wrote a shared value. A pending change
+                // it put live is folded into what it wrote, so the drafts'
                 // values count where the publish carried them.
                 changedParts: partsWritten({
-                  locale: capturedLocaleState
-                    ? (localizedUpdate?.writeLocale ?? null)
-                    : null,
+                  // The language the snapshot is recorded in, so a write to
+                  // a translated component of a collection with no
+                  // translations of its own is named as well.
+                  locale: versionLocale,
                   touched: keysSaveSets({
                     updatePayload,
                     componentFieldData,
@@ -17588,8 +17598,17 @@ export class CollectionMutationService extends BaseService {
                       localizedUpdate?.localizedFieldValues ?? {}
                     ),
                   }),
-                  keys: await partKeysOf(fields),
-                  languageWritten: true,
+                  // A collection that keeps no translations of its own stores
+                  // its fields on the shared row; its components alone are
+                  // a language's.
+                  keys: await partKeysOf(fields, {
+                    translated: Boolean(localizedUpdate),
+                  }),
+                  statusWritten:
+                    Object.prototype.hasOwnProperty.call(
+                      updatePayload,
+                      "status"
+                    ) || localizedUpdate?.companionData?._status !== undefined,
                 }),
                 maxPerDoc: versionsConfig.maxPerDoc,
               });
@@ -22567,6 +22586,12 @@ export class CollectionMutationService extends BaseService {
           ? localizedUpdate?.writeLocale
           : undefined;
         const savedStatus = (updated as { status?: unknown }).status;
+        // Which part each key belongs to, for the parts the version records.
+        // A collection that keeps no translations of its own stores its
+        // fields on the shared row; its components alone are a language's.
+        const updateKeys = await partKeysOf(fields, {
+          translated: Boolean(localizedUpdate),
+        });
         const versionNo = await this.captureTxVersion(tx, {
           onlyIfChanged: true,
           lifecycle: hasLifecycle(collection),
@@ -22582,21 +22607,25 @@ export class CollectionMutationService extends BaseService {
           // shared and a restore drops every per-locale field — or refuses,
           // on a collection where they all are.
           localeTag,
-          // Written in place: its language, and the shared part where it set
-          // a shared value.
-          changedParts: partsWritten({
-            locale: localeTag ?? null,
-            touched: keysSaveSets({
-              updatePayload: finalData,
-              componentFieldData,
-              manyToManyData,
-              translatedKeys: Object.keys(
-                localizedUpdate?.localizedFieldValues ?? {}
-              ),
+          // Written in place: the language where it wrote a translated value,
+          // a component or the language's status, and the shared part where
+          // it set a shared value.
+          changedParts: snapshotLocale =>
+            partsWritten({
+              locale: snapshotLocale,
+              touched: keysSaveSets({
+                updatePayload: finalData,
+                componentFieldData,
+                manyToManyData,
+                translatedKeys: Object.keys(
+                  localizedUpdate?.localizedFieldValues ?? {}
+                ),
+              }),
+              keys: updateKeys,
+              statusWritten:
+                Object.prototype.hasOwnProperty.call(finalData, "status") ||
+                localizedUpdate?.companionData?._status !== undefined,
             }),
-            keys: await partKeysOf(fields),
-            languageWritten: true,
-          }),
         });
         producedVersionNo = versionNo;
         await this.recordSaveHistory(

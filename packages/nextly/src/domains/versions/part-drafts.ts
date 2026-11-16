@@ -90,15 +90,24 @@ function isNamedPartField(
  * The keys are the fields addressable at the document's top level: an unnamed
  * group stores its children there, so each child is classified as a top-level
  * field is, and none is left out of both drafts.
+ *
+ * `translated: false` classifies a document whose own fields are stored on
+ * its shared row alone (it keeps no translations of its own): only its
+ * components, kept per language whatever their parent, are a language's.
  */
 export async function partKeysOf(
-  fields: readonly PartField[]
+  fields: readonly PartField[],
+  options: { translated?: boolean } = {}
 ): Promise<PartKeys> {
   const reached: readonly unknown[] = addressableFields(fields);
   const named = reached.filter(isNamedPartField);
   const language = await perLanguageFieldNames(
     named,
-    new Set(resolveLocalizedFieldNames(named, true)),
+    new Set(
+      options.translated === false
+        ? []
+        : resolveLocalizedFieldNames(named, true)
+    ),
     () => Promise.resolve(true)
   );
   // The system `title` and `slug` are stored on the shared row and left out
@@ -160,12 +169,11 @@ function touchesPart(
 /**
  * The parts a write in `locale` that set the keys `touched` changed, as its
  * version records them: the language where the write set one of the
- * language's keys, and the shared part where it set a shared key.
- *
- * `languageWritten` says the write put the language itself, its status
- * included, where it lands: a write in place does, so a publish by status
- * alone still names its language. A held save does not, and names a language
- * only for the values it held there.
+ * language's keys (a translated value or a component) or, `statusWritten`,
+ * the language's own status, so a publish by status alone still names its
+ * language; and the shared part where it set a shared key. A write that set
+ * only shared values names no language, though the language's values are in
+ * the snapshot it records.
  *
  * A write under no language is a write of a document kept as one part, which
  * is its shared part.
@@ -174,11 +182,11 @@ export function partsWritten(write: {
   locale: string | null;
   touched: ReadonlySet<string>;
   keys: PartKeys;
-  languageWritten?: boolean;
+  statusWritten?: boolean;
 }): ChangedParts {
   if (write.locale === null) return SHARED_PART_ALONE;
   const language =
-    write.languageWritten === true ||
+    write.statusWritten === true ||
     touchesPart(write.touched, write.keys.language);
   return {
     locales: language ? [write.locale] : [],

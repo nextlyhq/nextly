@@ -5351,13 +5351,16 @@ export class SingleMutationService extends BaseService {
               ...(options.restoredFrom
                 ? { restoredFrom: options.restoredFrom }
                 : {}),
-              // Written in place: the language it wrote in, where the Single
-              // keeps translations, and the shared part where it wrote a
+              // Written in place: the language the snapshot is recorded in
+              // where it wrote a translated value, a component or the
+              // language's status, and the shared part where it wrote a
               // shared value. A pending change it put live is folded into
-              // what it wrote, so the shared draft's values count where the
-              // publish carried them.
+              // what it wrote, so the drafts' values count where the publish
+              // carried them. A Single that keeps no translations of its own
+              // stores its fields on the shared row; its components alone are
+              // a language's.
               changedParts: partsWritten({
-                locale: companion ? savedLocale : null,
+                locale: savedLocale,
                 touched: new Set([
                   ...fieldsWrittenIn(singleMeta.fields, [
                     mainPayload,
@@ -5365,8 +5368,12 @@ export class SingleMutationService extends BaseService {
                   ]),
                   ...Object.keys(attemptComponentFields),
                 ]),
-                keys: await partKeysOf(fieldConfigs),
-                languageWritten: true,
+                keys: await partKeysOf(fieldConfigs, {
+                  translated: Boolean(companion),
+                }),
+                statusWritten:
+                  companionStatus !== undefined ||
+                  Object.prototype.hasOwnProperty.call(mainPayload, "status"),
               }),
               maxPerDoc: versionsConfig.maxPerDoc,
             });

@@ -104,9 +104,9 @@ describe("partKeysOf", () => {
 
 /**
  * The parts a write records on its version (`partsWritten`), from the keys it
- * set: a language only for its own keys unless the write put the language
- * itself, the shared part only for a shared key, and a write under no
- * language always the one shared part.
+ * set: a language only for its own keys or its own status, the shared part
+ * only for a shared key, and a write under no language always the one shared
+ * part.
  */
 describe("partsWritten", () => {
   const keys = {
@@ -126,13 +126,24 @@ describe("partsWritten", () => {
     ).toEqual({ locales: [], shared: true });
   });
 
-  it("names the language of a write in place that set no value of it, as a publish by status alone", () => {
+  it("names no language for a write that set a shared value and not the language's status", () => {
+    expect(
+      partsWritten({
+        locale: "es",
+        touched: new Set(["views", "updatedAt"]),
+        keys,
+        statusWritten: false,
+      })
+    ).toEqual({ locales: [], shared: true });
+  });
+
+  it("names the language of a write that set no value of it but its status, as a publish by status alone", () => {
     expect(
       partsWritten({
         locale: "es",
         touched: new Set(["status", "updatedAt"]),
         keys,
-        languageWritten: true,
+        statusWritten: true,
       })
     ).toEqual({ locales: ["es"], shared: false });
   });
@@ -141,6 +152,26 @@ describe("partsWritten", () => {
     expect(
       partsWritten({ locale: null, touched: new Set(["title"]), keys })
     ).toEqual({ locales: [], shared: true });
+  });
+});
+
+/**
+ * A document that keeps no translations of its own stores every field on its
+ * shared row; only its components, kept per language whatever their parent,
+ * belong to a language.
+ */
+describe("partKeysOf, for a document without translations of its own", () => {
+  it("puts its own fields in the shared part and its components in the language", async () => {
+    const keys = await partKeysOf(
+      [
+        { type: "text", name: "title" },
+        { type: "component", name: "banner", component: "banner" },
+      ],
+      { translated: false }
+    );
+
+    expect([...keys.language]).toEqual(["banner"]);
+    expect([...keys.shared].sort()).toEqual(["slug", "title"]);
   });
 });
 
