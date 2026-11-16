@@ -35,18 +35,15 @@ import {
   insertField,
   type FieldInsertPosition,
 } from "@admin/lib/builder/insert-field";
-import { UI_SCHEMA_FIELD_TYPES } from "@admin/lib/builder/ui-schema-mode";
+import { BUILDER_FIELD_TYPE_ENTRIES } from "@admin/lib/builder/offered-field-types";
 
 import { pickerExcludedTypes, type BuilderConfig } from "./builder-config";
 import { FIELD_TYPES_CATALOG } from "./field-picker-modal/field-types-catalog";
 import type { BuilderField } from "./types";
 
 /** The Builder's types: the catalog rows a ui-schema can store, described once. */
-const BUILDER_TYPES = describeFieldTypes<string>(
-  FIELD_TYPES_CATALOG.filter(entry =>
-    (UI_SCHEMA_FIELD_TYPES as readonly string[]).includes(entry.type)
-  )
-);
+// The Builder's own types, as a template's are checked against them.
+const BUILDER_TYPES = describeFieldTypes<string>(BUILDER_FIELD_TYPE_ENTRIES);
 
 /** The type that embeds a field group, as the catalog spells it. */
 const FIELD_GROUP_TYPE = FIELD_TYPES_CATALOG.find(entry =>

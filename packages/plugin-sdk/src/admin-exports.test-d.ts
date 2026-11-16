@@ -540,3 +540,29 @@ expectTypeOf<adminEntry.FileDropAreaProps>().toMatchTypeOf<{
 expectTypeOf<adminEntry.FormActionsProps["message"]>().toEqualTypeOf<
   React.ReactNode | undefined
 >();
+
+// The template declaration and how a plugin contributes templates
+// (@experimental): a plain declaration a plugin's admin module registers under
+// its own name, getting the removal back.
+expectTypeOf(adminEntry.registerSchemaTemplates).toEqualTypeOf<
+  (
+    source: string,
+    templates: readonly adminEntry.SchemaTemplate[]
+  ) => () => void
+>();
+expectTypeOf<adminEntry.SchemaTemplate["kind"]>().toEqualTypeOf<
+  "collection" | "single" | "fieldGroup"
+>();
+expectTypeOf<adminEntry.SchemaTemplate>().toMatchTypeOf<{
+  id: string;
+  category: string;
+  name: string;
+  description: string;
+  fields: readonly adminEntry.SchemaTemplateField[];
+}>();
+expectTypeOf<adminEntry.SchemaTemplateField["fields"]>().toEqualTypeOf<
+  readonly adminEntry.SchemaTemplateField[] | undefined
+>();
+// What a template needs is read from its fields, so a declaration has no
+// separate list of what it needs to keep in agreement with them.
+expectTypeOf<adminEntry.SchemaTemplate>().not.toHaveProperty("needs");
