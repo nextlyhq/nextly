@@ -97,6 +97,21 @@ function heading(id: string, words: string): Record<string, unknown> {
   };
 }
 
+/**
+ * A Heading with room above and below its line, taller than the toolbar, as a
+ * page's top heading usually is.
+ */
+function roomyHeading(id: string, words: string): Record<string, unknown> {
+  return {
+    ...heading(id, words),
+    styles: {
+      base: {
+        base: { padding: { blockStart: "20px", blockEnd: "20px" } },
+      },
+    },
+  };
+}
+
 function text(id: string, words: string): Record<string, unknown> {
   return { id, type: "core/text", version: 1, props: { text: words } };
 }
@@ -135,7 +150,29 @@ async function layoutWithHeader(request: APIRequestContext): Promise<string> {
         content: {
           formatVersion: 1,
           kind: "component",
-          nodes: [heading("h", `Site header ${at}`)],
+          // A header as a site draws one: a band with room in it, taller
+          // than the toolbar.
+          nodes: [
+            {
+              id: "band",
+              type: "core/section",
+              version: 1,
+              props: { as: "section", contained: true },
+              styles: {
+                base: {
+                  base: {
+                    padding: {
+                      blockStart: "32px",
+                      blockEnd: "32px",
+                      inlineStart: "24px",
+                      inlineEnd: "24px",
+                    },
+                  },
+                },
+              },
+              slots: { children: [heading("h", `Site header ${at}`)] },
+            },
+          ],
         },
         status: "published",
       },
@@ -208,7 +245,7 @@ test.describe("the block toolbar with no room above, and on a locked block", () 
     page,
   }) => {
     const id = await createPage(page.request, [
-      heading(HEADING, LONG),
+      roomyHeading(HEADING, LONG),
       text(NEXT, "The block after it, which the toolbar must not cover."),
     ]);
     await openBuilder(page, id, HEADING);
@@ -228,6 +265,43 @@ test.describe("the block toolbar with no room above, and on a locked block", () 
     await select(page, NEXT);
     const above = await barOn(page, "above");
     expect(above.y + above.height).toBeLessThanOrEqual(next.y);
+  });
+
+  test("keeps the next block readable under a top block shorter than the toolbar", async ({
+    page,
+  }) => {
+    // A one-line Heading is shorter than the toolbar, so the bar inside it
+    // runs past its bottom: it fades while the next block is pointed at.
+    const id = await createPage(page.request, [
+      heading(HEADING, "A short heading"),
+      text(NEXT, "The block after it."),
+    ]);
+    await openBuilder(page, id, HEADING);
+    await select(page, HEADING);
+    await expect(toolbar(page)).not.toHaveAttribute("data-faded", "");
+
+    const bar = await barOn(page, "inside");
+    const next = await boxOf(page, NEXT);
+    // The bar does run onto the next block here: the strip this is about.
+    expect(bar.y + bar.height).toBeGreaterThan(next.y);
+    await page.mouse.move(next.x + next.width - 20, next.y + next.height / 2);
+    await expect(toolbar(page)).toHaveAttribute("data-faded", "");
+    await expect(toolbar(page)).toHaveCSS("opacity", "0");
+
+    // A press on that strip, right where Duplicate is drawn, goes to the
+    // block under it: the block is selected and nothing is duplicated.
+    const duplicate = await toolbarControl(page, "Duplicate").boundingBox();
+    if (duplicate === null) throw new Error("[e2e] Duplicate has no box");
+    const x = duplicate.x + duplicate.width / 2;
+    const y = (next.y + Math.min(bar.y + bar.height, next.y + next.height)) / 2;
+    await page.mouse.move(x, next.y + next.height - 2, { steps: 4 });
+    await page.mouse.move(x, y, { steps: 4 });
+    await page.mouse.down();
+    await page.mouse.up();
+    await expect.poll(() => selection(page)).toEqual([NEXT]);
+    await expect(
+      page.getByRole("button", { name: "Undo", exact: true })
+    ).toBeDisabled();
   });
 
   test("draws inside a tall Section at the top, over nothing after it", async ({
@@ -297,7 +371,7 @@ test.describe("the block toolbar with no room above, and on a locked block", () 
     page,
   }) => {
     const id = await createPage(page.request, [
-      heading(HEADING, LONG),
+      roomyHeading(HEADING, LONG),
       text(NEXT, "The block after it."),
     ]);
     await openBuilder(page, id, HEADING);
@@ -308,9 +382,10 @@ test.describe("the block toolbar with no room above, and on a locked block", () 
     const words = await field(page, HEADING, "text");
     const point = await glyphPoint(page, words, 0.9);
     await page.mouse.dblclick(point.x, point.y);
-    await expect(
-      canvasFrame(page).locator('[contenteditable="true"]')
-    ).toBeVisible({ timeout: 30_000 });
+    // The element inline editing marks as the one being typed into.
+    await expect(canvasFrame(page).locator("[data-nx-editing]")).toBeVisible({
+      timeout: 30_000,
+    });
     await page.keyboard.type(" now");
     await expect(toolbar(page)).toBeHidden();
 
@@ -372,12 +447,11 @@ test.describe("the block toolbar with no room above, and on a locked block", () 
       "aria-disabled",
       "true"
     );
-    await openLayers(page);
-    await expect(layerRow(page, HERO).first()).not.toContainText("Locked");
 
-    // One edit: undo puts the lock back.
-    await page.keyboard.press("ControlOrMeta+z");
+    // One edit: one undo puts the lock back.
+    await page.getByRole("button", { name: "Undo", exact: true }).click();
     await expect(toolbarControl(page, "Unlock")).toBeVisible();
+    await openLayers(page);
     await expect(layerRow(page, HERO).first()).toContainText("Locked");
   });
 });

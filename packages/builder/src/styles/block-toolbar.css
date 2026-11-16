@@ -135,6 +135,17 @@
   opacity: 0;
 }
 
+/*
+ * A bar drawn inside a block shorter than itself runs over the top of the
+ * next block. While it is faded for that block, a press there goes to the
+ * block, not to a button the author cannot see. Its part over its own block is
+ * still reached: pointing there is pointing at the selected block, which
+ * brings the bar back.
+ */
+.nx-block-toolbar[data-side="inside"][data-faded]:not(:focus-within) button {
+  pointer-events: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .nx-block-toolbar {
     transition: none;
@@ -186,12 +197,14 @@
 }
 
 /*
- * The selected block's Layers lock, said at the start of its bar: a lock icon
- * and "Locked", or "Locked by" the block whose lock covers it. In the bar's own
- * ink, so it reads on the dark bar in either theme, and set apart from the
- * buttons by a rule in that ink rather than by a fill.
+ * The selected block's Layers lock, at the start of its bar: "Unlock" with an
+ * open padlock where the author may lift the lock, "Locked" dimmed where they
+ * may not, or "Locked by" the block whose lock covers it, with "Select it". In
+ * the bar's own ink, so it reads on the dark bar in either theme, and set
+ * apart from the buttons by a rule in that ink rather than by a fill.
  */
-.nx-block-toolbar__lock {
+.nx-block-toolbar__lock,
+.nx-block-toolbar__lock-button {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
@@ -204,6 +217,53 @@
      at runtime; the fallback is the same step. */
   font-size: var(--text-xs, 0.75rem);
   white-space: nowrap;
+}
+
+/* A control in words, as tall as the icon buttons beside it. */
+.nx-block-toolbar__lock-button {
+  height: 1.75rem;
+  border-block: none;
+  border-inline-start: none;
+  border-start-start-radius: var(--radius-sm);
+  border-end-start-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
+  font-size: var(--text-xs, 0.75rem);
+  cursor: pointer;
+}
+
+.nx-block-toolbar__lock-button:hover,
+.nx-block-toolbar__lock-select:hover {
+  background: color-mix(in srgb, var(--nx-builder-ink-text) 12%, transparent);
+}
+
+.nx-block-toolbar__lock-button:focus-visible,
+.nx-block-toolbar__lock-select:focus-visible {
+  outline: 2px solid var(--nx-builder-ink-text);
+  outline-offset: -2px;
+}
+
+.nx-block-toolbar__lock-button[aria-disabled="true"] {
+  color: color-mix(in srgb, var(--nx-builder-ink-text) 55%, transparent);
+  cursor: not-allowed;
+}
+
+.nx-block-toolbar__lock-button[aria-disabled="true"]:hover {
+  background: none;
+}
+
+/* "Select it", a link-like press inside the note, underlined as words are. */
+.nx-block-toolbar__lock-select {
+  height: 1.5rem;
+  padding-inline: 0.25rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
 }
 
 /*
