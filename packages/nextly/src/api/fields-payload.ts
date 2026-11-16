@@ -23,7 +23,10 @@ import {
   type FieldNameSurface,
   isCollectionOnlyFieldName,
 } from "../domains/dynamic-collections/field-name-rule";
-import { fieldProducesColumn } from "../domains/schema/services/field-column-descriptor";
+import {
+  fieldProducesColumn,
+  fieldsStoredOnRow,
+} from "../domains/schema/services/field-column-descriptor";
 import { NextlyError } from "../errors/nextly-error";
 import { uiSchemaFieldSchema } from "../schemas/_zod/ui-schema";
 import { pluginFieldOptionIssues } from "../shared/lib/plugin-field-options";
@@ -247,9 +250,10 @@ function fieldsAsSaved(fields: unknown): unknown {
 /**
  * What a kept name breaks only because the save gives it a column it did not have: a field
  * stored as a field-group reference, a many-to-many relationship or a virtual field, saved as
- * one that becomes a column. The name was never asked about a column, so the rules that a column
- * brings (its length, a lifecycle column it would reach) are asked now. A problem the name has
- * with or without a column is the stored name's, which keeps working where it is stored.
+ * one that becomes a column. The name was never asked about a column, so every rule a column
+ * meets is asked now: its length, a system column's name, and a lifecycle column it would reach,
+ * whether or not the name was already one the lifecycle declares. Only the spelling stays the
+ * stored name's, which keeps working where it is stored.
  */
 function problemTheColumnBrings(
   name: string,
@@ -259,12 +263,32 @@ function problemTheColumnBrings(
 ): FieldNameProblem | null {
   if (!fieldProducesColumn(field) || fieldProducesColumn(kept)) return null;
   // The declared spelling, so a camelCase name a plugin declared reaches the column's rules.
-  const asked = { ...place, spelling: "declared" as const };
-  const withColumn = fieldNameProblem(name, { ...asked, producesColumn: true });
-  const without = fieldNameProblem(name, { ...asked, producesColumn: false });
-  return withColumn !== null && withColumn.kind !== without?.kind
-    ? withColumn
-    : null;
+  const problem = fieldNameProblem(name, {
+    ...place,
+    spelling: "declared",
+    producesColumn: true,
+  });
+  return problem?.kind === "spelling" ? null : problem;
+}
+
+/** Whether a field has a name to be addressed by; a group without one only lays fields out. */
+function hasName(field: FieldName): field is FieldName & { name: string } {
+  return typeof field.name === "string" && field.name.length > 0;
+}
+
+/** Why `field`'s name cannot be saved at `place`, given the field `stored` holds under it there. */
+function nameProblemAt(
+  field: FieldName & { name: string },
+  kept: FieldName | undefined,
+  place: Omit<FieldNamePlace, "producesColumn" | "spelling">
+): FieldNameProblem | null {
+  return kept === undefined
+    ? fieldNameProblem(field.name, {
+        ...place,
+        // Asked of the field by the one predicate that says whether it has a column.
+        producesColumn: fieldProducesColumn(field),
+      })
+    : problemTheColumnBrings(field.name, field, kept, place);
 }
 
 /**
@@ -287,48 +311,68 @@ export function assertBuilderFieldNames(
   entity: FieldNamesEntity = {},
   path = ""
 ): void {
-  const held = new Map<string, FieldName>();
-  for (const field of fieldNames(stored)) {
-    if (typeof field.name === "string") held.set(field.name, field);
-  }
   // Judged as the save keeps them: the payload schema's shape, which the stored definition and
   // the columns follow. A key the schema does not declare, such as a root `virtual`, does not
   // survive the save, so it cannot spare a name the rules a column brings. Parsed once, at the
   // top; nested lists arrive already parsed.
   const asSaved = path === "" ? fieldsAsSaved(fields) : fields;
-  fieldNames(asSaved).forEach((field, index) => {
-    const at = `${path}${index}`;
-    const kept =
-      typeof field.name === "string" ? held.get(field.name) : undefined;
-    const place = {
-      surface: entity.surface,
-      nested: path !== "",
-      lifecycleEnabled: entity.lifecycleEnabled,
-    };
-    const problem =
-      typeof field.name !== "string"
-        ? null
-        : kept === undefined
-          ? fieldNameProblem(field.name, {
-              ...place,
-              // Asked of the field by the one predicate that says whether it has a column.
-              producesColumn: fieldProducesColumn(field),
-            })
-          : problemTheColumnBrings(field.name, field, kept, place);
-    if (problem !== null) {
-      throw NextlyError.validation({
-        errors: [
-          { path: `${at}.name`, code: problem.code, message: problem.message },
-        ],
-      });
-    }
-    if (Array.isArray(field.fields)) {
-      assertBuilderFieldNames(
-        field.fields,
-        fieldNames(kept?.fields),
-        entity,
-        `${at}.fields.`
-      );
-    }
-  });
+  assertLevelNames(asSaved, stored, entity, path, path !== "");
+}
+
+/**
+ * Refuses a field at one storage level of `fields`, and at each level below it, whose name breaks
+ * the rule for that level. A group with no name only lays fields out: the fields inside it are
+ * stored where it sits (`fieldsStoredOnRow`), so they are judged, and their kept names found, at
+ * the level holding it. A named group or a repeater keeps its fields inside its own value, the
+ * level below.
+ */
+function assertLevelNames(
+  fields: unknown,
+  stored: unknown,
+  entity: FieldNamesEntity,
+  path: string,
+  nested: boolean
+): void {
+  const held = new Map<string, FieldName>();
+  for (const field of fieldsStoredOnRow(fieldNames(stored))) {
+    if (hasName(field)) held.set(field.name, field);
+  }
+  const place = {
+    surface: entity.surface,
+    nested,
+    lifecycleEnabled: entity.lifecycleEnabled,
+  };
+  const walk = (list: unknown, prefix: string): void => {
+    fieldNames(list).forEach((field, index) => {
+      const at = `${prefix}${index}`;
+      if (!hasName(field)) {
+        // A group with no name: its fields are this level's.
+        if (Array.isArray(field.fields)) walk(field.fields, `${at}.fields.`);
+        return;
+      }
+      const kept = held.get(field.name);
+      const problem = nameProblemAt(field, kept, place);
+      if (problem !== null) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: `${at}.name`,
+              code: problem.code,
+              message: problem.message,
+            },
+          ],
+        });
+      }
+      if (Array.isArray(field.fields)) {
+        assertLevelNames(
+          field.fields,
+          kept?.fields,
+          entity,
+          `${at}.fields.`,
+          true
+        );
+      }
+    });
+  };
+  walk(fields, path);
 }
