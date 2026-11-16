@@ -32,6 +32,9 @@ vi.mock("../DocumentActionsContext", () => ({
   useDocumentActionsContext: () => hosted,
   useHostedRecoveryPoint: () => recovery,
   useHostedStored: () => stored,
+  // The chip says it is drawn so Save may keep a recovery offer; no case here
+  // offers one.
+  useSaveChipDrawn: () => {},
 }));
 
 const { DocumentPrimaryAction, DocumentSaveIndicator } = await import(
