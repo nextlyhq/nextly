@@ -134,6 +134,12 @@ describe("the builder speed report", () => {
     expect(problems).toEqual([]);
   });
 
+  it("fails a run told to measure only a measure no budget names", () => {
+    const { rows, problems } = judge({}, TWO, {}, { only: ["undoo"] });
+    expect(rows.every(row => row.outcome === "skipped")).toBe(true);
+    expect(problems).toEqual(['--only names "undoo", which no budget names']);
+  });
+
   it("fails a mark for a measure no budget names", () => {
     const { problems } = judge(
       { undo: { samples: ten(100) }, "select-requests": { samples: ten(0) } },

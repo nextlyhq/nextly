@@ -89,6 +89,12 @@ export function judge(measured, budgets, expected, options = {}) {
   const only = options.only === undefined ? null : new Set(options.only);
   const rows = [];
   const problems = [];
+  // A run told to measure a measure no budget names measured nothing it
+  // meant to: said, rather than passing as a table of skipped rows.
+  const named = new Set(budgets.map(b => b.id));
+  for (const id of only ?? [])
+    if (!named.has(id))
+      problems.push(`--only names "${id}", which no budget names`);
   for (const budget of budgets) {
     const mark = expected[budget.id];
     const base = {
@@ -135,7 +141,6 @@ export function judge(measured, budgets, expected, options = {}) {
       );
     }
   }
-  const named = new Set(budgets.map(b => b.id));
   for (const id of Object.keys(expected)) {
     if (!named.has(id)) {
       problems.push(

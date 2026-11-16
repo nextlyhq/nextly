@@ -90,32 +90,43 @@ export async function startServer(env) {
   let output = "";
   server.stdout.on("data", chunk => (output += chunk));
   server.stderr.on("data", chunk => (output += chunk));
-  const until = Date.now() + 120_000;
-  for (;;) {
-    if (server.exitCode !== null)
-      throw new Error(`the server exited:\n${output.slice(-2000)}`);
-    if (await portOpen(PORT)) {
-      const health = await fetch(`${BASE}/api/health`).catch(() => null);
-      if (health?.ok) break;
-    }
-    if (Date.now() > until)
-      throw new Error(`the server never answered:\n${output.slice(-2000)}`);
-    await sleep(250);
-  }
-  return {
-    pid: server.pid,
-    stop: async () => {
-      // The whole process group: `pnpm exec` and the Next.js server under it.
-      if (server.pid !== undefined) {
-        try {
-          process.kill(-server.pid, "SIGTERM");
-        } catch {
-          // Already gone.
-        }
+  const stop = async () => {
+    // The whole process group: `pnpm exec` and the Next.js server under it.
+    if (server.pid !== undefined) {
+      try {
+        process.kill(-server.pid, "SIGTERM");
+      } catch {
+        // Already gone.
       }
-      await sleep(1000);
-    },
+    }
+    await sleep(1000);
   };
+  const until = Date.now() + 120_000;
+  try {
+    for (;;) {
+      if (server.exitCode !== null)
+        throw new Error(`the server exited:\n${output.slice(-2000)}`);
+      if (await portOpen(PORT)) {
+        // Each ask bounded, so a server that takes the request and never
+        // answers cannot hold the start past its deadline.
+        const health = await fetch(`${BASE}/api/health`, {
+          signal: AbortSignal.timeout(
+            Math.max(1, Math.min(5000, until - Date.now()))
+          ),
+        }).catch(() => null);
+        if (health?.ok) break;
+      }
+      if (Date.now() > until)
+        throw new Error(`the server never answered:\n${output.slice(-2000)}`);
+      await sleep(250);
+    }
+  } catch (error) {
+    // A start that failed still leaves its processes running: stopped here,
+    // since the caller never receives a handle to stop them with.
+    await stop();
+    throw error;
+  }
+  return { pid: server.pid, stop };
 }
 
 export function statementsBetween(log, from, to) {

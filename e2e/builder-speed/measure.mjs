@@ -157,9 +157,10 @@ async function measure(log) {
             path: path.join(OUT_DIR, `${ids[0]}-failed.png`),
           })
           .catch(() => {});
+        // Every measure of the group, including any it already kept: those
+        // samples may have been taken on a page that has since changed.
         for (const id of ids)
-          if (measured[id] === undefined)
-            keep(id, [null], `could not be measured: ${reason}`);
+          keep(id, [null], `could not be measured: ${reason}`);
         await throttle(cdp, RATE);
         await openBuilder(page, large).catch(() => {});
         await watcher.quiet();
@@ -327,6 +328,11 @@ async function measure(log) {
 }
 
 async function main() {
+  // Before anything is built or started: an `--only` that names no budget
+  // would run for minutes and measure nothing.
+  const unknown = (ONLY ?? []).filter(id => !BUDGETS.some(b => b.id === id));
+  if (unknown.length > 0)
+    throw new Error(`--only names no budget: ${unknown.join(", ")}`);
   const dir = OUT_DIR;
   fs.mkdirSync(dir, { recursive: true });
   const log = OWN_SERVER ? path.join(dir, "statements.jsonl") : null;

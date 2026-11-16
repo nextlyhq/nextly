@@ -67,9 +67,13 @@ export async function selections(page, watcher, count, log) {
     out.outline.push(sample.ms[1]);
     await watcher.quiet();
     // What the click set off: every request sent from the click until 1.5 s
-    // after its result showed.
+    // after its result showed, read once that window has passed.
     const clicked = sample.start ?? Date.now();
     const shown = Math.max(clicked, ...sample.ends.filter(e => e !== null));
+    const now = await page.evaluate(
+      () => performance.timeOrigin + performance.now()
+    );
+    if (shown + 1500 > now) await sleep(shown + 1500 - now);
     const sent = (await sentBetween(page, clicked, shown + 1500)).filter(
       r => !r.path.endsWith("/document-lock")
     );
@@ -150,21 +154,30 @@ export async function quickClicks(page, count) {
         () => true,
         () => false
       );
-    // Until a second passes with no new long task.
+    // Until a second passes with no new long task, for at most a minute: a
+    // page that never falls quiet is no reading.
     let seen = -1;
-    for (;;) {
+    let settled = false;
+    const settleBy = Date.now() + SHOW_LIMIT_MS;
+    while (Date.now() < settleBy) {
       await sleep(1000);
       const n = await page.evaluate(
         () => window.__builderSpeed.longTasks.length
       );
-      if (n === seen) break;
+      if (n === seen) {
+        settled = true;
+        break;
+      }
       seen = n;
     }
     const to = await page.evaluate(
       () => performance.timeOrigin + performance.now()
     );
-    // Clicks that never selected the last block measured nothing.
-    totals.push(landed ? await blockingBetween(page, from, to) : null);
+    // Clicks that never selected the last block, or a page that never fell
+    // quiet, measured nothing.
+    totals.push(
+      landed && settled ? await blockingBetween(page, from, to) : null
+    );
   }
   return totals;
 }
@@ -185,10 +198,10 @@ export async function closeAddPanel(page) {
 
 /**
  * Starts counting the header and footer elements an action hides: in every
- * animation frame from now, how many elements inside the regions are drawn
- * with no size, beyond the number drawn with none before. A region missing
- * altogether counts as all the elements it held. The most in any one frame is
- * the count, so an element that blinks out and back is counted, once.
+ * animation frame from now, how many of the elements the regions drew before
+ * (with a size) are gone from the page or drawn with no size. The most in any
+ * one frame is the count, so an element that blinks out and back is counted
+ * once, and one taken away and drawn again as a new element counts too.
  */
 async function watchRegions(page) {
   await page.evaluate(() => {
@@ -203,31 +216,20 @@ async function watchRegions(page) {
       const box = element.getBoundingClientRect();
       return box.width === 0 || box.height === 0;
     };
-    const census = () => {
-      const counts = {};
-      for (const region of doc.querySelectorAll("[data-nx-region]")) {
-        const all = [region, ...region.querySelectorAll("*")];
-        counts[region.getAttribute("data-nx-region")] = {
-          all: all.length,
-          empty: all.filter(empty).length,
-        };
-      }
-      return counts;
-    };
-    const before = census();
+    const regions = [...doc.querySelectorAll("[data-nx-region]")];
+    const areas = new Set(regions.map(r => r.getAttribute("data-nx-region")));
     // Both regions, or the count below would read none for want of anything
     // to watch.
-    if (before.header === undefined || before.footer === undefined)
+    if (!areas.has("header") || !areas.has("footer"))
       throw new Error("the canvas draws no header or no footer to watch");
+    const drawn = regions
+      .flatMap(region => [region, ...region.querySelectorAll("*")])
+      .filter(element => !empty(element));
     const frame = () => {
       if (watch.stop) return;
-      const now = census();
       let hidden = 0;
-      for (const [area, was] of Object.entries(before)) {
-        const is = now[area];
-        hidden +=
-          is === undefined ? was.all : Math.max(0, is.empty - was.empty);
-      }
+      for (const element of drawn)
+        if (!element.isConnected || empty(element)) hidden += 1;
       watch.most = Math.max(watch.most, hidden);
       requestAnimationFrame(frame);
     };
