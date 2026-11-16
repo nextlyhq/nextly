@@ -10,6 +10,8 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
+import { randomUUID } from "node:crypto";
+
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -306,6 +308,31 @@ describe.each(getConfiguredTestDialects())(
       const current = await t.nextly.media.copyOf({ id: item.id, width: 640 });
       expect(current?.url).toContain(`?v=${copyVersionOf(replaced.filename)}`);
       expect(current?.url).not.toContain(oldVersion);
+    });
+
+    it("keeps a copy another item names as its own file when the original is deleted", async () => {
+      const item = await uploadPhoto();
+      expect((await get([item.id, "copy", "640"])).status).toBe(200);
+      const named = `${item.filename}.w640.jpg`;
+      expect(await mediaStorage().exists(named)).toBe(true);
+      // Another item whose file is that copy, as an import could make one.
+      const [row] = await t.adapter.select<Record<string, unknown>>("media", {
+        where: { and: [{ column: "id", op: "=", value: item.id }] },
+      });
+      const otherId = randomUUID();
+      await t.adapter.insert("media", {
+        ...row,
+        id: otherId,
+        filename: named,
+        url: mediaStorage().getPublicUrl(named),
+        thumbnailUrl: null,
+      });
+
+      await t.nextly.media.delete({ id: item.id });
+
+      expect(await mediaStorage().exists(item.filename)).toBe(false);
+      expect(await mediaStorage().exists(named)).toBe(true);
+      await t.nextly.media.delete({ id: otherId });
     });
 
     describe.each([

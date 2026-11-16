@@ -47,6 +47,7 @@ import {
   lockMediaItems,
 } from "../domains/media/lock-media-items";
 import {
+  filesToRemoveOf,
   errorForLog,
   filesKeptByOthers,
   removeStoredFiles,
@@ -298,7 +299,7 @@ function removalThrough(
       );
       filePaths.push(
         ...paths.filter(filePath => !kept.has(filePath)),
-        ...copiesToRemove(record, cleanup.keepsCopies?.("media") ?? false, kept)
+        ...copiesToRemove(record, reading.keepsCopies, kept)
       );
       for (const url of unlocated) warnUnlocated(url, record.id);
       for (const url of notHere) warnSizeNotHere(url, record.id);
@@ -1166,7 +1167,7 @@ export class MediaFolderService extends BaseService {
         const { reading } = files;
         const kept = await filesKeptByOthers(
           this.storedFileSearch,
-          run.flatMap(record => storedFilesOf(record, reading.locator).paths),
+          run.flatMap(record => filesToRemoveOf(record, reading)),
           ids,
           reading
         );

@@ -45,6 +45,7 @@ const ITEM = {
   filename: "media/2026/11/0b6f6c2e-photo.jpg",
   mimeType: "image/jpeg",
   url: "/uploads/media/2026/11/0b6f6c2e-photo.jpg",
+  width: 2200,
 };
 
 async function itemWithPhoto() {
@@ -264,6 +265,16 @@ describe("copyOfMedia past the original's width", () => {
       url: mediaCopyAddress(narrow, 320),
       width: 320,
     });
+  });
+
+  it("answers no copy for an original whose width was never recorded", async () => {
+    const { storage } = memoryStorage();
+    const processor = new ImageProcessor();
+    for (const width of [null, undefined]) {
+      expect(
+        await copyOfMedia({ ...ITEM, width }, 96, { storage, processor })
+      ).toBeNull();
+    }
   });
 });
 

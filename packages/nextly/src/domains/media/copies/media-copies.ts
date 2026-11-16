@@ -128,7 +128,10 @@ export async function copyOfMedia(
 ): Promise<MediaCopy | null> {
   const snapped = nearestMediaCopyWidth(width);
   if (copyFormatsOf(item.mimeType).length === 0) return null;
-  if (typeof item.width === "number" && snapped > item.width) return null;
+  // An original whose width was never recorded (uploaded while the image
+  // library was missing) could be narrower than any width asked for, and a
+  // copy is never enlarged, so no width it would have can be promised.
+  if (typeof item.width !== "number" || snapped > item.width) return null;
   if (!keepsCopies(deps.storage)) return null;
   if (!(await deps.processor.canProcess())) return null;
   return { url: mediaCopyAddress(item, snapped), width: snapped };

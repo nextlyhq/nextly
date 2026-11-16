@@ -8,7 +8,11 @@ import { describe, expect, it } from "vitest";
 import { Bucket } from "../../../storage/__tests__/stand-in-bucket";
 import { MediaStorage } from "../../../storage/storage";
 import { copyPathsOf } from "../copies/copy-rules";
-import { removeStoredFiles } from "../remove-stored-files";
+import {
+  filesToRemoveOf,
+  removeStoredFiles,
+  storageReadingOf,
+} from "../remove-stored-files";
 import { copiesToRemove, type MediaFilesRecord } from "../stored-files";
 
 const PHOTO: MediaFilesRecord = {
@@ -66,6 +70,29 @@ describe("removeStoredFiles", () => {
     const { removed, storage } = remover(true);
     await removeStoredFiles(storage, PHOTO, "photo", new Set([PHOTO.filename]));
     expect(removed).toEqual([]);
+  });
+});
+
+describe("filesToRemoveOf", () => {
+  it("asks about the copies too, where the storage keeps them", () => {
+    const keeping = storageReadingOf({ keepsCopies: () => true });
+    expect(filesToRemoveOf(PHOTO, keeping)).toEqual([
+      PHOTO.filename,
+      ...copyPathsOf(PHOTO),
+    ]);
+    const keepingNone = storageReadingOf({ keepsCopies: () => false });
+    expect(filesToRemoveOf(PHOTO, keepingNone)).toEqual([PHOTO.filename]);
+  });
+});
+
+describe("a copy another item names as its own file", () => {
+  it("is kept when its original is removed", async () => {
+    const { removed, storage } = remover(true);
+    const named = `${PHOTO.filename}.w640.webp`;
+    await removeStoredFiles(storage, PHOTO, "photo", new Set([named]));
+    expect(removed).toContain(PHOTO.filename);
+    expect(removed).not.toContain(named);
+    expect(removed).toContain(`${PHOTO.filename}.w320.webp`);
   });
 });
 

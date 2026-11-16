@@ -66,6 +66,8 @@ function sizeLocatorOf(
 export interface StorageReading {
   locator: SizeLocator | undefined;
   keys: StoredKeys;
+  /** Whether the storage keeps resized copies beside its files. */
+  keepsCopies: boolean;
 }
 
 /**
@@ -73,10 +75,33 @@ export interface StorageReading {
  * canonically, as a storage whose spellings may be one file.
  */
 export function storageReadingOf(
-  storage: Pick<StoredFileRemover, "getPublicUrl" | "getStorageType">
+  storage: Pick<
+    StoredFileRemover,
+    "getPublicUrl" | "getStorageType" | "keepsCopies"
+  >
 ): StorageReading {
   const locator = sizeLocatorOf(storage);
-  return { locator, keys: storedKeysOn(locator?.getType() ?? "") };
+  return {
+    locator,
+    keys: storedKeysOn(locator?.getType() ?? ""),
+    keepsCopies: storage.keepsCopies?.("media") ?? false,
+  };
+}
+
+/**
+ * Every file a removal of `record` takes, as read against one storage: its
+ * stored files and, where the storage keeps them, every resized copy it can
+ * have. What a removal asks the search for files another item refers to
+ * about, so a copy another item names is kept like any other file.
+ */
+export function filesToRemoveOf(
+  record: MediaFilesRecord,
+  reading: StorageReading
+): string[] {
+  return [
+    ...storedFilesOf(record, reading.locator).paths,
+    ...copiesToRemove(record, reading.keepsCopies, new Set()),
+  ];
 }
 
 /**
@@ -373,7 +398,7 @@ export async function removeStoredFiles(
   for (const url of notHere) warnSizeNotHere(url, mediaId);
   const copies = copiesToRemove(
     record,
-    storage.keepsCopies?.("media") ?? false,
+    storageReadingOf(storage).keepsCopies,
     kept
   );
   const removed = await Promise.all(
