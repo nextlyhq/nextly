@@ -68,6 +68,10 @@ type DesignMatches = Partial<Record<DesignView, number>>;
 interface DesignBrowse {
   readonly search: string;
   readonly setSearch: (search: string) => void;
+  /** The search field, where focus goes once a listed thing is removed. */
+  readonly searchRef: React.RefObject<HTMLInputElement | null>;
+  /** Opens a group the author folded and brings it into view, focused. */
+  readonly reveal: (group: string) => void;
   readonly folds: GroupFolds | undefined;
   readonly reportMatches: (matches: DesignMatches) => void;
 }
@@ -75,6 +79,8 @@ interface DesignBrowse {
 const DesignBrowseContext = React.createContext<DesignBrowse>({
   search: "",
   setSearch: () => undefined,
+  searchRef: { current: null },
+  reveal: () => undefined,
   folds: undefined,
   reportMatches: () => undefined,
 });
@@ -114,6 +120,43 @@ function useFolds(store: PreferenceStore | undefined): GroupFolds {
     [store]
   );
   return React.useMemo(() => ({ folded, onFold }), [folded, onFold]);
+}
+
+/**
+ * Opens a group of the open tab and brings it into view with focus on its
+ * heading, as a part sending the author to it asks: once drawn, since a
+ * folded group's rows are not.
+ */
+function useReveal(
+  root: React.RefObject<HTMLElement | null>,
+  folds: GroupFolds
+): (group: string) => void {
+  return React.useCallback(
+    (group: string) => {
+      if (folds.folded.has(group)) folds.onFold(group, false);
+      window.setTimeout(() => {
+        const section = [
+          ...(root.current?.querySelectorAll<HTMLElement>("[data-group]") ??
+            []),
+        ].find(element => element.dataset.group === group);
+        section?.scrollIntoView({ block: "nearest" });
+        section?.querySelector<HTMLElement>("button")?.focus();
+      }, 0);
+    },
+    [root, folds]
+  );
+}
+
+/**
+ * The panel's way to bring a group into view, for a part drawn inside a tab
+ * that sends the author to it, such as the fonts' "Edit this variable".
+ */
+export function DesignReveal({
+  children,
+}: {
+  children: (reveal: (group: string) => void) => React.ReactNode;
+}): React.JSX.Element {
+  return <>{children(useDesignBrowse().reveal)}</>;
 }
 
 /** The stored folds, or none: a store that holds nothing or no list of names. */
@@ -178,6 +221,8 @@ export function DesignPanel({
   // re-renders this panel, and that is no reason to rebuild the open tab.
   const open = React.useMemo(() => tabs[current](), [tabs, current]);
   const [search, setSearch] = React.useState("");
+  const searchRef = React.useRef<HTMLInputElement>(null);
+  const root = React.useRef<HTMLElement>(null);
   const [matches, setMatches] = React.useState<DesignMatches>({});
   const folds = useFolds(foldStore);
   // Parts report the counts they list; only the counts that changed land.
@@ -190,13 +235,15 @@ export function DesignPanel({
         : { ...current, ...reported }
     );
   }, []);
+  const reveal = useReveal(root, folds);
   const browse = React.useMemo(
-    () => ({ search, setSearch, folds, reportMatches }),
-    [search, folds, reportMatches]
+    () => ({ search, setSearch, searchRef, reveal, folds, reportMatches }),
+    [search, reveal, folds, reportMatches]
   );
   const searching = search.trim() !== "";
   return (
     <section
+      ref={root}
       className="nx-pb-design"
       aria-label={`${EDITOR_WORDS.design} panel`}
     >
@@ -232,6 +279,7 @@ export function DesignPanel({
           <div className="nx-pb-design__search">
             <Search aria-hidden="true" size={16} />
             <Input
+              ref={searchRef}
               type="search"
               aria-label={`Search ${EDITOR_WORDS.design}`}
               placeholder="Search"

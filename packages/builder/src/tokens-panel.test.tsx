@@ -1750,4 +1750,29 @@ describe("a Design tab's view of the variables", () => {
         .getAttribute("aria-expanded")
     ).toBe("true");
   });
+
+  it("puts focus on the host's search once a variable is removed", async () => {
+    // The row and its editor go with the variable; the host's search is the
+    // control that stays, as the view's own search is for a standalone view.
+    function WithSearch(): React.JSX.Element {
+      const searchRef = React.useRef<HTMLInputElement>(null);
+      return (
+        <>
+          <input aria-label="Host search" ref={searchRef} />
+          <Hosted tokens={SITE} search="" searchRef={searchRef} />
+        </>
+      );
+    }
+    render(<WithSearch />);
+    const editor = await openEditor(/^Brand/);
+    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    fireEvent.click(
+      await within(editor).findByRole("button", { name: /^Remove Brand/ })
+    );
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("textbox", { name: "Host search" })
+      )
+    );
+  });
 });

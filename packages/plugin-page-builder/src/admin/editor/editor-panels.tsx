@@ -48,7 +48,12 @@ import {
   useCanvasPreviewMode,
   type CanvasPreviewMode,
 } from "./canvas-preview-mode";
-import { DesignGroup, DesignPanel, type DesignView } from "./design-panel";
+import {
+  DesignGroup,
+  DesignPanel,
+  DesignReveal,
+  type DesignView,
+} from "./design-panel";
 import {
   checklistStoreFor,
   designFoldsStoreFor,
@@ -529,7 +534,6 @@ export function editorPanelRenderer({
   classes,
   pageClassBlocks,
   classSummaryContext,
-  requestPanel,
   insertInside,
   addSummon,
   onAddSummoned,
@@ -585,7 +589,6 @@ export function editorPanelRenderer({
     EditorPanels,
     | "offered"
     | "offerablePatterns"
-    | "requestPanel"
     | "insertInside"
     | "addSummon"
     | "onAddSummoned"
@@ -745,31 +748,38 @@ export function editorPanelRenderer({
                     )?.length
                   }
                 >
-                  <FontsPanelWithUpload
-                    faces={offerableFaces(
-                      canvasSiteStyle,
-                      siteStylePending,
-                      siteStyleError
+                  <DesignReveal>
+                    {reveal => (
+                      <FontsPanelWithUpload
+                        faces={offerableFaces(
+                          canvasSiteStyle,
+                          siteStylePending,
+                          siteStyleError
+                        )}
+                        codeFaces={configSiteStyle?.fonts}
+                        tokens={renderedTokens(
+                          canvasSiteStyle,
+                          siteStylePending,
+                          siteStyleError
+                        )}
+                        absence={siteStyleError !== null ? "failed" : "pending"}
+                        /*
+                          The fix for a token naming a family this site does not provide
+                          is to edit that token, and editing belongs to the studio. This
+                          shell offers one, so the jump is wired: without the callback
+                          the panel suppresses the action and an author is left to find
+                          the right panel and the right row themselves.
+                        */
+                        // The font variables are in this same tab: their group
+                        // is opened and brought into view, rather than the tab
+                        // asked for again.
+                        onOpenTokens={() => reveal("fonts")}
+                        storedFaces={storedSiteStyle?.fonts}
+                        storedPending={siteStylePending}
+                        unreadableFonts={unreadableStoredFonts}
+                      />
                     )}
-                    codeFaces={configSiteStyle?.fonts}
-                    tokens={renderedTokens(
-                      canvasSiteStyle,
-                      siteStylePending,
-                      siteStyleError
-                    )}
-                    absence={siteStyleError !== null ? "failed" : "pending"}
-                    /*
-                      The fix for a token naming a family this site does not provide
-                      is to edit that token, and editing belongs to the studio. This
-                      shell offers one, so the jump is wired: without the callback
-                      the panel suppresses the action and an author is left to find
-                      the right panel and the right row themselves.
-                    */
-                    onOpenTokens={() => requestPanel("design", "type")}
-                    storedFaces={storedSiteStyle?.fonts}
-                    storedPending={siteStylePending}
-                    unreadableFonts={unreadableStoredFonts}
-                  />
+                  </DesignReveal>
                 </DesignGroup>
                 <VariablesTab tab="type" />
               </>

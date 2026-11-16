@@ -194,6 +194,8 @@ export interface TokensPanelProps {
    * so its row and editor are drawn.
    */
   onSearch?: (query: string) => void;
+  /** The host's search field, where focus goes once a variable is removed. */
+  searchRef?: React.RefObject<HTMLInputElement | null>;
   /** Which groups are folded, and the way to fold one. Absent: none fold. */
   folds?: GroupFolds;
 }
@@ -338,7 +340,10 @@ function VariablesView({
     onAdded: clear,
     onSettle,
   });
-  const search = React.useRef<HTMLInputElement>(null);
+  const ownSearch = React.useRef<HTMLInputElement>(null);
+  // Where focus goes once a variable is removed: the host's search where it
+  // keeps one, else the view's own.
+  const search = hosted.searchRef ?? ownSearch;
 
   const groups = useListedGroups(tokens, mode, hosted.groups);
   const shown = searched(groups, needle);
@@ -358,7 +363,7 @@ function VariablesView({
       onInput={onActivity}
     >
       <PlacedControls placed={placed} slot={headerActions} header={header} />
-      <OwnSearch ref={search} shown={own} query={query} onQuery={setQuery} />
+      <OwnSearch ref={ownSearch} shown={own} query={query} onQuery={setQuery} />
       <ViewBody
         adds={
           <HiddenGroupAdds
@@ -444,7 +449,9 @@ function rowsHostOf({
     suppliedOf: identity => suppliedFor(supplied, identity),
     onRemoved: key => {
       forget(key);
-      search.current?.focus();
+      // After the removed row's editor has closed: closing hands focus back
+      // to its trigger, which went with the row, and would leave it nowhere.
+      window.setTimeout(() => search.current?.focus(), 0);
     },
   };
 }
@@ -980,6 +987,8 @@ function Group({
     <section
       className="nx-vars__group"
       aria-labelledby={id}
+      // Which group this is, for a host bringing one into view.
+      data-group={group}
       data-folded={folded ? "" : undefined}
     >
       <div className="nx-vars__group-head">
