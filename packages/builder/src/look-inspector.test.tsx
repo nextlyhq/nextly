@@ -16,6 +16,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import * as React from "react";
 import {
   afterAll,
   afterEach,
@@ -28,6 +29,7 @@ import {
 
 import type { EditorState } from "./editor-state";
 import { InspectorPanel } from "./inspector-panel";
+import { siteOrientationOf } from "./side-orientation";
 import type { SharedStyleChange } from "./shared-style-target";
 import type { SharedStylesHost } from "./style-target";
 
@@ -451,6 +453,65 @@ describe("a look's sides, named by the site's direction", () => {
     block.setAttribute("data-nx-node", "a");
     canvas.append(block);
     await waitFor(() => expect(sideOf("Padding right")).toBe("inlineStart"));
+  });
+
+  it("takes only the site's axes, never the page root's layout", () => {
+    // The root lays out the page, not the block a look styles: its display
+    // and flex direction would turn the look's alignment icons with the page.
+    const canvas = mountOnSite("rtl");
+    expect(siteOrientationOf(canvas)).toEqual({
+      writingMode: "horizontal-tb",
+      direction: "rtl",
+    });
+  });
+
+  it("draws a right-to-left site's box mirrored from the first paint", () => {
+    // Read on the first render, before any effect runs: an effect-only read
+    // would paint a left-to-right box first and mirror it a frame later.
+    const canvas = window.document.createElement("div");
+    const real = window.getComputedStyle.bind(window);
+    vi.spyOn(window, "getComputedStyle").mockImplementation(((
+      element: Element,
+      pseudo?: string | null
+    ) =>
+      element === canvas
+        ? ({
+            writingMode: "horizontal-tb",
+            direction: "rtl",
+          } as CSSStyleDeclaration)
+        : real(element, pseudo)) as typeof window.getComputedStyle);
+    const seen: (string | null | undefined)[] = [];
+    function FirstPaint(): null {
+      // Runs after React's commit and before passive effects re-render.
+      React.useLayoutEffect(() => {
+        const box = window.document.querySelector(".nx-spacing-box");
+        seen.push(
+          box === null
+            ? undefined
+            : within(box as HTMLElement)
+                .getByLabelText("Padding right")
+                .closest("[data-side]")
+                ?.getAttribute("data-side")
+        );
+      }, []);
+      return null;
+    }
+    render(
+      <>
+        <InspectorPanel
+          editor={editorFor(null)}
+          canvasRoot={canvas}
+          classLibrary={[panelLook]}
+          sharedStyles={{ mayChange: true, writeStyles: async () => undefined }}
+          lookEditing={{
+            look: { id: panelLook.id, blockType: "acme/panel" },
+            onExit: () => {},
+          }}
+        />
+        <FirstPaint />
+      </>
+    );
+    expect(seen).toEqual(["inlineStart"]);
   });
 
   it("names the sides left to right while the canvas can't say", () => {

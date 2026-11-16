@@ -221,7 +221,9 @@ function readSelected(
  * @param restyledBy - what can restyle the page without moving an element
  * @param measure - the reading, a module-level function so it never changes
  * @param sameAs - whether two readings say the same thing
- * @param initial - the answer before the first measurement
+ * @param initial - the answer on the first render, before the effect measures;
+ *   given the root, so a reading cheap enough to take during render can be
+ *   right from the first paint
  * @returns the newest reading
  */
 function useObservedReading<T>(
@@ -230,10 +232,10 @@ function useObservedReading<T>(
   restyledBy: RestyleSignals,
   measure: (root: HTMLElement | null | undefined, id: string | null) => T,
   sameAs: (a: T, b: T) => boolean,
-  initial: T
+  initial: (root: HTMLElement | null | undefined) => T
 ): T {
   const { document, state, breakpoint, cascade, previewContainer } = restyledBy;
-  const [reading, setReading] = React.useState<T>(initial);
+  const [reading, setReading] = React.useState<T>(() => initial(canvasRoot));
 
   React.useEffect(() => {
     /*
@@ -321,22 +323,15 @@ export function useCanvasReading(
     restyledBy,
     readSelected,
     same,
-    NOTHING
+    // Nothing known until the effect has found the selected element.
+    () => NOTHING
   );
-}
-
-/** The canvas root's axes, as the site states them; the id is not asked. */
-function readSite(canvasRoot: HTMLElement | null | undefined): SideOrientation {
-  return siteOrientationOf(canvasRoot);
 }
 
 /** Whether two site orientations name the same axes. */
 function sameAxes(a: SideOrientation, b: SideOrientation): boolean {
   return a.writingMode === b.writingMode && a.direction === b.direction;
 }
-
-/** The site's direction before the canvas is measured: left to right. */
-const SITE_UNMEASURED: SideOrientation = siteOrientationOf(undefined);
 
 /**
  * The site's own direction, read from the canvas root and kept current, for
@@ -354,8 +349,10 @@ export function useSiteOrientation(
     canvasRoot,
     null,
     restyledBy,
-    readSite,
+    siteOrientationOf,
     sameAxes,
-    SITE_UNMEASURED
+    // Measured on the first render too: one computed-style read of the root,
+    // so a right-to-left site's box is never first painted left to right.
+    siteOrientationOf
   );
 }
