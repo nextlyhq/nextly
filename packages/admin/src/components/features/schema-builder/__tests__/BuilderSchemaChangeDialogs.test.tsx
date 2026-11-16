@@ -149,6 +149,45 @@ describe("BuilderSchemaChangeDialogs", () => {
     expect(screen.getByText(/rename to/i)).toBeInTheDocument();
   });
 
+  // The first save of a table an earlier Nextly version made also converts it, which the save
+  // writes only once confirmed, so the short confirmation's "does not affect existing data" is not
+  // the whole story: the full dialog says what it brings up to date, in the server's own words.
+  it("shows the full dialog, saying what it brings up to date, for a safe change with conversions", async () => {
+    const user = userEvent.setup();
+    const { onConfirm } = renderDialogs(
+      preview({
+        conversions: [
+          {
+            table: "dc_posts",
+            column: "dc_posts",
+            from: "as an earlier version made it",
+            to: "as Nextly declares it (add index)",
+            change: "adds an index on created_at",
+          },
+          {
+            table: "dc_posts",
+            column: "body",
+            from: "text",
+            to: "varchar(255)",
+            change: "changes body from text to varchar(255)",
+          },
+        ],
+      })
+    );
+
+    expect(screen.queryByText(/safe change/i)).not.toBeInTheDocument();
+    const section = screen.getByRole("region", { name: "Brought up to date" });
+    expect(
+      within(section).getByText(
+        "dc_posts was made by an earlier Nextly version. Saving brings it up to date: adds an index on created_at; changes body from text to varchar(255)."
+      )
+    ).toBeInTheDocument();
+    // Nothing to tick: Save confirms every conversion listed.
+    expect(within(section).queryByRole("checkbox")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
   // A field leaving translation moves its other languages to the archive, so the
   // short confirmation's "does not affect existing data" would be untrue.
   it("shows the full dialog, saying what moves to the archive, for a field leaving translation", () => {

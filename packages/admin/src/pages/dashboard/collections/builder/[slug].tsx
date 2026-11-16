@@ -415,7 +415,7 @@ export default function CollectionBuilderEditPage({
       unsaved
         ? Promise.resolve(createPreview(fields))
         : schemaApi.preview(entitySlug, fields, localized, drafts),
-    apply: (fields, version, resolutions, renames) =>
+    apply: (fields, version, resolutions, renames, acknowledged) =>
       unsaved
         ? createUnsaved(fields)
         : schemaApi.apply(
@@ -425,7 +425,8 @@ export default function CollectionBuilderEditPage({
             resolutions,
             renames,
             localized,
-            drafts
+            drafts,
+            acknowledged
           ),
     onNoChanges: saveSettingsOnly,
     onApplied: unsaved ? onCreated : onSchemaApplied,

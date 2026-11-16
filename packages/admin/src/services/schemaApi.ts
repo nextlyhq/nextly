@@ -115,6 +115,37 @@ export interface SchemaPreviewResponse {
   renamed: SchemaPreviewRenameCandidate[];
   leavingTranslation?: SchemaPreviewLeavingTranslation[];
   joiningTranslation?: SchemaPreviewJoiningTranslation[];
+  /**
+   * What the save also brings up to date in a table an earlier Nextly version made, which it
+   * writes only once the apply confirms each by its key (`acknowledgedConversions`). Empty or
+   * absent when there is nothing to convert, and from an older server.
+   */
+  conversions?: SchemaPreviewConversion[];
+}
+
+/** One conversion a save makes to a table an earlier Nextly version made, as the preview names it. */
+export interface SchemaPreviewConversion {
+  /** The table it converts. */
+  table: string;
+  /** The key the apply confirms it by. Opaque: a column's name, or the table's for an index. */
+  column: string;
+  from: string;
+  to: string;
+  /** What it does, in plain words ("adds an index on created_at"), shown as it is. */
+  change: string;
+}
+
+/**
+ * The part of an apply's body that confirms the reviewed conversions: their keys, or nothing when
+ * there are none, so a save with nothing to convert sends what it always has.
+ */
+export function acknowledgedConversionsBody(
+  acknowledgedConversions: readonly string[] | undefined
+): { acknowledgedConversions?: readonly string[] } {
+  return acknowledgedConversions !== undefined &&
+    acknowledgedConversions.length > 0
+    ? { acknowledgedConversions }
+    : {};
 }
 
 /**
@@ -206,7 +237,9 @@ export const schemaApi = {
     // the persisted value untouched.
     localized?: boolean,
     // The pending Draft/Published toggle, judged with as the preview is (see above).
-    status?: boolean
+    status?: boolean,
+    // The keys of the conversions the review listed and its Save confirmed.
+    acknowledgedConversions?: readonly string[]
   ): Promise<SchemaApplyResponse> => {
     const result = await protectedApi.post<
       ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
@@ -218,6 +251,7 @@ export const schemaApi = {
       renameResolutions,
       ...(localized !== undefined ? { localized } : {}),
       ...(status !== undefined ? { status } : {}),
+      ...acknowledgedConversionsBody(acknowledgedConversions),
     });
     return {
       success: true,

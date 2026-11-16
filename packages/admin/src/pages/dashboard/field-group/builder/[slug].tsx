@@ -369,7 +369,7 @@ export default function FieldGroupBuilderEditPage({
       unsaved
         ? Promise.resolve(createPreview(fields))
         : fieldGroupApi.previewSchemaChanges(entitySlug, fields, localized),
-    apply: (fields, version, resolutions, renames) =>
+    apply: (fields, version, resolutions, renames, acknowledged) =>
       unsaved
         ? createUnsaved(fields)
         : fieldGroupApi.applySchemaChanges(
@@ -378,7 +378,8 @@ export default function FieldGroupBuilderEditPage({
             version,
             resolutions,
             renames,
-            localized
+            localized,
+            acknowledged
           ),
     onNoChanges: saveSettingsOnly,
     onApplied: unsaved ? onCreated : onSchemaApplied,

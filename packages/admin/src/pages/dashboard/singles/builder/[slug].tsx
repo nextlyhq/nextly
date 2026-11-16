@@ -370,7 +370,7 @@ export default function SingleBuilderEditPage({
       unsaved
         ? Promise.resolve(createPreview(fields))
         : singleApi.previewSchemaChanges(entitySlug, fields, localized, drafts),
-    apply: (fields, version, resolutions, renames) =>
+    apply: (fields, version, resolutions, renames, acknowledged) =>
       unsaved
         ? createUnsaved(fields)
         : singleApi.applySchemaChanges(
@@ -380,7 +380,8 @@ export default function SingleBuilderEditPage({
             resolutions,
             renames,
             localized,
-            drafts
+            drafts,
+            acknowledged
           ),
     onNoChanges: saveSettingsOnly,
     onApplied: unsaved ? onCreated : onSchemaApplied,

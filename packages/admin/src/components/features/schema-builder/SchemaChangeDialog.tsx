@@ -23,12 +23,14 @@ import {
 } from "@nextlyhq/ui";
 import { AlertTriangle } from "lucide-react";
 import type { JSX } from "react";
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 
+import { broughtUpToDateLines } from "@admin/lib/builder/brought-up-to-date";
 import { useFieldTypeLabel } from "@admin/lib/builder/field-type-label";
 import { reviewDeletesData } from "@admin/lib/builder/review-deletes-data";
 import type {
   SchemaPreviewChange,
+  SchemaPreviewConversion,
   SchemaPreviewJoiningTranslation,
   SchemaPreviewLeavingTranslation,
   SchemaPreviewRenameCandidate,
@@ -62,6 +64,8 @@ interface SchemaChangeDialogProps {
   leavingTranslation?: SchemaPreviewLeavingTranslation[];
   // Fields that become translated: how many values become the default language's.
   joiningTranslation?: SchemaPreviewJoiningTranslation[];
+  // What the save brings up to date in a table an earlier version made; Save confirms each.
+  conversions?: SchemaPreviewConversion[];
   onConfirm: (
     resolutions: Record<string, FieldResolution>,
     renameResolutions: SchemaRenameResolution[]
@@ -82,6 +86,7 @@ export function SchemaChangeDialog({
   interactiveFields,
   leavingTranslation = [],
   joiningTranslation = [],
+  conversions = [],
   onConfirm,
   isApplying,
 }: SchemaChangeDialogProps): JSX.Element {
@@ -286,6 +291,7 @@ export function SchemaChangeDialog({
 
         <LeavingTranslationNotice fields={leavingTranslation} />
         <JoiningTranslationNotice fields={joiningTranslation} />
+        <BroughtUpToDate conversions={conversions} />
 
         {/* Rename candidates - one section per dropped column with a list
             of "rename to X" radios + a "drop and add new" option.
@@ -606,5 +612,33 @@ function SchemaChangeDialogFooter({
             : "Save changes"}
       </AlertDialogAction>
     </AlertDialogFooter>
+  );
+}
+
+/**
+ * What the save also brings up to date in a table an earlier Nextly version made, in the server's
+ * own words. Nothing to tick: Save confirms every conversion listed, and Cancel confirms none.
+ */
+function BroughtUpToDate({
+  conversions,
+}: {
+  conversions: readonly SchemaPreviewConversion[];
+}): JSX.Element | null {
+  const headingId = useId();
+  if (conversions.length === 0) return null;
+  return (
+    <section
+      aria-labelledby={headingId}
+      className="space-y-1.5 rounded-md border border-border bg-primary/5 p-3"
+    >
+      <h3 id={headingId} className="text-sm font-medium">
+        Brought up to date
+      </h3>
+      {broughtUpToDateLines(conversions).map(line => (
+        <p key={line} className="text-sm text-muted-foreground">
+          {line}
+        </p>
+      ))}
+    </section>
   );
 }
