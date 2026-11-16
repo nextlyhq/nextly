@@ -333,7 +333,15 @@ function judgeIntoList(
     return { outcome: "blocked", reason: "kind-never-held" };
   if (value.kind === "list") {
     const verdicts = value.items.map(each => judgeAs(item, each, fromJson));
-    if (verdicts.some(v => v.outcome === "lost" || v.outcome === "blocked")) {
+    // An empty item is no item a typed list holds: its validator refuses a null in the list.
+    if (
+      verdicts.some(
+        v =>
+          v.outcome === "lost" ||
+          v.outcome === "blocked" ||
+          v.reason === "empty"
+      )
+    ) {
       return { outcome: "blocked", reason: "item-not-held" };
     }
     const readsAs = listWriting(item, verdicts);
@@ -488,7 +496,7 @@ function numberInto(
         }
       : { outcome: "lost", reason: "non-finite" };
   }
-  const held = holdsNumber(format, number.value);
+  const held = holdsNumber(format, dialect, number.value);
   if (held !== "exactly") {
     return {
       outcome: "blocked",
@@ -505,6 +513,21 @@ function numberInto(
 /** Whether a number column holds a finite number exactly. */
 function holdsNumber(
   format: NumberFormat,
+  dialect: FieldTypeOnDialect["dialect"],
+  value: ExactDecimal
+): "exactly" | "rounded" | "out of range" {
+  const held = columnHolds(format, value);
+  // SQLite's driver reads and binds every number as a JavaScript number, so a value a double does
+  // not hold exactly reads back as another whatever the column's own range.
+  if (held === "exactly" && dialect === "sqlite" && !fitsDouble(value)) {
+    return "rounded";
+  }
+  return held;
+}
+
+/** Whether a number column, by its own range and digits, holds a finite number exactly. */
+function columnHolds(
+  format: NumberFormat,
   value: ExactDecimal
 ): "exactly" | "rounded" | "out of range" {
   switch (format.kind) {
@@ -515,6 +538,10 @@ function holdsNumber(
       return fitsDouble(value) ? "exactly" : "rounded";
     case "decimal":
       return fitsDecimal(value, format.precision, format.scale);
+    case "json":
+      // A JSON number is read back as a JavaScript number, and a whole-number list holds no fraction.
+      if (format.whole && value.fraction !== "") return "rounded";
+      return fitsDouble(value) ? "exactly" : "rounded";
   }
 }
 
@@ -529,6 +556,8 @@ export function holdsNonFinite(
   dialect: FieldTypeOnDialect["dialect"],
   value: "NaN" | "Infinity" | "-Infinity"
 ): boolean {
+  // A list's numbers are JSON, which holds no non-finite number on any database.
+  if (format.kind === "json") return false;
   if (dialect === "mysql") return false;
   if (dialect === "sqlite") return value !== "NaN";
   if (format.kind === "integer") return false;
@@ -716,12 +745,38 @@ function writingOf(value: OldValue): string {
     case "empty":
       return "null";
     case "list":
-      return JSON.stringify(value.items.map(writingOf));
+      return jsonWritingOf(value);
     case "json":
     case "document":
       return stableJson(value.value);
     default:
       return textOf(value);
+  }
+}
+
+/**
+ * A value's writing as JSON: a number as a JSON number, a text or a date as a JSON string, a
+ * boolean as one, a list item by item, so a list of numbers writes `[3]`, never `["3"]`.
+ */
+function jsonWritingOf(value: OldValue): string {
+  switch (value.kind) {
+    case "empty":
+      return "null";
+    case "text":
+      return JSON.stringify(value.text);
+    case "number":
+      return value.number.finite === true
+        ? decimalWriting(value.number.value)
+        : "null";
+    case "boolean":
+      return String(value.value);
+    case "date":
+      return JSON.stringify(instantWriting(value.date));
+    case "list":
+      return `[${value.items.map(jsonWritingOf).join(",")}]`;
+    case "json":
+    case "document":
+      return stableJson(value.value);
   }
 }
 

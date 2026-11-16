@@ -470,12 +470,76 @@ const CASES: Case[] = [
     readsAs: "[3]",
   },
   {
-    name: "a text list to a list of numbers, written as JSON numbers",
+    name: "a text list to a list of float numbers, written as JSON numbers",
     from: ["chips"],
-    to: ["number", { hasMany: true }],
+    to: [
+      "number",
+      {
+        hasMany: true,
+        options: { format: "float" },
+      } as Partial<FieldDefinition>,
+    ],
     value: list(text("1"), text("2.5")),
     outcome: "changed",
     readsAs: "[1,2.5]",
+  },
+  // A list of numbers keeps its numbers as JSON numbers going to JSON.
+  {
+    name: "a list of numbers to JSON",
+    from: ["number", { hasMany: true }],
+    to: ["json"],
+    value: list(num("3")),
+    outcome: "kept",
+    readsAs: "[3]",
+  },
+  // A typed list holds no null item: the field's validator refuses one.
+  {
+    name: "a JSON [null] to a list of numbers",
+    from: ["json"],
+    to: ["number", { hasMany: true }],
+    value: json([null]),
+    outcome: "blocked",
+  },
+  // A list of numbers is JSON on every database, which holds no non-finite number (rule 6).
+  {
+    name: "a text Infinity to a list of numbers",
+    from: ["text"],
+    to: ["number", { hasMany: true }],
+    value: text("Infinity"),
+    outcome: "lost",
+  },
+  // A list of whole numbers keeps the field's whole-number rule.
+  {
+    name: "a fraction text to a list of whole numbers",
+    from: ["text"],
+    to: ["number", { hasMany: true }],
+    value: text("1.5"),
+    outcome: "blocked",
+  },
+  // A text field holding several values keeps them as a list.
+  {
+    name: "a text to a text holding several values",
+    from: ["text"],
+    to: ["text", { hasMany: true } as Partial<FieldDefinition>],
+    value: text("a"),
+    outcome: "changed",
+    readsAs: '["a"]',
+  },
+  // A number is read as a JavaScript number on SQLite, which holds no integer past 2^53 exactly.
+  {
+    name: "a text past 2^53 to a whole number",
+    from: ["text"],
+    to: ["number"],
+    value: text("9007199254740993"),
+    outcome: "blocked",
+  },
+  // A date field reads a JavaScript Date, which keeps milliseconds and no finer.
+  {
+    name: "a date-time with microseconds to a date",
+    from: ["text"],
+    to: ["date"],
+    value: text("2026-01-02T03:04:05.123456Z"),
+    outcome: "blocked",
   },
   // A number spelled with an exponent no column could hold is judged, never expanded.
   {
@@ -790,6 +854,20 @@ describe("pairs blocked whatever their values hold (rule 3, and the pairs no rul
     expect(judgeValue(several, one, list(text("p1"), text("p2"))).outcome).toBe(
       "blocked"
     );
+  });
+
+  it("changes a polymorphic reference to a polymorphic list of them, never keeping it", () => {
+    const one = typeOf("postgresql", "relationship", {
+      relationTo: ["people", "teams"],
+    } as Partial<FieldDefinition>);
+    const several = typeOf("postgresql", "relationship", {
+      relationTo: ["people", "teams"],
+      hasMany: true,
+    } as Partial<FieldDefinition>);
+    expect(
+      judgeValue(one, several, json({ relationTo: "people", value: "p1" }))
+        .outcome
+    ).toBe("changed");
   });
 
   it("tells two target sets apart that write alike once joined", () => {

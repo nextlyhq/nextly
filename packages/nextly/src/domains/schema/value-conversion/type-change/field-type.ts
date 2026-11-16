@@ -18,6 +18,8 @@ import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
   getColumnDescriptor,
+  numberFieldStoresFractions,
+  relationStorageShape,
   type SupportedDialect,
 } from "../../services/field-column-descriptor";
 import { parseColumnType } from "../column-type";
@@ -45,7 +47,12 @@ export type Family =
 export type NumberFormat =
   | { kind: "integer"; bits: 32 | 64 }
   | { kind: "double" }
-  | { kind: "decimal"; precision: number; scale: number };
+  | { kind: "decimal"; precision: number; scale: number }
+  /**
+   * An item of a list of numbers, kept as a JSON number: read back as a JavaScript number, never
+   * non-finite, and a whole number where the field allows no fraction.
+   */
+  | { kind: "json"; whole: boolean };
 
 /** How a date column stores a value: to which part of a second, and over which years. */
 export interface DateColumn {
@@ -66,7 +73,12 @@ export interface RelationTarget {
   targets: string[];
   upload: boolean;
   /** One target id on the row, several as a JSON list on the row, or a join table. */
-  kept: "one" | "several" | "join";
+  /**
+   * As the column keeps the links (`relationStorageShape`): one id, a list of ids, one
+   * `{ relationTo, value }` reference to one of several collections, a list of such references, or
+   * a join table.
+   */
+  kept: "one" | "list" | "targets" | "targetList" | "join";
 }
 
 /** A field's type on one database, as the rules read it. */
@@ -138,7 +150,15 @@ const plain =
  * has an entry, so a type added to the union is read deliberately, never as a plugin's.
  */
 const BY_TYPE: Record<DynamicFieldType, TypeReader> = {
-  text: bounded("text"),
+  // A text field holding several values keeps them as a JSON list of texts.
+  text: (field, dialect, builtBy) =>
+    field.hasMany === true
+      ? {
+          ...baseOf(field, dialect),
+          family: "list",
+          item: { ...baseOf(field, dialect), family: "text" },
+        }
+      : bounded("text")(field, dialect, builtBy),
   textarea: bounded("text"),
   code: bounded("text"),
   email: bounded("email"),
@@ -169,11 +189,15 @@ const BY_TYPE: Record<DynamicFieldType, TypeReader> = {
       ? {
           ...baseOf(field, dialect),
           family: "list",
-          // A list keeps its numbers as JSON, which holds any finite double.
+          // A list keeps its numbers as JSON numbers, each a whole number unless the field allows
+          // fractions, as its validator reads each item (`numberFieldStoresFractions`).
           item: {
             ...baseOf(field, dialect),
             family: "number",
-            number: { kind: "double" },
+            number: {
+              kind: "json",
+              whole: !numberFieldStoresFractions(field),
+            },
           },
         }
       : {
@@ -213,13 +237,13 @@ const BY_TYPE: Record<DynamicFieldType, TypeReader> = {
 };
 
 /**
- * What each database's date column keeps. PostgreSQL's `timestamp` keeps microseconds over a span
- * no date reaches; MySQL's `timestamp`, declared with no fractional digits, keeps whole seconds from
- * 1970-01-01 00:00:01 to 2038-01-19 03:14:07 UTC; SQLite's epoch integer keeps whole seconds over a
- * 64-bit span.
+ * What a date field reads back on each database. The field reads a JavaScript `Date`, which keeps
+ * milliseconds, so PostgreSQL's `timestamp`, which stores microseconds, is read to milliseconds;
+ * MySQL's `timestamp`, declared with no fractional digits, keeps whole seconds from
+ * 1970-01-01 00:00:01 to 2038-01-19 03:14:07 UTC; SQLite's epoch integer keeps whole seconds.
  */
 const DATE_COLUMNS: Record<SupportedDialect, DateColumn> = {
-  postgresql: { fractionDigits: 6 },
+  postgresql: { fractionDigits: 3 },
   mysql: { fractionDigits: 0, range: { first: 1, last: 2_147_483_647 } },
   sqlite: { fractionDigits: 0 },
 };
@@ -290,9 +314,7 @@ function relationOf(field: FieldDefinition): RelationTarget {
   const kept =
     options.relationType === "manyToMany" && field.type === "relationship"
       ? "join"
-      : field.hasMany === true || Array.isArray(field.relationTo)
-        ? "several"
-        : "one";
+      : (relationStorageShape(field) ?? "one");
   return { targets, upload: field.type === "upload", kept };
 }
 
