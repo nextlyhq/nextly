@@ -22,6 +22,7 @@ import {
 } from "./translation-worklist-service";
 
 const row = (over: Partial<TranslationWorkRow>): TranslationWorkRow => ({
+  kind: "collection",
   collection: "posts",
   collectionLabel: "Posts",
   id: "1",
