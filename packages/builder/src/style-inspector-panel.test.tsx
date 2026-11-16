@@ -30,6 +30,7 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -5310,11 +5311,119 @@ describe("a per-side property is drawn as a box", () => {
     const box = mountWithOrientation(LTR);
 
     expect(frameOf(box)?.getAttribute("data-sides")).toBe("logical");
+    // In the document in the order Tab visits them, the shorthand's order:
+    // top, then the inline end (right in a left-to-right page), bottom, and
+    // the inline start. Where each is DRAWN is the stylesheet's, by side.
     expect(
       Array.from(box?.querySelectorAll("[data-side]") ?? [], field =>
         field.getAttribute("data-side")
       )
-    ).toEqual(["blockStart", "inlineStart", "inlineEnd", "blockEnd"]);
+    ).toEqual(["blockStart", "inlineEnd", "blockEnd", "inlineStart"]);
+  });
+
+  it("moves Tab through margin then padding, each Top, Right, Bottom, Left, and never onto a reset", async () => {
+    /*
+     * Typed as an author types a box: a value, Tab, a value. Every side holds
+     * a value first, so each has a reset beside it; a reset that was a Tab
+     * stop would take the next value instead of the next side.
+     */
+    const all = {
+      blockStart: "1px",
+      inlineEnd: "1px",
+      blockEnd: "1px",
+      inlineStart: "1px",
+    };
+    register({ spacing: true });
+    const editor = editorFor(
+      documentOf({
+        base: { [BASE_BREAKPOINT]: { margin: all, padding: all } },
+      } as unknown as NodeStyles)
+    );
+    render(<StyleInspectorPanel editor={editor} sideOrientation={LTR} />);
+    const box = within(
+      document.querySelector(".nx-spacing-box") as HTMLElement
+    );
+    // The control: every side does have a reset to land on.
+    expect(box.getAllByRole("button", { name: /^Reset / })).toHaveLength(8);
+
+    const user = userEvent.setup();
+    const order = [
+      "Margin top",
+      "Margin right",
+      "Margin bottom",
+      "Margin left",
+      "Padding top",
+      "Padding right",
+      "Padding bottom",
+      "Padding left",
+    ];
+    await user.click(box.getByLabelText("Margin top"));
+    const visited: string[] = [];
+    for (let step = 0; step < order.length; step += 1) {
+      visited.push(
+        document.activeElement?.getAttribute("aria-label") ??
+          (
+            document.activeElement as HTMLInputElement | null
+          )?.labels?.[0]?.textContent?.trim() ??
+          ""
+      );
+      await user.tab();
+    }
+
+    expect(visited).toEqual(order);
+  });
+
+  it("resets the focused side with Alt+Backspace, as its reset button does", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { margin: { blockStart: "8px" } } },
+    } as unknown as NodeStyles;
+    register({ spacing: true });
+    const byButton = editorFor(documentOf(styles));
+    const first = render(
+      <StyleInspectorPanel editor={byButton} sideOrientation={LTR} />
+    );
+    fireEvent.click(
+      within(
+        document.querySelector(".nx-spacing-box") as HTMLElement
+      ).getByRole("button", { name: /^Reset Margin top/ })
+    );
+    first.unmount();
+
+    const byKey = editorFor(documentOf(styles));
+    render(<StyleInspectorPanel editor={byKey} sideOrientation={LTR} />);
+    const top = within(
+      document.querySelector(".nx-spacing-box") as HTMLElement
+    ).getByLabelText("Margin top");
+    fireEvent.keyDown(top, { key: "Backspace", altKey: true });
+
+    // The same write the button makes, so the key is the reset and not a
+    // second, slightly different one.
+    expect(byKey.applyAll).toHaveBeenCalledTimes(1);
+    expect(byKey.applyAll.mock.calls[0]?.[0]).toEqual(
+      byButton.applyAll.mock.calls[0]?.[0]
+    );
+  });
+
+  it("leaves Alt+Backspace alone on a side with nothing to reset", () => {
+    const { editor, box } = mountSpacingBox(LTR);
+    const top = within(box as HTMLElement).getByLabelText("Margin top");
+
+    fireEvent.keyDown(top, { key: "Backspace", altKey: true });
+
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("names Alt+Backspace in each side's description", () => {
+    const { box } = mountSpacingBox(LTR);
+    const top = within(box as HTMLElement).getByLabelText("Margin top");
+    const described = (top.getAttribute("aria-describedby") ?? "")
+      .split(" ")
+      .map(id => document.getElementById(id)?.textContent ?? "")
+      .join(" ");
+
+    expect(described).toContain("Alt+Backspace");
+    // A description, not an error: the side is not marked invalid by it.
+    expect(top.getAttribute("aria-invalid")).toBeNull();
   });
 
   it("carries the EDITED ELEMENT's axes, so its grid resolves in them", () => {

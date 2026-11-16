@@ -1083,6 +1083,13 @@
   min-height: 0;
   height: 100%;
   overflow-y: auto;
+  /*
+   * Room for a classic scrollbar is kept whether or not the panel scrolls,
+   * so the fields have one width with overlay and classic scrollbars alike:
+   * a scrollbar appearing as the Style tab grows took 15px from them and
+   * could tip the spacing box into its narrow layout.
+   */
+  scrollbar-gutter: stable;
   padding: 0.75rem;
   color: var(--nx-builder-text, var(--nx-foreground));
   background: var(--nx-builder-surface, var(--nx-background));
@@ -8115,7 +8122,15 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   pointer-events: auto;
 }
 
-@container nx-inspector-fields (max-width: 18rem) {
+/*
+ * The box falls back to a column of rows only below the width it really
+ * needs. Measured with the narrow rule off, the full box holds until its
+ * column is about 12.75rem wide (each side at its 3.5rem floor, margin around
+ * padding); 13rem keeps it whole at the inspector's default and minimum
+ * widths, a classic scrollbar's gutter included, where 18rem turned it into
+ * a list at the default width whenever that scrollbar showed.
+ */
+@container nx-inspector-fields (max-width: 13rem) {
   .nx-style-inspector__side-box {
     display: flex;
     flex-direction: column;
@@ -8151,6 +8166,11 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   }
 
   .nx-spacing-box .nx-inspector__field > .nx-style-inspector__breakpoint-action,
+  /* As specific as the focused-side rule above, which otherwise still floats
+     the reset over the next row's label while its side has focus. */
+  .nx-spacing-box
+    .nx-inspector__field:focus-within
+    .nx-style-inspector__breakpoint-action,
   .nx-spacing-box .nx-inspector__error {
     display: flex;
     position: static;

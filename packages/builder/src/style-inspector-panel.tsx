@@ -1585,6 +1585,85 @@ function spacingRings(
 const CompactSides = React.createContext(false);
 
 /**
+ * The id of a spacing-box side's description, which names its reset key: one
+ * spelling for the field that writes it and the input that reads it.
+ */
+function sideKeysId(fieldId: string): string {
+  return `${fieldId}-keys`;
+}
+
+/**
+ * What a value field is described by: the refusal of what was typed, if any,
+ * and for a side of the spacing box its reset key as well.
+ */
+/**
+ * The key handler of a spacing-box side, which resets by key rather than by
+ * Tab: its reset is out of the Tab order, so typing round the box goes side
+ * to side, and Alt+Backspace in the side does what the reset does when there
+ * is a value here to reset. Named in the side's description. `undefined` for
+ * a field that is not a side.
+ */
+function sideResetKeyDown(
+  side: string | undefined,
+  stored: StyleValue | undefined,
+  readOnly: boolean,
+  reset: () => void
+): ((event: React.KeyboardEvent<HTMLDivElement>) => void) | undefined {
+  if (side === undefined) return undefined;
+  const resettable = stored !== undefined && !readOnly;
+  return event => {
+    if (!resettable || !isResetKey(event)) return;
+    // Taken from the field, where Alt+Backspace would otherwise delete the
+    // word before the caret: here it is the side's reset.
+    event.preventDefault();
+    reset();
+  };
+}
+
+/**
+ * A spacing-box side's description, which its input names: how to reset it
+ * from the keyboard now that its reset is not a Tab stop. Hidden, so it is
+ * read as the side's description and not again, between the fields, by a
+ * screen reader reading the panel through. Nothing for a field that is not a
+ * side.
+ */
+function SideResetKeys({
+  side,
+  fieldId,
+}: {
+  side: string | undefined;
+  fieldId: string;
+}): React.JSX.Element | null {
+  if (side === undefined) return null;
+  return (
+    <span id={sideKeysId(fieldId)} hidden>
+      Alt+Backspace resets this side.
+    </span>
+  );
+}
+
+/** Alt+Backspace and no other modifier: a side's reset key. */
+function isResetKey(event: React.KeyboardEvent): boolean {
+  return (
+    event.key === "Backspace" &&
+    event.altKey &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.shiftKey
+  );
+}
+
+function fieldDescribedBy(
+  refusal: string | undefined,
+  side: boolean,
+  fieldId: string
+): string | undefined {
+  const ids = side ? [refusal, sideKeysId(fieldId)] : [refusal];
+  const joined = ids.filter(id => id !== undefined).join(" ");
+  return joined === "" ? undefined : joined;
+}
+
+/**
  * Whether this field's form toggle is drawn just above it. A single control
  * there keeps its label for assistive technology and drops the visible copy:
  * the toggle's row already says the name.
@@ -2319,6 +2398,11 @@ function StyleControlField({
     );
   }
 
+  // A side of the spacing box resets by key; see `sideResetKeyDown`.
+  const onSideKeyDown = sideResetKeyDown(side, stored, readOnly, () =>
+    commit(null)
+  );
+
   return (
     <div
       className="nx-inspector__field"
@@ -2326,6 +2410,7 @@ function StyleControlField({
       // Absent when this is not a side: React omits an `undefined` attribute, so
       // the value says whether the field is in a box without a branch here.
       data-side={side}
+      onKeyDown={onSideKeyDown}
       {...writes.caption}
     >
       {/* The label drags the value the number field below offers it. */}
@@ -2366,7 +2451,9 @@ function StyleControlField({
         onReset={() => commit(null)}
         stored={stored}
         readOnly={readOnly}
+        resetByKey={side !== undefined}
       />
+      <SideResetKeys side={side} fieldId={id} />
       <SharedValueLine
         target={target}
         answer={answer}
@@ -2573,6 +2660,7 @@ function BreakpointAction({
   onReset,
   stored,
   readOnly,
+  resetByKey = false,
 }: {
   answer: ProvenanceAnswer | undefined;
   /**
@@ -2593,6 +2681,11 @@ function BreakpointAction({
   stored: StyleValue | undefined;
   /** A field drawn as a retained value, whose own Clear already resets it. */
   readOnly: boolean;
+  /**
+   * Whether the field resets by a key of its own (a side of the spacing box),
+   * which takes its reset out of the Tab order.
+   */
+  resetByKey?: boolean;
 }): React.JSX.Element | null {
   /*
    * The row's one way back, so a list or an icon group needs no Clear of its
@@ -2616,6 +2709,7 @@ function BreakpointAction({
         editing={editing}
         fieldId={fieldId}
         onReset={onReset}
+        outOfTabOrder={resetByKey}
       />
     );
   }
@@ -2627,6 +2721,7 @@ function BreakpointAction({
         editing={editing}
         fieldId={fieldId}
         onReset={onReset}
+        outOfTabOrder={resetByKey}
       />
     );
   }
@@ -2644,6 +2739,7 @@ function BreakpointAction({
         editing={editing}
         fieldId={fieldId}
         onReset={onReset}
+        outOfTabOrder={resetByKey}
       />
     );
   if (answer?.jump === undefined) return reset;
@@ -2808,7 +2904,10 @@ function ResetAction({
   editing,
   fieldId,
   onReset,
+  outOfTabOrder = false,
 }: {
+  /** Out of the Tab order, for a field that resets by a key of its own. */
+  outOfTabOrder?: boolean;
   /**
    * What shows once this value is gone: another tier's value, nothing, or
    * `"unknown"` where no ranking of the cascade covers this tier, which the
@@ -2843,6 +2942,9 @@ function ResetAction({
           data-action="reset"
           {...commitsFor(fieldId)}
           onClick={onReset}
+          // Still a button to click; only Tab passes it by, since the field it
+          // belongs to resets by key.
+          tabIndex={outOfTabOrder ? -1 : undefined}
           aria-label={named}
         >
           {/* An icon at the row's end, where a "Reset to unset" line under
@@ -6807,7 +6909,9 @@ function TextField({
       title={sideTitle(compact, draft)}
       // A value, not words: no list of earlier entries over the field.
       autoComplete="off"
-      aria-describedby={describedBy}
+      // A side names its reset key in its description as well; kept apart
+      // from `describedBy`, which says the value was refused.
+      aria-describedby={fieldDescribedBy(describedBy, compact, id)}
       aria-invalid={invalid ? true : undefined}
       // Committed on blur and on Enter, matching the content tab: an op per
       // keystroke would make one undo remove one character.
