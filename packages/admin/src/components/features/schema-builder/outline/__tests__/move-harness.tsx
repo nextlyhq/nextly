@@ -24,6 +24,7 @@ import {
 } from "@admin/lib/builder/outline/outline-model";
 
 import type { BuilderField } from "../../types";
+import { crumbsByPointer } from "../FocusCrumbs";
 import { Outline } from "../Outline";
 import type { OutlineCallbacks } from "../outline-types";
 
@@ -93,7 +94,7 @@ export function MoveHarness({
     },
   };
   return (
-    <DndContext>
+    <DndContext collisionDetection={crumbsByPointer}>
       <Outline
         kind="collection"
         nodes={nodes}

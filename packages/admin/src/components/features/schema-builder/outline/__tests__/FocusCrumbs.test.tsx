@@ -2,6 +2,7 @@
  * The breadcrumb's crumbs as places to drop: which level each one names, the focused one
  * included, and a container Focus cannot show named without being a way back or a place.
  */
+import type { ClientRect, DroppableContainer } from "@dnd-kit/core";
 import { describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
@@ -17,7 +18,7 @@ import {
   nestedFixtureFieldGroups,
   nestedFixtureFields,
 } from "../../__fixtures__/nested-fixture";
-import { crumbTargetOf, FocusCrumbs } from "../FocusCrumbs";
+import { crumbsByPointer, crumbTargetOf, FocusCrumbs } from "../FocusCrumbs";
 
 /** Each drop place the crumbs register, by what a drag over it is called aloud. */
 const registered = vi.hoisted(() => new Map<string, string>());
@@ -79,5 +80,69 @@ describe("the breadcrumb's drop places", () => {
     expect(screen.getByText("SEO").closest("button")).toBeNull();
     expect(screen.getByRole("button", { name: "All fields" })).toBeTruthy();
     expect(registered.has("SEO, in the breadcrumb")).toBe(false);
+  });
+});
+
+/** A rectangle at `left`, `top`, `width` wide and `height` high. */
+function rect(
+  left: number,
+  top: number,
+  width: number,
+  height: number
+): ClientRect {
+  return {
+    left,
+    top,
+    width,
+    height,
+    right: left + width,
+    bottom: top + height,
+  };
+}
+
+/** What a drag over these places, with the dragged row at `dragged` and the pointer at `x`, `y`, is over. */
+function overAt(
+  places: Record<string, ClientRect>,
+  dragged: ClientRect,
+  x: number,
+  y: number
+): string[] {
+  const ids = Object.keys(places);
+  const containers = ids.map(
+    id => ({ id, key: id, data: { current: undefined } }) as unknown as DroppableContainer
+  );
+  return crumbsByPointer({
+    active: { id: "f-label" } as never,
+    collisionRect: dragged,
+    droppableRects: new Map(ids.map(id => [id, places[id]])),
+    droppableContainers: containers,
+    pointerCoordinates: { x, y },
+  }).map(each => String(each.id));
+}
+
+describe("crumbsByPointer", () => {
+  // Two crumbs side by side, the focused one wider, and a row below them.
+  const places = {
+    "focus-crumb:f-sections-items": rect(100, 0, 50, 20),
+    "focus-crumb:f-items-cta": rect(155, 0, 105, 20),
+    "f-kind": rect(0, 40, 800, 40),
+  };
+  // A dragged row is far wider than a crumb: level with the crumbs, it overlaps the focused one
+  // more than the one under the pointer, and no row.
+  const dragged = rect(110, 0, 700, 20);
+
+  it("is over the crumb under the pointer, whatever the dragged row overlaps most", () => {
+    expect(overAt(places, dragged, 125, 10)).toEqual([
+      "focus-crumb:f-sections-items",
+    ]);
+  });
+
+  it("is never over a crumb the pointer is not on", () => {
+    // The pointer in the gap between the two crumbs: overlap alone would pick the focused one.
+    expect(overAt(places, dragged, 152, 10)).toEqual([]);
+    // The pointer on the row below, the dragged row over it: the row, as by overlap.
+    expect(overAt(places, rect(110, 30, 700, 40), 500, 50)).toEqual([
+      "f-kind",
+    ]);
   });
 });

@@ -7,7 +7,12 @@
  * of that level, judged by the move rule as any other move is. A container above that Focus
  * cannot show (a field group, changed in its own editor) is named but not a way back or a place.
  */
-import { useDroppable } from "@dnd-kit/core";
+import {
+  pointerWithin,
+  rectIntersection,
+  useDroppable,
+  type CollisionDetection,
+} from "@dnd-kit/core";
 import { Button } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
@@ -29,6 +34,24 @@ export function crumbTargetOf(dropId: string): FieldInsertPosition | null {
   const id = dropId.slice(CRUMB_PREFIX.length);
   return id === TOP_LEVEL ? {} : { parentFieldId: id };
 }
+
+/**
+ * The place a drag in the outline is over. A crumb is small and sits right beside the next, so it
+ * is the place only while the pointer is on it, never because the dragged row, which is far wider,
+ * overlaps it most; anywhere else, the rows are judged by overlap as dnd-kit does by default.
+ */
+export const crumbsByPointer: CollisionDetection = args => {
+  const onCrumb = pointerWithin(args).find(
+    each => crumbTargetOf(String(each.id)) !== null
+  );
+  if (onCrumb) return [onCrumb];
+  return rectIntersection({
+    ...args,
+    droppableContainers: args.droppableContainers.filter(
+      each => crumbTargetOf(String(each.id)) === null
+    ),
+  });
+};
 
 function crumbName(node: OutlineNode): string {
   return node.field.label || node.field.name || "Untitled";
