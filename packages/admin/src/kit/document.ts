@@ -138,6 +138,16 @@ export {
 } from "../components/features/entries/EntryForm/panels/DocumentPanel";
 
 /**
+ * Where a saved document stands (Draft, Published or Changed), the rule the
+ * entry page's status pill draws. Exported for the plugin surface, so a
+ * full-window editor's pill reads the same rule rather than a copy of it.
+ */
+export {
+  savedPillState,
+  type SavedPillState,
+} from "../components/features/entries/EntryForm/panels/pill-state";
+
+/**
  * Put a contributed surface's live state somewhere a crash cannot take it.
  *
  * Exported for the plugin surface alongside the identity above: a field holding
