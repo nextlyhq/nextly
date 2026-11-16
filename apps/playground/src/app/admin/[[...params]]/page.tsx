@@ -27,6 +27,9 @@ import "../../../plugins/widget-check-fixture/admin";
 // The startup read fixture's page, for the e2e suite's check that a plugin
 // page's declared read is asked for inside the startup request.
 import "../../../plugins/startup-read-fixture/admin";
+// The template fixture's one template, for the e2e suite's check that a
+// template's needed collection is made too and saved first.
+import "../../../plugins/template-fixture/admin";
 
 export default function AdminPage() {
   return <RootLayout />;

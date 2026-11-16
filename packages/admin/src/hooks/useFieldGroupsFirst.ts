@@ -1,16 +1,18 @@
 "use client";
 
 /**
- * useFieldGroupsFirst: what an editor's save needs of the field groups not
- * saved yet.
+ * useFieldGroupsFirst: what an editor's save needs of the entities not saved
+ * yet: the field groups its fields use and the collections they link to.
  *
- * The ones its fields use are listed in the save's review and created after it
- * is confirmed, before the entity (`useSchemaSave`'s `fieldGroupsFirst`). The
- * ones its own field picker made are let go: those no field uses once the save
- * has landed, and all of them when its changes are discarded. A confirmed leave
- * releases them instead, each kept as an unsaved field group of its own. Every
+ * The ones its fields need are listed in the save's review and created after
+ * it is confirmed, before the entity (`useSchemaSave`'s `fieldGroupsFirst`),
+ * each one's definition written where its own first save writes it. The ones
+ * it made (from its field picker, or with "Create it too" in the new-entity
+ * dialog) are let go: those no field needs once the save has landed, and all
+ * of them when its changes are discarded. However the editor is left, it
+ * releases them instead, each kept as an unsaved entity of its own. Every
  * editor asks this one hook, so the three kinds cannot differ about which
- * groups a save creates.
+ * entities a save creates.
  */
 import { useCallback, useEffect, useMemo } from "react";
 
@@ -18,10 +20,14 @@ import type { FieldGroupCreate } from "@admin/components/features/schema-builder
 import {
   createFieldGroupsFirst,
   fieldGroupsFirst as fieldGroupsFirstOf,
+  type FieldGroupsFirstSteps,
   type FieldGroupHost,
   type FieldNamingGroups,
 } from "@admin/lib/builder/field-groups-first";
-import { fieldGroupEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
+import {
+  collectionEntityFromSettings,
+  fieldGroupEntityFromSettings,
+} from "@admin/lib/builder/settings-to-manifest";
 import {
   releaseUnsavedFieldGroupsOf,
   removeUnsavedEntity,
@@ -30,7 +36,7 @@ import {
 } from "@admin/lib/builder/unsaved-entities";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 
-import { useCreateFieldGroup } from "./queries";
+import { useCreateCollection, useCreateFieldGroup } from "./queries";
 import type { BuilderPendingChanges } from "./useBuilderEntityState";
 import { mirrorSchemaFile, type UseSchemaSaveOptions } from "./useSchemaSave";
 
@@ -41,7 +47,7 @@ export interface UseFieldGroupsFirstReturn {
   fieldGroupsFirst: UseSchemaSaveOptions["fieldGroupsFirst"];
   /** After a save has landed: the host's own ones no field uses go. */
   letGoUnused: () => void;
-  /** When the host's changes are discarded: every one its picker made goes. */
+  /** When the host's changes are discarded: every one it made goes. */
   letGoOwned: () => void;
   /**
    * When the host is left with its changes discarded: every one its picker
@@ -53,67 +59,25 @@ export interface UseFieldGroupsFirstReturn {
 
 const NONE: readonly FieldNamingGroups[] = [];
 
-export function useFieldGroupsFirst(
-  /** The kind of entity being edited. */
-  kind: FieldGroupHost["kind"],
-  /** Its address; undefined while it has none. */
-  address: string | undefined,
-  /** Its fields as they stand, in the editor's shape or the server's. */
-  fields: readonly FieldNamingGroups[]
-): UseFieldGroupsFirstReturn {
-  // One value per entity, so the callbacks below keep theirs between renders.
-  const host = useMemo<FieldGroupHost | undefined>(
-    () => (address ? { kind, address } : undefined),
-    [kind, address]
+/** The unsaved entities of the kinds a field names: field groups it uses, collections it links to. */
+function useHeldNamedEntities(): readonly UnsavedEntity[] {
+  const heldGroups = useUnsavedEntitiesOf("field-group");
+  const heldCollections = useUnsavedEntitiesOf("collection");
+  return useMemo(
+    () => [...heldGroups, ...heldCollections],
+    [heldGroups, heldCollections]
   );
-  const held = useUnsavedEntitiesOf("field-group");
+}
+
+/**
+ * How each kind a save creates first is created, and its definition then
+ * written to the schema file as that kind's own first save writes it.
+ */
+function useCreateFirstSteps(): FieldGroupsFirstSteps {
   const { mutateAsync: createFieldGroup } = useCreateFieldGroup();
-
-  const { used, unused } = useMemo(
-    () =>
-      host
-        ? fieldGroupsFirstOf(held, fields, host)
-        : fieldGroupsFirstOf([], NONE, { kind: "collection", address: "" }),
-    [held, fields, host]
-  );
-
-  const creates = useMemo(
-    () =>
-      used.map(group => ({
-        address: group.address,
-        label: group.settings.singularName,
-      })),
-    [used]
-  );
-
-  const letGoUnused = useCallback(() => {
-    for (const group of unused)
-      removeUnsavedEntity("field-group", group.address);
-  }, [unused]);
-
-  const letGoOwned = useCallback(() => {
-    if (!host) return;
-    for (const group of held) {
-      if (
-        group.ownedBy?.kind === host.kind &&
-        group.ownedBy.address === host.address
-      ) {
-        removeUnsavedEntity("field-group", group.address);
-      }
-    }
-  }, [held, host]);
-
-  const release = useCallback(() => {
-    if (host) releaseUnsavedFieldGroupsOf(host);
-  }, [host]);
-
-  // However the editor is left, with a pending change or none (a picker cancelled after a
-  // group was made leaves none), the groups its picker made stay as unsaved field groups of
-  // their own, which no other host's picker would otherwise offer.
-  useEffect(() => release, [release]);
-
+  const { mutateAsync: createCollection } = useCreateCollection();
   // As a field group's own first save writes its definition to the schema file.
-  const writeDefinition = useCallback(
+  const writeFieldGroup = useCallback(
     (group: UnsavedEntity) =>
       mirrorSchemaFile(
         () =>
@@ -128,6 +92,90 @@ export function useFieldGroupsFirst(
       ),
     []
   );
+  // As a collection's own first save writes its definition to the schema file.
+  const writeCollection = useCallback(
+    (made: UnsavedEntity) =>
+      mirrorSchemaFile(
+        () =>
+          schemaFileApi.writeCollection(
+            collectionEntityFromSettings(
+              made.address,
+              made.settings,
+              made.fields
+            )
+          ),
+        "Collection created"
+      ),
+    []
+  );
+  return useMemo(
+    () => ({
+      "field-group": { create: createFieldGroup, mirror: writeFieldGroup },
+      collection: { create: createCollection, mirror: writeCollection },
+    }),
+    [createFieldGroup, writeFieldGroup, createCollection, writeCollection]
+  );
+}
+
+export function useFieldGroupsFirst(
+  /** The kind of entity being edited. */
+  kind: FieldGroupHost["kind"],
+  /** Its address; undefined while it has none. */
+  address: string | undefined,
+  /** Its fields as they stand, in the editor's shape or the server's. */
+  fields: readonly FieldNamingGroups[]
+): UseFieldGroupsFirstReturn {
+  // One value per entity, so the callbacks below keep theirs between renders.
+  const host = useMemo<FieldGroupHost | undefined>(
+    () => (address ? { kind, address } : undefined),
+    [kind, address]
+  );
+  const held = useHeldNamedEntities();
+  const steps = useCreateFirstSteps();
+
+  const { used, unused } = useMemo(
+    () =>
+      host
+        ? fieldGroupsFirstOf(held, fields, host)
+        : fieldGroupsFirstOf([], NONE, { kind: "collection", address: "" }),
+    [held, fields, host]
+  );
+
+  const creates = useMemo(
+    () =>
+      used.map(entity => ({
+        kind: entity.kind,
+        address: entity.address,
+        label: entity.settings.singularName,
+      })),
+    [used]
+  );
+
+  const letGoUnused = useCallback(() => {
+    for (const entity of unused)
+      removeUnsavedEntity(entity.kind, entity.address);
+  }, [unused]);
+
+  const letGoOwned = useCallback(() => {
+    if (!host) return;
+    for (const entity of held) {
+      if (
+        entity.ownedBy?.kind === host.kind &&
+        entity.ownedBy.address === host.address
+      ) {
+        removeUnsavedEntity(entity.kind, entity.address);
+      }
+    }
+  }, [held, host]);
+
+  const release = useCallback(() => {
+    if (host) releaseUnsavedFieldGroupsOf(host);
+  }, [host]);
+
+  // However the editor is left, with a pending change or none (a picker cancelled after a
+  // group was made leaves none), the groups its picker made stay as unsaved field groups of
+  // their own, which no other host's picker would otherwise offer.
+  useEffect(() => release, [release]);
 
   // Absent when the save has nothing to create and nothing to let go.
   const fieldGroupsFirst = useMemo(
@@ -136,14 +184,10 @@ export function useFieldGroupsFirst(
         ? undefined
         : {
             creates,
-            create: () =>
-              createFieldGroupsFirst(used, {
-                create: createFieldGroup,
-                mirror: writeDefinition,
-              }),
+            create: () => createFieldGroupsFirst(used, steps),
             letGoUnused,
           },
-    [used, unused, creates, createFieldGroup, writeDefinition, letGoUnused]
+    [used, unused, creates, steps, letGoUnused]
   );
 
   return { creates, fieldGroupsFirst, letGoUnused, letGoOwned, release };

@@ -17,6 +17,7 @@ import {
   mirrorSchemaFile,
   useSchemaSave,
   type SchemaApplyOutcome,
+  type UseSchemaSaveOptions,
 } from "../useSchemaSave";
 
 const { toastError, toastWarning, startRestart, stopRestart } = vi.hoisted(
@@ -96,11 +97,7 @@ type Overrides = {
   /** The entity's settings changed since the save, read at each render. */
   settingChanges?: () => readonly SettingChange[];
   /** The field groups not saved yet that the fields use. */
-  fieldGroupsFirst?: {
-    creates: readonly { address: string; label: string }[];
-    create: () => Promise<string | null>;
-    letGoUnused?: () => void;
-  };
+  fieldGroupsFirst?: UseSchemaSaveOptions["fieldGroupsFirst"];
 };
 
 function setup(overrides: Overrides = {}) {
@@ -543,7 +540,7 @@ describe("a settings-only save", () => {
 // the review, and created only once the review is confirmed, before the host, so cancelling
 // creates nothing and a refused group leaves the host as it was.
 describe("field groups not saved yet", () => {
-  const HERO = { address: "hero", label: "Hero" };
+  const HERO = { kind: "field-group" as const, address: "hero", label: "Hero" };
 
   it("creates them after the confirmation and before the apply", async () => {
     const order: string[] = [];

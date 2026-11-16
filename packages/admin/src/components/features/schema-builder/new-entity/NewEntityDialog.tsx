@@ -34,7 +34,11 @@ import {
   entryKindChoices,
   hasStartingFieldChoice,
 } from "@admin/lib/builder/starting-field";
-import { useUnsavedAddresses } from "@admin/lib/builder/unsaved-entities";
+import type { OfferedTemplate } from "@admin/lib/builder/schema-templates";
+import {
+  useUnsavedAddresses,
+  type UnsavedEntity,
+} from "@admin/lib/builder/unsaved-entities";
 import type { FieldDefinition } from "@admin/types/collection";
 
 import { BUILDER_KIND_NOUN, type BuilderConfig } from "../builder-config";
@@ -56,14 +60,23 @@ import {
 import { EntryKindQuestion } from "./EntryKindQuestion";
 import { TemplateChoice } from "./TemplateChoice";
 import { useAddressCheck, type AddressCheckState } from "./useAddressCheck";
+import { useTemplateNeeds } from "./useTemplateNeeds";
 import { useTemplatePick } from "./useTemplatePick";
 
 type Props = {
   open: boolean;
   config: BuilderConfig;
   onCancel: () => void;
-  /** Create, with the fields the template picked adds (none without one). */
-  onCreate: (values: BuilderSettingsValues, fields: FieldDefinition[]) => void;
+  /**
+   * Create, with the fields the template picked adds (none without one), and
+   * the entities it needs that are made too, each owned by the new entity:
+   * held with it, and created first by its save.
+   */
+  onCreate: (
+    values: BuilderSettingsValues,
+    fields: FieldDefinition[],
+    needed: Omit<UnsavedEntity, "token">[]
+  ) => void;
   /**
    * A create is on its way: Create waits for it, so a second click sends no
    * second entity.
@@ -76,8 +89,9 @@ function createBlockedBy(
   values: BuilderSettingsValues,
   hasPlural: boolean,
   check: AddressCheckState,
-  // Why the template picked holds Create, once nothing above does.
-  templateBlockedBy: string | null
+  // Why the template picked holds Create, once nothing above does: its own
+  // fields first, then what they need.
+  template: { fields: string | null; needs: string | null }
 ): string | null {
   if (values.singularName.trim() === "") return "Add a name.";
   if (hasPlural && (values.pluralName ?? "").trim() === "") {
@@ -88,7 +102,7 @@ function createBlockedBy(
   if (values.slug.trim() === "") return "Add an API address.";
   if (check.status === "checking") return "Checking the address…";
   if (check.status === "refused") return "Choose another address.";
-  return templateBlockedBy;
+  return template.fields ?? template.needs;
 }
 
 /** The fold's accessible name: which of the options it holds are on. */
@@ -105,6 +119,19 @@ function optionsName(
   return on.length === 0
     ? "More options, none on"
     : `More options, on: ${on.join(", ")}`;
+}
+
+/**
+ * The new entity's icon: one picked here wins; else the picked template's,
+ * which says what the entity is better than its name may; else the name's
+ * suggestion.
+ */
+function entityIcon(
+  picked: string | null,
+  template: OfferedTemplate | null,
+  name: string
+): string {
+  return picked ?? template?.template.icon ?? suggestIcon(name);
 }
 
 function iconLabel(name: string): string {
@@ -146,13 +173,18 @@ export function NewEntityDialog({
   // Nothing typed yet is not a refusal to show.
   const typed = values.singularName !== "" || values.slug !== "";
   const pick = useTemplatePick(config, values);
-  // An icon picked here wins; else the picked template's, which says what the
-  // entity is better than its name may; else the name's suggestion.
-  const icon =
-    pickedIcon ??
-    pick.picked?.template.icon ??
-    suggestIcon(values.singularName);
-  const blockedBy = createBlockedBy(values, hasPlural, check, pick.blockedBy);
+  const icon = entityIcon(pickedIcon, pick.picked, values.singularName);
+  const address = values.slug.trim();
+  const needs = useTemplateNeeds(
+    pick.needs,
+    { kind, address },
+    unsaved,
+    pick.picked
+  );
+  const blockedBy = createBlockedBy(values, hasPlural, check, {
+    fields: pick.blockedBy,
+    needs: needs.blockedBy,
+  });
 
   const set = <K extends keyof BuilderSettingsValues>(
     key: K,
@@ -168,10 +200,11 @@ export function NewEntityDialog({
         ...values,
         singularName: values.singularName.trim(),
         pluralName: hasPlural ? values.pluralName?.trim() : undefined,
-        slug: values.slug.trim(),
+        slug: address,
         icon: hasIcon ? icon : "",
       }),
-      pick.fields()
+      pick.fields(),
+      needs.needed({ kind, address })
     );
   };
 
@@ -228,7 +261,7 @@ export function NewEntityDialog({
             onChange={next => set("slug", next)}
           />
 
-          <TemplateChoice ids={ids} pick={pick} />
+          <TemplateChoice ids={ids} pick={pick} needs={needs} />
 
           <MoreOptions
             ids={ids}

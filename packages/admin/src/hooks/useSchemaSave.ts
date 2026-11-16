@@ -19,6 +19,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import type { FieldGroupCreate } from "@admin/components/features/schema-builder/FieldGroupCreatesList";
 import type { SchemaChangeConfirmation } from "@admin/components/features/schema-builder/types";
 import { toast } from "@admin/components/ui";
 import { useRestart } from "@admin/context/RestartContext";
@@ -137,17 +138,18 @@ export interface UseSchemaSaveOptions {
    */
   settingChanges?: readonly SettingChange[];
   /**
-   * The field groups not saved yet that the fields use, which the save creates
-   * before the entity: listed in the review, and created by `create` once it
-   * is confirmed, so cancelling the review creates nothing. `create` answers
-   * why one was refused, which stops the save before the entity; null when
-   * every one was created. `letGoUnused` runs once a schema apply has landed,
-   * for the ones the entity's picker made that no field uses any more; a save
-   * that changes no schema writes later, so it keeps them, and leaving the
-   * editor releases them.
+   * The entities not saved yet that the fields need (field groups they use,
+   * collections they link to), which the save creates before the entity:
+   * listed in the review, and created by `create` once it is confirmed, so
+   * cancelling the review creates nothing. `create` answers why one was
+   * refused, which stops the save before the entity; null when every one was
+   * created. `letGoUnused` runs once a schema apply has landed, for the ones
+   * the entity made that no field needs any more; a save that changes no
+   * schema writes later, so it keeps them, and leaving the editor releases
+   * them.
    */
   fieldGroupsFirst?: {
-    creates: readonly { address: string; label: string }[];
+    creates: readonly FieldGroupCreate[];
     create: () => Promise<string | null>;
     letGoUnused?: () => void;
   };
@@ -186,10 +188,12 @@ export function useSchemaSave({
   settingChanges = NO_SETTING_CHANGES,
   fieldGroupsFirst,
 }: UseSchemaSaveOptions): UseSchemaSaveReturn {
-  // The groups the save creates first, by address: part of what a review agrees to, as the
-  // fields are, so a confirmation creates exactly the groups the review listed.
+  // The entities the save creates first, by kind and address: part of what a review agrees to,
+  // as the fields are, so a confirmation creates exactly the entities the review listed.
   const creates = JSON.stringify(
-    (fieldGroupsFirst?.creates ?? []).map(group => group.address)
+    (fieldGroupsFirst?.creates ?? []).map(
+      each => `${each.kind}:${each.address}`
+    )
   );
   const createsAny = (fieldGroupsFirst?.creates.length ?? 0) > 0;
   const { startRestart, stopRestart } = useRestart();

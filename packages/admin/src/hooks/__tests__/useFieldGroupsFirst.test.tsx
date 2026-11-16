@@ -11,20 +11,35 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestQueryClient } from "@admin/__tests__/utils";
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
-const { createGroup } = vi.hoisted(() => ({
-  createGroup: vi.fn(async (payload: { slug: string }) => ({
-    slug: payload.slug,
-  })),
-}));
+/** Each create, in the order made, as "kind:address". */
+const { createGroup, createCollection, created } = vi.hoisted(() => {
+  const created: string[] = [];
+  return {
+    created,
+    createGroup: vi.fn(async (payload: { slug: string }) => {
+      created.push(`field-group:${payload.slug}`);
+      return { slug: payload.slug };
+    }),
+    createCollection: vi.fn(async (payload: { name: string }) => {
+      created.push(`collection:${payload.name}`);
+      return { message: "Created." };
+    }),
+  };
+});
 vi.mock("@admin/services/fieldGroupApi", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/services/fieldGroupApi")>()),
   fieldGroupApi: { create: createGroup },
 }));
-const { writeFieldGroup } = vi.hoisted(() => ({
+vi.mock("@admin/services/collectionApi", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/services/collectionApi")>()),
+  collectionApi: { create: createCollection },
+}));
+const { writeFieldGroup, writeCollection } = vi.hoisted(() => ({
   writeFieldGroup: vi.fn(async () => ({})),
+  writeCollection: vi.fn(async () => ({})),
 }));
 vi.mock("@admin/services/schemaFileApi", () => ({
-  schemaFileApi: { writeFieldGroup },
+  schemaFileApi: { writeFieldGroup, writeCollection },
 }));
 vi.mock("@admin/services/addressCheckApi", () => ({
   addressCheckApi: {
@@ -77,14 +92,42 @@ function group(
   };
 }
 
+/** An unsaved collection a template's link needs, as "Create it too" makes one. */
+function collection(
+  address: string,
+  label: string,
+  ownedBy?: UnsavedEntity["ownedBy"]
+): UnsavedEntity {
+  return {
+    kind: "collection",
+    address,
+    token: `token-${address}`,
+    settings: {
+      singularName: label,
+      pluralName: label,
+      slug: address,
+      icon: "Box",
+    },
+    fields: [],
+    ...(ownedBy ? { ownedBy } : {}),
+  };
+}
+
 const usesHero = [
   { id: "1", name: "hero", type: "component", component: "hero" },
 ] as BuilderField[];
 
 afterEach(() => {
   createGroup.mockClear();
+  createCollection.mockClear();
+  writeFieldGroup.mockClear();
+  writeCollection.mockClear();
+  created.length = 0;
   for (const address of ["hero", "promo", "banner"]) {
     removeUnsavedEntity("field-group", address);
+  }
+  for (const address of ["authors", "tags"]) {
+    removeUnsavedEntity("collection", address);
   }
 });
 
@@ -95,7 +138,7 @@ describe("useFieldGroupsFirst", () => {
       useFieldGroupsFirst(POSTS.kind, POSTS.address, usesHero)
     );
     expect(result.current.creates).toEqual([
-      { address: "hero", label: "Hero" },
+      { kind: "field-group", address: "hero", label: "Hero" },
     ]);
 
     act(() => removeUnsavedEntity("field-group", "hero"));
@@ -206,6 +249,58 @@ describe("useFieldGroupsFirst", () => {
     expect(unsavedEntity("field-group", "hero")).toBeUndefined();
     expect(unsavedEntity("field-group", "promo")).toBeUndefined();
     expect(unsavedEntity("field-group", "banner")).toBeDefined();
+  });
+
+  it("lists and creates the unsaved collections the fields link to, in field order with the field groups", async () => {
+    addUnsavedEntity(collection("authors", "Authors", POSTS));
+    addUnsavedEntity(group("hero", "Hero", POSTS));
+    const fields = [
+      { id: "1", name: "author", type: "relationship", relationTo: "authors" },
+      { id: "2", name: "hero", type: "component", component: "hero" },
+    ] as BuilderField[];
+    const { result } = renderHook(() =>
+      useFieldGroupsFirst(POSTS.kind, POSTS.address, fields)
+    );
+    expect(result.current.creates).toEqual([
+      { kind: "collection", address: "authors", label: "Authors" },
+      { kind: "field-group", address: "hero", label: "Hero" },
+    ]);
+
+    let refused: string | null = "not run";
+    await act(async () => {
+      refused = (await result.current.fieldGroupsFirst?.create()) ?? null;
+    });
+
+    expect(refused).toBeNull();
+    expect(created).toEqual(["collection:authors", "field-group:hero"]);
+    // Written to the schema file, as a collection's own first save writes it.
+    expect(writeCollection).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: "authors" })
+    );
+    expect(unsavedEntity("collection", "authors")).toBeUndefined();
+  });
+
+  it("lets go of, or releases, the host's own collections as its field groups", () => {
+    addUnsavedEntity(collection("authors", "Authors", POSTS));
+    addUnsavedEntity(collection("tags", "Tags", POSTS));
+    const { result } = renderHook(() =>
+      useFieldGroupsFirst(POSTS.kind, POSTS.address, [])
+    );
+
+    act(() => result.current.release());
+    expect(unsavedEntity("collection", "authors")?.ownedBy).toBeUndefined();
+
+    // Held again as the host's, then its changes discarded.
+    act(() => {
+      for (const address of ["authors", "tags"]) {
+        removeUnsavedEntity("collection", address);
+      }
+      addUnsavedEntity(collection("authors", "Authors", POSTS));
+      addUnsavedEntity(collection("tags", "Tags", POSTS));
+    });
+    act(() => result.current.letGoOwned());
+    expect(unsavedEntity("collection", "authors")).toBeUndefined();
+    expect(unsavedEntity("collection", "tags")).toBeUndefined();
   });
 });
 

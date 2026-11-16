@@ -22,6 +22,11 @@ import {
 } from "@admin/lib/builder/template-check";
 
 import { sourceWords, TemplateGallery } from "./TemplateGallery";
+import {
+  needName,
+  type NeedState,
+  type TemplateNeeds,
+} from "./useTemplateNeeds";
 import type { TemplatePick } from "./useTemplatePick";
 
 /** One choice: a template, or none. */
@@ -93,10 +98,12 @@ function PickedFields({
   ids,
   pick,
   picked,
+  needs,
 }: {
   ids: string;
   pick: TemplatePick;
   picked: OfferedTemplate;
+  needs: TemplateNeeds;
 }): JSX.Element {
   const typeLabel = useFieldTypeLabel();
   const byKey = new Map<string, TemplateFailure[]>();
@@ -128,7 +135,58 @@ function PickedFields({
           )
         )}
       </ul>
+      {needs.open.length > 0 && (
+        <div className="space-y-1 pt-1">
+          <p className="text-xs text-muted-foreground">
+            It needs these to exist:
+          </p>
+          <ul className="space-y-1 text-xs">
+            {needs.open.map(state => (
+              <NeedRow key={state.key} ids={ids} needs={needs} state={state} />
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
+  );
+}
+
+/**
+ * One target the template needs and does not find: being checked, refused by
+ * the server (so the field needing it must be left out), or missing, made too
+ * unless the person says not.
+ */
+function NeedRow({
+  ids,
+  needs,
+  state,
+}: {
+  ids: string;
+  needs: TemplateNeeds;
+  state: NeedState;
+}): JSX.Element {
+  const name = needName(state);
+  if (state.status === "checking") {
+    return <li className="text-muted-foreground">{`Checking the ${name}…`}</li>;
+  }
+  if (state.status === "refused") {
+    return (
+      <li className="text-danger-text">
+        {`The ${name} cannot be made: ${state.refusal ?? ""}`}
+      </li>
+    );
+  }
+  const checkboxId = `${ids}-make-too-${state.kind}-${state.address}`;
+  return (
+    <li className="flex items-center gap-1">
+      <input
+        type="checkbox"
+        id={checkboxId}
+        checked={needs.makesToo(state.key)}
+        onChange={() => needs.toggleMakeToo(state.key)}
+      />
+      <label htmlFor={checkboxId}>{`Create the ${name} too`}</label>
+    </li>
   );
 }
 
@@ -189,9 +247,11 @@ function PickedField({
 export function TemplateChoice({
   ids,
   pick,
+  needs,
 }: {
   ids: string;
   pick: TemplatePick;
+  needs: TemplateNeeds;
 }): JSX.Element {
   const [browsing, setBrowsing] = useState(false);
   const { picked, quick } = pick;
@@ -235,7 +295,9 @@ export function TemplateChoice({
       >
         Browse all templates
       </Button>
-      {picked && <PickedFields ids={ids} pick={pick} picked={picked} />}
+      {picked && (
+        <PickedFields ids={ids} pick={pick} picked={picked} needs={needs} />
+      )}
       {browsing && (
         <TemplateGallery
           templates={pick.templates}
