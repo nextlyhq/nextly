@@ -424,6 +424,70 @@ initialised process and throws `Nextly services not initialized` when it is the 
 Nextly code a worker runs, which a blank scaffold makes likely because it ships no
 `instrumentation.ts`.
 
+## Resized copies
+
+A page that shows a 2,200-pixel photo in a 385-pixel slot sends the visitor far
+more bytes than it draws. Nextly can serve a resized copy of any stored JPEG,
+PNG, WebP or AVIF image instead, made the first time it is asked for and kept
+beside the original.
+
+<Callout type="warn">
+  Resized copies are experimental: the route, `media.copyOf()` and the widths
+  may change before they are stable.
+</Callout>
+
+Ask for a copy at the media route, with the width it is shown at:
+
+```
+GET /api/media/:id/copy/:width
+```
+
+- **Widths are fixed.** Copies come at 96, 160, 240, 320, 640, 960, 1280 and
+  1920 pixels wide, and any other width is served the nearest one: ask for 700
+  and you get 640. A copy is never wider than its original. The fixed list is
+  what stops anyone making the server resize an image to every width there is.
+- **The format follows the browser.** A JPEG or PNG is sent as AVIF to a browser
+  that accepts it, otherwise as WebP, otherwise in its own format. A WebP or AVIF
+  original keeps its format. The answer says `Vary: Accept`, so a cache keeps
+  each format apart.
+- **It is read as the item is.** The route answers a copy to exactly whoever may
+  read the media item, and refuses it the same way otherwise.
+- **It is kept with its original.** A copy is stored by the same storage, under
+  the original's key with the width and format added
+  (`photo.jpg.w640.webp`), and deleted with the original, or when its file is
+  replaced. Nothing is cut at upload.
+
+Rather than building the address yourself, ask for it. `media.copyOf()` takes a
+media item's `id`, or an address, and the width; it answers the copy's `url` and
+the width it snapped to, or `null` when there is no copy to be had and the
+original is to be used as it is:
+
+```ts
+const copy = await nextly.media.copyOf({ id: "abc-123", width: 700 });
+// { url: "/api/media/abc-123/copy/640?v=3f9a2c71b0de", width: 640 }
+const src = copy?.url ?? media.url;
+```
+
+It answers `null` for an address that is not one of your media items (an image on
+another site), for a type that is not resized (GIF, SVG, any file that is not an
+image), when the image library `sharp` is not installed, and when the storage
+cannot keep copies.
+
+The `v` in the address is the original file's version. While it is current the
+copy is cached for a year; once the file is replaced, an old address still
+answers, with the new picture, and is checked again rather than kept.
+
+| Storage           | Keeps copies                                               |
+| ----------------- | ---------------------------------------------------------- |
+| Local disk        | Yes                                                        |
+| S3 and compatible | Yes                                                        |
+| Vercel Blob       | Yes                                                        |
+| Uploadthing       | No: it chooses every file's key, so the original is served |
+
+When a copy cannot be made at the moment it is asked for (an original too large
+to resize, or a file missing from storage), the route redirects to the original,
+so the image still shows.
+
 ## Upgrading from a release with image sizes
 
 Earlier releases cut a set of image sizes from every upload and stored each as a file of its own, recorded in the media table's `sizes` column, with the size definitions in an `image_sizes` table. This release no longer makes or reads them, but it leaves what is stored until you remove it, and your site keeps working meanwhile. Startup says so while the column or the table is still there.
