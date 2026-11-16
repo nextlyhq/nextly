@@ -61,6 +61,8 @@ import { runUnitInTries } from "../busy-table/run-unit";
 import { boundedStopRecord } from "../busy-table/stopped-record";
 import { unresolvedAttempts } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
+import type { FieldMoveRequest } from "../field-moves/check-move";
+import { planEntityMoves, type EntityMoves } from "../field-moves/plan-moves";
 import { checksumOf } from "../migrate/applied-checksums";
 import {
   reconcileFile,
@@ -203,6 +205,12 @@ export interface CollectionSave {
   removedTogether?: readonly string[];
   /** The fields the person renamed, by name: written as renames, keeping their values. */
   renamedFields?: ReadonlyArray<{ from: string; to: string }>;
+  /**
+   * The fields the person moved into or out of a group, by path before and after: each entry's
+   * value is carried to where the field now is by the file's own statements (`planEntityMoves`),
+   * and a move that cannot keep them is refused before anything is written.
+   */
+  moves?: readonly FieldMoveRequest[];
   /** Override the clock for tests. */
   now?: Date;
 }
@@ -960,7 +968,7 @@ async function writeFiles(
     name: `${migrationSlug(save.slug)}_${save.change}`,
     table: plan.table,
     now: new Date(now.getTime() + offset),
-    appended: addedStatements(deps, save, plan.table),
+    ...movesOf(deps, save, plan.table),
     ...(save.resolutions === undefined
       ? {}
       : {
@@ -1170,6 +1178,8 @@ async function generateFor(
     now: Date;
     tablesAsTheyStand?: TableSpec[];
     appended?: { up: AddedStatements; down: AddedStatements };
+    /** Columns the save drops whose values its moves copied first (`movesOf`). */
+    valueMoves?: GenerateArgs["valueMoves"];
     newTableKeys?: ReadonlyMap<string, readonly ForeignKeySpec[]>;
     existingTableKeys?: GenerateArgs["foreignKeysOfExistingTables"];
     resolutions?: readonly ColumnResolution[];
@@ -1231,6 +1241,9 @@ async function generateFor(
     ...(args.appended === undefined
       ? {}
       : { appendedStatements: args.appended }),
+    ...(args.valueMoves === undefined || args.valueMoves.length === 0
+      ? {}
+      : { valueMoves: args.valueMoves }),
     ...(args.newTableKeys === undefined
       ? {}
       : { foreignKeysOfNewTables: args.newTableKeys }),
@@ -1267,7 +1280,8 @@ async function generateFor(
 function addedStatements(
   deps: CollectionSaveDeps,
   save: CollectionSave,
-  table: string
+  table: string,
+  moves: EntityMoves = NO_MOVES
 ): { up: AddedStatements; down: AddedStatements } {
   const junctions =
     save.junctions === undefined
@@ -1277,15 +1291,60 @@ function addedStatements(
     save.keys === undefined || save.entity === null || save.previous === null
       ? emptyAdded()
       : keyChanges(deps.adapter.getCapabilities().dialect, table, save.keys);
+  // A move's copy into a group leads the file, before any drop; its copy out of one ends it,
+  // after every add; each way down the other way round.
   return {
     up: {
-      first: [...keys.up.first, ...junctions.up.first],
-      last: [...junctions.up.last, ...keys.up.last],
+      first: [...moves.up.first, ...keys.up.first, ...junctions.up.first],
+      last: [...junctions.up.last, ...keys.up.last, ...moves.up.last],
     },
     down: {
-      first: [...keys.down.first, ...junctions.down.first],
-      last: [...junctions.down.last, ...keys.down.last],
+      first: [...moves.down.first, ...keys.down.first, ...junctions.down.first],
+      last: [...junctions.down.last, ...keys.down.last, ...moves.down.last],
     },
+  };
+}
+
+const NO_MOVES: EntityMoves = {
+  up: { first: [], last: [] },
+  down: { first: [], last: [] },
+  movedColumns: [],
+};
+
+/**
+ * The change file's added statements and the columns its moves drop, with the save's moves
+ * planned between the definitions before and after it: a move refused here stops the save before
+ * anything is written.
+ */
+function movesOf(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): {
+  appended: { up: AddedStatements; down: AddedStatements };
+  valueMoves: NonNullable<GenerateArgs["valueMoves"]>;
+} {
+  const moves =
+    save.moves === undefined ||
+    save.moves.length === 0 ||
+    save.previous === null ||
+    save.entity === null
+      ? NO_MOVES
+      : planEntityMoves({
+          before: (save.previous.fields ?? []) as FieldDefinition[],
+          after: (save.entity.fields ?? []) as FieldDefinition[],
+          moves: save.moves,
+          localized: save.entity.localized === true,
+          table,
+          dialect: deps.adapter.getCapabilities().dialect,
+        });
+  return {
+    appended: addedStatements(deps, save, table, moves),
+    valueMoves: moves.movedColumns.map(moved => ({
+      table: moved.table,
+      column: moved.column,
+      reason: `moved into the group ${moved.into}; its values are copied there first`,
+    })),
   };
 }
 

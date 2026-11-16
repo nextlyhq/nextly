@@ -359,6 +359,12 @@ export interface GenerateArgs {
     down: AddedStatements;
   };
   /**
+   * Columns the file drops whose values its appended statements copied elsewhere first (a field
+   * moved into a group). Judged as deletions, as `nextly migrate` judges the file, with the
+   * reason that says they are moves.
+   */
+  valueMoves?: readonly { table: string; column: string; reason: string }[];
+  /**
    * Foreign keys a table this file creates is declared with, by table: a
    * Schema Builder collection's relationship keys, which the column mapping
    * does not describe. Rendered into the table's CREATE, as the Builder
@@ -1387,6 +1393,7 @@ export async function generateMigration(
         previous === null ? undefined : previous.data.entities
       ),
       translationMoves: [
+        ...(args.valueMoves ?? []),
         ...companionPlans.flatMap(({ plan: { kind, spec } }) =>
           kind === "enable"
             ? spec.columns.map(column => ({
