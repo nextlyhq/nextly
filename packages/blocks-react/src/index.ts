@@ -351,6 +351,12 @@ export { sanitizeDocument } from "./sanitize";
  * their items' bindings: one walk for the published route and the editor.
  */
 export { listCollections } from "./list-collections";
+/**
+ * @experimental The same walk, for the lists `wanted` keeps, each list's
+ * props filled by a binding run where one is given: the editor's change
+ * check watches the collection a bound list draws, not its stored fallback.
+ */
+export { listCollectionsWhere } from "./list-collections";
 export type { PrepareDocumentArgs, PreparedDocument } from "./prepare-document";
 export { preparePageForRead } from "./read-page";
 export type { PreparedPage, ReadPageArgs } from "./read-page";

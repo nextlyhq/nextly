@@ -5,10 +5,13 @@
  * and kept per signed-in person, so no person is ever handed another's.
  */
 import {
+  clearBlocks,
   composeEntryContent,
   defineNamedQuery,
+  registerBlocks,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -461,6 +464,43 @@ describe("the canvas's binding sources", () => {
       );
       expect(writePluginRoute).toHaveBeenCalledTimes(2);
     } finally {
+      editing.identity = null;
+    }
+  });
+
+  it("checks the collection a bound list draws once the answer is in, not its stored fallback", async () => {
+    editing.identity = identity;
+    try {
+      checked.length = 0;
+      writePluginRoute.mockReset();
+      writePluginRoute.mockResolvedValue({
+        ...answer("Kinds"),
+        entry: { id: "p1", title: "Kinds", kind: "products" },
+      });
+      // A loop stored over posts whose collection is bound to the entry's
+      // "kind", which names products.
+      const listing: BlockDocument = {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "l",
+            type: "core/collection-loop",
+            version: 1,
+            props: { collection: "posts" },
+            bindings: { collection: { $bind: "kind" } },
+          },
+        ],
+      } as BlockDocument;
+      registerBlocks(coreBlocks, { source: "page-builder" });
+      renderHook(() => useCanvasBindings([listing], "en"));
+      await waitFor(() =>
+        expect(
+          (checked.at(-1) as { lists?: string[] } | undefined)?.lists
+        ).toContain("products")
+      );
+    } finally {
+      clearBlocks();
       editing.identity = null;
     }
   });

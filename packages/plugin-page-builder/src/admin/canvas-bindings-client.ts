@@ -30,7 +30,10 @@ import {
 import {
   bindingsFromWire,
   listCollections,
+  listCollectionsWhere,
+  pageBindingRun,
   READ_KINDS,
+  registeredBlocks,
   type NamedQueryLookup,
   type PageBindings,
   type PageReadReport,
@@ -288,11 +291,19 @@ function sourcesCheckAskOf(
   drawn: readonly BlockDocument[],
   identity: DocumentIdentity | null,
   namedQueries: NamedQueryLookup | undefined,
-  locale: string | undefined
+  locale: string | undefined,
+  bound: PageBindings | undefined
 ): CanvasSourcesChangedRequest | undefined {
-  if (request !== undefined) return sourcesChangedAskOf(request);
+  const drawnLists = boundListCollections(drawn, namedQueries, locale, bound);
+  if (request !== undefined) {
+    const asked = sourcesChangedAskOf(request);
+    const lists = [...new Set([...asked.lists, ...drawnLists])].sort();
+    return lists.length === asked.lists.length ? asked : { ...asked, lists };
+  }
   if (identity === null) return undefined;
-  const lists = [...listCollections(drawn, namedQueries)].sort();
+  const lists = [
+    ...new Set([...listCollections(drawn, namedQueries), ...drawnLists]),
+  ].sort();
   if (lists.length === 0) return undefined;
   return {
     source: requestSourceOf(identity),
@@ -300,6 +311,23 @@ function sourcesCheckAskOf(
     lists,
     ...(locale === undefined ? {} : { locale }),
   };
+}
+
+/**
+ * The collections the page's lists draw once their bindings are filled by
+ * the answer the canvas drew with: a list whose collection is bound draws
+ * the one its binding names, not the fallback stored beside it. None until
+ * an answer is in.
+ */
+function boundListCollections(
+  drawn: readonly BlockDocument[],
+  namedQueries: NamedQueryLookup | undefined,
+  locale: string | undefined,
+  bound: PageBindings | undefined
+): readonly string[] {
+  if (bound === undefined) return [];
+  const run = pageBindingRun(bound, locale, registeredBlocks());
+  return [...listCollectionsWhere(drawn, () => true, run, namedQueries)];
 }
 
 /**
@@ -312,11 +340,13 @@ function useWatchedSources(
   identity: DocumentIdentity | null,
   namedQueries: NamedQueryLookup | undefined,
   locale: string | undefined,
-  userId: string | null
+  userId: string | null,
+  bound: PageBindings | undefined
 ): void {
   const asked = useMemo(
-    () => sourcesCheckAskOf(request, drawn, identity, namedQueries, locale),
-    [request, drawn, identity, namedQueries, locale]
+    () =>
+      sourcesCheckAskOf(request, drawn, identity, namedQueries, locale, bound),
+    [request, drawn, identity, namedQueries, locale, bound]
   );
   useCanvasSourceCheck(asked, userId);
 }
@@ -512,9 +542,6 @@ export function useCanvasBindings(
   );
   // The ask as text: a new document that asks the same reads nothing new.
   const key = request === undefined ? "" : JSON.stringify(request);
-  // Saves made elsewhere to what this reads: asked once a minute at most
-  // while the builder is in sight, so a kept answer never outlives its data.
-  useWatchedSources(request, drawn, identity, namedQueries, locale, userId);
   const [answer, setAnswer] = useState<{
     readonly key: string;
     readonly userId: string;
@@ -525,6 +552,19 @@ export function useCanvasBindings(
   // The ask that failed last, so its failure is told rather than taken for
   // an answer on its way.
   const [failed, setFailed] = useState<string | null>(null);
+  // Saves made elsewhere to what this reads: asked once a minute at most
+  // while the builder is in sight, so a kept answer never outlives its data.
+  // With this ask's answer, so a list whose collection is bound is watched
+  // under the collection it draws.
+  useWatchedSources(
+    request,
+    drawn,
+    identity,
+    namedQueries,
+    locale,
+    userId,
+    answer !== null && answer.key === key ? answer.bindings : undefined
+  );
   // Bumped when the sources the canvas reads have changed, so the same ask is
   // made again: a source can change while what the page asks stays the same
   // (a saved title, an updated Single).
