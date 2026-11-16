@@ -1,0 +1,740 @@
+/*
+ * A per-side property drawn as the box it describes.
+ *
+ * `margin` and `padding` are one property each with four sides, and as four
+ * stacked rows they say nothing about which edge is which — an author reads
+ * four labels to answer what a diagram answers at a glance.
+ *
+ * ORIENTED BY THE EDITED ELEMENT, not by this panel. The element's axes reach
+ * this grid as the custom properties the rule below reads, and grid placement
+ * resolves in them: columns run along the inline axis and rows along the block
+ * axis, so `grid-column: 1` is the inline START edge in a right-to-left page as
+ * well as a left-to-right one, and a vertical writing mode transposes the pair
+ * without a single physical edge being named here. A layout written with `left`
+ * and `right` would have looked correct in an English admin and pointed at the
+ * opposite edge on an Arabic site.
+ *
+ * Values rather than an applied `writing-mode`, so the narrow fallback at the
+ * end of this file can take the axes back on cascade order: an inline
+ * declaration outranks every selector, and the fallback could then only win by
+ * shouting.
+ *
+ * The panel draws this only where it could READ that orientation; where it
+ * could not, the fields stay ordinary rows that name their side in words.
+ */
+.nx-style-inspector__side-box {
+  /*
+   * The edited element's axes, handed over by the panel as values.
+   *
+   * Used through a rule rather than applied inline, so the narrow fallback
+   * below can take them back by ordinary cascade order — an inline
+   * `writing-mode` outranks every selector, and the fallback could then only
+   * win by shouting.
+   */
+  writing-mode: var(--nx-side-writing-mode, horizontal-tb);
+  direction: var(--nx-side-direction, ltr);
+  display: grid;
+  /*
+   * The width goes to the sides: the centre takes only what it holds (the
+   * inner box, or a small square), so every side cell is at least 3.5rem and
+   * a value like "0.95rem" is not cut to "0.95re", as it was when each inner
+   * side had a third of a third of the panel.
+   */
+  grid-template-columns: minmax(3.5rem, 1fr) auto minmax(3.5rem, 1fr);
+  gap: 0.25rem;
+  align-items: center;
+}
+
+/*
+ * The sides, placed by WHICH SIDE THEY ARE, not by their place among the
+ * children, which varies with the heading, form selectors and notices; it is
+ * also the document order, which Tab follows, that leaves the picture alone.
+ */
+/* The block sides span their row at a side cell's width: the centre column
+   is only as wide as the inner box, too narrow for a value. */
+.nx-style-inspector__side-box > [data-side="blockStart"] {
+  grid-area: 1 / 1 / 2 / -1;
+  justify-self: center;
+  inline-size: 3.5rem;
+}
+
+.nx-style-inspector__side-box > [data-side="inlineStart"] {
+  grid-area: 2 / 1;
+}
+
+.nx-style-inspector__side-box > [data-side="inlineEnd"] {
+  grid-area: 2 / 3;
+}
+
+.nx-style-inspector__side-box > [data-side="blockEnd"] {
+  grid-area: 3 / 1 / 4 / -1;
+  justify-self: center;
+  inline-size: 3.5rem;
+}
+
+/*
+ * A side is a control alone: its position names the edge, so its label's
+ * words are hidden, but not its provenance dot, which position cannot say.
+ */
+.nx-style-inspector__side-box > [data-side] {
+  display: block;
+}
+
+.nx-style-inspector__side-box .nx-style-inspector__field-label-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/*
+ * The children read in the PANEL's axes, not the element's.
+ *
+ * The grid above is set to the edited element's writing mode so its placement
+ * resolves there. That mode is inherited, so without this a vertical-writing
+ * page would rotate the text inside every input and menu in the box — the
+ * orientation is meant to decide where a control sits, never how its own
+ * content reads.
+ *
+ * The panel's own axes are passed in rather than written here as `ltr`: the
+ * admin interface is translatable, so a fixed answer would reverse every
+ * control in this box on the day the admin itself runs right-to-left. The
+ * fallbacks apply only if the box is somehow drawn without them, and they are
+ * the ordinary case rather than an assumption about the site.
+ */
+.nx-style-inspector__side-box > * {
+  writing-mode: var(--nx-chrome-writing-mode, horizontal-tb);
+  direction: var(--nx-chrome-direction, ltr);
+}
+
+/*
+ * The middle of the box, which is what makes the four fields read as edges.
+ *
+ * Without it they are four inputs in a three-column grid with a hole, and the
+ * arrangement has to be inferred. A pseudo-element rather than a child, so the
+ * shape costs no markup and nothing announces it: the box is a picture of an
+ * arrangement a screen reader is already given in words, by the label each
+ * field keeps.
+ */
+.nx-style-inspector__side-box::before {
+  content: "";
+  grid-area: 2 / 2;
+  align-self: stretch;
+  min-height: 1.25rem;
+  min-inline-size: 1.5rem;
+  border: 1px dashed var(--nx-border);
+  border-radius: 0.25rem;
+}
+
+/*
+ * A measurement STACKS inside a box: the quantity above, the unit under it.
+ *
+ * Beside each other they do not fit. A side is a third of a rail rather than a
+ * whole one, and the unit menu is about 66px of intrinsic width — a trigger
+ * showing two or three characters plus its chevron and padding — which leaves
+ * the quantity around 26px, or two characters, in the very field an author
+ * types into. Lowering the menu's `min-width` cannot recover that, because the
+ * width is its CONTENT rather than its minimum.
+ *
+ * So the two halves take turns on the width instead of splitting it, which
+ * costs a row of height in a control that is three rows tall already and gives
+ * the quantity the whole 96px. Only inside a box: a full-width row has room for
+ * both and reads better with them on one line.
+ */
+/*
+ * A side's value centred in even-width digits, the cell's padding kept to
+ * 2px a side, so values up to seven characters ("0.95rem", about 46px at
+ * 12px) fit a 3.3rem cell whole.
+ */
+.nx-style-inspector__side-box input[data-slot="input"] {
+  padding-inline: 0.125rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.nx-style-inspector__side-box .nx-style-inspector__numeric {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.125rem;
+}
+
+.nx-style-inspector__side-box .nx-style-inspector__unit {
+  width: 100%;
+}
+
+/*
+ * A side's ◇, inside the side at its end rather than beside or above it: a
+ * box of eight sides has no room for a ninth control per row, and above the
+ * side it covered the label or the side above. The side's text makes room
+ * for it while it shows, so neither covers the other.
+ */
+.nx-style-inspector__side-box .nx-style-inspector__numeric {
+  position: relative;
+}
+
+.nx-style-inspector__side-box .nx-variable-choice {
+  position: absolute;
+  z-index: 2;
+  inset-block-start: 0.125rem;
+  inset-inline-end: 0.125rem;
+  background: var(--nx-popover);
+}
+
+.nx-style-inspector__side-box
+  .nx-style-inspector__numeric:is(:hover, :focus-within)
+  > input {
+  padding-inline-end: 1.625rem;
+}
+
+/* A side shows a held variable by name only; its value would not fit. */
+.nx-style-inspector__side-box .nx-variable-chip__value {
+  display: none;
+}
+
+/*
+ * A side of a box shows its ◇ only while pointed at or focused, held
+ * variable or not: kept in view over a box of eight sides, it would cover
+ * the side above it for good. After the rule that keeps a held variable's ◇
+ * in view, which this outranks by order for a side.
+ */
+[data-side] .nx-variable-choice {
+  opacity: 0;
+  pointer-events: none;
+}
+
+[data-side]:hover .nx-variable-choice,
+[data-side]:focus-within .nx-variable-choice,
+[data-side] .nx-variable-choice[data-state="open"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/*
+ * A side holding a variable: its name, then its clear, both in the side's own
+ * row and always shown, where a clear drawn over the box below hid it until
+ * hover and covered the box when it showed.
+ */
+.nx-spacing-box .nx-style-inspector__token.nx-variable-chip {
+  position: relative;
+  gap: 0;
+  padding-inline: 0.125rem 0;
+  font-size: var(--text-xs);
+}
+
+/* The name gets every pixel the side has left beside its clear. */
+.nx-spacing-box .nx-style-inspector__token .nx-variable-chip__choose {
+  padding-inline: 0;
+}
+
+/*
+ * Over the name's end, inside the chip, and only while the side is pointed at
+ * or focused, which the box's own reveal for a side's clear decides: at rest
+ * the name has the side's whole width. Faded rather than removed, so Tab still
+ * reaches it and its focus shows it.
+ */
+.nx-spacing-box .nx-style-inspector__token.nx-variable-chip > button {
+  position: absolute;
+  inset-block-start: 0;
+  inset-block-end: 0;
+  inset-inline-start: auto;
+  inset-inline-end: 0;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+  /* A gap of the chip's own fill between the name and the clear. */
+  border-inline-start: 0.25rem solid var(--nx-muted);
+  background: var(--nx-muted);
+  box-shadow: none;
+}
+
+/*
+ * Below the width where three columns of a control can be read, the box gives
+ * up and becomes rows.
+ *
+ * AFTER the box's own rules, and that is the whole reason this block sits at
+ * the end of the file rather than beside the field's stacking query it shares a
+ * threshold with. These selectors have the same specificity as the ones they
+ * override, so order decides: written earlier, the base rule below would
+ * restore `display: grid` and the label rule would restore the clipping, and
+ * what an author got at a narrow rail was a cramped grid with neither its
+ * centre diagram nor visible labels — the fallback declared and not delivered.
+ *
+ * The labels come BACK when it stacks. Their words are hidden only because
+ * position is saying which edge each field is, and once the fields are in a
+ * column nothing is saying it; four unlabelled inputs would be worse than
+ * either layout.
+ *
+ * The PANEL's axes come back too. The box carries the edited element's writing
+ * mode so its grid resolves there, and `flex-direction: column` would follow
+ * that same block axis — which is horizontal in a vertical writing mode, so the
+ * promised stack would run sideways. Plain declarations suffice because the
+ * element's axes are used through a rule rather than applied inline, so this
+ * one wins on order alone.
+ */
+/*
+ * The spacing section's box model, as the design draws it: margin the outer
+ * ring (dashed), padding the inner (solid, on the raised surface), the element
+ * an empty cell in the middle, each ring captioned at its corner.
+ *
+ * The rings are the side boxes above with a ring named, so they keep the
+ * edited element's axes and place each side by which side it is. The margin
+ * ring's middle column is wide enough to hold the padding ring, and its own
+ * centre marker gives way to it.
+ */
+.nx-style-inspector__side-box[data-ring] {
+  position: relative;
+  gap: 0.25rem;
+  padding: 1.25rem 0.375rem 0.375rem;
+  border-radius: var(--radius-md);
+}
+
+/*
+ * Both rings' side cells are 3.3rem, which a seven-character value
+ * ("0.95rem") fits at 12px: the margin ring's centre is the padding ring at
+ * its own width, the padding ring's a small square, so the box's width goes
+ * to the sides.
+ */
+.nx-style-inspector__side-box[data-ring="margin"] {
+  grid-template-columns: minmax(3.3rem, 1fr) auto minmax(3.3rem, 1fr);
+  border: 1px dashed var(--nx-builder-border);
+}
+
+.nx-style-inspector__side-box[data-ring="margin"]::before {
+  display: none;
+}
+
+.nx-style-inspector__side-box[data-ring="padding"] {
+  grid-template-columns: minmax(3.3rem, 1fr) minmax(1rem, auto) minmax(
+      3.3rem,
+      1fr
+    );
+  border: 1px solid var(--nx-builder-border);
+  background: var(--nx-builder-surface-raised);
+}
+
+.nx-spacing-box__centre {
+  grid-area: 2 / 2;
+  min-inline-size: 0;
+}
+
+.nx-spacing-box__caption {
+  position: absolute;
+  inset-block-start: 0.25rem;
+  inset-inline-start: 0.5rem;
+  font-size: var(--text-xs);
+  line-height: 1;
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * A side as a value, not a form: the number centred in a small field, no
+ * label drawn (each side is named for assistive technology), and its reset or
+ * jump action shown only while the side is being edited, over what is below
+ * it, so eight sides fit a panel's width.
+ */
+.nx-spacing-box .nx-inspector__field {
+  position: relative;
+  /* One width for every side, wherever its column is wide. */
+  justify-self: center;
+  inline-size: 100%;
+  max-inline-size: 3.5rem;
+}
+
+.nx-spacing-box .nx-inspector__field input {
+  block-size: 1.75rem;
+  padding-inline: 0.25rem;
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+/* As specific as a style row's reset, which is drawn at the row's end. */
+.nx-spacing-box .nx-inspector__field > .nx-style-inspector__breakpoint-action {
+  display: none;
+}
+
+/*
+ * A side's reset or jump action, and a refusal of what was typed, drawn over
+ * the box below the side rather than inside its 3.5rem: inside, a sentence
+ * turned into a tall column and pushed the rings apart. Bounded to a width the
+ * inspector holds, wrapping within it, and opened toward the inspector's
+ * middle from a side at its inline end, so neither runs off the panel.
+ */
+.nx-spacing-box
+  .nx-inspector__field:focus-within
+  .nx-style-inspector__breakpoint-action,
+.nx-spacing-box .nx-inspector__error {
+  display: flex;
+  position: absolute;
+  z-index: 2;
+  inset-block-start: 100%;
+  inset-inline-start: 0;
+  inline-size: max-content;
+  max-inline-size: 12rem;
+  margin: 0.25rem 0 0;
+  padding: 0.25rem 0.5rem;
+  white-space: normal;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-popover);
+  color: var(--nx-popover-foreground);
+  box-shadow: var(--shadow-md);
+}
+
+/*
+ * A side whose value is stored here and shadowed by another tier offers both
+ * a reset and a jump, each in the overlay below the side: the jump drops
+ * below the reset rather than painting over it at the same inset.
+ */
+.nx-spacing-box
+  .nx-inspector__field:has(> [data-action="reset"])
+  > [data-action="jump"] {
+  inset-block-start: calc(100% + 2.5rem);
+}
+
+.nx-spacing-box [data-side="inlineEnd"] .nx-style-inspector__breakpoint-action,
+.nx-spacing-box [data-side="inlineEnd"] .nx-inspector__error {
+  inset-inline-start: auto;
+  inset-inline-end: 0;
+}
+
+/*
+ * A token, or a value no control here edits, as a side of the box: its name
+ * cut to the side's width, and its Clear shown over the box while the side is
+ * pointed at or focused, as the side's other actions are. Faded rather than
+ * hidden, so Clear stays in the tab order and reveals itself when reached.
+ */
+.nx-spacing-box .nx-style-inspector__token {
+  min-inline-size: 0;
+  flex-wrap: nowrap;
+}
+
+.nx-spacing-box .nx-style-inspector__token > span {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-spacing-box .nx-style-inspector__token > button {
+  position: absolute;
+  z-index: 2;
+  /* Flush with the side, no gap: a pointer moving down to Clear stays over
+     the field the whole way, so its hover holds and Clear stays shown. */
+  inset-block-start: 100%;
+  inset-inline-start: 0;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+  background: var(--nx-popover);
+  box-shadow: var(--shadow-md);
+}
+
+.nx-spacing-box .nx-inspector__field:hover .nx-style-inspector__token > button,
+.nx-spacing-box
+  .nx-inspector__field:focus-within
+  .nx-style-inspector__token
+  > button {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Rows only below the width the box needs: the padding ring's sides spill
+   over the margin's under 16.5rem, measured. */
+@container nx-inspector-fields (width < 16.5rem) {
+  .nx-style-inspector__side-box {
+    display: flex;
+    flex-direction: column;
+    writing-mode: var(--nx-chrome-writing-mode, horizontal-tb);
+    direction: var(--nx-chrome-direction, ltr);
+  }
+
+  .nx-style-inspector__side-box::before {
+    display: none;
+  }
+
+  /* Each side a row as wide as the rail, the block sides' cell width undone. */
+  .nx-style-inspector__side-box > [data-side] {
+    inline-size: auto;
+    justify-self: stretch;
+  }
+
+  .nx-spacing-box__caption {
+    position: static;
+  }
+
+  /* Rows again, each with its label: the side takes the row's width, and
+     its action and any refusal sit in the row's flow below it. */
+  .nx-spacing-box .nx-inspector__field {
+    max-inline-size: none;
+  }
+
+  .nx-spacing-box .nx-inspector__field .nx-style-inspector__token > button {
+    position: static;
+    opacity: 1;
+    pointer-events: auto;
+    box-shadow: none;
+  }
+
+  /* A focused side's too, which the overlay rule above otherwise floats. */
+  .nx-spacing-box .nx-inspector__field > .nx-style-inspector__breakpoint-action,
+  .nx-spacing-box
+    .nx-inspector__field:focus-within
+    .nx-style-inspector__breakpoint-action,
+  .nx-spacing-box .nx-inspector__error {
+    display: flex;
+    position: static;
+    inline-size: auto;
+    max-inline-size: none;
+    border: 0;
+    background: none;
+    box-shadow: none;
+    padding: 0;
+  }
+
+  .nx-style-inspector__side-box .nx-style-inspector__field-label-text {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+    white-space: normal;
+  }
+}
+
+/*
+ * The spacing handles: the interactive half of the overlay.
+ *
+ * `pointer-events: auto` re-enables what the layer above turns off. The layer
+ * takes no pointer events at all, because bands cover the block they measure
+ * and a hit-test landing there would make the selected block unclickable; a
+ * handle is a thin strip on one edge, and taking a press is its whole purpose.
+ */
+.nx-spacing-handles__handle {
+  position: absolute;
+  pointer-events: auto;
+  /*
+   * Above the bands, so the strip on a band's edge takes the press rather than
+   * the band drawn under it. Still below the toolbar and the drop indicator,
+   * which the layer's own `z-index` already settles.
+   */
+  z-index: 1;
+  /* The axis the value moves along, so the cursor states which way to pull. */
+  touch-action: none;
+}
+
+.nx-spacing-handles__handle[data-side="top"],
+.nx-spacing-handles__handle[data-side="bottom"] {
+  cursor: ns-resize;
+}
+
+.nx-spacing-handles__handle[data-side="left"],
+.nx-spacing-handles__handle[data-side="right"] {
+  cursor: ew-resize;
+}
+
+/*
+ * Invisible until it is wanted. A permanent bar on all eight edges competes
+ * with the bands' own fills and with the selection outline, and the value chip
+ * is what an author reads at rest; the affordance appears under the pointer and
+ * whenever the handle holds focus, which is what makes the keyboard path
+ * discoverable rather than merely present.
+ */
+.nx-spacing-handles__handle::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  /* The select hue, as every mark drawn on the page: the admin's primary is
+     white in the dark theme and vanished on a white page. */
+  background-color: var(--nx-builder-select);
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.nx-spacing-handles__handle:hover::before,
+.nx-spacing-handles__handle:focus-visible::before {
+  opacity: 0.85;
+}
+
+/*
+ * The focus ring is drawn on the strip itself rather than left to the UA
+ * default, which would be clipped to a thin band and easy to miss.
+ */
+.nx-spacing-handles__handle:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+/*
+ * The live region is permanently mounted and never seen. A polite region
+ * inserted already carrying its text is not reliably announced, so it cannot be
+ * mounted with the message; `clip-path` keeps it out of the picture without
+ * `display: none`, which would take it out of the accessibility tree too.
+ */
+.nx-spacing-handles__status,
+/* The font upload's native picker, likewise out of sight but still in the
+   tree; the admin's button opens it. */
+.nx-fonts-upload__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/*
+ * The notice above the canvas while a locked area holds what its lock does
+ * not allow: a heading, the sentence, and the steps once the author reviews
+ * them. Bordered like the other chrome notices, on the raised surface.
+ */
+.nx-lock-repair {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--nx-builder-border, var(--nx-border));
+  background: var(--nx-builder-surface-raised, var(--nx-background));
+}
+
+.nx-lock-repair__title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.nx-lock-repair__steps {
+  margin: 0;
+  padding-inline-start: 1.25rem;
+  /* Numbered, because the steps are applied in the order shown. */
+  list-style: decimal;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.nx-lock-repair__actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/*
+ * A control that holds more than one value (a list's items, a relation's
+ * search and matches) stacks its name above it and takes the panel's whole
+ * width. Beside a 6.5rem label column it was squeezed into what is left, and
+ * a list item's field showed a few letters of its text.
+ */
+.nx-inspector__field.nx-inspector__field--stacked {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.nx-inspector__field.nx-inspector__field--stacked > * {
+  grid-column: 1;
+}
+
+/* A list's items, one quiet row each: its field, then its actions. */
+.nx-inspector__array {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.nx-inspector__array-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0.25rem 0.375rem;
+  padding: 0.375rem;
+  border: 1px solid var(--nx-border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+/* An item's fields, one above another, taking the row's width. */
+.nx-inspector__array-fields {
+  display: grid;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+/* An item's own fields stack too: the row is narrower than a field's columns. */
+.nx-inspector__array-fields .nx-inspector__field {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.nx-inspector__array-fields .nx-inspector__field > * {
+  grid-column: 1;
+}
+
+.nx-inspector__array-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+.nx-inspector__array-actions svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+/* A relation: what is chosen and its Clear on one line, then the search. */
+.nx-inspector__relation {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.nx-inspector__relation-chosen {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.nx-inspector__relation-chosen > p {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The matches: full-width rows, a long title cut with an ellipsis. */
+.nx-inspector__relation-matches {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-inspector__relation-matches button {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 0.375rem;
+  text-align: start;
+}
+
+/*
+ * Text cut short on one line with an ellipsis rather than wrapped or broken
+ * mid-word, the whole of it in a tooltip: a relation's title, and a shared
+ * style's name and class name in the picker.
+ */
+.nx-inspector__relation-title,
+.nx-classes__option-name,
+.nx-classes__option-class {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-inspector__relation-tick {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  margin-inline-start: auto;
+}
+
+.nx-inspector__relation-matches button[aria-pressed="true"] {
+  font-weight: 600;
+}
