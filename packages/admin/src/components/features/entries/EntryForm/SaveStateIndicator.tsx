@@ -197,24 +197,32 @@ function FailedSaveState({
       <span id={detailId} className="sr-only">
         {view.detail}
       </span>
-      <TooltipProvider delayDuration={300}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            {/* A real button, so Retry is reachable from the keyboard and
-                focusing it shows what failed. A failure nothing here can try
-                again offers no Retry that would only fail again; its control
-                still takes focus, to say what failed and where to fix it. */}
-            {view.retry === undefined ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-7 px-2"
-                aria-describedby={detailId}
-              >
-                Details
-              </Button>
-            ) : (
+      {view.retry === undefined ? (
+        // A failure nothing here can try again offers no Retry that would
+        // only fail again. Details opens what failed on a click and stays
+        // open to be read: a tooltip closes on the press that would open it.
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2"
+              aria-describedby={detailId}
+            >
+              Details
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="end" side="bottom" className="w-72 text-sm">
+            <p>{view.detail}</p>
+          </PopoverContent>
+        </Popover>
+      ) : (
+        <TooltipProvider delayDuration={300}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              {/* A real button, so Retry is reachable from the keyboard and
+                  focusing it shows what failed. */}
               <Button
                 type="button"
                 variant="ghost"
@@ -227,13 +235,13 @@ function FailedSaveState({
               >
                 Retry
               </Button>
-            )}
-          </TooltipTrigger>
-          <TooltipContent side="bottom" align="end">
-            <p>{view.detail}</p>
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" align="end">
+              <p>{view.detail}</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      )}
     </>
   );
 }

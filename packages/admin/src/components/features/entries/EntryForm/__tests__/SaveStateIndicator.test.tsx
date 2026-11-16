@@ -128,6 +128,25 @@ describe("SaveStateIndicator", () => {
     expect(details).toHaveFocus();
   });
 
+  it("opens what failed when Details is clicked, and closes it with Escape", async () => {
+    // A tooltip closes on the press that would open it, so a click on
+    // Details showed nothing; it opens on the click, and stays open to read.
+    const user = userEvent.setup();
+    const failed: DocumentSaveState = {
+      kind: "failed",
+      message: "Site colours wasn't saved: offline",
+    };
+    render(<SaveStateIndicator saveState={failed} recovery={noRecovery} />);
+    const details = screen.getByRole("button", { name: "Details" });
+    expect(details).toHaveAttribute("aria-expanded", "false");
+    await user.click(details);
+    expect(details).toHaveAttribute("aria-expanded", "true");
+    expect(await screen.findByRole("dialog")).toHaveTextContent(failed.message);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(details).toHaveFocus();
+  });
+
   it("says nothing for an opened document nothing has been stored in yet", () => {
     render(
       <SaveStateIndicator
