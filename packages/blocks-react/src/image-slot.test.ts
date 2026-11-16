@@ -296,14 +296,13 @@ describe("a site's classes and block defaults that size blocks", () => {
     ]);
   });
 
-  it("is told to the page's sizing by the route", () => {
-    expect(
-      imageSizingFor(async () => [], undefined, [], true, true).imageSlot
-        ?.siteSizesBlocks
-    ).toBe(true);
-    expect(
-      imageSizingFor(async () => [], undefined, [], true).imageSlot
-        ?.siteSizesBlocks
-    ).toBeUndefined();
+  it("still let a block's own width widen the slot", () => {
+    // A 1000px Image is drawn at 1000 whatever a class does; only narrowing
+    // by its own size is given up.
+    const slot = { ...rootImageSlot(BREAKPOINTS), siteSizesBlocks: true };
+    const wide = { base: { base: { width: "1000px" } } };
+    expect(narrowForOwnSize(slot, wide).devices.map(d => d.width)).toEqual([
+      1920, 1024, 1000,
+    ]);
   });
 });

@@ -349,8 +349,6 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
  * pixels can be wider than the container, since CSS draws it so.
  */
 export function narrowForOwnSize(slot: ImageSlot, styles: unknown): ImageSlot {
-  // A class or a block default could draw it wider than its own styles say.
-  if (slot.siteSizesBlocks === true) return slot;
   if (sizedOutsideTheBase(styles)) return slot;
   const base = recordOf(recordOf(recordOf(styles)?.base)?.base);
   if (base?.width === undefined && base?.maxWidth === undefined) return slot;
@@ -362,7 +360,14 @@ export function narrowForOwnSize(slot: ImageSlot, styles: unknown): ImageSlot {
       const own = lengthIn(base.width, device.width) ?? device.width;
       const cap =
         lengthIn(base.maxWidth, device.width) ?? Number.POSITIVE_INFINITY;
-      return { ...device, width: Math.min(own, cap) };
+      const sized = Math.min(own, cap);
+      // Where a class or a block default of the site's could draw the block
+      // wider than its own styles say, its own size may only widen the slot.
+      return {
+        ...device,
+        width:
+          slot.siteSizesBlocks === true ? Math.max(device.width, sized) : sized,
+      };
     }),
   };
 }

@@ -1076,6 +1076,55 @@ describe("a routed page's bindings", () => {
     expect(other.tags).toEqual(nextlySingleTags("campaign-style"));
   });
 
+  it("tells a page's sizing when the site's classes size blocks", async () => {
+    // A named class drawing blocks at a minimum width: no block's own width
+    // may narrow its images' slot. Observed on the context the route builds.
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "box",
+          type: "core/section",
+          version: 1,
+          props: {},
+          slots: { children: [] },
+        },
+      ],
+    };
+    const breakpoints = {
+      viewport: [{ id: "base", label: "Desktop" }],
+      container: [],
+    };
+    const slotOf = async (classes: unknown[]) => {
+      const { element } = await renderedPage(
+        createPublicBlocksPage,
+        {
+          collections: ["pages"],
+          field: "content",
+          blocks,
+          imageCopies: async () => [],
+          styleContext: { breakpoints },
+          siteStyles: { classes } as never,
+        },
+        instance(page)
+      );
+      return element.props.context?.imageSlot;
+    };
+    expect(
+      (
+        await slotOf([
+          {
+            id: "wide",
+            name: "Wide",
+            styles: { base: { base: { minWidth: "1000px" } } },
+          },
+        ])
+      )?.siteSizesBlocks
+    ).toBe(true);
+    expect((await slotOf([]))?.siteSizesBlocks).toBeUndefined();
+  });
+
   it("keeps a public route's image copies under its cache scope, on their own allowance", async () => {
     const page: BlockDocument = {
       formatVersion: DOCUMENT_FORMAT_VERSION,
