@@ -937,7 +937,6 @@ describe.each(getConfiguredTestDialects())(
       await entries().discardWorkingDraft({
         collectionName: POSTS,
         entryId: id,
-        overrideAccess: true,
         locale: "es",
         version: { _overwrite: true },
       });
