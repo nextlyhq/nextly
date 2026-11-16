@@ -300,6 +300,50 @@ function SheetDragHandle({ onDismiss }: { onDismiss: () => void }) {
  * @param side - Which edge to slide in from: "left", "right", "top", "bottom"
  * @public
  */
+/** What the keyboard can reach by Tab: enabled, not hidden, and in the tab order. */
+const TABBABLE =
+  'a[href], area[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex], [contenteditable="true"]';
+
+function tabbablesIn(root: ParentNode): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(TABBABLE)).filter(
+    element =>
+      element.tabIndex >= 0 &&
+      !element.hidden &&
+      // Radix's focus guards sit in the tab order at the page's edges, and are no control.
+      !element.hasAttribute("data-radix-focus-guard") &&
+      element.closest('[aria-hidden="true"], [inert]') === null
+  );
+}
+
+/**
+ * Tab at a non-modal sheet's edge, moved out of it as for any other part of the page.
+ *
+ * Radix's dialog keeps its focus scope looping even when it is not modal, so Tab from the
+ * sheet's last control would go round to its first, and Shift+Tab from its first to its last:
+ * a keyboard reader could not get from the sheet back to the page beside it. At those two edges
+ * this sends focus where the browser would: forward to the page's first control (the sheet is
+ * drawn after the page), back to the page's last. Anywhere else, Tab is left to the browser.
+ * Runs before the focus scope's own handler on the same element, which then finds focus already
+ * outside and does nothing.
+ */
+function leaveNonModalAtEdge(event: React.KeyboardEvent<HTMLElement>): void {
+  if (event.defaultPrevented) return;
+  if (event.key !== "Tab" || event.altKey || event.ctrlKey || event.metaKey) {
+    return;
+  }
+  const sheet = event.currentTarget;
+  const inside = tabbablesIn(sheet);
+  const edge = event.shiftKey ? inside[0] : inside[inside.length - 1];
+  if (edge === undefined || document.activeElement !== edge) return;
+  const page = tabbablesIn(sheet.ownerDocument.body).filter(
+    element => !sheet.contains(element)
+  );
+  const next = event.shiftKey ? page[page.length - 1] : page[0];
+  if (next === undefined) return;
+  event.preventDefault();
+  next.focus();
+}
+
 const SheetContent: React.ForwardRefExoticComponent<
   React.PropsWithoutRef<SheetContentProps> &
     React.RefAttributes<React.ElementRef<typeof DialogPrimitive.Content>>
@@ -308,7 +352,14 @@ const SheetContent: React.ForwardRefExoticComponent<
   SheetContentProps
 >(
   (
-    { side = "right", className, children, dragHandle = false, ...props },
+    {
+      side = "right",
+      className,
+      children,
+      dragHandle = false,
+      onKeyDown,
+      ...props
+    },
     ref
   ) => {
     const portalContainer = usePortalContainer();
@@ -329,6 +380,12 @@ const SheetContent: React.ForwardRefExoticComponent<
           data-slot="sheet-content"
           className={cn(sheetVariants({ side }), className)}
           {...props}
+          onKeyDown={event => {
+            onKeyDown?.(event);
+            // A sheet beside the page lets the keyboard move between the two; a modal one
+            // holds focus, as Radix does.
+            if (!modal) leaveNonModalAtEdge(event);
+          }}
         >
           {draggable ? (
             <>
