@@ -472,7 +472,11 @@ describe.each(getConfiguredTestDialects())(
         expect(relationId((await row(t, busy))?.layout)).toBe(seed);
         expect(await parts().mark.read()).toBeNull();
 
-        expect(await move(t)).toEqual({ kind: "pass", moved: 1, finished: true });
+        expect(await move(t)).toEqual({
+          kind: "pass",
+          moved: 1,
+          finished: true,
+        });
         expect(relationId((await row(t, busy))?.layout)).toBeNull();
         expect(await row(t, busy)).toMatchObject({ title: "Busy, edited" });
       });
@@ -522,12 +526,45 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
         });
 
+        // Its pages stay, and the move waits: the draft may be discarded.
+        expect(await move(t)).toEqual({
+          kind: "pass",
+          moved: 0,
+          finished: false,
+        });
+        expect(relationId((await row(t, kept))?.layout)).toBe(seed);
+        expect(await parts().mark.read()).toBeNull();
+        // And a write naming it keeps it: it is not the empty seed now.
+        const written = await page(t, "Written", {
+          layout: seed,
+          status: "draft",
+        });
+        expect(relationId((await row(t, written))?.layout)).toBe(seed);
+
+        // Published, the seed is a set like any other: the move is done.
+        const draft = await t.nextly.findByID({
+          collection: LAYOUTS_SLUG,
+          id: seed,
+          draft: true,
+          depth: 0,
+          overrideAccess: true,
+        });
+        await t.nextly.update({
+          collection: LAYOUTS_SLUG,
+          id: seed,
+          data: {
+            status: "published",
+            _rev: (draft as { _rev?: unknown } | null)?._rev,
+          },
+          overrideAccess: true,
+        });
         expect(await move(t)).toEqual({
           kind: "pass",
           moved: 0,
           finished: true,
         });
         expect(relationId((await row(t, kept))?.layout)).toBe(seed);
+        expect(relationId((await row(t, written))?.layout)).toBe(seed);
       });
 
       // Not on SQLite: a start of this harness there builds the plugin's
@@ -658,6 +695,10 @@ describe.each(getConfiguredTestDialects())(
         );
 
         expect(answer.successful, JSON.stringify(answer)).toBe(1);
+        // Moved after the batch's commit, not stored as sent then cleared.
+        expect(warnings).toContain(
+          "[page-builder] a page written in a batch named the empty seeded header & footer set, so it now uses the site default"
+        );
         await vi.waitFor(
           async () =>
             expect(relationId((await row(t, target))?.layout)).toBeNull(),

@@ -14,7 +14,8 @@
  * the set-removal fence, so it runs after validation (the fence's floor on the
  * `layout` field has judged the value as sent) and after that fence's own
  * `beforeChange`, which clears a deleted set from a publish. The value is
- * stored as `null`.
+ * stored as `null`. A seed that cannot be read leaves the value as sent,
+ * logged, rather than failing the save.
  *
  * ## Inside a caller's transaction
  *
@@ -99,8 +100,21 @@ async function normalisedChoice(
 ): Promise<Record<string, unknown> | undefined> {
   const named = namedBy(hook);
   if (named === null || hook.executor !== undefined) return undefined;
-  const nextly = await directApiOf(hook);
-  if (!(await namesEmptySeed(nextly, args.slugs, named))) return undefined;
+  try {
+    const nextly = await directApiOf(hook);
+    if (!(await namesEmptySeed(nextly, args.slugs, named))) return undefined;
+  } catch (error) {
+    // The seed could not be read: the save keeps its choice rather than
+    // failing for a check that only tidies it.
+    args.warn(
+      "[page-builder] could not check a saved page's header & footer set against the empty seed; it keeps its choice",
+      {
+        layoutId: named,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    );
+    return undefined;
+  }
   return { ...(hook.data as Record<string, unknown>), layout: null };
 }
 

@@ -17,7 +17,9 @@
  *
  * The seed's row and its working draft name no component in their areas. A
  * working draft that adds a header means someone is filling the seed, so its
- * pages are left on it.
+ * pages are left on it, and the move waits: the draft may be discarded. A
+ * seed whose row holds a header or footer is a set like any other, and the
+ * move is done.
  *
  * ## How the move writes
  *
@@ -123,38 +125,30 @@ export type EmptySeedReads = Pick<
 >;
 
 /**
- * The seeded set's id while it holds no header and no footer, in its row and
- * in its working draft; null when the site has no seed, the seed is gone, or
- * it holds an area. The one answer the move and the write normalisation share.
+ * Where the seeded set stands: `empty` while neither its row nor its working
+ * draft names a component in its areas; `filling` while only its working
+ * draft does (someone is giving it a header or footer, and may yet discard
+ * that); `filled` once its row does; `gone` when no seed is recorded or its
+ * row no longer exists. The one answer the move and the write normalisation
+ * share.
  */
-export async function emptySeedOf(
-  nextly: EmptySeedReads,
-  slugs: DefaultLayoutSlugs
-): Promise<string | null> {
-  const { seededLayout } = await readLayoutSettings(nextly, slugs);
-  if (seededLayout === null) return null;
-  return (await seedIsEmpty(nextly, slugs, seededLayout)) ? seededLayout : null;
-}
+type SeedState =
+  | { readonly kind: "empty"; readonly id: string }
+  | { readonly kind: "filling" }
+  | { readonly kind: "filled" }
+  | { readonly kind: "gone" };
 
-/**
- * Whether set `id` is the seed while it is empty, as {@link emptySeedOf}
- * answers, reading the seed only when `id` is the one the settings record.
- */
-export async function namesEmptySeed(
+/** Where the seed the settings record stands, as {@link SeedState} says. */
+async function seedState(
   nextly: EmptySeedReads,
   slugs: DefaultLayoutSlugs,
-  id: string
-): Promise<boolean> {
-  const { seededLayout } = await readLayoutSettings(nextly, slugs);
-  return seededLayout === id && (await seedIsEmpty(nextly, slugs, id));
-}
-
-/** Whether set `seed` exists and neither its row nor its draft names an area. */
-async function seedIsEmpty(
-  nextly: Pick<DefaultLayoutDirectApi, "find" | "findByID">,
-  slugs: Pick<DefaultLayoutSlugs, "layouts">,
-  seed: string
-): Promise<boolean> {
+  only?: string
+): Promise<SeedState> {
+  const { seededLayout: seed } = await readLayoutSettings(nextly, slugs);
+  // Asked about one set: the seed is read only when it is that set.
+  if (seed === null || (only !== undefined && seed !== only)) {
+    return { kind: "gone" };
+  }
   // The row: the live set when it is published, its only row when not.
   const found = await nextly.find({
     collection: slugs.layouts,
@@ -165,7 +159,8 @@ async function seedIsEmpty(
     overrideAccess: true,
   });
   const row = found.items[0] as { areas?: unknown } | undefined;
-  if (row === undefined || regionsOf(row).length > 0) return false;
+  if (row === undefined) return { kind: "gone" };
+  if (regionsOf(row).length > 0) return { kind: "filled" };
   // Its working draft, which only a read by id overlays.
   const latest: unknown = await nextly.findByID({
     collection: slugs.layouts,
@@ -174,7 +169,30 @@ async function seedIsEmpty(
     depth: 0,
     overrideAccess: true,
   });
-  return regionsOf(latest as { areas?: unknown } | undefined).length === 0;
+  return regionsOf(latest as { areas?: unknown } | undefined).length > 0
+    ? { kind: "filling" }
+    : { kind: "empty", id: seed };
+}
+
+/** The seeded set's id while it is empty, or null. */
+export async function emptySeedOf(
+  nextly: EmptySeedReads,
+  slugs: DefaultLayoutSlugs
+): Promise<string | null> {
+  const state = await seedState(nextly, slugs);
+  return state.kind === "empty" ? state.id : null;
+}
+
+/**
+ * Whether set `id` is the seed while it is empty, reading the seed only when
+ * `id` is the one the settings record.
+ */
+export async function namesEmptySeed(
+  nextly: EmptySeedReads,
+  slugs: DefaultLayoutSlugs,
+  id: string
+): Promise<boolean> {
+  return (await seedState(nextly, slugs, id)).kind === "empty";
 }
 
 /** What the move needs. */
@@ -225,15 +243,25 @@ async function moveOnce(deps: EmptySeedMoveDeps): Promise<EmptySeedOutcome> {
   if ((await deps.emptySeed.mark.read()) !== null) {
     return { kind: "done-before" };
   }
-  const seed = await emptySeedOf(deps.nextly, deps.slugs);
-  // No empty seed, so no page can be stuck on one, and the write
-  // normalisation keeps it that way.
-  if (seed === null) return finish(deps, 0);
+  const state = await seedState(deps.nextly, deps.slugs);
+  // No seed, or one with a published header or footer: no page is stuck on
+  // an empty one, and the write normalisation keeps it that way.
+  if (state.kind === "gone" || state.kind === "filled") return finish(deps, 0);
+  // Only its draft holds an area: its pages stay while someone fills it, and
+  // the move is not done, since that draft may yet be discarded.
+  if (state.kind === "filling")
+    return { kind: "pass", moved: 0, finished: false };
+  const seed = state.id;
 
   const scan = await scanLayoutReferences({
     nextly: deps.nextly,
     pages: deps.pagesSlug,
     layoutId: seed,
+    // Unbounded: the scan's working-draft reads start from the first
+    // published page on every run, so a bounded scan on a larger site would
+    // stop at the same place on every pass and never finish. This reads each
+    // page once, as a job no request waits on, and only until it finishes.
+    budget: Number.POSITIVE_INFINITY,
   });
   let moved = 0;
   let refused = 0;
@@ -249,6 +277,15 @@ async function moveOnce(deps: EmptySeedMoveDeps): Promise<EmptySeedOutcome> {
     );
   }
   if (!scan.complete || refused > 0) {
+    deps.warn(
+      "[page-builder] the move of pages off the empty seeded header & footer set did not finish; the next jobs pass carries on",
+      {
+        seededLayout: seed,
+        moved,
+        savedMeanwhile: refused,
+        unread: scan.unread.length,
+      }
+    );
     return { kind: "pass", moved, finished: false };
   }
   return finish(deps, moved);

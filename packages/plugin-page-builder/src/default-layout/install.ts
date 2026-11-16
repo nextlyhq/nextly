@@ -145,7 +145,7 @@ export async function seedDefaultLayoutAtStart(
     await moveEmptySeedPages({ ...setup, nextly });
   } catch (error) {
     setup.warn(
-      "[page-builder] the default Layout could not be checked at start; the jobs sweep will check it",
+      "[page-builder] the default Layout, or the move of pages off the empty seeded set, could not be run at start; the jobs sweep will run it",
       { error: error instanceof Error ? error.message : String(error) }
     );
   }
