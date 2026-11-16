@@ -27,8 +27,10 @@ import { draftsKeptByPart } from "../versions/part-drafts";
 import { COMPANION_UPDATED_AT_COLUMN } from "./companion-columns";
 import {
   documentLanguageKey,
-  languageOutOfDate,
+  fieldProvenanceOf,
+  languageOutOfDateSql,
   type FieldProvenance,
+  type ProvenanceScope,
 } from "./provenance/field-status";
 import type { CompanionReadiness } from "./runtime/companion-readiness";
 import { buildCompanionStampTable } from "./runtime/companion-stamp-table";
@@ -801,6 +803,11 @@ export function buildTranslationStatusCondition(args: {
   hasUpdatedAt?: boolean;
   defaultLocale: string;
   filter: TranslationStatusFilter;
+  /**
+   * The collection or Single, where its values' provenance is recorded (the table is there):
+   * `stale` then judges a language by its recorded values where it has any.
+   */
+  provenance?: ProvenanceScope;
 }): SQL | undefined {
   const {
     companionTableName,
@@ -874,6 +881,7 @@ export function buildTranslationStatusCondition(args: {
         locale,
         defaultLocale,
         nonBlankOn,
+        provenance: args.provenance,
       });
     default:
       return undefined;
@@ -922,6 +930,7 @@ function buildStaleCondition(args: {
   locale: string;
   defaultLocale: string;
   nonBlankOn: (ref: CompanionTableRef) => SQL;
+  provenance?: ProvenanceScope;
 }): SQL {
   const { table, mainIdColumn, locale, defaultLocale, nonBlankOn } = args;
   // Prefixed, because an alias shares a namespace with the caller's own tables and a bare `src`
@@ -936,13 +945,39 @@ function buildStaleCondition(args: {
     WHERE ${tgt}.${parent} = ${mainIdColumn}
     AND ${tgt}.${localeCol} = ${locale}
     AND (${nonBlankOn(tgt)})
-    AND EXISTS (
-      SELECT 1 FROM ${table} ${src}
-      WHERE ${src}.${parent} = ${mainIdColumn}
-      AND ${src}.${localeCol} = ${defaultLocale}
-      AND ${sourceMovedAfterTarget(src, tgt)}
-    )
+    AND ${languageStale({
+      byStamp: sql`EXISTS (
+        SELECT 1 FROM ${table} ${src}
+        WHERE ${src}.${parent} = ${mainIdColumn}
+        AND ${src}.${localeCol} = ${defaultLocale}
+        AND ${sourceMovedAfterTarget(src, tgt)}
+      )`,
+      entryId: sql`${tgt}.${parent}`,
+      locale: sql`${locale}`,
+      provenance: args.provenance,
+    })}
   )`;
+}
+
+/**
+ * Whether a document's language is stale: by its recorded values where provenance is recorded
+ * (`languageOutOfDateSql`), else by `byStamp` alone. ONE composition, used by the filter arm
+ * and by {@link readStaleLocales}, so the worklist and the overview cannot disagree.
+ */
+function languageStale(args: {
+  byStamp: SQL;
+  entryId: SQL;
+  locale: SQL;
+  provenance: ProvenanceScope | undefined;
+}): SQL {
+  return args.provenance
+    ? languageOutOfDateSql({
+        scope: args.provenance,
+        entryId: args.entryId,
+        locale: args.locale,
+        byStamp: args.byStamp,
+      })
+    : args.byStamp;
 }
 
 /** A table alias as `sql.identifier` produces it — derived, so it cannot drift from that call. */
@@ -1018,9 +1053,9 @@ export interface LocaleTranslationMeta {
    * timestamps to compare" are different answers and only one of them is a claim about the
    * content. A row written before `_updated_at` existed is unknown, never up to date.
    *
-   * Where the language's values have a recorded origin, it is decided field by field instead
-   * (`fields`): stale when any field's source changed after it was made from it, and not stale
-   * when every translated field is known to be current, whatever the stamps say.
+   * Where the language's values have a recorded origin, it is decided by them instead
+   * (`languageOutOfDateSql`): stale exactly when one of its fields is out of date (`fields`),
+   * whatever the stamps say.
    */
   stale?: boolean;
   /**
@@ -1056,10 +1091,12 @@ export interface TranslationStatusArgs {
    */
   staleness?: { companionTableName: string; dialect: SupportedDialect };
   /**
-   * Each row's fields' provenance by language, keyed by `documentLanguageKey`
-   * (`fieldProvenanceOf`). Omitted, every language is judged by its stamp alone.
+   * The collection or Single the rows are of, where its values' provenance is recorded (the table
+   * is there): each language is then judged by its recorded values where it has any
+   * (`languageOutOfDateSql`), and each one's fields are reported. Omitted, every language is
+   * judged by its stamp alone.
    */
-  fieldProvenance?: ReadonlyMap<string, Record<string, FieldProvenance>>;
+  provenance?: ProvenanceScope & { dialect: SupportedDialect };
   idKey?: string;
   /** See `readiness` on {@link PopulateCompanionArgs}. */
   readiness: CompanionReadiness | undefined;
@@ -1148,7 +1185,8 @@ async function readStaleLocales(
   dialect: SupportedDialect,
   ids: (string | number)[],
   locales: string[],
-  defaultLocale: string
+  defaultLocale: string,
+  provenance?: ProvenanceScope
 ): Promise<Set<string>> {
   const out = new Set<string>();
   if (ids.length === 0 || locales.length === 0) return out;
@@ -1170,12 +1208,17 @@ async function readStaleLocales(
         and(
           inArray(stamp.parent as never, ids),
           inArray(stamp.locale as never, locales),
-          sql`EXISTS (
-            SELECT 1 FROM ${target} ${source}
-            WHERE ${source}.${parent} = ${target}.${parent}
-            AND ${source}.${localeCol} = ${defaultLocale}
-            AND ${sourceMovedAfterTarget(source, target)}
-          )`
+          languageStale({
+            byStamp: sql`EXISTS (
+              SELECT 1 FROM ${target} ${source}
+              WHERE ${source}.${parent} = ${target}.${parent}
+              AND ${source}.${localeCol} = ${defaultLocale}
+              AND ${sourceMovedAfterTarget(source, target)}
+            )`,
+            entryId: sql`${target}.${parent}`,
+            locale: sql`${target}.${localeCol}`,
+            provenance,
+          })
         )
       );
   } catch (error) {
@@ -1244,9 +1287,19 @@ export async function populateTranslationStatus(
         args.staleness.dialect,
         ids,
         locales,
-        defaultLocale
+        defaultLocale,
+        args.provenance
       )
     : new Set<string>();
+  // Each language's fields' provenance, for the page in one read.
+  const fieldProvenance = args.provenance
+    ? await fieldProvenanceOf(
+        db,
+        args.provenance.dialect,
+        args.provenance,
+        ids.map(String)
+      )
+    : undefined;
 
   for (const row of rows) {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
@@ -1261,7 +1314,7 @@ export async function populateTranslationStatus(
         statusValues: args.statusValues,
         isStale: (locale: string) =>
           staleKeys.has(`${String(row[idKey])}::${locale}`),
-        fields: args.fieldProvenance?.get(
+        fields: fieldProvenance?.get(
           documentLanguageKey(String(row[idKey]), code)
         ),
       });
@@ -1414,18 +1467,7 @@ function buildLocaleMeta(args: {
   // guard asserts is spelled out rather than inferred. No test separates the two mechanisms, and
   // none can while both hold.
   if (args.fields !== undefined) entry.fields = args.fields;
-  // Field by field where the origins are known; the language-level stamp only where they are not.
-  const translatedFields = companionRow
-    ? localizedFields
-        .filter(f => !isBlank(companionRow[f.column]))
-        .map(f => f.name)
-    : [];
-  const byFields = languageOutOfDate(args.fields, translatedFields);
-  if (
-    code !== defaultLocale &&
-    hasContent &&
-    (byFields ?? args.isStale(code))
-  ) {
+  if (code !== defaultLocale && hasContent && args.isStale(code)) {
     entry.stale = true;
   }
   return entry;
