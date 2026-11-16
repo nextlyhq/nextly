@@ -175,7 +175,14 @@ export function builderFieldErrors(
           ? { kind: "broken-condition" as const, message: condition.message }
           : null);
       if (error) errors.set(field.id, error);
-      if (Array.isArray(field.fields)) walk(field.fields);
+      // Only a group or a repeater holds nested fields, as the save judges them: a plugin type may
+      // keep a `fields` option of its own as private configuration, which is no field list.
+      if (
+        (field.type === "group" || field.type === "repeater") &&
+        Array.isArray(field.fields)
+      ) {
+        walk(field.fields);
+      }
     }
   };
   walk(fields);

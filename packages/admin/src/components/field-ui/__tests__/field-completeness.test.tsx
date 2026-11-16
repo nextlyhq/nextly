@@ -97,6 +97,34 @@ describe("a field lacking what its type needs", () => {
   });
 });
 
+// Only a group or a repeater holds nested fields, as the save judges them: a plugin type may keep
+// a `fields` option of its own as private configuration.
+describe("fields nested in a field", () => {
+  const repeated = field({
+    id: "f2",
+    name: "kind",
+    type: "select",
+    options: [option("A", "a"), option("B", "a")],
+  });
+
+  it("are judged inside a group", () => {
+    const errors = builderFieldErrors([
+      field({ type: "group", fields: [repeated] }),
+    ]);
+    expect(errors.get("f2")?.kind).toBe("bad-option");
+  });
+
+  it("are not judged inside another type's own `fields` setting", () => {
+    const errors = builderFieldErrors([
+      field({
+        type: "acme-picker" as BuilderField["type"],
+        fields: [repeated],
+      }),
+    ]);
+    expect(errors.has("f2")).toBe(false);
+  });
+});
+
 describe("the field's settings panel", () => {
   it("says what the field lacks", () => {
     const fields = [field({ type: "relationship" })];

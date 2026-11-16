@@ -13,7 +13,6 @@
 
 import {
   assertBuilderFieldNames,
-  assertOptionValuesDistinct,
   assertValidFieldsPayload,
   assertValidPluginFieldOptions,
 } from "../../api/fields-payload";
@@ -408,8 +407,6 @@ export const COMPONENTS_METHODS: Record<
       // what none of them can judge is a plugin type's own options, so an
       // unsatisfiable declaration would be stored and fail on every write.
       assertValidPluginFieldOptions(b.fields);
-      // Nor two options sharing one value, which the stored value could not tell apart.
-      assertOptionValuesDistinct(b.fields);
 
       const isLocalized = b.localized === true;
       // i18n: a localized component stores translatable values via the

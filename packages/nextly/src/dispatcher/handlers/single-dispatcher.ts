@@ -22,7 +22,6 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import {
   assertBuilderFieldNames,
   assertTopLevelFieldsNamed,
-  assertOptionValuesDistinct,
   assertValidFieldsPayload,
   assertValidPluginFieldOptions,
   readRequestedLifecycle,
@@ -622,8 +621,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // can judge a plugin type's own options, so an unsatisfiable declaration
       // would be stored and then fail on every write to the single.
       assertValidPluginFieldOptions(b.fields);
-      // Nor two options sharing one value, which the stored value could not tell apart.
-      assertOptionValuesDistinct(b.fields);
 
       const schemaHash = calculateSchemaHash(b.fields);
       // Canonical resolver keeps the UI-create path in sync with registry
