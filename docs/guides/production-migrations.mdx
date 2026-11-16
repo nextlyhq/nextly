@@ -307,15 +307,27 @@ export default defineConfig({
 });
 ```
 
-- **Production only** (`NODE_ENV === "production"`) — a no-op in development.
-- The step is `nextly migrate`, run by the start: it writes the registry, the permissions and the
-  preset grants, and changes the tables, as the command does. The rest of the start does neither,
-  so it is the one step of a production start that sets up an empty database.
-- Pending migrations apply during initialization, **under the migrate lock**, so
-  multiple instances starting together are safe: one applies while the others
-  wait, then all serve with the schema ready.
-- **Failure-safe:** a failed boot migration is logged and the app continues (it
-  does not crash the process); resolve with `nextly migrate`.
+- **Production only** (`NODE_ENV === "production"`) — a no-op in development, and `next build`
+  runs no migration.
+- The step is `nextly migrate`, run by the start, **first**: before the start reads anything of the
+  registry. It does what the command does: sets an empty database up, applies the pending
+  migrations, writes the [registry record](#the-first-nextly-migrate-on-this-release) on a first
+  run, writes the registry, the permissions and the preset grants, marks the
+  [permissions an applied migration drops](#a-permission-your-build-no-longer-declares), refuses a
+  translations column that cannot hold a newly translated field, and makes the translation tables
+  and the user fields' columns. The rest of the start then reads what it wrote and writes neither,
+  so the database after the start is the database after `nextly migrate`.
+- Pending migrations apply **under the migrate lock**, so multiple instances starting together
+  are safe: one applies while the others wait, then all serve with the schema ready.
+- **A migration that deletes data** (a dropped collection, table or column) needs the same consent
+  as the command: set `NEXTLY_ACCEPT_DATA_LOSS` to the tables it may delete from. Without it the
+  start refuses that file, logs why, and serves the database as it is.
+- **An older build** whose migrations folder lacks a migration the database records applied (a
+  rollback, or an old preview sharing the database) writes nothing, logs a warning naming each
+  missing migration, and starts, serving the database as the newer build left it.
+- **A failed migration** is logged with its reason and the app continues (it does not crash the
+  process); resolve with `nextly migrate`. A lock still held after waiting, or a table kept busy,
+  refuses the start instead: the app would otherwise serve a schema it cannot account for.
 - Tune lock takeover with `db.migrateLockTtlSeconds` (default **900s**).
 
 > **Serverless caveat.** Running migrations on boot adds work to cold starts. On
@@ -397,6 +409,10 @@ its file returns it is never run again and is checked against its recorded check
 migration whose file is gone with no removal recorded shows as `applied (file missing)`. The
 `--json` output carries the same value in `status`.
 
+With [`db.runMigrationsOnBoot`](#pattern-4-run-migrations-on-boot-opt-in), an older build's start
+stops its migrations the same way, before writing anything, but goes on starting: it logs a
+warning naming each missing migration and serves the database as the newer build left it.
+
 ### The first `nextly migrate` on this release
 
 The registry rows of your collections, Singles and field groups come from the migrations: each
@@ -451,8 +467,10 @@ written before the plugin joined your build, keeps its state. Nextly's own permi
 snapshot, and no migration marks one. A migration whose snapshot an earlier release wrote, without
 the registry metadata or without the permissions, marks nothing.
 
-No server start marks a permission, in production or in development: a build that no longer
-declares a permission, an older build included, leaves it as it is. A development start still
+No server start marks a permission, in production or in development, outside the
+[migrations at start](#pattern-4-run-migrations-on-boot-opt-in), which mark it as the command does
+when they apply that migration: a build that no longer declares a permission, an older build
+included, leaves it as it is. A development start still
 adds the permissions its config declares, and clears the mark of one it declares again; a
 production start adds none (see [What a production start writes](#what-a-production-start-writes)). An older
 build's `nextly migrate` marks nothing either, since it stops before writing when the database

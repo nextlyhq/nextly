@@ -24,6 +24,8 @@
  * - A field newly translated over a leftover translations column that cannot
  *   hold it: the step refuses it before the registry records the field, as
  *   the command does, and the start goes on.
+ * - A migration that deletes data: refused without consent, applied under
+ *   `NEXTLY_ACCEPT_DATA_LOSS` naming the table, as the command reads it.
  * - An older build, against a database a newer build migrated: the step
  *   writes nothing, a warning names the migration the build lacks, and the
  *   start goes on and serves what the database holds.
@@ -624,6 +626,53 @@ describe.each(getConfiguredTestDialects())(
       expect((await contents(viaStart))["permissions"]).toEqual(
         command["permissions"]
       );
+    }, 600_000);
+
+    it("applies a migration that deletes data only under NEXTLY_ACCEPT_DATA_LOSS, as nextly migrate does", async () => {
+      const viaStart = await emptyDatabase();
+      const viaCommand = await emptyDatabase();
+      use(viaCommand);
+      await migrateCreate("initial", migratedAtStart(POSTS, ADDED));
+      await migrate(viaStart, migratedByCommand(POSTS, ADDED));
+      await migrate(viaCommand, migratedByCommand(POSTS, ADDED));
+      await migrateCreate("dropped", migratedAtStart(POSTS), {
+        acceptDataLoss: "dc_mas_added",
+      });
+      const tableThere = async (url: string): Promise<boolean> => {
+        const adapter = await open(url);
+        try {
+          return await adapter.tableExists("dc_mas_added");
+        } finally {
+          await adapter.disconnect().catch(() => undefined);
+        }
+      };
+
+      // Without consent the start refuses the file, as the command does, and
+      // goes on: the table and its rows stay.
+      const refused = await productionStart(
+        viaStart,
+        migratedAtStart(POSTS),
+        "mas-posts"
+      );
+      expect(refused.refusal).toBeUndefined();
+      expect(refused.warnings.join("\n")).toMatch(
+        /DATA_LOSS_CONSENT_REQUIRED/
+      );
+      expect(await tableThere(viaStart)).toBe(true);
+
+      // With consent for the table, from the same variable the command reads.
+      vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", "dc_mas_added");
+      const applied = await productionStart(
+        viaStart,
+        migratedAtStart(POSTS),
+        "mas-posts"
+      );
+      await migrate(viaCommand, migratedByCommand(POSTS));
+      await productionStart(viaCommand, migratedByCommand(POSTS), "mas-posts");
+
+      expect(applied.refusal).toBeUndefined();
+      expect(await tableThere(viaStart)).toBe(false);
+      expect(await contents(viaStart)).toEqual(await contents(viaCommand));
     }, 600_000);
 
     it("refuses a field newly translated over a column that cannot hold it, as nextly migrate does", async () => {
