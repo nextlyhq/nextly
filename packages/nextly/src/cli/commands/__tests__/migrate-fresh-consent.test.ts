@@ -78,7 +78,23 @@ vi.mock("../../utils/adapter", () => ({
 }));
 
 vi.mock("../../utils/config-loader", () => ({
-  loadConfig: async () => ({ config: { db: {} }, configPath: undefined }),
+  // A loaded configuration always names its migrations folder (the default when unset).
+  loadConfig: async () => ({
+    config: { db: { migrationsDir: "./migrations" } },
+    configPath: undefined,
+  }),
+}));
+
+// The configuration here declares nothing a migration could record, so the comparison the
+// command makes before the consent finds nothing; it reads a project folder this test has none of.
+vi.mock("../../../domains/schema/migrate/unwritten-changes", () => ({
+  unwrittenChangesOf: async () => ({
+    tables: [],
+    settings: [],
+    permissions: [],
+    noSnapshot: true,
+  }),
+  unwrittenChangesError: () => undefined,
 }));
 
 /** Every status `process.exit` was called with, the first being the one a run ends on. */
