@@ -21,9 +21,9 @@ import type {
 
 import type { BuilderKind } from "./builder-config";
 import { CreateEntityConfirmDialog } from "./CreateEntityConfirmDialog";
+import type { FieldGroupCreate } from "./FieldGroupCreatesList";
 import { SafeChangeConfirmDialog } from "./SafeChangeConfirmDialog";
 import { SchemaChangeDialog } from "./SchemaChangeDialog";
-import type { FieldGroupCreate } from "./FieldGroupCreatesList";
 import { SettingsChangeConfirmDialog } from "./SettingsChangeConfirmDialog";
 import type { SchemaChangeConfirmation } from "./types";
 

@@ -40,13 +40,13 @@ import type {
 
 import { BUILDER_KIND_NOUN, type BuilderKind } from "./builder-config";
 import {
-  JoiningTranslationNotice,
-  LeavingTranslationNotice,
-} from "./LeavingTranslationNotice";
-import {
   FieldGroupCreatesList,
   type FieldGroupCreate,
 } from "./FieldGroupCreatesList";
+import {
+  JoiningTranslationNotice,
+  LeavingTranslationNotice,
+} from "./LeavingTranslationNotice";
 import { SettingChangesList } from "./SettingChangesList";
 
 interface SchemaChangeDialogProps {

@@ -5,6 +5,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { CreateComponentPayload } from "@admin/services/fieldGroupApi";
 import type { FieldDefinition } from "@admin/types/collection";
 
 /** What the server's address check refuses, by address. */
@@ -115,7 +116,7 @@ describe("createFieldGroupsFirst", () => {
   it("creates each after checking its address again, letting it go from the unsaved ones", async () => {
     addUnsavedEntity(group("hero", POSTS));
     addUnsavedEntity(group("banner", POSTS));
-    const create = vi.fn(async () => ({}));
+    const create = vi.fn(async (_payload: CreateComponentPayload) => ({}));
 
     const refused = await createFieldGroupsFirst(
       [group("hero", POSTS), group("banner", POSTS)],
@@ -140,7 +141,7 @@ describe("createFieldGroupsFirst", () => {
     refusals = {
       hero: { code: "DUPLICATE", message: "Resource already exists." },
     };
-    const create = vi.fn(async () => ({}));
+    const create = vi.fn(async (_payload: CreateComponentPayload) => ({}));
 
     const refused = await createFieldGroupsFirst(
       [group("hero", POSTS), group("banner", POSTS)],
@@ -157,7 +158,7 @@ describe("createFieldGroupsFirst", () => {
 
   it("stops at a refused create, saying which group and why", async () => {
     addUnsavedEntity(group("hero", POSTS));
-    const create = vi.fn(async () => {
+    const create = vi.fn(async (_payload: CreateComponentPayload) => {
       throw new Error("The server is unavailable.");
     });
 

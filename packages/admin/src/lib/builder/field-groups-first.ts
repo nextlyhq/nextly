@@ -13,18 +13,28 @@
 import { checkAddressAgain } from "@admin/components/features/schema-builder/new-entity/useAddressCheck";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { CreateComponentPayload } from "@admin/services/fieldGroupApi";
-import type { FieldDefinition } from "@admin/types/collection";
 
 import { fieldGroupCreatePayload } from "./create-request";
 import { removeUnsavedEntity, type UnsavedEntity } from "./unsaved-entities";
 
 /** The entity being saved, as an unsaved field group names its owner. */
-type Host = NonNullable<UnsavedEntity["ownedBy"]>;
+export type FieldGroupHost = NonNullable<UnsavedEntity["ownedBy"]>;
+
+/**
+ * A field as far as naming field groups goes, in the editor's shape or the
+ * server's: the group it embeds, the groups a zone of them offers, and the
+ * fields it holds.
+ */
+export interface FieldNamingGroups {
+  component?: string;
+  components?: string[];
+  fields?: readonly FieldNamingGroups[];
+}
 
 /** Every field group the fields name, at any depth, in field order, each once. */
-function fieldGroupsNamedBy(fields: readonly FieldDefinition[]): string[] {
+function fieldGroupsNamedBy(fields: readonly FieldNamingGroups[]): string[] {
   const named: string[] = [];
-  const visit = (level: readonly FieldDefinition[]) => {
+  const visit = (level: readonly FieldNamingGroups[]) => {
     for (const field of level) {
       for (const address of [
         ...(field.component ? [field.component] : []),
@@ -46,8 +56,8 @@ function fieldGroupsNamedBy(fields: readonly FieldDefinition[]): string[] {
  */
 export function fieldGroupsFirst(
   held: readonly UnsavedEntity[],
-  fields: readonly FieldDefinition[],
-  host: Host
+  fields: readonly FieldNamingGroups[],
+  host: FieldGroupHost
 ): { used: UnsavedEntity[]; unused: UnsavedEntity[] } {
   const groups = held.filter(entity => entity.kind === "field-group");
   const named = fieldGroupsNamedBy(fields);
