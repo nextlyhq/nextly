@@ -35,5 +35,6 @@ the server resolves; `view=inline` or `view=side` picks the layout. On the page,
 and the layout switch write the reader's choice to the address. When the version you last
 looked at is no longer kept, the page says so and names the version it compares with instead.
 Opening a comparison marks its newer version as seen. "Restore…" opens the editor's restore
-list for the version on show. Nothing is written until you save there, and saving keeps the
-draft unpublished.
+list for the version on show. Nothing is written until you save there. On a document with
+drafts, that save keeps the draft unpublished; a document without drafts saves straight to the
+live document.
