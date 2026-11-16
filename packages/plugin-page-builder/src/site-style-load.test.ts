@@ -2,7 +2,8 @@ import { allBlocks, clearBlocks, registerBlocks } from "@nextlyhq/blocks-engine"
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { withRegisteredLooks } from "./core-looks";
+import { withBlockLooks, withRegisteredLooks } from "./core-looks";
+import { resolveSiteStyle, type SiteStyleData } from "./site-style";
 import { loadSiteStyle } from "./site-style-load";
 import { readSiteStyleRecord } from "./site-style-record";
 import type { SiteStyleReader } from "./site-style-storage";
@@ -67,13 +68,27 @@ describe("the site style a published page loads", () => {
   it("holds the same looks the canvas reads, other plugins' blocks among them", async () => {
     registerBlocks(coreBlocks, { source: "page-builder" });
     registerBlocks([acmeHero], { source: "acme" });
-    const published = await loadSiteStyle({ nextly: nothingStored });
-    // The canvas's own set: the config it is sent, with every block its
-    // registry holds.
-    const canvas = withRegisteredLooks(readSiteStyleRecord(undefined));
-    const looks = (ids: string[]) => ids.filter(id => id.startsWith("look:"));
-    expect(looks(idsOf(published))).toEqual(looks(idsOf(canvas)));
-    expect(idsOf(published)).toContain("look:acme/hero:dark");
+    const card = { id: "c-card", slug: "card", orderIndex: 0, styles: {} };
+    const hostDefaults = { classes: [card] };
+    const published = await loadSiteStyle({
+      nextly: nothingStored,
+      defaults: hostDefaults,
+    });
+    // The canvas's own set, built the way it reaches the canvas: the plugin
+    // sends its code tier (the host's style with every registered block's
+    // looks, resolved), and the editor adds its registry's looks to that.
+    const sent = resolveSiteStyle(withBlockLooks(hostDefaults, allBlocks()));
+    const canvas = resolveSiteStyle(
+      withRegisteredLooks(readSiteStyleRecord(sent))
+    );
+    const looks = (style: SiteStyleData) =>
+      (style.classes ?? []).filter(entry => entry.id.startsWith("look:"));
+    // Whole entries, so a look whose styles, order or block type differed
+    // between the two would show here, not only a missing one.
+    expect(looks(published)).toEqual(looks(canvas));
+    expect(idsOf(published)).toEqual(
+      expect.arrayContaining([...CORE_LOOKS, "look:acme/hero:dark"])
+    );
   });
 
   it("takes the looks of blocks that register while the read boots the site", async () => {

@@ -279,12 +279,12 @@ describe("a node referencing a class that was never written", () => {
       path: "/nodes/0/classes/1",
       severity: "warning",
       message:
-        'This block uses the style "ghost", which this site doesn\'t have, so the page doesn\'t show it.',
-      suggestion:
-        "Remove the style from this block, or add a shared style with that name in Design.",
+        'This block uses a style this site doesn\'t have ("ghost"), so the page doesn\'t show it.',
+      suggestion: "Remove the style from this block, or choose one this site has.",
     });
+    // Neither the document's terms nor a page builder's screens, which a host without one lacks.
     expect(`${missing?.message} ${missing?.suggestion}`).not.toMatch(
-      /\b(node|library|reference)\b/i
+      /\b(node|library|reference|design)\b/i
     );
   });
 });
