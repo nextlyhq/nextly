@@ -42,11 +42,11 @@ shows only on a page that has one.
 The site-wide list is **Bindings to fix**, under **Checks** in the Page Builder's panel
 (`/admin/plugins/nextlyhq-plugin-page-builder/bindings-to-fix`), for people who can edit
 pages. The Page Builder overview leads with it while any need fixing. It lists every document whose bindings no longer fit, by place (pages, components,
-patterns, Layouts, other entries and Singles), each with **Open in editor** at its block.
+saved sections, header & footer sets, other entries and Singles), each with **Open in editor** at its block.
 The dashboard's **Needs your attention** card counts them and links to it, and a
 **Bindings to fix** card can be added under **Customize**.
 
-A binding in a page's Layout region opens the component that region places, where it is
+A binding in a page's header & footer set region opens the component that region places, where it is
 edited. One in a language other than the default has no link, since the editor edits the
 default language. A document's draft is checked as well, so a binding broken only in a
 draft is listed before that draft is published. Until the first check of every document
@@ -54,11 +54,11 @@ finishes, the list says it hasn't checked yet rather than that every binding fit
 
 ### Publishing a page whose parts aren't published
 
-A page, the components it places and its Layout are published separately. When you
+A page, the components it places and its header & footer set are published separately. When you
 publish a page that places a component that isn't published, or one placed inside
-another component, or names a Layout that isn't published, the editor tells you before
+another component, or names a header & footer set that isn't published, the editor tells you before
 it publishes. The dialog lists each part, and what visitors see meanwhile: nothing where
-an unpublished component sits, and the site's default Layout around the page until its
+an unpublished component sits, and the site's default header & footer set around the page until its
 own is published.
 
 - **Publish page only** publishes the page and leaves the parts as they are. It's the
@@ -137,7 +137,8 @@ returns you to the entry with that row's **Open Page Builder** focused.
 Mac), finds four kinds of thing as you type, each under its own heading:
 
 - **Add**: blocks and your components to add. Each says where it will go, as the Add panel
-  does ("Adding after Heading"), and choosing one adds it there.
+  does ("Adding inside Hero, at the end"), and choosing one adds it there, by the same
+  rule as a click in the Add panel (see [Where a clicked block lands](#where-a-clicked-block-lands)).
 - **On this page**: the page's blocks, by the names Layers shows, with what each is and
   what it sits in. Choosing one selects it and scrolls it into view.
 - **Pages**: the site's other pages you may open, by title, with **Draft** beside a page
@@ -155,7 +156,7 @@ has no item at all, so nothing on the rail opens an empty panel.
 
 | Item         | What it holds                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Add**      | The blocks, components and saved patterns you can place. Drag one onto the canvas, or choose it to place it after the selected block, or at the end of the page when nothing is selected.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| **Add**      | The blocks, components and saved sections you can place. Drag one onto the canvas, or choose it to place it by the selected block (see [Where a clicked block lands](#where-a-clicked-block-lands)), or at the end of the page when nothing is selected.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | **Layers**   | The page as a tree. Select, expand, move, hide, lock and rename blocks here. See [Working with a block's row in Layers](#working-with-a-blocks-row-in-layers).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | **Pages**    | The site's pages, with search. Open, add, duplicate, rename or delete one without leaving the editor. See [Pages](#pages).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | **Design**   | The site's look, in three tabs: **Variables** (named colours, type sizes and spacing, each with a light and a dark value), **Shared styles** and **Fonts** (see [Fonts](#fonts)). A variable's dark value applies when a visitor's device prefers dark. The Variables tab imports and exports DTCG files, including one file per mode for Figma. A variable that a page, a component, a shared style or a block's default style still uses can't be removed: change those uses first. Some pages are never fully counted: a page too large to read in full, or one that keeps its blocks in a field under a named group. Before removing a variable, the editor reads those pages for it. If one of them uses the variable, or can't be read in time, the removal is refused and that page is named, or counted instead when you can't open it or its title can't be looked up in time. |
@@ -167,6 +168,35 @@ Add, Layers and Design sit at the top. Settings and Help sit at the bottom.
 The editor remembers the panel you left open, and on Design the tab you left on, the
 next time you open it. It remembers them for you, not for the browser, so two people
 who share a browser each find their own.
+
+## Where a clicked block lands
+
+Choosing a block in the Add panel (a click, or <kbd>Enter</kbd> on a tile), the
+Components panel or search places it by what is selected and what you add:
+
+- **Nothing selected**: at the end of the page, above the footer.
+- **A block that holds blocks is selected** (a Section, Box, Columns, Card, Accordion,
+  Gallery…):
+  - a content block (Heading, Text, Image, Button…) goes **inside it, at the end**;
+  - a layout block (Box, Columns, Column, Card) goes **after it**, so Box then Box gives
+    two Boxes one after the other, not one inside the other.
+- **A block that holds no blocks is selected** (a Heading, say): anything goes after it.
+- **A Section or a saved section** goes after the top-level block that holds the
+  selection, never inside another section.
+- **A component** is placed as a layout block when one of its top-level blocks is one,
+  and as a content block otherwise.
+
+If the place the rule picks can't take the block (Columns hold only Column blocks, so a
+Heading can't go inside them), it goes after the selected block instead, then after each
+block around it, out to the page. A Column added with Columns selected goes inside them,
+since nothing after them takes it. A container's own **+** adds inside that container,
+whatever you add.
+
+The line at the top of the Add panel says where the next block goes before you choose
+it: "Adding inside Hero, at the end", "Adding after Heading, inside Hero" or "Adding at
+the end of the page". Each tile tells a screen reader where it goes, and after an insert
+a screen reader hears what was added and where ("Heading added inside Hero, at the
+end"). The new block is selected, so the next one goes after it.
 
 ## Pages
 
@@ -330,9 +360,9 @@ may manage the page builder's site settings.
   **Edit breakpoints** opens the editor in place. **Save breakpoints** stores the whole
   set at once, after checking it, and **Cancel** leaves it as it was. If you close
   Settings with an edit open, it asks before throwing the edit away.
-- **Default Layout** is the Layout pages without one of their own are shown in. Choosing
+- **Default header & footer set** is the header & footer set pages without one of their own are shown in. Choosing
   another saves it at once and says **Saved**, or **Not saved** with **Retry**. Changing
-  it also needs the rights to update and publish Layouts. Without them, you can see it
+  it also needs the rights to update and publish header & footer sets. Without them, you can see it
   but not change it.
 
 The site's breakpoints change only here. A write to the site style that changes them
@@ -361,7 +391,7 @@ contributes: {
 },
 ```
 
-The tab is drawn for a page or a design, never for a Layout or a component. Besides
+The tab is drawn for a page or a design, never for a header & footer set or a component. Besides
 `setBadge`, it receives:
 
 - `context`: `userId`, `document` (`"page"` or `"template"`), the edited document's
@@ -534,7 +564,7 @@ more than 10". A list that shows a visitor fewer entries than you see says so ab
 entries: "Showing what visitors see: 4 of 6 entries". Stop to see your own entries
 again, drafts included. The strip's count is of the page's own blocks, and says
 "Conditions checked for each entry in the list" when a list's blocks are all there is to
-check, adding "some blocks aren't checked" when a Layout region also holds conditions.
+check, adding "some blocks aren't checked" when a header & footer set region also holds conditions.
 
 Blocks inside a placed component are checked with the page's: a component's own block
 whose conditions don't hold is drawn as its line where it would be, "Members offer ·
@@ -542,7 +572,7 @@ hidden for this page: Title doesn't contain Members", and the strip counts it, o
 each place the component is drawn. A press on the line selects the placement, as a press
 on any of the component's blocks does.
 
-Blocks inside a region of the page's Layout aren't checked yet: they keep their
+Blocks inside a region of the page's header & footer set aren't checked yet: they keep their
 **Conditional** badge while you preview as a visitor, and the strip says some blocks
 aren't checked.
 
@@ -561,7 +591,7 @@ is greyed out, with the reason under it:
 - "No block on this page has conditions", when nothing on the page, its placed
   components included, has a condition;
 - "No entry to check here. The published page checks them where it's placed.", when
-  you edit a component or a Layout's header or footer: the published page checks them
+  you edit a component or a header & footer set's header or footer: the published page checks them
   where it is placed;
 - "Needs an entry to check its conditions against.", on a template with no entry to
   preview, or on a Single, which is no entry of a collection.
@@ -597,7 +627,7 @@ while a template is open, and a template holds one: with one placed, its tile sa
 Entry content is refused when it is saved anywhere but a template, an entry's own blocks
 field included, and so is a second one, or a field the collection doesn't have as a
 blocks field. A blocks field inside a repeater is stored on each row, not on the entry,
-so it is never offered. **Save as pattern**, **Update a pattern** and **Turn into
+so it is never offered. **Save as section…**, **Update a saved section** and **Turn into
 component** are turned off, with the reason, while the selection holds Entry content.
 
 ## Help

@@ -351,6 +351,25 @@ export { sanitizeDocument } from "./sanitize";
  * their items' bindings: one walk for the published route and the editor.
  */
 export { listCollections } from "./list-collections";
+/**
+ * @experimental The same walk, for the lists `wanted` keeps, each list's
+ * props filled by a binding run where one is given: the editor's change
+ * check watches the collection a bound list draws, not its stored fallback.
+ */
+export { listCollectionsWhere } from "./list-collections";
+/**
+ * @experimental A list's query as the engine reads it, which
+ * {@link listCollectionsWhere} hands to the `wanted` it is given, and the
+ * types it is written in.
+ */
+export type {
+  ListFilter,
+  ListFilterOp,
+  ListFilterScalar,
+  ListQuery,
+  ListRelation,
+  ListSortKey,
+} from "@nextlyhq/blocks-engine";
 export type { PrepareDocumentArgs, PreparedDocument } from "./prepare-document";
 export { preparePageForRead } from "./read-page";
 export type { PreparedPage, ReadPageArgs } from "./read-page";
@@ -442,6 +461,8 @@ export type {
   NamedClass,
   NodeStyles,
   NodeVisibility,
+  // The tab a prop names, reachable from `PropSchema`.
+  PropGroup,
   PropSchema,
   RemotePattern,
   RemotePatternInput,

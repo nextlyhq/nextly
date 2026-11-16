@@ -379,3 +379,64 @@ describe("whether a stored background paints an image", () => {
     expect(paintsBackgroundImage("gradient", undefined)).toBe(false);
   });
 });
+
+describe("a child's share of a Row or a Grid, and a grid's item alignment", () => {
+  const emitted = (values: Record<string, unknown>) =>
+    compileStyleValues(values, "/p").declarations.map(
+      each => `${each.property}: ${each.value}`
+    );
+
+  it("compiles each new property to its CSS", () => {
+    expect(
+      emitted({
+        flexGrow: 1,
+        flexShrink: 0,
+        flexBasis: "240px",
+        alignSelf: "start",
+        justifySelf: "center",
+        order: -1,
+        justifyItems: "stretch",
+      })
+    ).toEqual([
+      "align-self: start",
+      "flex-basis: 240px",
+      "flex-grow: 1",
+      "flex-shrink: 0",
+      "justify-items: stretch",
+      "justify-self: center",
+      "order: -1",
+    ]);
+  });
+
+  it("takes the keywords each one names", () => {
+    expect(emitted({ flexBasis: "content" })).toEqual(["flex-basis: content"]);
+    expect(emitted({ flexBasis: "fit-content" })).toEqual([
+      "flex-basis: fit-content",
+    ]);
+    expect(emitted({ flexBasis: "50%" })).toEqual(["flex-basis: 50%"]);
+    expect(emitted({ alignSelf: "baseline" })).toEqual([
+      "align-self: baseline",
+    ]);
+    expect(emitted({ justifySelf: "end" })).toEqual(["justify-self: end"]);
+    expect(emitted({ justifyItems: "center" })).toEqual([
+      "justify-items: center",
+    ]);
+  });
+
+  it("writes nothing for a value the property cannot take", () => {
+    // A negative share and a fractional order are discarded by a browser, and
+    // `left` is refused by the catalog's logical-only policy.
+    expect(emitted({ flexGrow: -1 })).toEqual([]);
+    expect(emitted({ flexShrink: -2 })).toEqual([]);
+    expect(emitted({ order: 1.5 })).toEqual([]);
+    expect(emitted({ alignSelf: "left" })).toEqual([]);
+    expect(emitted({ justifySelf: "right" })).toEqual([]);
+    expect(emitted({ flexBasis: "red" })).toEqual([]);
+    // Values a browser would drop on these properties, which Baseline does
+    // not yet mark widely available there.
+    expect(emitted({ flexBasis: "stretch" })).toEqual([]);
+    expect(emitted({ flexBasis: "fit-content(10rem)" })).toEqual([]);
+    expect(emitted({ justifySelf: "safe end" })).toEqual([]);
+    expect(emitted({ justifyItems: "legacy center" })).toEqual([]);
+  });
+});

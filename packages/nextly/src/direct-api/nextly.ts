@@ -61,6 +61,8 @@ import { PermissionService } from "../domains/auth/services/permission-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { RolePermissionService } from "../domains/auth/services/role-permission-service";
 import { RoleService } from "../domains/auth/services/role-service";
+import { EmailDeliveryActivity } from "../domains/email/delivery-activity";
+import type { EmailDeliveryService } from "../domains/email/services/email-delivery-service";
 import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
 import type { FieldRewriteResult } from "../domains/versions/field-rewrite";
 import { NextlyError } from "../errors/nextly-error";
@@ -103,6 +105,7 @@ import {
   createVersionsNamespace,
   createReleasesNamespace,
   createFieldGroupsNamespace,
+  createEmailDeliveriesNamespace,
   createEmailNamespace,
   createEmailProvidersNamespace,
   createEmailTemplatesNamespace,
@@ -120,6 +123,7 @@ import {
   type VersionsNamespace,
   type ReleasesNamespace,
   type FieldGroupsNamespace,
+  type EmailDeliveriesNamespace,
   type EmailNamespace,
   type EmailProvidersNamespace,
   type EmailTemplatesNamespace,
@@ -292,6 +296,8 @@ export class Nextly implements NextlyContext {
   public readonly email: EmailNamespace;
   public readonly emailProviders: EmailProvidersNamespace;
   public readonly emailTemplates: EmailTemplatesNamespace;
+  /** @experimental The delivery log and queued email, read as the Email hub's Activity reads them. */
+  public readonly emailDeliveries: EmailDeliveriesNamespace;
   public readonly userFields: UserFieldsNamespace;
   public readonly roles: RolesNamespace;
   public readonly permissions: PermissionsNamespace;
@@ -301,9 +307,9 @@ export class Nextly implements NextlyContext {
   public readonly releases: ReleasesNamespace;
   /** A person's own notices. */
   public readonly notices: NoticesNamespace;
-  /** @experimental A document's history: list, read, compare, name, restore. */
+  /** A document's history: list, read, compare, name, restore. */
   public readonly versions: VersionsNamespace;
-  /** @experimental A subject's content events: a document's or a release's. */
+  /** A subject's content events: a document's or a release's. */
   public readonly contentEvents: ContentEventsNamespace;
   /** @experimental Recognising a plugin's kind of signed-in person. */
   public readonly principals: NextlyPrincipals;
@@ -334,6 +340,9 @@ export class Nextly implements NextlyContext {
     );
     this.emailTemplates = withLanguagesPinned(
       createEmailTemplatesNamespace(this)
+    );
+    this.emailDeliveries = withLanguagesPinned(
+      createEmailDeliveriesNamespace(this)
     );
     this.userFields = withLanguagesPinned(createUserFieldsNamespace(this));
     this.roles = withLanguagesPinned(createRolesNamespace(this));
@@ -509,6 +518,14 @@ export class Nextly implements NextlyContext {
   /** @internal */
   public get emailSendService(): EmailService {
     return container.get<EmailService>("emailService");
+  }
+
+  /** @internal The Activity reads, over the adapter registered when called. */
+  public get emailDeliveryActivity(): EmailDeliveryActivity {
+    return new EmailDeliveryActivity(
+      container.get<DrizzleAdapter>("adapter"),
+      container.get<EmailDeliveryService>("emailDeliveryService")
+    );
   }
 
   /** Cached RoleService — not registered in the DI container. */
@@ -1313,6 +1330,18 @@ export const nextly = {
     undoUpdate: async (args: UndoEmailTemplateUpdateArgs) =>
       (await requireNextlyOnceStarted()).emailTemplates.undoUpdate(args),
   },
+
+  /** @experimental */
+  emailDeliveries: {
+    find: async args =>
+      (await requireNextlyOnceStarted()).emailDeliveries.find(args),
+    findQueued: async args =>
+      (await requireNextlyOnceStarted()).emailDeliveries.findQueued(args),
+    lastSent: async args =>
+      (await requireNextlyOnceStarted()).emailDeliveries.lastSent(args),
+    overdue: async args =>
+      (await requireNextlyOnceStarted()).emailDeliveries.overdue(args),
+  } satisfies EmailDeliveriesNamespace,
 
   userFields: {
     find: async (args?: FindUserFieldsArgs) =>

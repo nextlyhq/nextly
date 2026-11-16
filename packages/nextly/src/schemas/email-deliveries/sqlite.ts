@@ -83,11 +83,17 @@ export const emailDeliveriesSqlite = sqliteTable(
     index("email_deliveries_recipient_idx").on(t.recipientHash, t.createdAt),
     index("email_deliveries_status_created_idx").on(t.status, t.createdAt),
     index("email_deliveries_provider_idx").on(t.providerId, t.createdAt),
+    index("email_deliveries_provider_type_idx").on(t.providerType, t.createdAt),
     index("email_deliveries_retention_idx").on(t.retentionClass, t.createdAt),
     // Erasure finds a person's rows by kind and id.
     index("email_deliveries_principal_idx").on(t.principalKind, t.principalId),
     // Erasure clears a send's key digest from all its records.
     index("email_deliveries_key_idx").on(t.keyDigest),
+    index("email_deliveries_template_idx").on(
+      t.templateSlug,
+      t.status,
+      t.createdAt
+    ),
   ]
 );
 

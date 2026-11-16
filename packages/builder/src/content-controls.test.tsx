@@ -197,7 +197,12 @@ describe("what an author reads", () => {
                 article: "Article",
                 aside: "Aside",
               },
-              showOptionValue: true,
+              code: {
+                div: "div",
+                section: "section",
+                article: "article",
+                aside: "aside",
+              },
             },
           },
           render: () => null,
@@ -281,6 +286,13 @@ describe("a few short options in a row", () => {
               options: ["div", "section", "article"],
               display: "menu",
             },
+            fit: {
+              type: "select",
+              label: "Fit",
+              options: ["auto", "cover"],
+              optionLabels: { auto: "Auto", cover: "Cover" },
+              code: { auto: "auto", cover: "cover" },
+            },
             loading: {
               type: "select",
               options: ["lazy", "eager"],
@@ -336,6 +348,14 @@ describe("a few short options in a row", () => {
     const { view } = mountWith({ as: "div" });
     expect(view.queryByRole("radiogroup", { name: "Element type" })).toBeNull();
     expect(view.getByRole("combobox", { name: "Element type" })).toBeDefined();
+  });
+
+  it("keeps a menu where the options declare their code, which it shows", () => {
+    // Short enough for a row of buttons, but a row has nowhere to show what
+    // each choice writes.
+    const { view } = mountWith({ fit: "auto" });
+    expect(view.queryByRole("radiogroup", { name: "Fit" })).toBeNull();
+    expect(view.getByRole("combobox", { name: "Fit" })).toBeDefined();
   });
 
   it("keeps a menu while the stored value is none of the options", () => {

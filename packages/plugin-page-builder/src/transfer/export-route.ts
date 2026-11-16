@@ -299,7 +299,7 @@ function patternItem(
   const content = row.content;
   if (!isDocument(content)) {
     throw refusal(
-      "The pattern holds no content, so it cannot be exported.",
+      "The saved section holds no content, so it cannot be exported.",
       "transfer-export-pattern-empty"
     );
   }

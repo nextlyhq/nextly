@@ -144,6 +144,8 @@ function InsertPanelWithLibrary({
   beginInsertDrag: React.ComponentProps<typeof InsertPanel>["beginInsertDrag"];
   /** The container to add inside, when its "+" asked for it. */
   inside?: string;
+  /** The block to add right after, when the "+" in the gap below it asked. */
+  after?: string;
   /** A canvas press still to answer, and where to say it was answered. */
   summoned: React.ComponentProps<typeof InsertPanel>["summoned"];
   onSummoned: React.ComponentProps<typeof InsertPanel>["onSummoned"];
@@ -286,12 +288,15 @@ type PanelRequests = {
     | undefined;
   requestPanel: RequestPanel;
   /**
-   * Open Add; given a container, add inside it (its empty-container "+"),
-   * which is never implied by selecting it.
+   * Open Add; given a place a "+" chose, add there whatever the block: inside
+   * a container (its empty-container "+"), or in the gap right after a block
+   * (the "+" between sections). Neither is what selecting the block implies.
    */
-  openInsertPanel: (inside?: string) => void;
+  openInsertPanel: (place?: InsertPlaceRequest) => void;
   /** The container the last "+" chose to add inside, if any. */
   insertInside: string | undefined;
+  /** The block the last gap's "+" chose to add right after, if any. */
+  insertAfter: string | undefined;
   /**
    * The count of canvas add presses Add has yet to answer, or `undefined`
    * when it has answered them all: each new one has the panel focus its
@@ -312,6 +317,16 @@ interface RequestPanel {
   (panel: LeftPanel): void;
   (panel: "design", view?: DesignView): void;
   (panel: Exclude<LeftPanel, "design">, view?: string): void;
+}
+
+/** A place a canvas "+" chose: inside a container, or right after a block. */
+type InsertPlaceRequest =
+  | { readonly inside: string }
+  | { readonly after: string };
+
+/** The block a place request is about, which it lasts while it is selected. */
+function requestedBlock(place: InsertPlaceRequest): string {
+  return "inside" in place ? place.inside : place.after;
 }
 
 /** Requests to open a panel from the canvas. */
@@ -343,9 +358,9 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
       count: (current?.count ?? 0) + 1,
     }));
   }, []);
-  const [insideRequest, setInsideRequest] = useState<string | undefined>(
-    undefined
-  );
+  const [placeRequest, setPlaceRequest] = useState<
+    InsertPlaceRequest | undefined
+  >(undefined);
   /*
    * Canvas presses for Add, counted apart from the panel request: opening a
    * panel that is already open changes nothing the shell can show, so the
@@ -355,28 +370,36 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
   const [addPresses, setAddPresses] = useState(0);
   const [answeredPress, setAnsweredPress] = useState(0);
   const openInsertPanel = useCallback(
-    (inside?: string): void => {
-      setInsideRequest(inside);
+    (place?: InsertPlaceRequest): void => {
+      setPlaceRequest(place);
       setAddPresses(count => count + 1);
       requestPanel("add");
     },
     [requestPanel]
   );
   /*
-   * A "+"'s choice lasts while its container stays selected. Selecting
-   * anything else, the block just added included, ends it, so selecting the
-   * container again later adds after it, as any selection does.
+   * A "+"'s choice lasts while its block stays selected. Selecting anything
+   * else, the block just added included, ends it, so selecting the block
+   * again later places as any selection does.
    */
-  if (insideRequest !== undefined && selectedId !== insideRequest) {
-    setInsideRequest(undefined);
+  const held =
+    placeRequest !== undefined && requestedBlock(placeRequest) === selectedId
+      ? placeRequest
+      : undefined;
+  if (placeRequest !== undefined && held === undefined) {
+    setPlaceRequest(undefined);
   }
-  const insertInside = insideRequest === selectedId ? insideRequest : undefined;
+  const insertInside =
+    held !== undefined && "inside" in held ? held.inside : undefined;
+  const insertAfter =
+    held !== undefined && "after" in held ? held.after : undefined;
 
   return {
     openPanelRequest,
     requestPanel,
     openInsertPanel,
     insertInside,
+    insertAfter,
     addSummon: addPresses > answeredPress ? addPresses : undefined,
     onAddSummoned: setAnsweredPress,
   };
@@ -535,6 +558,7 @@ export function editorPanelRenderer({
   pageClassBlocks,
   classSummaryContext,
   insertInside,
+  insertAfter,
   addSummon,
   onAddSummoned,
   pages,
@@ -590,6 +614,7 @@ export function editorPanelRenderer({
     | "offered"
     | "offerablePatterns"
     | "insertInside"
+    | "insertAfter"
     | "addSummon"
     | "onAddSummoned"
     | "pages"
@@ -615,6 +640,8 @@ export function editorPanelRenderer({
           offerablePatterns={offerablePatterns}
           // Inside the container a "+" chose, while it is the selection.
           {...(insertInside === undefined ? {} : { inside: insertInside })}
+          // In the gap a "+" chose, while the block above it is selected.
+          {...(insertAfter === undefined ? {} : { after: insertAfter })}
           // A canvas press still to answer, whether Add opened for it or
           // was already open.
           summoned={addSummon}
@@ -645,6 +672,7 @@ export function editorPanelRenderer({
           }
           beginInsertDrag={drag.beginInsertDrag}
           {...(insertInside === undefined ? {} : { inside: insertInside })}
+          {...(insertAfter === undefined ? {} : { after: insertAfter })}
           // From the panel there is no placement, so Back returns to the
           // editor as the author left it.
           {...(componentView.onEditComponent === undefined

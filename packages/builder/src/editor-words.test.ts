@@ -17,7 +17,7 @@ describe("the editor's words", () => {
       design: "Design",
       variables: "Variables",
       sharedStyles: "Shared styles",
-      sections: "Sections",
+      sections: "Saved sections",
       content: "Content",
       style: "Style",
     });

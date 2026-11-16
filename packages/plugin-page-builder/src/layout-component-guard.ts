@@ -180,7 +180,7 @@ async function refuseWhileALayoutNamesIt(
   if (isInsideACallerTransaction(context)) {
     throw refusal(
       `This component cannot be ${removal.done} in a bulk operation, because ` +
-        `whether a Layout still uses it cannot be checked safely there. ` +
+        `whether a header & footer set still uses it cannot be checked safely there. ` +
         `${removal.alone} on its own and the check will run.`
     );
   }
@@ -206,7 +206,7 @@ async function refuseWhileALayoutNamesIt(
   // direction is not.
   if (!usage.complete) {
     throw refusal(
-      `This component cannot be ${removal.done}: there are too many Layouts ` +
+      `This component cannot be ${removal.done}: there are too many header & footer sets ` +
         `to check, so whether one still uses it could not be established.`
     );
   }
@@ -216,9 +216,11 @@ async function refuseWhileALayoutNamesIt(
   const named = layoutsNamed(usage.references);
   throw refusal(
     `This component cannot be ${removal.done} because ${describeLayouts(named)}. ` +
-      `A Layout appears on every page assigned to it, so ${removal.doing} a ` +
+      `A header & footer set appears on every page assigned to it, so ${removal.doing} a ` +
       `component it uses would leave a gap on all of them. Remove it from ${
-        named.length === 1 ? "that Layout" : "those Layouts"
+        named.length === 1
+          ? "that header & footer set"
+          : "those header & footer sets"
       } first.`
   );
 }
@@ -320,8 +322,8 @@ function layoutsNamed(
 /** How those Layouts read in the refusal, so an author knows where to go. */
 function describeLayouts(named: readonly string[]): string {
   return named.length === 1
-    ? `the Layout "${named[0]}" uses it`
-    : `${String(named.length)} Layouts use it: ${named.map(n => `"${n}"`).join(", ")}`;
+    ? `the header & footer set "${named[0]}" uses it`
+    : `${String(named.length)} header & footer sets use it: ${named.map(n => `"${n}"`).join(", ")}`;
 }
 
 /**

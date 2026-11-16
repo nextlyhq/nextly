@@ -149,11 +149,9 @@ function isWrite(request: { url(): string; method(): string }): boolean {
   );
 }
 
-/** The top bar's save state chip. */
+/** The top bar's Save, which says whether the work is saved. */
 function saveState(page: Page) {
-  return page
-    .locator('[data-topbar="end"]')
-    .locator('[data-testid="save-state-indicator"]');
+  return page.locator('[data-topbar="end"]').locator('[data-action="save"]');
 }
 
 /**
@@ -308,7 +306,7 @@ test.describe("a block locked in Layers", () => {
     await textField(page).press("Tab");
 
     expect(await saveDraft(page)).toBe(1);
-    // One save, said once: the chip says "Saved" for the one write.
+    // One save, said once: Save reads "Saved" for the one write.
     await expect(saveState(page)).toHaveText("Saved");
 
     const [hero] = await storedNodes(page.request, id);
@@ -362,9 +360,14 @@ test.describe("a block locked in Layers", () => {
     await pressSave(page);
     await refused;
     const indicator = saveState(page);
-    await expect(indicator).toContainText("Not saved", { timeout: 30_000 });
-    const retry = indicator.getByRole("button", { name: "Retry" });
-    await expect(retry).toBeVisible();
+    // Save itself is the Retry, with the reason in its notice.
+    await expect(indicator).toHaveText("Retry save", { timeout: 30_000 });
+    await expect(
+      page.getByTestId("document-save-publish-notice").getByText("Not saved", {
+        exact: true,
+      })
+    ).toBeVisible();
+    const retry = indicator;
 
     // Nothing stored changed, and the editor still holds the work.
     const [hero] = await storedNodes(page.request, id);
