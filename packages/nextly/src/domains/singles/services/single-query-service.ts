@@ -1626,7 +1626,12 @@ export class SingleQueryService extends BaseService {
       // attach the per-locale `_translations` overview for the admin's language pills
       // (opt-in via `?translation-status=1`). No-op for non-localized singles / public reads.
       if (options.translationStatus) {
-        await this.attachTranslationOverview(slug, singleMeta, doc);
+        await this.attachTranslationOverview(
+          slug,
+          singleMeta,
+          doc,
+          statusFilter
+        );
       }
 
       // Redact password hashes and the columns that never leave the server
@@ -2136,10 +2141,11 @@ export class SingleQueryService extends BaseService {
   private async attachTranslationOverview(
     slug: string,
     singleMeta: DynamicSingleRecord,
-    doc: Record<string, unknown>
+    doc: Record<string, unknown>,
+    statusFilter: StatusFilter | null | undefined
   ): Promise<void> {
     try {
-      await this.populateTranslationMeta(slug, singleMeta, doc);
+      await this.populateTranslationMeta(slug, singleMeta, doc, statusFilter);
     } catch (error) {
       // Same reasoning as the overlay above: a failed overview read reaches here, and is
       // normalized rather than handed to the wire as the driver wrote it.
@@ -2158,7 +2164,9 @@ export class SingleQueryService extends BaseService {
   private async populateTranslationMeta(
     slug: string,
     singleMeta: DynamicSingleRecord,
-    doc: Record<string, unknown>
+    doc: Record<string, unknown>,
+    /** The read's lifecycle bound; a public read is told of published languages only. */
+    statusFilter: StatusFilter | null | undefined
   ): Promise<void> {
     // Gate on THIS single's flag, not just app-level localization — a non-localized single has
     // no companion, so there is no per-locale translation status to attach.
@@ -2175,8 +2183,11 @@ export class SingleQueryService extends BaseService {
     // batched lookup the collection read uses, so both overviews answer the
     // question the same way.
     const docId = (doc as { id?: unknown }).id;
+    // A public read is told which languages are published and nothing of the
+    // work in progress, as a collection's public overview is.
+    const publicRead = statusFilter?.isPublicRead === true;
     const pendingChangeLocales =
-      typeof docId === "string"
+      !publicRead && typeof docId === "string"
         ? await new VersionsRepository(this.adapter).findPendingChangeLocales(
             "single",
             slug,
@@ -2211,6 +2222,7 @@ export class SingleQueryService extends BaseService {
       // So a Single reports staleness for what it can vouch for and stays silent about the rest,
       // which is the same conservative direction the whole feature takes.
       staleness:
+        !publicRead &&
         readiness === "ready" &&
         (await resolveCompanionColumn(
           this.adapter,
@@ -2222,6 +2234,9 @@ export class SingleQueryService extends BaseService {
               dialect: this.adapter.dialect,
             }
           : undefined,
+      // On a status-scoped read, a draft-only translation is not reported present.
+      statusValues:
+        companion.hasStatus && statusFilter ? statusFilter.values : undefined,
     });
   }
 
