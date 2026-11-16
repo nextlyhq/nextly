@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import { FieldErrorNotice } from "@admin/components/features/schema-builder/FieldErrorNotice";
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
+import { convertToBuilderField } from "@admin/lib/builder/field-transformers";
 import { builderFieldErrors } from "@admin/lib/builder/field-validators";
 
 const field = (overrides: Partial<BuilderField>): BuilderField => ({
@@ -94,6 +95,38 @@ describe("a field lacking what its type needs", () => {
     ],
   ] as const)("is no error: %s", (_case, overrides) => {
     expect(errorOf(overrides as Partial<BuilderField>)).toBeUndefined();
+  });
+});
+
+// A relationship stored the earlier way names its collection in `options.target` and, for a
+// many-to-many, is handed to the Builder without `relationTo`: it links somewhere, as the save
+// accepts, and loading it does not make it an error.
+describe("a relationship stored the earlier way", () => {
+  const loaded = (options: Record<string, unknown>) =>
+    convertToBuilderField(
+      {
+        name: "subject",
+        type: "relationship",
+        options,
+      } as unknown as Parameters<typeof convertToBuilderField>[0],
+      0
+    );
+
+  it("is no error with its stored target", () => {
+    const relationship = loaded({
+      target: "tags",
+      relationType: "manyToMany",
+    });
+    expect(builderFieldErrors([relationship]).get(relationship.id)).toBe(
+      undefined
+    );
+  });
+
+  it("is an error with no target stored", () => {
+    const relationship = loaded({ relationType: "manyToMany" });
+    expect(builderFieldErrors([relationship]).get(relationship.id)?.kind).toBe(
+      "no-target"
+    );
   });
 });
 

@@ -384,6 +384,12 @@ export interface BuilderField extends FieldConfig {
    */
   relationTo?: string | string[];
   /**
+   * The collection a relationship stored the earlier way links to, from its stored
+   * `options.target`, when it has no `relationTo` (a many-to-many is left so by the server). Read
+   * only, so the Builder does not judge the field unlinked; a save does not write it.
+   */
+  storedRelationTarget?: string;
+  /**
    * Maximum depth for populating related documents
    */
   maxDepth?: number;

@@ -4,7 +4,7 @@
  * file at every config load does not, so a project already holding one keeps starting. Re-saving
  * it is refused until one value is changed.
  */
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,22 +28,27 @@ const repeated = [
 describe("a definition whose options repeat a value", () => {
   it("still loads, and re-saving it is refused", async () => {
     const dir = await mkdtemp(join(tmpdir(), "repeated-option-"));
-    await writeFile(
-      join(dir, "ui-schema.json"),
-      JSON.stringify({
-        version: 1,
-        collections: [{ slug: "events", fields: repeated }],
-      })
-    );
+    try {
+      await writeFile(
+        join(dir, "ui-schema.json"),
+        JSON.stringify({
+          version: 1,
+          collections: [{ slug: "events", fields: repeated }],
+        })
+      );
 
-    const manifest = await loadUiSchema({
-      projectRoot: dir,
-      uiSchemaFile: "./ui-schema.json",
-    });
+      const manifest = await loadUiSchema({
+        projectRoot: dir,
+        uiSchemaFile: "./ui-schema.json",
+      });
 
-    expect(manifest.collections[0].fields).toHaveLength(1);
-    expect(() =>
-      assertValidFieldsPayload(manifest.collections[0].fields)
-    ).toThrow(NextlyError);
+      expect(manifest.collections[0].fields).toHaveLength(1);
+      expect(() =>
+        assertValidFieldsPayload(manifest.collections[0].fields)
+      ).toThrow(NextlyError);
+    } finally {
+      // The folder is the test's own, so it goes with it.
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

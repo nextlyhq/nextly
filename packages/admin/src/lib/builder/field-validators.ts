@@ -64,19 +64,14 @@ function optionProblem(field: BuilderField): string | null {
 
 /**
  * Whether a relationship names a collection to link to, as the save requires: `relationTo`, one
- * or more, or a stored `options.target`. An upload needs none: it links to the media library.
+ * or more, or the stored `options.target` a relationship saved the earlier way keeps
+ * (`storedRelationTarget`). An upload needs none: it links to the media library.
  */
 function linksSomewhere(field: BuilderField): boolean {
   const { relationTo } = field;
   if (typeof relationTo === "string" && relationTo.length > 0) return true;
   if (Array.isArray(relationTo) && relationTo.length > 0) return true;
-  const stored: unknown = field.options;
-  return (
-    typeof stored === "object" &&
-    stored !== null &&
-    !Array.isArray(stored) &&
-    typeof (stored as { target?: unknown }).target === "string"
-  );
+  return (field.storedRelationTarget ?? "") !== "";
 }
 
 /** One thing a named field's type needs: the error when the field lacks it, else null. */
