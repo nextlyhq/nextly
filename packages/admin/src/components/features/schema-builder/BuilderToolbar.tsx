@@ -65,6 +65,34 @@ const KIND_LIST_ROUTE: Record<BuilderConfig["kind"], string> = {
   "field-group": ROUTES.BUILDER_FIELD_GROUPS,
 };
 
+/**
+ * Why Save waits, said where Save is, so a held Save is never a button that
+ * does nothing without a reason. Mounted whether or not Save is held, and only
+ * its text changes: a status region inserted with its message already in it is
+ * not reliably announced. Visually hidden while empty, so it takes no room
+ * beside Save, and on a phone, whose row is full: there Save carries the
+ * reason as its title.
+ */
+function SaveHeldStatus({
+  reason,
+}: {
+  reason: string | undefined;
+}): JSX.Element {
+  return (
+    <span
+      role="status"
+      data-testid="save-held-status"
+      className={
+        reason === undefined
+          ? "sr-only"
+          : "sr-only sm:not-sr-only text-xs text-muted-foreground"
+      }
+    >
+      {reason ?? ""}
+    </span>
+  );
+}
+
 export function BuilderToolbar({
   config,
   name,
@@ -156,24 +184,11 @@ export function BuilderToolbar({
         >
           <Settings className="h-4 w-4" />
         </Button>
-        {/* Said where Save is, so a held Save is never a button that does
-            nothing without a reason. Mounted whether or not Save is held, and
-            only its text changes: a status region inserted with its message
-            already in it is not reliably announced. Visually hidden while
-            empty, so it takes no room beside Save. */}
-        <span
-          role="status"
-          data-testid="save-held-status"
-          className={
-            saveHeld === undefined ? "sr-only" : "text-xs text-muted-foreground"
-          }
-        >
-          {saveHeld ?? ""}
-        </span>
+        <SaveHeldStatus reason={saveHeld} />
         <Button
           size="sm"
           disabled={saveDisabled}
-          title={lockedSaveTitle}
+          title={lockedSaveTitle ?? saveHeld}
           onClick={onSave}
         >
           Save
