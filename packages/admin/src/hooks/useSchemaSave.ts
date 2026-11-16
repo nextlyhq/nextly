@@ -23,6 +23,12 @@ import type { SchemaChangeConfirmation } from "@admin/components/features/schema
 import { toast } from "@admin/components/ui";
 import { useRestart } from "@admin/context/RestartContext";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
+import {
+  renameAnswers,
+  renameNotOffered,
+  withDecidedRenames,
+  type DraftRename,
+} from "@admin/lib/builder/rename-answers";
 import type {
   FieldResolution,
   SchemaPreviewResponse,
@@ -125,6 +131,8 @@ export interface UseSchemaSaveOptions {
    * the preview was made with, as for the fields.
    */
   previewedWith?: unknown;
+  /** The saved fields the draft renamed. */
+  draftRenames?: readonly DraftRename[];
 }
 
 export interface UseSchemaSaveReturn {
@@ -137,6 +145,9 @@ export interface UseSchemaSaveReturn {
   ) => void;
 }
 
+/** No renames, as one constant so the callbacks keep their identity across renders. */
+const NO_RENAMES: readonly DraftRename[] = [];
+
 export function useSchemaSave({
   slug,
   missingSlugMessage,
@@ -148,6 +159,7 @@ export function useSchemaSave({
   onNoChanges,
   onApplied,
   previewedWith,
+  draftRenames = NO_RENAMES,
 }: UseSchemaSaveOptions): UseSchemaSaveReturn {
   const { startRestart, stopRestart } = useRestart();
   // The fields and settings each preview was made from. The dialog shows that
@@ -185,6 +197,16 @@ export function useSchemaSave({
           onNoChanges(fields);
           return;
         }
+        // A rename the preview does not offer as one would drop the field's values, so nothing is
+        // put in front of the person to confirm.
+        const { missing } = renameAnswers(
+          draftRenames,
+          previewed.renamed ?? []
+        );
+        if (missing) {
+          toast.error(renameNotOffered(missing));
+          return;
+        }
         previewedFields.current.set(
           previewed,
           JSON.stringify({ fields, previewedWith })
@@ -204,6 +226,7 @@ export function useSchemaSave({
     onNoChanges,
     confirmation,
     previewedWith,
+    draftRenames,
   ]);
 
   const confirmApply = useCallback(
@@ -230,11 +253,15 @@ export function useSchemaSave({
         confirmation.beginApply();
         startRestart();
         try {
+          // The renames the Builder made are its own to answer, whatever the dialog chose.
           const result = await apply(
             fields,
             previewed.schemaVersion,
             resolutions,
-            renameResolutions
+            withDecidedRenames(
+              renameResolutions,
+              renameAnswers(draftRenames, previewed.renamed ?? []).decided
+            )
           );
           if (!result.success) {
             stopRestart(
@@ -275,6 +302,7 @@ export function useSchemaSave({
       startRestart,
       stopRestart,
       previewedWith,
+      draftRenames,
     ]
   );
 

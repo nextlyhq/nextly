@@ -9,7 +9,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@admin/__tests__/utils";
 import type { SchemaChangeConfirmation } from "@admin/components/features/schema-builder/types";
 import { parseApiError } from "@admin/lib/api/parseApiError";
-import type { SchemaPreviewResponse } from "@admin/services/schemaApi";
+import type { DraftRename } from "@admin/lib/builder/rename-answers";
+import type {
+  SchemaPreviewRenameCandidate,
+  SchemaPreviewResponse,
+} from "@admin/services/schemaApi";
 import type { FieldDefinition } from "@admin/types/collection";
 
 import {
@@ -92,6 +96,8 @@ type Overrides = {
   onApplied?: (fields: FieldDefinition[]) => void | Promise<void>;
   /** The settings the preview and the apply are sent with, read at each render. */
   previewedWith?: () => unknown;
+  /** The saved fields the draft renamed. */
+  draftRenames?: DraftRename[];
 };
 
 function setup(overrides: Overrides = {}) {
@@ -117,6 +123,7 @@ function setup(overrides: Overrides = {}) {
       onNoChanges,
       onApplied,
       previewedWith: overrides.previewedWith?.(),
+      draftRenames: overrides.draftRenames,
     })
   );
 
@@ -461,5 +468,125 @@ describe("confirmApply", () => {
     expect(applyFn).not.toHaveBeenCalled();
     expect(startRestart).not.toHaveBeenCalled();
     expect(confirmation.beginApply).not.toHaveBeenCalled();
+  });
+});
+
+// A saved field the Builder renamed reaches the save as one column dropped and another added. The
+// Builder answers that pair as a rename itself, never as a drop and an add, and saves nothing when
+// the preview does not offer the pair: a rename must never lose the field's values.
+describe("a rename the Builder made", () => {
+  const candidate = (
+    from: string,
+    to: string,
+    table = "dc_posts"
+  ): SchemaPreviewRenameCandidate => ({
+    table,
+    from,
+    to,
+    fromType: "text",
+    toType: "text",
+    typesCompatible: true,
+    preservesValues: true,
+    defaultSuggestion: "rename",
+  });
+  const rename = (previousName: string, name: string): DraftRename => ({
+    label: "Summary",
+    previousName,
+    name,
+  });
+
+  it("is answered as a rename, whatever the dialog chose, on every table holding it", async () => {
+    const pending = preview({
+      renamed: [
+        candidate("summary", "abstract"),
+        candidate("summary", "abstract", "dc_posts_locales"),
+      ],
+    });
+    const { result, applyFn } = setup({
+      confirmation: confirmationStub(pending),
+      draftRenames: [rename("summary", "abstract")],
+    });
+
+    await act(async () =>
+      result.current.confirmApply({}, [
+        {
+          tableName: "dc_posts",
+          fromColumn: "summary",
+          toColumn: "abstract",
+          choice: "drop_and_add",
+        },
+      ])
+    );
+
+    await waitFor(() => expect(applyFn).toHaveBeenCalledTimes(1));
+    expect(applyFn).toHaveBeenCalledWith(FIELDS, 9, {}, [
+      {
+        tableName: "dc_posts",
+        fromColumn: "summary",
+        toColumn: "abstract",
+        choice: "rename",
+      },
+      {
+        tableName: "dc_posts_locales",
+        fromColumn: "summary",
+        toColumn: "abstract",
+        choice: "rename",
+      },
+    ]);
+  });
+
+  it("is matched by the column a camelCase name becomes", async () => {
+    const pending = preview({
+      renamed: [candidate("meta_title", "meta_heading")],
+    });
+    const { result, applyFn } = setup({
+      confirmation: confirmationStub(pending),
+      draftRenames: [rename("metaTitle", "metaHeading")],
+    });
+
+    await act(async () => result.current.confirmApply({}, []));
+
+    await waitFor(() => expect(applyFn).toHaveBeenCalledTimes(1));
+    expect(applyFn).toHaveBeenCalledWith(FIELDS, 9, {}, [
+      {
+        tableName: "dc_posts",
+        fromColumn: "meta_title",
+        toColumn: "meta_heading",
+        choice: "rename",
+      },
+    ]);
+  });
+
+  it("saves nothing, naming the field, when the preview does not offer it", async () => {
+    const confirmation = confirmationStub();
+    const { result, applyFn } = setup({
+      confirmation,
+      previewFn: vi.fn(() =>
+        Promise.resolve(preview({ renamed: [candidate("body", "text")] }))
+      ),
+      draftRenames: [rename("summary", "abstract")],
+    });
+
+    await act(async () => result.current.handleSave());
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
+    expect(toastError.mock.lastCall?.[0]).toMatch(
+      /Summary.*summary.*abstract/s
+    );
+    expect(confirmation.request).not.toHaveBeenCalled();
+    expect(applyFn).not.toHaveBeenCalled();
+  });
+
+  it("needs no pair when the new name keeps the column", async () => {
+    const confirmation = confirmationStub();
+    const { result } = setup({
+      confirmation,
+      draftRenames: [rename("metaTitle", "meta_title")],
+    });
+
+    await act(async () => result.current.handleSave());
+
+    await waitFor(() => expect(confirmation.request).toHaveBeenCalledTimes(1));
+    expect(toastError).not.toHaveBeenCalled();
   });
 });
