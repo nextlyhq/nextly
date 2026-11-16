@@ -14,10 +14,13 @@ import {
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import {
+  DESIGN_TAB_GROUPS,
   TokensPanel,
+  type DesignTab,
   type TokensPanelProps,
   type VariablesPreview,
   useVariablesHeader,
+  variableMatchesByTab,
 } from "@nextlyhq/builder/shell";
 import { useCan } from "@nextlyhq/plugin-sdk/client";
 import {
@@ -46,7 +49,7 @@ import { useHeldSiteStyle, useSaveSiteStyle } from "../site-style-client";
 import { useShown } from "../use-shown";
 import { useVariablesClient } from "../variables-client";
 
-import { useDesignHeaderSlot } from "./design-panel";
+import { useDesignBrowse, useDesignHeaderSlot } from "./design-panel";
 
 /**
  * The tokens studio, and the state that belongs to it rather than to the editor.
@@ -147,6 +150,7 @@ export function TokensStudio({
     readOnly: !mayChange,
     preview,
   });
+  useReportVariableMatches(edits ?? editable);
   const studio: TokensPanelProps = {
     tokens: edits ?? editable,
     supplied: baseline,
@@ -550,9 +554,38 @@ function absenceOf(pending: boolean): "pending" | "failed" {
 const VariablesStudio = createContext<TokensPanelProps | null>(null);
 
 /** The Variables tab: the studio's variables, in the panel its frame holds. */
-export function VariablesTab(): React.JSX.Element | null {
+export function VariablesTab({
+  tab,
+}: {
+  /** The Design tab this is: its groups are the ones listed. */
+  tab: Exclude<DesignTab, "styles">;
+}): React.JSX.Element | null {
   const studio = useContext(VariablesStudio);
-  return studio === null ? null : <TokensPanel {...studio} />;
+  const { search, folds } = useDesignBrowse();
+  return studio === null ? null : (
+    <TokensPanel
+      {...studio}
+      groups={DESIGN_TAB_GROUPS[tab]}
+      search={search}
+      {...(folds === undefined ? {} : { folds })}
+    />
+  );
+}
+
+/**
+ * How many variables the panel's search matches in each tab, reported to
+ * the panel for the counts beside its tab names, whichever tab is open: the
+ * studio holds the variables for all of them.
+ */
+function useReportVariableMatches(tokens: SiteTokenSet | undefined): void {
+  const { search, reportMatches } = useDesignBrowse();
+  const matches = useMemo(
+    () => variableMatchesByTab(tokens, search),
+    [tokens, search]
+  );
+  useEffect(() => {
+    reportMatches(matches);
+  }, [matches, reportMatches]);
 }
 
 /**

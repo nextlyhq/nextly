@@ -794,3 +794,34 @@
   outline: 2px solid var(--nx-ring);
   outline-offset: 2px;
 }
+
+/* The Design panel's one search, under its tabs, across all four. */
+.nx-pb-design__search {
+  position: relative;
+  margin-top: 8px;
+}
+.nx-pb-design__search > svg {
+  position: absolute;
+  top: 50%;
+  left: 0.625rem;
+  transform: translateY(-50%);
+  color: var(--nx-muted-foreground);
+  pointer-events: none;
+}
+.nx-pb-design__search input {
+  height: 32px;
+  padding-left: 1.875rem;
+  font-size: 13px;
+}
+/* How many matches a tab holds, beside its name, while a search is on. */
+.nx-pb-design__tab-count {
+  margin-left: 4px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--nx-muted-foreground);
+}
+/* A group another panel fills (the site's fonts under Type) sits in the
+   tab's flow as the variable groups do. */
+.nx-pb-design__group {
+  padding: 0 0.75rem;
+}

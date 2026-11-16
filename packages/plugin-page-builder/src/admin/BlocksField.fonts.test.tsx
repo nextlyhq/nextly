@@ -93,7 +93,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
             : `${openPanelRequest.panel}:${openPanelRequest.view ?? ""}`}
         </div>
         <div data-testid="panel">
-          {renderPanel?.("design", { current: "fonts", choose: () => {} })}
+          {renderPanel?.("design", { current: "type", choose: () => {} })}
         </div>
       </div>
     ),
@@ -350,8 +350,8 @@ describe("the fonts panel reaching an author", () => {
       error: null,
     };
     await openEditor();
-    fireEvent.click(screen.getByRole("button", { name: "Edit in Variables" }));
-    expect(screen.getByTestId("request").textContent).toBe("design:variables");
+    fireEvent.click(screen.getByRole("button", { name: "Edit this variable" }));
+    expect(screen.getByTestId("request").textContent).toBe("design:type");
   });
 
   it("draws a read still in flight as loading rather than as a site with no fonts", async () => {
