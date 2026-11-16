@@ -443,6 +443,10 @@ export async function storeQueuedEmail(
   const erasedAs = input.person
     ? await deletedDigestOf(tx, input, input.person)
     : undefined;
+  // The template it is sent from, in clear for the Activity list: a slug
+  // names a kind of message, never a person.
+  const templateSlug =
+    input.message.kind === "template" ? input.message.slug : null;
   if (input.person && erasedAs !== undefined) {
     await db.insert(table).values({
       id,
@@ -453,6 +457,7 @@ export async function storeQueuedEmail(
       principalKind: input.person.kind,
       principalId: erasedAs,
       failure: null,
+      templateSlug,
       createdAt: now,
       updatedAt: now,
       settledAt: now,
@@ -478,6 +483,7 @@ export async function storeQueuedEmail(
     principalKind: input.person?.kind ?? null,
     principalId: input.person?.id ?? null,
     failure: null,
+    templateSlug,
     createdAt: now,
     updatedAt: now,
     settledAt: null,

@@ -499,10 +499,19 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
       resource: "content-releases",
     },
   },
-  // Email deliveries. ONE permission for now: cancelling a queued email, the
-  // one act anything enforces today. Reading the delivery log arrives with the
-  // delivery screen and its routes, which would read it; seeding it sooner
-  // would show the admin a screen whose routes do not exist yet.
+  // Email deliveries: reading the delivery log and queued email (the Email
+  // hub's Activity routes, which never return an address, subject or body),
+  // and managing queued email (cancelling it, or having it sent again). Read
+  // is listed first, so on a fresh install it exists before manage does.
+  // Neither implies the other: a reader sees what was sent, a manager acts.
+  {
+    name: "Read Email Deliveries",
+    slug: "read-email-deliveries",
+    action: "read",
+    resource: "email-deliveries",
+    description:
+      "Permission to see the email delivery log and queued email, and to search them by an exact address",
+  },
   {
     name: "Manage Email Deliveries",
     slug: "manage-email-deliveries",

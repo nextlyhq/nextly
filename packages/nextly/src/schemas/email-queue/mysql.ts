@@ -29,6 +29,7 @@ export const emailQueueMysql = mysqlTable(
     principalKind: varchar("principal_kind", { length: 191 }),
     principalId: varchar("principal_id", { length: 191 }),
     failure: text("failure"),
+    templateSlug: varchar("template_slug", { length: 255 }),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
     updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
     settledAt: bigint("settled_at", { mode: "number" }),

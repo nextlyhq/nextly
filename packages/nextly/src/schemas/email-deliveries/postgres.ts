@@ -229,6 +229,13 @@ export const emailDeliveriesPg = pgTable(
     index("email_deliveries_principal_idx").on(t.principalKind, t.principalId),
     // Erasure clears a send's key digest from all its records.
     index("email_deliveries_key_idx").on(t.keyDigest),
+    // One template's history, and when each template was last sent: the
+    // Activity list's template filter, and the Messages list's "Last sent".
+    index("email_deliveries_template_idx").on(
+      t.templateSlug,
+      t.status,
+      t.createdAt
+    ),
   ]
 );
 

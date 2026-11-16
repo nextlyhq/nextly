@@ -2058,6 +2058,43 @@ function parseEmailTemplateRoutes(
 }
 
 // ============================================================================
+// Email Delivery Routes Parser
+// ============================================================================
+
+/** `/api/email-deliveries/<read>`, each a GET, by its URL token. */
+const EMAIL_DELIVERY_READS: Record<string, string> = {
+  queued: "listQueuedEmails",
+  "last-sent": "lastSentByTemplate",
+  overdue: "overdueQueuedEmails",
+};
+
+/**
+ * Parse the Email hub's Activity routes. Each is a read, answered by the
+ * direct-dispatch `email` service, whose handler asks
+ * `read-email-deliveries`:
+ * - GET /api/email-deliveries → delivery records, newest first, filtered
+ * - GET /api/email-deliveries/queued → queued emails, newest first, filtered
+ * - GET /api/email-deliveries/last-sent → when each template was last sent
+ * - GET /api/email-deliveries/overdue → whether queued email is overdue
+ */
+function parseEmailDeliveryRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (httpMethod !== "GET" || subresource) return null;
+  const method = id === undefined ? "listDeliveries" : EMAIL_DELIVERY_READS[id];
+  if (!method) return null;
+  return {
+    service: "email",
+    operation: id === undefined ? "list" : "single",
+    method,
+    routeParams,
+  };
+}
+
+// ============================================================================
 // User Field Routes Parser
 // ============================================================================
 
@@ -3334,6 +3371,17 @@ export function parseRestRoute(
   // Handle Email Templates endpoints
   if (resource === "email-templates") {
     const result = parseEmailTemplateRoutes(
+      id,
+      subresource,
+      httpMethod,
+      routeParams
+    );
+    if (result) return result;
+  }
+
+  // Handle the Email hub's Activity reads
+  if (resource === "email-deliveries") {
+    const result = parseEmailDeliveryRoutes(
       id,
       subresource,
       httpMethod,

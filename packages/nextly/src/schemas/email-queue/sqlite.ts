@@ -21,6 +21,7 @@ export const emailQueueSqlite = sqliteTable(
     principalKind: text("principal_kind"),
     principalId: text("principal_id"),
     failure: text("failure"),
+    templateSlug: text("template_slug"),
     createdAt: integer("created_at").notNull(),
     updatedAt: integer("updated_at").notNull(),
     settledAt: integer("settled_at"),

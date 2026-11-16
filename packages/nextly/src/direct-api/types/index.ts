@@ -168,6 +168,16 @@ export type {
   QueuedEmail,
   QueuedEmailState,
   CancelQueuedEmailArgs,
+  FindEmailDeliveriesArgs,
+  FindQueuedEmailsArgs,
+  EmailLastSentArgs,
+  EmailOverdueArgs,
+  ActivityPage,
+  DeliveryActivity,
+  DeliveryOutcome,
+  QueuedEmailActivity,
+  QueuedEmailOverdue,
+  TemplateLastSent,
 } from "./email";
 
 export type {

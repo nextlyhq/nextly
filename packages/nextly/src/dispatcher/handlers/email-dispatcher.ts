@@ -12,6 +12,10 @@
  * Email services are non-paginated (they return plain arrays), so list
  * methods use respondData with a named field rather than respondList
  * plus synthetic pagination meta.
+ *
+ * The Email hub's Activity reads (`/api/email-deliveries`) are dispatched
+ * directly by the route handler to `handleEmailDeliveryRequest`, which asks
+ * `read-email-deliveries` itself and pages by cursor.
  */
 
 import { z } from "zod";
@@ -23,9 +27,14 @@ import {
   respondDoc,
   respondMutation,
 } from "../../api/response-shapes";
+import { withErrorHandler } from "../../api/with-error-handler";
 import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
+import { isErrorResponse, requireAnyPermission } from "../../auth/middleware";
+import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
 import { container } from "../../di/container";
+import { SYSTEM_READ_POLICY } from "../../domains/auth/system-write-policy";
 import { brandSettingsUpdateSchema } from "../../domains/email/brand-settings";
+import { EmailDeliveryActivity } from "../../domains/email/delivery-activity";
 import { draftPreviewSchema } from "../../domains/email/draft-preview-request";
 import { toDescriptor } from "../../domains/email/provider-definition";
 import { sendOutcomeMessage } from "../../domains/email/send-outcome";
@@ -44,6 +53,7 @@ import type { EmailService } from "../../services/email/email-service";
 import type { EmailTemplateService } from "../../services/email/email-template-service";
 import { readAuthenticatedActor } from "../helpers/authenticated-actor";
 import {
+  getAdapterFromDI,
   getEmailProviderServiceFromDI,
   getEmailTemplateServiceFromDI,
 } from "../helpers/di";
@@ -668,4 +678,102 @@ export function dispatchEmailTemplates(
   const handler = EMAIL_TEMPLATE_METHODS[method];
   if (!handler) throw new Error(`Unknown method: ${method}`);
   return handler.execute({ templateService }, params, body);
+}
+
+// ============================================================
+// The Email hub's Activity reads
+// ============================================================
+
+/** The filters a list route takes, as its query string gives them. */
+const DELIVERY_FILTER_KEYS = [
+  "outcome",
+  "template",
+  "providerId",
+  "providerType",
+  "from",
+  "to",
+  "cursor",
+  "limit",
+] as const;
+const QUEUED_FILTER_KEYS = [
+  "state",
+  "template",
+  "from",
+  "to",
+  "cursor",
+  "limit",
+] as const;
+
+/** The named query parameters, each once; anything else is ignored. */
+function queryOf(
+  query: URLSearchParams,
+  keys: readonly string[]
+): Record<string, string> {
+  const picked: Record<string, string> = {};
+  for (const key of keys) {
+    const value = query.get(key);
+    if (value !== null) picked[key] = value;
+  }
+  return picked;
+}
+
+/** Each Activity read, by the method the route parser names. */
+const EMAIL_DELIVERY_READS: Record<
+  string,
+  (activity: EmailDeliveryActivity, query: URLSearchParams) => Promise<Response>
+> = {
+  listDeliveries: async (activity, query) =>
+    respondData({
+      ...(await activity.listDeliveries(queryOf(query, DELIVERY_FILTER_KEYS))),
+    }),
+  listQueuedEmails: async (activity, query) =>
+    respondData({
+      ...(await activity.listQueuedEmails(queryOf(query, QUEUED_FILTER_KEYS))),
+    }),
+  // `?slug=a&slug=b` names the templates; none names every template sent.
+  lastSentByTemplate: async (activity, query) => {
+    const slugs = query.getAll("slug");
+    return respondData({
+      templates: await activity.lastSentByTemplate(
+        slugs.length > 0 ? slugs : undefined
+      ),
+    });
+  },
+  overdueQueuedEmails: async activity =>
+    respondData({ ...(await activity.overdue()) }),
+};
+
+/**
+ * The Email hub's Activity reads: the delivery list, the queued-email list,
+ * each template's last send, and whether queued email is overdue. Each asks
+ * `read-email-deliveries` before anything is read, refused as every other
+ * route refuses, and none returns an address, subject or body.
+ */
+export function handleEmailDeliveryRequest(
+  req: Request,
+  method: string
+): Promise<Response> {
+  return withErrorHandler(async (request: Request): Promise<Response> => {
+    const read = EMAIL_DELIVERY_READS[method];
+    if (!read) {
+      throw NextlyError.notFound({
+        logContext: { service: "email", method },
+      });
+    }
+    const auth = await requireAnyPermission(request, [
+      ...SYSTEM_READ_POLICY.emailDeliveries.read.anyOf,
+    ]);
+    // Thrown, so the refusal has the envelope every other 401/403 has.
+    if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
+    const adapter = getAdapterFromDI();
+    if (!adapter) {
+      throw NextlyError.internal({
+        logContext: { reason: "database-adapter-unavailable" },
+      });
+    }
+    return read(
+      new EmailDeliveryActivity(adapter),
+      new URL(request.url).searchParams
+    );
+  })(req);
 }
