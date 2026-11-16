@@ -419,3 +419,42 @@ describe("builder pending changes: the entity's settings", () => {
     expect(result.current.state.settings?.singularName).toBe("Article");
   });
 });
+
+// A save that applies the fields first and writes the settings after: until
+// that settings write lands, its change stays pending and undoable.
+describe("builder pending changes: a save of fields and settings together", () => {
+  it("keeps the settings change undoable until its write lands", () => {
+    const { result, field } = setup();
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "X",
+      })
+    );
+    act(() =>
+      result.current.state.setSettings({
+        ...settingsOf(entity),
+        singularName: "Article",
+      })
+    );
+    // The fields landed; the settings write has not.
+    act(() => result.current.state.pinFields());
+    expect(result.current.state.pending.canUndo).toBe(true);
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    expect(result.current.state.settings?.singularName).toBe("Post");
+
+    act(() => {
+      result.current.state.pending.redo();
+    });
+    act(() =>
+      result.current.state.pinSettings({
+        ...settingsOf(entity),
+        singularName: "Article",
+      })
+    );
+    expect(result.current.state.unsavedCount).toBe(0);
+    expect(result.current.state.pending.canUndo).toBe(false);
+  });
+});

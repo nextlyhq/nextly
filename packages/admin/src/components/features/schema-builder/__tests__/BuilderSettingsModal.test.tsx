@@ -602,3 +602,35 @@ describe("BuilderSettingsModal — its changes, pending", () => {
     expect(editor.result.current.unsavedCount).toBe(3);
   });
 });
+
+describe("BuilderSettingsModal — an unsaved address typed with spaces", () => {
+  it("checks and submits the same trimmed address", async () => {
+    refusals = {};
+    check.mockClear();
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <BuilderSettingsModal
+        open
+        mode="edit"
+        config={collectionConfig}
+        initialValues={{
+          singularName: "Post",
+          slug: "posts",
+          icon: "FileText",
+        }}
+        unsavedAddress={{ otherAddresses: [] }}
+        onCancel={vi.fn()}
+        onSubmit={onSubmit}
+      />
+    );
+    const address = screen.getByLabelText("Slug");
+    await user.clear(address);
+    await user.type(address, "stories ");
+    const save = screen.getByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).toBeEnabled());
+    expect(check).toHaveBeenLastCalledWith("collection", "stories", []);
+    await user.click(save);
+    expect(onSubmit.mock.calls[0][0].slug).toBe("stories");
+  });
+});
