@@ -44,6 +44,35 @@ describe("naming a duplicate as the save will judge it", () => {
     const after = duplicatedFields(fields, "f-body") ?? [];
     expect(namesAt(after, "f-layout")).toEqual(["body", "body_3"]);
   });
+
+  it("names each field a copied layout group carries against the level holding it", () => {
+    // The copy's fields are stored beside the original's, so each needs a free name there.
+    const fields = [
+      plain("f-layout", "", {
+        type: "group",
+        fields: [plain("f-body", "body"), plain("f-title", "title")],
+      }),
+      plain("f-body-2", "body_2"),
+    ];
+    const after = duplicatedFields(fields, "f-layout") ?? [];
+    expect(after.map(field => field.name)).toEqual(["", "", "body_2"]);
+    expect(after[1]?.fields?.map(field => field.name)).toEqual([
+      "body_3",
+      "title_2",
+    ]);
+  });
+
+  it("keeps a copied layout group's fields clear of each other's new names", () => {
+    // `a` passes over the original's `a_2` to `a_3`, so the copy of `a_2` must pass over it too.
+    const fields = [
+      plain("f-layout", "", {
+        type: "group",
+        fields: [plain("f-a", "a"), plain("f-a-2", "a_2")],
+      }),
+    ];
+    const after = duplicatedFields(fields, "f-layout") ?? [];
+    expect(after[1]?.fields?.map(field => field.name)).toEqual(["a_3", "a_4"]);
+  });
 });
 
 describe("heldNamesOf", () => {
