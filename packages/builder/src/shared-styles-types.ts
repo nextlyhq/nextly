@@ -117,15 +117,6 @@ export interface SharedStylesPanelProps {
    * @experimental Settles with the Variables tab's usage.
    */
   initialOpenId?: string;
-  /**
-   * A search the host keeps across several views, as the Design panel keeps
-   * one across its tabs, with the way to change it. Given, this tab lists
-   * what it matches and draws no search box of its own.
-   */
-  hostSearch?: {
-    readonly query: string;
-    readonly onQuery: (query: string) => void;
-  };
 }
 
 /** How the Block looks group's rows choose the look the inspector edits. */

@@ -116,18 +116,40 @@ export type { PanelLookEditing } from "./shared-styles-types";
  */
 export { USAGE_RECOUNT_IDLE_MAX, USAGE_RECOUNT_MS } from "./usage-reads";
 
+/** A search a host keeps across several views, and the way to change it. */
+export interface HostSearch {
+  readonly query: string;
+  readonly onQuery: (query: string) => void;
+}
+
+/**
+ * The search a host keeps across several views, as the Design panel keeps
+ * one across its tabs. Provided, the tab lists what it matches and draws no
+ * search box of its own.
+ */
+export const SharedStylesHostSearch: React.Context<HostSearch | undefined> =
+  React.createContext<HostSearch | undefined>(undefined);
+
 /**
  * What the tab searches for: the host's search where it keeps one, changed
  * through the host, else the tab's own.
  */
-function usePanelSearch(hostSearch: SharedStylesPanelProps["hostSearch"]): {
+function usePanelSearch(): {
   query: string;
   setQuery: (query: string) => void;
 } {
+  const host = React.useContext(SharedStylesHostSearch);
   const [own, setOwn] = React.useState("");
-  return hostSearch === undefined
+  return host === undefined
     ? { query: own, setQuery: setOwn }
-    : { query: hostSearch.query, setQuery: hostSearch.onQuery };
+    : { query: host.query, setQuery: host.onQuery };
+}
+
+/** The filter bar, drawn only while there are styles to filter. */
+function FiltersWhenListed(
+  props: React.ComponentProps<typeof FilterBar>
+): React.JSX.Element | null {
+  return props.rows.length > 0 ? <FilterBar {...props} /> : null;
 }
 
 /** No pending names, as one value rather than a fresh record each render. */
@@ -308,9 +330,8 @@ export function SharedStylesPanel({
   pendingNames = NO_NAMES,
   looks,
   initialOpenId,
-  hostSearch,
 }: SharedStylesPanelProps): React.JSX.Element {
-  const { query, setQuery } = usePanelSearch(hostSearch);
+  const { query, setQuery } = usePanelSearch();
   const [filter, setFilter] = React.useState<SharedStyleFilter>("all");
   const [pages, setPages] = React.useState(1);
   const [issue, setIssue] = React.useState<Issue | null>(null);
@@ -362,25 +383,22 @@ export function SharedStylesPanel({
     <div className="nx-vars nx-shared-styles" {...readOnlyMark(readOnly)}>
       <SearchBox
         ref={search}
-        shown={hostSearch === undefined}
         query={query}
         onQuery={next => {
           setQuery(next);
           setPages(1);
         }}
       />
-      {rows.length > 0 && (
-        <FilterBar
-          rows={rows}
-          filter={filter}
-          onFilter={next => {
-            setFilter(next);
-            setPages(1);
-          }}
-          usageOf={usageOf}
-          exact={exact}
-        />
-      )}
+      <FiltersWhenListed
+        rows={rows}
+        filter={filter}
+        onFilter={next => {
+          setFilter(next);
+          setPages(1);
+        }}
+        usageOf={usageOf}
+        exact={exact}
+      />
       <div className="nx-vars__body">
         <PanelNotes
           readOnly={readOnly}
@@ -492,17 +510,15 @@ function readOnlyMark(readOnly: boolean): { "data-read-only"?: "" } {
 /** The search over every style, by name, property or value. */
 function SearchBox({
   ref,
-  shown,
   query,
   onQuery,
 }: {
   ref: React.Ref<HTMLInputElement>;
-  /** Not drawn where a host keeps the search. */
-  shown: boolean;
   query: string;
   onQuery: (query: string) => void;
 }): React.JSX.Element | null {
-  if (!shown) return null;
+  // Not drawn where a host keeps the search.
+  if (React.useContext(SharedStylesHostSearch) !== undefined) return null;
   return (
     <div className="nx-vars__search">
       <Search aria-hidden="true" size={16} />

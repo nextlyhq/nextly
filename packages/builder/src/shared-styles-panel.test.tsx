@@ -29,6 +29,7 @@ import {
   type SharedStyleUsesPage,
 } from "./shared-style-library";
 import {
+  SharedStylesHostSearch,
   SharedStylesPanel,
   USAGE_RECOUNT_MS,
   USAGE_RECOUNT_IDLE_MAX,
@@ -1947,7 +1948,21 @@ describe("a role that may not change the site's design", () => {
 describe("a search the host keeps", () => {
   it("lists what the host's search matches, and draws no search box of its own", async () => {
     // The Design panel keeps one search across its tabs.
-    await panel({ hostSearch: { query: "old", onQuery: () => undefined } });
+    render(
+      <SharedStylesHostSearch.Provider
+        value={{ query: "old", onQuery: () => undefined }}
+      >
+        <SharedStylesPanel
+          library={[CARD, HERO, OLD]}
+          pageBlocks={NO_BLOCKS}
+          onRename={async () => ({ ok: true })}
+        />
+      </SharedStylesHostSearch.Provider>
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
     expect(
       screen.queryByRole("searchbox", { name: "Search shared styles" })
     ).toBeNull();

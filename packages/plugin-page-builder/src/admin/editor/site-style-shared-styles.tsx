@@ -11,13 +11,16 @@ import type {
   StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 import {
+  SharedStylesHostSearch,
   SharedStylesPanel,
   type PageClassBlocks,
 } from "@nextlyhq/builder/shell";
 import { useCan } from "@nextlyhq/plugin-sdk/client";
+import { useMemo } from "react";
 
 import { useSharedStylesClient } from "../shared-styles-client";
 
+import { useDesignBrowse } from "./design-panel";
 import type { ClassSurface } from "./site-style-class-surface";
 import { useStyleToOpen } from "./site-style-tokens-studio";
 
@@ -49,21 +52,29 @@ export function SharedStylesStudio({
   const mayChange = useCan("update-site-style");
   const access = useSharedStylesClient();
   const initialOpenId = useStyleToOpen();
+  const { search, setSearch } = useDesignBrowse();
+  // The Design panel's one search, across its tabs.
+  const hostSearch = useMemo(
+    () => ({ query: search, onQuery: setSearch }),
+    [search, setSearch]
+  );
   return (
-    <SharedStylesPanel
-      library={classes.library}
-      absence={classes.absence}
-      suppliedClassIds={suppliedClassIds}
-      styleContext={styleContext}
-      tokens={tokens}
-      pageBlocks={pageBlocks}
-      readOnly={!mayChange}
-      access={access}
-      onRename={classes.rename}
-      currentRenameAttempt={classes.currentRenameAttempt}
-      pendingNames={classes.pendingNames}
-      {...(looks === undefined ? {} : { looks })}
-      {...(initialOpenId === undefined ? {} : { initialOpenId })}
-    />
+    <SharedStylesHostSearch.Provider value={hostSearch}>
+      <SharedStylesPanel
+        library={classes.library}
+        absence={classes.absence}
+        suppliedClassIds={suppliedClassIds}
+        styleContext={styleContext}
+        tokens={tokens}
+        pageBlocks={pageBlocks}
+        readOnly={!mayChange}
+        access={access}
+        onRename={classes.rename}
+        currentRenameAttempt={classes.currentRenameAttempt}
+        pendingNames={classes.pendingNames}
+        {...(looks === undefined ? {} : { looks })}
+        {...(initialOpenId === undefined ? {} : { initialOpenId })}
+      />
+    </SharedStylesHostSearch.Provider>
   );
 }
