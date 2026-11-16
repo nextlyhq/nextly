@@ -13,7 +13,6 @@ import type {
 } from "../../../../schemas/dynamic-collections";
 import { selectOptionValues } from "../../../../shared/lib/entry-validation";
 import { getFieldType } from "../../field-types/field-type-registry";
-import { parseColumnType } from "../column-type";
 import {
   type ColumnOrigin,
   DEFAULT_DECIMAL_PRECISION,
@@ -21,6 +20,7 @@ import {
   getColumnDescriptor,
   type SupportedDialect,
 } from "../../services/field-column-descriptor";
+import { parseColumnType } from "../column-type";
 
 /** The families the rules are stated for. */
 export type Family =
