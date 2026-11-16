@@ -162,13 +162,10 @@ describe("partsWritten", () => {
  */
 describe("partKeysOf, for a document without translations of its own", () => {
   it("puts its own fields in the shared part and its components in the language", async () => {
-    const keys = await partKeysOf(
-      [
-        { type: "text", name: "title" },
-        { type: "component", name: "banner", component: "banner" },
-      ],
-      { translated: false }
-    );
+    const banner = { type: "component", name: "banner", component: "banner" };
+    const keys = await partKeysOf([{ type: "text", name: "title" }, banner], {
+      translated: false,
+    });
 
     expect([...keys.language]).toEqual(["banner"]);
     expect([...keys.shared].sort()).toEqual(["slug", "title"]);
