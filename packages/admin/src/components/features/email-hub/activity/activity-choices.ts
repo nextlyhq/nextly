@@ -33,6 +33,15 @@ export function notStoredLabel(type: string): string {
   return `${type} (not stored)`;
 }
 
+/**
+ * How the filter names a choice by type. The log narrows by a provider's type
+ * alone, which takes in every provider of that type, a stored one included,
+ * so the choice says so rather than promising only those not stored.
+ */
+function everyOfTypeLabel(type: string): string {
+  return `Every ${type} provider`;
+}
+
 /** A stored provider the reader cannot see the name of: its type and the start of its id. */
 function unnamedStoredLabel(type: string, id: string): string {
   return `${type} · ${id.slice(0, 8)}`;
@@ -64,8 +73,9 @@ export function templateChoices(
 
 /**
  * The providers to offer: every stored one by name when the reader may read
- * them, else each stored one the loaded rows name, by type and id; then each
- * provider not stored that the rows name, by type; the chosen one always.
+ * them, else each stored one the loaded rows name, by type and id; then, for
+ * each provider not stored that the rows name, every provider of its type;
+ * the chosen one always.
  */
 export function providerChoices(
   stored: ReadonlyArray<{ id: string; name: string }> | undefined,
@@ -82,7 +92,7 @@ export function providerChoices(
     .map(([id, label]) => ({ choice: { id }, label }))
     .sort((a, b) => a.label.localeCompare(b.label));
   for (const type of [...notStored].sort()) {
-    options.push({ choice: { type }, label: notStoredLabel(type) });
+    options.push({ choice: { type }, label: everyOfTypeLabel(type) });
   }
   return options;
 }

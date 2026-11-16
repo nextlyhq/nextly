@@ -51,6 +51,12 @@ const ACTIVITY_PAGE_SIZE = 50;
  */
 const UNSETTLED_POLL_MS = 30_000;
 
+/**
+ * How often a list of settled rows is read again, so email sent or queued
+ * since appears while the tab stays open, however quiet the list was.
+ */
+const SETTLED_POLL_MS = 60_000;
+
 /** How often the overdue check is asked again while the hub is open. */
 const OVERDUE_POLL_MS = 60_000;
 
@@ -175,14 +181,14 @@ export function useEmailActivity(
         ? undefined
         : last.next,
     enabled: options.enabled ?? true,
-    // Read again only while a loaded queued email can still change by itself;
-    // a list of settled rows has nothing new to show until something is sent.
+    // Read again sooner while a loaded queued email can still change by
+    // itself, and every minute otherwise, for email sent or queued since.
     refetchInterval: current =>
       (current.state.data?.pages ?? []).some(page =>
         holdsUnsettledQueued(page.queued)
       )
         ? UNSETTLED_POLL_MS
-        : false,
+        : SETTLED_POLL_MS,
     refetchOnWindowFocus: true,
   });
 

@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 /**
- * Activity's list reads itself again while a queued email it shows can still
- * change by itself (waiting, retrying, sending), so a row never keeps a state
- * the queue has moved past, and stops once every queued row has settled.
+ * Activity's list reads itself again every 30 seconds while a queued email it
+ * shows can still change by itself (waiting, retrying, sending), so a row
+ * never keeps a state the queue has moved past, and every minute once all
+ * have settled, so email sent or queued since still appears.
  *
  * @module hooks/queries/__tests__/useEmailActivity.test
  */
@@ -62,8 +63,9 @@ afterEach(() => {
   listQueuedEmailActivity.mockReset();
 });
 
-async function readsAfterHalfAMinute(
-  state: QueuedEmailActivity["state"]
+async function readsAfter(
+  state: QueuedEmailActivity["state"],
+  ms: number
 ): Promise<number> {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   listDeliveryActivity.mockResolvedValue({ items: [], meta: EMPTY_META });
@@ -78,17 +80,21 @@ async function readsAfterHalfAMinute(
   await waitFor(() => expect(result.current.rows).toHaveLength(1));
   const before = listQueuedEmailActivity.mock.calls.length;
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(31_000);
+    await vi.advanceTimersByTimeAsync(ms);
   });
   return listQueuedEmailActivity.mock.calls.length - before;
 }
 
 describe("useEmailActivity", () => {
-  it("reads the list again while a queued email it shows is still waiting", async () => {
-    expect(await readsAfterHalfAMinute("waiting")).toBeGreaterThan(0);
+  it("reads the list again within 30 seconds while a queued email it shows is still waiting", async () => {
+    expect(await readsAfter("waiting", 31_000)).toBeGreaterThan(0);
   });
 
-  it("does not read it again once every queued email it shows has settled", async () => {
-    expect(await readsAfterHalfAMinute("sent")).toBe(0);
+  it("reads a settled list again less often, not within 30 seconds", async () => {
+    expect(await readsAfter("sent", 31_000)).toBe(0);
+  });
+
+  it("still reads a settled list again within a minute, for email sent since", async () => {
+    expect(await readsAfter("sent", 61_000)).toBeGreaterThan(0);
   });
 });

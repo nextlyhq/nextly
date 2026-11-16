@@ -85,7 +85,7 @@ describe("templateChoices", () => {
 });
 
 describe("providerChoices", () => {
-  it("offers stored providers by name, and one not stored by type, never as deleted", () => {
+  it("offers stored providers by name, and for one not stored every provider of its type, never as deleted", () => {
     expect(
       providerChoices(
         [{ id: "11111111-aaaa-bbbb-cccc-000000000000", name: "Resend (main)" }],
@@ -97,7 +97,7 @@ describe("providerChoices", () => {
         choice: { id: "11111111-aaaa-bbbb-cccc-000000000000" },
         label: "Resend (main)",
       },
-      { choice: { type: "smtp" }, label: "smtp (not stored)" },
+      { choice: { type: "smtp" }, label: "Every smtp provider" },
     ]);
   });
 
@@ -107,13 +107,13 @@ describe("providerChoices", () => {
         choice: { id: "11111111-aaaa-bbbb-cccc-000000000000" },
         label: "resend · 11111111",
       },
-      { choice: { type: "smtp" }, label: "smtp (not stored)" },
+      { choice: { type: "smtp" }, label: "Every smtp provider" },
     ]);
   });
 
   it("keeps offering the chosen provider when no row names it", () => {
     expect(providerChoices(undefined, [], { type: "postmark" })).toEqual([
-      { choice: { type: "postmark" }, label: "postmark (not stored)" },
+      { choice: { type: "postmark" }, label: "Every postmark provider" },
     ]);
     expect(
       providerChoices(undefined, [], { id: "p9" }).map(option => option.choice)
