@@ -13,7 +13,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import type React from "react";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { z } from "zod";
 
 import {
@@ -26,8 +26,14 @@ import {
   type ActiveOverlay,
   type BuilderSettingsValues,
 } from "@admin/components/features/schema-builder";
+import { checkAddressAgain } from "@admin/components/features/schema-builder/new-entity/useAddressCheck";
 import { toast } from "@admin/components/ui";
-import { useSingleSchema, useUpdateSingle } from "@admin/hooks/queries";
+import { ROUTES, buildRoute } from "@admin/constants/routes";
+import {
+  useCreateSingle,
+  useSingleSchema,
+  useUpdateSingle,
+} from "@admin/hooks/queries";
 import { useBuilderEntityState } from "@admin/hooks/useBuilderEntityState";
 import { useBuilderFieldActions } from "@admin/hooks/useBuilderFieldActions";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
@@ -38,8 +44,17 @@ import {
   mirrorSchemaFile,
   useSchemaSave,
 } from "@admin/hooks/useSchemaSave";
+import { createPreview } from "@admin/lib/builder/create-preview";
+import { singleCreatePayload } from "@admin/lib/builder/create-request";
 import { settingsAreDirty } from "@admin/lib/builder/settings-dirty";
 import { singleEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
+import { hasPageBuilderField } from "@admin/lib/builder/starting-field";
+import {
+  removeUnsavedEntity,
+  type UnsavedEntity,
+  useUnsavedEntity,
+} from "@admin/lib/builder/unsaved-entities";
+import { navigateTo } from "@admin/lib/navigation";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 import { singleApi } from "@admin/services/singleApi";
 import type { FieldDefinition } from "@admin/types/collection";
@@ -94,6 +109,22 @@ function singleSettings(single: ApiSingle): BuilderSettingsValues {
   };
 }
 
+/**
+ * A Single created in the dialog and not saved yet, in the shape the page loads
+ * a saved one in. Nothing of it is stored, so it has no table or timestamps.
+ */
+function unsavedSingle(entity: UnsavedEntity): ApiSingle {
+  return {
+    id: `unsaved:single:${entity.address}`,
+    slug: entity.address,
+    label: entity.settings.singularName,
+    tableName: "",
+    fields: entity.fields,
+    createdAt: "",
+    updatedAt: "",
+  };
+}
+
 interface SingleBuilderEditPageProps {
   params?: { slug?: string };
 }
@@ -106,7 +137,18 @@ export default function SingleBuilderEditPage({
   params,
 }: SingleBuilderEditPageProps): React.ReactElement {
   const slug = params?.slug;
-  const { data: single, isLoading, error } = useSingleSchema(slug);
+  // A Single created in the dialog waits in this tab until its first save;
+  // the server has nothing under its address to read.
+  const unsaved = useUnsavedEntity("single", slug ?? "");
+  const {
+    data: savedSingle,
+    isLoading,
+    error,
+  } = useSingleSchema(unsaved ? undefined : slug);
+  const single = useMemo(
+    () => (unsaved ? unsavedSingle(unsaved) : savedSingle),
+    [unsaved, savedSingle]
+  );
   // The tab names the Single being edited once it has arrived.
   useDocumentTitle(single ? singleName(single) : undefined);
 
@@ -120,7 +162,10 @@ export default function SingleBuilderEditPage({
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
   const confirmation = useSchemaChangeConfirmation();
 
-  const { mutate: updateSingle, isPending: isSaving } = useUpdateSingle();
+  const { mutate: updateSingle, isPending: isUpdating } = useUpdateSingle();
+  const { mutateAsync: createSingle, isPending: isCreating } =
+    useCreateSingle();
+  const isSaving = isUpdating || isCreating;
 
   const {
     settings,
@@ -135,10 +180,14 @@ export default function SingleBuilderEditPage({
     entity: single,
     builder,
     toFields: loaded => loaded.fields ?? [],
-    toSettings: singleSettings,
+    // An unsaved Single opens with what the dialog set.
+    toSettings: loaded => unsaved?.settings ?? singleSettings(loaded),
     isDirty: settingsAreDirty,
     onLoad: loaded => builder.form.reset({ singularName: singleName(loaded) }),
-    identity: loaded => loaded.slug,
+    // A saved Single is known by its slug, which an unsaved one shares; its
+    // id tells them apart, so once saved the editor loads the server's afresh.
+    identity: loaded => (unsaved ? loaded.id : loaded.slug),
+    unsaved: unsaved !== undefined,
   });
 
   const isLocked = single?.locked === true;
@@ -277,6 +326,38 @@ export default function SingleBuilderEditPage({
 
   // i18n: preview and apply carry the same toggle, so the resolutions the user
   // is asked for match the DDL that actually runs.
+  // The first save of an unsaved Single is its create: reviewed from the
+  // fields it will be created with, its address checked once more (another
+  // tab may have saved one under it), then created with every field and
+  // setting. A refusal at either step creates nothing and keeps it unsaved.
+  const createUnsaved = useCallback(
+    async (fields: FieldDefinition[]) => {
+      if (!settings) return { success: false };
+      const refused = await checkAddressAgain("single", entitySlug);
+      if (refused !== null) return { success: false, message: refused };
+      await createSingle(singleCreatePayload(entitySlug, settings, fields));
+      return { success: true };
+    },
+    [settings, entitySlug, createSingle]
+  );
+
+  // Created: the file mirror follows the create, and this tab lets the
+  // unsaved Single go, so the editor reads the server's from now on.
+  const onCreated = useCallback(
+    async (fieldDefinitions: FieldDefinition[]) => {
+      if (!settings) return;
+      await mirrorSchemaFile(
+        () =>
+          schemaFileApi.writeSingle(
+            singleEntityFromSettings(entitySlug, settings, fieldDefinitions)
+          ),
+        "Single created"
+      );
+      removeUnsavedEntity("single", entitySlug);
+    },
+    [settings, entitySlug]
+  );
+
   const { handleSave, confirmApply } = useSchemaSave({
     slug,
     missingSlugMessage: "Single slug is missing",
@@ -286,21 +367,42 @@ export default function SingleBuilderEditPage({
     // saved field's storage level is refused before it can lose values.
     getValidatedFields: () => getValidatedFields(pending.saved),
     preview: fields =>
-      singleApi.previewSchemaChanges(entitySlug, fields, localized, drafts),
+      unsaved
+        ? Promise.resolve(createPreview(fields))
+        : singleApi.previewSchemaChanges(entitySlug, fields, localized, drafts),
     apply: (fields, version, resolutions, renames) =>
-      singleApi.applySchemaChanges(
-        entitySlug,
-        fields,
-        version,
-        resolutions,
-        renames,
-        localized,
-        drafts
-      ),
+      unsaved
+        ? createUnsaved(fields)
+        : singleApi.applySchemaChanges(
+            entitySlug,
+            fields,
+            version,
+            resolutions,
+            renames,
+            localized,
+            drafts
+          ),
     onNoChanges: saveSettingsOnly,
-    onApplied: onSchemaApplied,
+    onApplied: unsaved ? onCreated : onSchemaApplied,
     previewedWith: { localized },
   });
+
+  // Discard all on an unsaved Single discards the Single itself: it leaves
+  // this tab, and the editor returns to the list.
+  const pendingChanges = useMemo(
+    () =>
+      unsaved
+        ? {
+            ...pending,
+            discardLeaves: true,
+            discardAll: () => {
+              removeUnsavedEntity("single", entitySlug);
+              navigateTo(ROUTES.BUILDER_SINGLES);
+            },
+          }
+        : pending,
+    [unsaved, pending, entitySlug]
+  );
 
   // ---------------------------- Loading / error guards ----------------------
 
@@ -332,7 +434,17 @@ export default function SingleBuilderEditPage({
       locked={isLocked}
       configPath={single?.configPath}
       unsavedCount={unsavedCount}
-      pending={pending}
+      pending={pendingChanges}
+      pageBuilderHref={
+        // Once saved, an entity laid out from blocks opens in the Page Builder
+        // from a new entry (a Single, from its document).
+        !unsaved && hasPageBuilderField(pending.saved)
+          ? buildRoute(ROUTES.SINGLE_EDIT, { slug: entitySlug })
+          : undefined
+      }
+      onDiscard={
+        unsaved ? () => removeUnsavedEntity("single", entitySlug) : undefined
+      }
       savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}
@@ -356,6 +468,7 @@ export default function SingleBuilderEditPage({
         kind={SINGLE_BUILDER_CONFIG.kind}
         entityName={slug}
         onConfirm={confirmApply}
+        creating={unsaved !== undefined}
       />
     </BuilderPageLayout>
   );
