@@ -13,9 +13,11 @@ import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import { generateStatements } from "../pipeline/sql-templates";
 
 import {
+  proveStatements,
   refuseUnlessProven,
   statementsShownBySnapshot,
 } from "./snapshot-proof";
+import type { LiveSchema } from "./statement-judgement";
 
 const posts = (
   ...columns: string[]
@@ -439,5 +441,108 @@ describe("statementsShownBySnapshot: what passes the first condition", () => {
         dialect
       ).toEqual([]);
     }
+  });
+});
+
+describe("proveStatements: rows a statement fills with its default", () => {
+  /** A live schema holding every object, each usable: the statements' schema effect is there. */
+  const everything: LiveSchema = {
+    hasTable: () => true,
+    hasColumn: () => true,
+    hasIndex: () => true,
+    hasConstraint: () => true,
+    usable: () => true,
+  };
+
+  /** The statuses `proveStatements` gives, with `nulls` NULL rows in every column it counts. */
+  async function prove(
+    statements: string[],
+    dialect: SupportedDialect,
+    nulls: number
+  ): Promise<{ statuses: string[]; counted: string[] }> {
+    const counted: string[] = [];
+    const proofs = await proveStatements({
+      statements,
+      dialect,
+      sides,
+      live: {
+        schema: everything,
+        nullsIn: (table, column) => {
+          counted.push(`${table}.${column}`);
+          return Promise.resolve(nulls);
+        },
+      },
+    });
+    return { statuses: proofs.map(proof => proof.status), counted };
+  }
+
+  const ADD_NOTE = `ALTER TABLE "dc_posts" ADD COLUMN "note" varchar(32) DEFAULT 'n'`;
+
+  it("is not proven where rows it would have filled are still NULL", async () => {
+    expect(await prove([ADD_NOTE], "postgresql", 2)).toEqual({
+      statuses: ["unfilled"],
+      counted: ["dc_posts.note"],
+    });
+  });
+
+  it("is proven where no row is NULL there: filled by db:sync, or an empty table", async () => {
+    expect((await prove([ADD_NOTE], "postgresql", 0)).statuses).toEqual([
+      "shown",
+    ]);
+  });
+
+  it("counts nothing for a NOT NULL column, or a default of NULL, which leave no row to fill", async () => {
+    expect(
+      await prove(
+        [
+          `ALTER TABLE "dc_posts" ADD COLUMN "state" varchar(32) NOT NULL DEFAULT 'draft'`,
+          `ALTER TABLE "dc_posts" ADD COLUMN "note" varchar(32) DEFAULT NULL`,
+          'ALTER TABLE "dc_posts" ADD COLUMN "slug" text',
+        ],
+        "postgresql",
+        5
+      )
+    ).toEqual({ statuses: ["shown", "shown", "shown"], counted: [] });
+  });
+
+  it("counts a SQLite rebuild's new column its copy leaves to the default", async () => {
+    const statements = [
+      `CREATE TABLE "__new_dc_posts" ("id" text NOT NULL, "title" text, "note" text DEFAULT 'n')`,
+      'INSERT INTO "__new_dc_posts" ("id", "title") SELECT "id", "title" FROM "dc_posts"',
+      'DROP TABLE "dc_posts"',
+      'ALTER TABLE "__new_dc_posts" RENAME TO "dc_posts"',
+    ];
+    expect(await prove(statements, "sqlite", 1)).toEqual({
+      statuses: ["shown", "unfilled", "shown", "shown"],
+      counted: ["dc_posts.note"],
+    });
+  });
+
+  it("names such a statement in the refusal", async () => {
+    let error: unknown;
+    try {
+      refuseUnlessProven({
+        file: { filename: "20261116_add_note.sql", sha256: CHECKSUM },
+        proof: {
+          statements: await proveStatements({
+            statements: [ADD_NOTE],
+            dialect: "postgresql",
+            sides,
+            live: { schema: everything, nullsIn: () => Promise.resolve(3) },
+          }),
+          recordedChecksum: CHECKSUM,
+        },
+        attempt: undefined,
+      });
+    } catch (thrown) {
+      error = thrown;
+    }
+    const message = (error as NextlyError).publicMessage;
+    expect(message).toContain(
+      "the database holds rows 1 statement would have filled with its default, still NULL"
+    );
+    expect(message).toContain(
+      'ALTER TABLE "dc_posts" ADD COLUMN "note" varchar(32) DEFAULT (rows it fills with its default are still NULL)'
+    );
   });
 });

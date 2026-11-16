@@ -187,7 +187,7 @@ import {
   constructsAdded,
   refuseUnitTheServerCannotHold,
 } from "../../domains/schema/migrate/server-constructs";
-import { statementsShownBySnapshot } from "../../domains/schema/migrate/snapshot-proof";
+import { proveStatements } from "../../domains/schema/migrate/snapshot-proof";
 import {
   assertRunnableStatements,
   marksNoTransaction,
@@ -195,10 +195,7 @@ import {
   statementRefusals,
 } from "../../domains/schema/migrate/split-sql";
 import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
-import {
-  judgeStatements,
-  readLiveSchema,
-} from "../../domains/schema/migrate/statement-judgement";
+import { readLiveSchema } from "../../domains/schema/migrate/statement-judgement";
 import {
   adoptUniqueIndexesAlreadyThere,
   type AdoptedUniqueIndex,
@@ -4842,16 +4839,21 @@ export async function runFileMigrations(args: {
         // against the live database too: the snapshot comparison cannot see an index left invalid
         // or a constraint not validated.
         snapshotProof: async () => ({
-          statements: statementsShownBySnapshot(
-            upStatements,
+          statements: await proveStatements({
+            statements: upStatements,
             dialect,
-            { before, target },
-            judgeStatements(
-              upStatements,
-              dialect,
-              await readLiveSchema(db, dialect, upStatements)
-            )
-          ),
+            sides: { before, target },
+            live: {
+              schema: await readLiveSchema(db, dialect, upStatements),
+              // Loaded where it is used, as the core upgrade loads it: most runs never reach here.
+              nullsIn: async (table, column) => {
+                const { countNulls } = await import(
+                  "../../domains/schema/pipeline/classifier/count-helpers"
+                );
+                return countNulls(db, dialect, table, column);
+              },
+            },
+          }),
           recordedChecksum: targetFile?.migrationHash ?? "",
         }),
       });

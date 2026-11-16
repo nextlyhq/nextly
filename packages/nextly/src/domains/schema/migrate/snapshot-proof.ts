@@ -53,7 +53,12 @@ import {
   StatementCursor,
   type StatementToken,
 } from "./statement-cursor";
-import { labelOf, type JudgedStatement } from "./statement-judgement";
+import {
+  judgeStatements,
+  labelOf,
+  type JudgedStatement,
+  type LiveSchema,
+} from "./statement-judgement";
 import { registryRowWrittenBy } from "./statement-targets";
 
 /** One statement of a pending file, as the refusal names it. */
@@ -66,7 +71,172 @@ interface StatementProof {
    * not stand as it leaves it (`judgeStatements`): an index left invalid, a constraint not
    * validated, an object absent.
    */
-  status: "shown" | "unshown" | "not-done";
+  status: "shown" | "unshown" | "not-done" | "unfilled";
+}
+
+/** A column a statement fills, in every row the table already holds, with its default. */
+interface FilledColumn {
+  table: string;
+  column: string;
+}
+
+/** What the live database says of a pending file's statements, where it stands at the file's end. */
+export interface LiveFacts {
+  /** The live schema the statements are judged against (`readLiveSchema`). */
+  schema: LiveSchema;
+  /** How many rows hold NULL in `column` of `table` (`countNulls`). */
+  nullsIn: (table: string, column: string) => Promise<number>;
+}
+
+/**
+ * Each statement of a pending file the database stands at the end of, with what proves it
+ * (`statementsShownBySnapshot`), the live database's word on it (`judgeStatements`), and, for a
+ * statement that fills a nullable column's rows with its default, that no row still holds NULL
+ * there: a database brought to the same schema by adding the column and setting its default
+ * afterwards has the default and not the rows it would have filled. One count per such column, and
+ * only here.
+ */
+export async function proveStatements(args: {
+  statements: readonly string[];
+  dialect: SupportedDialect;
+  sides: { before: NextlySchemaSnapshot; target: NextlySchemaSnapshot };
+  live: LiveFacts;
+}): Promise<StatementProof[]> {
+  const { statements, dialect, live } = args;
+  const proofs = statementsShownBySnapshot(
+    statements,
+    dialect,
+    args.sides,
+    judgeStatements(statements, dialect, live.schema)
+  );
+  const filled = columnsFilledBy(statements, dialect);
+  for (const [at, proof] of proofs.entries()) {
+    if (proof.status !== "shown") continue;
+    for (const { table, column } of filled[at]) {
+      if ((await live.nullsIn(table, column)) > 0) {
+        proofs[at] = { ...proof, status: "unfilled" };
+        break;
+      }
+    }
+  }
+  return proofs;
+}
+
+/**
+ * For each statement, the nullable columns it fills with a default in every row its table holds:
+ * an `ALTER TABLE ... ADD [COLUMN] c ... DEFAULT <value>`, and a column with a default that a SQLite
+ * rebuild's twin has and its copy does not fill. A NOT NULL column holds no NULL to find, so it is
+ * not counted.
+ */
+function columnsFilledBy(
+  statements: readonly string[],
+  dialect: SupportedDialect
+): FilledColumn[][] {
+  const filled = statements.map(statement =>
+    columnsAddedWithDefault(statement, dialect)
+  );
+  for (const at of rebuildCopyStatements(statements, dialect)) {
+    filled[at] = twinColumnsLeftToDefault(
+      statements[at - 1],
+      statements[at],
+      dialect
+    );
+  }
+  return filled;
+}
+
+/** `ALTER TABLE t ADD [COLUMN] [IF NOT EXISTS] c ... DEFAULT <value>` clauses, nullable ones. */
+function columnsAddedWithDefault(
+  statement: string,
+  dialect: SupportedDialect
+): FilledColumn[] {
+  const cursor = cursorOf(statement, dialect, EXACT);
+  if (!cursor.accept("ALTER", "TABLE")) return [];
+  cursor.acceptCondition();
+  if (dialect === "postgresql") cursor.accept("ONLY");
+  const table = cursor.name();
+  if (table === undefined) return [];
+  return cursor.clauses().flatMap(tokens => {
+    const clause = new StatementCursor(tokens);
+    if (!clause.accept("ADD")) return [];
+    clause.accept("COLUMN");
+    clause.acceptCondition();
+    const column = clause.name();
+    return column !== undefined && fillsWithDefault(clause.rest())
+      ? [{ table, column }]
+      : [];
+  });
+}
+
+/**
+ * The columns of a SQLite rebuild's twin (`create`) that have a default and that its copy
+ * (`copy`) does not fill: every row the table held takes the default in them.
+ */
+function twinColumnsLeftToDefault(
+  create: string,
+  copy: string,
+  dialect: SupportedDialect
+): FilledColumn[] {
+  const twin = createdTable(create, dialect);
+  const copied = new Set(copiedColumns(copy, dialect));
+  if (twin === undefined) return [];
+  const table = twin.replace(/^__new_/, "");
+  return columnDefinitions(create, dialect)
+    .filter(([column, rest]) => !copied.has(column) && fillsWithDefault(rest))
+    .map(([column]) => ({ table, column }));
+}
+
+/** Each column a `CREATE TABLE` body defines, with the tokens after its name. */
+function columnDefinitions(
+  create: string,
+  dialect: SupportedDialect
+): Array<[string, StatementToken[]]> {
+  const cursor = cursorOf(create, dialect, EXACT);
+  cursor.accept("CREATE", "TABLE");
+  cursor.acceptCondition();
+  if (cursor.name() === undefined || !cursor.accept("(")) return [];
+  const body = cursor.rest();
+  const close = body.lastIndexOf(")");
+  return new StatementCursor(body.slice(0, close)).clauses().flatMap(tokens => {
+    const definition = new StatementCursor(tokens);
+    const first = definition.peek();
+    if (typeof first === "string" && TABLE_CONSTRAINT_WORDS.has(first)) {
+      return [];
+    }
+    const column = definition.name();
+    return column === undefined ? [] : [[column, definition.rest()]];
+  });
+}
+
+/** Words opening a table constraint in a `CREATE TABLE` body, not a column. */
+const TABLE_CONSTRAINT_WORDS = new Set([
+  "CONSTRAINT",
+  "PRIMARY",
+  "UNIQUE",
+  "FOREIGN",
+  "CHECK",
+]);
+
+/** The columns an `INSERT INTO t (a, b) ...` names. */
+function copiedColumns(copy: string, dialect: SupportedDialect): string[] {
+  const cursor = cursorOf(copy, dialect, EXACT);
+  if (!cursor.accept("INSERT", "INTO") || cursor.name() === undefined) {
+    return [];
+  }
+  return cursor.accept("(") ? (cursor.names() ?? []) : [];
+}
+
+/**
+ * Whether a column definition's tail gives it a default other than NULL while leaving it nullable:
+ * the rows it fills could have been left NULL by another way to the same schema.
+ */
+function fillsWithDefault(tail: readonly StatementToken[]): boolean {
+  const at = tail.indexOf("DEFAULT");
+  if (at === -1 || tail[at + 1] === "NULL") return false;
+  const notNull = tail.some(
+    (token, i) => token === "NOT" && tail[i + 1] === "NULL"
+  );
+  return !notNull && !tail.includes("PRIMARY");
 }
 
 /** Verdicts of the live database that say a statement's effect is not there (`judgeStatements`). */
@@ -641,6 +811,7 @@ const MARKS: Record<StatementProof["status"], string> = {
   shown: "the database has it",
   unshown: "not shown by its snapshot",
   "not-done": "the database does not stand as it leaves it",
+  unfilled: "rows it fills with its default are still NULL",
 };
 
 /** `n` statements, in words. */
@@ -672,6 +843,11 @@ function reasonsOf(
   if (count("unshown") > 0) {
     why.push(
       `its snapshot does not show what ${statementCount(count("unshown"))} ${count("unshown") === 1 ? "does" : "do"}`
+    );
+  }
+  if (count("unfilled") > 0) {
+    why.push(
+      `the database holds rows ${statementCount(count("unfilled"))} would have filled with ${count("unfilled") === 1 ? "its default" : "their defaults"}, still NULL`
     );
   }
   if (count("not-done") > 0) {

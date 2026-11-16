@@ -362,6 +362,58 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    /** `name`'s snapshot, its table as the live database holds it now: where the file ends. */
+    async function retarget(name: string): Promise<void> {
+      const file = JSON.parse(await readFile(snapshotPath(name), "utf8")) as {
+        snapshot: NextlySchemaSnapshot;
+      };
+      const live = await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [
+        TABLE,
+      ]);
+      file.snapshot.tables = file.snapshot.tables.map(table =>
+        table.name === TABLE ? live.tables[0] : table
+      );
+      await writeFile(snapshotPath(name), JSON.stringify(file, null, 2));
+    }
+
+    it.each([
+      ["refuses it where rows it would have filled are still NULL", "nulled"],
+      ["records it where db:sync filled every row", "filled"],
+      ["records it over an empty table", "empty"],
+    ] as const)(
+      "a file adding a nullable column with a default: %s",
+      async (_case, rows) => {
+        if (rows === "empty") await query(`DELETE FROM ${q(TABLE)}`);
+        await dbSync(true);
+        // The column the file adds, already in the database with its default: added with it,
+        // which fills every row, and for `nulled` emptied again, as adding the column first and
+        // setting its default afterwards would leave it.
+        const addNote = `ALTER TABLE ${q(TABLE)} ADD COLUMN ${q("note")} varchar(32) DEFAULT 'n'`;
+        await query(addNote);
+        if (rows === "nulled") {
+          await query(`UPDATE ${q(TABLE)} SET ${q("note")} = NULL`);
+        }
+        const text = await withUp(two, [addNote]);
+        await writeFile(sqlPath(two), text);
+        await rehash(two, text);
+        await retarget(two);
+
+        if (rows !== "nulled") {
+          await migrate();
+          expect(await ledger(two)).toEqual([
+            { status: "applied", statementsExecuted: 0 },
+          ]);
+          return;
+        }
+        const error = await refusal();
+        expect(error.code).toBe("NEXTLY_MIGRATION_NOT_PROVEN");
+        expect(error.publicMessage).toContain(
+          `ADD COLUMN ${q("note")} varchar(32) DEFAULT (rows it fills with its default are still NULL)`
+        );
+        expect(await ledger(two)).toEqual([]);
+      }
+    );
+
     it("runs the edited file whole where the database stands at its start, backfilling the column", async () => {
       const backfill = `UPDATE ${q(TABLE)} SET ${q("summary")} = 'backfilled'`;
       await writeFile(sqlPath(two), await withUp(two, [backfill]));
