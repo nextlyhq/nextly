@@ -100,11 +100,31 @@ describe("what the shared sheet carries", () => {
 });
 
 describe("the content-width rule", () => {
-  it("constrains the class the container block applies, and centres it", () => {
+  it("pads the content of the class the container block applies in to the content width", () => {
+    // The box is never narrowed: no width, no centring margin. Its inline
+    // padding is the inset to the content width, with the gutter as the least.
     const css = sheet({ tokens: { tokens: [WIDTH_TOKEN] } }).css;
     expect(css).toContain(
-      ".nx-pb-page :where(.nx-pb-contained){max-width:var(--site-content-width);margin-inline:auto}"
+      '@property --nx-contain-inset{syntax:"<length-percentage>";inherits:false;initial-value:0px}'
     );
+    expect(css).toContain(".nx-pb-page :where(*){--nx-contain-inset:0px}");
+    expect(css).toContain(
+      ".nx-pb-page :where(.nx-pb-contained){--nx-contain-inset:max(0px, (100% - var(--site-content-width)) / 2);padding-inline:max(var(--site-space-gutter, 0px), var(--nx-contain-inset))}"
+    );
+    expect(css).not.toContain("max-width");
+    expect(css).not.toContain("margin-inline");
+  });
+
+  it("sets the inset on a contained element after the reset that zeroes it", () => {
+    // Both weigh 0-1-0, so order decides: the contained rule must come after
+    // the reset or every contained element would be inset by nothing.
+    const css = sheet({ tokens: { tokens: [WIDTH_TOKEN] } }).css;
+    const reset = css.indexOf(":where(*){--nx-contain-inset:0px}");
+    const contained = css.indexOf(":where(.nx-pb-contained){--nx-contain-inset:");
+    expect(reset).toBeGreaterThan(-1);
+    expect(contained).toBeGreaterThan(reset);
+    // And the registration comes first, at the sheet's top level.
+    expect(css.indexOf("@property --nx-contain-inset")).toBeLessThan(reset);
   });
 
   it("reads the property under the prefix the tokens were declared with", () => {
@@ -151,7 +171,7 @@ describe("the content-width rule", () => {
 
   it("weighs nothing, so anything an author states beats it", () => {
     // `:where()` is the whole mechanism. Without it a site default would beat a
-    // node's own max-width whenever the node's rule did not out-specify it.
+    // node's own padding whenever the node's rule did not out-specify it.
     expect(sheet({ tokens: { tokens: [WIDTH_TOKEN] } }).css).toContain(
       ":where(.nx-pb-contained)"
     );
@@ -177,9 +197,8 @@ describe("the content-width rule", () => {
   it.each(["none", "inherit", "initial", "unset", "auto"])(
     "writes nothing when the width is %s, which bounds nothing",
     width => {
-      // Legal for `max-width` and no maximum at all, so `margin-inline: auto`
-      // would centre a node that has an authored width and nothing bounding
-      // it — the failure the whole gate exists to refuse.
+      // Legal for `max-width` and no maximum at all, so there is no width to
+      // inset the content to — the case the whole gate withholds the rule for.
       const unbounded = {
         id: "content.width",
         name: "content.width",
@@ -188,7 +207,7 @@ describe("the content-width rule", () => {
       } as never;
       const css = sheet({ tokens: { tokens: [unbounded] } }).css;
       expect(css).not.toContain("nx-pb-contained");
-      expect(css).not.toContain("margin-inline");
+      expect(css).not.toContain("--nx-contain-inset");
     }
   );
 
@@ -207,7 +226,7 @@ describe("the content-width rule", () => {
       } as never;
       const css = sheet({ tokens: { tokens: [dynamic] } }).css;
       expect(css).not.toContain("nx-pb-contained");
-      expect(css).not.toContain("margin-inline");
+      expect(css).not.toContain("--nx-contain-inset");
     }
   );
 
@@ -226,7 +245,7 @@ describe("the content-width rule", () => {
       } as never;
       const css = sheet({ tokens: { tokens: [bogus] } }).css;
       expect(css).not.toContain("nx-pb-contained");
-      expect(css).not.toContain("margin-inline");
+      expect(css).not.toContain("--nx-contain-inset");
     }
   );
 
@@ -252,8 +271,7 @@ describe("the content-width rule", () => {
   it("writes nothing when the width token's VALUE does not suit its kind", () => {
     // A token may declare itself a dimension and carry a colour. The emitter
     // writes it as given and says so in a warning — so the property is
-    // declared and useless, `max-width` drops, and `margin-inline: auto`
-    // beside it centres a node with nothing bounding it.
+    // declared and useless, and an inset computed from it contains nothing.
     const badValue = {
       id: "content.width",
       name: "content.width",
@@ -262,14 +280,13 @@ describe("the content-width rule", () => {
     } as never;
     const css = sheet({ tokens: { tokens: [badValue] } }).css;
     expect(css).not.toContain("nx-pb-contained");
-    expect(css).not.toContain("margin-inline");
+    expect(css).not.toContain("--nx-contain-inset");
   });
 
   it("writes nothing when the width token is not a dimension", () => {
     // The emitter declares whatever it is given, so a colour carrying this
-    // identity still produces `--site-content-width`. `max-width: #ff0000` is
-    // then invalid and drops, while `margin-inline: auto` beside it survives —
-    // centring a contained node with nothing bounding it.
+    // identity still produces `--site-content-width`. An inset computed from
+    // `#ff0000` is then invalid, and a rule that contains nothing.
     const wrongKind = {
       id: "content.width",
       name: "content.width",
@@ -278,14 +295,13 @@ describe("the content-width rule", () => {
     } as never;
     const css = sheet({ tokens: { tokens: [wrongKind] } }).css;
     expect(css).not.toContain("nx-pb-contained");
-    expect(css).not.toContain("margin-inline");
+    expect(css).not.toContain("--nx-contain-inset");
   });
 
   it("writes nothing when the emitter REFUSED the width token", () => {
     // Derived from what the emitter wrote rather than from what the caller
     // passed. A token the emitter rejects declares no property, so the rule
-    // would otherwise reference nothing — dropping `max-width` and leaving
-    // `margin-inline: auto` to centre a node with no bound.
+    // would otherwise reference nothing: a rule that contains nothing.
     const refused = {
       name: "content.width",
       kind: "dimension",
@@ -296,14 +312,11 @@ describe("the content-width rule", () => {
   });
 
   it("writes nothing at all when the token set omits the width", () => {
-    // Half of this rule is worse than none: an undeclared custom property
-    // invalidates only its own declaration, so `max-width` would drop while
-    // `margin-inline: auto` survived — centring a contained node that carries a
-    // width of its own, in the configuration documented as producing NO
-    // containment.
+    // A rule reading a width nothing declares contains nothing, so none of it
+    // is written: no registration, no reset and no inset.
     const css = sheet({ tokens: { tokens: [] } }).css;
     expect(css).not.toContain("nx-pb-contained");
-    expect(css).not.toContain("margin-inline");
+    expect(css).not.toContain("--nx-contain-inset");
   });
 
   it("states no width of its own when the token set omits one", () => {
@@ -312,7 +325,13 @@ describe("the content-width rule", () => {
     // place it cannot see.
     const css = sheet({ tokens: { tokens: [WIDTH_TOKEN] } }).css;
     const rule = css.slice(css.indexOf(":where(.nx-pb-contained)"));
-    expect(rule.slice(0, rule.indexOf("}"))).not.toMatch(/rem|px|%/);
+    const body = rule.slice(0, rule.indexOf("}"));
+    expect(body).toContain("var(--site-content-width)");
+    // `0px` (no inset, no gutter) and `100%` (the box's own width) are the
+    // only literals: neither is a content width.
+    expect(body.replaceAll("0px", "").replaceAll("100%", "")).not.toMatch(
+      /rem|px|%/
+    );
   });
 });
 

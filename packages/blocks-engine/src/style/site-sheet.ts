@@ -21,7 +21,7 @@ import type {
 } from "../document";
 import type { ValidationIssue } from "../validation";
 
-import { compilePageCss } from "./compile-page";
+import { CONTAIN_INSET_PROPERTY, compilePageCss } from "./compile-page";
 import type { MayFetchUrl } from "./css-value";
 import { compileStyleValues, tokenCustomProperty } from "./declarations";
 import type { NamedClass } from "./named-class";
@@ -129,6 +129,9 @@ const TOKEN_SELECTOR = ":root";
  */
 const CONTENT_WIDTH_TOKEN = "content.width";
 
+/** The token that sets the least space beside a contained container's content. */
+const GUTTER_TOKEN = "space.gutter";
+
 /**
  * Values that are legal for `max-width` and bound nothing.
  *
@@ -177,8 +180,22 @@ function documentUsingEveryType(
 /**
  * The rule behind the content-width class.
  *
- * `margin-inline` rather than `margin: 0 auto`, so the centring follows writing
- * direction and leaves any block-direction margin an author set alone.
+ * **The box is never narrowed; its content is padded in.** A contained
+ * container stays one element drawn full width, its background included, and
+ * its inline padding brings its content in to the content width:
+ * `max(<gutter>, (100% - <content width>) / 2)` at each side. One element,
+ * because flow, flex and grid all lay out the container's own children, and an
+ * author's selectors and the canvas's marks address that element.
+ *
+ * The inset travels in `--nx-contain-inset`, which this rule sets on a
+ * contained element and to `0px` on every other element of the page. The
+ * engine writes every inline padding as at least that inset
+ * (`withContainInset` in `compile-page`), so the value an author or a block
+ * default sets replaces the gutter and can widen the inset, but never undoes
+ * the containment. The property is registered as not inherited, and the reset
+ * says the same for a browser that ignores the registration, so a block inside
+ * a contained one is never inset by it. Logical padding, so the inset follows
+ * the writing direction.
  *
  * **No fallback width, deliberately.** A site whose token set omits
  * `content.width` gets no rule at all, which is the same posture the rest of
@@ -186,18 +203,15 @@ function documentUsingEveryType(
  * than invented. A literal here would hand a site that deliberately removed the
  * token a width from a place it cannot see.
  *
- * **The two declarations stand or fall together, which is why the CALLER gates
- * on the token rather than this function emitting an unusable half.** An
- * undeclared custom property invalidates its own declaration and nothing else,
- * so a rule written without the token would drop `max-width` and keep
- * `margin-inline: auto` — centring a contained node that has an authored width
- * of its own, in exactly the configuration documented as producing no
- * containment. Centring is not the smaller half of this rule; it is a separate
- * effect that only makes sense once a width bounds it.
+ * **Withheld whole when the width bounds nothing.** An inset computed from a
+ * width that is not one is invalid at computed-value time, and the registered
+ * property then falls to `0px`: harmless, but a rule that contains nothing.
+ * So the rule is written only when the width is usable, and a site without one
+ * gets none of it.
  *
  * Wrapped in `:where()` so it weighs nothing. It is a default that must lose to
- * anything an author states, including a `max-width` on the node itself, and
- * zero specificity is what makes that true without depending on source order.
+ * anything an author states, and zero specificity is what makes that true
+ * without depending on source order.
  */
 /**
  * Whether one emitted token can actually bound the content width.
@@ -214,9 +228,8 @@ function documentUsingEveryType(
  * Asked once, it also covers cases nobody has hit yet. `none` is valid CSS and
  * removes the bound; `initial`, `unset` and `revert` resolve to `none` or to
  * whatever a cascade decides, which is not something a site stylesheet can
- * promise. All of them leave `margin-inline: auto` centring an element that has
- * an authored width and no maximum — the failure this whole gate exists to
- * refuse.
+ * promise. None of them gives the containment a width to inset the content
+ * to — the case this gate exists to withhold the rule for.
  */
 function boundsTheContent(token: SiteToken): boolean {
   if (tokenIdentity(token) !== CONTENT_WIDTH_TOKEN) return false;
@@ -241,9 +254,8 @@ function boundsTheContent(token: SiteToken): boolean {
  * **Does it bound anything?** Asked here, because that is not a grammar
  * question. `none` is a perfectly valid `max-width` and removes the maximum;
  * the CSS-wide keywords resolve to it or to whatever a cascade decides, which a
- * site stylesheet cannot promise on behalf of a page. Every one of them leaves
- * `margin-inline: auto` centring an element with an authored width and no
- * ceiling.
+ * site stylesheet cannot promise on behalf of a page. None of them is a width
+ * the content can be inset to.
  */
 function boundsWidth(value: string): boolean {
   const normalised = value.trim().toLowerCase();
@@ -276,9 +288,9 @@ function emitContentWidth(
   //
   // The KIND is part of the question, not decoration. A token carrying this
   // identity with a colour kind is emitted happily — the emitter's job is to
-  // declare what it was given — and `max-width: #ff0000` is invalid at
-  // computed-value time, so it drops while `margin-inline: auto` beside it does
-  // not. Same half-rule, arrived at from a third direction.
+  // declare what it was given — and an inset computed from `#ff0000` is
+  // invalid at computed-value time: a rule that contains nothing, arrived at
+  // from a third direction.
   const declared = declaredTokens.some(boundsTheContent);
   if (!declared) return "";
 
@@ -287,10 +299,13 @@ function emitContentWidth(
   // rejected, so a reference built from the raw value would name a property
   // nothing declared — silently, because an unresolved custom property
   // invalidates its declaration instead of reporting.
-  const property = tokenCustomProperty(
-    CONTENT_WIDTH_TOKEN,
-    resolveTokenPrefix(prefix).prefix
-  );
+  const resolvedPrefix = resolveTokenPrefix(prefix).prefix;
+  const property = tokenCustomProperty(CONTENT_WIDTH_TOKEN, resolvedPrefix);
+  // The least space at each side when nothing sets the padding. Read with a
+  // `0px` fallback: a site that removed the token has no gutter, and an
+  // undeclared custom property would otherwise invalidate the whole padding.
+  const gutter = tokenCustomProperty(GUTTER_TOKEN, resolvedPrefix);
+  const inset = CONTAIN_INSET_PROPERTY;
   // Anchored to the page root, like every other default this engine emits.
   // `override-contract.md` states the invariant plainly — "nothing the builder
   // emits can match outside the page root" — and an unanchored `:where()`
@@ -298,7 +313,14 @@ function emitContentWidth(
   // page wearing this class would be constrained by a sheet that is not its
   // own. One class in the anchor keeps the whole selector at 0-1-0, which is
   // the weight the contract gives an element or block-type default.
-  return `.${PAGE_ROOT_CLASS} :where(.${CONTENT_WIDTH_CLASS}){max-width:var(${property});margin-inline:auto}`;
+  return [
+    `@property ${inset}{syntax:"<length-percentage>";inherits:false;initial-value:0px}`,
+    `.${PAGE_ROOT_CLASS} :where(*){${inset}:0px}`,
+    // After the reset and at its weight, so a contained element takes this.
+    // `100%` resolves where the property is used, in the element's own
+    // padding, so it is the width of the box the container is laid out in.
+    `.${PAGE_ROOT_CLASS} :where(.${CONTENT_WIDTH_CLASS}){${inset}:max(0px, (100% - var(${property})) / 2);padding-inline:max(var(${gutter}, 0px), var(${inset}))}`,
+  ].join("\n");
 }
 
 /**
@@ -365,8 +387,8 @@ function compileBreakpointIndependentTiers(
   // Pushed unconditionally; the rule withholds ITSELF when the width token it
   // reads is undeclared. The engine's default set carries `content.width`, but
   // those defaults are layered a tier above this function, so a caller
-  // compiling a set that omits it arrives here with the property undeclared —
-  // and half of this rule is worse than none of it.
+  // compiling a set that omits it arrives here with the property undeclared,
+  // and a rule reading a width nothing declares contains nothing.
   blocks.push(emitContentWidth(declaredTokens, tokenPrefix));
 
   return { blocks, warnings, tokenPrefix };

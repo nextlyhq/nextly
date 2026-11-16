@@ -77,7 +77,9 @@ describe("a node's own styles", () => {
         }),
       ])
     );
-    expect(out).toContain("padding-inline-start: 2rem");
+    expect(out).toContain(
+      "padding-inline-start: max(2rem, var(--nx-contain-inset, 0px))"
+    );
     expect(out).toContain("padding-block-end: 1rem");
     expect(out).not.toContain("padding-left");
   });
@@ -716,7 +718,9 @@ describe("the compiler does not trust that validation ran", () => {
       ]),
       CTX
     );
-    expect(result.css).toContain("padding-inline-start: 2rem");
+    expect(result.css).toContain(
+      "padding-inline-start: max(2rem, var(--nx-contain-inset, 0px))"
+    );
     expect(result.css).not.toContain("padding-block-start");
   });
 
@@ -2269,5 +2273,109 @@ describe("the overlay's two properties", () => {
     expect(
       css(doc([node("n1", { base: { base: { color: "#fff" } } })]))
     ).not.toContain("--nx-pb-overlay");
+  });
+});
+
+describe("inline padding and a contained container's inset", () => {
+  const INSET = "var(--nx-contain-inset, 0px)";
+
+  it("writes a node's inline padding as at least the inset, on both sides", () => {
+    // The site sheet sets the inset on a contained element and to 0px on every
+    // other one. Written this way, an author's 200px widens a contained
+    // container's inset and its 0 drops the gutter, but neither takes the
+    // content past the content width; on any other element the padding is the
+    // value as set.
+    const out = css(
+      doc([
+        node("n1", {
+          base: {
+            base: {
+              padding: {
+                inlineStart: "200px",
+                inlineEnd: "0",
+                blockStart: "1rem",
+              },
+            },
+          },
+        }),
+      ])
+    );
+    expect(out).toContain(`padding-inline-start: max(200px, ${INSET})`);
+    expect(out).toContain(`padding-inline-end: max(0, ${INSET})`);
+    // The block axis is never inset: containment is about width only.
+    expect(out).toContain("padding-block-start: 1rem;");
+  });
+
+  it("writes a block-type default and a named class the same way", () => {
+    // A Section's default gutter is a block-type default, and a class can set
+    // padding too. Either would replace the containment if it were written as
+    // a bare value, because both outweigh the site sheet's own rule.
+    const out = css(doc([node("n1")]), {
+      ...CTX,
+      blockBases: {
+        "core/box": {
+          base: {
+            base: { padding: { inlineStart: { $token: "space.gutter" } } },
+          },
+        },
+      },
+      namedClasses: [
+        {
+          id: "c1",
+          slug: "card",
+          orderIndex: 0,
+          styles: { base: { base: { padding: { inlineEnd: "3rem" } } } },
+        },
+      ],
+    } as unknown as StyleCompileContext);
+    expect(out).toContain(
+      `padding-inline-start: max(var(--site-space-gutter), ${INSET})`
+    );
+    expect(out).toContain(`padding-inline-end: max(3rem, ${INSET})`);
+  });
+
+  it("wraps the value at every breakpoint and state", () => {
+    const out = css(
+      doc([
+        node("n1", {
+          base: { mobile: { padding: { inlineStart: "1rem" } } },
+          hover: { base: { padding: { inlineStart: "2rem" } } },
+        }),
+      ])
+    );
+    expect(out).toContain(`padding-inline-start: max(1rem, ${INSET})`);
+    expect(out).toContain(`padding-inline-start: max(2rem, ${INSET})`);
+    expect(out).not.toMatch(/padding-inline-start: \d/);
+  });
+
+  it("records the value as it was set in the trace, not the wrapped one", () => {
+    // The inspector names a value and where it came from. The inset is how
+    // containment combines with it, not a value anyone set.
+    const { trace } = compilePageCss(
+      doc([node("n1", { base: { base: { padding: { inlineStart: "2rem" } } } })]),
+      { ...CTX, trace: true } as StyleCompileContext
+    );
+    expect(trace).toBeDefined();
+    expect(
+      trace?.find(entry => entry.property === "padding-inline-start")?.value
+    ).toBe("2rem");
+  });
+
+  it("leaves every other property as it was written", () => {
+    const out = css(
+      doc([
+        node("n1", {
+          base: {
+            base: {
+              margin: { inlineStart: "2rem" },
+              padding: { blockEnd: "1rem" },
+            },
+          },
+        }),
+      ])
+    );
+    expect(out).toContain("margin-inline-start: 2rem");
+    expect(out).toContain("padding-block-end: 1rem");
+    expect(out).not.toContain("--nx-contain-inset");
   });
 });

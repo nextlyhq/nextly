@@ -1309,6 +1309,49 @@ interface EnvelopeContext {
   previewStates?: boolean;
 }
 
+/**
+ * The custom property a contained container's inset travels in.
+ *
+ * A contained container is drawn full width, and its inline padding brings its
+ * content in to the site's content width. The site sheet sets this property on
+ * a contained element to how far that is from each edge, and to `0px` on every
+ * other element of the page (see `emitContentWidth`). It is registered as not
+ * inherited there too, so a block inside a contained one never takes the inset
+ * of the container around it.
+ */
+export const CONTAIN_INSET_PROPERTY = "--nx-contain-inset";
+
+/** The two padding sides a contained container's inset is applied to. */
+const INLINE_PADDING = new Set(["padding-inline-start", "padding-inline-end"]);
+
+/**
+ * The declarations as written into a rule: an inline padding at least the
+ * containment inset.
+ *
+ * Every tier's inline padding (a node's own value, a block-type default, a
+ * named class) is written as `max(<value>, var(--nx-contain-inset, 0px))`. The
+ * padding is the same everywhere the inset is `0px`, which is every element
+ * that is not contained. On a contained one the value an author or a default
+ * set replaces the site's gutter as the least space at each side, and can widen
+ * the inset, but it cannot take the content past the content width. CSS has no
+ * other way to combine two values of one property, so the combination is
+ * written into each value that might replace the containment's own.
+ *
+ * Only the emitted rule carries it: the trace records the value as it was set.
+ */
+function withContainInset(
+  declarations: readonly Declaration[]
+): Declaration[] {
+  return declarations.map(declaration =>
+    INLINE_PADDING.has(declaration.property)
+      ? {
+          ...declaration,
+          value: `max(${declaration.value}, var(${CONTAIN_INSET_PROPERTY}, 0px))`,
+        }
+      : declaration
+  );
+}
+
 /** Compile one styles envelope into rules under one selector. */
 function envelopeRules(
   styles: NodeStyles | undefined,
@@ -1442,7 +1485,7 @@ function envelopeRules(
             (weightlessAnchor === undefined
               ? `${selector}${stateSelectors[state]}${rule.descendant}`
               : `${weightlessAnchor} :where(${selector}${stateSelectors[state]}${rule.descendant})`),
-          declarations: rule.declarations,
+          declarations: withContainInset(rule.declarations),
         });
         // Recorded here, from the same declarations that were just emitted, in the same loop.
         // Anywhere else it would be a second reading of the document, and a second reading can
