@@ -561,7 +561,23 @@ export interface BlockKeyboardActionsResult {
    * document, which may hold another editor's toolbar first.
    */
   readonly toolbarFocus: ToolbarFocusSlot;
+  /**
+   * Where the canvas's frame is put for Escape to send focus back to, filled
+   * by {@link BlockKeyboardActions}. Empty, Escape moves the selection from
+   * wherever it is pressed.
+   */
+  readonly canvasFrame: CanvasFrameSlot;
 }
+
+/**
+ * Holds the canvas's frame, or `null` while there is none.
+ *
+ * A slot rather than a context read inside the hook: the canvas frame's
+ * context changes with every zoom and resize the canvas reports, and the
+ * Escape binding needs only the frame, when the key lands. Filled by a child
+ * of its own, so a resize re-renders that child alone.
+ */
+type CanvasFrameSlot = React.MutableRefObject<HTMLIFrameElement | null>;
 
 /**
  * Holds the call that finds an editor's block toolbar's tab stop, which
@@ -636,10 +652,10 @@ export function useBlockKeyboardActions({
   latest.current = editor;
   // The canvas's frame, read when Escape lands for the same reason: it is
   // where focus goes back to from a panel, and the frame is registered after
-  // the bindings are.
-  const canvasFrame = useCanvasFrame().frame;
-  const latestFrame = React.useRef(canvasFrame);
-  latestFrame.current = canvasFrame;
+  // the bindings are. See `CanvasFrameSlot` for who fills it.
+  const latestFrame: CanvasFrameSlot = React.useRef<HTMLIFrameElement | null>(
+    null
+  );
   const toolbarFocus: ToolbarFocusSlot = React.useRef<
     (() => HTMLElement | null) | null
   >(null);
@@ -1114,10 +1130,12 @@ export function useBlockKeyboardActions({
             { origin: pressOrigin(event), canvasFrame: latestFrame.current }
           );
           if (outcome === "return-to-canvas") {
-            // Where the keyboard reaches the canvas by F6 too: the frame,
-            // with the selected block still outlined in it and the block's
-            // keys (Delete, Alt+F10, Enter, Escape) acting on it from there.
-            latestFrame.current?.focus();
+            // The frame, where the page's own keys land: the selected block
+            // is still outlined in it, and Delete, Alt+F10, Enter and Escape
+            // act on it from there. Without scrolling, because an author who
+            // has scrolled the canvas to the block they are styling would
+            // otherwise be thrown back to the frame's top edge.
+            latestFrame.current?.focus({ preventScroll: true });
             return;
           }
           if (outcome !== "navigate-selection") return;
@@ -1375,7 +1393,26 @@ export function useBlockKeyboardActions({
     selectionActions,
     depthMoves,
     toolbarFocus,
+    canvasFrame: latestFrame,
   };
+}
+
+/**
+ * Keeps an editor's canvas frame slot pointing at the frame the canvas has
+ * registered, and draws nothing. Its own component so that the canvas
+ * reporting a new zoom or size re-renders this and not the editor's bindings.
+ */
+function CanvasFrameReader({ into }: { into: CanvasFrameSlot }): null {
+  const frame = useCanvasFrame().frame;
+  useIsomorphicLayoutEffect(() => {
+    into.current = frame;
+    return () => {
+      // Cleared with the frame, so a slot never points at a frame that has
+      // left the page.
+      if (into.current === frame) into.current = null;
+    };
+  }, [into, frame]);
+  return null;
 }
 
 /**
@@ -1446,6 +1483,7 @@ export function BlockKeyboardActions({
     selectionActions: offered,
     depthMoves,
     toolbarFocus,
+    canvasFrame,
   } = useBlockKeyboardActions(options);
 
   /*
@@ -1497,6 +1535,7 @@ export function BlockKeyboardActions({
         <DepthMovesContext.Provider value={depthMoves}>
           <BlockActionsContext.Provider value={actions}>
             <ToolbarFocusContext.Provider value={toolbarFocus}>
+              <CanvasFrameReader into={canvasFrame} />
               <p aria-live="polite" role="status" className="nx-sr-only">
                 {announcement}
               </p>

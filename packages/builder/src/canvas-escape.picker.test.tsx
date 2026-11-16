@@ -292,6 +292,52 @@ describe("Escape with the colour picker open", () => {
   });
 });
 
+describe("Escape in a floating list that closes without marking the key handled", () => {
+  it("is read from where the press started, after the list has moved focus away", () => {
+    /*
+     * The picker above marks Escape handled, so the shortcut manager stops
+     * before the editor's binding runs and that case never reaches the rule.
+     * This list does not: it closes on the keystroke, ahead of the editor,
+     * and hands focus to a button in the panel. A rule reading focus when the
+     * binding runs would see that button and send focus on to the canvas — a
+     * second answer to one press. Read from the event, the press started in
+     * the list, which owns it.
+     */
+    const { frame, hostCancel } = mount();
+    const layer = document.createElement("div");
+    layer.setAttribute("data-radix-popper-content-wrapper", "");
+    const list = document.createElement("ul");
+    list.setAttribute("role", "listbox");
+    list.tabIndex = 0;
+    layer.append(list);
+    const panelButton = document.createElement("button");
+    panelButton.textContent = "Back in the panel";
+    document.body.append(layer, panelButton);
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape" || !layer.isConnected) return;
+      layer.remove();
+      panelButton.focus();
+    };
+    document.addEventListener("keydown", closeOnEscape, true);
+    try {
+      list.focus();
+
+      const event = pressEscape(list);
+
+      expect(layer.isConnected).toBe(false);
+      expect(document.activeElement).toBe(panelButton);
+      expect(document.activeElement).not.toBe(frame);
+      expect(selected()).toBe("inner");
+      // Still consumed: the page's cancel never runs while the editor is up.
+      expect(event.defaultPrevented).toBe(true);
+      expect(hostCancel).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("keydown", closeOnEscape, true);
+      panelButton.remove();
+    }
+  });
+});
+
 describe("Escape typed in an inspector text field", () => {
   it("never moves the selection, and focus stays in the field", () => {
     const { hostCancel } = mount();

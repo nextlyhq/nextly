@@ -269,6 +269,21 @@ describe("escapeOutcome: where the press started", () => {
     expect(outcomeFrom(frame, frame)).toBe("navigate-selection");
   });
 
+  it("moves the selection from the canvas's region, which F6 focuses while the page is zoomed past it", () => {
+    // The region wraps the frame's box rather than sitting inside it, so the
+    // box alone would read a press there as a panel's and send focus into the
+    // frame instead of going up.
+    const frame = canvasFrame();
+    const box = frame.parentElement;
+    if (box === null) throw new Error("the frame has no box");
+    const region = document.createElement("section");
+    region.tabIndex = 0;
+    box.replaceWith(region);
+    region.append(box);
+
+    expect(outcomeFrom(region, frame)).toBe("navigate-selection");
+  });
+
   it("moves the selection from a press with nothing focused", () => {
     expect(outcomeFrom(document.body, canvasFrame())).toBe(
       "navigate-selection"

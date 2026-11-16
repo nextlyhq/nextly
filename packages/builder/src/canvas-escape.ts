@@ -201,17 +201,22 @@ export function pressOrigin(event: Event): Element | null {
 /**
  * Whether a press started on the canvas.
  *
- * Two places count. Anything in the frame's own document is the page itself.
- * The box holding the frame counts too: the block toolbar and the canvas's own
- * add buttons are drawn over the page in the editor's document, and they act
- * on what is selected there, so Escape on them moves the selection as it does
- * on the page beneath.
+ * Three places count. Anything in the frame's own document is the page
+ * itself. The box holding the frame counts too: the block toolbar and the
+ * canvas's own add buttons are drawn over the page in the editor's document,
+ * and they act on what is selected there, so Escape on them moves the
+ * selection as it does on the page beneath. And an element holding the frame:
+ * the canvas's region takes focus itself while the page is zoomed past it (F6
+ * stops there so the keyboard can scroll it), and it is the canvas as much as
+ * the page inside it is. The body holds the frame as well, and answers the
+ * same through "nothing focused".
  */
 function startedOnCanvas(
   origin: Element,
   canvasFrame: HTMLIFrameElement
 ): boolean {
   if (origin.closest(`[${CANVAS_FRAME_BOX_ATTRIBUTE}]`) !== null) return true;
+  if (origin.contains(canvasFrame)) return true;
   return origin.ownerDocument === canvasFrame.contentDocument;
 }
 
