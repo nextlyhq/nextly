@@ -71,6 +71,15 @@ expectTypeOf<ComponentPath>().toEqualTypeOf<string>();
 expectTypeOf(adminEntry.useCurrentUserId).returns.toEqualTypeOf<
   string | null
 >();
+// The schema version, unknown until an answer carried one, and a listener
+// for its moves that answers the call stopping it.
+expectTypeOf(adminEntry.schemaVersion).returns.toEqualTypeOf<
+  number | undefined
+>();
+expectTypeOf(adminEntry.onSchemaChange)
+  .parameter(0)
+  .toEqualTypeOf<(version: number) => void>();
+expectTypeOf(adminEntry.onSchemaChange).returns.toEqualTypeOf<() => void>();
 expectTypeOf<PluginAdminContributions>().toMatchTypeOf<{
   menu?: PluginMenuItem[];
   pages?: PluginAdminPage[];

@@ -70,6 +70,9 @@ type ApiErrorResult = {
 
 export type ApiResult<T> = ApiSuccess<T> | ApiErrorResult;
 
+/** Who is told when the schema version moves. */
+const schemaListeners = new Set<(version: number) => void>();
+
 /**
  * Notes the schema version a response announces, for cross-flow schema change
  * detection. If the version increased and this tab did not just apply changes
@@ -100,6 +103,40 @@ export function noteSchemaVersion(res: Response): void {
   // The device memory is labelled with the schema version: a move discards
   // what was kept under the old one.
   noteRememberedSchemaVersion(String(version));
+  // Every move is told, this tab's own applies included, to whoever keeps
+  // something the schema decides.
+  if (stored !== undefined && version !== stored) {
+    for (const listener of [...schemaListeners]) listener(version);
+  }
+}
+
+/**
+ * The schema version the server last answered this tab with
+ * (@experimental), or `undefined` before any answer carried one.
+ *
+ * For a surface that keeps an answer the schema decides (the collections a
+ * list may repeat over): kept with the version it was read under, it is
+ * read again once the version has moved. Every admin request notes it, so
+ * reading it costs nothing.
+ */
+export function schemaVersion(): number | undefined {
+  return typeof window === "undefined"
+    ? undefined
+    : window.__nextlySchemaVersion;
+}
+
+/**
+ * Be told each time the schema version moves (@experimental): this tab's
+ * own Schema Builder apply, another tab's, or a code-first change, as the
+ * next admin request learns of it. Answers the call that stops it.
+ */
+export function onSchemaChange(
+  listener: (version: number) => void
+): () => void {
+  schemaListeners.add(listener);
+  return () => {
+    schemaListeners.delete(listener);
+  };
 }
 
 /** Whether `init` sends a GET, the only request an earlier answer can stand for. */
