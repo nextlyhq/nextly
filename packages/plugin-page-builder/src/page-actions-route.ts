@@ -970,7 +970,9 @@ function planLayout(
   // Only the plugin's own pages hold a Layout; a host collection with a blocks
   // field has no such fields to write.
   if (collection !== (ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG)) {
-    throw refusedAction(["Only the page builder's own pages choose a Layout."]);
+    throw refusedAction([
+      "Only the page builder's own pages choose a header & footer set.",
+    ]);
   }
   const layout = {
     layout: action.layout,

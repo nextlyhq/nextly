@@ -35,12 +35,20 @@ const OWN_STYLESHEET_TOKEN = "--nx-builder-surface";
 
 /**
  * The one surface both sides of the editor sit on, the rail's own: the left
- * panels and the Inspector read as one frame around the canvas, divided from it
- * by the resize handle's single line, and a panel paints nothing of its own
- * behind its content. One class, so the two sides cannot drift apart.
+ * panels and the Inspector are the panel surface around the canvas's grey
+ * well, divided from it by the resize handle's single line. One class, so the
+ * two sides cannot drift apart.
  */
 export const SIDE_PANEL_CLASS =
-  "bg-[color:var(--nx-builder-surface)] h-full overflow-auto";
+  "bg-[color:var(--nx-builder-panel)] h-full overflow-auto";
+
+/**
+ * The resize handles between a side panel and the canvas: their 1px line in
+ * the divider token, which turns to the foreground under more contrast and to
+ * the system's text colour in forced colours (the base partial).
+ */
+export const PANEL_DIVIDER_CLASS =
+  "nx-builder-divider-line bg-[color:var(--nx-builder-divider)]";
 
 /**
  * Tell a developer when the design system's stylesheet has not been loaded.

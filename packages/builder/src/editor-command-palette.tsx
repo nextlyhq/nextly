@@ -31,6 +31,7 @@ import {
 } from "./command-palette";
 import type { EditorState } from "./editor-state";
 import {
+  InsertAnnouncement,
   placementWords,
   useInsertOffers,
   type InsertOffers,
@@ -111,9 +112,11 @@ export function EditorCommandPalette({
 }: EditorCommandPaletteProps): React.JSX.Element {
   const verbs = useBlockActionsContext();
   // Whether the palette is open, followed whoever opens it: its verbs ask the
-  // locks only while an author can choose between them.
+  // locks only while an author can choose between them. Handed to the palette
+  // as its open state, so a palette the shell closes tells this as it closes.
   const [shown, setShown] = React.useState(false);
-  const actions = useSelectionActions(editor, open ?? shown);
+  const isOpen = open ?? shown;
+  const actions = useSelectionActions(editor, isOpen);
   // Taken out of `editor` so the list below depends on these two functions
   // rather than on the store object, for the reason given there.
   const { undo, redo } = editor;
@@ -176,34 +179,41 @@ export function EditorCommandPalette({
   ];
 
   return (
-    <CommandPalette
-      commands={found}
-      groups={[
-        // Already matched, by the Add panel's own rule.
-        { name: ADD_GROUP, limit: SEARCH_LIMIT, matched: true },
-        { name: PAGE_GROUP, limit: SEARCH_LIMIT },
-        ...(results === undefined ? [] : [{ ...results.group, matched: true }]),
-      ]}
-      onSearchChange={next => {
-        setQuery(next);
-        onSearchChange?.(next);
-      }}
-      placeholder="Search blocks, this page, pages and commands…"
-      emptyMessage={searched => (
-        <>
-          <p className="text-foreground">Nothing matches “{searched}”.</p>
-          <p className="mt-1">
-            Search finds blocks to add, blocks on this page, your pages and
-            commands.
-          </p>
-        </>
-      )}
-      {...(open === undefined ? {} : { open })}
-      onOpenChange={next => {
-        setShown(next);
-        onOpenChange?.(next);
-      }}
-    />
+    <>
+      {/* Outside the dialog, which closes as a row runs, so the sentence an
+          insert from search is announced with is still there to be read. */}
+      <InsertAnnouncement text={offers.announcement} afterClose />
+      <CommandPalette
+        commands={found}
+        groups={[
+          // Already matched, by the Add panel's own rule.
+          { name: ADD_GROUP, limit: SEARCH_LIMIT, matched: true },
+          { name: PAGE_GROUP, limit: SEARCH_LIMIT },
+          ...(results === undefined
+            ? []
+            : [{ ...results.group, matched: true }]),
+        ]}
+        onSearchChange={next => {
+          setQuery(next);
+          onSearchChange?.(next);
+        }}
+        placeholder="Search blocks, this page, pages and commands…"
+        emptyMessage={searched => (
+          <>
+            <p className="text-foreground">Nothing matches “{searched}”.</p>
+            <p className="mt-1">
+              Search finds blocks to add, blocks on this page, your pages and
+              commands.
+            </p>
+          </>
+        )}
+        open={isOpen}
+        onOpenChange={next => {
+          setShown(next);
+          onOpenChange?.(next);
+        }}
+      />
+    </>
   );
 }
 

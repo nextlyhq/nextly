@@ -14,7 +14,6 @@
  * of core's. The plugin knows its holders by their short names.
  *
  * @module plugins/plugin-version-pins
- * @experimental
  */
 
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
@@ -36,7 +35,7 @@ import {
 } from "./service-opts";
 
 /**
- * @experimental The transaction a pin runs on: the handle `ctx.db.transaction`
+ * The transaction a pin runs on: the handle `ctx.db.transaction`
  * passes its callback, or the token `ctx.services.collections.withTransaction`
  * hands its work.
  */
@@ -44,20 +43,20 @@ export type PluginPinTransaction =
   | PluginTransaction
   | PluginCollectionTransaction;
 
-/** @experimental Where a pin runs: always a transaction of the plugin's. */
+/** Where a pin runs: always a transaction of the plugin's. */
 export interface PluginPinOptions {
   tx: PluginPinTransaction;
 }
 
 /**
- * @experimental One of a holder's slots, and the version it points at: the
+ * One of a holder's slots, and the version it points at: the
  * row core's holders list, named for the plugin surface rather than declared
  * again, so the two cannot drift apart.
  */
 export type PluginVersionPin = VersionPinSlot;
 
 /**
- * @experimental A holder a plugin registered, pinning on the plugin's own
+ * A holder a plugin registered, pinning on the plugin's own
  * transaction.
  */
 export interface PluginVersionPinHolder {
@@ -85,7 +84,7 @@ export interface PluginVersionPinHolder {
   list(ref: VersionRef, opts: PluginPinOptions): Promise<PluginVersionPin[]>;
 }
 
-/** @experimental `ctx.services.versions.pins`. */
+/** `ctx.services.versions.pins`. */
 export interface PluginVersionPins {
   /**
    * Register a holder in this plugin's namespace and get it. Refuses a name

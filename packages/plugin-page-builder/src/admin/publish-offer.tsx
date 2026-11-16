@@ -61,7 +61,7 @@ import {
 import { PUBLISHING_ACTIONS } from "./publishing-actions";
 
 /** What is being published, in the words the dialog uses for it. */
-export type PublishSubject = "page" | "component" | "Layout";
+export type PublishSubject = "page" | "component" | "header & footer set";
 
 /** The author's answer. */
 export type PublishChoice =
@@ -347,7 +347,7 @@ export function reportLeftUnpublished(
 function nameOf(entry: UnpublishedDependency): string {
   if (entry.title !== null) return entry.title;
   return entry.kind === "layout"
-    ? "A Layout you can't view"
+    ? "A header & footer set you can't view"
     : "A component you can't view";
 }
 
@@ -356,7 +356,7 @@ function withheldBecause(entry: UnpublishedDependency): string | null {
   if (entry.mayPublish) return null;
   if (entry.title === null) return "You can't view it";
   return entry.kind === "layout"
-    ? "You can't publish Layouts"
+    ? "You can't publish header & footer sets"
     : "You can't publish components";
 }
 
@@ -374,11 +374,12 @@ function headingFor(
       ? `This ${subject} uses a component that no longer exists`
       : `This ${subject} uses components that no longer exist`;
   }
-  if (components === 0) return `This ${subject}'s Layout isn't published`;
+  if (components === 0)
+    return `This ${subject}'s header & footer set isn't published`;
   const noun =
     components === 1 ? "1 component" : `${String(components)} components`;
   return layout
-    ? `This ${subject}'s Layout and ${noun} aren't published`
+    ? `This ${subject}'s header & footer set and ${noun} aren't published`
     : `This ${subject} uses ${noun} that ${
         components === 1 ? "isn't" : "aren't"
       } published`;
@@ -398,7 +399,7 @@ function consequenceFor(
       ? `Visitors see nothing where an unpublished component sits until it's published.`
       : null,
     layout
-      ? `Until its Layout is published, the ${subject} is shown inside the site's default Layout.`
+      ? `Until its header & footer set is published, the ${subject} is shown inside the site's default header & footer set.`
       : null,
     readiness.missing > 0
       ? `${
@@ -517,7 +518,9 @@ export function PublishOfferDialog({
                   >
                     {nameOf(entry)}
                     <span className="sr-only">
-                      {entry.kind === "layout" ? ", Layout" : ", component"}
+                      {entry.kind === "layout"
+                        ? ", header & footer set"
+                        : ", component"}
                     </span>
                   </label>
                   {withheld === null ? null : (

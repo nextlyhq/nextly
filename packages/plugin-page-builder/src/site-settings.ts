@@ -1417,7 +1417,7 @@ export async function readSiteSettings(
     // Every page of them: an option left off would be a Layout that cannot be
     // made the default, or a default the select could not show.
     await walkPages({
-      describe: "the published Layouts",
+      describe: "the published header & footer sets",
       maxPages: LAYOUT_PAGES_MAX,
       fetchPage: async page =>
         await nextly.find({

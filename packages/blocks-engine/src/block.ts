@@ -104,7 +104,150 @@ export interface PropSchema {
    * names no `url` prop of the block.
    */
   addressProp?: string;
+  /**
+   * Which tab of the block's settings the prop is edited in: `"content"`
+   * (what the block says, shows or links to), `"style"` (how it looks) or
+   * `"advanced"`. Left out, the prop is in Content, so a block that declares
+   * none keeps every prop where it always was.
+   *
+   * Registration refuses a prop that is what the block says
+   * (`role: "content"`) anywhere but Content, any other tab name, and, in
+   * Style, a prop holding text, media, an address, a relation or a list.
+   *
+   * @experimental
+   */
+  group?: PropGroup;
+  /**
+   * The section inside the tab the prop is drawn in, in plain words: "Link",
+   * "Behaviour". Left out, a Content prop is in a section named after the
+   * block and an Advanced prop in "HTML". A Style prop names one of the Style
+   * tab's sections ({@link STYLE_SECTION_KEYS}), and must.
+   *
+   * @experimental
+   */
+  section?: string;
+  /**
+   * What the prop writes to the page, for an author who reads HTML or CSS:
+   * one string for the prop, or one per option value of a select
+   * (`{ section: "section" }`), shown beside the plain words.
+   *
+   * @experimental
+   */
+  code?: string | Readonly<Record<string, string>>;
   [option: string]: unknown;
+}
+
+/**
+ * The tabs a block's setting can be edited in. A prop names one as its
+ * `group`; Content is the default.
+ *
+ * @experimental
+ */
+export const PROP_GROUPS = ["content", "style", "advanced"] as const;
+
+/** One of {@link PROP_GROUPS}. @experimental */
+export type PropGroup = (typeof PROP_GROUPS)[number];
+
+/**
+ * The Style tab's sections, by key: what a `"style"` prop's `section` names.
+ * The editor draws its Style sections under the same keys.
+ *
+ * @experimental
+ */
+export const STYLE_SECTION_KEYS = [
+  "icon",
+  "layout",
+  "spacing",
+  "size",
+  "position",
+  "typography",
+  "background",
+  "border",
+  "effects",
+] as const;
+
+/** One of {@link STYLE_SECTION_KEYS}. @experimental */
+export type StyleSectionKey = (typeof STYLE_SECTION_KEYS)[number];
+
+/**
+ * The prop types that hold what a block says (text, media, an address, a
+ * relation, a list of items), which are never how it looks, so never Style.
+ */
+const SAID_TYPES: ReadonlySet<string> = new Set([
+  "text",
+  "textarea",
+  "richText",
+  "media",
+  "upload",
+  "url",
+  "relation",
+  "entryField",
+  "array",
+]);
+
+/** Where a prop is edited: its tab, and the section inside it. */
+export interface PropPlace {
+  readonly tab: PropGroup;
+  /**
+   * The section's name: the prop's own, the block's label on Content, "HTML"
+   * on Advanced, or a Style section's key.
+   */
+  readonly section: string;
+}
+
+/** Whether a value names one of the tabs a prop can be edited in. */
+function isPropGroup(value: unknown): value is PropGroup {
+  return PROP_GROUPS.some(group => group === value);
+}
+
+/**
+ * Where a prop is edited, with its defaults applied: Content and a section
+ * named `blockLabel` where it declares neither. Read from a schema a
+ * registered block was accepted with, so the tab is one of the three.
+ *
+ * @experimental
+ */
+export function propPlace(schema: PropSchema, blockLabel: string): PropPlace {
+  const tab = isPropGroup(schema.group) ? schema.group : "content";
+  const own =
+    typeof schema.section === "string" && schema.section.trim() !== ""
+      ? schema.section
+      : undefined;
+  if (own !== undefined) return { tab, section: own };
+  return { tab, section: tab === "advanced" ? "HTML" : blockLabel };
+}
+
+/**
+ * Why a prop cannot be placed where it says, in plain words naming the block
+ * and the prop, or `undefined` where it can. What registration refuses.
+ *
+ * @experimental
+ */
+export function propPlacementRefusal(
+  blockName: string,
+  propName: string,
+  schema: Readonly<Record<string, unknown>>
+): string | undefined {
+  const where = `block "${blockName}" setting "${propName}"`;
+  const { group, section, role, type } = schema;
+  if (group !== undefined && !isPropGroup(group)) {
+    return `${where} names the tab ${JSON.stringify(group)}, which is not one of content, style or advanced.`;
+  }
+  if (section !== undefined && typeof section !== "string") {
+    return `${where} names its section with something other than words.`;
+  }
+  if (group === undefined || group === "content") return undefined;
+  if (role === "content") {
+    return `${where} is what the block says (role "content"), so it belongs in the content tab, not ${group}.`;
+  }
+  if (group !== "style") return undefined;
+  if (typeof type === "string" && SAID_TYPES.has(type)) {
+    return `${where} holds ${type} content, which belongs in the content tab, not style.`;
+  }
+  if (!STYLE_SECTION_KEYS.some(key => key === section)) {
+    return `${where} is in the style tab, so its section must be one of ${STYLE_SECTION_KEYS.join(", ")}.`;
+  }
+  return undefined;
 }
 
 /**

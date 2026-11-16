@@ -7,12 +7,20 @@
  * @module shell-top-bar
  */
 import { cn } from "@nextlyhq/ui/utils";
-import { ArrowLeft, PanelLeft, PanelRight } from "lucide-react";
+import {
+  ArrowLeft,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+} from "lucide-react";
 import * as React from "react";
 
 import type { CanvasZoom } from "./canvas-zoom";
 import { CanvasZoomControl } from "./canvas-zoom-control";
+import { ChromeTooltip } from "./chrome-tooltip";
 import type { BuilderShellProps } from "./shell-props";
+import { PANEL_DIVIDER_CLASS } from "./shell-stylesheet";
 
 /**
  * The editor's top bar: three columns, the outer two equal, so the centre one
@@ -57,7 +65,7 @@ export function ShellTopBar({
       // devices and the zoom) sits in the middle of the editor whatever the
       // sides hold. A container, so controls inside can give way by width.
       // `nx-builder-topbar` sets every control inside at the editor's density.
-      className="nx-builder-topbar border-[color:var(--nx-builder-border)] @container/topbar grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b px-2"
+      className="nx-builder-topbar border-[color:var(--nx-builder-divider)] @container/topbar grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b px-2"
       aria-label="Editor actions"
     >
       <div data-topbar="start" className="flex min-w-0 items-center gap-2">
@@ -145,7 +153,7 @@ export function ShellTopBar({
           <>
             <span
               aria-hidden="true"
-              className="h-5 w-px shrink-0 bg-[color:var(--nx-builder-border)]"
+              className={cn("h-5 w-px shrink-0", PANEL_DIVIDER_CLASS)}
             />
             {topBarEnd}
           </>
@@ -155,11 +163,59 @@ export function ShellTopBar({
   );
 }
 
+/** One side-panel toggle: its stable name, its side, and each state's icon. */
+interface SidePanelToggle {
+  /** The accessible name, kept as the state changes; pressed says which way. */
+  label: string;
+  /** The side as the tooltip names it: "the left panel", "the right panel". */
+  side: "left" | "right";
+  shown: boolean;
+  onClick: () => void;
+  /** Drawn while the panel shows: the panel closing, what a press does. */
+  CloseIcon: typeof PanelLeftClose;
+  /** Drawn while the panel is hidden: the panel opening. */
+  OpenIcon: typeof PanelLeftOpen;
+}
+
+/**
+ * A toggle whose look says what pressing it does. While its panel shows, it
+ * draws the panel's close icon on a fill and its tooltip reads "Hide the left
+ * panel"; while hidden, the open icon with no fill and "Show the left panel".
+ * The name stays the panel's and `aria-pressed` carries the state, so a
+ * screen reader hears "Left panel, pressed" rather than a name that changes
+ * under the author. The fill is `nx-builder-panel-toggle`'s, drawn from
+ * `data-shown`, in the base partial.
+ */
+function PanelToggleButton({
+  label,
+  side,
+  shown,
+  onClick,
+  CloseIcon,
+  OpenIcon,
+}: SidePanelToggle): React.JSX.Element {
+  const Icon = shown ? CloseIcon : OpenIcon;
+  return (
+    <ChromeTooltip content={`${shown ? "Hide" : "Show"} the ${side} panel`}>
+      <button
+        type="button"
+        aria-pressed={shown}
+        aria-label={label}
+        data-shown={shown ? "true" : "false"}
+        data-builder-animates
+        onClick={onClick}
+        className="nx-builder-panel-toggle focus-visible:ring-ring inline-flex size-[var(--nx-builder-control-height)] items-center justify-center rounded-md focus-visible:ring-2 focus-visible:outline-none"
+      >
+        <Icon className="size-4" aria-hidden="true" />
+      </button>
+    </ChromeTooltip>
+  );
+}
+
 /**
  * The top bar's buttons that show or hide each side of the editor, so the
- * canvas can take the room. Pressed means shown; each keeps its panel's name,
- * and the pressed state says which way it is. The left one is drawn only when
- * the host offers a left panel, since with none it could show nothing.
+ * canvas can take the room. The left one is drawn only when the host offers a
+ * left panel, since with none it could show nothing.
  */
 function SidePanelToggles({
   leftShown,
@@ -172,34 +228,26 @@ function SidePanelToggles({
   onLeft: (() => void) | undefined;
   onInspector: () => void;
 }): React.JSX.Element {
-  const toggle = (
-    label: string,
-    shown: boolean,
-    onClick: () => void,
-    Icon: typeof PanelLeft
-  ) => (
-    <button
-      type="button"
-      aria-pressed={shown}
-      aria-label={label}
-      title={`${shown ? "Hide" : "Show"} the ${label.toLowerCase()}`}
-      onClick={onClick}
-      className={cn(
-        "focus-visible:ring-ring rounded-md p-1.5 focus-visible:ring-2 focus-visible:outline-none",
-        shown
-          ? "text-[color:var(--nx-builder-text)]"
-          : "text-[color:var(--nx-builder-text-muted)]"
-      )}
-    >
-      <Icon className="size-4" aria-hidden="true" />
-    </button>
-  );
   return (
     <div className="flex shrink-0 items-center gap-0.5">
-      {onLeft === undefined
-        ? null
-        : toggle("Left panel", leftShown, onLeft, PanelLeft)}
-      {toggle("Inspector", inspectorShown, onInspector, PanelRight)}
+      {onLeft === undefined ? null : (
+        <PanelToggleButton
+          label="Left panel"
+          side="left"
+          shown={leftShown}
+          onClick={onLeft}
+          CloseIcon={PanelLeftClose}
+          OpenIcon={PanelLeftOpen}
+        />
+      )}
+      <PanelToggleButton
+        label="Inspector"
+        side="right"
+        shown={inspectorShown}
+        onClick={onInspector}
+        CloseIcon={PanelRightClose}
+        OpenIcon={PanelRightOpen}
+      />
     </div>
   );
 }

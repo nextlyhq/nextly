@@ -140,11 +140,7 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
-  // The status pill's rule and words, the admin's own: the pill is drawn for
-  // real here, so a published page with edits is read as the bar shows it.
-  savedPillState: (
-    await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()
-  ).savedPillState,
+  // The admin's pill words, for the template preview's rows.
   PILL_LABEL: (
     await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()
   ).PILL_LABEL,
@@ -204,8 +200,16 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
   // The header's controls the bar places; drawn by the admin, not here.
-  DocumentSaveIndicator: () => null,
-  DocumentPrimaryAction: () => null,
+  DocumentSaveAndPublish: () => null,
+  // The page's life stage as the admin answers it from the saved status:
+  // the rule itself is the admin's, tested there; here it stands for it,
+  // so what is pinned is that the pill reads the stage and nothing else.
+  useDocumentLifeStage: () =>
+    documentStatus === null
+      ? null
+      : documentStatus.status === "published"
+        ? { stage: "published", label: "Published" }
+        : { stage: "draft", label: "Draft" },
   useDocumentActions: () => null,
   // No preview here: the top bar's Preview draws nothing.
   useDocumentPreview: () => null,
@@ -432,11 +436,11 @@ describe("the page status beside unsaved work", () => {
       .getByText(/Page status/)
       .parentElement?.textContent?.replace("Page status: ", "") ?? "";
 
-  it("still reads Published after an edit, leaving unsaved work to the save chip", () => {
+  it("still reads Published after an edit, leaving unsaved work to the Save button", () => {
     /*
      * A published page with an edit used to read "Modified" here while the
      * save chip said "Unsaved changes": two signals for one state. The pill
-     * reports where the SAVED page stands, as the entry page's does.
+     * reports where the page is in its life; the Save button says the rest.
      */
     documentStatus = { status: "published", hasWorkingDraft: false };
     entryFields = <p>fields</p>;
@@ -453,11 +457,11 @@ describe("the page status beside unsaved work", () => {
     expect(pillWords()).toBe("Published");
   });
 
-  it("reads Changed for a published page with a saved working draft", () => {
-    // The positive control: the pill still follows the saved status, so the
-    // case above is not a pill stuck on "Published".
-    documentStatus = { status: "published", hasWorkingDraft: true };
+  it("reads Draft for a draft page", () => {
+    // The positive control: the pill follows the life stage, so the case
+    // above is not a pill stuck on "Published".
+    documentStatus = { status: "draft", hasWorkingDraft: false };
     openEditor();
-    expect(pillWords()).toBe("Changed");
+    expect(pillWords()).toBe("Draft");
   });
 });

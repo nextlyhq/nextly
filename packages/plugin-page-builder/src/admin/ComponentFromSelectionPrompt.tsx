@@ -112,7 +112,7 @@ const COPY: Record<
   convert: {
     submit: "Turn into component",
     working: "Turning into a component…",
-    done: "Turned into a component",
+    done: "Turned into a component. Edit it once and every page updates.",
   },
 };
 

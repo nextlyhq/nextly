@@ -78,7 +78,7 @@ function dryRunAnswers(found: RemovalCheck) {
   answer = async body =>
     body.dryRun
       ? { message: "", item: { check: found } }
-      : { message: "The Layout was deleted.", item: {} };
+      : { message: "The header & footer set was deleted.", item: {} };
 }
 
 function openDialog(status = "published") {
@@ -89,7 +89,9 @@ function openDialog(status = "published") {
       published={status === "published"}
     />
   );
-  fireEvent.click(screen.getByRole("button", { name: "Remove Layout…" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Remove header & footer set…" })
+  );
 }
 
 beforeEach(() => {
@@ -115,10 +117,12 @@ describe("Remove Layout…", () => {
 
     expect(
       await screen.findByText(
-        "This Layout is the site's default. Choose another default first."
+        "This header & footer set is the site's default. Choose another default first."
       )
     ).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Delete Layout" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Delete header & footer set" })
+    ).toBeNull();
     expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
   });
 
@@ -133,12 +137,12 @@ describe("Remove Layout…", () => {
 
     expect(
       await screen.findByText(
-        "At least 1 page uses this Layout. Not every page could be checked."
+        "At least 1 page uses this header & footer set. Not every page could be checked."
       )
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "These pages use this Layout. Choose another Layout for them first."
+        "These pages use this header & footer set. Choose another header & footer set for them first."
       )
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^Move / })).toBeNull();
@@ -149,7 +153,7 @@ describe("Remove Layout…", () => {
     openDialog();
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Delete Layout" })
+      await screen.findByRole("button", { name: "Delete header & footer set" })
     );
 
     await waitFor(() =>
@@ -167,23 +171,25 @@ describe("Remove Layout…", () => {
     dryRunAnswers(check());
     openDialog("draft");
 
-    await screen.findByRole("button", { name: "Delete Layout" });
+    await screen.findByRole("button", { name: "Delete header & footer set" });
     expect(screen.queryByRole("button", { name: "Unpublish" })).toBeNull();
   });
 
   it("shows a refusal the removal meets in the dialog", async () => {
     answer = async body => {
       if (body.dryRun) return { message: "", item: { check: check() } };
-      throw new Error("This Layout is already being removed.");
+      throw new Error("This header & footer set is already being removed.");
     };
     openDialog();
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Delete Layout" })
+      await screen.findByRole("button", { name: "Delete header & footer set" })
     );
 
     expect(
-      await screen.findAllByText("This Layout is already being removed.")
+      await screen.findAllByText(
+        "This header & footer set is already being removed."
+      )
     ).not.toHaveLength(0);
     expect(navigated).toEqual([]);
   });
@@ -216,7 +222,7 @@ describe("a dry run that answers after the dialog closed", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
 
-    fail(new Error("The Layout could not be checked."));
+    fail(new Error("The header & footer set could not be checked."));
     await new Promise(resolve => setTimeout(resolve, 20));
 
     expect(screen.queryByRole("alertdialog")).toBeNull();
@@ -238,7 +244,9 @@ describe("in the document bar", () => {
     };
     documentStatus = { status: "published", hasWorkingDraft: false };
     render(<RemoveLayoutToolbarSlot context="collection" />);
-    expect(screen.getByRole("button", { name: "Remove Layout…" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Remove header & footer set…" })
+    ).toBeTruthy();
   });
 
   it("holds the button while the editor holds the document's writes, saying why", () => {
@@ -251,7 +259,9 @@ describe("in the document bar", () => {
     identity = { kind: "collection", slug: "layouts", documentId: "landing" };
     documentStatus = { status: "published", hasWorkingDraft: false };
     render(<RemoveLayoutToolbarSlot context="collection" />);
-    const button = screen.getByRole("button", { name: "Remove Layout…" });
+    const button = screen.getByRole("button", {
+      name: "Remove header & footer set…",
+    });
     expect((button as HTMLButtonElement).disabled).toBe(true);
     expect(button.getAttribute("title")).toBe("A past version is on screen.");
   });
@@ -264,7 +274,7 @@ describe("in the document bar", () => {
     expect(
       (
         screen.getByRole("button", {
-          name: "Remove Layout…",
+          name: "Remove header & footer set…",
         }) as HTMLButtonElement
       ).disabled
     ).toBe(true);
@@ -283,7 +293,7 @@ describe("in the document bar", () => {
     expect(
       (
         screen.getByRole("button", {
-          name: "Remove Layout…",
+          name: "Remove header & footer set…",
         }) as HTMLButtonElement
       ).disabled
     ).toBe(false);
@@ -293,7 +303,9 @@ describe("in the document bar", () => {
     identity = { kind: "collection", slug: "layouts", documentId: "landing" };
     documentStatus = { status: "published", hasWorkingDraft: false };
     render(<RemoveLayoutToolbarSlot context="collection" />);
-    expect(screen.getByRole("button", { name: "Remove Layout…" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Remove header & footer set…" })
+    ).toBeTruthy();
   });
 
   it.each([
@@ -316,7 +328,7 @@ describe("in the document bar", () => {
 describe("a delete that a page published meanwhile still names", () => {
   it("says so in the dialog, and returns to the list only once the author has read it", async () => {
     const sentence =
-      "Home still uses this Layout. It shows the site default until it is published with another Layout.";
+      "Home still uses this header & footer set. It shows the site default until it is published with another header & footer set.";
     answer = async body =>
       body.dryRun
         ? { message: "", item: { check: check() } }
@@ -332,12 +344,14 @@ describe("a delete that a page published meanwhile still names", () => {
     openDialog();
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Delete Layout" })
+      await screen.findByRole("button", { name: "Delete header & footer set" })
     );
 
     expect(await screen.findByText(sentence)).toBeTruthy();
     expect(navigated).toEqual([]);
-    fireEvent.click(screen.getByRole("button", { name: "Back to Layouts" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Back to Header & footer" })
+    );
     expect(navigated).toEqual(["/admin/collections/layouts"]);
   });
 });
@@ -391,7 +405,7 @@ describe("moving the pages to the site default first", () => {
         (_text, element) =>
           element?.tagName === "P" &&
           element.textContent ===
-            "40 pages use this Layout. Move them to the site default, Main, and then delete or unpublish it, or close and choose another Layout for them yourself."
+            "40 pages use this header & footer set. Move them to the site default, Main, and then delete or unpublish it, or close and choose another header & footer set for them yourself."
       )
     ).toBeTruthy();
     expect(screen.getByRole("link", { name: "Pricing" })).toBeTruthy();
@@ -467,7 +481,7 @@ describe("moving the pages to the site default first", () => {
         (_text, element) =>
           element?.tagName === "P" &&
           element.textContent ===
-            "12 pages now use the site default, Main. 28 still use this Layout, so it was not deleted."
+            "12 pages now use the site default, Main. 28 still use this header & footer set, so it was not deleted."
       )
     ).toBeTruthy();
     expect(screen.getByText("Moved 12 of 40 pages")).toBeTruthy();
@@ -499,16 +513,18 @@ describe("moving the pages to the site default first", () => {
 
     expect(
       await screen.findByText(
-        "40 pages moved to the site default, Main, and the Layout was deleted."
+        "40 pages moved to the site default, Main, and the header & footer set was deleted."
       )
     ).toBeTruthy();
     // Every live version moved, so nothing is left for a publisher.
-    expect(screen.queryByText(/still name this Layout/)).toBeNull();
+    expect(
+      screen.queryByText(/still name this header & footer set/)
+    ).toBeNull();
     // The outcome is marked by an icon beside the title, not by colouring
     // the sentence.
     expect(
       screen
-        .getByText("Layout deleted")
+        .getByText("Header & footer set deleted")
         .querySelector('svg[aria-hidden="true"]')
     ).not.toBeNull();
     expect(navigated).toEqual([]);
@@ -539,12 +555,12 @@ describe("moving the pages to the site default first", () => {
 
     expect(
       await screen.findByText(
-        "37 pages moved to the site default, Main, and the Layout was deleted."
+        "37 pages moved to the site default, Main, and the header & footer set was deleted."
       )
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "The published versions of 3 pages still name this Layout, because changing them needs permission to publish them. Visitors see the site default's header and footer there until someone who can publish them chooses another Layout."
+        "The published versions of 3 pages still name this header & footer set, because changing them needs permission to publish them. Visitors see the site default's header and footer there until someone who can publish them chooses another header & footer set."
       )
     ).toBeTruthy();
     // Each named page opens in a new tab, for whoever can publish it.
@@ -589,7 +605,7 @@ describe("moving the pages to the site default first", () => {
         (_text, element) =>
           element?.tagName === "P" &&
           element.textContent ===
-            "39 of 40 pages moved to the site default, Main. The Layout was not deleted, because one page still uses it:"
+            "39 of 40 pages moved to the site default, Main. The header & footer set was not deleted, because one page still uses it:"
       )
     ).toBeTruthy();
     expect(screen.getByText("Some pages couldn't be moved")).toBeTruthy();
@@ -598,7 +614,7 @@ describe("moving the pages to the site default first", () => {
     expect(screen.getByText("You can't edit this page.")).toBeTruthy();
     expect(
       screen.getByText(
-        "Ask someone who can edit it to choose another Layout, then try again."
+        "Ask someone who can edit it to choose another header & footer set, then try again."
       )
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();

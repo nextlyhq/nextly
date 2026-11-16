@@ -304,17 +304,19 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                   hidden={dragging}
                   onAppend={nodeId => {
                     // Select the container and open Add to add INSIDE it,
-                    // said explicitly: selecting a container never implies
-                    // inside, so a click on a selected block adds after it.
+                    // said explicitly: a layout block added with a container
+                    // selected goes after it, while this "+" means inside
+                    // for every block.
                     editor.select(nodeId);
-                    openInsertPanel(nodeId);
+                    openInsertPanel({ inside: nodeId });
                   }}
                 />
                 {/*
                   The empty page's start card and the "+" between sections.
-                  The "+" selects the section above its gap and opens Add,
-                  which adds after the selected block and names the place;
-                  the start card opens Add on a page with nothing to select.
+                  The "+" selects the section above its gap and opens Add to
+                  add IN THE GAP, said explicitly: with a section selected a
+                  content block would otherwise go inside it. The start card
+                  opens Add on a page with nothing to select.
                   Hidden mid-drag, when the drag's own line says where a block
                   lands.
                 */}
@@ -325,7 +327,7 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                   onStart={() => openInsertPanel()}
                   onAddAfter={nodeId => {
                     editor.select(nodeId);
-                    openInsertPanel();
+                    openInsertPanel({ after: nodeId });
                   }}
                 />
               </>
