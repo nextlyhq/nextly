@@ -143,7 +143,7 @@ describeEachDialect(
         collection: "notes",
         data: { title: "Draft" },
       } as never);
-      return String((created as { item: { id: unknown } }).item.id);
+      return String(created.item.id);
     }
 
     it("holds back a save that publishes, and nothing goes live", async () => {
@@ -170,7 +170,7 @@ describeEachDialect(
         locale: "en",
         data: { title: "Hello" },
       } as never);
-      const id = String((created as { item: { id: unknown } }).item.id);
+      const id = String(created.item.id);
       const seen = heldUnlessWithoutReview();
 
       const refusal = await refusalOf(
@@ -196,7 +196,7 @@ describeEachDialect(
         locale: "en",
         data: { title: "Hello" },
       } as never);
-      const id = String((created as { item: { id: unknown } }).item.id);
+      const id = String(created.item.id);
       heldUnlessWithoutReview();
 
       const refusal = await refusalOf(
@@ -304,7 +304,7 @@ describeEachDialect(
         collection: "notes",
         data: { title: "Live", status: "published" },
       } as never);
-      const id = String((created as { item: { id: unknown } }).item.id);
+      const id = String(created.item.id);
       const seen = heldUnlessWithoutReview();
 
       await t!.nextly.update({
