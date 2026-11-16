@@ -48,7 +48,9 @@ vi.mock("../template-preview-client", () => ({
 const writePluginRoute = vi.hoisted(() => vi.fn());
 // The change check has its own tests; here it would share the mocked route
 // with the read under test.
-vi.mock("./canvas-source-check", () => ({ useCanvasSourceCheck: () => undefined }));
+vi.mock("./canvas-source-check", () => ({
+  useCanvasSourceCheck: () => undefined,
+}));
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useCurrentUserId: () => "u1",
   useDocumentIdentity: () => ({

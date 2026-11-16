@@ -49,6 +49,7 @@ import { valueAtPath } from "../snapshot-merge";
 import type { OpenAt } from "./builder-address";
 import { useCanvasEntryIdentity } from "./canvas-entry";
 import { listEntryCollectionOf } from "./canvas-page-context";
+import { useDropKeptReadsOnSave } from "./canvas-source-check";
 import { useConditionedPage } from "./conditioned-page";
 import { editorCanvasRegion } from "./editor-canvas-region";
 import {
@@ -92,7 +93,6 @@ import {
   useHostCommit,
   useSavePoint,
 } from "./use-host-commit";
-import { useDropKeptReadsOnSave } from "./canvas-source-check";
 import { useOpenAtSection } from "./use-open-at-section";
 import {
   useBoundCanvasRender,

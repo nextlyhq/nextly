@@ -52,12 +52,12 @@ import {
 } from "../canvas-bindings-contract";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
+import { onCanvasSourcesChanged } from "./canvas-sources";
 import {
   useCanvasEntryIdentity,
   useCanvasEntryRead,
   type CanvasEntryRead,
 } from "./editor/canvas-entry";
-import { onCanvasSourcesChanged } from "./canvas-sources";
 import { useCanvasSourceCheck } from "./editor/canvas-source-check";
 /**
  * What each answer's reads cost the page's allowance, by the bindings it
