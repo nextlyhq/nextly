@@ -192,6 +192,31 @@ describe("planEntityMoves", () => {
     ).toEqual({ first: [], last: [] });
   });
 
+  it("refuses a move into a group that replaces a virtual group of its name, which made no column", () => {
+    const virtualMeta = {
+      ...group("meta", []),
+      virtual: true,
+    } as FieldDefinition;
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before: [text("title"), virtualMeta],
+        after: [group("meta", [text("title")])],
+        moves: [{ from: ["title"], to: ["meta", "title"] }],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              message: expect.stringContaining("Save the new group first"),
+            }),
+          ],
+        },
+      })
+    );
+  });
+
   it("plans nothing for a save that moves nothing", () => {
     expect(
       planEntityMoves({

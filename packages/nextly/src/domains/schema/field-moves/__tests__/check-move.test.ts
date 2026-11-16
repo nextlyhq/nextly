@@ -221,6 +221,18 @@ describe("checkMove", () => {
     ).toMatchObject({ ok: false });
   });
 
+  it("refuses a move out of a group into a unique field, whose values would arrive after the uniqueness", () => {
+    const checked = checkMove(
+      [group("meta", [text("slug")])],
+      [text("slug", { unique: true }), group("meta", [])],
+      { from: ["meta", "slug"], to: ["slug"] }
+    );
+    expect(checked).toMatchObject({ ok: false, reason: "unique" });
+    expect((checked as { message: string }).message).toMatch(
+      /Move it first, then make it unique as a change of its own/
+    );
+  });
+
   it("refuses a move into a group in the same save that takes the field's uniqueness away", () => {
     const before = [text("slug", { unique: true }), group("meta", [])];
     const after = [group("meta", [text("slug")])];
