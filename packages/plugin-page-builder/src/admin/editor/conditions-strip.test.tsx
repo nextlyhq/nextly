@@ -126,7 +126,12 @@ describe("the strip while previewing as a visitor", () => {
     expect(screen.getByRole("status").textContent).toBe(
       "1 block hidden for this page"
     );
-    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    const stop = screen.getByRole("button", {
+      name: "Stop previewing as a visitor",
+    });
+    // The word it shows starts the name it is read by.
+    expect(stop.textContent).toBe("Stop");
+    fireEvent.click(stop);
     expect(onStop).toHaveBeenCalledTimes(1);
     // Nothing of the switch it replaces.
     expect(screen.queryByRole("switch")).toBeNull();

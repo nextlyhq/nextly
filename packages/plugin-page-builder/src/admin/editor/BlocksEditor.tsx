@@ -9,8 +9,9 @@
  * what fills the shell's slots from them: the top bar (`editor-top-bar`), the
  * inspector (`editor-inspector`, with its services in `editor-services`), the
  * canvas region (`editor-canvas-region`), Settings (`editor-settings`) and the
- * conditions strip and switch (`editor-conditions`), all reading one view
- * (`editor-view`). This module puts them into the shell.
+ * strip above the canvas and "Preview as visitor" (`editor-conditions`),
+ * all reading one view (`editor-view`). This module puts them into the
+ * shell.
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/BlocksEditor
  */
@@ -365,7 +366,7 @@ function EditorBody<TFieldValues extends FieldValues>({
 
   const style = useSiteStyleInputs(mount.clientConfig);
   // Whether the canvas's lists read as a visitor: held above the canvas's
-  // inputs, which read them, and set by the conditions switch below.
+  // inputs, which read them, and set by "Preview as visitor" below.
   const listsAsVisitor = useListsAsVisitor();
   const canvas = useCanvasInputs(mount, style, listsAsVisitor.lists);
   const panels = useEditorPanels(mount, name, {

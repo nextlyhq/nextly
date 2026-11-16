@@ -13,7 +13,7 @@ import {
   type AppliedConditions,
   type AppliedConditionsOptions,
 } from "@nextlyhq/builder/shell";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { loopCollectionsIn } from "../loop-collections-client";
 
@@ -29,7 +29,7 @@ import {
   usePageConditionsRead,
   type PageConditionsSource,
 } from "./page-conditions-read";
-import type { VisitorPreview } from "./preview-button";
+import { focusPreviewMenu, type VisitorPreview } from "./preview-button";
 import {
   TemplatePreviewStrip,
   type useTemplatePreviewState,
@@ -71,7 +71,10 @@ export function editorStrip(
     conditions.said === undefined ? undefined : (
       <VisitorStrip
         said={conditions.said}
-        onStop={() => conditions.visitor.onChange(false)}
+        onStop={() => {
+          conditions.visitor.onChange(false);
+          focusPreviewMenu();
+        }}
       />
     );
   if (preview === undefined) return visitor;
@@ -172,13 +175,20 @@ export function useAppliedConditionsSwitch(
     if (next) setAttempt(count => count + 1);
     setOn(next);
   }, []);
+  // A document left with no conditioned block turns the view off, so one
+  // added again later doesn't bring it back unasked. Kept on while only the
+  // entry is missing: a template switching entries keeps showing each as a
+  // visitor gets it.
+  useEffect(() => {
+    if (!checks) setOn(false);
+  }, [checks]);
   const unavailable = visitorUnavailable(
     kind,
     checks,
     preview !== undefined ? entry?.kind === "entry" : pageSource !== undefined
   );
-  // Applied only while it is on and can be: a document that loses its last
-  // conditioned block, or a template its entry, shows every block again.
+  // Applied only while it is on and can be: a template between entries
+  // shows every block until the next one is read.
   const active = on && unavailable === undefined;
   // A page is read as a visitor reads it, and only once the author applies
   // its conditions.

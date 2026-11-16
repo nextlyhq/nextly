@@ -127,8 +127,22 @@ describe("Preview as visitor on a page", () => {
     expect(result.current.said).toBe("1 block hidden for this page");
 
     // The strip's Stop turns it off, and the canvas shows every block again.
-    render(<>{editorStrip(undefined, result.current)}</>);
-    act(() => screen.getByRole("button", { name: "Stop" }).click());
+    // Focus goes to Preview's menu, where the view is turned on, rather than
+    // being lost with the strip.
+    render(
+      <>
+        <button type="button" data-preview-menu="">
+          Preview options
+        </button>
+        {editorStrip(undefined, result.current)}
+      </>
+    );
+    act(() =>
+      screen
+        .getByRole("button", { name: "Stop previewing as a visitor" })
+        .click()
+    );
+    expect(document.activeElement?.textContent).toBe("Preview options");
     expect(result.current.visitor.on).toBe(false);
     expect(result.current.said).toBeUndefined();
     expect(appliedWith).toHaveBeenLastCalledWith(undefined);
@@ -145,6 +159,23 @@ describe("Preview as visitor on a page", () => {
     expect(result.current.visitor.on).toBe(false);
     expect(pageWanted).not.toHaveBeenCalledWith(true);
     expect(appliedWith).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it("goes off when the last conditioned block goes, and stays off when one comes back", () => {
+    const { result, rerender } = renderHook(
+      (props: { held: typeof CONDITIONED }) =>
+        useSwitch({ source: PAGE, ...props }),
+      { initialProps: { held: CONDITIONED } }
+    );
+    act(() => result.current.visitor.onChange(true));
+    expect(result.current.visitor.on).toBe(true);
+    rerender({ held: PLAIN });
+    expect(result.current.said).toBeUndefined();
+    // An undo brings the block back, not the view the author never asked
+    // for again.
+    rerender({ held: CONDITIONED });
+    expect(result.current.visitor.on).toBe(false);
+    expect(result.current.said).toBeUndefined();
   });
 
   it("needs an entry on a page that is none of a collection's", () => {
@@ -183,7 +214,14 @@ describe("Preview as visitor elsewhere", () => {
     expect(pageWanted).not.toHaveBeenCalledWith(true);
     expect(result.current.said).toBe("1 block hidden for this post");
 
-    // The visitor's row sits under the Previewing row.
+    // Between entries it shows every block, and comes back on with the next:
+    // the author is comparing entries as a visitor gets each.
+    rerender({});
+    expect(result.current.said).toBeUndefined();
+    rerender({ entry: ENTRY });
+    expect(result.current.said).toBe("1 block hidden for this post");
+
+    // The visitor's row is handed to the Previewing strip, which draws it.
     render(<>{editorStrip(TEMPLATE, result.current)}</>);
     const previewing = screen.getByTestId("previewing");
     expect(previewing.textContent).toContain("Previewing as a visitor");

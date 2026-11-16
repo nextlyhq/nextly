@@ -19,6 +19,7 @@
 import type { DocumentKind } from "@nextlyhq/blocks-engine";
 import type { AppliedConditions } from "@nextlyhq/builder/shell";
 import { Eye } from "lucide-react";
+import { useEffect, useState } from "react";
 
 /** Why "Preview as visitor" can't be used where no block has conditions. */
 const NO_CONDITIONS = "No block on this page has conditions";
@@ -114,8 +115,9 @@ export function visitorStripWords({
 
 /**
  * The strip while the canvas shows the page as a visitor gets it: that it
- * does, what was hidden, and Stop. What was hidden is a live region, so each
- * change of it is announced.
+ * does, what was hidden, and Stop. What was hidden is a live region, drawn
+ * empty first and filled once it is on the page, so even the first words
+ * are announced, then each change of them.
  */
 export function VisitorStrip({
   said,
@@ -123,8 +125,11 @@ export function VisitorStrip({
 }: {
   /** What the conditions did, from {@link visitorStripWords}. */
   readonly said: string;
+  /** Turns the view off; it is told where focus goes once the strip is gone. */
   readonly onStop: () => void;
 }): React.JSX.Element {
+  const [announced, setAnnounced] = useState("");
+  useEffect(() => setAnnounced(said), [said]);
   return (
     <div className="nx-preview-strip" data-visitor-preview="">
       <span className="nx-preview-strip__mode">
@@ -132,10 +137,17 @@ export function VisitorStrip({
         Previewing as a visitor
       </span>
       <span className="nx-preview-strip__sep" aria-hidden="true" />
-      <span className="nx-preview-strip__count" role="status" title={said}>
-        {said}
+      <span className="nx-preview-strip__count" role="status" title={announced}>
+        {announced}
       </span>
-      <button type="button" className="nx-preview-strip__stop" onClick={onStop}>
+      <button
+        type="button"
+        className="nx-preview-strip__stop"
+        // The whole of what it stops, to a screen reader, starting with the
+        // word the button shows.
+        aria-label="Stop previewing as a visitor"
+        onClick={onStop}
+      >
         Stop
       </button>
     </div>

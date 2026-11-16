@@ -96,6 +96,15 @@ const VISITOR_DOES = "Hides blocks whose conditions don’t match";
 const OPTIONS = "Preview options";
 
 /**
+ * Moves focus to the button that opens Preview's menu: where the visitor
+ * strip's Stop sends it, since the strip leaves the page with the button
+ * that was pressed, and the menu is where the view is turned on again.
+ */
+export function focusPreviewMenu(): void {
+  document.querySelector<HTMLElement>("[data-preview-menu]")?.focus();
+}
+
+/**
  * A menu row's name, and a line under it saying what it does or why not.
  * The line describes the row rather than joining its name, so a screen
  * reader says "Preview as visitor" and then what it does.
@@ -242,7 +251,13 @@ export function PreviewButton({
           {open === undefined ? (
             // No press to sit beside: the menu's own button carries the
             // words, and its arrow says it opens a menu.
-            <Button type="button" size="sm" variant="outline" title={OPTIONS}>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              title={OPTIONS}
+              data-preview-menu=""
+            >
               {words}
               <ChevronDown className="size-4" aria-hidden="true" />
             </Button>
@@ -254,6 +269,7 @@ export function PreviewButton({
               className="rounded-l-none border-l-0 px-1.5"
               aria-label={OPTIONS}
               title={OPTIONS}
+              data-preview-menu=""
             >
               <ChevronDown className="size-4" aria-hidden="true" />
             </Button>

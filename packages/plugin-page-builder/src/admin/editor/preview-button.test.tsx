@@ -343,6 +343,36 @@ describe("the Preview menu", () => {
     expect(saveWithoutPublishing).toHaveBeenCalledTimes(1);
   });
 
+  it("holds Preview this version while the document is being saved, and not the visitor's view", async () => {
+    preview = { open: vi.fn() };
+    actions = {
+      saveState: { kind: "saving" },
+      saveWithoutPublishing: () => Promise.resolve({ ok: true }),
+    };
+    render(<PreviewButton visitor={visitorView()} />);
+    await openMenu();
+    expect(
+      screen
+        .getByRole("menuitem", { name: "Preview this version" })
+        .getAttribute("aria-disabled")
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("menuitemcheckbox", { name: "Preview as visitor" })
+        .hasAttribute("aria-disabled")
+    ).toBe(false);
+  });
+
+  it("names it Preview the saved version with nothing unsaved too", async () => {
+    preview = { open: vi.fn() };
+    actions = { saveState: { kind: "saved" } };
+    render(<PreviewButton visitor={visitorView()} />);
+    await openMenu();
+    expect(
+      screen.getByRole("menuitem", { name: "Preview the saved version" })
+    ).toBeTruthy();
+  });
+
   it("turns Preview as visitor on, and shows it checked while it is", async () => {
     preview = { open: vi.fn() };
     actions = { saveState: { kind: "saved" } };
