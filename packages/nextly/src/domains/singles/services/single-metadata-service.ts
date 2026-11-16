@@ -1017,40 +1017,9 @@ export class SingleMetadataService {
     input: UpdateSingleSchemaInput,
     plan: UpdateDdlPlan | null
   ): Promise<UpdateSingleSchemaResult> {
-    const { previousEntity, writeEntitySave } = await loadEntitySave();
-    const existing = input.existing;
-    const updateData = input.updateData;
-    const before = (existing.fields ?? []) as unknown as FieldDefinition[];
-    const after =
-      plan?.fields ??
-      (updateData.fields as FieldDefinition[] | undefined) ??
-      before;
-    const stored = singleEntity(existing);
-    const rename = await this.detectedFieldRename(before, after);
-    // The Required and Unique settings of fields leaving translation are applied after the
-    // companion's values are copied, and refused together where those values cannot take them. The
-    // first file is written without them, so it matches what the registry records either way; a
-    // second records them once they have applied.
-    const leaving = plan?.leavingSettings ?? [];
-    const planned =
-      leaving.length > 0 ? withoutRefusedSettings(after, leaving) : after;
-    const entityWith = (fields: FieldDefinition[]) =>
-      singleEntity({ ...existing, ...updateData, fields });
-    const save = {
-      kind: "single" as const,
-      slug: input.slug,
-      previous: await previousEntity(deps, "single", input.slug, stored),
-      entity: entityWith(planned),
-      change: "update" as const,
-      ...(rename ? { renamedFields: [rename] } : {}),
-      ...(await entityRelations(
-        deps.adapter,
-        this.logger,
-        existing.tableName,
-        before,
-        after
-      )),
-    };
+    const { writeEntitySave } = await loadEntitySave();
+    const { before, after, rename, leaving, planned, entityWith, save } =
+      await this.updateSaveOf(deps, input, plan);
     // Where the save carries no values across its change, its own migration file applies it in
     // development, as the Builder dialog's save does: run as `nextly migrate` runs one, in tries over
     // a busy table and on SQLite with foreign keys off. A save that carries values keeps the
@@ -1121,6 +1090,57 @@ export class SingleMetadataService {
       }
     }
     return ran.result as UpdateSingleSchemaResult;
+  }
+
+  /**
+   * What an update is written as: the field lists before and after, the rename it makes, the
+   * Required and Unique settings of fields leaving translation, which the first file is written
+   * without, and the save the writer takes.
+   */
+  private async updateSaveOf(
+    deps: CollectionSaveDeps,
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan | null
+  ) {
+    const { previousEntity } = await loadEntitySave();
+    const existing = input.existing;
+    const updateData = input.updateData;
+    const before = (existing.fields ?? []) as unknown as FieldDefinition[];
+    const after =
+      plan?.fields ??
+      (updateData.fields as FieldDefinition[] | undefined) ??
+      before;
+    const rename = await this.detectedFieldRename(before, after);
+    // The Required and Unique settings of fields leaving translation are applied after the
+    // companion's values are copied, and refused together where those values cannot take them. The
+    // first file is written without them, so it matches what the registry records either way; a
+    // second records them once they have applied.
+    const leaving = plan?.leavingSettings ?? [];
+    const planned =
+      leaving.length > 0 ? withoutRefusedSettings(after, leaving) : after;
+    const entityWith = (fields: FieldDefinition[]) =>
+      singleEntity({ ...existing, ...updateData, fields });
+    const save: CollectionSave = {
+      kind: "single",
+      slug: input.slug,
+      previous: await previousEntity(
+        deps,
+        "single",
+        input.slug,
+        singleEntity(existing)
+      ),
+      entity: entityWith(planned),
+      change: "update",
+      ...(rename ? { renamedFields: [rename] } : {}),
+      ...(await entityRelations(
+        deps.adapter,
+        this.logger,
+        existing.tableName,
+        before,
+        after
+      )),
+    };
+    return { before, after, rename, leaving, planned, entityWith, save };
   }
 
   /**

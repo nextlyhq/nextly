@@ -477,11 +477,10 @@ describe.each(getConfiguredTestDialects())(
 
         // The same save again: the row is written, and nothing is left for the migrate commands.
         await kind.change(t, [text("heading"), text("body")]);
-        expect(
-          (await kind.row(t))?.fields?.map(
-            field => (field as { name: string }).name
-          )
-        ).toEqual(["heading", "body"]);
+        const fields = (await kind.row(t))?.fields as
+          | { name: string }[]
+          | undefined;
+        expect(fields?.map(field => field.name)).toEqual(["heading", "body"]);
         await nothingLeftToDo(t);
       }, 60_000);
     });
