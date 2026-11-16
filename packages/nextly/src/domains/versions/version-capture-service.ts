@@ -82,8 +82,9 @@ export class VersionCaptureService {
     const repo = new VersionsRepository(db);
     const { versionNo, retried } = await insertWithRetry(db, repo, input);
     // Trim history to the configured cap inside the caller's transaction. What
-    // is always kept (the newest version, each language's latest published one,
-    // named versions and restore lineage) is decided by selectVersionsToPrune.
+    // is always kept (the newest version, the latest published one of each
+    // language and of the shared part, named versions and restore lineage) is
+    // decided by selectVersionsToPrune, from the parts each row records.
     if (typeof input.maxPerDoc === "number") {
       // After a lost race the scan reads with a lock too: on MySQL a plain read
       // answers from the snapshot the first allocation took, which lacks the

@@ -13,6 +13,7 @@ import {
   breaches,
   fetchableStylesheets,
   judge,
+  narrowEngineSources,
   REGISTRATION_BUDGET_KB,
   SCREENS,
   sourceLengths,
@@ -34,6 +35,7 @@ function screen(name, groups = {}, fetchable = [EDITOR_SHEET]) {
     groups: {
       "page builder": empty,
       "block engine": empty,
+      "block engine beyond its narrow entries": empty,
       "builder editor": empty,
       "CSS parser": empty,
       "site-code section": empty,
@@ -108,6 +110,33 @@ describe("breaches", () => {
       "sign-in: holds the builder editor (1 modules, e.g. packages/builder/src/canvas.tsx)",
       "sign-in: holds the CSS parser (1 modules, e.g. node_modules/css-tree/lib/index.js)",
     ]);
+  });
+
+  it("names block engine code beyond its narrow entries on a screen that draws no part", () => {
+    expect(
+      breaches(
+        [
+          screen("dashboard", {
+            "block engine beyond its narrow entries": {
+              gzippedBytes: 1,
+              sources: ["packages/blocks-engine/src/style/compile-page.ts"],
+            },
+          }),
+        ],
+        []
+      )
+    ).toEqual([
+      "dashboard: holds the block engine beyond its narrow entries (1 modules, e.g. packages/blocks-engine/src/style/compile-page.ts)",
+    ]);
+  });
+
+  it("fails the CSS parser on the sign-in page or the dashboard: no known miss excuses it", () => {
+    const found = [
+      "sign-in: holds the CSS parser (76 modules, e.g. node_modules/css-tree/lib/index.js)",
+      "dashboard: holds the CSS parser (76 modules, e.g. node_modules/css-tree/lib/index.js)",
+      "dashboard, parts drawn: holds the CSS parser (76 modules, e.g. node_modules/css-tree/lib/index.js)",
+    ];
+    expect(judge(found)).toEqual(found);
   });
 
   it("names a part the builder holds before it opens", () => {
@@ -248,5 +277,93 @@ describe("sourceLengths", () => {
         ["packages/b.ts", 4],
       ])
     );
+  });
+});
+
+describe("the block engine's narrow entries", () => {
+  const packageJson = {
+    exports: {
+      ".": { import: "./dist/index.mjs" },
+      "./contrast": { import: "./dist/contrast.mjs" },
+      "./named-query": { default: "./dist/named-query.mjs" },
+    },
+  };
+  // The root, two narrow entries, the chunk one of them shares with the root,
+  // and a chunk only the root reaches.
+  const metafile = {
+    outputs: {
+      "dist/index.mjs": {
+        imports: [
+          { path: "dist/contrast-a1.mjs" },
+          { path: "dist/compile-b2.mjs" },
+          { path: "css-tree/parser", external: true },
+        ],
+        inputs: { "src/index.ts": {} },
+      },
+      "dist/contrast.mjs": {
+        imports: [{ path: "dist/contrast-a1.mjs" }],
+        inputs: { "src/contrast.ts": {} },
+      },
+      "dist/contrast-a1.mjs": {
+        imports: [],
+        inputs: {
+          "src/style/contrast.ts": {},
+          "src/style/css-identifier.ts": {},
+        },
+      },
+      "dist/named-query.mjs": {
+        imports: [],
+        inputs: { "src/named-query.ts": {}, "src/plain-record.ts": {} },
+      },
+      "dist/compile-b2.mjs": {
+        imports: [],
+        inputs: { "src/style/compile-page.ts": {} },
+      },
+    },
+  };
+  const sources = narrowEngineSources(packageJson, metafile);
+
+  it("holds what each subpath export other than the root reaches, as source and as built", () => {
+    expect([...sources].sort()).toEqual(
+      [
+        "packages/blocks-engine/dist/contrast.mjs",
+        "packages/blocks-engine/dist/contrast-a1.mjs",
+        "packages/blocks-engine/dist/named-query.mjs",
+        "packages/blocks-engine/src/contrast.ts",
+        "packages/blocks-engine/src/style/contrast.ts",
+        "packages/blocks-engine/src/style/css-identifier.ts",
+        "packages/blocks-engine/src/named-query.ts",
+        "packages/blocks-engine/src/plain-record.ts",
+      ].sort()
+    );
+  });
+
+  it("leaves out what only the root reaches", () => {
+    expect(sources.has("packages/blocks-engine/src/index.ts")).toBe(false);
+    expect(
+      sources.has("packages/blocks-engine/src/style/compile-page.ts")
+    ).toBe(false);
+    expect(sources.has("packages/blocks-engine/dist/compile-b2.mjs")).toBe(
+      false
+    );
+  });
+
+  it("lets through only the named entries, not every subpath export", () => {
+    const withAnother = {
+      exports: {
+        ...packageJson.exports,
+        "./style": { import: "./dist/compile-b2.mjs" },
+      },
+    };
+    expect(
+      narrowEngineSources(withAnother, metafile).has(
+        "packages/blocks-engine/src/style/compile-page.ts"
+      )
+    ).toBe(false);
+  });
+
+  it("is empty without a build graph, so every engine module counts against a screen", () => {
+    expect(narrowEngineSources(packageJson, undefined).size).toBe(0);
+    expect(narrowEngineSources(undefined, metafile).size).toBe(0);
   });
 });

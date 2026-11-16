@@ -139,15 +139,16 @@ test.describe("the top bar's far end", () => {
   }) => {
     const id = await openDraftPage(page);
 
-    // The panel buttons first, then search, Preview, and Save and Publish,
-    // the bar ending on the page's own verbs.
+    // The panel buttons first, then search, Preview with its arrow, and
+    // Save and Publish, the bar ending on the page's own verbs.
     await expect
-      .poll(async () => (await endButtons(page)).slice(0, 6))
+      .poll(async () => (await endButtons(page)).slice(0, 7))
       .toEqual([
         "Left panel",
         "Inspector",
         "Search and commands",
         "Preview",
+        "Preview options",
         "Saved",
         "Publish",
       ]);
