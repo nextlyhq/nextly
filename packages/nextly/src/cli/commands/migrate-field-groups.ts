@@ -40,6 +40,7 @@ import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
 import type { MigrationOutcome } from "../../domains/field-groups/migration/run";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
+import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
 import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
 import { withAdapter } from "../utils/adapter";
@@ -90,6 +91,17 @@ export async function runMigrateFieldGroups(
   const dryRun = options.apply !== true;
   const direction = options.down === true ? "down" : "up";
 
+  // A writing run's renames wait for a busy table within the bounds the environment gives
+  // (`NEXTLY_LOCK_TIMEOUT`, `NEXTLY_LOCK_TIMEOUT_TOTAL`), read before the database is reached so a
+  // bound outside its range refuses the run before anything is read or changed. Each try's notice
+  // is a warning, so `--quiet` keeps it back; the stop itself is an error and is always shown.
+  const busyTable = dryRun
+    ? undefined
+    : {
+        bounds: busyTableBounds({ env: process.env }),
+        notify: (line: string) => logger.warn(line),
+      };
+
   logger.keyValue("Direction", direction);
   logger.keyValue("Mode", dryRun ? "preview (nothing is written)" : "apply");
   logger.newline();
@@ -131,6 +143,7 @@ export async function runMigrateFieldGroups(
         // catalog or contended for the lock, and restating that decision would make this a second
         // place it could drift from.
         backupConfirmed: options.backupConfirmed === true,
+        ...(busyTable === undefined ? {} : { busyTable }),
       });
 
       reportOutcome(outcome, logger);
