@@ -995,11 +995,12 @@ export async function generateMigration(
       ...permissionScopeOf(args),
     });
   // What a run writes a file for even when no table changes.
-  const changesBeyondTables =
-    hasSettingsChanges || changedPermissions.length > 0;
   // Statements the caller adds are a change of their own though no table's shape changes with
   // them: a field's values moved between two groups, whose columns both stand.
-  const appendsStatements = addsStatements(args.appendedStatements);
+  const changesBeyondTables =
+    hasSettingsChanges ||
+    changedPermissions.length > 0 ||
+    addsStatements(args.appendedStatements);
 
   const recorded = await recordedUnlessChanged(args, {
     // Not the per-language unique indexes: a snapshot from before the record has none of them, so
@@ -1024,12 +1025,7 @@ export async function generateMigration(
     },
   });
   if (recorded !== undefined) return recorded;
-  if (
-    operations.length === 0 &&
-    !hasCompanions &&
-    !changesBeyondTables &&
-    !appendsStatements
-  ) {
+  if (operations.length === 0 && !hasCompanions && !changesBeyondTables) {
     return null;
   }
 
@@ -1087,12 +1083,7 @@ export async function generateMigration(
     previous: previousSnapshot,
     dialect: args.dialect,
   });
-  if (
-    operations.length === 0 &&
-    !hasCompanions &&
-    !changesBeyondTables &&
-    !appendsStatements
-  ) {
+  if (operations.length === 0 && !hasCompanions && !changesBeyondTables) {
     return null;
   }
 
@@ -1145,15 +1136,10 @@ export async function generateMigration(
   // reverse rename rather than a data-losing drop+add. Object-removing ops
   // recover their original spec from previousSnapshot.
   const inverseOps = withCyclicForeignKeysSplit(
-    restoredNullable(buildInverseOperations(operations, previousSnapshot), [
-      ...fieldJoinsPlans.flatMap(({ plan }) =>
-        plan.spec.columns.map(c => ({
-          table: plan.spec.mainTable,
-          column: c.name,
-        }))
-      ),
-      ...(args.valueMoves ?? []),
-    ]),
+    restoredNullable(
+      buildInverseOperations(operations, previousSnapshot),
+      refilledOnTheWayDown(fieldJoinsPlans, args.valueMoves)
+    ),
     args.dialect,
     desiredSnapshot.tables
   );
@@ -1193,7 +1179,7 @@ export async function generateMigration(
   // A column whose field moved into a group comes back nullable on the way down, its values
   // copied back from the group last: it is made required again once they are in.
   downSqlStatements.push(
-    ...movedBackRequired(args.valueMoves ?? [], args.dialect, previousSnapshot)
+    ...movedBackRequired(args.valueMoves, args.dialect, previousSnapshot)
   );
 
   // 7c. A translated relation whose shape changed keeps its values on the entity's companion,
@@ -3000,6 +2986,22 @@ function requiredAgain(
   return generateStatements(ops, dialect, previousSnapshot.tables);
 }
 
+/** The columns the way down re-adds and then fills: each joining field's, and each moved field's. */
+function refilledOnTheWayDown(
+  joins: readonly FieldJoinsEntry[],
+  moves: GenerateArgs["valueMoves"]
+): { table: string; column: string }[] {
+  return [
+    ...joins.flatMap(({ plan }) =>
+      plan.spec.columns.map(c => ({
+        table: plan.spec.mainTable,
+        column: c.name,
+      }))
+    ),
+    ...(moves ?? []),
+  ];
+}
+
 /**
  * The main migration's DOWN with each column whose values are copied back after it is re-added
  * made nullable: a joining field's, which the `joins` file's DOWN fills with the default
@@ -3009,9 +3011,9 @@ function requiredAgain(
  */
 function restoredNullable(
   inverse: Operation[],
-  refilled: readonly { table: string; column?: string }[]
+  refilled: readonly { table: string; column: string }[]
 ): Operation[] {
-  const keys = new Set(refilled.map(r => `${r.table}::${r.column ?? ""}`));
+  const keys = new Set(refilled.map(r => `${r.table}::${r.column}`));
   return inverse.map(op =>
     op.type === "add_column" &&
     keys.has(`${op.tableName}::${op.column.name}`) &&
@@ -3026,12 +3028,12 @@ function restoredNullable(
  * previous snapshot had it, once its values are copied back from the group (`requiredAgain`).
  */
 function movedBackRequired(
-  moves: readonly { table: string; column: string }[],
+  moves: GenerateArgs["valueMoves"],
   dialect: SupportedDialect,
   previousSnapshot: NextlySchemaSnapshot
 ): string[] {
   const byTable = new Map<string, string[]>();
-  for (const { table, column } of moves) {
+  for (const { table, column } of moves ?? []) {
     byTable.set(table, [...(byTable.get(table) ?? []), column]);
   }
   return [...byTable].flatMap(([table, columns]) =>
