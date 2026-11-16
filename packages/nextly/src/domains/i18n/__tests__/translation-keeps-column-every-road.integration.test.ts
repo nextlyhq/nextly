@@ -123,34 +123,30 @@ const run = <T>(t: TestNextly, statement: string) =>
   ) as unknown as Promise<T[]>;
 
 /**
- * The moved fields compared on `dialect`. PostgreSQL's date column is left out: the translations
- * table keeps it as `timestamp with time zone` beside the main table's `timestamp without time
- * zone`, and moving a value between the two stores its instant shifted by the session's time zone,
- * a defect of its own, not a property this comparison should hold as expected.
+ * `columns` as a receiving column is compared with the column it came from, the date column's type
+ * each dialect keeps on purpose or by a defect of its own aside: on MySQL the translations table
+ * keeps a date as `DATETIME(3)` beside the main table's `timestamp`, both holding the UTC wall clock
+ * Nextly writes, its adapter pinning every session to UTC; on PostgreSQL it keeps one as
+ * `timestamp with time zone` beside the main table's `timestamp without time zone`, and moving a
+ * value between the two stores its instant shifted by the session's time zone, a defect of its
+ * own, so its type is not held here as expected. Everything else about the date column is.
  */
-function comparedOn(dialect: TestDialect): string[] {
-  return dialect === "postgresql"
-    ? MOVED.filter(name => name !== "published")
-    : MOVED;
-}
-
-/**
- * `columns` as the translations table is compared with them. On MySQL it keeps a date as
- * `DATETIME(3)` beside the main table's `timestamp` on purpose: both hold the UTC wall clock Nextly
- * writes, its adapter pinning every session to UTC, and the date comes back to the main table as
- * `timestamp`.
- */
-function asReceived(
+function forComparison(
   columns: Record<string, ColumnDefinition | undefined>,
   dialect: TestDialect
 ): Record<string, ColumnDefinition | undefined> {
-  if (dialect !== "mysql") return columns;
-  return Object.fromEntries(
-    Object.entries(columns).filter(([name]) => name !== "published")
-  );
+  const date = columns.published;
+  if (!date || dialect === "sqlite") return columns;
+  return {
+    ...columns,
+    published:
+      dialect === "mysql"
+        ? { ...date, type: "datetime(3)" }
+        : { ...date, type: "(not compared)" },
+  };
 }
 
-/** The compared fields' columns in `table`, by name, as the database's catalog reports them. */
+/** The moved fields' columns in `table`, by name, as the database's catalog reports them. */
 async function movedColumns(
   t: TestNextly,
   dialect: TestDialect,
@@ -162,7 +158,7 @@ async function movedColumns(
     table
   );
   return Object.fromEntries(
-    comparedOn(dialect).map(name => [name, columns.find(c => c.name === name)])
+    MOVED.map(name => [name, columns.find(c => c.name === name)])
   );
 }
 
@@ -203,15 +199,12 @@ describe.each(getConfiguredTestDialects())(
     const expectEveryColumn = (
       columns: Record<string, ColumnDefinition | undefined>
     ) => {
-      for (const name of comparedOn(dialect)) {
+      for (const name of MOVED) {
         expect(columns[name], `${name} in the table`).toBeDefined();
       }
     };
 
-    /**
-     * Every moved field has its column in `table`, by name: PostgreSQL's date column included,
-     * which the definition comparison leaves out.
-     */
+    /** Every moved field has its column in `table`, by name. */
     const expectAllMovedIn = async (t: TestNextly, table: string) =>
       expect([...(await movedColumnsLeft(t, table))].sort()).toEqual(
         [...MOVED].sort()
@@ -238,7 +231,7 @@ describe.each(getConfiguredTestDialects())(
       };
     }
 
-    /** The moved fields' columns `table` still has, by name; none when the table is gone. */
+    /** The moved fields' columns `table` has, in the table's own order; none when it is gone. */
     async function movedColumnsLeft(
       t: TestNextly,
       table: string
@@ -246,13 +239,43 @@ describe.each(getConfiguredTestDialects())(
       const rows = await run<{ name: string }>(
         t,
         dialect === "mysql"
-          ? `SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}'`
+          ? `SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}' ORDER BY ORDINAL_POSITION`
           : dialect === "sqlite"
-            ? `SELECT name FROM pragma_table_info('${table}')`
-            : `SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${table}'`
+            ? `SELECT name FROM pragma_table_info('${table}') ORDER BY cid`
+            : `SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${table}' ORDER BY ordinal_position`
       );
       return rows.map(row => row.name).filter(name => MOVED.includes(name));
     }
+
+    /** Whether `table` is there at all. */
+    async function tableThere(t: TestNextly, table: string): Promise<boolean> {
+      const rows = await run<{ name: string }>(
+        t,
+        dialect === "mysql"
+          ? `SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}'`
+          : dialect === "sqlite"
+            ? `SELECT name FROM sqlite_master WHERE type = 'table' AND name = '${table}'`
+            : `SELECT table_name AS name FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = '${table}'`
+      );
+      return rows.length > 0;
+    }
+
+    /** The languages `id` has a row for in the translations table. */
+    async function languagesOf(t: TestNextly, id: string): Promise<string[]> {
+      const rows = await run<{ locale: string }>(
+        t,
+        `SELECT ${q("_locale")} AS locale FROM ${q(COMPANION)} WHERE ${q("_parent")} = '${id}'`
+      );
+      return rows.map(row => row.locale).sort();
+    }
+
+    /** An entry holding values, so a move is seen to carry them with their columns. */
+    const insertEntry = (t: TestNextly) =>
+      run(
+        t,
+        `INSERT INTO ${q(TABLE)} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("heading")}, ${q("body")}, ${q("views")}) VALUES ('r1', 'T', 'r1', 'H', 'B', 7)`
+      );
+    const VALUES = { heading: "H", body: "B", views: 7 };
 
     it("through the Builder's schema dialog, on the database it saves to", async () => {
       const first = await boot(dialect);
@@ -271,18 +294,29 @@ describe.each(getConfiguredTestDialects())(
         );
       }
       await expectAllMovedIn(first, TABLE);
+      const order = await movedColumnsLeft(first, TABLE);
       const before = await movedColumns(first, dialect, TABLE);
       expectEveryColumn(before);
+      await insertEntry(first);
 
       await setTranslated(first, true);
 
       await expectAllMovedIn(first, COMPANION);
-
+      expect(await movedColumnsLeft(first, COMPANION)).toEqual(order);
       expect(
-        asReceived(await movedColumns(first, dialect, COMPANION), dialect)
-      ).toEqual(asReceived(before, dialect));
-      // Moved, not copied: the main table no longer has them.
+        forComparison(await movedColumns(first, dialect, COMPANION), dialect)
+      ).toEqual(forComparison(before, dialect));
+      // Moved, not copied: the main table no longer has them, and the entry's values are the
+      // default language's, in its one row.
       expect(await movedColumnsLeft(first, TABLE)).toEqual([]);
+      expect(await languagesOf(first, "r1")).toEqual(["en"]);
+      expect(
+        await valuesIn(
+          first,
+          COMPANION,
+          `${q("_parent")} = 'r1' AND ${q("_locale")} = 'en'`
+        )
+      ).toEqual(VALUES);
 
       await setTranslated(first, false);
 
@@ -290,8 +324,11 @@ describe.each(getConfiguredTestDialects())(
       // as that file says: so each comes back as it was before translation, and the translations
       // table is gone. A property no migration file holds is not kept on this road: a default set
       // by hand on the main table, not through Nextly, does not survive.
-      expect(await movedColumnsLeft(first, COMPANION)).toEqual([]);
+      expect(await tableThere(first, COMPANION)).toBe(false);
+      expect(await valuesIn(first, TABLE, `${q("id")} = 'r1'`)).toEqual(VALUES);
       const { views, ...rest } = before;
+      // Each column back, though not where it stood: the turn-off's push adds the restored columns
+      // after the others, in its own order, so their position is the one thing not held here.
       await expectAllMovedIn(first, TABLE);
       const back = await movedColumns(first, dialect, TABLE);
       expectEveryColumn(back);
@@ -323,13 +360,10 @@ describe.each(getConfiguredTestDialects())(
 
       await migrateFolder(second, { step: created });
       await expectAllMovedIn(second, TABLE);
+      const order = await movedColumnsLeft(second, TABLE);
       const before = await movedColumns(second, dialect, TABLE);
       expectEveryColumn(before);
-      // An entry holding values, so the replay is seen to move them with their columns.
-      await run(
-        second,
-        `INSERT INTO ${q(TABLE)} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("heading")}, ${q("body")}, ${q("views")}) VALUES ('r1', 'T', 'r1', 'H', 'B', 7)`
-      );
+      await insertEntry(second);
       // Until the data-loss judgement counts a translations table created in the same file as the
       // run's own, an unattended run refuses the file's writes into that table unless given the
       // consent without targets, which no target names.
@@ -337,24 +371,26 @@ describe.each(getConfiguredTestDialects())(
         step: enabled - created,
         consent: resolveDataLossConsent({ flag: true, env: {} }),
       });
-      return { second, before };
+      return { second, before, order };
     }
 
     it("through nextly migrate, replaying the dialog's turn-on into a second database", async () => {
-      const { second, before } = await replayUpToTurnOn();
+      const { second, before, order } = await replayUpToTurnOn();
 
       await expectAllMovedIn(second, COMPANION);
+      expect(await movedColumnsLeft(second, COMPANION)).toEqual(order);
       expect(
-        asReceived(await movedColumns(second, dialect, COMPANION), dialect)
-      ).toEqual(asReceived(before, dialect));
+        forComparison(await movedColumns(second, dialect, COMPANION), dialect)
+      ).toEqual(forComparison(before, dialect));
       expect(await movedColumnsLeft(second, TABLE)).toEqual([]);
+      expect(await languagesOf(second, "r1")).toEqual(["en"]);
       expect(
         await valuesIn(
           second,
           COMPANION,
           `${q("_parent")} = 'r1' AND ${q("_locale")} = 'en'`
         )
-      ).toEqual({ heading: "H", body: "B", views: 7 });
+      ).toEqual(VALUES);
     });
 
     // A turn-off replayed in a run of its own, after the turn-on's, stops on PostgreSQL and MySQL
@@ -364,20 +400,30 @@ describe.each(getConfiguredTestDialects())(
     it.skipIf(dialect !== "sqlite")(
       "through nextly migrate, replaying the dialog's turn-off in a later run",
       async () => {
-        const { second, before } = await replayUpToTurnOn();
+        const { second, before, order } = await replayUpToTurnOn();
+        // Another language's translation beside the default language's, which turning
+        // translation off archives rather than restores.
+        await run(
+          second,
+          `INSERT INTO ${q(COMPANION)} (${q("_parent")}, ${q("_locale")}, ${q("heading")}, ${q("body")}, ${q("views")}) VALUES ('r1', 'es', 'Hola', 'BB', 9)`
+        );
 
         await migrateFolder(second, {
           consent: resolveDataLossConsent({ flag: COMPANION, env: {} }),
         });
 
         await expectAllMovedIn(second, TABLE);
+        expect(await movedColumnsLeft(second, TABLE)).toEqual(order);
         expect(await movedColumns(second, dialect, TABLE)).toEqual(before);
-        expect(await movedColumnsLeft(second, COMPANION)).toEqual([]);
-        expect(await valuesIn(second, TABLE, `${q("id")} = 'r1'`)).toEqual({
-          heading: "H",
-          body: "B",
-          views: 7,
-        });
+        expect(await tableThere(second, COMPANION)).toBe(false);
+        expect(await valuesIn(second, TABLE, `${q("id")} = 'r1'`)).toEqual(
+          VALUES
+        );
+        const archived = await run<{ value: string }>(
+          second,
+          `SELECT ${q("value")} AS value FROM ${q("nextly_i18n_archive")} WHERE ${q("entry_id")} = 'r1' AND ${q("locale")} = 'es' AND ${q("field")} = 'heading'`
+        );
+        expect(archived.map(row => row.value)).toEqual(["Hola"]);
       }
     );
   }
