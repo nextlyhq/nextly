@@ -511,7 +511,10 @@ describe("a site whose stored style still names a spacing model", () => {
     );
   });
 
-  it("gives a Heading, a Text and a Button no outer margin of their own", async () => {
+  // A guard on the block-type tier, beside the element rules asserted above:
+  // classic wrote its margins on the element rules, so this holds on either
+  // model and only keeps a future block default from adding one.
+  it("writes no outer margin on a Heading, Text or Button block-type rule", async () => {
     const html = await served(LEFTOVER);
     const rules = html.match(/:where\([^)]*\) \{[^}]*\}/g) ?? [];
     // The control: the scan reads the block-type rules, the button's among them.
