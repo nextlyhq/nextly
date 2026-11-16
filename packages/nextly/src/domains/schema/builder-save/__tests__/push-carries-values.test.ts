@@ -254,6 +254,24 @@ describe("pushCarriesValues", () => {
       ).toBe(true);
     });
 
+    it("reads the fields a group with no name lays out, which its row stores", async () => {
+      const laidOut = (inside: FieldDefinition) =>
+        ({ type: "group", fields: [inside] }) as unknown as FieldDefinition;
+      const kept = save({
+        oldFields: [laidOut(shared("views"))],
+        newFields: [laidOut(shared("views")), shared("extra")],
+      });
+      expect(await pushCarriesValues(kept)).toBe(false);
+      expect(
+        await pushCarriesValues({
+          ...kept,
+          newFields: [
+            laidOut(field("views", { type: "number", localized: false })),
+          ],
+        })
+      ).toBe(true);
+    });
+
     it("runs the file for a field made required, whose column keeps its type", async () => {
       expect(
         await pushCarriesValues(

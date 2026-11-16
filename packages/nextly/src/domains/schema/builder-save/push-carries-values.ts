@@ -12,6 +12,7 @@ import type { FieldRename } from "../../i18n/migration/reconcile-companion";
 import type { TableSpec } from "../pipeline/diff/types";
 import { reachesRelationStorage } from "../pipeline/recorded-shapes";
 import {
+  fieldsStoredOnRow,
   toSnakeCase,
   type ColumnDescriptor,
 } from "../services/field-column-descriptor";
@@ -99,6 +100,19 @@ export async function pushCarriesValues(args: {
   });
 }
 
+/**
+ * The named fields a row stores: the top-level ones and those a group with no name lays out
+ * (`fieldsStoredOnRow`), which holds no value and has no column of its own.
+ */
+function namedOnRow(
+  fields: readonly FieldDefinition[]
+): (FieldDefinition & { name: string })[] {
+  return fieldsStoredOnRow(fields).filter(
+    (field): field is FieldDefinition & { name: string } =>
+      typeof field.name === "string" && field.name !== ""
+  );
+}
+
 /** Whether a field kept by the save, under its name or its rename, gets a column of another type. */
 function columnTypeChanges(args: {
   oldFields: readonly FieldDefinition[];
@@ -107,13 +121,15 @@ function columnTypeChanges(args: {
   renames: ReadonlyArray<{ from: string; to: string }>;
 }): boolean {
   const before = new Map(
-    args.oldFields.map(field => [toSnakeCase(field.name), field] as const)
+    namedOnRow(args.oldFields).map(
+      field => [toSnakeCase(field.name), field] as const
+    )
   );
   // The type as the database declares it, sizes included (`varchar(255)`, `numeric(10, 2)`): a
   // field whose column keeps it (a Unique text on PostgreSQL stays `text`) changes nothing there.
   const shape = (field: FieldDefinition) =>
     args.columnOf(field)?.dialectType ?? null;
-  return args.newFields.some(field => {
+  return namedOnRow(args.newFields).some(field => {
     const column = toSnakeCase(field.name);
     const from =
       args.renames.find(rename => rename.to === column)?.from ?? column;
@@ -131,10 +147,10 @@ async function fillsSingleRow(
   row: NonNullable<Parameters<typeof pushCarriesValues>[0]["singleRow"]>
 ): Promise<boolean> {
   const kept = new Set([
-    ...args.oldFields.map(field => toSnakeCase(field.name)),
+    ...namedOnRow(args.oldFields).map(field => toSnakeCase(field.name)),
     ...row.renamedTo,
   ]);
-  const filled = args.newFields.some(
+  const filled = namedOnRow(args.newFields).some(
     field => !kept.has(toSnakeCase(field.name)) && row.fills(field)
   );
   return filled && (await row.holdsRow());
@@ -147,8 +163,8 @@ function translatedFieldRenamedOrRemoved(args: {
   renamed: FieldRename | null | undefined;
 }): boolean {
   if (args.renamed) return true;
-  const kept = new Set(args.newFields.map(field => field.name));
-  return args.oldFields.some(
+  const kept = new Set(namedOnRow(args.newFields).map(field => field.name));
+  return namedOnRow(args.oldFields).some(
     field => isFieldLocalized(field, true) && !kept.has(field.name)
   );
 }
