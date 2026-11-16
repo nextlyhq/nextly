@@ -197,11 +197,13 @@ function itemFlag(declarations: readonly Declaration[]): Declaration[] {
   }
   const direction = declarations.findLast(d => d.property === "flex-direction");
   if (direction !== undefined) {
+    // `inherit` takes a direction no rule here can know, so it is read as a
+    // column: the inset is then never lost. The other keywords resolve to
+    // the initial `row`.
+    const value = direction.value.trim().toLowerCase();
     flags.push({
       property: COLUMN_FLOW_PROPERTY,
-      value: direction.value.trim().toLowerCase().startsWith("column")
-        ? "1"
-        : "0",
+      value: value.startsWith("column") || value === "inherit" ? "1" : "0",
     });
   }
   return flags;

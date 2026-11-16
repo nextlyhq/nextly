@@ -2543,7 +2543,19 @@ describe("inline padding and a contained container's inset", () => {
         )
       ).toMatch(new RegExp(`> \\* \\{[^}]*${COLUMN}: 1`));
     }
-    for (const flexDirection of ["row", "row-reverse"]) {
+    // `inherit` takes a direction no rule here can know, so it is read as a
+    // column: the inset is then never lost. The other keywords resolve to
+    // the initial `row`.
+    expect(
+      css(
+        doc([
+          node("n1", {
+            base: { base: { display: "flex", flexDirection: "inherit" } },
+          }),
+        ])
+      )
+    ).toMatch(new RegExp(`> \\* \\{[^}]*${COLUMN}: 1`));
+    for (const flexDirection of ["row", "row-reverse", "initial", "unset"]) {
       expect(
         css(doc([node("n1", { base: { base: { flexDirection } } })]))
       ).toMatch(new RegExp(`> \\* \\{[^}]*${COLUMN}: 0`));
