@@ -106,7 +106,7 @@ describe("the Single page with changes from a last visit on offer", () => {
     ).toBeInTheDocument();
     expect(screen.getAllByText("Unsaved changes").length).toBeGreaterThan(0);
     expect(
-      screen.queryByText("Changes from your last visit aren't saved yet")
+      screen.queryByRole("button", { name: "Unsaved changes: Save or Discard" })
     ).toBeNull();
 
     await userEvent.click(screen.getByRole("button", { name: "Save" }));

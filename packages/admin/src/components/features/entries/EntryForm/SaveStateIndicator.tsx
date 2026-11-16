@@ -69,10 +69,11 @@ export interface StoredDocument {
 }
 
 /**
- * What the chip says while changes from the author's last visit wait, in a
- * view whose chip makes the recovery offer, and nothing else has changed.
+ * What the offer's popover says first while changes from the author's last
+ * visit wait, in a view whose chip makes the recovery offer: the chip itself
+ * keeps the bar's one short status, "Unsaved changes".
  */
-const LAST_VISIT_LABEL = "Changes from your last visit aren't saved yet";
+const LAST_VISIT_NOTICE = "Changes from your last visit aren't saved yet.";
 
 /**
  * What the indicator draws: one of the four states, the changes from a last
@@ -136,10 +137,11 @@ export function saveIndicatorView(
         detail: recoveryLine(recovery),
       };
     case "saved": {
-      // The changes from the last visit, said as what they are: Save keeps
-      // them (it is offered while they wait), so never "Unsaved changes"
-      // beside a Save that does nothing.
-      if (offerInChip) return { tone: "offered", label: LAST_VISIT_LABEL };
+      // The changes from the last visit: unsaved, and the bar's Save keeps
+      // them (it is offered while they wait), so "Unsaved changes" never sits
+      // beside a Save that does nothing. The chip's popover says what they
+      // are, with Save and Discard.
+      if (offerInChip) return { tone: "offered", label: "Unsaved changes" };
       // Never "Saved" over edits that live only in a recovery point.
       if (recovery.pendingOfferAt !== null) {
         return {
@@ -297,6 +299,7 @@ function OfferChip({
   lead,
   leave,
   take,
+  notice,
 }: {
   label: string;
   /** What the popover holds, said after the label to a screen reader. */
@@ -308,6 +311,8 @@ function OfferChip({
   leave: OfferAnswer;
   /** The answer that acts, last. */
   take: OfferAnswer;
+  /** A sentence said first in the popover, above when the work is from. */
+  notice?: string;
 }): JSX.Element {
   // Made here, so the banner a document view would draw stands down.
   useClaimRecoveryOffer();
@@ -332,7 +337,14 @@ function OfferChip({
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-72 text-sm">
-        <p className="text-foreground">
+        {notice === undefined ? null : (
+          <p className="mb-1 font-medium text-foreground">{notice}</p>
+        )}
+        <p
+          className={
+            notice === undefined ? "text-foreground" : "text-muted-foreground"
+          }
+        >
           {lead}{" "}
           <span className="font-medium">{formatTimeAgo(offer.savedAt)}</span>.
         </p>
@@ -396,9 +408,10 @@ export interface OfferedSave {
 }
 
 /**
- * Changes from the last visit, waiting: the chip says so, and its popover
- * says when they are from, with Save, which keeps them (the document's own
- * Save, offered while they wait), and Discard, which stops offering them.
+ * Changes from the last visit, waiting: the chip says "Unsaved changes", the
+ * bar's one short status, and its popover says what they are and when they
+ * are from, with Save, which keeps them (the document's own Save, offered
+ * while they wait), and Discard, which stops offering them.
  */
 function LastVisitChip({
   label,
@@ -414,7 +427,8 @@ function LastVisitChip({
       label={label}
       purpose="Save or Discard"
       offer={offer}
-      lead="You made these changes"
+      notice={LAST_VISIT_NOTICE}
+      lead="You made them"
       leave={{ label: "Discard", run: offer.dismiss }}
       take={{ label: "Save", ...save }}
     />

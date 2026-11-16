@@ -227,7 +227,7 @@ describe("changes from the last visit, offered in the chip", () => {
   };
   const waiting = { ...noRecovery, pendingOfferAt: NOW };
 
-  it("says the changes from the last visit aren't saved yet", () => {
+  it("keeps the bar's short status, and says what the changes are in its popover", async () => {
     render(
       <SaveStateIndicator
         saveState={{ kind: "saved", at: null }}
@@ -236,17 +236,17 @@ describe("changes from the last visit, offered in the chip", () => {
         save={{ run: vi.fn() }}
       />
     );
-    expect(
-      screen.getByText("Changes from your last visit aren't saved yet")
-    ).toBeInTheDocument();
-    expect(screen.queryByText("Unsaved changes")).not.toBeInTheDocument();
     expect(indicator().dataset.tone).toBe("offered");
     expect(
       saveIndicatorView({ kind: "saved", at: null }, waiting, null, true)
-    ).toEqual({
-      tone: "offered",
-      label: "Changes from your last visit aren't saved yet",
-    });
+    ).toEqual({ tone: "offered", label: "Unsaved changes" });
+    // The offer's own control, not the restore offer made after an edit.
+    await userEvent.click(
+      screen.getByRole("button", { name: "Unsaved changes: Save or Discard" })
+    );
+    expect(
+      await screen.findByText("Changes from your last visit aren't saved yet.")
+    ).toBeInTheDocument();
   });
 
   it("offers Save, which runs the document's Save, and Discard, which stops offering", async () => {
@@ -261,7 +261,7 @@ describe("changes from the last visit, offered in the chip", () => {
       />
     );
     const chip = screen.getByRole("button", {
-      name: "Changes from your last visit aren't saved yet: Save or Discard",
+      name: "Unsaved changes: Save or Discard",
     });
 
     await userEvent.click(chip);
@@ -292,7 +292,7 @@ describe("changes from the last visit, offered in the chip", () => {
     );
     await userEvent.click(
       screen.getByRole("button", {
-        name: "Changes from your last visit aren't saved yet: Save or Discard",
+        name: "Unsaved changes: Save or Discard",
       })
     );
     const save = await screen.findByRole("button", { name: "Save" });

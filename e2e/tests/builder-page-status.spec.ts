@@ -4,8 +4,9 @@
  * The pill beside the title says where the SAVED page stands (Draft,
  * Published or Changed) and nothing about unsaved edits, which only the save
  * chip reports. And changes left from a last visit, stored but never saved,
- * open with Save enabled and the chip saying so, with Save and Discard: never
- * "Unsaved changes" beside a Save that does nothing.
+ * open with Save enabled, the chip saying "Unsaved changes" and its popover
+ * "Changes from your last visit aren't saved yet." with Save and Discard:
+ * never "Unsaved changes" beside a Save that does nothing.
  *
  * @module tests/builder-page-status.spec
  */
@@ -27,7 +28,11 @@ const NODES = [
   },
 ];
 
-const LAST_VISIT = "Changes from your last visit aren't saved yet";
+const LAST_VISIT = "Changes from your last visit aren't saved yet.";
+
+/** The chip's control while changes from a last visit wait. */
+const offerChip = (page: Page) =>
+  end(page).getByRole("button", { name: "Unsaved changes: Save or Discard" });
 
 /** A published page of its own, and its id. */
 async function createPublishedPage(
@@ -155,17 +160,13 @@ test.describe("the builder's page status", () => {
     await leaveUnsavedChange(page, id);
 
     await openBuilder(page, id);
-    await expect(chip(page)).toHaveText(LAST_VISIT);
+    await expect(chip(page)).toHaveText("Unsaved changes");
     await expect(barSave(page)).toBeEnabled();
-    await expect(
-      page.locator("[data-topbar]").getByText("Unsaved changes")
-    ).toHaveCount(0);
 
-    // The chip's popover offers both answers.
-    await end(page)
-      .getByRole("button", { name: `${LAST_VISIT}: Save or Discard` })
-      .click();
+    // The chip's popover says what they are, and offers both answers.
+    await offerChip(page).click();
     const popover = page.getByRole("dialog");
+    await expect(popover.getByText(LAST_VISIT)).toBeVisible();
     await expect(
       popover.getByRole("button", { name: "Discard" })
     ).toBeVisible();
@@ -193,11 +194,9 @@ test.describe("the builder's page status", () => {
     await leaveUnsavedChange(page, id);
 
     await openBuilder(page, id);
-    await expect(chip(page)).toHaveText(LAST_VISIT);
+    await expect(offerChip(page)).toBeVisible();
 
-    await end(page)
-      .getByRole("button", { name: `${LAST_VISIT}: Save or Discard` })
-      .click();
+    await offerChip(page).click();
     await page
       .getByRole("dialog")
       .getByRole("button", { name: "Discard" })

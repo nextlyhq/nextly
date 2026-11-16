@@ -826,16 +826,23 @@ describe("EntryForm with a document view", () => {
     const barSaveAnywhere = (): HTMLElement =>
       screen.getAllByRole("button", { name: "Save" })[0] as HTMLElement;
 
-    it("says so in the chip, with Save enabled, and draws no banner", () => {
+    it("says so in the chip, with Save enabled, and draws no banner", async () => {
       offerFromLastVisit("restored");
       open();
 
-      expect(
-        screen.getByText("Changes from your last visit aren't saved yet")
-      ).toBeInTheDocument();
-      expect(screen.queryByText("Unsaved changes")).toBeNull();
-      expect(screen.queryByText(/you have unsaved changes from/i)).toBeNull();
+      // The bar's one short status, beside an enabled Save, and the offer's
+      // words in its popover.
+      const chip = screen.getByRole("button", {
+        name: "Unsaved changes: Save or Discard",
+      });
       expect(barSave().disabled).toBe(false);
+      expect(screen.queryByText(/you have unsaved changes from/i)).toBeNull();
+      await userEvent.click(chip);
+      expect(
+        await screen.findByText(
+          "Changes from your last visit aren't saved yet."
+        )
+      ).toBeInTheDocument();
     });
 
     it("keeps them on Save: restores them, then saves what was restored", async () => {
@@ -855,7 +862,7 @@ describe("EntryForm with a document view", () => {
 
       await userEvent.click(
         screen.getByRole("button", {
-          name: "Changes from your last visit aren't saved yet: Save or Discard",
+          name: "Unsaved changes: Save or Discard",
         })
       );
       const popover = await screen.findByRole("dialog");
@@ -919,7 +926,7 @@ describe("EntryForm with a document view", () => {
 
       await userEvent.click(
         screen.getByRole("button", {
-          name: "Changes from your last visit aren't saved yet: Save or Discard",
+          name: "Unsaved changes: Save or Discard",
         })
       );
       const popover = await screen.findByRole("dialog");
@@ -1167,7 +1174,9 @@ describe("EntryForm with a document view", () => {
       ).toBeInTheDocument();
       expect(screen.getAllByText("Unsaved changes").length).toBeGreaterThan(0);
       expect(
-        screen.queryByText("Changes from your last visit aren't saved yet")
+        screen.queryByRole("button", {
+          name: "Unsaved changes: Save or Discard",
+        })
       ).toBeNull();
       const save = screen.getByRole("button", { name: "Save" });
       expect((save as HTMLButtonElement).disabled).toBe(true);
