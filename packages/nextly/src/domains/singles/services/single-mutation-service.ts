@@ -170,6 +170,12 @@ import {
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
 import {
+  assertClaimsAllowed,
+  provenanceClaimsOf,
+  type ProvenanceClaims,
+} from "../../i18n/provenance/provenance-claims";
+import { discardDraftProvenance } from "../../i18n/provenance/record-provenance";
+import {
   isValidLocale,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
@@ -332,6 +338,11 @@ import {
 } from "./single-before-update";
 import { readSingleForCreation } from "./single-first-row";
 import type { SingleMediaUsageDeps } from "./single-media-usage";
+import {
+  recordSingleProvenance,
+  singleProvenanceRecorded,
+  type SingleProvenanceDeps,
+} from "./single-provenance";
 import {
   SingleQueryService,
   checkSingleAccess,
@@ -521,6 +532,15 @@ export class SingleMutationService extends BaseService {
   /** The site's languages as they are now: the source may be the language registry. */
   private get localization(): SanitizedLocalizationConfig | undefined {
     return localizationNow(this.localizationSource);
+  }
+
+  /** What recording a write's provenance needs of this service. */
+  private get provenanceDeps(): SingleProvenanceDeps {
+    return {
+      adapter: this.adapter,
+      logger: this.logger,
+      defaultLocale: this.localization?.defaultLocale,
+    };
   }
 
   /**
@@ -1225,6 +1245,17 @@ export class SingleMutationService extends BaseService {
               ...(draftLocale ? { parts: { locales: [draftLocale] } } : {}),
             }
           );
+          // What the draft said about where its values came from goes with
+          // it; the live values keep their own record.
+          if (
+            typeof draftLocale === "string" &&
+            (await singleProvenanceRecorded(this.provenanceDeps, tx))
+          ) {
+            await discardDraftProvenance(tx, {
+              ...discardedRef,
+              locale: draftLocale,
+            });
+          }
           // The discarded part has nothing unpublished left to review: its
           // review closes with the draft, in this transaction.
           await closeReviewOnDiscard(
@@ -2176,11 +2207,19 @@ export class SingleMutationService extends BaseService {
     // with the version below: as server code stated them, or as the body's
     // `_restoredFrom` names them. Malformed, it is refused as a version is.
     let restoredFrom: FieldSources | undefined;
+    let provenanceClaims: ProvenanceClaims | undefined;
     try {
       versionCheck = versionCheckFor(data, {
         exempt: releaseRunExemptFor({ scopeKind: "single", scopeSlug: slug }),
       });
       restoredFrom = rawOptions.restoredFrom ?? restoredFromOf(data);
+      // What the save claims about where its translated values came from,
+      // read before the key is dropped with the version below.
+      provenanceClaims = provenanceClaimsOf(data);
+      assertClaimsAllowed(
+        provenanceClaims,
+        actorForWrite(rawOptions.actor, rawOptions.user)
+      );
     } catch (error) {
       return buildSingleErrorResult(error, "Failed to update Single document");
     }
@@ -4527,6 +4566,18 @@ export class SingleMutationService extends BaseService {
               savedBy,
               revisionClaimed: claimed,
             });
+            // Where the values came from, beside them: a publish of the
+            // language's held draft moves the draft's own record live.
+            await recordSingleProvenance(this.provenanceDeps, tx, {
+              slug,
+              entryId: existingDoc.id,
+              locale: writeLocale,
+              values: companionData,
+              localizedFields: companion.localizedFields,
+              savedBy,
+              claims: provenanceClaims,
+              promotesDraft: promotedDraft,
+            });
             const row = rows[0] as Record<string, unknown>;
             for (const f of companion.localizedFields) {
               if (
@@ -4628,6 +4679,24 @@ export class SingleMutationService extends BaseService {
               { id: existingDoc.id },
               savedBy
             );
+            // Where the held values came from, recorded as the language's
+            // draft: what is live keeps its own record until a publish.
+            if (
+              companion &&
+              typeof singleDraftLocale === "string" &&
+              Object.keys(companionData).length > 0
+            ) {
+              await recordSingleProvenance(this.provenanceDeps, tx, {
+                slug,
+                entryId: existingDoc.id,
+                locale: singleDraftLocale,
+                values: companionData,
+                localizedFields: companion.localizedFields,
+                savedBy,
+                claims: provenanceClaims,
+                partState: "draft",
+              });
+            }
             const draftRepo = new VersionsRepository(tx);
             const draftRef = {
               scopeKind: "single" as const,
@@ -6627,6 +6696,15 @@ export class SingleMutationService extends BaseService {
       values: translation,
       savedBy: args.actor,
       revisionClaimed: claimed,
+    });
+    // Where the rewritten value came from, as any live write records it.
+    await recordSingleProvenance(this.provenanceDeps, tx, {
+      slug: singleMeta.slug,
+      entryId,
+      locale: translatedIn,
+      values: translation,
+      localizedFields: companion.localizedFields,
+      savedBy: args.actor,
     });
   }
 

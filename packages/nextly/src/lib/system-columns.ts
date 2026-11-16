@@ -725,6 +725,16 @@ export const DOCUMENT_OVERWRITE_KEY = "_overwrite";
 export const DOCUMENT_RESTORED_FROM_KEY = "_restoredFrom";
 
 /**
+ * The key a write names where its translated values came from under: per field, a machine
+ * translation, an agent's, a copy from another language, or a value written in its own language.
+ * Read and checked at the boundary (`domains/i18n/provenance/provenance-claims`), never stored as a
+ * column.
+ *
+ * @experimental Until per-field provenance is complete.
+ */
+export const DOCUMENT_PROVENANCE_KEY = "_provenance";
+
+/**
  * The columns a step of `nextly migrate` adds to existing tables, which no snapshot comparison
  * reports (see `addedByMigrateStep`).
  */
