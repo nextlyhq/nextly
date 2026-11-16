@@ -5,8 +5,10 @@
  *
  * The picker lists only the fields that fit the prop, by the engine's own
  * rule (`canBindFieldToProp`), from what the host reads for the person
- * editing (`ContentServices.listBindingFields`): fields visitors may not read
- * say so, and a draft's value is marked rather than shown, in each option's
+ * editing (`ContentServices.listBindingFields`), and, for a block inside a
+ * collection list, the list item's own fields first, with their values from
+ * the list's first entry (`readListSample`): fields visitors may not read say
+ * so, and a draft's value is shown with "Draft" beside it, in each option's
  * own text, so a screen reader announces both. An unbind is planned by the
  * host, by the decision the page actions API takes, and applied here as any
  * edit; the reason it gives is said under the field.
@@ -24,7 +26,6 @@ import {
   type Binding,
   type BindingFieldShape,
   type BindingFormat,
-  type BindingRunInput,
   type BlockDocument,
   type BuilderOp,
 } from "@nextlyhq/blocks-engine";
@@ -58,9 +59,16 @@ import {
   previewWithFormat,
 } from "./binding-format-field";
 import { bindOp, unbindOp } from "./binding-ops";
+import {
+  useBindingSources,
+  useListSample,
+  usePreviewFormatIn,
+  type PreviewFormatIn,
+} from "./binding-picker-reads";
 import type {
   BindingFieldChoice,
   BindingFieldSource,
+  ListSample,
   UnbindAsk,
   UnbindPlanAnswer,
 } from "./binding-services";
@@ -69,13 +77,28 @@ import type { UnbindAnswer } from "./composition-actions";
 import type { ContentServices } from "./content-controls";
 import { ImageBindingFallback } from "./image-binding-fallback";
 import { fieldLabel, propLabel, type EditableProp } from "./inspector";
-import { useItemSource, type ItemSource } from "./item-binding-source";
+import {
+  itemChoices,
+  useItemSource,
+  useListItem,
+  type ItemSource,
+} from "./item-binding-source";
 import { withArticle } from "./with-article";
+
+/**
+ * A source the picker lists: one the host lists, or the item of the list the
+ * block sits in, which only the editor knows and the picker lists first.
+ */
+type PickerSource = Omit<BindingFieldSource, "binding"> & {
+  readonly binding:
+    | BindingFieldSource["binding"]
+    | { readonly source: "item" };
+};
 
 /** One field the picker offers, with where it is read from. */
 interface FieldOption extends ListedChoice {
   readonly path: string;
-  readonly source: BindingFieldSource;
+  readonly source: PickerSource;
   readonly field: BindingFieldChoice;
   /** The relation or group it sits in, named, for a field one step in. */
   readonly parent?: string;
@@ -228,11 +251,25 @@ function withFormat(binding: Binding, format: BindingFormat): Binding {
   return { ...binding, format };
 }
 
-/** A source's name as the chip and the picker say it: "This post", "Site". */
-function sourceName(source: BindingFieldSource): string {
+/**
+ * A source's name as the chip and the picker say it: "This post", "Site", and
+ * for a list's item the name its group was given ("Each post").
+ */
+function sourceName(source: PickerSource): string {
   return source.binding.source === "entry"
     ? `This ${source.label.toLowerCase()}`
     : source.label;
+}
+
+/**
+ * A source's group in the picker, by which source it is rather than where it
+ * is listed: the list item's group, drawn once the list's fields are read,
+ * then moves no other group's options, so a search or an option the author
+ * is on keeps its place.
+ */
+function groupOf(source: PickerSource): string {
+  const at = source.binding;
+  return at.source === "single" ? `single:${at.sourceKey}` : at.source;
 }
 
 /**
@@ -245,7 +282,7 @@ function sourceName(source: BindingFieldSource): string {
  * fills; the link's entry id, bound, is changed only to another such id.
  */
 function fittingOptions(
-  sources: readonly BindingFieldSource[],
+  sources: readonly PickerSource[],
   prop: EditableProp,
   formatIn: PreviewFormatIn,
   entryLink: EntryLink | undefined
@@ -257,8 +294,8 @@ function fittingOptions(
       ? entryLink?.writable === true && field.public
       : prop.name !== entryLink?.id && fits(field, prop);
   const options: FieldOption[] = [];
-  sources.forEach((source, index) => {
-    const group = String(index);
+  sources.forEach(source => {
+    const group = groupOf(source);
     for (const field of source.fields) {
       const label = choiceLabel(field);
       if (offered(field)) {
@@ -351,7 +388,7 @@ function withFormatOnBind(
 
 /** One option, with its text as the list searches it and a reader hears it. */
 function option(
-  source: BindingFieldSource,
+  source: PickerSource,
   group: string,
   field: BindingFieldChoice,
   path: string,
@@ -415,122 +452,48 @@ function OptionRow({ option }: { option: FieldOption }): React.JSX.Element {
           <EyeOff aria-hidden="true" size={12} />
           Not public
         </span>
-      ) : field.draft === true ? (
-        <span className="nx-binding-option__tag">Draft</span>
-      ) : field.preview === undefined ? null : (
-        <span className="nx-binding-option__preview">{field.preview}</span>
+      ) : (
+        <>
+          {field.preview === undefined ? null : (
+            <span className="nx-binding-option__preview">{field.preview}</span>
+          )}
+          {/* A draft's value is shown with the word beside it, so the
+              author sees the real value and knows it isn't live yet. */}
+          {field.draft === true ? (
+            <span className="nx-binding-option__tag">Draft</span>
+          ) : null}
+        </>
       )}
     </span>
   );
 }
 
-/** The language and time zone the picker previews a formatted value in. */
-type PreviewFormatIn = Pick<BindingRunInput, "locale" | "timeZone">;
-
 /**
- * The language and zone the picker previews in: the page's language, and the
- * site's zone, asked of the host when the picker opens rather than with the
- * canvas, which reads it only for a page already formatting a date. Until
- * the zone is in, and where the host has none or its read fails, the preview
- * is in UTC, as a page rendered with no zone; it is drawn again once it is.
+ * The list item as a source the picker lists first, named for the list's
+ * entries ("Each post"); `undefined` outside every list.
  */
-function usePreviewFormatIn(
-  services: ContentServices | undefined
-): PreviewFormatIn {
-  const locale = services?.bindingLocale;
-  const readZone = services?.readSiteTimeZone;
-  const [read, setRead] = React.useState<{
-    readonly from: () => Promise<string | undefined>;
-    readonly zone: string | undefined;
-  }>();
-  React.useEffect(() => {
-    if (readZone === undefined) return;
-    let current = true;
-    readZone().then(
-      zone => {
-        if (current) setRead({ from: readZone, zone });
-      },
-      () => {
-        // No zone to show: the previews stay in UTC.
-      }
-    );
-    return () => {
-      current = false;
-    };
-  }, [readZone]);
-  // Only the zone this host's read gave, so another host's is never shown.
-  const timeZone = read?.from === readZone ? read?.zone : undefined;
-  return React.useMemo(
-    () => ({
-      ...(locale === undefined ? {} : { locale }),
-      ...(timeZone === undefined ? {} : { timeZone }),
-    }),
-    [locale, timeZone]
-  );
-}
-
-/** The host's read of the fields a binding can read. */
-type ListBindingFields = () => Promise<readonly BindingFieldSource[]>;
-
-/**
- * The read in flight, per host function, shared only while it runs, as the
- * list controls share theirs (`collection-loop-controls`): the controls drawn
- * together for one block (a bound image's chip and its alt note) make one
- * read and see one answer, so they can't disagree. Dropped once it settles:
- * an answer is one signed-in author's, read with their access.
- */
-const sourcesInFlight = new WeakMap<
-  ListBindingFields,
-  Promise<readonly BindingFieldSource[]>
->();
-
-/** The host's binding sources, one read shared by every control asking at once. */
-function readBindingSources(
-  list: ListBindingFields
-): Promise<readonly BindingFieldSource[]> {
-  const held = sourcesInFlight.get(list);
-  if (held !== undefined) return held;
-  const answer = list();
-  sourcesInFlight.set(list, answer);
-  const settle = (): void => {
-    if (sourcesInFlight.get(list) === answer) sourcesInFlight.delete(list);
+function itemPickerSource(
+  item: ItemSource | undefined,
+  sample: ListSample | undefined
+): PickerSource | undefined {
+  if (item === undefined) return undefined;
+  return {
+    binding: { source: "item" },
+    label: `Each ${item.one}`,
+    fields: itemChoices(item.fields, sample),
   };
-  answer.then(settle, settle);
-  return answer;
 }
 
-/** The fields a binding can read, as the host reads them; read once per open. */
-function useBindingSources(
-  services: ContentServices | undefined,
-  wanted: boolean
-): readonly BindingFieldSource[] | "loading" | "failed" {
-  const [sources, setSources] = React.useState<
-    readonly BindingFieldSource[] | "loading" | "failed"
-  >("loading");
-  const list = services?.listBindingFields;
-  React.useEffect(() => {
-    if (!wanted || list === undefined) return;
-    let current = true;
-    setSources("loading");
-    readBindingSources(list).then(
-      read => {
-        if (current) setSources(read);
-      },
-      () => {
-        if (current) setSources("failed");
-      }
-    );
-    return () => {
-      current = false;
-    };
-  }, [list, wanted]);
-  return sources;
-}
-
-/** The picker: the fitting fields by source, searched, moved through by key. */
+/**
+ * The picker: the fitting fields by source, nearest first (the list item a
+ * block sits in, then the page, its Singles and the site), searched, moved
+ * through by key.
+ */
 function BindingPicker({
   prop,
   blockLabel,
+  document,
+  nodeId,
   services,
   current,
   entryLink,
@@ -538,6 +501,9 @@ function BindingPicker({
 }: {
   prop: EditableProp;
   blockLabel: string;
+  /** The document the block is in, where its list is found. */
+  document: BlockDocument;
+  nodeId: string;
   services: ContentServices | undefined;
   /** The link's entry, where the prop is a link's destination. */
   entryLink: EntryLink | undefined;
@@ -545,19 +511,26 @@ function BindingPicker({
   current: Binding | undefined;
   onPick: (option: FieldOption) => void;
 }): React.JSX.Element {
-  const sources = useBindingSources(services, true);
+  const listed = useBindingSources(services, true);
+  const item = useListItem(document, nodeId, services, true);
+  const sample = useListSample(services?.readListSample, item?.list);
   const formatIn = usePreviewFormatIn(services);
   const name = propLabel(prop.name, prop.schema);
-  if (sources === "loading") {
+  // The list's fields are waited for with the page's, so the groups are
+  // drawn once, in their order, rather than the item's arriving above.
+  if (listed === "loading" || item?.loading === true) {
     return <p className="nx-binding-picker__note">Reading the fields…</p>;
   }
-  if (sources === "failed") {
+  if (listed === "failed") {
     return (
       <p className="nx-binding-picker__note" role="alert">
         The fields could not be read. Close this and try again.
       </p>
     );
   }
+  const nearest = itemPickerSource(item, sample);
+  const sources: readonly PickerSource[] =
+    nearest === undefined ? listed : [nearest, ...listed];
   // Previewed in the page's language and the site's zone.
   const options = fittingOptions(sources, prop, formatIn, entryLink);
   // A source with nothing to offer this prop is not listed: an empty group
@@ -578,9 +551,9 @@ function BindingPicker({
         label={`Fields for ${name}`}
         searchLabel="Find a field"
         noMatch="No field matches."
-        groups={sources.flatMap((source, index) =>
-          offering.has(String(index))
-            ? [{ group: String(index), heading: sourceName(source) }]
+        groups={sources.flatMap(source =>
+          offering.has(groupOf(source))
+            ? [{ group: groupOf(source), heading: sourceName(source) }]
             : []
         )}
         renderChoice={choice => <OptionRow option={choice} />}
@@ -739,6 +712,8 @@ function BindButton({
         <BindingPicker
           prop={prop}
           blockLabel={blockLabel}
+          document={document}
+          nodeId={nodeId}
           services={services}
           current={undefined}
           entryLink={entryLink}
@@ -1582,6 +1557,8 @@ function BoundField({
             <BindingPicker
               prop={prop}
               blockLabel={blockLabel}
+              document={document}
+              nodeId={nodeId}
               services={services}
               current={binding}
               entryLink={entryLink}

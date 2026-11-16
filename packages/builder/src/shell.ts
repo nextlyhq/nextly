@@ -627,7 +627,6 @@ export type { LayersPanelProps, LayersRegionRow } from "./layers-panel";
  */
 export { TokensPanel, useVariablesHeader } from "./tokens-panel";
 export type {
-  SpacingModeControl,
   TokensPanelProps,
   VariablesHeader,
   VariablesPreview,
