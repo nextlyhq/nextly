@@ -2,12 +2,13 @@
  * The connection a try's watch asks on.
  *
  * The watch must ask on another connection than the session it watches, which is busy running the
- * statement. The adapter's pool gives it one while the pool can spare one. A pool of one cannot:
- * the watched transaction or session holds its only connection for the whole try, so every ask
- * through the pool would wait behind it and the watch would see nothing until the try had ended,
- * leaving only the database's per-lock timeout to bound a try that waits for several locks in
- * turn. On such a pool the watch opens one connection of its own beside the pool, as the schema
- * lock's renewals do, and closes it when it stops.
+ * statement. The adapter's pool gives it one while the pool has one free when the watch starts: an
+ * idle connection, or room to open one. A pool with none (a pool of one, which the watched
+ * transaction or session holds for the whole try, or a larger pool whose every other connection is
+ * busy with other work) cannot: every ask through it would queue behind that work and the watch
+ * would see nothing until the try had ended, leaving only the database's per-lock timeout to bound
+ * a try that waits for several locks in turn. Then the watch opens one connection of its own
+ * beside the pool, as the schema lock's renewals do, and closes it when it stops.
  *
  * @module domains/schema/busy-table/watch-connection
  */
@@ -38,6 +39,9 @@ export interface WatchConnection {
 /** node-postgres's pool, as far as a connection beside it needs. */
 interface PgPoolLike {
   options?: { max?: number };
+  /** The connections open, and of them those idle. */
+  totalCount?: number;
+  idleCount?: number;
   Client?: new (options: unknown) => {
     connect(): Promise<void>;
     query(text: string, params: unknown[]): Promise<{ rows: unknown[] }>;
@@ -46,9 +50,14 @@ interface PgPoolLike {
   };
 }
 
-/** mysql2's pool, as far as its size needs. */
+/** mysql2's pool, as far as its size needs: the core pool, or the promise pool around it. */
 interface MysqlPoolLike {
   config?: { connectionLimit?: number };
+  /** The promise pool's core pool. */
+  pool?: MysqlPoolLike;
+  /** The connections open, and of them those free (mysql2's own queues). */
+  _allConnections?: { length: number };
+  _freeConnections?: { length: number };
 }
 
 /**
@@ -88,7 +97,46 @@ export function poolCanSpareOne(
   return true;
 }
 
-/** The adapter's own pool, used where it can spare a connection. */
+/**
+ * Whether the adapter's pool has a connection free now, beside the one the watched try holds: an
+ * idle one, or room to open another. Where the pool does not show how many it has open, its size
+ * alone answers (`poolCanSpareOne`).
+ */
+export function poolHasFreeConnection(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect
+): boolean {
+  const pool = driverPool(adapter);
+  if (dialect === "postgresql") {
+    const pg = pool as PgPoolLike | undefined;
+    if (
+      typeof pg?.totalCount !== "number" ||
+      typeof pg.idleCount !== "number"
+    ) {
+      return poolCanSpareOne(adapter, dialect);
+    }
+    const max = pg.options?.max ?? PG_DEFAULT_POOL_MAX;
+    return pg.idleCount > 0 || pg.totalCount < max;
+  }
+  if (dialect === "mysql") {
+    const outer = pool as MysqlPoolLike | undefined;
+    const core = outer?.pool ?? outer;
+    const all = core?._allConnections?.length;
+    const free = core?._freeConnections?.length;
+    if (typeof all !== "number" || typeof free !== "number") {
+      return poolCanSpareOne(adapter, dialect);
+    }
+    const limit =
+      core?.config?.connectionLimit ??
+      outer?.config?.connectionLimit ??
+      MYSQL_DEFAULT_CONNECTION_LIMIT;
+    return free > 0 || all < limit;
+  }
+  // SQLite's watch asks nothing.
+  return true;
+}
+
+/** The adapter's own pool, used where it has a connection free. */
 function poolConnection(adapter: DrizzleAdapter): WatchConnection {
   return {
     query: <T>(statement: SQL) => adapter.queryStatement<T>(statement),
@@ -97,8 +145,8 @@ function poolConnection(adapter: DrizzleAdapter): WatchConnection {
 }
 
 /**
- * The connection the watch asks on: the adapter's pool where it can spare a connection, else one
- * of the watch's own. Where that connection cannot be opened (a refused login, a driver this does
+ * The connection the watch asks on: the adapter's pool where it has a connection free now
+ * (`poolHasFreeConnection`), else one of the watch's own. Where that connection cannot be opened (a refused login, a driver this does
  * not know) the pool is used, as before: the try's per-lock timeout still bounds each wait.
  *
  * Opened from the watch's own loop, which started before the try's transaction opened, so the
@@ -109,7 +157,7 @@ export async function openWatchConnection(
   dialect: SupportedDialect
 ): Promise<WatchConnection> {
   const pool = poolConnection(adapter);
-  if (poolCanSpareOne(adapter, dialect)) return pool;
+  if (poolHasFreeConnection(adapter, dialect)) return pool;
   try {
     if (dialect === "postgresql") {
       return (await openPostgresWatch(driverPool(adapter), pool)) ?? pool;
