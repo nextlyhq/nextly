@@ -63,6 +63,13 @@ describe("moveCandidates", () => {
     expect(moveCandidates([loop], [loop])).toEqual([]);
   });
 
+  it("sees a container used under two parents at both, so reordering them moves nothing", () => {
+    const meta = group("meta", [text("title")]);
+    const left = group("left", [meta]);
+    const right = group("right", [meta]);
+    expect(moveCandidates([left, right], [right, left])).toEqual([]);
+  });
+
   it("takes a renamed group's fields for the rename, not as moves", () => {
     expect(
       moveCandidates([group("meta", [text("title")])], [group("info", [text("title")])])

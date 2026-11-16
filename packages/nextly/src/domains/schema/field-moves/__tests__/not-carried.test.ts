@@ -27,6 +27,16 @@ describe("notCarried", () => {
     ]);
   });
 
+  it("names a NOT NULL the column had, which a key in JSON cannot hold", () => {
+    expect(notCarried({ type: "text", nullable: false, indexes: [] })).toEqual([
+      { property: "type", value: "text" },
+      { property: "constraint", value: "NOT NULL" },
+    ]);
+    expect(notCarried({ type: "text", nullable: true, indexes: [] })).toEqual([
+      { property: "type", value: "text" },
+    ]);
+  });
+
   it("names a foreign key, and only the type for a plain column", () => {
     expect(
       notCarried({ type: "uuid", indexes: [], foreignKey: "fk_dc_posts_author" })
