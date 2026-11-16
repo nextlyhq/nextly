@@ -4382,42 +4382,24 @@ export class CollectionQueryService extends BaseService {
             ),
           revealed
         );
-        // The entries that pass over the same languages are read together, one batch each, and
-        // put back in the order the page holds them.
-        const batches = new Map<
-          string,
-          { skipLanguages?: ReadonlySet<string>; indexes: number[] }
-        >();
-        expandedEntries.forEach((entry, index) => {
-          const skipLanguages = skipByEntry?.get(String(entry.id));
-          const key = skipLanguages ? [...skipLanguages].sort().join(",") : "";
-          const batch = batches.get(key) ?? { skipLanguages, indexes: [] };
-          batch.indexes.push(index);
-          batches.set(key, batch);
+        expandedEntries = await fieldGroupData.populateComponentDataMany({
+          entries: expandedEntries,
+          // The physical table, as the write recorded it in `_parent_table`.
+          parentTable: collectionTableName(collection, params.collectionName),
+          fields: fields as FieldConfig[],
+          depth: params.depth,
+          select: params.select,
+          // i18n: thread the read locale so embedded localized components resolve
+          // per language across the list, and forward fallback control so the
+          // admin's no-fallback edit mode (`?fallback-locale=none`) leaves an
+          // untranslated embedded field blank instead of showing default text.
+          locale: params.locale,
+          fallbackLocale: params.fallbackLocale,
+          // Asked per entry, so the whole page is still populated in one batch while each entry's
+          // field groups fall back past its own unpublished languages.
+          skipLanguagesOf: skipByEntry && (id => skipByEntry.get(id)),
+          access: this.buildComponentReadAccess(params, localeChain, caches),
         });
-        const populated = [...expandedEntries];
-        for (const { skipLanguages, indexes } of batches.values()) {
-          const filled = await fieldGroupData.populateComponentDataMany({
-            entries: indexes.map(index => expandedEntries[index]),
-            // The physical table, as the write recorded it in `_parent_table`.
-            parentTable: collectionTableName(collection, params.collectionName),
-            fields: fields as FieldConfig[],
-            depth: params.depth,
-            select: params.select,
-            // i18n: thread the read locale so embedded localized components resolve
-            // per language across the list, and forward fallback control so the
-            // admin's no-fallback edit mode (`?fallback-locale=none`) leaves an
-            // untranslated embedded field blank instead of showing default text.
-            locale: params.locale,
-            fallbackLocale: params.fallbackLocale,
-            skipLanguages,
-            access: this.buildComponentReadAccess(params, localeChain, caches),
-          });
-          filled.forEach((entry, position) => {
-            populated[indexes[position]] = entry;
-          });
-        }
-        expandedEntries = populated;
       }
 
       // ============================================================

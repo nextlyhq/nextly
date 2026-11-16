@@ -251,11 +251,12 @@ export interface PopulateComponentDataManyParams {
   /** i18n: per-request fallback control (see PopulateComponentDataParams.fallbackLocale). */
   fallbackLocale?: ComponentFallbackLocale;
   /**
-   * i18n: the languages every entry of this batch is not published in (see
-   * ComponentReadLanguage.skipLanguages). One set for the batch: a caller whose entries differ
-   * reads each group of entries sharing a set in its own call.
+   * i18n: the languages an entry of this batch is not published in, by the entry's id (see
+   * ComponentReadLanguage.skipLanguages). Asked per entry, so a page whose entries are published in
+   * different languages is still read in one batch, each entry's components falling back past its
+   * own set. `undefined` for an entry, or no function at all, skips nothing.
    */
-  skipLanguages?: ReadonlySet<string>;
+  skipLanguagesOf?: (parentId: string) => ReadonlySet<string> | undefined;
   /** See PopulateComponentDataParams.access. */
   access?: ComponentReadAccess;
   /**
@@ -286,7 +287,14 @@ interface ZoneInstance {
  * arguments, so the three per-kind readers cannot take them in a different
  * order.
  */
-interface BatchPopulateRead extends ComponentReadLanguage {
+interface BatchPopulateRead
+  extends Omit<ComponentReadLanguage, "skipLanguages"> {
+  /**
+   * The languages each parent of the batch passes over, by the parent's id
+   * (PopulateComponentDataManyParams.skipLanguagesOf): a batch spans parents
+   * published in different languages, so one set cannot stand for them all.
+   */
+  skipLanguagesOf?: (parentId: string) => ReadonlySet<string> | undefined;
   depth: number;
   currentDepth: number;
   access: ComponentReadAccess;
@@ -326,6 +334,42 @@ function instancesIn(values: readonly unknown[]): Record<string, unknown>[] {
     }
   }
   return found;
+}
+
+/**
+ * The instances one field read for a batch's parents (`dataByParent`, by parent id), in the order
+ * `instancesIn` gives them, and the languages each passes over asked by the instance's OWN id: the
+ * instances are the parents of the level nested in them, and each belongs to the document of the
+ * parent holding it, so it inherits that parent's set. No function where the batch had none.
+ */
+function instancesWithParentLanguages(
+  dataByParent: ReadonlyMap<string, unknown> | undefined,
+  skipLanguagesOf:
+    | ((parentId: string) => ReadonlySet<string> | undefined)
+    | undefined
+): {
+  instances: Record<string, unknown>[];
+  skipLanguagesOf?: (instanceId: string) => ReadonlySet<string> | undefined;
+} {
+  const instances: Record<string, unknown>[] = [];
+  const parentOf = new Map<string, string>();
+  for (const [parentId, value] of dataByParent ?? []) {
+    for (const instance of instancesIn([value])) {
+      instances.push(instance);
+      // The nested read asks by the id its batch reads the instance's children under.
+      if (typeof instance.id === "string" || typeof instance.id === "number") {
+        parentOf.set(String(instance.id), parentId);
+      }
+    }
+  }
+  if (!skipLanguagesOf) return { instances };
+  return {
+    instances,
+    skipLanguagesOf: instanceId => {
+      const parentId = parentOf.get(instanceId);
+      return parentId === undefined ? undefined : skipLanguagesOf(parentId);
+    },
+  };
 }
 
 // Duplicated here (and in the mutation service) to avoid a cross-domain
@@ -445,41 +489,66 @@ export class FieldGroupQueryService extends BaseService {
   }
 
   /**
-   * i18n: overlay a localized component's translatable fields onto its deserialized
-   * instance data from the companion `comp_<slug>_locales` table for the requested locale
-   * (with fallback). No-op when localization is off, the component isn't localized, no
-   * locale was requested, or it has no translatable fields. `dataArray` is mutated in place;
-   * each item must carry the instance `id` (deserializeComponentRow sets it).
-   *
-   * `executor` mirrors the one the instance read uses: a snapshot assembled inside
-   * a write transaction has just written these companion rows on that connection,
-   * and a pooled read would not see them.
-   *
-   * The one-language case of {@link overlayLocalizedComponentByLanguage}.
+   * i18n: overlay a batch's instances of one localized component, each instance falling back
+   * past the languages its own parent passes over (`read.skipLanguagesOf`). The instances are
+   * grouped by their parent's set and every group is overlaid in ONE
+   * {@link overlayLocalizedComponentByLanguage} call, which reads the companion once for all the
+   * groups' chains, so parents published in different languages cost no more reads than parents
+   * published in the same ones. Each item's `data` is mutated in place.
    */
-  private overlayLocalizedComponent(
+  private overlayBatchByParentLanguages(
     meta: DynamicFieldGroupRecord,
-    dataArray: Record<string, unknown>[],
-    // The language read, its fallback and the languages it passes over, taken as one so a caller
-    // cannot forward two of them and drop the third.
-    { locale, fallbackLocale, skipLanguages }: ComponentReadLanguage,
-    executor?: unknown,
-    /** A failed translation read propagates rather than returning shared values. */
-    strict = false
+    instances: readonly {
+      parentId: string;
+      data: Record<string, unknown>;
+    }[],
+    read: BatchPopulateRead
   ): Promise<void> {
+    // A read of every translation resolves no chain, so the skipped languages change nothing
+    // there and every instance is overlaid together.
+    const skipLanguagesOf =
+      read.locale === EVERY_TRANSLATION ? undefined : read.skipLanguagesOf;
+    // Keyed by the set's members, so parents passing over the same languages share one chain.
+    const groups = new Map<
+      string,
+      {
+        skipLanguages?: ReadonlySet<string>;
+        dataArray: Record<string, unknown>[];
+      }
+    >();
+    for (const { parentId, data } of instances) {
+      const skipLanguages = skipLanguagesOf?.(parentId);
+      const key = skipLanguages ? [...skipLanguages].sort().join(",") : "";
+      const group = groups.get(key);
+      if (group) group.dataArray.push(data);
+      else groups.set(key, { skipLanguages, dataArray: [data] });
+    }
     return this.overlayLocalizedComponentByLanguage(
       meta,
-      [{ dataArray, locale, fallbackLocale, skipLanguages }],
-      executor,
-      strict
+      [...groups.values()].map(({ skipLanguages, dataArray }) => ({
+        dataArray,
+        locale: read.locale,
+        fallbackLocale: read.fallbackLocale,
+        skipLanguages,
+      })),
+      read.executor,
+      read.strict
     );
   }
 
   /**
-   * {@link overlayLocalizedComponent} for several languages at once, each over
-   * its own copy of the instances and with its own fallback: the companion is
-   * read ONCE for every language's chain, and each copy is then resolved by
-   * its own chain, as an overlay of that language alone resolves it.
+   * i18n: overlay a localized component's translatable fields onto its deserialized
+   * instance data from the companion `comp_<slug>_locales` table, for several languages at
+   * once, each over its own instances and with its own fallback (and the languages that
+   * fallback passes over): the companion is read ONCE for every language's chain, and each
+   * group is then resolved by its own chain, as an overlay of that language alone resolves it.
+   * No-op when localization is off, the component isn't localized, or it has no translatable
+   * fields. Each `dataArray` is mutated in place; each item must carry the instance `id`
+   * (deserializeComponentRow sets it).
+   *
+   * `executor` mirrors the one the instance read uses: a snapshot assembled inside
+   * a write transaction has just written these companion rows on that connection,
+   * and a pooled read would not see them.
    */
   private async overlayLocalizedComponentByLanguage(
     meta: DynamicFieldGroupRecord,
@@ -980,6 +1049,8 @@ export class FieldGroupQueryService extends BaseService {
    * definition that places a field group inside itself ends with the data.
    *
    * Nesting is not a relationship hop: each level keeps the relationship depth of the one above.
+   * `read.skipLanguagesOf` is asked by the instances' own ids, which are the parents of the level
+   * below.
    */
   private async populateNestedInstances(
     instances: Record<string, unknown>[],
@@ -998,8 +1069,9 @@ export class FieldGroupQueryService extends BaseService {
         currentDepth: read.currentDepth,
         locale: read.locale,
         fallbackLocale: read.fallbackLocale,
-        // A nested field group belongs to the same document, so it passes over the same languages.
-        skipLanguages: read.skipLanguages,
+        // A nested field group belongs to the same document as the instance holding it, so it
+        // passes over that document's languages, asked by the holding instance's id.
+        skipLanguagesOf: read.skipLanguagesOf,
         access: read.access,
         strict: read.strict,
         executor: read.executor,
@@ -1016,17 +1088,21 @@ export class FieldGroupQueryService extends BaseService {
     values: readonly unknown[] | undefined,
     field: FieldGroupFieldConfig,
     languages: readonly ComponentReadLanguage[],
-    read: Omit<BatchPopulateRead, keyof ComponentReadLanguage>
+    read: Omit<
+      BatchPopulateRead,
+      "locale" | "fallbackLocale" | "skipLanguagesOf"
+    >
   ): Promise<void> {
     if (values === undefined) return;
     for (const [index, language] of languages.entries()) {
       // Each language's own fallback and skipped languages, so a nested read falls back as its
-      // parent's did.
+      // parent's did. Every instance here belongs to the one entry, so all share its set.
+      const { skipLanguages } = language;
       await this.populateNestedInstances(instancesIn([values[index]]), field, {
         ...read,
         locale: language.locale,
         fallbackLocale: language.fallbackLocale,
-        skipLanguages: language.skipLanguages,
+        skipLanguagesOf: skipLanguages && (() => skipLanguages),
       });
     }
   }
@@ -1046,7 +1122,7 @@ export class FieldGroupQueryService extends BaseService {
       select,
       locale,
       fallbackLocale,
-      skipLanguages,
+      skipLanguagesOf,
       access = { trusted: TRUSTS_EVERY_COLLECTION },
       strict = false,
       executor,
@@ -1077,8 +1153,9 @@ export class FieldGroupQueryService extends BaseService {
       currentDepth,
       locale,
       fallbackLocale,
-      // Read by every overlay of the batch and inherited by the field groups nested in it.
-      skipLanguages,
+      // Asked by every overlay of the batch for each instance's parent, and passed on, through
+      // the instances' ids, to the field groups nested in them.
+      skipLanguagesOf,
       access,
       strict,
       executor,
@@ -1116,12 +1193,17 @@ export class FieldGroupQueryService extends BaseService {
             fieldDataMaps.set(field.name, dataMap);
           }
         }
-        // The field groups placed directly in what was read, at every depth, every entry's at once.
-        await this.populateNestedInstances(
-          instancesIn([...(fieldDataMaps.get(field.name)?.values() ?? [])]),
-          field,
-          read
-        );
+        // The field groups placed directly in what was read, at every depth, every entry's at once,
+        // each instance passing over the languages of the entry holding it.
+        const { instances, skipLanguagesOf: nestedSkipLanguagesOf } =
+          instancesWithParentLanguages(
+            fieldDataMaps.get(field.name),
+            skipLanguagesOf
+          );
+        await this.populateNestedInstances(instances, field, {
+          ...read,
+          skipLanguagesOf: nestedSkipLanguagesOf,
+        });
       } catch (error) {
         // A rule that could not run never answered: see the catch above.
         rethrowIfRuleCouldNotRun(error);
@@ -1462,14 +1544,8 @@ export class FieldGroupQueryService extends BaseService {
         });
       }
     }
-    await this.overlayLocalizedComponent(
-      meta,
-      collected.map(c => c.data),
-      // The language, its fallback and the languages it passes over, as the batch reads them.
-      read,
-      read.executor,
-      read.strict
-    );
+    // One overlay for the batch, each instance falling back past its own parent's languages.
+    await this.overlayBatchByParentLanguages(meta, collected, read);
 
     const result = new Map<string, unknown>();
     for (const { parentId, data } of collected) {
@@ -1510,14 +1586,8 @@ export class FieldGroupQueryService extends BaseService {
         parentId: row[STORAGE_FORMAT.columns.parentId],
         data: this.deserializeComponentRow(row, componentFields, false, reach),
       }));
-    await this.overlayLocalizedComponent(
-      meta,
-      entries.map(e => e.data),
-      // The language, its fallback and the languages it passes over, as the batch reads them.
-      read,
-      read.executor,
-      read.strict
-    );
+    // One overlay for the batch, each instance falling back past its own parent's languages.
+    await this.overlayBatchByParentLanguages(meta, entries, read);
 
     const grouped = new Map<string, Record<string, unknown>[]>();
     for (const { parentId, data } of entries) {
@@ -1655,28 +1725,29 @@ export class FieldGroupQueryService extends BaseService {
   /**
    * i18n: overlay a zone's translatable fields from each kind's companion in
    * one read for every instance of that kind across the batch, not one read
-   * per instance. Each instance is mutated in place.
+   * per instance. Each instance is mutated in place, falling back past the
+   * languages of the parent holding it, so each carries its parent's id.
    */
   private async overlayZoneByKind(
     instancesByParent: Map<string, ZoneInstance[]>,
     read: BatchPopulateRead
   ): Promise<void> {
-    const bySlug = new Map<string, Record<string, unknown>[]>();
-    for (const instances of instancesByParent.values()) {
+    const bySlug = new Map<
+      string,
+      { parentId: string; data: Record<string, unknown> }[]
+    >();
+    for (const [parentId, instances] of instancesByParent) {
       for (const { data, slug } of instances) {
         const ofSlug = bySlug.get(slug);
-        if (ofSlug) ofSlug.push(data);
-        else bySlug.set(slug, [data]);
+        if (ofSlug) ofSlug.push({ parentId, data });
+        else bySlug.set(slug, [{ parentId, data }]);
       }
     }
-    for (const [slug, dataArray] of bySlug) {
-      await this.overlayLocalizedComponent(
+    for (const [slug, ofSlug] of bySlug) {
+      await this.overlayBatchByParentLanguages(
         await this.registryService.getComponent(slug, read.executor),
-        dataArray,
-        // The language, its fallback and the languages it passes over, as the batch reads them.
-        read,
-        read.executor,
-        read.strict
+        ofSlug,
+        read
       );
     }
   }

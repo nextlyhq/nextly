@@ -4,7 +4,7 @@
  * fields do. A language the document holds only as a draft is skipped, and
  * its component values are not read by a public reader.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   defineCollection,
@@ -64,7 +64,12 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         ],
       }),
     ],
-    localization: { locales: ["en", "es", "fr"], defaultLocale: "en" },
+    // Spanish falls back through German, so a read falling back through
+    // Spanish passes Spanish, German and then English.
+    localization: {
+      locales: ["en", { code: "es", fallbackLocale: ["de"] }, "fr", "de"],
+      defaultLocale: "en",
+    },
   });
   return current;
 }
@@ -149,6 +154,109 @@ describe.each(getConfiguredTestDialects())(
       expect(read.title).toBe("Page en français");
       expect(JSON.stringify(read)).not.toContain("borrador");
       expect(JSON.stringify(read.seo)).toContain("SEO in English");
+    }, 90_000);
+
+    // Three pages, all published in English and in French with no component
+    // value of their own there, each holding Spanish and German differently:
+    // A both as drafts, B Spanish as a draft and German published, C Spanish
+    // published and German a draft. A French list read falling back through
+    // Spanish, German, then English fills every page's components in ONE
+    // batch, and each page still skips the languages it alone is not
+    // published in: a page given another's set reads a different value.
+    it("fills a list's components in one batch, each page skipping its own draft languages", async () => {
+      const t = await boot(dialect);
+      /** A page written language by language, each with its own status. */
+      const page = async (
+        writes: readonly [string, string, "published" | "draft"][]
+      ): Promise<string> => {
+        const [[firstLocale, firstSeo, firstStatus], ...rest] = writes;
+        const id = String(
+          (
+            await t.nextly.create({
+              collection: PAGES,
+              locale: firstLocale,
+              data: {
+                title: `Page ${firstSeo}`,
+                seo: { metaTitle: firstSeo },
+                status: firstStatus,
+              },
+            })
+          ).item.id
+        );
+        for (const [locale, seo, status] of rest) {
+          await t.nextly.update({
+            collection: PAGES,
+            id,
+            locale,
+            data: {
+              title: `Page ${seo || locale}`,
+              ...(seo ? { seo: { metaTitle: seo } } : {}),
+              status,
+              _overwrite: true,
+            },
+          });
+        }
+        return id;
+      };
+      const a = await page([
+        ["en", "A in English", "published"],
+        ["es", "A borrador", "draft"],
+        ["de", "A Entwurf", "draft"],
+        ["fr", "", "published"],
+      ]);
+      const b = await page([
+        ["en", "B in English", "published"],
+        ["es", "B borrador", "draft"],
+        ["de", "B auf Deutsch", "published"],
+        ["fr", "", "published"],
+      ]);
+      const c = await page([
+        ["en", "C in English", "published"],
+        ["es", "C en español", "published"],
+        ["de", "C Entwurf", "draft"],
+        ["fr", "", "published"],
+      ]);
+
+      const populate = vi.spyOn(
+        t.getService("fieldGroupDataService"),
+        "populateComponentDataMany"
+      );
+      const listed = await t.nextly.find({
+        collection: PAGES,
+        locale: "fr",
+        fallbackLocale: "es",
+        status: "published",
+      });
+      const populateCalls = populate.mock.calls.length;
+      populate.mockRestore();
+      // Every page is on the list, so the call below covers three entries.
+      expect(
+        listed.items.map(item => String(item.id)).sort(),
+        JSON.stringify({
+          a,
+          b,
+          c,
+          listed: listed.items.map(item => [item.id, item.title]),
+        })
+      ).toEqual([a, b, c].sort());
+      // One population call for the whole page of entries.
+      expect(populateCalls).toBe(1);
+
+      const seoOf = (id: string) =>
+        JSON.stringify(
+          (
+            listed.items.find(item => String(item.id) === id) as
+              | Record<string, unknown>
+              | undefined
+          )?.seo ?? null
+        );
+      // A skips both drafts and reads its English value.
+      expect(seoOf(a)).toContain("A in English");
+      // B skips its Spanish draft and reads its published German value.
+      expect(seoOf(b)).toContain("B auf Deutsch");
+      // C reads its published Spanish value before its German draft.
+      expect(seoOf(c)).toContain("C en español");
+      expect(JSON.stringify(listed.items)).not.toMatch(/borrador|Entwurf/);
     }, 90_000);
 
     it("falls back past a Single's draft language in a component", async () => {
