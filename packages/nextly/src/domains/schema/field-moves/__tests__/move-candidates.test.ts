@@ -48,6 +48,15 @@ describe("moveCandidates", () => {
     ).toEqual([]);
   });
 
+  it("offers nothing where two fields of that name left and one arrived", () => {
+    expect(
+      moveCandidates(
+        [text("title"), group("a", [text("title")]), group("b", [])],
+        [group("a", []), group("b", [text("title")])]
+      )
+    ).toEqual([]);
+  });
+
   it("takes a renamed group's fields for the rename, not as moves", () => {
     expect(
       moveCandidates([group("meta", [text("title")])], [group("info", [text("title")])])
