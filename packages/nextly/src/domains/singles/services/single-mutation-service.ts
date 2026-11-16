@@ -4032,10 +4032,11 @@ export class SingleMutationService extends BaseService {
               // stamp is put back, as the save writes it when nothing is pending. Without it a
               // change of translated values alone, in a language other than the default, leaves
               // the Single's row no value to set, and the database refuses the empty update.
-              mainPayload = {
+              const promotedMain: Record<string, unknown> = {
                 ...promoted.main,
                 updated_at: updatePayload.updated_at,
               };
+              mainPayload = promotedMain;
               companionData = promoted.companion;
               // The draft's component values, with the publish's own over
               // them, are written by the component save below, without the
