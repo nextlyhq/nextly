@@ -85,7 +85,7 @@ describe("the page's Layout picker", () => {
     const view = layoutPickerView(page(), ready());
     expect(view.value).toBe(SITE_DEFAULT_VALUE);
     expect(view.why).toBe(
-      "Follows the site default, Main, because this page doesn't choose its own Layout."
+      "Follows the site default, Main, because this page doesn't choose its own header & footer set."
     );
     expect(view.effective?.id).toBe("main");
   });
@@ -112,14 +112,14 @@ describe("the page's Layout picker", () => {
     const view = layoutPickerView(page("unknown"), ready());
     expect(view.value).toBe(layoutValue("unknown"));
     expect(view.options.find(o => o.value === view.value)?.label).toBe(
-      "A Layout you can't view, or one that was deleted"
+      "A header & footer set you can't view, or one that was deleted"
     );
     expect(view.options[0]).toMatchObject({
       label: "Site default",
       note: "Main",
     });
     expect(view.why).toBe(
-      "You can't see this Layout. It may have been deleted, or you may not have access to it. Choose another Layout to change it."
+      "You can't see this header & footer set. It may have been deleted, or you may not have access to it. Choose another header & footer set to change it."
     );
     // Nothing of it is drawn.
     expect(view.effective).toBeNull();
@@ -141,10 +141,10 @@ describe("the page's Layout picker", () => {
       ready({ defaultLayout: null, defaultUnreadable: true })
     );
     expect(view.options[0]?.label).toBe(
-      "Site default (a Layout you can't view, or one that was deleted)"
+      "Site default (a header & footer set you can't view, or one that was deleted)"
     );
     expect(view.why).toBe(
-      "Follows the site default: a Layout you can't view, or one that was deleted."
+      "Follows the site default: a header & footer set you can't view, or one that was deleted."
     );
     expect(view.effective).toBeNull();
   });
@@ -200,7 +200,7 @@ describe("the page's Layout picker", () => {
     const view = layoutPickerView(page(), ready({ defaultLayout: null }));
     expect(view.options[0]?.label).toBe("Site default (none set)");
     expect(view.why).toBe(
-      "No header or footer: the site has no published default Layout"
+      "No header or footer: the site has no published default header & footer set"
     );
     expect(view.effective).toBeNull();
   });
@@ -208,9 +208,9 @@ describe("the page's Layout picker", () => {
   it("is read-only without the right to read Layouts, naming what it can", () => {
     const named = layoutPickerView(page("landing"), { kind: "forbidden" });
     expect(named.readOnly).toBe(true);
-    expect(named.why).toBe("A Layout you can't view");
+    expect(named.why).toBe("A header & footer set you can't view");
     expect(named.options.find(o => o.value === named.value)?.label).toBe(
-      "A Layout you can't view"
+      "A header & footer set you can't view"
     );
     expect(layoutPickerView(page(), { kind: "forbidden" }).why).toBe(
       "Site default"
@@ -224,7 +224,7 @@ describe("the page's Layout picker", () => {
     expect(view.effective).toBeNull();
     // Not yet refused: the stored Layout is not called one the author can't view.
     expect(view.options.find(o => o.value === view.value)?.label).toBe(
-      "The chosen Layout"
+      "The chosen header & footer set"
     );
   });
 });
@@ -265,7 +265,7 @@ describe("a Layout behind Remove Layout's fence", () => {
       label: "Landing",
       note: "Being removed",
       description:
-        "This Layout is being removed, so pages can't choose it. Choose another Layout.",
+        "This header & footer set is being removed, so pages can't choose it. Choose another header & footer set.",
       disabled: true,
     });
     expect(view.options).toContainEqual({
@@ -273,7 +273,7 @@ describe("a Layout behind Remove Layout's fence", () => {
       label: "Unfinished",
       note: "Unpublished. Publish it again to choose it.",
       description:
-        "This Layout was unpublished with Remove Layout, so pages can't choose it until it is published again. Choose another Layout.",
+        "This header & footer set was unpublished with Remove header & footer set, so pages can't choose it until it is published again. Choose another header & footer set.",
       disabled: true,
     });
   });

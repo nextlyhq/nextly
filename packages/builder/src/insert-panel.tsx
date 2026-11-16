@@ -557,6 +557,6 @@ function emptyStateText(tab: PanelTab, query: string): string {
   const word = TAB_WORDS[tab];
   if (searched !== "") return `No ${word} match "${searched}".`;
   return tab === "sections"
-    ? `No ${word} are saved yet.`
+    ? `No ${word} yet.`
     : `No ${word} can be added here.`;
 }

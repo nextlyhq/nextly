@@ -273,7 +273,7 @@ describe("before a publish", () => {
     expect(listed).toEqual([
       "Pricing card, component",
       "Badge in the card, component",
-      "Landing, Layout",
+      "Landing, header & footer set",
     ]);
     fireEvent.click(screen.getByRole("button", { name: "Publish all 4" }));
     await running;
@@ -438,8 +438,10 @@ describe("before a publish", () => {
     render(<Harness layout="l1" />);
     const running = publish();
     const dialog = await screen.findByRole("alertdialog");
-    expect(dialog.textContent).toContain("This page's Layout isn't published");
-    expect(dialog.textContent).toContain("site's default Layout");
+    expect(dialog.textContent).toContain(
+      "This page's header & footer set isn't published"
+    );
+    expect(dialog.textContent).toContain("site's default header & footer set");
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Publish both" }));
     });
