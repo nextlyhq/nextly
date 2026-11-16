@@ -104,6 +104,10 @@ export const versionKeys = {
     [...versionKeys.details(), ...scopeKey(scope), versionNo] as const,
   diffs: (): readonly ["versions", "diff"] =>
     [...versionKeys.all(), "diff"] as const,
+  // What every comparison of one document starts with, so a cached
+  // answer can be told to belong to that document by its key alone.
+  documentDiffs: (scope: VersionScope): readonly string[] =>
+    [...versionKeys.diffs(), ...scopeKey(scope)] as const,
   // A comparison with a baseline the server resolves: named by the baseline
   // and the version compared, or none for the server's own choice.
   baselineDiff: (
@@ -111,12 +115,7 @@ export const versionKeys = {
     baseline: string,
     to: number | undefined
   ): readonly unknown[] =>
-    [
-      ...versionKeys.diffs(),
-      ...scopeKey(scope),
-      baseline,
-      to ?? "auto",
-    ] as const,
+    [...versionKeys.documentDiffs(scope), baseline, to ?? "auto"] as const,
   // A diff is identified by the document (scope), the ordered version pair
   // (from, to), and whether unchanged fields are filtered out (modifiedOnly).
   // The result also depends on the live schema, which the query treats as
@@ -324,8 +323,19 @@ export function useVersionDiff({
 
 /**
  * A version compared with a baseline the server resolves (see
- * `versionApi.diffFromBaseline`). Null asks for nothing. Kept fresh as a pair's
- * comparison is: the server classifies it against the live schema.
+ * `versionApi.diffFromBaseline`). Null asks for nothing.
+ *
+ * Resolved once per visit, unlike a pair's comparison, and never refetched by
+ * focus, reconnection or a remount while the answer is cached. Showing the
+ * comparison marks its newer version seen, which moves the baseline "the
+ * version you last looked at" onto that version itself: asked again, the
+ * server would answer that there is nothing to compare, replacing the
+ * comparison the reader is looking at. Freezing the pair costs no freshness
+ * the reader can see, because only the two version numbers and the baseline
+ * note are read from this answer; the fields are drawn by the pair's own
+ * comparison (`useVersionDiff`), which still revalidates against the live
+ * schema. Marking a version seen invalidates nothing, so it cannot refetch
+ * this either.
  */
 export function useBaselineDiff({
   scope,
@@ -338,6 +348,9 @@ export function useBaselineDiff({
   to?: number;
   enabled?: boolean;
 }): UseQueryResult<VersionDiff, Error> {
+  // The start every baseline key of this document shares, so a previous
+  // answer can be told apart from another document's.
+  const documentKey = versionKeys.documentDiffs(scope);
   return useQuery<VersionDiff, Error>({
     queryKey:
       baseline === null
@@ -349,9 +362,21 @@ export function useBaselineDiff({
       return versionApi.diffFromBaseline(scope, baseline, to);
     },
     enabled: enabled && baseline !== null && isAddressable(scope),
-    staleTime: 0,
-    refetchOnWindowFocus: true,
-    placeholderData: keepPreviousData,
+    // Frozen for the visit (see above).
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    // The previous comparison stays on screen while another baseline of the
+    // SAME document loads. Never another document's: the router can move from
+    // one document's comparison to another's without unmounting, and that
+    // pair, drawn under the new document's heading, would also be marked
+    // seen on the new document, moving its "last looked at" to a version
+    // never shown.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery !== undefined &&
+      documentKey.every((part, i) => previousQuery.queryKey[i] === part)
+        ? previous
+        : undefined,
   });
 }
 
