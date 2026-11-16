@@ -229,6 +229,20 @@ function withoutOwnSeo(input: PageMetadataInput): PageMetadataInput {
   return { ...input, source: { ...input.source, entry } };
 }
 
+/**
+ * The title pattern that gives the title of every page the design draws:
+ * the type's own, else the site's default, as the order fills it; nothing
+ * where neither holds text.
+ */
+function titlePatternOf(
+  rules: SiteRules,
+  collection: string
+): string | undefined {
+  return textOf(
+    { ...rules.defaultPatterns, ...rules.patterns[collection] }.title
+  );
+}
+
 /** The route a template's SEO panel reads. */
 export function seoTemplateRoute(setup: {
   readRules?: ReadRules;
@@ -282,10 +296,12 @@ export function seoTemplateRoute(setup: {
       );
       const locale = body.locale ?? undefined;
       const rules = await readRules(ctx, locale);
+      const titlePattern = titlePatternOf(rules, body.collection);
       const answer: TemplateContext = {
         typeLabel: names.one,
         typePlural: names.many,
         fields,
+        ...(titlePattern === undefined ? {} : { titlePattern }),
         imageFields,
         entries,
         count: listed.total,
