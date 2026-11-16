@@ -82,7 +82,12 @@ for (const dialect of getConfiguredTestDialects()) {
       projectRoot = await mkdtemp(join(tmpdir(), "nextly-unique-list-"));
       vi.spyOn(process, "cwd").mockReturnValue(projectRoot);
       clearServices();
-      t = await createTestNextly({ dialect, basePath: projectRoot });
+      t = await createTestNextly({
+        dialect,
+        basePath: projectRoot,
+        // So a translated list can be created; a list kept per language is one all the same.
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
       await dispatch(
         "createCollection",
         {},
@@ -109,6 +114,39 @@ for (const dialect of getConfiguredTestDialects()) {
           "createCollection",
           {},
           { name: "uql_posts", label: "Posts", fields: [listOfTags(true)] }
+        )
+      ).rejects.toMatchObject(REFUSED);
+      expect(await t!.adapter.tableExists("dc_uql_posts")).toBe(false);
+    }, 120_000);
+
+    it("inside a named group, at the create, building nothing", async () => {
+      await expect(
+        dispatch(
+          "createCollection",
+          {},
+          {
+            name: "uql_posts",
+            label: "Posts",
+            fields: [
+              { name: "meta", type: "group", fields: [listOfTags(true)] },
+            ],
+          }
+        )
+      ).rejects.toMatchObject(REFUSED);
+      expect(await t!.adapter.tableExists("dc_uql_posts")).toBe(false);
+    }, 120_000);
+
+    it("translated, at the create, building nothing", async () => {
+      await expect(
+        dispatch(
+          "createCollection",
+          {},
+          {
+            name: "uql_posts",
+            label: "Posts",
+            localized: true,
+            fields: [{ ...listOfTags(true), localized: true }],
+          }
         )
       ).rejects.toMatchObject(REFUSED);
       expect(await t!.adapter.tableExists("dc_uql_posts")).toBe(false);
