@@ -1292,6 +1292,16 @@ export interface MigrateCoreDeps {
    * and its own push brings the database to it.
    */
   refuseUnwrittenChanges?: () => Promise<void>;
+  /**
+   * Refuse, reading only, a database that lacks a table or column the newest
+   * applied app snapshot records (`database-behind-migrations.ts`), naming
+   * each with the migration that last created it: before the lock, and again
+   * under it before Phase 1.
+   *
+   * `nextly migrate` and the production boot pass it. The development boot
+   * does not: its push makes the database match the configuration.
+   */
+  refuseDatabaseBehind?: boolean;
 }
 
 export interface MigrateCoreResult {
