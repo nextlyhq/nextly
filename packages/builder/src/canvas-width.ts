@@ -5,11 +5,11 @@
  * ## The chosen breakpoint comes first, and the width follows from it
  *
  * The breakpoint the author is styling is a stored choice, `editingBreakpoint`
- * in `shell-state.ts`, set only by the device buttons
- * (`breakpoint-switcher.tsx`). It is never read off the width the canvas
- * measured: opening a panel or narrowing the window changes the room the
- * canvas has, and a breakpoint derived from that room moved every edit to a
- * breakpoint the author never picked.
+ * in `shell-state.ts`: the device the author picked (`breakpoint-switcher.tsx`),
+ * or one the host asks the shell to show. It is never read off the width the
+ * canvas measured: opening a panel or narrowing the window changes the room
+ * the canvas has, and a breakpoint derived from that room moved every edit to
+ * a breakpoint the author never picked.
  *
  * So the order is choice, then width. {@link editingBreakpointOf} turns the
  * stored choice into the breakpoint an edit goes to, and {@link previewWidth}

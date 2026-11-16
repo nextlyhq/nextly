@@ -178,8 +178,9 @@ the template once per item. Bind any prop on a nested block to an item field (Co
 page renders: each repeated item shows its own entry's field values, and a binding with
 no value shows its fallback, or the text the block was given in the editor. A value that
 breaks a binding rule never reaches the block. A binding whose field or block changed
-after it was saved shows its fallback until it is fixed, and the dashboard's **Bindings
-to fix** card lists it. Empty, error and unconfigured states are first-class, and a per-page query budget bounds
+after it was saved shows its fallback, or the block's own value, until it is fixed. The
+dashboard's **Needs your attention** card counts these, and **Bindings to fix**, under
+**Checks** in the Page Builder's panel, lists them. Empty, error and unconfigured states are first-class, and a per-page query budget bounds
 nested loops — depth in a document becomes multiplication in reads.
 
 ## Styling, tokens & responsive
