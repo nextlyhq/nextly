@@ -1,8 +1,9 @@
 /**
  * The checks every planner shares: whether the blocks may sit where they are
- * put, the nesting verdict inside a copied forest, the destination and its
- * layer locks, duplicated ids, fresh ids for a copy, and the anchors a copy
- * would orphan.
+ * put, their shape, the nesting verdict inside a copied forest, the
+ * destination and its layer locks, a root the document holds twice,
+ * duplicated ids, whether an index would miss part of the forest, replacing a
+ * run in place, fresh ids for a copy, and the anchors a copy would orphan.
  *
  * @module composition-planners-refusals
  */
@@ -10,6 +11,7 @@ import type {
   InsertTarget,
   PlanRefusal,
   PlanWarning,
+  RunPlacement,
 } from "./composition-planners-contract";
 import { type BlockDocument, type BlockNode, renderedDomId } from "./document";
 import { lockedAncestorOf } from "./layers-lock";
@@ -25,6 +27,7 @@ import {
   nodeShapeRefusal,
   type OpPosition,
   positionRefusal,
+  subtreeRemovalRefusal,
 } from "./ops";
 import { type ComponentLookup, placementTypesOf } from "./resolve-instances";
 import {
@@ -60,6 +63,28 @@ export function overIndexBound(survey: DocumentSurvey): boolean {
 }
 
 /**
+ * A selected root this document will not let a `remove` take.
+ *
+ * The op layer's own rule rather than a count of the root's id, and the two are
+ * not the same question: `remove` refuses when ANY id inside the subtree it
+ * takes occurs more than once in the document, because the inverse it records
+ * could not put that subtree back. A root can be unique while a node three
+ * levels down collides with something across the page — and the plan then
+ * succeeds, the library row is written, and the first op throws.
+ */
+export function removableRefusal(
+  document: BlockDocument,
+  roots: readonly BlockNode[]
+): PlanRefusal | undefined {
+  for (const root of roots) {
+    if (subtreeRemovalRefusal(document.nodes, root) !== undefined) {
+      return { problem: "duplicate-destination" };
+    }
+  }
+  return undefined;
+}
+
+/**
  * A root the ops are about to ADDRESS that the document holds twice.
  *
  * `update` and `remove` both address a node by id and both refuse one the
@@ -85,6 +110,33 @@ export function ambiguousRootRefusal(
     }
   }
   return undefined;
+}
+
+/** Where the replacement goes, or why the run names nowhere to put it. */
+interface ReplacementPosition {
+  readonly at: OpPosition;
+  readonly problem?: undefined;
+  readonly permitted?: undefined;
+  readonly issues?: undefined;
+}
+
+/**
+ * The run's own place, as the position an op would put something back at.
+ *
+ * The narrowing {@link RunPlacement} deliberately does not do, in the one place
+ * that has to commit to an answer. `contiguousRun` sets the two container
+ * fields together or leaves both, so a parent named without its slot is a shape
+ * it does not emit — but the fields are independently optional in its result,
+ * and guessing which half to believe would either move a block to the top level
+ * or address a slot nobody named. Refused as what it is instead, through the
+ * cause `applyOp` would give the position it cannot be built into.
+ */
+export function replacementPosition(
+  at: RunPlacement
+): ReplacementPosition | PlanRefusal {
+  if (at.parentId === undefined) return { at: { index: at.index } };
+  if (at.slot === undefined) return { problem: "invalid-position" };
+  return { at: { parentId: at.parentId, slot: at.slot, index: at.index } };
 }
 
 /**

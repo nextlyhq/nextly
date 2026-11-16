@@ -1,6 +1,7 @@
 /**
  * Saving a selection as a pattern: the run a selection makes, the pattern
- * document it is stored as, and updating a pattern from a new selection.
+ * document it is stored as, whether a save would be refused, and updating a
+ * pattern from a new selection.
  *
  * @module composition-planners-patterns
  */
@@ -10,6 +11,7 @@ import type {
   PatternUpdateTarget,
   PlanRefusal,
   PlanResult,
+  RunPlacement,
 } from "./composition-planners-contract";
 import {
   nodeOrigin,
@@ -186,24 +188,6 @@ interface SavableRun {
 }
 
 /**
- * Where a run sat in the document it was selected from.
- *
- * Reported as the run gave it — the two container fields independently
- * optional — rather than as an `OpPosition`, which ties them together.
- * Narrowing here would mean deciding what a half-set container MEANS at the
- * point that has the least to go on, and the honest answer is that it is not a
- * position at all. `replaceOps` refuses it as one.
- */
-export interface RunPlacement {
-  /** The node whose slot held the run, absent at the top level. */
-  readonly parentId?: string;
-  /** The slot within that parent, absent at the top level. */
-  readonly slot?: string;
-  /** The index of the run's FIRST node in that sibling list. */
-  readonly index: number;
-}
-
-/**
  * The one question every SAVE asks of a selection.
  *
  * Both save planners ask it and they must ask it identically: an author who can
@@ -226,7 +210,7 @@ export interface RunPlacement {
  * produces a library row that `planInsertPattern` then refuses EVERYWHERE — an
  * entry an author can see, cannot place, and gets no reason for until they try.
  *
- * That failure has happened once already in this module, between save and
+ * That failure has happened once already in these planners, between save and
  * insert, and it is invisible in either planner read alone: each answers
  * correctly about the document it was handed. So the save asks the questions
  * the insert will ask, of the same shared rules, and refuses at the point where
@@ -554,4 +538,49 @@ function restampOps(
       },
     })),
   };
+}
+
+/**
+ * Whether this selection could be saved as a pattern, and why not.
+ *
+ * The counterpart to `patternRefusal`, published for the same reason and
+ * against the opposite mistake. That one stops a palette OFFERING a stored
+ * pattern the planner would reject; this one stops a surface offering to SAVE a
+ * selection the planner would reject — a button that accepts a click and then
+ * fails, which is the same defect on the write side.
+ *
+ * Asked of the PLANNER rather than restated. The ways a selection can be
+ * unsavable are not a short list a toolbar should keep its own copy of: a
+ * selection that is not one contiguous run, a block that may not be a document
+ * root, a node whose shape the op layer will not carry, a descendant nested
+ * somewhere the rules no longer allow, one DOM id on two of the run's own
+ * nodes, and a document that will not fit the byte cap. A surface enumerating
+ * those drifts the first time the planner learns a new way to say no, and it
+ * drifts SILENTLY — the button stays enabled and the save fails.
+ *
+ * Before this, the only way to ask was to call {@link planSaveAsPattern} with a
+ * `target` invented for the purpose, which is a collection name and a field set
+ * a caller asking "may I?" does not have yet.
+ *
+ * A THIN VIEW over the planner's own preflight rather than a second walk: the
+ * same `plannedSave` the two save planners call, so a question answered here
+ * and a save attempted afterwards cannot disagree. It therefore does the same
+ * work a save does, up to building the stored document — which is what makes it
+ * exact, and what makes it worth memoising on the selection rather than calling
+ * per render.
+ *
+ * It takes NO limits of its own, deliberately. {@link planSaveAsPattern} has
+ * none either — it plans under the defaults — so a preflight that accepted them
+ * would answer a question the planner never asks: a caller passing a lower
+ * `maxNodes` would see a save disabled that the planner then accepts, and a
+ * higher one the reverse. A preflight whose whole purpose is to agree with the
+ * planner must not take an input the planner cannot take.
+ */
+export function saveAsPatternRefusal(
+  document: BlockDocument,
+  selectedIds: readonly string[],
+  nesting: NestingSource
+): PlanRefusal | undefined {
+  const saved = plannedSave(document, selectedIds, nesting);
+  return saved.problem === undefined ? undefined : saved;
 }

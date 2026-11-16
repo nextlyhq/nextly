@@ -42,6 +42,7 @@ export type {
 export {
   planSaveAsPattern,
   planUpdatePatternFromSelection,
+  saveAsPatternRefusal,
 } from "./composition-planners-patterns";
 export {
   planConvertToComponent,
@@ -56,7 +57,6 @@ export type {
 export {
   patternRefusal,
   planInsertPattern,
-  saveAsPatternRefusal,
 } from "./composition-planners-insert";
 export { internalNestingVerdict } from "./composition-planners-refusals";
 export { detachedPage, planDetach } from "./composition-planners-detach";

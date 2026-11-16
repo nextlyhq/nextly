@@ -334,11 +334,12 @@ interface RecordedRenames {
 function recordedRenames(origin: BlockOrigin | undefined): RecordedRenames {
   // The DOCUMENT module's reading, not a second one here, and ONE of it for
   // both halves. What a record must carry to be trusted and what it says once
-  // trusted are one question, and this file used to answer the second half
-  // itself: it validated through `isBlockOrigin` and then walked the record
-  // again for its contents, so a stored Proxy ran its traps twice and the two
-  // readings could disagree about an entry. Asking for the renames and the
-  // node lists separately would reopen exactly that between the two.
+  // trusted are one question, and the planners used to answer the second
+  // half themselves: they validated through `isBlockOrigin` and then walked
+  // the record again for its contents, so a stored Proxy ran its traps twice
+  // and the two readings could disagree about an entry. Asking for the
+  // renames and the node lists separately would reopen exactly that between
+  // the two.
   const read = origin === undefined ? undefined : patternRenameRecord(origin);
   return { renames: read?.renamed ?? NO_RENAMES, nodes: read?.renamedNodes };
 }

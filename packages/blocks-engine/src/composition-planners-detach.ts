@@ -5,17 +5,13 @@
  *
  * @module composition-planners-detach
  */
-import {
-  removableRefusal,
-  replacementPosition,
-} from "./composition-planners-components";
 import type {
   CompositionPlan,
   PlanProblem,
   PlanRefusal,
   PlanResult,
+  RunPlacement,
 } from "./composition-planners-contract";
-import type { RunPlacement } from "./composition-planners-patterns";
 import { insertOps } from "./composition-planners-provenance";
 import {
   destinationOf,
@@ -25,6 +21,8 @@ import {
   internalNestingRefusal,
   lockRefusal,
   placementRefusal,
+  removableRefusal,
+  replacementPosition,
   shapeRefusal,
 } from "./composition-planners-refusals";
 import {

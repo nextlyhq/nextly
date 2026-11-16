@@ -342,6 +342,24 @@ export interface PatternUpdateTarget {
 }
 
 /**
+ * Where a run sat in the document it was selected from.
+ *
+ * Reported as the run gave it — the two container fields independently
+ * optional — rather than as an {@link OpPosition}, which ties them together.
+ * Narrowing here would mean deciding what a half-set container MEANS at the
+ * point that has the least to go on, and the honest answer is that it is not a
+ * position at all. `replaceOps` refuses it as one.
+ */
+export interface RunPlacement {
+  /** The node whose slot held the run, absent at the top level. */
+  readonly parentId?: string;
+  /** The slot within that parent, absent at the top level. */
+  readonly slot?: string;
+  /** The index of the run's FIRST node in that sibling list. */
+  readonly index: number;
+}
+
+/**
  * A pattern as it is STORED: the document, and the identity the store gave it.
  *
  * Both, because inserting one records where the copy came from and a document
