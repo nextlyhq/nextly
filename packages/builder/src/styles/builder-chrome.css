@@ -8165,9 +8165,10 @@ label[data-named-above] .nx-style-inspector__field-label-text {
     box-shadow: none;
   }
 
+  /* The focused side's action is named too: the overlay rule above is more
+     specific than the first selector here, and without its own selector a
+     focused side's reset floated over the next row's label. */
   .nx-spacing-box .nx-inspector__field > .nx-style-inspector__breakpoint-action,
-  /* As specific as the focused-side rule above, which otherwise still floats
-     the reset over the next row's label while its side has focus. */
   .nx-spacing-box
     .nx-inspector__field:focus-within
     .nx-style-inspector__breakpoint-action,

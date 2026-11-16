@@ -30,7 +30,6 @@ import {
   screen,
   within,
 } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -5321,11 +5320,16 @@ describe("a per-side property is drawn as a box", () => {
     ).toEqual(["blockStart", "inlineEnd", "blockEnd", "inlineStart"]);
   });
 
-  it("moves Tab through margin then padding, each Top, Right, Bottom, Left, and never onto a reset", async () => {
+  it("moves Tab through margin then padding, each Top, Right, Bottom, Left, and never onto a reset", () => {
     /*
      * Typed as an author types a box: a value, Tab, a value. Every side holds
      * a value first, so each has a reset beside it; a reset that was a Tab
      * stop would take the next value instead of the next side.
+     *
+     * The sequence is read as the browser builds it, since jsdom moves no
+     * focus on Tab: every element in the box that takes focus from the
+     * keyboard, in document order (no positive tabindex is used here). The
+     * browser test in e2e presses the real key.
      */
     const all = {
       blockStart: "1px",
@@ -5346,7 +5350,6 @@ describe("a per-side property is drawn as a box", () => {
     // The control: every side does have a reset to land on.
     expect(box.getAllByRole("button", { name: /^Reset / })).toHaveLength(8);
 
-    const user = userEvent.setup();
     const order = [
       "Margin top",
       "Margin right",
@@ -5357,18 +5360,21 @@ describe("a per-side property is drawn as a box", () => {
       "Padding bottom",
       "Padding left",
     ];
-    await user.click(box.getByLabelText("Margin top"));
-    const visited: string[] = [];
-    for (let step = 0; step < order.length; step += 1) {
-      visited.push(
-        document.activeElement?.getAttribute("aria-label") ??
-          (
-            document.activeElement as HTMLInputElement | null
-          )?.labels?.[0]?.textContent?.trim() ??
-          ""
-      );
-      await user.tab();
-    }
+    const stops = Array.from(
+      document
+        .querySelector(".nx-spacing-box")
+        ?.querySelectorAll<HTMLElement>("input, button, [tabindex]") ?? []
+    ).filter(
+      element =>
+        element.tabIndex >= 0 &&
+        !(element as HTMLInputElement | HTMLButtonElement).disabled
+    );
+    const visited = stops.map(
+      element =>
+        element.getAttribute("aria-label") ??
+        (element as HTMLInputElement).labels?.[0]?.textContent?.trim() ??
+        ""
+    );
 
     expect(visited).toEqual(order);
   });
