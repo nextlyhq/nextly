@@ -27,38 +27,33 @@
  * @module domains/schema/migrate/baseline
  */
 import { NextlyError } from "../../../errors";
-import { scopeLedgerRows } from "../events/ledger-scope";
+import { ledgerFilename, scopeLedgerRows } from "../events/ledger-scope";
 import { standingsByFilename } from "../events/migration-state";
 import type { SchemaEventRow } from "../events/schema-events-repository";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import type { NextlySchemaSnapshot, Operation } from "../pipeline/diff/types";
+import { appliedAppMigrations } from "../schema-version";
 
 /** The snapshot a first migration is diffed against when none exists. */
 export const EMPTY_SNAPSHOT: NextlySchemaSnapshot = { tables: [] };
 
-/** A ledger row as the baseline's history rules read it. */
+/** A ledger row as the baseline's attempt rule reads it. */
 export type LedgerRow = Pick<
   SchemaEventRow,
   "eventType" | "status" | "startedAt" | "filename" | "supersededEventIds"
 >;
 
-/** Each app migration's standing, a plugin's rows left to its own stream (`scopeLedgerRows`). */
-function appStandings(rows: readonly LedgerRow[]) {
-  return standingsByFilename(scopeLedgerRows(rows));
-}
-
 /**
- * The app migrations a baseline counts as history: those whose latest outcome
- * is applied, as every rule judges a migration's state (`migrationStanding`),
- * whatever records that are not outcomes follow it (an accepted checksum, a
- * removal recorded, an attempt). A migration rolled back is no history, file
- * present or not, and neither is a plugin's row.
+ * The app migrations a baseline counts as history, by the name the ledger
+ * records them under (`<name>.sql`): those the ledger records applied, by the
+ * one rule the stored schema version is read by too (`appliedAppMigrations`).
+ * A migration's latest outcome decides, whatever records that are not
+ * outcomes follow it (an accepted checksum, a removal recorded, an attempt),
+ * so a migration rolled back is no history, file present or not, and neither
+ * is a plugin's row.
  */
-export function appliedAppMigrations(rows: readonly LedgerRow[]): string[] {
-  return [...appStandings(rows)]
-    .filter(([, standing]) => standing.state === "applied")
-    .map(([filename]) => filename)
-    .sort();
+export function historyInLedger(rows: readonly SchemaEventRow[]): string[] {
+  return [...appliedAppMigrations(rows)].map(ledgerFilename).sort();
 }
 
 /** An app migration's attempt that failed or recorded no outcome, and nothing has resolved. */
@@ -73,7 +68,10 @@ export interface OpenAttempt {
 /** Every app migration with an unresolved attempt, by filename. */
 export function openAttempts(rows: readonly LedgerRow[]): OpenAttempt[] {
   const open: OpenAttempt[] = [];
-  for (const [filename, { unresolvedAttempt }] of appStandings(rows)) {
+  // A plugin's rows are left to its own stream (`scopeLedgerRows`).
+  for (const [filename, { unresolvedAttempt }] of standingsByFilename(
+    scopeLedgerRows(rows)
+  )) {
     if (unresolvedAttempt === undefined) continue;
     open.push({
       filename,
@@ -146,7 +144,7 @@ export interface HistoryMigration {
   filename: string;
   /** Its file is in the build's migrations folder. */
   inFolder: boolean;
-  /** Its latest outcome in the ledger is applied (`appliedAppMigrations`). */
+  /** Its latest outcome in the ledger is applied (`historyInLedger`). */
   applied: boolean;
 }
 
@@ -250,7 +248,7 @@ export interface PlanBaselineArgs {
    */
   migrationFiles?: readonly string[];
   /**
-   * The app migrations the ledger records as applied (`appliedAppMigrations`).
+   * The app migrations the ledger records as applied (`historyInLedger`).
    *
    * Checked separately from the files because the two can disagree in the
    * damaging direction: a project whose migrations were deleted from disk

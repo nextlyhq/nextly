@@ -11,13 +11,12 @@ import { describe, expect, it } from "vitest";
 import type { SchemaEventRow } from "../../events/schema-events-repository";
 import type { NextlySchemaSnapshot } from "../../pipeline/diff/types";
 import {
-  appliedAppMigrations,
+  historyInLedger,
   historyRefusalLines,
   isUnadoptedDatabase,
   openAttempts,
   planBaseline,
   undoneAttemptRefusal,
-  type LedgerRow,
 } from "../baseline";
 import { migrationDriftError } from "../drift-error";
 
@@ -179,20 +178,30 @@ function ledger() {
     eventType: SchemaEventRow["eventType"],
     status: SchemaEventRow["status"],
     supersededEventIds: string[] | null = null
-  ): LedgerRow => ({
+  ): SchemaEventRow => ({
+    id: String(++at),
     filename,
     eventType,
     status,
     supersededEventIds,
-    startedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, ++at)),
+    source: "cli-migrate",
+    sha256: null,
+    scopeKind: null,
+    scopeSlug: null,
+    startedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, at)),
+    endedAt: null,
+    durationMs: null,
+    note: null,
+    statementsExecuted: null,
+    supersededBy: null,
   });
 }
 
-describe("appliedAppMigrations", () => {
+describe("historyInLedger", () => {
   it("counts an app migration whose latest outcome is applied", () => {
     const row = ledger();
     expect(
-      appliedAppMigrations([row("1_init.sql", "file_apply", "applied")])
+      historyInLedger([row("1_init.sql", "file_apply", "applied")])
     ).toEqual(["1_init.sql"]);
   });
 
@@ -201,7 +210,7 @@ describe("appliedAppMigrations", () => {
     // baseline for good, since every row of any kind counted.
     const row = ledger();
     expect(
-      appliedAppMigrations([
+      historyInLedger([
         row("1_init.sql", "file_apply", "applied"),
         row("1_init.sql", "file_apply", "rolled_back", ["1"]),
       ])
@@ -211,7 +220,7 @@ describe("appliedAppMigrations", () => {
   it("does not count a plugin's rows, applied or not", () => {
     const row = ledger();
     expect(
-      appliedAppMigrations([
+      historyInLedger([
         row(
           "plugin:@acme/nextly-plugin-auth/0001_init",
           "file_apply",
@@ -226,7 +235,7 @@ describe("appliedAppMigrations", () => {
     // outcome. Its unresolved attempt is refused on its own (`openAttempts`).
     const row = ledger();
     expect(
-      appliedAppMigrations([
+      historyInLedger([
         row("1_init.sql", "file_apply", "failed"),
         row("2_posts.sql", "file_apply", "in_progress"),
       ])
@@ -239,7 +248,7 @@ describe("appliedAppMigrations", () => {
     // migration stays applied.
     const row = ledger();
     expect(
-      appliedAppMigrations([
+      historyInLedger([
         row("1_init.sql", "file_apply", "applied"),
         row("1_init.sql", "file_removed", "recorded"),
         row("2_posts.sql", "file_apply", "applied"),
@@ -253,7 +262,7 @@ describe("appliedAppMigrations", () => {
   it("counts a migration applied again after a rollback once", () => {
     const row = ledger();
     expect(
-      appliedAppMigrations([
+      historyInLedger([
         row("1_init.sql", "file_apply", "applied"),
         row("1_init.sql", "file_apply", "rolled_back", ["1"]),
         row("1_init.sql", "file_apply", "applied"),

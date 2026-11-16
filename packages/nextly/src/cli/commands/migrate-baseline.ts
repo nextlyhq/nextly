@@ -41,17 +41,19 @@ import { RETAINED_SIZES_COLUMN } from "../../domains/media/retired-image-sizes-c
 import { ledgerFilename } from "../../domains/schema/events/ledger-scope";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
-import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import {
+  SchemaEventsRepository,
+  type SchemaEventRow,
+} from "../../domains/schema/events/schema-events-repository";
 import { checksumOf } from "../../domains/schema/migrate/applied-checksums";
 import {
-  appliedAppMigrations,
+  historyInLedger,
   EMPTY_SNAPSHOT,
   historyRefusalLines,
   openAttempts,
   planBaseline,
   undoneAttemptRefusal,
   type HistoryMigration,
-  type LedgerRow,
 } from "../../domains/schema/migrate/baseline";
 import {
   readOldBuilderLedger,
@@ -181,7 +183,7 @@ async function listMigrationFiles(
 /**
  * The ledger's attempt and outcome rows for the app's migrations, read once
  * for both of the baseline's own questions: is an attempt unresolved, and
- * which migrations are history (`openAttempts`, `appliedAppMigrations`).
+ * which migrations are history (`openAttempts`, `historyInLedger`).
  *
  * A database managed by `db:sync` has never run `migrate`, so its ledger holds
  * no `file_apply` rows — and on the oldest such databases the table does not
@@ -195,7 +197,7 @@ async function readAppLedger(
     dialect: SupportedDialect;
     declared: DeclaredNames | undefined;
   }
-): Promise<LedgerRow[]> {
+): Promise<SchemaEventRow[]> {
   if (!(await ledgerExists(adapter))) return [];
   // Past the existence check, a failure is a real one — permissions, a wrong
   // schema, a broken table. Swallowing it would read as "never migrated" and
@@ -211,7 +213,7 @@ async function readAppLedger(
 }
 
 /**
- * The app migrations the ledger counts as history (`appliedAppMigrations`),
+ * The app migrations the ledger counts as history (`historyInLedger`),
  * once no attempt stands unresolved.
  *
  * Runs after the shared history checks (`assertAppHistoryHolds`), which
@@ -231,7 +233,7 @@ async function ledgerHistory(
   if (open.length > 0) {
     throw undoneAttemptRefusal("nextly migrate:baseline", open);
   }
-  return appliedAppMigrations(ledger);
+  return historyInLedger(ledger);
 }
 
 /** Whether the migration ledger table is there at all. */
@@ -1055,6 +1057,13 @@ export async function baselineCore(
       // command refuses on until an operator resolves it. The file's name is
       // new, taken from this run's clock under the migrate lock, so no other
       // applied row for it can exist.
+      //
+      // Started and ended at one instant, this run's clock (the one that
+      // named the file), since nothing runs between the two: an end stamped
+      // before the repository chose the start could read earlier than it.
+      // A name no row carries yet has no earlier event to start after, so the
+      // instant is the start the repository's own rule would choose.
+      const recordedAt = deps.now ?? new Date();
       await repo.insertEvent({
         eventType: "file_apply",
         status: "applied",
@@ -1065,7 +1074,8 @@ export async function baselineCore(
         // in `migrate:status`.
         sha256: checksumOf(sqlContent),
         statementsExecuted: 0,
-        endedAt: new Date(),
+        startedAt: recordedAt,
+        endedAt: recordedAt,
       });
 
       logger.debug(`Baseline recorded as applied: ${baseName}.sql`);
