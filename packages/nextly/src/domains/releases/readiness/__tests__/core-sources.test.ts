@@ -18,6 +18,7 @@ import {
   CORE_OTHER_RELEASE_SOURCE,
   CORE_PERMISSION_SOURCE,
   CORE_RELEASE_CHECK_SOURCES,
+  CORE_REMOVED_FROM_CODE_SOURCE,
   CORE_REQUIRED_FIELDS_SOURCE,
   registerCoreReleaseCheckSources,
   registeredReleaseCheckSources,
@@ -446,6 +447,73 @@ describe("core.other-release", () => {
         s => s.key
       )
     ).toEqual(["core.other-release"]);
+  });
+});
+
+describe("core.removed-from-code", () => {
+  it("reports every document of a collection or Single removed from code, naming it, and no other", async () => {
+    // Removed: the `old-posts` collection and the `banner` Single. A
+    // collection and a Single of the same slugs' kind that are declared are
+    // the controls. Locale-scoped and authorless members are reported too:
+    // nobody can write to a removed entity.
+    const removed = new Set(["collection:old-posts", "single:banner"]);
+    const removedFromCode = vi.fn(
+      async (scope: { scopeKind: string; scopeSlug: string }) =>
+        removed.has(`${scope.scopeKind}:${scope.scopeSlug}`)
+    );
+    const found = await run(
+      CORE_REMOVED_FROM_CODE_SOURCE,
+      [
+        member("kept"),
+        member("old", { scopeSlug: "old-posts" }),
+        member("old-down", { scopeSlug: "old-posts", action: "unpublish" }),
+        member("old-de", { scopeSlug: "old-posts", locale: "de" }),
+        member("old-authorless", { scopeSlug: "old-posts", createdBy: null }),
+        member("banner", { scopeKind: "single", scopeSlug: "banner" }),
+        member("kept-single", { scopeKind: "single", scopeSlug: "header" }),
+        // The same slug in the other registry is a different entity.
+        member("posts-single", { scopeKind: "single", scopeSlug: "old-posts" }),
+      ],
+      { removedFromCode }
+    );
+    const of = (kind: string, slug: string) => ({ kind, slug });
+    expect(found).toEqual([
+      {
+        memberId: "old",
+        code: "ENTITY_REMOVED_FROM_CODE",
+        detail: of("collection", "old-posts"),
+      },
+      {
+        memberId: "old-down",
+        code: "ENTITY_REMOVED_FROM_CODE",
+        detail: of("collection", "old-posts"),
+      },
+      {
+        memberId: "old-de",
+        code: "ENTITY_REMOVED_FROM_CODE",
+        detail: of("collection", "old-posts"),
+      },
+      {
+        memberId: "old-authorless",
+        code: "ENTITY_REMOVED_FROM_CODE",
+        detail: of("collection", "old-posts"),
+      },
+      {
+        memberId: "banner",
+        code: "ENTITY_REMOVED_FROM_CODE",
+        detail: of("single", "banner"),
+      },
+    ]);
+    // Once per scope: five scopes, five questions.
+    expect(removedFromCode).toHaveBeenCalledTimes(5);
+  });
+
+  it("is a hard source of core's, checked after the document's existence", () => {
+    const keys = CORE_RELEASE_CHECK_SOURCES.map(s => s.key);
+    expect(CORE_REMOVED_FROM_CODE_SOURCE.severity).toBe("hard");
+    expect(keys.indexOf("core.removed-from-code")).toBe(
+      keys.indexOf("core.exists") + 1
+    );
   });
 });
 

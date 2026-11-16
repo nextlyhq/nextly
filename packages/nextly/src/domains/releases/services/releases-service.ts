@@ -156,6 +156,7 @@ import type {
   ReleasesRepository,
 } from "../releases-repository";
 import { RELEASES_RESOURCE } from "../releases-resource";
+import { scopeRemovedFromCode } from "../removed-entity-releases";
 
 /** The system-resource authorities a release operation can require. */
 export type ReleaseAuthority =
@@ -239,7 +240,10 @@ export interface ReleaseActor {
  */
 export type ReleaseDocumentChecks = Omit<
   ReleaseCheckReads,
-  "liveAuthors" | "scheduledMemberships" | "declaresLifecycle"
+  | "liveAuthors"
+  | "scheduledMemberships"
+  | "declaresLifecycle"
+  | "removedFromCode"
 >;
 
 export interface ReleasesServiceDeps {
@@ -2815,6 +2819,9 @@ export class ReleasesService {
             scope.scopeKind === "single" ? "single" : "collection",
             scope.scopeSlug
           ),
+        // The write guard's own decision, so the check names exactly the
+        // entities whose writes the run would be refused on.
+        removedFromCode: scopeRemovedFromCode,
         scheduledMemberships: refs =>
           repository.findDueMembersFor([...refs], now),
       },

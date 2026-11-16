@@ -31,6 +31,18 @@
  * told; and contained, so a sweep that fails is logged and never stops the
  * releases due now from running.
  *
+ * ## Why releases holding a removed entity's document are stopped first
+ *
+ * Before that, the pass stops each scheduled release holding a document of a
+ * collection or Single removed from code (`stopReleasesOfRemovedEntities`).
+ * No write to such an entity succeeds, so the release can never run, and
+ * this pass is the first writer under the configuration that removed it: a
+ * server's start writes nothing. Stopped now, before its time, its owner is
+ * told at once instead of at its time; and stopped before anything due runs,
+ * a due one is stopped whole rather than part-applied. First, too, so an
+ * overdue release it stops is not also reported overdue. Contained like the
+ * overdue notices: a failure is logged, and never stops the due releases.
+ *
  * @module domains/releases/releases-drain-job
  */
 
@@ -46,6 +58,7 @@ import type { ApplyDueReleasesResult } from "./apply-due-releases";
 import { createReleaseMutations } from "./release-mutations";
 import { ReleasesRepository } from "./releases-repository";
 import type { ReleasesDbApi } from "./releases-repository";
+import { stopReleasesOfRemovedEntities } from "./removed-entity-releases";
 
 /** The registered slug. Stated once so the runner and the trigger agree. */
 export const RELEASES_DRAIN_JOB = "releases:drain";
@@ -82,6 +95,7 @@ export function createReleasesDrainJob(deps: {
     handler: async (_input, context) => {
       const startedAt = Date.now();
       const repository = new ReleasesRepository(deps.db);
+      await stopReleasesOfRemovedEntitiesContained(repository);
       await tellOverdueOwners(repository, context.now);
       const result = await applyDueReleases({
         // ONE origin for both sides of the pass's `now() >= deadline` test.
@@ -113,6 +127,26 @@ export function createReleasesDrainJob(deps: {
       await deps.onOutcome(result);
     },
   });
+}
+
+/**
+ * Stop the scheduled releases holding a document of an entity removed from
+ * code, logging rather than throwing a failure: the pass still runs what is
+ * due, and the next pass asks again.
+ */
+async function stopReleasesOfRemovedEntitiesContained(
+  repository: ReleasesRepository
+): Promise<void> {
+  try {
+    await stopReleasesOfRemovedEntities({ repository });
+  } catch (error) {
+    getNextlyLogger().warn({
+      kind: "release-removed-entity-stop-failed",
+      message:
+        "Releases holding a document of an entity removed from code could not be stopped; the next pass tries again",
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /** Tell overdue releases' owners, logging rather than throwing a failure. */

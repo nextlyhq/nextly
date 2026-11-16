@@ -9,6 +9,8 @@
  *   core.author          hard  who the run acts as: none, gone, or a locale
  *   core.permission      hard  the author may no longer perform the action
  *   core.exists          hard  the document is gone
+ *   core.removed-from-code hard its collection or Single was removed from
+ *                              code, so nothing may write to it
  *   core.lifecycle       hard  its collection or Single has no lifecycle now
  *   core.companion-status hard its translations have no per-language status
  *   core.held-drafts     hard  another language holds unreleased work
@@ -197,6 +199,38 @@ export const CORE_EXISTS_SOURCE = defineReleaseCheckSource({
     return batch
       .filter(member => !existing.has(documentRefKey(member)))
       .map(member => ({ memberId: member.id, code: "DOCUMENT_GONE" as const }));
+  },
+});
+
+/**
+ * Whether each member's collection or Single was removed from code: the
+ * configuration no longer declares it, and its registry row says the app's
+ * code defines it. Every write to such an entity's entries is refused, the
+ * release's own included, until it is retired or declared again, so each of
+ * its members is a hard problem, naming the entity. The owner fixes it by
+ * taking the document out of the release or declaring the entity again.
+ *
+ * Every member is reported, whatever its author or language: none of them
+ * can be written by anyone. Asked once per scope.
+ */
+export const CORE_REMOVED_FROM_CODE_SOURCE = defineReleaseCheckSource({
+  key: "core.removed-from-code",
+  severity: "hard",
+  codes: ["ENTITY_REMOVED_FROM_CODE"],
+  async check(batch, ctx) {
+    const findings: ReleaseCheckFinding<"ENTITY_REMOVED_FROM_CODE">[] = [];
+    for (const members of groupedBy(batch, scopeKey)) {
+      const [first] = members;
+      if (!(await ctx.reads.removedFromCode(first))) continue;
+      for (const member of members) {
+        findings.push({
+          memberId: member.id,
+          code: "ENTITY_REMOVED_FROM_CODE",
+          detail: { kind: member.scopeKind, slug: member.scopeSlug },
+        });
+      }
+    }
+    return findings;
   },
 });
 
@@ -411,6 +445,7 @@ export const CORE_RELEASE_CHECK_SOURCES: readonly ReleaseCheckSource[] = [
   CORE_AUTHOR_SOURCE,
   CORE_PERMISSION_SOURCE,
   CORE_EXISTS_SOURCE,
+  CORE_REMOVED_FROM_CODE_SOURCE,
   CORE_LIFECYCLE_SOURCE,
   CORE_COMPANION_STATUS_SOURCE,
   CORE_HELD_DRAFTS_SOURCE,

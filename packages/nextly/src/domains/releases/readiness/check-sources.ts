@@ -105,6 +105,13 @@ export interface ReleaseCheckReads {
    */
   declaresLifecycle(scope: ReleaseCheckScope): Promise<boolean>;
   /**
+   * Whether the scope is a collection or Single removed from code: its
+   * registry row says the app's code defines it, and the running
+   * configuration no longer declares it. The run's write to it is refused,
+   * by the same decision this answers with.
+   */
+  removedFromCode(scope: ReleaseCheckScope): Promise<boolean>;
+  /**
    * Whether the scope declares a per-language lifecycle its translation table
    * physically lacks, which a document-wide write refuses on.
    */
