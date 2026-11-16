@@ -214,11 +214,7 @@ export default function FieldGroupBuilderEditPage({
   const entitySlug = slug ?? "";
   // The field groups not saved yet that this save creates first, and the ones this editor's
   // picker made, which its save, Discard all and leave let go or release.
-  const fieldGroupHost = useMemo(
-    () => (slug ? { kind: "field-group" as const, address: slug } : undefined),
-    [slug]
-  );
-  const groupsFirst = useFieldGroupsFirst(fieldGroupHost, builder.fields);
+  const groupsFirst = useFieldGroupsFirst("field-group", slug, builder.fields);
   const localized = settings?.i18n === true;
 
   /**

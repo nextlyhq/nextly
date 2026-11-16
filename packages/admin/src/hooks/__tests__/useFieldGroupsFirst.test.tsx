@@ -85,7 +85,9 @@ afterEach(() => {
 describe("useFieldGroupsFirst", () => {
   it("lists the ones the fields use, kept current with the unsaved ones", async () => {
     addUnsavedEntity(group("hero", "Hero", POSTS));
-    const { result } = renderHook(() => useFieldGroupsFirst(POSTS, usesHero));
+    const { result } = renderHook(() =>
+      useFieldGroupsFirst(POSTS.kind, POSTS.address, usesHero)
+    );
     expect(result.current.creates).toEqual([
       { address: "hero", label: "Hero" },
     ]);
@@ -97,7 +99,9 @@ describe("useFieldGroupsFirst", () => {
   it("creates the ones the fields use, through the field group create", async () => {
     addUnsavedEntity(group("hero", "Hero", POSTS));
     addUnsavedEntity(group("promo", "Promo", POSTS));
-    const { result } = renderHook(() => useFieldGroupsFirst(POSTS, usesHero));
+    const { result } = renderHook(() =>
+      useFieldGroupsFirst(POSTS.kind, POSTS.address, usesHero)
+    );
 
     let refused: string | null = "not run";
     await act(async () => {
@@ -114,14 +118,18 @@ describe("useFieldGroupsFirst", () => {
 
   it("has nothing for the save to do where no unsaved field group is the host's or used", () => {
     addUnsavedEntity(group("banner", "Banner"));
-    const { result } = renderHook(() => useFieldGroupsFirst(POSTS, []));
+    const { result } = renderHook(() =>
+      useFieldGroupsFirst(POSTS.kind, POSTS.address, [])
+    );
     expect(result.current.creates).toEqual([]);
     expect(result.current.fieldGroupsFirst).toBeUndefined();
   });
 
   it("hands the save the host's unused ones to let go, with nothing to create", () => {
     addUnsavedEntity(group("promo", "Promo", POSTS));
-    const { result } = renderHook(() => useFieldGroupsFirst(POSTS, []));
+    const { result } = renderHook(() =>
+      useFieldGroupsFirst(POSTS.kind, POSTS.address, [])
+    );
     expect(result.current.fieldGroupsFirst?.creates).toEqual([]);
     act(() => result.current.fieldGroupsFirst?.letGoUnused?.());
     expect(unsavedEntity("field-group", "promo")).toBeUndefined();
@@ -129,7 +137,9 @@ describe("useFieldGroupsFirst", () => {
 
   it("releases the host's ones when it is left, each kept as one of its own", () => {
     addUnsavedEntity(group("hero", "Hero", POSTS));
-    const { result } = renderHook(() => useFieldGroupsFirst(POSTS, usesHero));
+    const { result } = renderHook(() =>
+      useFieldGroupsFirst(POSTS.kind, POSTS.address, usesHero)
+    );
 
     act(() => result.current.release());
 
@@ -143,7 +153,9 @@ describe("useFieldGroupsFirst", () => {
     addUnsavedEntity(group("hero", "Hero", POSTS));
     addUnsavedEntity(group("promo", "Promo", POSTS));
     addUnsavedEntity(group("banner", "Banner"));
-    const { result } = renderHook(() => useFieldGroupsFirst(POSTS, usesHero));
+    const { result } = renderHook(() =>
+      useFieldGroupsFirst(POSTS.kind, POSTS.address, usesHero)
+    );
 
     act(() => result.current.letGoUnused());
 
@@ -156,7 +168,9 @@ describe("useFieldGroupsFirst", () => {
     addUnsavedEntity(group("hero", "Hero", POSTS));
     addUnsavedEntity(group("promo", "Promo", POSTS));
     addUnsavedEntity(group("banner", "Banner"));
-    const { result } = renderHook(() => useFieldGroupsFirst(POSTS, usesHero));
+    const { result } = renderHook(() =>
+      useFieldGroupsFirst(POSTS.kind, POSTS.address, usesHero)
+    );
 
     act(() => result.current.letGoOwned());
 

@@ -51,11 +51,18 @@ export interface UseFieldGroupsFirstReturn {
 const NONE: readonly FieldNamingGroups[] = [];
 
 export function useFieldGroupsFirst(
-  /** The entity being edited; undefined while it has no address. */
-  host: FieldGroupHost | undefined,
+  /** The kind of entity being edited. */
+  kind: FieldGroupHost["kind"],
+  /** Its address; undefined while it has none. */
+  address: string | undefined,
   /** Its fields as they stand, in the editor's shape or the server's. */
   fields: readonly FieldNamingGroups[]
 ): UseFieldGroupsFirstReturn {
+  // One value per entity, so the callbacks below keep theirs between renders.
+  const host = useMemo<FieldGroupHost | undefined>(
+    () => (address ? { kind, address } : undefined),
+    [kind, address]
+  );
   const held = useUnsavedEntitiesOf("field-group");
   const { mutateAsync: createFieldGroup } = useCreateFieldGroup();
 

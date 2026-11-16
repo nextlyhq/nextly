@@ -214,11 +214,7 @@ export default function SingleBuilderEditPage({
   const entitySlug = slug ?? "";
   // The field groups not saved yet that this save creates first, and the ones this editor's
   // picker made, which its save, Discard all and leave let go or release.
-  const fieldGroupHost = useMemo(
-    () => (slug ? { kind: "single" as const, address: slug } : undefined),
-    [slug]
-  );
-  const groupsFirst = useFieldGroupsFirst(fieldGroupHost, builder.fields);
+  const groupsFirst = useFieldGroupsFirst("single", slug, builder.fields);
   const localized = settings?.i18n === true;
   // The pending Draft/Published toggle rides with the fields, as `localized` does, so the save
   // refuses a field taking one of the lifecycle's names in the save that turns it on.
