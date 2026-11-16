@@ -196,7 +196,8 @@ async function expectedColumnTypeResolver(
  * The type the main table's creator gave a field before it built its columns from the column
  * descriptor (`preBuilderSaveColumnType`): the one earlier spelling the planner accepts beside
  * {@link expectedColumnTypeResolver}'s, because field groups built that way still exist and nothing
- * migrates their columns. None for the companion, whose builder has not changed.
+ * migrates their columns. For the companion, the type an earlier release gave the column
+ * (`earlierCompanionColumnType`), until the development sync or `nextly migrate` converts it.
  */
 async function preBuilderSaveColumnTypeResolver(
   dialect: SupportedDialect
@@ -206,10 +207,24 @@ async function preBuilderSaveColumnTypeResolver(
   const { preBuilderSaveColumnType } = await import(
     "./pre-builder-save-column-type"
   );
-  return (field, table) =>
-    table === "companion"
-      ? undefined
-      : (preBuilderSaveColumnType(asCreatorField(field), dialect) ?? undefined);
+  const { fieldToLocalizedColumnSpec } = await import(
+    "../../i18n/migration/field-to-column-spec"
+  );
+  const { ddlType } = await import("../../i18n/migration/ddl-types");
+  const { earlierCompanionColumnType } = await import(
+    "../../i18n/migration/companion-column-holds"
+  );
+  return (field, table) => {
+    if (table !== "companion") {
+      return (
+        preBuilderSaveColumnType(asCreatorField(field), dialect) ?? undefined
+      );
+    }
+    const spec = fieldToLocalizedColumnSpec(field, dialect, "fieldGroup");
+    return spec
+      ? earlierCompanionColumnType(ddlType(spec, dialect), dialect)
+      : undefined;
+  };
 }
 
 /**

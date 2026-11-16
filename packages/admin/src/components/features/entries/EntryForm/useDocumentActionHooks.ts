@@ -14,10 +14,12 @@ import { useCallback, useEffect, useRef } from "react";
 import type { DocumentAction, EditorDocumentAction } from "./document-actions";
 import { reasonFor } from "./DocumentActionBar";
 import { useDocumentActionsContext } from "./DocumentActionsContext";
-import type {
-  BeforeDocumentAction,
-  DocumentActionBindings,
-  DocumentSaveState,
+import {
+  NOTHING_CHANGED_REASON,
+  type BeforeDocumentAction,
+  type DocumentActionBindings,
+  type DocumentActionOutcome,
+  type DocumentSaveState,
 } from "./useDocumentActionBindings";
 
 /** The document's actions as a surface inside the editor sees them. */
@@ -34,6 +36,18 @@ export interface DocumentActions {
   run: DocumentActionBindings["run"];
   /** Whether the document's work is stored. */
   saveState: DocumentSaveState;
+  /**
+   * Runs the Save action, as `run("save")` does, where that Save is offered
+   * and keeps the work unpublished: a draft, or a working draft beside the
+   * live version. Answers `{ ok: true }` without saving where Save is refused
+   * only because nothing has changed, since what is stored already is the
+   * work. Undefined where it is not offered (someone who may not
+   * change the document) or where it would publish (a published document
+   * whose collection keeps no drafts) or there is no draft to keep (a
+   * collection with no status), so a surface that must never publish, such
+   * as a preview that saves first, can tell before it offers to.
+   */
+  saveWithoutPublishing?: () => Promise<DocumentActionOutcome>;
   /**
    * When this document was last stored in this session, whatever the save
    * state now says, or null before the first store. A new value means a store
@@ -66,11 +80,28 @@ export function useDocumentActions(): DocumentActions | null {
         : { ...published, disabledReason: reason },
     ];
   });
+  const save = offered.find(action => action.id === "save");
   return {
     actions: offered,
     primary: offered.find(action => action.placement === "primary"),
     run: hosted.run,
     saveState: hosted.saveState,
+    // The bar's own Save through `run`, so its permission, lock, before-save
+    // steps and save state all apply; the host's own binding is only asked
+    // whether that Save would leave the document unpublished. A plugin cannot
+    // replace Save (`OVERRIDABLE_DOCUMENT_ACTIONS` is Delete and Unpublish),
+    // so the Save asked about is the one `run` runs.
+    ...(save !== undefined && hosted.saveWithoutPublishing !== undefined
+      ? {
+          // Refused only because nothing has changed, the stored version
+          // already is the work, which is what a caller asks; every other
+          // refusal leaves work unstored and is answered as the Save answers.
+          saveWithoutPublishing: () =>
+            save.disabledReason === NOTHING_CHANGED_REASON
+              ? Promise.resolve<DocumentActionOutcome>({ ok: true })
+              : hosted.run("save"),
+        }
+      : {}),
     storedAt: hosted.lastStoredAt,
   };
 }
