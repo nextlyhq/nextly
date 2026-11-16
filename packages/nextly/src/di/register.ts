@@ -1086,10 +1086,6 @@ async function registerServicesOnce(
     structure,
     "before migrations at start"
   );
-  // The cache handlers read expiries from this adapter's ledger, and writes
-  // made outside a request record theirs into it, for every instance.
-  installTagExpiryLedger(adapter);
-
   await refuseUnmigratedDatabaseInBuildPhase(adapter);
 
   const bootExtensionSchema = await prepareBootSchema(
@@ -1124,12 +1120,19 @@ async function registerServicesOnce(
   // read. It sets an empty database up as the command does and applies what is
   // pending, so the rest of the start reads what it wrote, as a start after
   // `nextly migrate` does, and writes no bookkeeping or schema itself.
-  const migratedAtBoot = await runBootMigrations(
-    config,
-    transformedConfig,
-    deferredExtends,
-    { adapter, logger: resolvedLogger }
+  const migratedAtBoot = await withStartRegistrationsSetAside(
+    async () =>
+      await runBootMigrations(config, transformedConfig, deferredExtends, {
+        adapter,
+        logger: resolvedLogger,
+      })
   );
+  // The cache handlers read expiries from this adapter's ledger, and writes
+  // made outside a request record theirs into it, for every instance. After
+  // the migrations at start, which record theirs through the ledger they lend
+  // themselves, on their own transaction, as `nextly migrate` does.
+  installTagExpiryLedger(adapter);
+
   // A run that failed before it set the database up leaves it as it was.
   await refuseDatabaseNotSetUp(adapter, structure, "after migrations at start");
 
@@ -2968,6 +2971,27 @@ async function resealKeysUnderCurrentSecret(
         secrets
       ),
   ]);
+}
+
+/**
+ * Run `work` with this start's registrations (its adapter and its schema
+ * registry) set aside, as `nextly migrate` runs with none. The run lends the
+ * services a write reaches, bound to its own transaction where it opens one,
+ * and a lent service never replaces a registration already there: with the
+ * start's adapter in the container, a first run's permissions and grants
+ * would go through the pool, outside the transaction that writes the registry
+ * rows and the record, and wait behind its locks. Put back afterwards,
+ * whatever `work` did, so a refusal still releases the adapter.
+ */
+async function withStartRegistrationsSetAside<T>(
+  work: () => Promise<T>
+): Promise<T> {
+  const setAside = container.detach();
+  try {
+    return await work();
+  } finally {
+    container.restore(setAside);
+  }
 }
 
 /**

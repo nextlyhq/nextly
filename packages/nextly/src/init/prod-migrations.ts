@@ -97,8 +97,6 @@ interface MigrateCoreLike {
     markOrphanedPermissions?: DeployStepDeps["markOrphanedPermissions"];
     /** Spread in by `deployStepDeps`, checked here for the reason above. */
     beforeMetadata?: DeployStepDeps["beforeMetadata"];
-    /** See `MigrateCoreDeps.firstRunSeedsInside`. */
-    firstRunSeedsInside?: boolean;
     /** See `MigrateCoreDeps.busyTable`. */
     busyTable?: { bounds: BusyTableBounds; notify: (line: string) => void };
   }): Promise<{ applied: number; coreChanged: boolean; ran: boolean }>;
@@ -448,10 +446,6 @@ async function applyBootMigrations(
     // The access `nextly migrate` adds once the registry rows are written:
     // a production start adds none, so these migrations are the deploy step.
     seedPermissions: startAccessSeeder(adapter, args.served, run.coreLogger),
-    // A first run's access in its one transaction, as `nextly migrate` writes
-    // it: the start has registered its adapter, but no service a grants change
-    // reaches, so the run is told rather than left to infer it.
-    firstRunSeedsInside: true,
     // The first run's record, the orphan marks an applied migration sets, and
     // the refusal of a translations column that cannot hold a newly translated
     // field, as `nextly migrate` hands them (`deployStepDeps`).
