@@ -650,7 +650,11 @@ function ColourValue({
   }, []);
   // A picker still open when the popover closes writes what it showed.
   React.useEffect(() => flush, [flush]);
-  const hex = shown ?? colourHexOf(value, undefined);
+  // The swatch follows what is typed, so a value that is not a colour shows
+  // as one at once, rather than as the last colour or as black.
+  const typed = text.trim();
+  const hex = shown ?? colourHexOf(typed === "" ? value : typed, undefined);
+  const invalid = hex === undefined && typed !== "";
   return (
     <div className="nx-vars-editor__field">
       <label className="nx-vars-editor__label" htmlFor={id}>
@@ -661,13 +665,15 @@ function ColourValue({
           <span
             className="nx-vars__swatch"
             aria-hidden="true"
+            data-invalid={invalid ? "" : undefined}
             style={swatchStyle(hex)}
           />
         ) : (
           <button
             type="button"
             className="nx-vars__swatch nx-vars-editor__swatch"
-            aria-label={`Pick the ${label.toLowerCase()} colour`}
+            data-invalid={invalid ? "" : undefined}
+            aria-label={`Pick the ${label.toLowerCase()} colour${invalid ? ", not a colour now" : ""}`}
             aria-expanded={picking}
             style={swatchStyle(hex)}
             onClick={() => {
@@ -709,7 +715,9 @@ function ColourValue({
       {picking ? (
         <ColorPicker
           className="nx-vars-editor__picker"
-          color={hex ?? "#000000"}
+          // A value that is not a colour starts the picker from no colour
+          // (clear), not from black, which it would claim the value is.
+          color={hex ?? NO_COLOUR}
           showAlpha
           onColorChange={next => {
             draft.current = next;
@@ -720,6 +728,9 @@ function ColourValue({
     </div>
   );
 }
+
+/** Where the picker starts for a value that is not a colour: clear. */
+const NO_COLOUR = "#00000000";
 
 /** The dark value: its field, or a line saying it follows light. */
 function DarkValue({

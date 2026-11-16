@@ -117,6 +117,31 @@ describe("the rows", () => {
     ).toBeTruthy();
   });
 
+  it("shows a colour value that is not a colour as invalid, and never as black", async () => {
+    render(<Hosted tokens={SITE} />);
+    const colour = await openEditor(/^Brand/);
+    // The control: a real colour draws its swatch, with no invalid mark.
+    const swatch = () =>
+      within(colour).getByRole("button", { name: /^Pick the light colour/ });
+    expect(swatch().hasAttribute("data-invalid")).toBe(false);
+    fireEvent.change(within(colour).getByLabelText(/^Light/), {
+      target: { value: "#12" },
+    });
+    // At once, as typed: marked invalid, and said so.
+    expect(swatch().hasAttribute("data-invalid")).toBe(true);
+    expect(swatch().getAttribute("aria-label")).toBe(
+      "Pick the light colour, not a colour now"
+    );
+    // Opened on it, the picker does not start from black.
+    fireEvent.click(swatch());
+    const values = within(colour)
+      .getAllByRole("textbox")
+      .map(field => (field as HTMLInputElement).value.toLowerCase());
+    expect(values.length).toBeGreaterThan(1);
+    expect(values).not.toContain("000000");
+    expect(values).not.toContain("#000000");
+  });
+
   it("labels the colour columns beside the Colours heading, for sight only", () => {
     render(<Hosted tokens={SITE} />);
     const colours = screen.getByRole("region", { name: "Colours" });
