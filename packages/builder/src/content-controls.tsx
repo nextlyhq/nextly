@@ -66,6 +66,9 @@ import { fitsSideBySide, type SideBySideRoom } from "./style-numeric";
 // The host's services and what every control takes, the media controls and
 // the rich text control live in modules of their own beside it; every name
 // this module exported still is.
+// Part of this module's exported names; no importer in the package reads it.
+// fallow-ignore-next-line unused-type
+export type { LoopRelation } from "./content-services";
 export {
   type ContentControl,
   type ContentControlProps,
@@ -79,7 +82,6 @@ export {
   type ListEntriesCount,
   type LoopCollection,
   type LoopListField,
-  type LoopRelation,
   type MediaPickerProps,
   type MediaSummary,
   type PickedMedia,
