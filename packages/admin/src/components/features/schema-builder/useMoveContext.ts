@@ -15,11 +15,11 @@ import {
   fieldGroupUsedByQuery,
   type FieldGroupPlacement,
 } from "@admin/hooks/useFieldGroupUsedBy";
+import { nameSurfaceOf } from "@admin/lib/builder/field-name-check";
 import {
   savedContainerIdsFrom,
   type MoveContext,
 } from "@admin/lib/builder/move-rule";
-import { nameSurfaceOf } from "@admin/lib/builder/field-name-check";
 import { heldNamesOf } from "@admin/lib/builder/move-words";
 import { fieldGroupFieldHolding } from "@admin/lib/builder/outline/move-targets";
 import {

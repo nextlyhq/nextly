@@ -448,12 +448,11 @@ describe("names that clash where a field arrives", () => {
     plain("f-top", held === "title" ? "heading" : held),
   ];
 
-  // Judged on the names the save sends (`convertToFieldDefinition`): a name typed in other letter
-  // case, or with spaces, is sent as the stored name it becomes, which is then the same name.
+  // Judged on the names the save sends (`convertToFieldDefinition`), which is every name as it is:
+  // one typed in other letter case clashes with the held name as the save's own rule says.
   it.each([
     ["the same name", "subtitle", "subtitle"],
     ["a name typed in other letter case", "Subtitle", "subtitle"],
-    ["a name typed with spaces", "Sub Title", "sub_title"],
   ])("%s, at the top level and inside a group", (_case, incoming, held) => {
     const words = "the same name";
     // Out of its group, beside a top-level field of the held name.
@@ -512,18 +511,22 @@ describe("names that clash where a field arrives", () => {
     const verdict = (name: string, over: Partial<MoveContext> = {}) =>
       judgeMove(out(name), "f-moved", {}, { ...ctx, ...over });
 
-    it("refuses a built-in column's name on a collection and a Single, not in a field group", () => {
+    it("refuses a built-in column's name where the entity's table has that column", () => {
       expect(refusal(verdict("created_at")).reason).toBe("reserved-name");
       expect(refusal(verdict("created_at")).message).toContain(
         "built-in column"
       );
+      expect(refusal(verdict("updated_at", { surface: "single" })).reason).toBe(
+        "reserved-name"
+      );
+      // Every table has its timestamps, a field group's own included.
       expect(
-        refusal(verdict("updated_at", { surface: "single" })).reason
+        refusal(verdict("created_at", { surface: "fieldGroup" })).reason
       ).toBe("reserved-name");
-      // A collection's owner column, which a Single does not have.
+      // A collection's owner column, which a Single and a field group do not have.
       expect(refusal(verdict("created_by")).reason).toBe("reserved-name");
       expect(verdict("created_by", { surface: "single" }).allowed).toBe(true);
-      expect(verdict("created_at", { surface: "fieldGroup" }).allowed).toBe(
+      expect(verdict("created_by", { surface: "fieldGroup" }).allowed).toBe(
         true
       );
     });
@@ -707,17 +710,24 @@ describe("what a move takes with it, and where it arrives", () => {
 
 describe("names as the save sends them, and layout groups", () => {
   it("judges a draft name by the name the save sends", () => {
-    // The Builder keeps the name as typed; the save sends it normalised.
+    // The save sends a name as it is typed, not as a label would derive it, so `My Field!` takes
+    // nothing from `my_field`: it is refused for its spelling, as the save refuses it, wherever it
+    // goes.
     const fields = [
       plain("f-g", "group", {
         type: "group",
         fields: [plain("f-a", "My Field!")],
       }),
       plain("f-b", "my_field"),
+      plain("f-other", "other", { type: "group", fields: [] }),
     ];
     expect(refusal(judgeMove(fields, "f-a", {}, ctx)).reason).toBe(
-      "name-clash"
+      "name-invalid"
     );
+    expect(
+      refusal(judgeMove(fields, "f-a", { parentFieldId: "f-other" }, ctx))
+        .reason
+    ).toBe("name-invalid");
   });
 
   it("counts a nameless layout group's fields as siblings of the level holding it", () => {

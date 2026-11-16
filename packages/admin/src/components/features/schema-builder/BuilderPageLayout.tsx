@@ -27,7 +27,11 @@ import { findFieldById } from "@admin/lib/builder";
 import { builderAnnouncements } from "@admin/lib/builder/builder-announcements";
 import type { DuplicateNaming } from "@admin/lib/builder/duplicate-field";
 import { builderFieldErrors } from "@admin/lib/builder/field-validators";
-import { judgeMove, moveDestinations } from "@admin/lib/builder/move-rule";
+import {
+  judgeMove,
+  moveDestinations,
+  type MoveContext,
+} from "@admin/lib/builder/move-rule";
 import {
   flattenOutline,
   nodePlacement,
@@ -190,6 +194,7 @@ function BuilderWorkspace(
     | "savedFieldIds"
     | "settings"
     | "pending"
+    | "lifecycleEnabled"
   >
 ): JSX.Element {
   const { builder, pending } = props;
@@ -209,6 +214,17 @@ function BuilderWorkspace(
     () => markPending(built, pending.marks, pending.changes),
     [built, pending.marks, pending.changes]
   );
+  // What the move rule needs beyond the fields, for every way of moving one.
+  const moveContext = useMoveContext({
+    config: props.config,
+    locked: props.locked,
+    fields: builder.fields,
+    saved: pending.saved,
+    // As the save judges names: with Draft/Published as stored or as the pending settings set it.
+    lifecycleEnabled: props.lifecycleEnabled === true,
+    outline,
+    fieldGroups,
+  });
   // Leaves for a field group's own editor, where its fields are changed. The
   // page's guard asks first while changes are pending, as it does for every
   // other way out.
@@ -219,6 +235,7 @@ function BuilderWorkspace(
     <div className="flex flex-1 items-start">
       <FieldListRegion
         {...props}
+        moveContext={moveContext}
         outline={outline}
         fieldGroups={fieldGroups}
         fieldGroupsLoad={fieldGroupsLoad}
@@ -326,8 +343,7 @@ function FieldListRegion({
   active,
   onActiveChange,
   onDuplicateField,
-  pending,
-  settings,
+  moveContext,
   openFieldGroup,
 }: Pick<
   Props,
@@ -340,9 +356,9 @@ function FieldListRegion({
   | "active"
   | "onActiveChange"
   | "onDuplicateField"
-  | "pending"
-  | "settings"
 > & {
+  /** What the move rule needs beyond the fields, for every way of moving one. */
+  moveContext: MoveContext;
   outline: readonly OutlineNode[];
   fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
   fieldGroupsLoad: FieldGroupsLoad;
@@ -359,18 +375,6 @@ function FieldListRegion({
     () => builder.fields.filter(field => field.isSystem),
     [builder.fields]
   );
-
-  // What the move rule needs beyond the fields, for every way of moving one.
-  const moveContext = useMoveContext({
-    config,
-    locked,
-    fields: builder.fields,
-    saved: pending.saved,
-    // As the pending settings set it: the save judges names with Draft/Published as it will be.
-    lifecycleEnabled: settings.status === true,
-    outline,
-    fieldGroups,
-  });
 
   const callbacks: OutlineCallbacks = {
     select: fieldId => onActiveChange({ kind: "edit", fieldId }),
