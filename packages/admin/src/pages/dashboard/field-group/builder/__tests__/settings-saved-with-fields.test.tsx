@@ -74,16 +74,21 @@ function json(body: unknown, status: number): Response {
 }
 
 const applied: unknown[] = [];
+/** Whether the server's preview finds fields to migrate. */
+let previewFindsChanges = true;
 
 beforeEach(() => {
   updateFieldGroup.mockClear();
   applied.length = 0;
+  previewFindsChanges = true;
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/field-groups/schema/hero/preview")) {
-        return Promise.resolve(json(PREVIEW, 200));
+        return Promise.resolve(
+          json({ ...PREVIEW, hasChanges: previewFindsChanges }, 200)
+        );
       }
       if (url.endsWith("/field-groups/schema/hero/apply")) {
         applied.push(JSON.parse(String(init?.body ?? "{}")));
@@ -168,6 +173,8 @@ describe("a field group's settings saved with a field change", () => {
 
 describe("a field group's settings saved on their own", () => {
   it("are reviewed first, then saved without a schema apply", async () => {
+    // No field changed, so the server's preview finds nothing to migrate.
+    previewFindsChanges = false;
     const user = userEvent.setup();
     render(
       <RestartProvider>
