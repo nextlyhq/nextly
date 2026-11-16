@@ -94,6 +94,7 @@ import {
 import {
   deployStepDeps,
   recordedBeforeTheRun,
+  serviceLoggerOf,
 } from "../../domains/schema/migrate/deploy-step-deps";
 import { addDocumentColumns } from "../../domains/schema/migrate/document-columns";
 import {
@@ -847,12 +848,7 @@ export async function runMigrate(
           configResult.configPath ? configResult.config : null,
           configResult.configPath ?? null,
           adapter as unknown as DrizzleAdapter,
-          {
-            debug: (message: string) => logger.debug(message),
-            info: (message: string) => logger.info(message),
-            warn: (message: string) => logger.warn(message),
-            error: (message: string) => logger.error(message),
-          }
+          serviceLoggerOf(logger)
         );
         // The plugins' own deploy work, last, once every step above has
         // left the schema in step (`migrate-hooks`). Not where migrations

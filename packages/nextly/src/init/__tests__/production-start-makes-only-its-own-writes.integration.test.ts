@@ -117,6 +117,17 @@ function names(call: RecordedStatement, key: string): boolean {
   );
 }
 
+/** The `nextly_meta` keys of the start's own writes, and what each is. */
+const META_KEYS: ReadonlyArray<[key: string, kind: WriteClass]> = [
+  [SETUP_TOKEN_META_KEY, "setup token"],
+  [PRINCIPAL_DIGEST_KEY_META_KEY, "secret seal"],
+  ["plugin.digestKey:", "secret seal"],
+];
+
+/** The tables a seal of stored secrets writes besides `nextly_meta`. */
+const isSealTable = (table: string): boolean =>
+  table === "nextly_plugin_settings" || table.startsWith("nextly_email_queue");
+
 /** The class of `call`, or undefined when it writes nothing. */
 function classOf(call: RecordedStatement): WriteClass | undefined {
   const match = WRITE.exec(call.text);
@@ -124,18 +135,14 @@ function classOf(call: RecordedStatement): WriteClass | undefined {
   if (table === undefined) return undefined;
   if (call.context === "after the start") return "after the start";
   if (table === "journal_mode") return "journal mode";
-  if (table === "nextly_plugin_settings") return "secret seal";
-  if (table.startsWith("nextly_email_queue")) return "secret seal";
-  if (table === "nextly_meta") {
-    if (names(call, SETUP_TOKEN_META_KEY)) return "setup token";
-    if (
-      names(call, PRINCIPAL_DIGEST_KEY_META_KEY) ||
-      names(call, "plugin.digestKey:")
-    ) {
-      return "secret seal";
-    }
-  }
-  return `unlisted: ${call.text.replace(/\s+/g, " ").slice(0, 120)}`;
+  if (isSealTable(table)) return "secret seal";
+  const meta =
+    table === "nextly_meta"
+      ? META_KEYS.find(([key]) => names(call, key))
+      : undefined;
+  return (
+    meta?.[1] ?? `unlisted: ${call.text.replace(/\s+/g, " ").slice(0, 120)}`
+  );
 }
 
 /** Each class written, with the statements nothing on the list explains. */

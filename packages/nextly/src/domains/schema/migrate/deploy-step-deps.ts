@@ -48,6 +48,24 @@ export interface DeployStepRun {
 }
 
 /**
+ * The run's logger as the services take one: its four levels, each bound to it, so a service
+ * calling one detached still reaches the run's output.
+ */
+export function serviceLoggerOf(logger: CommandContext["logger"]): {
+  debug(message: string): void;
+  info(message: string): void;
+  warn(message: string): void;
+  error(message: string): void;
+} {
+  return {
+    debug: (message: string) => logger.debug(message),
+    info: (message: string) => logger.info(message),
+    warn: (message: string) => logger.warn(message),
+    error: (message: string) => logger.error(message),
+  };
+}
+
+/**
  * What an applied migration orphans (`MigrateCoreDeps.markOrphanedPermissions`), on the run's
  * own connection, lent to the services a permission write retires the cached answers through
  * (`withCommandServicesLent`), as Phase 4 writes. Each mark set or cleared is logged with the
@@ -61,12 +79,7 @@ async function markOrphansOnRunConnection(
   migration: string,
   logger: CommandContext["logger"]
 ): Promise<void> {
-  const serviceLogger = {
-    debug: (message: string) => logger.debug(message),
-    info: (message: string) => logger.info(message),
-    warn: (message: string) => logger.warn(message),
-    error: (message: string) => logger.error(message),
-  };
+  const serviceLogger = serviceLoggerOf(logger);
   const result = await withCommandServicesLent(adapter, serviceLogger, () =>
     new PermissionSeedService(adapter, serviceLogger).markOrphanedPermissions(
       scope.declared,

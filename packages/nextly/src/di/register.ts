@@ -1081,9 +1081,11 @@ async function registerServicesOnce(
   // reads a table it would not find. After the registration above, so a
   // refusal releases the adapter. A start with migrations at start asks after
   // them instead, below: they set such a database up.
-  if (!structure.migratesAtStart) {
-    await refuseDatabaseNotSetUp(adapter, structure);
-  }
+  await refuseDatabaseNotSetUp(
+    adapter,
+    structure,
+    "before migrations at start"
+  );
   // The cache handlers read expiries from this adapter's ledger, and writes
   // made outside a request record theirs into it, for every instance.
   installTagExpiryLedger(adapter);
@@ -1108,15 +1110,14 @@ async function registerServicesOnce(
   // development hold is taken, which is wherever the migrations at start can
   // run; inside that hold otherwise, below, so a development start judges the
   // plugins after any install or uninstall holding the lock has finished.
-  if (!takesDevelopmentStartHold()) {
-    await assertBootPluginInstallStates(
-      transformedConfig,
-      adapter,
-      adapterDrizzleDb,
-      resolvedLogger,
-      bootExtensionSchema
-    );
-  }
+  await assertBootPluginInstallStates(
+    transformedConfig,
+    adapter,
+    adapterDrizzleDb,
+    resolvedLogger,
+    bootExtensionSchema,
+    "before the hold"
+  );
 
   // Migrations at start, where the app turns them on: `nextly migrate` run by
   // the start, under the one schema lock, before anything of the registry is
@@ -1129,10 +1130,8 @@ async function registerServicesOnce(
     deferredExtends,
     { adapter, logger: resolvedLogger }
   );
-  if (structure.migratesAtStart) {
-    // A run that failed before it set the database up leaves it as it was.
-    await refuseDatabaseNotSetUp(adapter, structure);
-  }
+  // A run that failed before it set the database up leaves it as it was.
+  await refuseDatabaseNotSetUp(adapter, structure, "after migrations at start");
 
   // A production start reads the catalog and the Schema Builder registries
   // once, together, and every step below that asks is answered from that
@@ -1210,15 +1209,14 @@ async function registerServicesOnce(
       // Inside the hold, before the Builder reconcile and the code-first sync
       // below, which would otherwise add a refused plugin's fields and tables
       // before the refusal; outside it, above, before the migrations at start.
-      if (takesDevelopmentStartHold()) {
-        await assertBootPluginInstallStates(
-          transformedConfig,
-          adapter,
-          adapterDrizzleDb,
-          resolvedLogger,
-          bootExtensionSchema
-        );
-      }
+      await assertBootPluginInstallStates(
+        transformedConfig,
+        adapter,
+        adapterDrizzleDb,
+        resolvedLogger,
+        bootExtensionSchema,
+        "inside the hold"
+      );
 
       await publishStoredRecordingPolicies(adapter, transformedConfig);
 
@@ -3117,8 +3115,17 @@ async function assertBootPluginInstallStates(
   adapter: DrizzleAdapter,
   adapterDrizzleDb: DatabaseInstance,
   logger: Logger,
-  bootExtensionSchema: ExtensionSchema | undefined
+  bootExtensionSchema: ExtensionSchema | undefined,
+  /**
+   * Which of its two places in the start asks. It judges once: inside the
+   * development start's schema-lock hold where that hold is taken, so it reads
+   * the plugins' states after any install or uninstall holding the lock has
+   * finished; before the hold otherwise, which is wherever the migrations at
+   * start can run, so it judges before them.
+   */
+  where: "before the hold" | "inside the hold"
 ): Promise<void> {
+  if ((where === "inside the hold") !== takesDevelopmentStartHold()) return;
   const plugins = transformedConfig.plugins ?? [];
   if (plugins.length === 0) return;
   const [
@@ -3680,9 +3687,14 @@ function startStructureOf(
  */
 async function refuseDatabaseNotSetUp(
   adapter: DrizzleAdapter,
-  structure: StartStructure
+  structure: StartStructure,
+  /** Asked at both points; it answers at the one that applies to this start. */
+  at: "before migrations at start" | "after migrations at start"
 ): Promise<void> {
   if (!structure.productionStart || isNextBuildPhase()) return;
+  if ((at === "after migrations at start") !== structure.migratesAtStart) {
+    return;
+  }
   const { assertDatabaseSetUp } = await import("../init/first-run");
   await assertDatabaseSetUp(adapter);
 }
