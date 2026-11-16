@@ -75,6 +75,12 @@ type Props = {
   onSave: () => void;
   settings: BuilderSettingsValues;
   onSettingsChange: (next: BuilderSettingsValues) => void;
+  /**
+   * Whether the save judges names with Draft/Published on: on as stored, or as the pending settings
+   * turn it on. Its columns stand until the save that turns it off lands, after the fields, so a
+   * name it owns is refused either way. Absent, as for a field group, it is off.
+   */
+  lifecycleEnabled?: boolean;
   /** A collection's stored hooks, shown read-only in its settings modal. */
   storedHooks?: readonly StoredHookConfig[];
   active: ActiveOverlay;
@@ -158,6 +164,8 @@ export function BuilderPageLayout(props: Props): JSX.Element {
           onSettingsChange={onSettingsChange}
           readOnly={locked}
           storedHooks={storedHooks}
+          savedFields={pending.saved}
+          lifecycleEnabled={props.lifecycleEnabled}
         />
 
         {children}
@@ -194,6 +202,7 @@ function BuilderWorkspace(
     | "savedFieldIds"
     | "settings"
     | "pending"
+    | "lifecycleEnabled"
   >
 ): JSX.Element {
   const { builder, pending } = props;
@@ -254,6 +263,8 @@ function EditedFieldSettings({
   savedFieldIds,
   locked,
   openFieldGroup,
+  pending,
+  lifecycleEnabled,
 }: Pick<
   Props,
   | "active"
@@ -262,6 +273,8 @@ function EditedFieldSettings({
   | "builder"
   | "savedFieldIds"
   | "locked"
+  | "pending"
+  | "lifecycleEnabled"
 > & {
   outline: readonly OutlineNode[];
   openFieldGroup: (slug: string) => void;
@@ -295,6 +308,10 @@ function EditedFieldSettings({
         node && !node.own ? nodePlacement(node, byId, outline) : undefined
       }
       onOpenFieldGroup={openFieldGroup}
+      // A name is judged as the save judges it: beside the names pending deletes still hold, with
+      // Draft/Published as the save judges it.
+      savedFields={pending.saved}
+      lifecycleEnabled={lifecycleEnabled}
       onFieldChange={builder.handleFieldUpdate}
       onFieldDelete={fieldId => {
         builder.handleFieldDelete(fieldId);
