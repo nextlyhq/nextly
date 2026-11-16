@@ -71,6 +71,7 @@ const PROJECT = defineConfig({
 });
 
 type Field = { name: string; type: string };
+/** The registry row as stored: every column, so a refused save that moves any of them shows. */
 type Row = { label?: unknown; fields?: unknown } | null;
 
 /** One kind of entity a Builder save writes, and how its Builder saves it. */
@@ -89,6 +90,8 @@ interface Kind {
   remove(): Promise<unknown>;
   /** The registry row, as stored, or null. */
   row(t: TestNextly): Promise<Row>;
+  /** Store `value` in the `heading` field of one entry, as the entity's own writes store it. */
+  seed(t: TestNextly, value: string): Promise<void>;
 }
 
 const renameResolutions = (
@@ -137,6 +140,12 @@ const KINDS: Kind[] = [
     remove: () =>
       dispatchSingles("deleteSingle", { slug: "notice" }, undefined),
     row: t => t.getService("singleRegistryService").getSingleForWrite("notice"),
+    seed: async (t, value) => {
+      await t.nextly.updateSingle({
+        slug: "notice",
+        data: { heading: value, _overwrite: true },
+      } as never);
+    },
   },
   {
     name: "a field group",
@@ -166,10 +175,22 @@ const KINDS: Kind[] = [
       dispatchComponents("deleteComponent", { slug: "meta" }, undefined),
     row: t =>
       t.getService("fieldGroupRegistryService").findComponentForWrite("meta"),
+    // One instance of the group, placed in an entry of some parent, as a parent's save stores it.
+    seed: async (t, value) => {
+      await (
+        t.adapter as unknown as { executeQuery(sql: string): Promise<unknown> }
+      ).executeQuery(
+        `INSERT INTO comp_meta (id, _parent_id, _parent_table, _parent_field, _order, heading) VALUES ('kept-1', 'parent-1', 'dc_parent', 'meta', 0, '${value}')`
+      );
+    },
   },
 ];
 
 const text = (name: string): Field => ({ name, type: "text" });
+
+// A read-only folder stops no write on Windows or as root, so a case relying on one cannot fail.
+const MODES_NOT_ENFORCED =
+  process.platform === "win32" || process.getuid?.() === 0;
 
 let instance: TestNextly | undefined;
 let basePath: string;
@@ -280,16 +301,42 @@ describe.each(getConfiguredTestDialects())(
         .map(row => String(row.filename))
         .sort();
     }
-    /** Everything a refused save must leave as it found it. */
+    /** Each file in `dir` by name, with its contents: a file rewritten in place shows too. */
+    const contentsOf = (dir: string, names: readonly string[]) =>
+      Object.fromEntries(
+        names.map(name => [name, readFileSync(join(dir, name), "utf-8")])
+      );
+    /**
+     * Everything a refused save must leave as it found it: every migration and snapshot with its
+     * contents, the definition, every apply the ledger holds whatever its outcome, the table's
+     * columns, and the whole registry row.
+     */
     async function standing(t: TestNextly, kind: Kind) {
       return {
-        files: migrationFiles(),
-        snapshots: snapshotFiles(),
+        files: contentsOf(migrationsDir(), migrationFiles()),
+        snapshots: contentsOf(join(migrationsDir(), "meta"), snapshotFiles()),
         definition: definitionText(),
-        applied: await appliedFiles(t),
+        ledger: (await ledger(t).listFileApplies())
+          .map(row => JSON.stringify(row))
+          .sort(),
         columns: await columns(t, kind.table),
-        fields: (await kind.row(t))?.fields,
+        row: await kind.row(t),
       };
+    }
+    /** The values `column` holds, one for each stored row of `table`. */
+    async function storedValue(
+      t: TestNextly,
+      table: string,
+      column: string
+    ): Promise<unknown> {
+      const rows = await (
+        adapterOf(t) as unknown as {
+          executeQuery<R>(sql: string): Promise<R[]>;
+        }
+      ).executeQuery<{ value: unknown }>(
+        `SELECT ${column} AS value FROM ${table}`
+      );
+      return rows.map(row => row.value);
     }
 
     /** Run a command over the project, as its CLI would; its exit code and what it said. */
@@ -407,6 +454,8 @@ describe.each(getConfiguredTestDialects())(
         await nothingLeftToDo(t);
 
         await kind.remove();
+        // Its file recorded applied would pass both commands with the table still standing.
+        expect(await adapterOf(t).tableExists(kind.table)).toBe(false);
         await nothingLeftToDo(t);
       }, 60_000);
 
@@ -456,9 +505,11 @@ describe.each(getConfiguredTestDialects())(
         expect(defined(kind)).toBeUndefined();
       });
 
-      it("renames a field as a rename, keeping its column's place in the history", async () => {
+      it("renames a field as a rename, keeping its column's place in the history and its values", async () => {
         const t = await boot();
         await kind.create([text("heading")]);
+        // A stored value: a rebuild that drops the column and adds the new one would lose it.
+        await kind.seed(t, "kept");
 
         await kind.change(t, [text("headline")], {
           from: "heading",
@@ -472,53 +523,60 @@ describe.each(getConfiguredTestDialects())(
         const up = readFileSync(join(migrationsDir(), update!), "utf-8").split(
           "-- DOWN"
         )[0]!;
-        expect(up).toMatch(/RENAME/i);
+        expect(up).toMatch(/RENAME COLUMN/i);
         expect(up).not.toMatch(/DROP COLUMN/i);
         const names = await columns(t, kind.table);
         expect(names).toContain("headline");
         expect(names).not.toContain("heading");
+        expect(await storedValue(t, kind.table, "headline")).toEqual(["kept"]);
         expect(await appliedFiles(t), JSON.stringify(migrationFiles())).toEqual(
           migrationFiles()
         );
         await nothingLeftToDo(t);
       }, 60_000);
 
-      it("refuses a change while the migrations folder cannot be written, and changes nothing", async () => {
-        const t = await boot();
-        await kind.create([text("heading")]);
-        const before = await standing(t, kind);
+      it.skipIf(MODES_NOT_ENFORCED)(
+        "refuses a change while the migrations folder cannot be written, and changes nothing",
+        async () => {
+          const t = await boot();
+          await kind.create([text("heading")]);
+          const before = await standing(t, kind);
 
-        chmodSync(migrationsDir(), 0o555);
-        const refused = await kind
-          .change(t, [text("heading"), text("body")])
-          .then(
-            () => undefined,
-            (error: unknown) => error
-          );
-        chmodSync(migrationsDir(), 0o755);
+          chmodSync(migrationsDir(), 0o555);
+          const refused = await kind
+            .change(t, [text("heading"), text("body")])
+            .then(
+              () => undefined,
+              (error: unknown) => error
+            );
+          chmodSync(migrationsDir(), 0o755);
 
-        expect(refused).toBeInstanceOf(Error);
-        expect(await standing(t, kind)).toEqual(before);
-      });
+          expect(refused).toBeInstanceOf(Error);
+          expect(await standing(t, kind)).toEqual(before);
+        }
+      );
 
-      it("refuses a change while the definition file cannot be written, and runs nothing", async () => {
-        const t = await boot();
-        await kind.create([text("heading")]);
-        const before = await standing(t, kind);
+      it.skipIf(MODES_NOT_ENFORCED)(
+        "refuses a change while the definition file cannot be written, and runs nothing",
+        async () => {
+          const t = await boot();
+          await kind.create([text("heading")]);
+          const before = await standing(t, kind);
 
-        // The definition is replaced by a rename inside its folder, so the folder is what stops it.
-        chmodSync(join(basePath, "schema"), 0o555);
-        const refused = await kind
-          .change(t, [text("heading"), text("body")])
-          .then(
-            () => undefined,
-            (error: unknown) => error
-          );
-        chmodSync(join(basePath, "schema"), 0o755);
+          // The definition is replaced by a rename inside its folder, so the folder is what stops it.
+          chmodSync(join(basePath, "schema"), 0o555);
+          const refused = await kind
+            .change(t, [text("heading"), text("body")])
+            .then(
+              () => undefined,
+              (error: unknown) => error
+            );
+          chmodSync(join(basePath, "schema"), 0o755);
 
-        expect(refused).toBeInstanceOf(Error);
-        expect(await standing(t, kind)).toEqual(before);
-      });
+          expect(refused).toBeInstanceOf(Error);
+          expect(await standing(t, kind)).toEqual(before);
+        }
+      );
 
       describe("over a history the migrate commands refuse", () => {
         const HISTORY_CASES: {
