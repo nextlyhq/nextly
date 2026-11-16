@@ -167,11 +167,21 @@ export const TYPOGRAPHY_DEFAULTS: NonNullable<
  * what can be supplied here. `null` is not a state this reads for, because a
  * context omitting the field has no opinion while one stating it has already
  * won.
+ *
+ * A `spacingMode` the context states is NOT handed on. The engine's compile
+ * context still declares one, and under `classic` the engine writes no
+ * container gap; this library compiles one spacing model, so a route stating
+ * that field would otherwise draw every container without its gap, and a sheet
+ * stored from that compile would carry the same identity as one with the gaps.
+ * Every page and trace compile builds its context here, so this is the one
+ * place it is dropped.
  */
 export function withTypographyDefaults(
   context: StyleCompileContext
 ): StyleCompileContext {
-  if (context.elementBases !== undefined) return context;
+  const { spacingMode: _stated, ...withoutModel } = context;
+  const single = "spacingMode" in context ? withoutModel : context;
+  if (single.elementBases !== undefined) return single;
   // One baseline for every site: no element carries an outer margin.
-  return { ...context, elementBases: TYPOGRAPHY_DEFAULTS };
+  return { ...single, elementBases: TYPOGRAPHY_DEFAULTS };
 }

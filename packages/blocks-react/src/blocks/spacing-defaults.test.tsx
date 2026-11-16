@@ -417,14 +417,17 @@ describe("a site whose stored style still names a spacing model", () => {
     resolveEntryPath: () => Promise.resolve(null),
   } as unknown as PageContext;
 
-  /** The page as a visitor is served it, with `stored` as the site's style. */
-  async function served(stored: object): Promise<string> {
+  /**
+   * The page as a visitor is served it, with `stored` as the site's style and
+   * `route` beside the breakpoints of the route's own compile context.
+   */
+  async function served(stored: object, route: object = {}): Promise<string> {
     const stream = await renderToReadableStream(
       <PageRenderer
         document={PAGE}
         blocks={createBlockResolver(coreBlocks)}
         context={CONTEXT}
-        styleContext={{ breakpoints: BREAKPOINTS }}
+        styleContext={{ breakpoints: BREAKPOINTS, ...route }}
         siteStyles={{ breakpoints: BREAKPOINTS, ...stored }}
       />
     );
@@ -439,6 +442,26 @@ describe("a site whose stored style still names a spacing model", () => {
 
   it("serves exactly the page the same site serves without the key", async () => {
     expect(await served(LEFTOVER)).toBe(await served({}));
+  });
+
+  it("serves exactly that page when a route's own compile context states the key", async () => {
+    expect(await served({}, LEFTOVER)).toBe(await served({}));
+  });
+
+  it("compiles and stamps a stored sheet alike when a route's compile context states the key", () => {
+    const compiled = (route: object) =>
+      resolvePageStyles(
+        PAGE,
+        undefined,
+        { breakpoints: BREAKPOINTS, ...route },
+        createBlockResolver(coreBlocks)
+      );
+    const withKey = compiled(LEFTOVER);
+    const without = compiled({});
+    // The gaps are in the sheet, so the equality below is not two empty ones.
+    expect(without.css).toContain(`${CHILD_GAP_CLASS} > * + *`);
+    expect(withKey.css).toBe(without.css);
+    expect(withKey.sharedInputsId).toBe(without.sharedInputsId);
   });
 
   it.each(["h1", "h2", "h3", "h4", "h5", "h6", "p"])(
@@ -486,6 +509,20 @@ describe("a site whose stored style still names a spacing model", () => {
     expect(typeRule(await served(LEFTOVER), `core--${type}`)).toContain(
       `gap: ${gap}`
     );
+  });
+
+  it("gives a Heading, a Text and a Button no outer margin of their own", async () => {
+    const html = await served(LEFTOVER);
+    const rules = html.match(/:where\([^)]*\) \{[^}]*\}/g) ?? [];
+    // The control: the scan reads the block-type rules, the button's among them.
+    expect(rules.some(rule => rule.includes(".nx-bt-core--button)"))).toBe(
+      true
+    );
+    const outerMargin = /margin-block-(start|end): (?!0[ ;}])/;
+    for (const type of ["heading", "text", "button"]) {
+      const own = rules.filter(rule => rule.includes(`.nx-bt-core--${type}`));
+      expect(own.filter(rule => outerMargin.test(rule))).toEqual([]);
+    }
   });
 
   it("gives a quote and a divider no outer margin", async () => {
