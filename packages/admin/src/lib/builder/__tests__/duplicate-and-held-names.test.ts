@@ -25,11 +25,19 @@ function namesAt(
 }
 
 describe("naming a duplicate as the save will judge it", () => {
-  it("passes over a name a sibling holds once the save normalises it", () => {
-    // `foo-2` is sent as `foo_2`, so a copy named `foo_2` would clash at save.
+  it("passes over a name a sibling holds as the save sends it", () => {
+    // A sibling already holds `foo_2`, so the copy takes the next free number.
+    const fields = [plain("f-foo", "foo"), plain("f-other", "foo_2")];
+    const after = duplicatedFields(fields, "f-foo");
+    expect(namesAt(after ?? [])).toEqual(["foo", "foo_3", "foo_2"]);
+  });
+
+  it("judges a sibling's name as it is sent, not as a label would derive it", () => {
+    // Every name goes to the save as it is, so `foo-2` stays `foo-2` and takes nothing from a
+    // copy named `foo_2`; the save refuses `foo-2` itself, naming the field.
     const fields = [plain("f-foo", "foo"), plain("f-other", "foo-2")];
     const after = duplicatedFields(fields, "f-foo");
-    expect(namesAt(after ?? [])).toEqual(["foo", "foo_3", "foo-2"]);
+    expect(namesAt(after ?? [])).toEqual(["foo", "foo_2", "foo-2"]);
   });
 
   it("names a copy inside a layout group against the level holding it", () => {

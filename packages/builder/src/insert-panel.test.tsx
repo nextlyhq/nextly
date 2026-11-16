@@ -17,7 +17,7 @@
  * @module insert-panel.test
  */
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   act,
@@ -42,6 +42,7 @@ import { NoticeSinkProvider } from "./builder-notices";
 import { InsertPanel } from "./insert-panel";
 import type { EditorState } from "./editor-state";
 import { EMPTY_SELECTION } from "./selection";
+import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
 
 // The command primitives observe their list box to size it, and jsdom
 // implements no ResizeObserver. Without this every case dies at render with a
@@ -344,9 +345,8 @@ describe("InsertPanel", () => {
      * as the drag being withdrawn. So the drag abandons itself part-way, only
      * on touch, and nothing in CI is capable of noticing.
      */
-    const css = readFileSync(
-      join(process.cwd(), "src/styles/builder-chrome.css"),
-      "utf8"
+    const css = chromeStylesheetSource(url =>
+      readFileSync(fileURLToPath(url), "utf8")
     );
     const rule = css.slice(css.indexOf(".nx-insert-panel [cmdk-item] {"));
     const firstBlock = rule.slice(0, rule.indexOf("}"));
@@ -1079,9 +1079,8 @@ describe("the grid, and the popover that describes a tile", () => {
      * Comments stripped, because a comment naming the selector would satisfy
      * a search of the raw text.
      */
-    const css = readFileSync(
-      join(process.cwd(), "src/styles/builder-chrome.css"),
-      "utf8"
+    const css = chromeStylesheetSource(url =>
+      readFileSync(fileURLToPath(url), "utf8")
     ).replace(/\/\*[\s\S]*?\*\//g, "");
     const painted = css.match(
       /([^{}]*)\[cmdk-item\]\[data-selected="true"\]\s*\{[^}]*border-color:\s*var\(--nx-primary\)/

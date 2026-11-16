@@ -20,6 +20,8 @@ import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
 import { canFocus } from "@admin/lib/builder/outline/focus-view";
 import type { OutlineNode } from "@admin/lib/builder/outline/outline-model";
 
+import { ErrorBadge } from "./OutlineRow";
+
 const CRUMB_PREFIX = "focus-crumb:";
 const TOP_LEVEL = "top";
 
@@ -107,8 +109,17 @@ function CrumbButton({
   );
 }
 
-/** The focused container's crumb: where the outline is, and a place to drop at its end. */
-function CurrentCrumb({ node }: { node: OutlineNode }): JSX.Element {
+/**
+ * The focused container's crumb: where the outline is, and a place to drop at its end. Its own
+ * row, which carries its error badge, is not drawn while it is focused, so the badge is here.
+ */
+function CurrentCrumb({
+  node,
+  error,
+}: {
+  node: OutlineNode;
+  error?: string;
+}): JSX.Element {
   const label = crumbName(node);
   const { setNodeRef, isOver } = useCrumbDrop(node.id, label);
   return (
@@ -120,18 +131,26 @@ function CurrentCrumb({ node }: { node: OutlineNode }): JSX.Element {
       }`}
     >
       {label}
+      {error && (
+        <span className="ml-2">
+          <ErrorBadge error={error} />
+        </span>
+      )}
     </span>
   );
 }
 
 export function FocusCrumbs({
   crumbs,
+  focusedError,
   exitRef,
   onGo,
   onExit,
 }: {
   /** From the top level's first container down to the focused one. */
   crumbs: readonly OutlineNode[];
+  /** The focused container's own error, if it has one. */
+  focusedError?: string;
   /** Exit focus, which takes keyboard focus when the focused container draws no row. */
   exitRef?: Ref<HTMLButtonElement>;
   /** Go back to a crumb's level: a container's id, or null for the top level. */
@@ -167,7 +186,7 @@ export function FocusCrumbs({
             </li>
           ))}
           <li className={SEPARATED}>
-            <CurrentCrumb node={focused} />
+            <CurrentCrumb node={focused} error={focusedError} />
           </li>
         </ol>
       </nav>

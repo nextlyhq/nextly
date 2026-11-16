@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
+
 /**
  * What a draggable label looks like and which gestures it keeps, asserted
  * against the sheet that decides it: jsdom applies no stylesheet, so a render
@@ -10,9 +12,8 @@ import { describe, expect, it } from "vitest";
  *
  * @module label-scrub-styles.test
  */
-const CHROME = readFileSync(
-  fileURLToPath(new URL("./styles/builder-chrome.css", import.meta.url)),
-  "utf8"
+const CHROME = chromeStylesheetSource(url =>
+  readFileSync(fileURLToPath(url), "utf8")
 );
 
 const SELECTOR = ".nx-style-inspector .nx-inspector__field > label[data-scrub]";

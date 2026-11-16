@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
+
 /**
  * Where the "+" between sections stays shown without a pointer near it,
  * asserted against the sheet that shows it.
@@ -16,9 +18,8 @@ import { describe, expect, it } from "vitest";
  *
  * @module page-inserters-styles.test
  */
-const CHROME = readFileSync(
-  fileURLToPath(new URL("./styles/builder-chrome.css", import.meta.url)),
-  "utf8"
+const CHROME = chromeStylesheetSource(url =>
+  readFileSync(fileURLToPath(url), "utf8")
 );
 
 /** The body of the media block that holds a rule for `selector`. */
