@@ -409,7 +409,13 @@ describe.each(getConfiguredTestDialects())(
     function expectNamesEachProperty(sentence: string | undefined): void {
       expect(sentence).toContain("constraint NOT NULL");
       expect(sentence).toMatch(/: type \S+/);
-      expect(sentence).toMatch(/index \S*summary\S*/);
+      // MySQL cannot index a whole TEXT column, so Nextly gives this one no index there, and
+      // none is named; the other dialects index it.
+      if (dialect === "mysql") {
+        expect(sentence).not.toContain("index ");
+      } else {
+        expect(sentence).toMatch(/index \S*summary\S*/);
+      }
       if (dialect !== "sqlite") {
         expect(sentence).toContain("comment Shown in lists");
       }
