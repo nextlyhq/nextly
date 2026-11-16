@@ -75,11 +75,6 @@ import {
   unusedWithheld,
 } from "./shared-styles-list";
 import { RemoveUnusedHead } from "./shared-styles-remove-unused";
-import {
-  foundLooks,
-  foundSharedStyles,
-  stylesTabSource,
-} from "./styles-tab-matches";
 import type {
   PageClassBlocks,
   PanelLookEditing,
@@ -93,6 +88,11 @@ import {
   useRename,
   useUsage,
 } from "./shared-styles-usage";
+import {
+  foundLooks,
+  foundSharedStyles,
+  stylesTabSource,
+} from "./styles-tab-matches";
 import { idsKey, idsOf } from "./usage-reads";
 
 // The tab's shapes, its usage reads and rename, its row, its list and the
