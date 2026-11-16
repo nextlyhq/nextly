@@ -111,6 +111,7 @@ import {
 } from "./api/widget-layout";
 import { getWidgetPreviews } from "./api/widget-previews";
 import { postWidgetQuery } from "./api/widget-query";
+import { handleWorkflowRequest } from "./api/workflows";
 import { runWithAccessMemo } from "./auth/access/request-memo";
 import { apiKeyScopeFrom } from "./auth/authenticated-scope";
 import {
@@ -431,6 +432,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "apiKeys",
   "webhooks",
   "releases",
+  "workflows",
   "notices",
   "jobs",
   "generalSettings",
@@ -1682,6 +1684,13 @@ async function serveServiceRequest(
   // the stream reaches it consumed.
   if (service === "releases") {
     return handleReleaseRequest(req, method, routeParams);
+  }
+
+  // ==================== WORKFLOWS DIRECT DISPATCH ====================
+  // Review state, steps and assignments. Beside releases and for the same reason: the handler
+  // owns its auth and parses its own JSON, so it stays above the shared body read below.
+  if (service === "workflows") {
+    return handleWorkflowRequest(req, method);
   }
 
   // ==================== CONTENT EVENTS BY SUBJECT ====================
