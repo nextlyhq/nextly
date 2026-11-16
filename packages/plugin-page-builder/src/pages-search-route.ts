@@ -1507,12 +1507,14 @@ export function pageAddressRoute(
   pagePath?: string
 ): {
   method: "GET";
+  checksAccess: true;
   path: string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 } {
   return {
     method: "GET",
     path: PAGE_ADDRESS_ROUTE_PATH,
+    checksAccess: true, // The handler judges each caller.
     handler: async (req, ctx) =>
       Response.json(
         await readPageAddress(parsePageAddressQuery(req.url), {
@@ -1537,12 +1539,14 @@ export function pagesSearchRoute(
   pagePath?: string
 ): {
   method: "GET";
+  checksAccess: true;
   path: string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 } {
   return {
     method: "GET",
     path: PAGES_SEARCH_ROUTE_PATH,
+    checksAccess: true, // The handler judges each caller.
     // No `public: true`, which is what makes this authenticated, and no
     // `requiredPermission`: the search spans collections a permission names
     // one at a time. Each read's own access is core's.

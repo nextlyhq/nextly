@@ -570,12 +570,14 @@ function sizeOf(document: BlockDocument): { nodes: number; bytes: number } {
  */
 export function publishReadinessRoute(setup: PublishReadinessSetup): {
   method: "POST";
+  checksAccess: true;
   path: string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 } {
   return {
     method: "POST",
     path: PUBLISH_READINESS_ROUTE_PATH,
+    checksAccess: true, // The handler judges each caller.
     handler: async (req, ctx) => {
       const body = await bodyOf(req, READINESS_BODY);
       if (!setup.enabled || ctx.caller === null) {
@@ -706,12 +708,14 @@ function refusalReason(error: unknown): string {
  */
 export function publishDependenciesRoute(setup: PublishReadinessSetup): {
   method: "POST";
+  checksAccess: true;
   path: string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 } {
   return {
     method: "POST",
     path: PUBLISH_DEPENDENCIES_ROUTE_PATH,
+    checksAccess: true, // The handler judges each caller.
     handler: async (req, ctx) => {
       const body = await bodyOf(req, PUBLISH_BODY);
       const stores = storesOf(ctx, setup.store);

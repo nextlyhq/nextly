@@ -8,6 +8,7 @@ import { randomBytes } from "crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import { assertTopLevelFieldsNamed } from "../../../api/fields-payload";
 import { NextlyError } from "../../../errors";
 import { resolveBuilderRevalidate } from "../../../revalidation/builder-revalidate";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
@@ -69,6 +70,7 @@ import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
 import {
   columnsThatMayHoldNull,
   fieldProducesColumn,
+  fieldsStoredOnRow,
   getColumnDescriptor,
   systemColumnsForFields,
   toSnakeCase,
@@ -481,7 +483,9 @@ export class DynamicCollectionService extends BaseService {
     fields: FieldDefinition[]
   ): Promise<ReadonlyMap<string, string>> {
     const slugs = new Set<string>();
-    for (const field of fields) {
+    // The field groups at this level, those inside a group with no name among them, as a rename
+    // pairs them (`fieldGroupRenamePairs`): a table left unresolved moves no rows.
+    for (const field of fieldsStoredOnRow(fields)) {
       for (const slug of fieldGroupSlugList(field)) slugs.add(slug);
     }
     if (slugs.size === 0) return new Map();
@@ -555,21 +559,8 @@ export class DynamicCollectionService extends BaseService {
     // Element shape matters too: the array is normalised with `f.name
     // .toLowerCase()` below, before field validation runs, so an element
     // without a string name throws the same untyped TypeError the checks
-    // above exist to prevent.
-    const malformed = data.fields.findIndex(
-      f => typeof (f as { name?: unknown })?.name !== "string"
-    );
-    if (malformed !== -1) {
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: `fields[${malformed}].name`,
-            code: "REQUIRED",
-            message: "Each field requires a name.",
-          },
-        ],
-      });
-    }
+    // above exist to prevent. The rule every entity API shares.
+    assertTopLevelFieldsNamed(data.fields);
 
     // `group` is lower-cased later without a type check; `?.` guards null and
     // undefined but not a number or object, which would throw an untyped
@@ -1364,21 +1355,9 @@ export class DynamicCollectionService extends BaseService {
       }
       // The array is normalised through `f.name.toLowerCase()` before field
       // validation runs, so an element without a string name throws an
-      // untyped TypeError rather than reporting the client error it is.
-      const malformedUpdate = updates.fields.findIndex(
-        f => typeof (f as { name?: unknown })?.name !== "string"
-      );
-      if (malformedUpdate !== -1) {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: `fields[${malformedUpdate}].name`,
-              code: "REQUIRED",
-              message: "Each field requires a name.",
-            },
-          ],
-        });
-      }
+      // untyped TypeError rather than reporting the client error it is. The
+      // rule every entity API shares.
+      assertTopLevelFieldsNamed(updates.fields);
     }
 
     const collection = (await this.registryService.getCollection(
@@ -2115,10 +2094,12 @@ export class DynamicCollectionService extends BaseService {
     junctions: { up: string[]; down: string[] };
     keys: { before: ForeignKeySpec[]; after: ForeignKeySpec[] };
   }> {
-    // Read for this Builder collection's own keys, `relationTo` relationships included.
+    // Read for this Builder collection's own keys, `relationTo` relationships included, those
+    // inside a group with no name among them: they hold keys on the row (`keysTheTableHolds`), so
+    // their targets are read from the registry as the ones beside the group are.
     const targetTables = await collectionTablesBySlug(
       this.adapter,
-      [...oldFields, ...newFields],
+      fieldsStoredOnRow([...oldFields, ...newFields]),
       { builder: true }
     );
     const junctions = this.junctionStatements(
@@ -2190,29 +2171,46 @@ export class DynamicCollectionService extends BaseService {
    */
   private async keysTheTableHolds(
     tableName: string,
-    oldFields: FieldDefinition[],
-    newFields: FieldDefinition[],
+    declaredOldFields: FieldDefinition[],
+    declaredNewFields: FieldDefinition[],
     targetTables: CollectionTables | undefined
   ): Promise<{ before: ForeignKeySpec[]; after: ForeignKeySpec[] }> {
-    const onMainTable = (field: FieldDefinition) => field.localized !== true;
+    // The fields with a column on the table before and after (`fieldsStoredOnRow`): those inside a
+    // group with no name too, whose relationships hold keys here as one beside the group does, on
+    // an entry's row and on a field group's alike. The group itself has no column, nor a name to
+    // spell one from.
+    const oldFields = fieldsStoredOnRow(declaredOldFields);
+    const newFields = fieldsStoredOnRow(declaredNewFields);
+    // Which fields are translated is read from the declared lists, as the creating SQL and the
+    // desired table read it: a field inside a group with no name stays on the row whatever it
+    // says, so its key is this table's. Each side is read from its own list, so a relationship the
+    // save makes translated keeps its key before and has none after, and the drop is written.
+    const onMainTableOf = (declared: FieldDefinition[]) => {
+      const translated = new Set(
+        declared
+          .filter(field => field.localized === true)
+          .map(field => field.name)
+      );
+      return (field: FieldDefinition) => !translated.has(field.name);
+    };
+    const onMainTableBefore = onMainTableOf(declaredOldFields);
+    const onMainTableAfter = onMainTableOf(declaredNewFields);
     const described = this.relationshipForeignKeys(
       tableName,
-      newFields.filter(onMainTable),
+      newFields.filter(onMainTableAfter),
       targetTables
     );
     const lower = (name: string) => name.toLowerCase();
-    const relationColumns = (fields: FieldDefinition[]) =>
-      new Set(
-        fields
-          .filter(
-            field =>
-              field.type === "relationship" &&
-              onMainTable(field) &&
-              fieldProducesColumn(field)
-          )
-          .map(field => lower(toSnakeCase(field.name)))
-      );
-    const oldRelationColumns = relationColumns(oldFields);
+    const oldRelationColumns = new Set(
+      oldFields
+        .filter(
+          field =>
+            field.type === "relationship" &&
+            onMainTableBefore(field) &&
+            fieldProducesColumn(field)
+        )
+        .map(field => lower(toSnakeCase(field.name)))
+    );
     if (described.length === 0 && oldRelationColumns.size === 0) {
       return { before: [], after: [] };
     }

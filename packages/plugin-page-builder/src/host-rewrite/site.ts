@@ -15,6 +15,8 @@ import {
   NextlyError,
   readStoredFields,
   updateIfUnchanged,
+  type FieldRewriteRequest,
+  type FieldRewriteResult,
   type PluginConditionalWriteIdentity,
   type PluginStoredDocument,
   type PluginStoredFields,
@@ -34,9 +36,18 @@ import {
 } from "../layout-component-guard";
 import { layoutReferencesOf } from "../layout-component-usage";
 
-import { documentKeyOf, type HostAddress, type LeftHost } from "./contract";
+import {
+  documentKeyOf,
+  type HostAddress,
+  type HostForm,
+  type LeftHost,
+  type StepOutcome,
+} from "./contract";
 import type {
+  CopiesResult,
   HostCandidate,
+  HostCopiesWrite,
+  HostCopiesWriter,
   HostDocument,
   HostRead,
   HostReader,
@@ -1012,6 +1023,212 @@ export function systemHostWriter(
     ...site,
     identity: () => Promise.resolve({ overrideAccess: true as const }),
   });
+}
+
+/**
+ * The plugin's field rewrite (`ctx.services.collections.rewriteField`), bound
+ * to the plugin so each document's history names the Page Builder, made with
+ * `opts` as given.
+ */
+export type SiteFieldRewrite<TOpts> = (
+  request: FieldRewriteRequest,
+  opts?: TOpts
+) => Promise<FieldRewriteResult>;
+
+/**
+ * Rewrites a collection entry's host on its live copy and every pending draft
+ * holding its field, through core's field rewrite, as `as` resolves the
+ * person the run belongs to (their update and publish rights both judged), or
+ * as the system where it resolves none. Each copy's new value is the step's
+ * answer for that copy's own stored value; a copy holding nothing is left. A
+ * copy the step refuses aborts the rewrite with nothing written, and is
+ * answered as `step-refused` with the step's words.
+ *
+ * ## The step is never asked inside the rewrite's transaction
+ *
+ * Core calls `set.from` inside the transaction that holds the entry's row
+ * lock, and a step reads (a component's definitions, through the pool), so
+ * asked there it would wait, on a pool of one connection, for the connection
+ * that transaction holds. So the step judges each copy's value before the
+ * rewrite, and `set.from` only looks the answer up, by the value itself. The
+ * copies the walk read are judged first. A copy it did not read (a draft in
+ * another language) aborts the rewrite with nothing written; it is judged
+ * outside, and the rewrite is made again from the same version, until every
+ * copy has been judged.
+ */
+export function siteCopiesWriter<TOpts>(
+  site: CopiesSite<TOpts>
+): HostCopiesWriter {
+  return async write => {
+    const field = write.host.path[0];
+    if (field === undefined || write.host.path.length !== 1) {
+      return {
+        kind: "refused",
+        detail: "This value has no address a write can name.",
+      };
+    }
+    const judged = new JudgedCopies(write);
+    for (const seed of write.seeds) await judged.judge(seed.value, seed.form);
+    for (let round = 1; ; round += 1) {
+      const outcome = await rewriteOnce(site, write, field, judged);
+      if (outcome.kind !== "unjudged") return outcome;
+      // Each round that stops judges one copy more, and a copy judged once
+      // is answered from then on, so the rewrite converges on a document
+      // with any number of drafts. A save in between moves the version, and
+      // the rewrite answers STALE_VERSION instead. The ceiling only guards
+      // against a copy whose value is never answered, which would be a
+      // defect here rather than a document still changing.
+      if (round >= MAX_COPIES_ROUNDS) return { kind: "changed" };
+      await judged.judge(outcome.value, outcome.form);
+    }
+  };
+}
+
+/** What a copies writer makes its rewrites with. */
+export interface CopiesSite<TOpts> {
+  readonly rewriteField: SiteFieldRewrite<TOpts>;
+  readonly as: () => Promise<TOpts | undefined>;
+  /** Why, as each rewritten document's history keeps it. */
+  readonly reason: string;
+  /** What follows a committed rewrite: the work save hooks would have done. */
+  readonly afterRewrite?: (document: {
+    readonly slug: string;
+    readonly id: string;
+  }) => Promise<void>;
+  /**
+   * Runs one rewrite inside the scope the validation core runs inside it
+   * reads (`rewrite-scope`), handing it the call that names each copy as it
+   * is decided. Absent, the rewrite runs with none.
+   */
+  readonly scope?: RewriteScopeRunner;
+}
+
+/**
+ * Runs `run` inside a rewrite's scope for `field`; `run` is handed what to
+ * call with each copy's stored value as the rewrite decides that copy.
+ */
+export type RewriteScopeRunner = <T>(
+  field: string,
+  run: (deciding: (stored: unknown) => void) => Promise<T>
+) => Promise<T>;
+
+/**
+ * The most rewrites one copies write makes: far more copies than one
+ * document holds (one draft per language, and the live copy).
+ */
+const MAX_COPIES_ROUNDS = 64;
+
+/** Why a rewrite was abandoned before anything was written. */
+class CopyAbort extends Error {}
+
+/**
+ * The step's answers for one host's copies, judged outside any transaction and
+ * looked up by the copy's value, written in one canonical form so a value read
+ * from a column and the same value read from a version snapshot match.
+ */
+class JudgedCopies {
+  private readonly answers = new Map<string, StepOutcome>();
+
+  constructor(private readonly write: HostCopiesWrite) {}
+
+  /** Judge a copy's value, as the step does, outside any transaction. */
+  async judge(value: unknown, form: HostForm): Promise<void> {
+    const key = copyKey(value, form);
+    if (this.answers.has(key)) return;
+    this.answers.set(
+      key,
+      await this.write.step(value, { host: this.write.host, form })
+    );
+  }
+
+  /** The answer judged for this value, or `undefined` when none was. */
+  answer(value: unknown, form: HostForm): StepOutcome | undefined {
+    return this.answers.get(copyKey(value, form));
+  }
+}
+
+/** One copy's value and form as one key, its objects' keys in sorted order. */
+function copyKey(value: unknown, form: HostForm): string {
+  return `${form}:${JSON.stringify(value, (_key, held: unknown) =>
+    isRecord(held) && !Array.isArray(held)
+      ? Object.fromEntries(
+          Object.keys(held)
+            .sort()
+            .map(name => [name, held[name]])
+        )
+      : held
+  )}`;
+}
+
+/**
+ * One rewrite, its every copy answered from `judged`: done, refused, or
+ * abandoned for a copy not judged yet, which is answered so it can be.
+ */
+async function rewriteOnce<TOpts>(
+  site: CopiesSite<TOpts>,
+  write: HostCopiesWrite,
+  field: string,
+  judged: JudgedCopies
+): Promise<
+  | CopiesResult
+  | {
+      readonly kind: "unjudged";
+      readonly value: unknown;
+      readonly form: HostForm;
+    }
+> {
+  let refused: string | undefined;
+  let unjudged: { value: unknown; form: HostForm } | undefined;
+  const call = (opts: TOpts | undefined, deciding: (stored: unknown) => void) =>
+    site.rewriteField(
+      {
+        collection: write.host.slug,
+        id: write.host.id ?? "",
+        field,
+        // Only a value stored per language is read in one (`maybeShared`
+        // hosts take no copies write), so this names a translated field's
+        // language and nothing else.
+        ...(write.host.locale === undefined
+          ? {}
+          : { locale: write.host.locale }),
+        expectedVersion: write.rev,
+        set: {
+          from: (current, copy) => {
+            deciding(current);
+            if (current === null || current === undefined) return null;
+            const form = copy.form === "live" ? write.liveForm : "draft";
+            const outcome = judged.answer(current, form);
+            if (outcome === undefined) {
+              unjudged = { value: structuredClone(current), form };
+              throw new CopyAbort();
+            }
+            if (outcome.kind === "refuse") {
+              refused = outcome.reason;
+              throw new CopyAbort();
+            }
+            return outcome.kind === "rewritten" ? outcome.value : current;
+          },
+        },
+        reason: site.reason,
+      },
+      opts
+    );
+  try {
+    // Resolved before the scope opens: who the rewrite is made as.
+    const opts = await site.as();
+    await (site.scope === undefined
+      ? call(opts, () => undefined)
+      : site.scope(field, deciding => call(opts, deciding)));
+  } catch (error) {
+    if (refused !== undefined) return { kind: "step-refused", detail: refused };
+    if (unjudged !== undefined) return { kind: "unjudged", ...unjudged };
+    return writeFailure(error);
+  }
+  await site.afterRewrite?.({
+    slug: write.host.slug,
+    id: write.host.id ?? "",
+  });
+  return { kind: "written" };
 }
 
 /**

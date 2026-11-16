@@ -22,6 +22,7 @@
 import { execFile } from "node:child_process";
 import {
   cpSync,
+  existsSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -60,6 +61,33 @@ import { READING_LISTS_PLUGIN, readingListsFixturePlugin } from "./plugin";
 const run = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
 const playground = resolve(here, "../../..");
+
+/**
+ * The file the `nextly` package names as its `bin`, found by resolving the
+ * package as an import does and walking up to its manifest. A literal path
+ * into `node_modules` assumes one install layout: there is no `.bin` under
+ * Yarn PnP, and hoisting moves the package. Run by this Node, as the shim
+ * pnpm writes into `.bin` does.
+ */
+function nextlyBin(): string {
+  let dir = dirname(fileURLToPath(import.meta.resolve("nextly")));
+  for (;;) {
+    const manifest = join(dir, "package.json");
+    if (existsSync(manifest)) {
+      const { name, bin } = JSON.parse(readFileSync(manifest, "utf8")) as {
+        name?: string;
+        bin?: string | Record<string, string>;
+      };
+      const entry = typeof bin === "string" ? bin : bin?.nextly;
+      if (name === "nextly" && entry !== undefined) return join(dir, entry);
+    }
+    const parent = dirname(dir);
+    if (parent === dir) {
+      throw new Error("no package manifest named nextly above its entry");
+    }
+    dir = parent;
+  }
+}
 
 type Dialect = "sqlite" | "postgresql" | "mysql";
 
@@ -276,7 +304,7 @@ function makeSite(scratch: string, databaseUrl: string) {
     writeConfig,
     migrationsDir: join(scratch, "src/db/migrations"),
     nextly: (...args: string[]): Promise<Outcome> =>
-      run(join(playground, "node_modules/.bin/nextly"), args, {
+      run(process.execPath, [nextlyBin(), ...args], {
         cwd: scratch,
         env: environment,
         timeout: 150_000,
@@ -322,8 +350,9 @@ describe.runIf(dialects().includes("sqlite"))(
         );
         const shipped = readdirSync(join(copy, "migrations")).sort();
         const outcome = await run(
-          join(playground, "node_modules/.bin/nextly"),
+          process.execPath,
           [
+            nextlyBin(),
             "migrate:create",
             "--plugin",
             "./reading-lists-fixture/plugin.ts",

@@ -24,10 +24,14 @@
  * table on a live database, and `field-group-route-delegates.test.ts` proves the route reaches it
  * instead of writing the row itself. Neither half stands alone.
  *
+ * Every case runs as a development server does, where a create builds its table at once. Anywhere
+ * else every transport writes the migration, records the field group pending and builds nothing,
+ * for the deploy's `nextly migrate` to apply; `field-group-and-single-saves` holds that case.
+ *
  * Self-skips per dialect on the standard rule: SQLite always runs, the servers run when their URL
  * is set, and each dialect gets its own throwaway database.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import {
@@ -38,9 +42,18 @@ import {
 
 let current: TestNextly | undefined;
 
+// A field group's Builder create builds its table in development only; anywhere else it writes the
+// migration for the deploy's `nextly migrate` and records the group pending, with no table. These
+// cases judge the table a create leaves, so they run as a development server does. `vi.stubEnv`
+// rather than assigning: `NODE_ENV` is declared read-only.
+beforeEach(() => {
+  vi.stubEnv("NODE_ENV", "development");
+});
+
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  vi.unstubAllEnvs();
 });
 
 /** The registry's own view of a slug, or undefined when it holds none. */

@@ -7,8 +7,10 @@
  *
  * With `move: true` it is one tick of a move instead (`move-pages.ts`): the
  * first starts it, the next ones carry the `token` and the cursor (`after`)
- * the last one answered, and `stop` ends it. A move's page saves are made as
- * the caller too, so a page they may not edit is left, and reported.
+ * the last one answered, and `stop` ends it. A move's page writes are made as
+ * the caller too: its field rewrites through the plugin's own collection
+ * service, so each page's history names the Page Builder beside them, and a
+ * page they may not edit is left, and reported.
  *
  * ## Who may call it
  *
@@ -24,6 +26,7 @@ import {
   getCachedNextly,
   NextlyError,
   respondMutation,
+  type FieldRewriteRequest,
   type PluginRouteContext,
   type PluginRoutePermissionScope,
 } from "@nextlyhq/plugin-sdk";
@@ -34,7 +37,7 @@ import { PAGES_SLUG } from "../collections/pages";
 import type { ActionBy } from "../component-actions-contract";
 import { actionByOf } from "../composition-route-kit";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "../default-layout/settings-single";
-import { readingAsUser } from "../library-route";
+import { asServiceCaller, readingAsUser } from "../library-route";
 
 import { movePages } from "./move-pages";
 import { removeLayout, type RemoveResult } from "./remove-layout";
@@ -60,6 +63,9 @@ const RemoveBody = z.union([
     // A page id, as the previous tick answered it.
     after: z.string().min(1).max(255).optional(),
     stop: z.literal(true).optional(),
+    // The pages earlier ticks named as not moved, as their answers gave them;
+    // no more than one scan reads.
+    refused: z.array(z.string().min(1).max(255)).max(2000).optional(),
   }),
 ]);
 
@@ -123,6 +129,10 @@ async function handle(
     newToken: () => globalThis.crypto.randomUUID(),
     mayRemove: (action: RemovalAction) =>
       holdsRemovalGrants(ctx.caller, action, slugs.layouts),
+    // As the caller, with an API key's own scope, through the service bound
+    // to this plugin, which names it in each rewritten page's history.
+    rewrite: (request: FieldRewriteRequest) =>
+      ctx.services.collections.rewriteField(request, asServiceCaller(ctx)),
   };
   const layoutId = ctx.params.id ?? "";
   const answer =
@@ -133,6 +143,7 @@ async function handle(
           ...(body.token === undefined ? {} : { token: body.token }),
           ...(body.after === undefined ? {} : { after: body.after }),
           ...(body.stop === undefined ? {} : { stop: body.stop }),
+          ...(body.refused === undefined ? {} : { refused: body.refused }),
         })
       : await removeLayout(deps, {
           layoutId,

@@ -23,12 +23,10 @@ import {
   type RemotePatternInput,
   type NodeStyles,
   type StyleCompileContext,
-  type SpacingMode,
   type StyleValue,
   type StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
 
-import { blockBaseUnder } from "./blocks/classic-spacing";
 import { withTypographyDefaults } from "./blocks/typography-defaults";
 import { prepareDocumentForRead } from "./prepare-document";
 import type {
@@ -215,20 +213,19 @@ export function blockBasesFor(
   document: BlockDocument,
   blocks: BlockResolver,
   stated?: Readonly<Record<string, NodeStyles>>,
-  spacingMode?: SpacingMode,
   /**
-   * The site's edits to its block types' own looks, laid over each base the
-   * model chose, so the order is: the base (frozen under Classic), then the
-   * site's edit of it, then a look, a shared style and the block's own values.
+   * The site's edits to its block types' own looks, laid over each base, so
+   * the order is: the definition's base, then the site's edit of it, then a
+   * look, a shared style and the block's own values.
    */
   siteDefaults?: Readonly<Record<string, NodeStyles>>
 ): Record<string, NodeStyles> {
-  // A derived default follows the spacing model; a stated record is the
-  // caller's own choice and is narrowed as it is.
+  // A derived default is the definition's own, a host's replacement included;
+  // a stated record is the caller's own choice and is narrowed as it is.
   const bases = perUsedType(
     document,
     blocks,
-    definition => blockBaseUnder(definition, spacingMode),
+    definition => definition.baseStyles,
     stated
   );
   if (siteDefaults === undefined) return bases;
@@ -470,7 +467,6 @@ function compileContextFor(
       storedDocument ?? document,
       blocks,
       styleContext.blockBases,
-      styleContext.spacingMode,
       // The site's edits to its blocks' own looks, which its class library
       // holds as default looks: read here, so every page compiled from that
       // library, canvas or published, lays them over the same bases.
@@ -481,16 +477,12 @@ function compileContextFor(
       blocks,
       styleContext.blockParts
     ),
-    // None under the classic model, so the identity carries no gap the
-    // compile would not write.
-    childGaps:
-      styleContext.spacingMode === "classic"
-        ? {}
-        : childGapsFor(
-            storedDocument ?? document,
-            blocks,
-            styleContext.childGaps
-          ),
+    // Every container writes its gap, so the identity carries each one.
+    childGaps: childGapsFor(
+      storedDocument ?? document,
+      blocks,
+      styleContext.childGaps
+    ),
     drawsNothing,
   });
 }

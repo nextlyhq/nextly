@@ -189,6 +189,12 @@ export default defineFieldGroup({
 });
 ```
 
+## Groups with no name
+
+A `group` with no `name` only lays a field group's form out. The data fields inside it are stored on the instance's own row, as columns of the field group's table, exactly as the fields beside the group are. A field group placed inside such a group keeps its instances in its own table, as one placed beside it does.
+
+Field groups made with an earlier Nextly release stored nothing for a data field inside a group with no name, and their tables have no column for it. The next save of the field group in the Visual Schema Builder, or the next `nextly migrate:create`, writes a migration that adds each missing column as a nullable column, and changes no column that already exists. When the table was made before Builder saves wrote migrations, the save's review lists each added column for you to confirm. Until that migration is applied, the field group is read and written as before, and the values of those fields are not stored. Reconcile keeps those fields in the definition and lists each column still to be added.
+
 ## Field group nesting
 
 Field groups can embed other field groups using the `component` field type, at any depth. There is no depth limit.

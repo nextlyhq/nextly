@@ -41,6 +41,7 @@ const writePlugin = definePlugin({
   contributes: {
     routes: [
       {
+        siteWide: false,
         method: "POST",
         path: "/write",
         // Composes `{ as: "user", user }` and NOTHING else — the shape every
@@ -64,6 +65,7 @@ const writePlugin = definePlugin({
         },
       },
       {
+        siteWide: false,
         method: "POST",
         path: "/read",
         // Same shape, an operation the key DOES hold. Separates "held to its

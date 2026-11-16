@@ -34,8 +34,7 @@ import { getTableName } from "../../collections/services/collection-utils";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import {
   fieldGroupRowMoves,
-  keepsFieldGroupRows,
-  removedAndAddedFieldGroups,
+  fieldGroupRenamePairs,
   removedAndAddedFields as renameCandidates,
 } from "../../field-groups/storage/field-group-rename";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
@@ -58,6 +57,7 @@ import {
   junctionTableNameFor,
   junctionTablesOf,
   usesJunctionTable,
+  fieldsStoredOnRow,
   getColumnDescriptor,
   getSystemColumnDescriptors,
   relationshipStoresJson,
@@ -145,23 +145,26 @@ function sameJunctionColumns(a: JunctionShape, b: JunctionShape): boolean {
 }
 
 /**
- * Refuse a save that renames more than one of something whose data moves with
- * the rename. A wrong pairing migrates the wrong rows, so the author renames
- * one per save; the refusal names both sides so they can see what to split.
+ * The one rename a save holds among `pairs`, or null when it holds none. A save that renames more
+ * than one of something whose data moves with the rename is refused: a wrong pairing migrates the
+ * wrong rows, so the author renames one per save, and the refusal names both sides so they can see
+ * what to split.
  */
-function refuseAmbiguousRename(args: {
-  code: string;
-  /** Plural, for the count: "field groups". */
-  what: string;
-  /** What each rename moves: "the group's existing rows to the new field name". */
-  moves: string;
-  /** Singular, for the instruction: "field group". */
-  one: string;
-  oldOnly: FieldDefinition[];
-  newOnly: FieldDefinition[];
-}): void {
-  const { oldOnly, newOnly } = args;
-  if (oldOnly.length <= 1 && newOnly.length <= 1) return;
+function onlyRename(
+  pairs: Array<{ from: FieldDefinition; to: FieldDefinition }>,
+  args: {
+    code: string;
+    /** Plural, for the count: "field groups". */
+    what: string;
+    /** What each rename moves: "the group's existing rows to the new field name". */
+    moves: string;
+    /** Singular, for the instruction: "field group". */
+    one: string;
+  }
+): { from: FieldDefinition; to: FieldDefinition } | null {
+  if (pairs.length <= 1) return pairs[0] ?? null;
+  const oldOnly = [...new Set(pairs.map(p => p.from))];
+  const newOnly = [...new Set(pairs.map(p => p.to))];
   throw NextlyError.validation({
     errors: [
       {
@@ -1312,8 +1315,12 @@ export class DynamicCollectionSchemaService {
       targetTables?: CollectionTables;
     }
   ): string {
+    // The fields whose columns sit on this row: those inside a group with no name are stored where
+    // it sits, as the runtime table and the desired schema read them (`fieldsStoredOnRow`). Handed
+    // the group itself, the column naming below read its missing name and stopped.
+    const stored = fieldsStoredOnRow(fields);
     // Refuse an unusable decimal shape before any of it becomes SQL.
-    this.assertDecimalDimensions(fields);
+    this.assertDecimalDimensions(stored);
     // A Single's field defaults are the application's (`fieldDefaultsAreColumns`).
     const columnDefaults = this.fieldDefaultsAreColumns(_options?.isSingle);
 
@@ -1322,12 +1329,12 @@ export class DynamicCollectionSchemaService {
     const junctionTables: string[] = [];
 
     // i18n: drop translatable fields from the main table when localized (they go to
-    // the companion). Uses the shared classifier so main/companion agree on the split.
-    const mainFields = _options?.localized
-      ? fields.filter(
-          f => !resolveLocalizedFieldNames([f], true).includes(f.name)
-        )
-      : fields;
+    // the companion). Uses the shared classifier so main/companion agree on the split, over the
+    // declared list as the companion reads it: a field inside a group with no name stays here.
+    const translated = _options?.localized
+      ? new Set(resolveLocalizedFieldNames(fields, true))
+      : new Set<string>();
+    const mainFields = stored.filter(f => !translated.has(f.name));
 
     const columns = mainFields
       .map(f => {
@@ -1404,7 +1411,7 @@ export class DynamicCollectionSchemaService {
     // `Title` means the same column, and comparing the raw name would inject the system one beside
     // it — two columns of the same name, which no dialect will create.
     const declaresColumn = (column: string) =>
-      fields.some(
+      stored.some(
         f =>
           typeof f.name === "string" &&
           toSnakeCase(f.name) === column &&
@@ -1575,8 +1582,8 @@ ${allColumnDefs.join(",\n")}
    */
   generateAlterTableMigration(
     tableName: string,
-    oldFields: FieldDefinition[],
-    newFields: FieldDefinition[],
+    declaredOldFields: FieldDefinition[],
+    declaredNewFields: FieldDefinition[],
     options?: {
       /**
        * Previous Draft/Published flag — pass `existing.status === true` so
@@ -1711,6 +1718,11 @@ ${allColumnDefs.join(",\n")}
       isSingle?: boolean;
     }
   ): string {
+    // The fields whose columns sit on the row before and after, those inside a group with no name
+    // among them, as the creating SQL reads them (`fieldsStoredOnRow`): the group has no name to
+    // pair or to name a column by, and the fields it holds are columns that stay where they are.
+    const oldFields = fieldsStoredOnRow(declaredOldFields);
+    const newFields = fieldsStoredOnRow(declaredNewFields);
     // The added columns become SQL here too, so the same refusal applies.
     this.assertDecimalDimensions(newFields);
     const columnDefaults = this.fieldDefaultsAreColumns(options?.isSingle);
@@ -2407,8 +2419,9 @@ ${allColumnDefs.join(",\n")}
     statements.push(
       ...this.junctionLifecycle(
         tableName,
-        options?.junctionFields?.old ?? oldFields,
-        options?.junctionFields?.new ?? newFields,
+        // The declared lists, as the creating SQL reads its junctions from the declared fields.
+        options?.junctionFields?.old ?? declaredOldFields,
+        options?.junctionFields?.new ?? declaredNewFields,
         options?.targetTables
       )
     );
@@ -2741,7 +2754,14 @@ ${allColumnDefs.join(",\n")}
     oldFields: FieldDefinition[],
     newFields: FieldDefinition[]
   ): { from: FieldDefinition; to: FieldDefinition } | null {
-    const { oldOnly, newOnly } = renameCandidates(oldFields, newFields);
+    // Paired over the fields whose columns sit on the row (`fieldsStoredOnRow`), as the alter
+    // reads them: a field renamed inside a group with no name renames a column of this row, and
+    // every caller (the alter, the save's preconditions, the retry after a part-made rename) asks
+    // here, so they agree on it. Over the declared lists the unnamed group matched itself and hid it.
+    const { oldOnly, newOnly } = renameCandidates(
+      fieldsStoredOnRow(oldFields),
+      fieldsStoredOnRow(newFields)
+    );
 
     if (oldOnly.length === 0 || newOnly.length === 0) {
       // Pure add or pure drop — not a rename candidate.
@@ -2823,18 +2843,12 @@ ${allColumnDefs.join(",\n")}
         .filter(to => this.sameRelationTarget(from, to))
         .map(to => ({ from, to }))
     );
-    if (pairs.length === 0) return null;
-    if (pairs.length > 1) {
-      refuseAmbiguousRename({
-        code: "MANY_TO_MANY_RENAME_AMBIGUOUS",
-        what: "many-to-many fields",
-        moves: "the field's links to the new name",
-        one: "many-to-many field",
-        oldOnly: [...new Set(pairs.map(p => p.from))],
-        newOnly: [...new Set(pairs.map(p => p.to))],
-      });
-    }
-    return pairs[0];
+    return onlyRename(pairs, {
+      code: "MANY_TO_MANY_RENAME_AMBIGUOUS",
+      what: "many-to-many fields",
+      moves: "the field's links to the new name",
+      one: "many-to-many field",
+    });
   }
 
   /**
@@ -2862,25 +2876,14 @@ ${allColumnDefs.join(",\n")}
     oldFields: FieldDefinition[],
     newFields: FieldDefinition[]
   ): { from: FieldDefinition; to: FieldDefinition } | null {
-    const { oldOnly, newOnly } = removedAndAddedFieldGroups(
-      oldFields,
-      newFields
-    );
-    if (oldOnly.length === 0 || newOnly.length === 0) return null;
-    refuseAmbiguousRename({
+    // The pairs that may be one field renamed (`fieldGroupRenamePairs`), which `migrate:create`
+    // asks about too: incompatible combinations never count toward the refusal below.
+    return onlyRename(fieldGroupRenamePairs(oldFields, newFields), {
       code: "FIELD_GROUP_RENAME_AMBIGUOUS",
       what: "field groups",
       moves: "the group's existing rows to the new field name",
       one: "field group",
-      oldOnly,
-      newOnly,
     });
-
-    const from = oldOnly[0];
-    const to = newOnly[0];
-    // The same rows under either name (`keepsFieldGroupRows`), which `migrate:create` asks too.
-    if (!keepsFieldGroupRows(from, to)) return null;
-    return { from, to };
   }
 
   /**
@@ -2973,7 +2976,9 @@ ${allColumnDefs.join(",\n")}
       indexNames.add(indexNameForColumn(tableName, column));
       indexColumns.set(indexNameForColumn(tableName, column), [column]);
     }
-    for (const field of fields) {
+    // The fields whose columns sit on the row, those inside a group with no name among them
+    // (`fieldsStoredOnRow`): the creating SQL indexes and keys them as it does the rest.
+    for (const field of fieldsStoredOnRow(fields)) {
       if (!fieldProducesColumn(field)) continue;
       const column = toSnakeCase(field.name);
       // Asked through the statement builder, not through `columnIsIndexed` alone. Wanting an
@@ -3030,7 +3035,9 @@ ${allColumnDefs.join(",\n")}
    */
   plannedColumnTypes(fields: FieldDefinition[]): Map<string, string> {
     const types = new Map<string, string>();
-    for (const field of fields) {
+    // Every column of the row, those of the fields inside a group with no name among them
+    // (`fieldsStoredOnRow`), as the creating SQL makes them.
+    for (const field of fieldsStoredOnRow(fields)) {
       if (!fieldProducesColumn(field)) continue;
       types.set(toSnakeCase(field.name), this.newColumnType(field));
     }

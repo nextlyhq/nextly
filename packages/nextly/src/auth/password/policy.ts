@@ -47,6 +47,16 @@ export interface PasswordHasher {
   ) => boolean | void | string | { ok: boolean; message?: string };
   /** Optional name for the digester in error messages. */
   name?: string;
+  /**
+   * Optional: whether a stored value is one of this hasher's hashes. With it,
+   * sign-in refuses a stored value that is neither this hasher's nor core's
+   * bcrypt (a password stored as given) without asking `verify`. Without it,
+   * any non-empty stored value that is not bcrypt goes to `verify`. Bcrypt
+   * values core stored before the hasher was configured are verified with
+   * bcrypt and stored again with `hash` at the next sign-in, unless this
+   * answers that the value is the hasher's own.
+   */
+  isHash?: (stored: string) => boolean;
 }
 
 export const DEFAULT_MIN_PASSWORD_LENGTH = 8;
@@ -72,6 +82,29 @@ export function setMinPasswordLength(length: number): void {
 
 export function resetPasswordPolicy(): void {
   activeMinPasswordLength = DEFAULT_MIN_PASSWORD_LENGTH;
+}
+
+/**
+ * The part of the account password rule a browser can apply before it
+ * submits: the minimum length, and the byte limit of the digester that will
+ * hash the password, or `null` where that digester sets none a browser can
+ * check (`reach: "unbounded"`, or no numeric reach beside its own
+ * `validate`). The server still judges every write in full.
+ */
+export interface ClientPasswordRule {
+  minLength: number;
+  maxBytes: number | null;
+}
+
+/**
+ * The browser's part of the rule for passwords `hasher` hashes, or for core's
+ * bcrypt without one. Derived from the same values the server judges by, so
+ * the admin's forms cannot drift from it.
+ */
+export function clientPasswordRule(hasher?: DigesterReach): ClientPasswordRule {
+  let maxBytes: number | null = DEFAULT_DIGESTER_REACH_BYTES;
+  if (hasher) maxBytes = typeof hasher.reach === "number" ? hasher.reach : null;
+  return { minLength: getMinPasswordLength(), maxBytes };
 }
 
 /**

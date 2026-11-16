@@ -30,6 +30,7 @@ const registered = {
   "@/plugins/widget-kit-fixture/admin#UnlabelledControlCard": _p3.UnlabelledControlCard, // widget "widget-kit-fixture/unlabelled-control" of plugin "widget-kit-fixture"
   "@nextlyhq/plugin-form-builder/admin#FormBuilderView": _p4.FormBuilderView,
   "@nextlyhq/plugin-form-builder/admin#NewSubmissionsCard": _p4.NewSubmissionsCard, // widget "form-builder/new-submissions" of plugin "@nextlyhq/plugin-form-builder"
+  "@nextlyhq/plugin-form-builder/admin#SubmissionPage": _p4.SubmissionPage,
   "@nextlyhq/plugin-form-builder/admin#SubmissionsView": _p4.SubmissionsView,
   "@nextlyhq/plugin-page-builder/admin#BindingsToFixCard": _p5.BindingsToFixCard, // widget "page-builder/bindings-to-fix" of plugin "@nextlyhq/plugin-page-builder"
   "@nextlyhq/plugin-page-builder/admin#BindingsToFixPage": _p5.BindingsToFixPage,

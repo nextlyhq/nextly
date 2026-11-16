@@ -1,6 +1,7 @@
 /**
- * A page's social card, complete: the site's name, the page's language, and
- * its image at an absolute address with its size and alt text.
+ * A page's social card, complete: the site's name, the page's language, the
+ * site's X account, and its image at an absolute address with its size and
+ * alt text.
  *
  * The answer carries the image as the media library stores it, which is
  * often a path from the site's root (`/uploads/cover.jpg`). A network reading
@@ -35,6 +36,8 @@ export interface SocialCardRules {
    * tag such as `en-US`. A page the route read in a language states that one.
    */
   language?: string;
+  /** The site's X account, as `@handle`: the card's `twitter:site`. */
+  xAccount?: string;
 }
 
 /** Where a social card reads its rules from, in a language. */
@@ -110,8 +113,8 @@ function defined<T extends Record<string, unknown>>(value: T): T {
 
 /**
  * `answer` with its social card complete: the image on the site's origin,
- * the site's name where the answer has none, and the page's language, the
- * one it was read in or else the site's.
+ * the site's name and X account where the answer has none, and the page's
+ * language, the one it was read in or else the site's.
  */
 export function completeSocialCard(
   answer: PageMetadataAnswer,
@@ -132,6 +135,7 @@ export function completeSocialCard(
     siteName: social.siteName ?? textOf(rules.siteName),
     locale:
       social.locale ?? cardLocale(input.locale) ?? cardLocale(rules.language),
+    xAccount: social.xAccount ?? rules.xAccount,
   });
   return Object.keys(card).length === 0 ? answer : { ...answer, social: card };
 }
@@ -166,13 +170,80 @@ export interface SocialCardOptions {
    * languages.
    */
   language?: string;
+  /**
+   * The site's X (Twitter) account, stated on every page's card as
+   * `twitter:site`: its handle, with or without the `@` (`"@example"`), or
+   * its profile address (`"https://x.com/example"`). Written as `@handle`;
+   * anything else is refused when the plugin is created.
+   *
+   * @experimental Its name and shape may change before 1.0.
+   */
+  xAccount?: string;
+}
+
+/** The hosts an X profile address is on. */
+const X_HOSTS = new Set([
+  "x.com",
+  "www.x.com",
+  "mobile.x.com",
+  "twitter.com",
+  "www.twitter.com",
+  "mobile.twitter.com",
+]);
+
+/** An X handle: one to fifteen letters, digits or underscores. */
+const X_HANDLE = /^[A-Za-z0-9_]{1,15}$/;
+
+/**
+ * The handle an X account names, from its handle, with or without the `@`,
+ * or its profile address; none for anything else. A profile address's query
+ * and fragment, such as `?lang=en`, are no part of the account.
+ */
+function xHandleOf(account: string): string | undefined {
+  if (/^https?:\/\//i.test(account)) {
+    let url: URL;
+    try {
+      url = new URL(account);
+    } catch {
+      return undefined;
+    }
+    if (!X_HOSTS.has(url.hostname.toLowerCase())) return undefined;
+    const segments = url.pathname.split("/").filter(part => part !== "");
+    const [handle] = segments;
+    return segments.length === 1 &&
+      handle !== undefined &&
+      X_HANDLE.test(handle)
+      ? handle
+      : undefined;
+  }
+  const handle = account.startsWith("@") ? account.slice(1) : account;
+  return X_HANDLE.test(handle) ? handle : undefined;
+}
+
+/**
+ * `socialCard.xAccount` as the card states it, `@handle`; none where it is
+ * blank, as an unset environment variable reads.
+ *
+ * @throws NextlyError when it names no X account.
+ */
+function xAccountOf(account: string | undefined): string | undefined {
+  const given = textOf(account);
+  if (given === undefined) return undefined;
+  const handle = xHandleOf(given);
+  if (handle === undefined) {
+    throw NextlyError.invalidInput({
+      message: `seoPlugin: socialCard.xAccount ${JSON.stringify(account)} is not an X account. Give its handle, such as "@example", or its profile address, such as "https://x.com/example".`,
+    });
+  }
+  return `@${handle}`;
 }
 
 /**
  * The card's rules as the plugin's options give them: its `baseUrl` as the
  * site's origin, or else the first of the site's production addresses, the
- * name its `socialCard` names, and its language, or else the site's default
- * language. A language that is no language tag is refused when the plugin
+ * name and X account its `socialCard` names, and its language, or else the
+ * site's default language. A language that is no language tag, and an X
+ * account that is no handle or profile address, are refused when the plugin
  * is created.
  */
 export function socialCardRulesFromOptions(
@@ -185,6 +256,7 @@ export function socialCardRulesFromOptions(
       message: `seoPlugin: socialCard.language ${JSON.stringify(language)} is not a language tag, such as "en-US".`,
     });
   }
+  const xAccount = xAccountOf(options?.xAccount);
   // The production addresses are read on every page, as the canonical rule
   // reads them, so a deploy that names them needs no restart of the reader.
   return async ctx =>
@@ -192,5 +264,6 @@ export function socialCardRulesFromOptions(
       origin: baseUrl ?? productionAddressesOf(undefined)[0],
       siteName: options?.siteName,
       language: language ?? (await ctx.publicAddresses.defaultLanguage()),
+      xAccount,
     });
 }

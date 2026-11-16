@@ -6,7 +6,8 @@
 import { describe, expect, it } from "vitest";
 
 import { contentFacts } from "../content";
-import { addressShapes, brokenLinks } from "../links";
+import { linkedPageKey } from "../link-graph";
+import { addressShapes, brokenLinks, readLinks } from "../links";
 
 const MEDIA = {
   id: "m1",
@@ -139,6 +140,77 @@ const inDefaultLanguage = async (url: URL) => ({
   path: url.pathname,
 });
 
+/** A page holding an address, as the record names it. */
+const POST = { collection: "posts", id: "p1" };
+
+describe("readLinks", () => {
+  it("names each page the links reach, once, in the language each address is served in, and none outside the site", async () => {
+    const keptOf = async (url: URL) =>
+      url.pathname.startsWith("/de/")
+        ? { locale: "de", path: url.pathname.slice(3) }
+        : { locale: "en", path: url.pathname };
+    const holders = new Map([
+      ["en /blog/here", [{ collection: "posts", id: "p1" }]],
+      ["de /blog/here", [{ collection: "posts", id: "p1" }]],
+      // A page built in code holds no address in the record.
+      ["en /pricing", []],
+      ["en /", [{ collection: "single:home", id: "h1" }]],
+    ]);
+    const read = await readLinks(
+      [
+        { field: "body", url: "/blog/here" },
+        { field: "intro", url: "https://example.com/blog/here#top" },
+        { field: "body", url: "/de/blog/here" },
+        { field: "body", url: "/pricing" },
+        { field: "body", url: "/" },
+        { field: "body", url: "https://elsewhere.com/blog/here" },
+      ],
+      {
+        shapes: addressShapes([
+          { slug: "posts", publicAddress: "/blog/{slug}" },
+        ]),
+        productionAddresses: ["https://example.com"],
+        keptOf,
+        holders: async (path, locale) => holders.get(`${locale} ${path}`) ?? [],
+      }
+    );
+    expect(read.to).toEqual([
+      linkedPageKey("posts", "p1", "en"),
+      linkedPageKey("posts", "p1", "de"),
+      linkedPageKey("single:home", "h1", "en"),
+    ]);
+    expect(read.broken).toEqual([]);
+  });
+
+  it("counts a link a redirect sends into another language for the page in that language", async () => {
+    const read = await readLinks([{ field: "body", url: "/blog/old" }], {
+      shapes: addressShapes([{ slug: "posts", publicAddress: "/blog/{slug}" }]),
+      productionAddresses: [],
+      keptOf: async url => ({ locale: "en", path: url.pathname }),
+      holders: async () => [{ collection: "nx_seo_redirects", id: "r1" }],
+      pagesOf: async () => [{ collection: "posts", id: "p1", locale: "de" }],
+    });
+    expect(read.to).toEqual([linkedPageKey("posts", "p1", "de")]);
+  });
+
+  it("counts a link to an address a redirect holds for the page the redirect sends people to", async () => {
+    const redirect = { collection: "nx_seo_redirects", id: "r1" };
+    const read = await readLinks([{ field: "body", url: "/blog/old" }], {
+      shapes: addressShapes([{ slug: "posts", publicAddress: "/blog/{slug}" }]),
+      productionAddresses: [],
+      keptOf: async url => ({ locale: "en", path: url.pathname }),
+      holders: async path => (path === "/blog/old" ? [redirect] : []),
+      pagesOf: async holders =>
+        holders.flatMap(each =>
+          each.id === "r1" ? [{ collection: "posts", id: "p1" }] : [each]
+        ),
+    });
+    expect(read.to).toEqual([linkedPageKey("posts", "p1", "en")]);
+    // Held by the redirect, so not broken.
+    expect(read.broken).toEqual([]);
+  });
+});
+
 describe("brokenLinks", () => {
   const shapes = addressShapes([
     { slug: "posts", publicAddress: "/blog/{slug}" },
@@ -165,7 +237,7 @@ describe("brokenLinks", () => {
         shapes,
         productionAddresses: ["https://example.com"],
         keptOf: inDefaultLanguage,
-        isHeld: async path => held.has(path),
+        holders: async path => (held.has(path) ? [POST] : []),
       }
     );
     expect(found).toEqual([
@@ -185,9 +257,9 @@ describe("brokenLinks", () => {
         shapes,
         productionAddresses: [],
         keptOf: inDefaultLanguage,
-        isHeld: async path => {
+        holders: async path => {
           asked.push(path);
-          return false;
+          return [];
         },
       }
     );
@@ -205,7 +277,7 @@ describe("brokenLinks", () => {
         shapes,
         productionAddresses: ["https://example.com"],
         keptOf: inDefaultLanguage,
-        isHeld: async path => path === "/blog/caf%C3%A9",
+        holders: async path => (path === "/blog/caf%C3%A9" ? [POST] : []),
       }
     );
     expect(found).toEqual([]);
@@ -231,7 +303,8 @@ describe("brokenLinks", () => {
         shapes,
         productionAddresses: ["https://example.com", "https://fr.example.com"],
         keptOf,
-        isHeld: async (path, locale) => held.has(`${locale} ${path}`),
+        holders: async (path, locale) =>
+          held.has(`${locale} ${path}`) ? [POST] : [],
       }
     );
     expect(found).toEqual([
@@ -250,8 +323,8 @@ describe("brokenLinks", () => {
       shapes,
       productionAddresses: ["https://en.example.com", "https://fr.example.com"],
       keptOf,
-      isHeld: async (path: string, locale: string) =>
-        held.has(`${locale} ${path}`),
+      holders: async (path: string, locale: string) =>
+        held.has(`${locale} ${path}`) ? [POST] : [],
     };
     const link = [{ field: "body", url: "/blog/bonjour" }];
     expect(

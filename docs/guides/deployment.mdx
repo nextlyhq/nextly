@@ -117,6 +117,30 @@ Use a managed PostgreSQL service that's reachable from Vercel's IP ranges:
 
 SQLite is **not** suitable for Vercel deployments -- the file would be wiped on every cold start. See [Database](/docs/database) for adapter-specific guidance.
 
+#### Database connections on Vercel
+
+A Vercel function instance serves many requests and is suspended between them, and a suspended instance keeps the database connections it holds open. A pool sized for a long-running server, ten connections kept for thirty seconds, can then use up a small database's connection limit across a handful of instances, and new connections fail with "too many connections".
+
+So on Vercel (where `VERCEL` is set, in functions and builds) the PostgreSQL and MySQL adapters default to a small pool: at most 3 connections, none kept open, and an idle connection closed after 5 seconds. Install `@vercel/functions` in the app as well:
+
+```bash
+pnpm add @vercel/functions
+```
+
+With it installed, the adapter hands its pool to [`attachDatabasePool`](https://vercel.com/docs/functions/functions-api-reference/vercel-functions-package#attachdatabasepool), which keeps an instance alive until its idle connections have closed, rather than suspending it with them open. Without it the adapter logs one warning when it connects and relies on the short idle timeout alone.
+
+To size the pool yourself, set `DB_POOL_MAX`, `DB_POOL_MIN` or `DB_POOL_IDLE_TIMEOUT`, or pass `pool` to the adapter. Each setting replaces only its own default, so `DB_POOL_MAX=10` gives a larger pool that still closes idle connections after 5 seconds. Setting all three (`DB_POOL_MAX=10`, `DB_POOL_MIN=0`, `DB_POOL_IDLE_TIMEOUT=30000`) returns to the defaults of a long-running server, on PostgreSQL and MySQL alike.
+
+To check the budget, multiply the pool's maximum by the function instances you expect at peak, and add the build: each Next.js build worker opens its own pool while it prerenders. Keep the total under your database's connection limit, with room for migrations and your own tools.
+
+Nextly does not ship a connection pooler. When the budget does not fit, because traffic runs many instances or the plan allows few connections, put the provider's pooler in front of the database and point `DATABASE_URL` at it:
+
+- **Neon**: the pooled connection string (its host ends in `-pooler`).
+- **Supabase**: the Supavisor pooler's connection string from the project's database settings.
+- **Self-hosted PostgreSQL**: PgBouncer.
+
+A transaction-mode pooler hands each transaction whichever server connection is free, so session state does not carry from one transaction to the next. If you set the adapter's `schema`, Nextly sends `search_path` as a connection startup option; check that your pooler passes it through. See [PostgreSQL connection pool](/docs/database/postgres#connection-pool) and [MySQL connection pool](/docs/database/mysql#connection-pool).
+
 ### 6. Client addresses
 
 Set `security.trustProxy: true` in `nextly.config.ts`, so sign-in is rate limited per client and audit records carry real addresses. Vercel's edge makes this safe: see [On Vercel](#on-vercel).

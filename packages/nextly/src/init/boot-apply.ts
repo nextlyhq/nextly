@@ -99,7 +99,12 @@ export async function runBootTimeApplyIfDev(opts?: {
     // so without this a migration-created collection is addressable in metadata
     // and unqueryable. Shared with the production path, which needs the same
     // step for the same reason.
-    await reloadDynamicTables(label);
+    // At the stored version it reads first (`loadingDefinitions`), so the
+    // first follow of the version does not load them all again.
+    const { loadingDefinitions } = await import(
+      "../route-handler/schema-version"
+    );
+    await loadingDefinitions(() => reloadDynamicTables(label));
 
     // Step 2: Apply code-first schema changes
     const { reloadNextlyConfig } = await import("./reload-config");

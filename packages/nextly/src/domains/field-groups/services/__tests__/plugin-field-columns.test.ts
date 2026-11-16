@@ -44,7 +44,7 @@ describe("plugin field types on a field group", () => {
     // The SQL type, not just the name: a column mapped to text would satisfy a
     // presence check while storing the wrong thing.
     expect(sql).toMatch(
-      /"score"\s+(?:INTEGER|BIGINT|REAL|DOUBLE PRECISION|NUMERIC)/i
+      /"score"\s+(?:int4|integer|int8|bigint|float8|real|double precision|numeric)\b/i
     );
   });
 
@@ -68,7 +68,7 @@ describe("plugin field types on a field group", () => {
     );
 
     expect(sql).not.toMatch(/"score"\s+(?:NUMERIC|DECIMAL)/i);
-    expect(sql).toMatch(/"score"\s+(?:INTEGER|BIGINT)/i);
+    expect(sql).toMatch(/"score"\s+(?:int4|integer|int8|bigint)\b/i);
   });
 
   it("omits it when the type is not registered", () => {

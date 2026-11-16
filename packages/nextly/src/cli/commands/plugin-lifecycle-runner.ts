@@ -62,6 +62,10 @@ import {
   type PlannedDown,
 } from "./migrate-down";
 import {
+  PLUGIN_HOOK_HANDLER_WAIT_MS,
+  withBootedPlugins,
+} from "./plugin-hook-boot";
+import {
   previewPluginInstall,
   previewPluginInstallAll,
   previewPluginUninstall,
@@ -160,14 +164,6 @@ function pluginModules(
 ): PluginMigration[] {
   return orderedMigrations(plugin.contributes?.schema?.migrations ?? []);
 }
-
-/**
- * How long the command waits, after a plugin's `onInstall` or `onUninstall`,
- * for the event handlers it set off before shutting the runtime down: long
- * enough for a deletion's follow-up work, short enough that one handler that
- * never settles cannot hold the command open.
- */
-const LIFECYCLE_HANDLER_WAIT_MS = 30_000;
 
 /**
  * The statements a module's DOWN runs on one dialect, one per driver call —
@@ -723,20 +719,9 @@ async function connect(
    * and no hook ran — a plugin that seeds a row or registers with an external
    * service in `onInstall` got neither.
    *
-   * The hook takes a `PluginContext`, and the only thing that builds one is
-   * `registerServices` — so running it means booting the runtime, which no
-   * other CLI command does. Two things keep that proportionate:
-   *
-   * - The boot happens ONLY when this plugin actually declares the hook.
-   *   Most do not, and those installs stay exactly as cheap as before.
-   * - It reuses the adapter this command already opened, so the boot does not
-   *   make a second connection, and the teardown runs in a `finally`: an
-   *   install that fails inside a hook — or inside the boot itself — must not
-   *   leave running plugins or a registered container behind.
-   *
-   * Every plugin's `init()` runs during that boot, which is the point — the
-   * hook is documented as running against a booted context, and one booted
-   * without its siblings is not the context the plugin will live in.
+   * The boot happens ONLY when this plugin actually declares the hook, so
+   * most installs stay exactly as cheap as before; how it boots, and tears
+   * down, is `withBootedPlugins`, shared with `nextly migrate`'s `onMigrate`.
    */
   const runLifecycleHook = async (
     plugin: LifecyclePlugin,
@@ -746,135 +731,53 @@ async function connect(
   ): Promise<void> => {
     const definition = definitions.find(d => d.name === plugin.name);
     if (definition?.[hook] === undefined) return;
-
-    const {
-      registerServices,
-      getInitializedPluginContext,
-      clearServices,
-      destroyRegisteredPlugins,
-    } = await import("../../di/register");
-    const { isServicesRegistered } = await import("../../di/service-access");
-    const { buildServiceConfig } = await import(
-      "../../init/build-service-config"
-    );
-    const { getImageProcessor } = await import("../../storage/image-processor");
-    const { getHookRegistry } = await import("../../hooks/hook-registry");
     const { getEventBus } = await import("../../events/event-bus");
-
-    // A registration this command did not make is not this command's to tear
-    // down. `registerServices` refuses when one exists, and the cleanup below
-    // would otherwise destroy that owner's plugins and clear its container on
-    // the way out of the refusal.
-    if (isServicesRegistered()) {
-      throw new NextlyError({
-        code: "CONFLICT",
-        publicMessage: `Services are already registered in this process, so ${plugin.name}'s ${hook} was not run.`,
-        logContext: {
-          reason: "plugin-hook-services-registered",
-          plugin: plugin.name,
-          hook,
-        },
-      });
-    }
 
     // What the hook sets off is traced to this, and whether it all finished
     // in time decides, after the teardown, whether the command goes on.
     const cause = Symbol(`${plugin.name} ${hook}`);
-    let handlersFinished = true;
-    try {
-      // Inside the `try`, so the cleanup covers a registration that fails
-      // part way. Plugins initialize before registration finishes, so one
-      // that throws after that point leaves their `init()` work running with
-      // the registered flag never set — and a `registerServices` outside the
-      // `try` skipped the cleanup exactly then.
-      // As the lifecycle command's boot: the install-state gate would refuse
-      // the very plugin this command is installing or uninstalling.
-      await asLifecycleCommandBoot(plugin.name, () =>
-        registerServices({
-          ...buildServiceConfig({
-            // The config as the app wrote it. The boot runs every `setup`
-            // transformer and contribution fold itself; booting from the
-            // loader's `config`, which holds their result, ran each twice, so
-            // a transformer that adds a plugin or a collection added it again.
-            //
-            // Boot migrations off: the hook runs inside the command's migrate
-            // lock, which this process may take again, so a boot that
-            // migrated would apply a pending module after the uninstall had
-            // fixed which ones to undo, on every dialect.
-            config: {
-              ...appConfig,
-              db: { ...appConfig.db, runMigrationsOnBoot: false },
-            },
-            // The grants the loader read before any `setup` transformer ran.
-            pluginConsent,
-            adapter: drizzleAdapter,
-            imageProcessor: getImageProcessor(),
-            hookRegistry: getHookRegistry(),
-            logger: context.logger,
-          }),
-          // The project `--cwd` names, not the directory the CLI ran in: the
-          // start check judges the Next.js and React that app installs.
-          appRoot: projectRoot,
-        })
-      );
-      const pluginContext = getInitializedPluginContext(plugin.name);
-      if (pluginContext === undefined) {
-        // Registered, but this plugin was not among the initialized ones —
-        // it is disabled in config. Saying so beats running nothing quietly.
-        context.logger.warn(
-          `${plugin.name} is disabled in config, so ${hook} was not run.`
+    const { handlersFinished } = await withBootedPlugins(
+      {
+        appConfig,
+        pluginConsent,
+        adapter: drizzleAdapter,
+        logger: context.logger,
+        // The project `--cwd` names, not the directory the CLI ran in.
+        projectRoot,
+        // As the lifecycle command's boot: the install-state gate would
+        // refuse the very plugin this command is installing or uninstalling.
+        wrapBoot: boot => asLifecycleCommandBoot(plugin.name, boot),
+        running: {
+          name: `${plugin.name}'s ${hook}`,
+          logContext: { plugin: plugin.name, hook },
+        },
+      },
+      cause,
+      async contextOf => {
+        const pluginContext = contextOf(plugin.name);
+        if (pluginContext === undefined) {
+          // Registered, but this plugin was not among the initialized ones —
+          // it is disabled in config. Saying so beats running nothing quietly.
+          context.logger.warn(
+            `${plugin.name} is disabled in config, so ${hook} was not run.`
+          );
+          return;
+        }
+        // After the boot, which can change the schema itself, and right
+        // before the hook: what the caller reads here is what the hook
+        // started from.
+        await beforeHook?.();
+        // Branched rather than called through `definition[hook]`: the two
+        // hooks take different arguments, and a union of them accepts
+        // neither call. Run under the hook's cause, so every event it sets
+        // off, and every one their handlers emit in turn, is waited for.
+        await getEventBus().runCaused(cause, () =>
+          hook === "onInstall"
+            ? definition.onInstall?.(pluginContext)
+            : definition.onUninstall?.(pluginContext, opts)
         );
-        return;
       }
-      // After the boot, which can change the schema itself, and right before
-      // the hook: what the caller reads here is what the hook started from.
-      await beforeHook?.();
-      // Branched rather than called through `definition[hook]`: the two hooks
-      // take different arguments, and a union of them accepts neither call.
-      // Run under the hook's cause, so every event it sets off, and every one
-      // their handlers emit in turn, is waited for below.
-      await getEventBus().runCaused(cause, () =>
-        hook === "onInstall"
-          ? definition.onInstall?.(pluginContext)
-          : definition.onUninstall?.(pluginContext, opts)
-      );
-    } finally {
-      // `destroyRegisteredPlugins` + `clearServices`, NOT `shutdownServices`.
-      //
-      // Both leave the container unregistered, which is all this needs — a
-      // registered one would make the next `registerServices` in the process
-      // throw. The difference is that `shutdownServices` also DISCONNECTS the
-      // adapter, and this command is not finished with it: an install still
-      // has owner rows to record and an uninstall still has DOWN statements to
-      // run, both through a Drizzle handle bound to that pool. Reconnecting
-      // afterwards did not save it — the handle still pointed at the closed
-      // pool — and on MySQL closing the pool also releases the connection-
-      // bound migrate lock this command is holding, letting another migration
-      // in while the DOWNs run.
-      //
-      // `destroy()` still runs, through the same helper `shutdownServices`
-      // uses. Skipping it left whatever `init()` started running in a process
-      // that has finished its work, which can keep a one-shot CLI alive. Both
-      // calls are safe after a registration that failed part way: the helper
-      // destroys only the plugins that registration recorded (none, if it
-      // failed before initializing them), and `clearServices` resets whatever
-      // was registered, however much that was.
-      //
-      // First, the handlers of the events the hook set off are let finish,
-      // their own follow-up events included. Emitting is fire-and-forget, so
-      // another plugin's handler (removing what it kept about each account an
-      // uninstall reports deleted, say) is still running when the hook
-      // returns; torn down under it, that work would stop part way. Only
-      // those traced to the hook: a producer a plugin started in `init()` and
-      // stops in `destroy()` never lets the bus empty. And for a bounded
-      // time, so a handler that never settles cannot hold the command open.
-      handlersFinished = await getEventBus().settleCaused(
-        cause,
-        LIFECYCLE_HANDLER_WAIT_MS
-      );
-      await destroyRegisteredPlugins();
-      clearServices();
-    }
+    );
     // Failed after the teardown, never before it. The command goes no further
     // with work still running that the hook set off: an uninstall's DOWNs
     // would drop the tables that work was reading. Its state stays
@@ -882,7 +785,7 @@ async function connect(
     if (!handlersFinished) {
       throw new NextlyError({
         code: "CONFLICT",
-        publicMessage: `Event handlers that ${plugin.name}'s ${hook} set off were still running after ${LIFECYCLE_HANDLER_WAIT_MS / 1000}s, so the command stopped there. Run it again once what they do can finish.`,
+        publicMessage: `Event handlers that ${plugin.name}'s ${hook} set off were still running after ${PLUGIN_HOOK_HANDLER_WAIT_MS / 1000}s, so the command stopped there. Run it again once what they do can finish.`,
         logContext: {
           reason: "plugin-hook-handlers-running",
           plugin: plugin.name,

@@ -117,6 +117,7 @@ import {
   runFieldHooks,
   type VisitorGrantsLoader,
 } from "../../../shared/lib/field-level-registry";
+import { applyFieldSelection } from "../../../shared/lib/field-selection";
 import {
   assertFieldGroupPathsFilterable,
   assertFilterableFields,
@@ -3069,7 +3070,9 @@ export class CollectionQueryService extends BaseService {
 
     // (6) Last of the sanitizing steps.
     if (params.select && Object.keys(params.select).length > 0) {
-      finalData = this.applyFieldSelectionToArray(finalData, params.select);
+      // The one meaning of `select`, shared with a Single's read.
+      const select = params.select;
+      finalData = finalData.map(entry => applyFieldSelection(entry, select));
     }
 
     if (params.richTextFormat && params.richTextFormat !== "json") {
@@ -6069,194 +6072,5 @@ export class CollectionQueryService extends BaseService {
     slugs: Iterable<string>
   ): Promise<Map<string, string>> {
     return componentTableNamesFor(slugs, this.filterSources());
-  }
-
-  /**
-   * Apply field selection to filter entry data.
-   *
-   * Filters an entry object to only include fields specified in the select parameter.
-   * The `id` field is always included regardless of selection.
-   * Supports nested field selection using dot notation (e.g., "author.name").
-   *
-   * @param entry - The entry object to filter
-   * @param select - Object with field names as keys and boolean values (true = include)
-   * @returns Filtered entry with only selected fields
-   *
-   * @example
-   * ```typescript
-   * const entry = { id: '1', title: 'Hello', content: 'World', author: { id: '2', name: 'John' } };
-   * const select = { title: true, 'author.name': true };
-   * const result = applyFieldSelection(entry, select);
-   * // Result: { id: '1', title: 'Hello', author: { name: 'John' } }
-   * ```
-   */
-  private applyFieldSelection(
-    entry: Record<string, unknown>,
-    select: Record<string, boolean>
-  ): Record<string, unknown> {
-    // Get list of fields to include (where value is true)
-    const selectedFields = Object.entries(select)
-      .filter(([, include]) => include)
-      .map(([field]) => field);
-
-    // If no fields selected, return entry as-is
-    if (selectedFields.length === 0) {
-      return entry;
-    }
-
-    // Build result with only selected fields
-    const result: Record<string, unknown> = {};
-
-    // Always include id
-    if (entry.id !== undefined) {
-      result.id = entry.id;
-    }
-
-    // Always include the system timestamps, for consistency across responses. Taken from the
-    // shared list rather than named one by one: this ran BEFORE camelCase conversion and knew
-    // only the original two, so a selected read dropped the first-publication marker even when
-    // the caller asked for it by name.
-    for (const key of SYSTEM_TIMESTAMP_KEYS) {
-      if (entry[key] !== undefined) {
-        result[key] = entry[key];
-      }
-    }
-
-    for (const fieldPath of selectedFields) {
-      if (fieldPath === "id") {
-        // Already handled above
-        continue;
-      }
-
-      if (fieldPath.includes(".")) {
-        // Handle nested field selection (e.g., "author.name")
-        const [parentField, ...childParts] = fieldPath.split(".");
-        const childPath = childParts.join(".");
-
-        if (entry[parentField] !== undefined && entry[parentField] !== null) {
-          const parentValue = entry[parentField];
-
-          // Handle array of objects (e.g., hasMany relationships)
-          if (Array.isArray(parentValue)) {
-            if (!result[parentField]) {
-              result[parentField] = parentValue.map(() => ({}));
-            }
-            parentValue.forEach((item, index) => {
-              if (typeof item === "object" && item !== null) {
-                const itemRecord = item as Record<string, unknown>;
-                const resultArray = result[parentField] as Record<
-                  string,
-                  unknown
-                >[];
-                // Always include id in nested objects
-                if (itemRecord.id !== undefined) {
-                  resultArray[index].id = itemRecord.id;
-                }
-                // Get nested value using child path
-                const nestedValue = this.getNestedValue(itemRecord, childPath);
-                if (nestedValue !== undefined) {
-                  this.setNestedValue(
-                    resultArray[index],
-                    childPath,
-                    nestedValue
-                  );
-                }
-              }
-            });
-          }
-          // Handle single object (e.g., hasOne relationship)
-          else if (typeof parentValue === "object") {
-            const parentRecord = parentValue as Record<string, unknown>;
-            if (!result[parentField]) {
-              result[parentField] = {};
-              // Always include id in nested objects
-              if (parentRecord.id !== undefined) {
-                (result[parentField] as Record<string, unknown>).id =
-                  parentRecord.id;
-              }
-            }
-            const nestedValue = this.getNestedValue(parentRecord, childPath);
-            if (nestedValue !== undefined) {
-              this.setNestedValue(
-                result[parentField] as Record<string, unknown>,
-                childPath,
-                nestedValue
-              );
-            }
-          }
-        }
-      } else {
-        // Simple field selection
-        if (entry[fieldPath] !== undefined) {
-          result[fieldPath] = entry[fieldPath];
-        }
-      }
-    }
-
-    return result;
-  }
-
-  /**
-   * Get a nested value from an object using dot notation path.
-   *
-   * @param obj - Source object
-   * @param path - Dot-separated path (e.g., "author.name")
-   * @returns The nested value or undefined
-   */
-  private getNestedValue(obj: Record<string, unknown>, path: string): unknown {
-    const parts = path.split(".");
-    let current: unknown = obj;
-
-    for (const part of parts) {
-      if (current === null || current === undefined) {
-        return undefined;
-      }
-      if (typeof current !== "object") {
-        return undefined;
-      }
-      current = (current as Record<string, unknown>)[part];
-    }
-
-    return current;
-  }
-
-  /**
-   * Set a nested value in an object using dot notation path.
-   *
-   * @param obj - Target object to modify
-   * @param path - Dot-separated path (e.g., "author.name")
-   * @param value - Value to set
-   */
-  private setNestedValue(
-    obj: Record<string, unknown>,
-    path: string,
-    value: unknown
-  ): void {
-    const parts = path.split(".");
-    let current = obj;
-
-    for (let i = 0; i < parts.length - 1; i++) {
-      const part = parts[i];
-      if (current[part] === undefined || current[part] === null) {
-        current[part] = {};
-      }
-      current = current[part] as Record<string, unknown>;
-    }
-
-    current[parts[parts.length - 1]] = value;
-  }
-
-  /**
-   * Apply field selection to an array of entries.
-   *
-   * @param entries - Array of entry objects
-   * @param select - Object with field names as keys and boolean values
-   * @returns Array of filtered entries
-   */
-  private applyFieldSelectionToArray(
-    entries: Record<string, unknown>[],
-    select: Record<string, boolean>
-  ): Record<string, unknown>[] {
-    return entries.map(entry => this.applyFieldSelection(entry, select));
   }
 }
