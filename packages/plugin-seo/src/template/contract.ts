@@ -37,6 +37,13 @@ export interface TemplateContext {
   typePlural: string;
   /** The variables a rule may name: each field of the type it can read. */
   fields: PatternField[];
+  /**
+   * The type's title pattern, else the site's default one, as SEO settings
+   * hold it (`{Title} | {Site name}`); absent where neither sets one. It is
+   * what gives the title of every page the design draws: a design states no
+   * title of its own.
+   */
+  titlePattern?: string;
   /** The type's image fields, which a share image may be taken from. */
   imageFields: { name: string; label: string }[];
   /** Published entries the reader may read, newest first, to preview with. */

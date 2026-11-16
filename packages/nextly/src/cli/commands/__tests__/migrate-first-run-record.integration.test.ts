@@ -330,11 +330,18 @@ describe.each(getConfiguredTestDialects())(
       writeFileSync(path, JSON.stringify(snapshot, null, 2));
     }
 
-    /** `nextly migrate`; returns the error it failed with, if it did, and what it said. */
+    /**
+     * `nextly migrate`; returns the error it failed with, if it did, what it
+     * said, and a refusal's lines (its `why`), where the error carries them.
+     */
     async function migrateRun(
       cfg: unknown,
       stopAt?: string
-    ): Promise<{ failure: string | undefined; said: string[] }> {
+    ): Promise<{
+      failure: string | undefined;
+      why?: string;
+      said: string[];
+    }> {
       loaded.config = cfg;
       tick();
       const { context, said } = command(stopAt);
@@ -345,7 +352,12 @@ describe.each(getConfiguredTestDialects())(
         const failure = NextlyError.is(error)
           ? error.publicMessage
           : String((error as Error).message);
-        return { failure, said };
+        const { why } = error as { why?: unknown };
+        return {
+          failure,
+          ...(typeof why === "string" ? { why } : {}),
+          said,
+        };
       }
     }
 
@@ -624,7 +636,7 @@ describe.each(getConfiguredTestDialects())(
         // The release that set the preset grants, recorded in the same commit.
         expect(after.presetRelease).toBe(true);
         expect(said).toContain(
-          "First run on this release: 0 registry rows written from the configuration (0 declared, the rest already matched), and kept with the database's registry record as its baseline. From now on the registry rows come from the migrations."
+          "First run on this release: the site's current settings and permissions are now recorded in the database (0 registry rows written from the configuration, 0 declared, the rest already matched), but in no migration yet. The next `nextly migrate:create` writes the migration that captures them."
         );
       }, 180_000);
 
@@ -684,12 +696,14 @@ describe.each(getConfiguredTestDialects())(
           );
         });
         expect(said).toContain(
-          "First run on this release: 1 registry row written from the configuration (1 declared, the rest already matched), and kept with the database's registry record as its baseline. From now on the registry rows come from the migrations."
+          "First run on this release: the site's current settings and permissions are now recorded in the database (1 registry row written from the configuration, 1 declared, the rest already matched), but in no migration yet. The next `nextly migrate:create` writes the migration that captures them."
         );
 
         // With the record, a configuration that differs changes no row until
-        // a migration records it.
-        await migrate(config(["extra"]));
+        // a migration records it: the run is refused, naming the change.
+        const ahead = await migrateRun(config(["extra"]));
+        expect(ahead.failure, ahead.said.join("\n")).toBeDefined();
+        expect(ahead.why).toMatch(/^\+ add_column dc_fr_posts\.extra \(/m);
         await on(url, async adapter => {
           expect(await rowFields(adapter)).toEqual([
             "slug",
@@ -797,10 +811,20 @@ describe.each(getConfiguredTestDialects())(
           await addUndeclaredGrant(adapter);
         });
 
-        await migrate(config(["extra"]));
+        // A configuration ahead of that snapshot is refused before the first
+        // run's bookkeeping, naming the change, with nothing written.
+        const ahead = await migrateRun(config(["extra"]));
+        expect(ahead.failure, ahead.said.join("\n")).toBeDefined();
+        expect(ahead.why).toMatch(/^\+ add_column dc_fr_posts\.extra \(/m);
+        await on(url, async adapter => {
+          expect(await recordOf(adapter)).toBeUndefined();
+          expect(await rowFields(adapter)).toEqual(["title"]);
+        });
+
+        await migrate(config());
 
         await on(url, async adapter => {
-          // From the snapshot, not the configuration, which has `extra`.
+          // From the snapshot, which an earlier start's row was behind.
           expect(await rowFields(adapter)).toEqual([
             "slug",
             "title",

@@ -693,3 +693,22 @@
   white-space: nowrap;
   border-width: 0;
 }
+
+/*
+ * Highlighted for a moment when an add control on the canvas asks for the
+ * panel, so the author sees where the next block goes even when the panel
+ * was already open. A stronger tint and a ring of the same accent; it fades
+ * back where the author allows motion.
+ */
+.nx-insert-panel__placement[data-flash] {
+  background: color-mix(in oklch, var(--nx-primary) 22%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--nx-primary) 45%, transparent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .nx-insert-panel__placement {
+    transition:
+      background-color 400ms ease,
+      box-shadow 400ms ease;
+  }
+}
