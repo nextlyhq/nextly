@@ -22,12 +22,23 @@ import { readFileSync } from "node:fs";
 
 import * as entry from "./index";
 
-/** Every `export function` name a module declares. */
+/**
+ * Every `export function` name a module declares: its entry file and the
+ * `<module>-*` parts the entry re-exports from, since a module split into
+ * parts keeps its functions there and only re-exports them from the entry.
+ */
 function exportedFunctions(module: string): string[] {
-  const source = readFileSync(
-    new URL(`./${module}.ts`, import.meta.url),
-    "utf8"
-  );
+  const read = (file: string) =>
+    readFileSync(new URL(`./${file}.ts`, import.meta.url), "utf8");
+  const entrySource = read(module);
+  const parts = [
+    ...new Set(
+      [...entrySource.matchAll(/from "\.\/([\w-]+)"/g)]
+        .map(match => match[1]!)
+        .filter(file => file.startsWith(`${module}-`))
+    ),
+  ];
+  const source = [entrySource, ...parts.map(read)].join("\n");
   return [...source.matchAll(/^export function (\w+)/gm)].map(
     match => match[1]!
   );

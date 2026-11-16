@@ -27,6 +27,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useCurrentUserId: () => userId(),
   readPluginRoute: () => readPluginRoute(),
   writePluginRoute: vi.fn(),
+  // The schema never moves here.
+  schemaVersion: () => 1,
+  onSchemaChange: () => () => {},
 }));
 
 const {
