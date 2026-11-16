@@ -32,6 +32,7 @@ const PLAIN = "srs_plain";
 const WORDS = "srs_words";
 const HOOKED = "srs_hooked";
 const RULED = "srs_ruled";
+const PUBLISHED_WORDS = "srs_published_words";
 
 /** What each read hook and field rule was handed, by Single. */
 const seen: Record<string, unknown[]> = { [HOOKED]: [], [RULED]: [] };
@@ -135,9 +136,30 @@ async function bootLocalized(dialect: TestDialect): Promise<SingleReads> {
           text({ name: "code" }),
         ],
       }),
+      // Each language published on its own, with two shared fields.
+      defineSingle({
+        slug: PUBLISHED_WORDS,
+        localized: true,
+        status: true,
+        fields: [
+          text({ name: "headline", localized: true }),
+          text({ name: "code", localized: false }),
+          text({ name: "notes", localized: false }),
+        ],
+      }),
     ],
   });
   const nextly = reads(current);
+  for (const [locale, data] of [
+    ["en", { headline: "Hello", code: "P1", notes: "kept" }],
+    ["es", { headline: "Hola" }],
+  ] as const) {
+    await nextly.updateSingle({
+      slug: PUBLISHED_WORDS,
+      locale,
+      data: { ...data, status: "published", _overwrite: true },
+    });
+  }
   await nextly.updateSingle({
     slug: WORDS,
     locale: "en",
@@ -253,6 +275,26 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(shared.code).toBe("W1");
       expect(unasked(shared, ["code"])).toEqual([]);
+    }, 120_000);
+
+    // A public read in a language asks whether the Single is published in
+    // it, and reads no more of the Single's own table to ask than its
+    // selection does.
+    it("reads a public selection in a language while an unselected field's column is missing", async () => {
+      const nextly = await bootLocalized(dialect);
+      await execute(
+        dialect,
+        `ALTER TABLE {single_${PUBLISHED_WORDS}} DROP COLUMN {notes}`
+      );
+
+      const selected = await nextly.findSingle({
+        slug: PUBLISHED_WORDS,
+        locale: "es",
+        status: "published",
+        select: { code: true },
+      });
+      expect(selected.code).toBe("P1");
+      expect(unasked(selected, ["code"])).toEqual([]);
     }, 120_000);
 
     it("reads a selection whose fields have columns, while an unselected field's column is missing", async () => {

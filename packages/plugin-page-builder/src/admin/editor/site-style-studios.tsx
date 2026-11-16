@@ -11,9 +11,11 @@
  * This module holds the readings and is the entry for the rest, each in a
  * module of its own: the tokens studio and Variables tab
  * (`site-style-tokens-studio`), the class surface
- * (`site-style-class-surface`), the fonts panel (`site-style-fonts`), the
- * Shared styles tab (`site-style-shared-styles`) and the breakpoints writer
- * (`site-style-breakpoints`).
+ * (`site-style-class-surface`), the Shared styles tab
+ * (`site-style-shared-styles`) and the breakpoints writer
+ * (`site-style-breakpoints`). The fonts panel (`site-style-fonts`) is not
+ * among them: the editor fetches it when the Fonts tab draws it, which a
+ * re-export here would undo by loading it with the rest.
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/site-style-studios
  */
@@ -27,7 +29,6 @@ import type { SiteStyleData } from "../../site-style";
 
 export { useBreakpointWriter } from "./site-style-breakpoints";
 export { useClassSurface, type ClassSurface } from "./site-style-class-surface";
-export { FontsPanelWithUpload } from "./site-style-fonts";
 export { SharedStylesStudio } from "./site-style-shared-styles";
 export { TokensStudio, VariablesTab } from "./site-style-tokens-studio";
 // Part of this module's exported names; no importer in the package reads it.

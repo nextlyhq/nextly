@@ -17,6 +17,12 @@
  * badge on hover or focus and opens the full tag beside it on a click
  * (`canvas-region-placement` has where, and when it flips inside).
  *
+ * A region is drawn again only when what it is drawn from changes: its
+ * document, its definitions, its sheet and the canvas's shared inputs. The
+ * hover cue is the stylesheet's (`:hover`, `:focus-within`), not React state,
+ * and what its async blocks drew (a logo, a button) is kept between draws, so
+ * an insert on the page or the pointer resting on the footer never blinks it.
+ *
  * @module canvas-regions
  */
 import type {
@@ -25,6 +31,7 @@ import type {
   RegionArea,
 } from "@nextlyhq/blocks-engine";
 import {
+  createStandaloneContext,
   PageRenderer,
   type PageRendererProps,
   type PartSheet,
@@ -32,8 +39,10 @@ import {
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import { Lock } from "lucide-react";
 import {
+  memo,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   type FocusEvent,
@@ -102,11 +111,12 @@ export interface CanvasRegion {
 export const REGION_ATTRIBUTE = "data-nx-region";
 
 /**
- * How a region's mark is shown: the lock alone at rest, widened into its
- * badge while the pointer or focus is on the region, and with the tag open
- * beside it after a click, Enter or Space.
+ * How a region's mark is shown: closed, or with the tag open beside it after
+ * a click, Enter or Space. While closed, the stylesheet widens the lock into
+ * its badge when the pointer or focus is on the region: a pointer crossing
+ * the region changes no state, so it never draws the region again.
  */
-type MarkState = "rest" | "hover" | "open";
+type MarkState = "rest" | "open";
 
 /**
  * One locked region on the canvas.
@@ -162,7 +172,12 @@ export function CanvasRegionFrame({
       {...handlers.frame}
     >
       <div className="nx-canvas-region__content" inert>
-        <RegionContent region={region} rendered={rendered} sheet={sheet} />
+        <RegionContent
+          document={region.document}
+          definitions={region.definitions}
+          rendered={rendered}
+          sheet={sheet}
+        />
       </div>
       <div
         ref={mark}
@@ -192,30 +207,94 @@ export function CanvasRegionFrame({
   );
 }
 
-/** The region's own document, drawn with the canvas's inputs. */
-function RegionContent({
-  region,
-  rendered,
-  sheet,
-}: {
-  region: CanvasRegion;
+/** What a region's content is drawn from. */
+interface RegionContentProps {
+  document: BlockDocument;
+  definitions: DefinitionsById | undefined;
   rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined;
   sheet: PartSheet;
-}): JSX.Element {
+}
+
+/**
+ * The region's own document, drawn with the canvas's inputs, and drawn again
+ * only when one of them changes (`sameRegionDraw`).
+ */
+const RegionContent = memo(function RegionContent({
+  document,
+  definitions,
+  rendered,
+  sheet,
+}: RegionContentProps): JSX.Element {
   const {
     styles: _pageStyles,
     definitions: _pageDefinitions,
     ...shared
   } = rendered ?? {};
+  // One context for as long as the region is drawn, where the canvas hands
+  // none: what its async blocks drew is kept per context.
+  const ownContext = useMemo(() => createStandaloneContext(), []);
   return (
     <PageRenderer
       {...shared}
+      context={shared.context ?? ownContext}
       {...sheet}
-      document={region.document}
-      {...(region.definitions === undefined || region.definitions.size === 0
+      document={document}
+      {...(definitions === undefined || definitions.size === 0
         ? {}
-        : { definitions: region.definitions })}
+        : { definitions })}
+      // An image or a button already drawn stays drawn when the region is
+      // drawn again, rather than blinking out while it runs again. Never on
+      // a published page, which this is not.
+      keepAsyncOutputs
     />
+  );
+}, sameRegionDraw);
+
+/**
+ * Whether two draws of a region's content would draw the same: the same
+ * document and definitions, and the canvas's inputs and the part's sheet
+ * equal field by field. The canvas hands a new object for each after an edit
+ * on the page (an insert, a style), with the same values in it; the page's
+ * own styles and definitions are not the region's and are never read.
+ */
+function sameRegionDraw(
+  before: RegionContentProps,
+  after: RegionContentProps
+): boolean {
+  return (
+    before.document === after.document &&
+    before.definitions === after.definitions &&
+    sameFields(regionInputs(before.rendered), regionInputs(after.rendered)) &&
+    before.sheet.siteStyles === after.sheet.siteStyles &&
+    sameFields(before.sheet.styleContext, after.sheet.styleContext)
+  );
+}
+
+/** The canvas's inputs a region reads: all but the page's own. */
+function regionInputs(
+  rendered: RegionContentProps["rendered"]
+): object | undefined {
+  if (rendered === undefined) return undefined;
+  const { styles: _styles, definitions: _definitions, ...shared } = rendered;
+  return shared;
+}
+
+/** Whether two objects hold the same values under the same keys. */
+function sameFields(
+  before: object | undefined,
+  after: object | undefined
+): boolean {
+  if (before === after) return true;
+  if (before === undefined || after === undefined) return false;
+  const keys = Object.keys(before);
+  if (keys.length !== Object.keys(after).length) return false;
+  return keys.every(
+    key =>
+      Object.hasOwn(after, key) &&
+      Object.is(
+        (before as Record<string, unknown>)[key],
+        (after as Record<string, unknown>)[key]
+      )
   );
 }
 
@@ -249,9 +328,10 @@ function RegionTag({
 }
 
 /**
- * The region's and its lock's handlers: hover and focus widen the lock into
- * its badge, a click on the region opens the tag and one on the lock toggles
- * it, Escape closes it back onto the lock, and focus leaving closes it.
+ * The region's and its lock's handlers: a click on the region opens the tag
+ * and one on the lock toggles it, Escape closes it back onto the lock, and
+ * focus leaving closes it. Hover and focus widening the lock into its badge
+ * are the stylesheet's, so they need no handler.
  */
 function useRegionHandlers(
   setState: (next: MarkState | ((now: MarkState) => MarkState)) => void,
@@ -260,7 +340,6 @@ function useRegionHandlers(
   open: boolean
 ) {
   const rest = (): void => setState("rest");
-  const widen = (): void => setState(now => (now === "rest" ? "hover" : now));
   return {
     rest,
     frame: {
@@ -268,14 +347,9 @@ function useRegionHandlers(
         if (event.target === frame.current) lock.current?.focus();
       },
       onClick: () => setState("open"),
-      onMouseEnter: widen,
-      onMouseLeave: () =>
-        setState(now =>
-          now === "hover" && !hasFocusIn(frame.current) ? "rest" : now
-        ),
       onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => {
         if (event.key !== "Escape" || !open) return;
-        setState("hover");
+        setState("rest");
         lock.current?.focus();
       },
       onBlur: (event: FocusEvent<HTMLDivElement>) => {
@@ -285,20 +359,13 @@ function useRegionHandlers(
       },
     },
     lock: {
-      onFocus: widen,
       onClick: (event: MouseEvent<HTMLButtonElement>) => {
         // The lock toggles; the region's own click only opens.
         event.stopPropagation();
-        setState(now => (now === "open" ? "hover" : "open"));
+        setState(now => (now === "open" ? "rest" : "open"));
       },
     },
   };
-}
-
-/** Whether focus is on an element inside `root`. */
-function hasFocusIn(root: HTMLElement | null): boolean {
-  const focused = root?.ownerDocument.activeElement ?? null;
-  return root !== null && focused !== null && root.contains(focused);
 }
 
 /** Where the mark sits: which side of the page edge, and how far in. */
@@ -308,9 +375,10 @@ interface MarkPlace {
 }
 
 /**
- * The mark's place, measured whenever it changes size (a state change) and
- * whenever the page or the canvas around the frame scrolls or resizes, so a
- * mark that would leave the screen is brought back onto it.
+ * The mark's place, measured whenever it changes size (the tag opening, at
+ * once; the badge widening on hover, a frame later) and whenever the page or
+ * the canvas around the frame scrolls or resizes, so a mark that would leave
+ * the screen is brought back onto it.
  */
 function useMarkPlace(
   frame: RefObject<HTMLDivElement | null>,
@@ -351,7 +419,14 @@ function useMarkPlace(
     for (const doc of documents) {
       doc.defaultView?.addEventListener("resize", later);
     }
+    // The mark's own size, which the stylesheet changes on hover and focus
+    // without a render. Read from the mark's window, which in a frame is not
+    // this one's.
+    const Observer = mark.current?.ownerDocument.defaultView?.ResizeObserver;
+    const sized = Observer === undefined ? undefined : new Observer(later);
+    if (mark.current !== null) sized?.observe(mark.current);
     return () => {
+      sized?.disconnect();
       for (const scroller of scrollers) {
         scrollEventTarget(scroller).removeEventListener("scroll", later);
       }
