@@ -49,6 +49,8 @@ type Props = {
   storedHooks?: readonly StoredHookConfig[];
   /** The fields as last saved, where a pending delete still holds its name until the save. */
   savedFields?: readonly BuilderField[];
+  /** Whether the save judges names with Draft/Published on: as stored, or as the pending settings set it. */
+  lifecycleEnabled?: boolean;
 };
 
 export function BuilderOverlays({
@@ -61,6 +63,7 @@ export function BuilderOverlays({
   readOnly,
   storedHooks,
   savedFields,
+  lifecycleEnabled = false,
 }: Props): JSX.Element {
   const close = () => onActiveChange({ kind: "none" });
 
@@ -98,8 +101,7 @@ export function BuilderOverlays({
             if (!how.addAnother) onActiveChange({ kind: "edit", fieldId });
           }}
           savedFields={savedFields}
-          // The pending settings, which the save sends with the fields.
-          lifecycleEnabled={settings.status === true}
+          lifecycleEnabled={lifecycleEnabled}
         />
       )}
     </>
