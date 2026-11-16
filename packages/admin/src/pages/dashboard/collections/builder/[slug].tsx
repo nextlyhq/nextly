@@ -51,6 +51,7 @@ import {
   mirrorSchemaFile,
   useSchemaSave,
 } from "@admin/hooks/useSchemaSave";
+import { useUnsavedDiscard } from "@admin/hooks/useUnsavedDiscard";
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { collectionCreatePayload } from "@admin/lib/builder/create-request";
 import { collectionEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
@@ -451,19 +452,12 @@ export default function CollectionBuilderEditPage({
 
   // Discard all on an unsaved collection discards the collection itself: it
   // leaves this tab, and the editor returns to the list.
-  const pendingChanges = useMemo(
-    () =>
-      unsaved
-        ? {
-            ...pending,
-            discardLeaves: true,
-            discardAll: () => {
-              removeUnsavedEntity("collection", entitySlug);
-              navigateTo(ROUTES.BUILDER_COLLECTIONS);
-            },
-          }
-        : pending,
-    [unsaved, pending, entitySlug]
+  const pendingChanges = useUnsavedDiscard(
+    pending,
+    unsaved !== undefined,
+    "collection",
+    entitySlug,
+    ROUTES.BUILDER_COLLECTIONS
   );
 
   // ----------------------------------------------------------------

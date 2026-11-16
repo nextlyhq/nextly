@@ -51,6 +51,7 @@ import {
   mirrorSchemaFile,
   useSchemaSave,
 } from "@admin/hooks/useSchemaSave";
+import { useUnsavedDiscard } from "@admin/hooks/useUnsavedDiscard";
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { fieldGroupCreatePayload } from "@admin/lib/builder/create-request";
 import { fieldGroupEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
@@ -389,19 +390,12 @@ export default function FieldGroupBuilderEditPage({
 
   // Discard all on an unsaved field group discards the field group itself: it
   // leaves this tab, and the editor returns to the list.
-  const pendingChanges = useMemo(
-    () =>
-      unsaved
-        ? {
-            ...pending,
-            discardLeaves: true,
-            discardAll: () => {
-              removeUnsavedEntity("field-group", entitySlug);
-              navigateTo(ROUTES.BUILDER_FIELD_GROUPS);
-            },
-          }
-        : pending,
-    [unsaved, pending, entitySlug]
+  const pendingChanges = useUnsavedDiscard(
+    pending,
+    unsaved !== undefined,
+    "field-group",
+    entitySlug,
+    ROUTES.BUILDER_FIELD_GROUPS
   );
 
   // ---------------------------- Loading / error guards ----------------------

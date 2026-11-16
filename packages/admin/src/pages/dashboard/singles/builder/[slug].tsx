@@ -45,6 +45,7 @@ import {
   mirrorSchemaFile,
   useSchemaSave,
 } from "@admin/hooks/useSchemaSave";
+import { useUnsavedDiscard } from "@admin/hooks/useUnsavedDiscard";
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { singleCreatePayload } from "@admin/lib/builder/create-request";
 import { singleEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
@@ -406,19 +407,12 @@ export default function SingleBuilderEditPage({
 
   // Discard all on an unsaved Single discards the Single itself: it leaves
   // this tab, and the editor returns to the list.
-  const pendingChanges = useMemo(
-    () =>
-      unsaved
-        ? {
-            ...pending,
-            discardLeaves: true,
-            discardAll: () => {
-              removeUnsavedEntity("single", entitySlug);
-              navigateTo(ROUTES.BUILDER_SINGLES);
-            },
-          }
-        : pending,
-    [unsaved, pending, entitySlug]
+  const pendingChanges = useUnsavedDiscard(
+    pending,
+    unsaved !== undefined,
+    "single",
+    entitySlug,
+    ROUTES.BUILDER_SINGLES
   );
 
   // ---------------------------- Loading / error guards ----------------------

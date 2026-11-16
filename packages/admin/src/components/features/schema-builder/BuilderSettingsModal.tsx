@@ -165,6 +165,40 @@ function unsavedAddressNote(check: AddressCheckState): {
 }
 
 /**
+ * What the dialog does with the address, decided once: editable while the
+ * entity is created or not saved yet; the note said under it (why a saved
+ * one is fixed, what the check says of an unsaved one); and whether Save
+ * waits for the check, which it does while an unsaved address is refused or
+ * still being checked.
+ */
+function addressState(
+  mode: "create" | "edit",
+  kind: BuilderKind,
+  unsaved: boolean,
+  check: AddressCheckState,
+  usedByCount: number | undefined
+): {
+  editable: boolean;
+  note: { text: string; refused: boolean } | undefined;
+  held: boolean;
+} {
+  if (mode === "create")
+    return { editable: true, note: undefined, held: false };
+  if (!unsaved) {
+    return {
+      editable: false,
+      note: { text: fixedAddressNote(kind, usedByCount), refused: false },
+      held: false,
+    };
+  }
+  return {
+    editable: true,
+    note: unsavedAddressNote(check),
+    held: check.status === "checking" || check.status === "refused",
+  };
+}
+
+/**
  * The live check of an unsaved entity's address, drawn only for one: a saved
  * entity's address is fixed and asked about nothing. Hands its answer up.
  */
@@ -295,16 +329,13 @@ export function BuilderSettingsModal({
   const [addressCheck, setAddressCheck] = useState<AddressCheckState>({
     status: "checking",
   });
-  const addressEditable = mode === "create" || unsavedAddress !== undefined;
-  const slugNote =
-    mode === "create"
-      ? undefined
-      : unsavedAddress
-        ? unsavedAddressNote(addressCheck)
-        : { text: fixedAddressNote(config.kind, usedByCount), refused: false };
-  const addressHeld =
-    unsavedAddress !== undefined &&
-    (addressCheck.status === "checking" || addressCheck.status === "refused");
+  const address = addressState(
+    mode,
+    config.kind,
+    unsavedAddress !== undefined,
+    addressCheck,
+    usedByCount
+  );
   const [tab, setTab] = useState<"basics" | "advanced" | "hooks">("basics");
   const hookCount = storedHooks?.length ?? 0;
 
@@ -358,8 +389,8 @@ export function BuilderSettingsModal({
                 // and re-pins the baseline as though it had been written.
                 // An unsaved entity's has nothing under it yet, so it stays
                 // editable until the first save.
-                slugEditable={addressEditable}
-                slugNote={slugNote}
+                slugEditable={address.editable}
+                slugNote={address.note}
               />
             </fieldset>
           </TabsContent>
@@ -391,7 +422,7 @@ export function BuilderSettingsModal({
                 Cancel
               </Button>
               <Button
-                disabled={addressHeld}
+                disabled={address.held}
                 onClick={() => onSubmit(normalizedSettings(values))}
               >
                 {primaryLabel}
