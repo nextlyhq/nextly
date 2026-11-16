@@ -31,7 +31,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
 
-type Field = Record<string, unknown> & { name: string; type: string };
+type Field = Record<string, unknown> & { name?: string; type: string };
 
 const BODY: Field[] = [{ name: "body", type: "text" }];
 
@@ -361,7 +361,7 @@ describeEachDialect(
      * apply: the collection create road caps a name at 50 characters, while the apply asks a
      * field with no column nothing about a column's length.
      */
-    async function storedReference() {
+    async function storedReference(reference: Field = REFERENCE) {
       expect(
         await answerOf(() =>
           dispatchComponents(
@@ -376,8 +376,71 @@ describeEachDialect(
         )
       ).toBe("accepted");
       await posts(false);
-      expect(await applyToPosts([...BODY, REFERENCE])).toBe("accepted");
+      expect(await applyToPosts([...BODY, reference])).toBe("accepted");
     }
+
+    // A field-group reference keeps no column, so `status` is stored as one while drafts are off.
+    // Given a column in the save that turns drafts on, it would reach the lifecycle's own column.
+    it("refuses a stored field named status given a column in the save that turns drafts on", async () => {
+      await storedReference({
+        name: "status",
+        type: "component",
+        component: "chips",
+      });
+      const columnsBefore = await columnsOf("dc_posts");
+
+      const answer = await applyToPosts(
+        [...BODY, { name: "status", type: "text" }],
+        true
+      );
+
+      expect(answer).toEqual(ownedByLifecycle("status"));
+      expect(await columnsOf("dc_posts")).toEqual(columnsBefore);
+    });
+
+    // A group with no name only lays fields out: in a field group its fields are columns of the
+    // field group's own table, where a column's length counts as at any top level.
+    it("refuses a field group's field inside a group with no name whose column would be too long", async () => {
+      expect(
+        await answerOf(() =>
+          dispatchComponents(
+            "createComponent",
+            {},
+            {
+              slug: "card",
+              label: "Card",
+              fields: [{ name: "label", type: "text" }],
+            }
+          )
+        )
+      ).toBe("accepted");
+      const columnsBefore = await columnsOf("comp_card");
+      const { version } = await registered("dynamic_components", "card");
+
+      const answer = await answerOf(() =>
+        dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug: "card" },
+          {
+            fields: [
+              { name: "label", type: "text" },
+              { type: "group", fields: [{ name: TOO_LONG, type: "text" }] },
+            ],
+            confirmed: true,
+            schemaVersion: version,
+          }
+        )
+      );
+
+      expect(answer).toEqual([
+        expect.objectContaining({
+          code: "INVALID_FIELD_NAME",
+          path: "1.fields.0.name",
+          message: expect.stringContaining("longer than 63 characters"),
+        }),
+      ]);
+      expect(await columnsOf("comp_card")).toEqual(columnsBefore);
+    });
 
     it("refuses a stored field given a column its name is too long for, and writes nothing", async () => {
       await storedReference();
