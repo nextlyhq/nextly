@@ -5,6 +5,9 @@
  * the block actions the toolbar and menus run, the nesting rules to judge a
  * placement by, the selection's offer, and the toolbar's focus slot.
  *
+ * Each context is exported with its type written out, as the package's
+ * declaration build needs for an exported value; the values are unchanged.
+ *
  * @module block-actions-context
  */
 
@@ -86,9 +89,8 @@ export interface BlockActions {
  * `null` until a provider is above it, which {@link useBlockActionsContext}
  * turns into a thrown error rather than a silently inert toolbar.
  */
-export const BlockActionsContext = React.createContext<BlockActions | null>(
-  null
-);
+export const BlockActionsContext: React.Context<BlockActions | null> =
+  React.createContext<BlockActions | null>(null);
 
 /**
  * The nesting rules the editor is judging placements by, for surfaces below it.
@@ -102,7 +104,8 @@ export const BlockActionsContext = React.createContext<BlockActions | null>(
  * `null` means no provider, which {@link useNestingSource} answers with the
  * registry — the same default every surface here already applies.
  */
-export const NestingContext = React.createContext<NestingSource | null>(null);
+export const NestingContext: React.Context<NestingSource | null> =
+  React.createContext<NestingSource | null>(null);
 
 /**
  * The verbs for the current selection, computed once for every surface.
@@ -117,16 +120,15 @@ export const NestingContext = React.createContext<NestingSource | null>(null);
  * Published from here because this is the one place above all three that
  * already holds the editor and the rules they must agree about.
  */
-export const SelectionActionsContext =
+export const SelectionActionsContext: React.Context<SelectionOffer | null> =
   React.createContext<SelectionOffer | null>(null);
 
 export function useSelectionActionsContext(): SelectionOffer | null {
   return React.useContext(SelectionActionsContext);
 }
 
-export const ToolbarFocusContext = React.createContext<ToolbarFocusSlot | null>(
-  null
-);
+export const ToolbarFocusContext: React.Context<ToolbarFocusSlot | null> =
+  React.createContext<ToolbarFocusSlot | null>(null);
 
 /**
  * The nearest provider's toolbar focus slot, or `null` outside one: the
