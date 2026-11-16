@@ -341,6 +341,16 @@ describe("scrubbing printed text", () => {
     expect(said).not.toMatch(/pa@ss|ss\?word|word@/);
   });
 
+  it("masks a query value holding an @, which reads like the credentials' end", () => {
+    const url = "postgresql://localhost/app?sslpassword=S3cr3t@TailSecret";
+    expect(safeConnection(url)).toBe("postgresql://***");
+    const said = redactConnection(
+      `cannot reach ${url}; sslpassword=S3cr3t@TailSecret, TailSecret`,
+      url
+    );
+    expect(said).not.toMatch(/S3cr3t|TailSecret/);
+  });
+
   it("masks the whole of a URL whose @ was left out, keeping file: messages intact", () => {
     const url = "postgresql://alice:swordfish/db";
     expect(safeConnection(url)).toBe("postgresql://***");

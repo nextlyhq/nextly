@@ -27,10 +27,14 @@ function splitConnection(url: string) {
     scheme: hasAuthority ? url.slice(0, slashes) : "",
     rest,
     ...parts,
-    // An `@` after the query's start, or a host that is no `host[:port]`
-    // (`alice:swordfish` with the `@` left out), may hold credentials.
+    // An `@` after the query's start, a `?` before the first `@` (a query
+    // value holding `@` reads like a password holding `?` and `@`), or a host
+    // that is no `host[:port]` (`alice:swordfish` with the `@` left out), may
+    // hold credentials.
     ambiguous:
-      parts.atAfterQuery || (hasAuthority && !PLAIN_HOST.test(parts.host)),
+      parts.atAfterQuery ||
+      parts.queryBeforeAt ||
+      (hasAuthority && !PLAIN_HOST.test(parts.host)),
   };
 }
 
@@ -47,6 +51,7 @@ function authorityParts(rest: string) {
     hostAndPath,
     query: queryFrom < 0 ? "" : rest.slice(queryFrom + 1),
     atAfterQuery: rest.lastIndexOf("@") > authorityEnd,
+    queryBeforeAt: firstAt >= 0 && rest.slice(0, firstAt).includes("?"),
   };
 }
 
@@ -62,10 +67,16 @@ export function connectionSecrets(url: string | undefined): string[] {
   const userinfos = ambiguous
     ? [userinfo, rest.slice(0, rest.lastIndexOf("@")), host]
     : [userinfo];
+  // Read too as a query from the first `?`, whose values may hold an `@`.
+  const firstQuery = rest.indexOf("?");
+  const queries =
+    ambiguous && firstQuery >= 0
+      ? [query, rest.slice(firstQuery + 1)]
+      : [query];
   const secrets = new Set<string>([
     url,
     ...userinfos.flatMap(credentialSecrets),
-    ...querySecrets(query),
+    ...queries.flatMap(querySecrets),
   ]);
   return [...secrets]
     .filter(secret => secret.length > 0)
