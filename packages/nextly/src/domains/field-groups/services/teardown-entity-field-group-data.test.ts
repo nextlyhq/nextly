@@ -582,10 +582,12 @@ describe("countEntityComponentTree", () => {
           removed.set(table, (removed.get(table) ?? 0) + n);
           return n;
         }),
-        // The translations of the instances it reads: three for the middle level's.
-        executeQuery: vi.fn(async (sql: string) =>
-          sql.includes(translated) ? [{ n: 3 }] : [{ n: 0 }]
-        ),
+        // Raw SQL is not how a count is read: a count through it reads nothing.
+        executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
+        // The translations of the instances it reads, through Drizzle: three for the middle level's.
+        getDrizzle: () => ({
+          execute: async () => ({ rows: [{ n: 3 }] }),
+        }),
         select: vi.fn(
           async (
             table: string,

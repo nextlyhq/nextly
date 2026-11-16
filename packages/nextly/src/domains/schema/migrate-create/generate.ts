@@ -3707,9 +3707,10 @@ function provenanceOf(entry: RecordedEntitySettings): string {
  * snapshot records, by the table their recorded declaration names (its `dbName`, else its slug).
  * A declared entity's fields are the config's and the snapshot's together, so a junction whose
  * field the config just removed is still known as the entity's; and one whose recorded table
- * differs from its declared one is also known by the recorded table, which the migration drops.
+ * differs from its declared one is also known by the recorded table, which the migration drops,
+ * with the recorded fields, which then belong to that table alone.
  */
-function coveredEntitiesOf(
+export function coveredEntitiesOf(
   args: GenerateArgs,
   recorded: EntitySettingsRecord | undefined
 ): CoveredEntity[] {
@@ -3725,17 +3726,25 @@ function coveredEntitiesOf(
       const dbName = entry.settings.dbName;
       return tableOf(slug, typeof dbName === "string" ? dbName : undefined);
     };
-    const entities = declared.map(entity =>
-      coveredEntity({
+    const entities = declared.map(entity => {
+      // The recorded fields join the declared ones only under the same table: under a new one,
+      // the recorded declaration is the old table's, kept below as the entity that owns what the
+      // old table's fields name, as the registry row `nextly migrate` reads still does.
+      const entry = record?.[entity.slug];
+      const sameTable =
+        entry !== undefined &&
+        recordedTable(entity.slug, entry).toLowerCase() ===
+          entity.tableName.toLowerCase();
+      return coveredEntity({
         kind,
         slug: entity.slug,
         tableName: entity.tableName,
-        fields: [...entity.fields, ...fieldsOf(record?.[entity.slug])],
+        fields: [...entity.fields, ...(sameTable ? fieldsOf(entry) : [])],
         ...(entity.settings === undefined
           ? {}
           : { source: provenanceOf(entity.settings) }),
-      })
-    );
+      });
+    });
     for (const [slug, entry] of Object.entries(record ?? {})) {
       const table = recordedTable(slug, entry);
       const current = declared.find(entity => entity.slug === slug);

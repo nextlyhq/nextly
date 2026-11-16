@@ -30,10 +30,12 @@ import type {
   SupportedDialect,
   WhereClause,
 } from "@nextlyhq/adapter-drizzle/types";
+import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { q } from "../../i18n/migration/ddl-types";
+import { querySqlRows } from "../../schema/pipeline/classifier/count-helpers";
 import { isCompanionTable } from "../../schema/pipeline/managed-tables";
 import { readIdentifierCaseRules } from "../../schema/utils/read-identifier-case";
 import {
@@ -419,14 +421,15 @@ export async function countEntityComponentTree(args: {
       if (instanceIds.length === 0 || !(await adapter.tableExists(companion))) {
         return;
       }
-      const pg = adapter.dialect === "postgresql";
+      // Through Drizzle's tagged SQL, which quotes the names and binds the ids for the dialect.
       for (const idChunk of chunk(instanceIds, ID_CHUNK_SIZE)) {
-        const placeholders = idChunk
-          .map((_, i) => (pg ? `$${i + 1}` : "?"))
-          .join(", ");
-        const [row] = await adapter.executeQuery<{ n: unknown }>(
-          `SELECT COUNT(*) AS n FROM ${q(companion, adapter.dialect)} WHERE ${q("_parent", adapter.dialect)} IN (${placeholders})`,
-          idChunk
+        const [row] = await querySqlRows<{ n: unknown }>(
+          adapter.getDrizzle(),
+          adapter.dialect,
+          sql`SELECT COUNT(*) AS ${sql.identifier("n")} FROM ${sql.identifier(companion)} WHERE ${sql.identifier("_parent")} IN (${sql.join(
+            idChunk.map(id => sql`${id}`),
+            sql`, `
+          )})`
         );
         add(companion, Number(row?.n ?? 0));
       }

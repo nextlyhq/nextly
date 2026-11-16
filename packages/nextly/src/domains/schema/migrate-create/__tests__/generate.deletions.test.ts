@@ -8,7 +8,12 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { Deletion } from "../../migrate/data-loss-consent";
-import { generateMigration, type MinimalConfigEntity } from "../generate";
+import { entityOwners } from "../../migrate/entity-coverage";
+import {
+  coveredEntitiesOf,
+  generateMigration,
+  type MinimalConfigEntity,
+} from "../generate";
 import { computeMigrationHash } from "../snapshot-io";
 
 const NOW = new Date("2026-04-29T15:45:00.123Z");
@@ -390,5 +395,41 @@ describe("generateMigration's deletions", () => {
     expect(judged).toHaveLength(1);
     expect(result!.sqlContent).toContain("-- Deletes: table dc_posts");
     expect(await written()).toEqual(before);
+  });
+});
+
+describe("the entities a migration is planned against", () => {
+  it("keeps a junction the recorded declaration names with the recorded table, when dbName changes too", () => {
+    // `stories` moves from `dc_tales` to `dc_fables` and drops its tag links in the same change.
+    const tags = {
+      name: "tags",
+      type: "relationship",
+      options: {
+        relationType: "manyToMany",
+        target: "tags",
+        junctionTable: "dc_tales_tags",
+      },
+    };
+    const entities = coveredEntitiesOf(
+      {
+        collections: [{ slug: "stories", tableName: "dc_fables", fields: [] }],
+        singles: [],
+        components: [],
+      } as unknown as Parameters<typeof coveredEntitiesOf>[0],
+      {
+        collections: {
+          stories: {
+            source: "code",
+            settings: { slug: "stories", dbName: "tales", fields: [tags] },
+          },
+        },
+        singles: {},
+        fieldGroups: {},
+      }
+    );
+    const owners = entityOwners(entities);
+    // The old table's entity owns it alone, as the registry row `nextly migrate` reads says.
+    expect(owners.ownerOf("dc_tales_tags")?.table).toBe("dc_tales");
+    expect(owners.mainOf("dc_fables")?.slug).toBe("stories");
   });
 });
