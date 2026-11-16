@@ -103,12 +103,11 @@ import {
   clearsFirst,
   isAt,
   LIST_CONVERSION_STEPS,
-  liveStepOf,
+  liveProgressOf,
   noStepReason,
   notResumed,
   progressFinding,
   progressStepName,
-  readLiveState,
   stepName,
 } from "./resume";
 import { findingLock, type TableWaitSettings } from "./run-report";
@@ -459,45 +458,7 @@ class ApplyRun {
       return { finding, facts: { ...NO_RUN_FACTS, lock: ranOut } };
     }
     try {
-      // Planned again from the table as the conversions before it in this run left it: a plan
-      // read at the start could restate a table another column's conversion has since changed,
-      // and on SQLite rebuild it as it first stood.
-      const fresh = await this.refreshed(finding);
-      if (fresh === null) return null;
-      const freshLock = findingLock(fresh, 0);
-      if (freshLock !== null) {
-        return { finding: fresh, facts: { ...NO_RUN_FACTS, lock: freshLock } };
-      }
-      let clearing: Clearing | null = null;
-      if (clearable(fresh)) {
-        const decided = this.consentFor(fresh);
-        if (!("given" in decided)) {
-          return {
-            finding: decided.finding,
-            facts: { ...NO_RUN_FACTS, ...decided.facts },
-          };
-        }
-        clearing = decided;
-      } else if (!convertible(fresh)) {
-        return { finding: fresh, facts: NO_RUN_FACTS };
-      }
-      // Made only once a column is still to convert.
-      const ready = await this.ensureRepairsTable(fresh);
-      if (ready !== null) {
-        return { finding: fresh, facts: { ...NO_RUN_FACTS, lock: ready } };
-      }
-      const done =
-        this.dialect === "mysql"
-          ? await this.convertInSteps(fresh, clearing)
-          : await this.convertInTransaction(fresh, clearing);
-      // A consent given stays on the record whatever the conversion's outcome, so a failed column
-      // never reads as one no consent covered.
-      return clearing === null || done.facts.consent !== null
-        ? done
-        : {
-            ...done,
-            facts: { ...done.facts, consent: consentRan(clearing, 0) },
-          };
+      return await this.convertFresh(finding);
     } catch (error) {
       if (error instanceof SchemaLockLost) throw error;
       // Anything that stops the column before its first step, such as its progress record
@@ -510,6 +471,61 @@ class ApplyRun {
         },
       };
     }
+  }
+
+  /**
+   * Plan the column again from the table as the conversions before it in this run left it, and
+   * convert it: a plan read at the start could restate a table another column's conversion has
+   * since changed, and on SQLite rebuild it as it first stood.
+   */
+  private async convertFresh(
+    finding: DiffersFinding
+  ): Promise<Converted | null> {
+    const fresh = await this.refreshed(finding);
+    if (fresh === null) return null;
+    const freshLock = findingLock(fresh, 0);
+    if (freshLock !== null) {
+      return { finding: fresh, facts: { ...NO_RUN_FACTS, lock: freshLock } };
+    }
+    const plan = this.clearingOf(fresh);
+    if (!("convert" in plan)) return plan;
+    const { convert, clearing } = plan;
+    // Made only once a column is still to convert.
+    const ready = await this.ensureRepairsTable(convert);
+    if (ready !== null) {
+      return { finding: convert, facts: { ...NO_RUN_FACTS, lock: ready } };
+    }
+    const done =
+      this.dialect === "mysql"
+        ? await this.convertInSteps(convert, clearing)
+        : await this.convertInTransaction(convert, clearing);
+    // A consent given stays on the record whatever the conversion's outcome, so a failed column
+    // never reads as one no consent covered.
+    return clearing === null || done.facts.consent !== null
+      ? done
+      : { ...done, facts: { ...done.facts, consent: consentRan(clearing, 0) } };
+  }
+
+  /**
+   * A fresh finding to convert, with the consent or yes to clear its values (null for a column
+   * that only converts); or the outcome of a column left as it is: no consent to clear it, or
+   * nothing left to convert.
+   */
+  private clearingOf(
+    fresh: ColumnFinding
+  ): { convert: DiffersFinding; clearing: Clearing | null } | Converted {
+    if (clearable(fresh)) {
+      const decided = this.consentFor(fresh);
+      return "given" in decided
+        ? { convert: fresh, clearing: decided }
+        : {
+            finding: decided.finding,
+            facts: { ...NO_RUN_FACTS, ...decided.facts },
+          };
+    }
+    return convertible(fresh)
+      ? { convert: fresh, clearing: null }
+      : { finding: fresh, facts: NO_RUN_FACTS };
   }
 
   /**
@@ -579,13 +595,9 @@ class ApplyRun {
     for (const progress of unfinished) {
       if (!clearsFirst(progress)) continue;
       // A table whose tries run out is asked nothing: under the lock it takes no further wait.
-      const read = await this.waits.read(progress.table, async db => {
-        const state = await readLiveState(db, this.dialect, progress);
-        return {
-          live: state,
-          reached: await liveStepOf(db, this.dialect, progress, state),
-        };
-      });
+      const read = await this.waits.read(progress.table, db =>
+        liveProgressOf(db, this.dialect, progress)
+      );
       if (read.kind === "ran-out" || read.value.reached !== 0) continue;
       const { live } = read.value;
       const finding = progressFinding(
@@ -832,6 +844,89 @@ class ApplyRun {
     }
   }
 
+  /**
+   * A PostgreSQL or SQLite try's one wait, then its end. PostgreSQL closes the table first, as
+   * the type change closes it anyway, so no write comes between the judgement and the change;
+   * the try's watch ends the wait at its bound, and a `lock_timeout` half a second past it is the
+   * backstop. SQLite already holds the database's write lock from its BEGIN IMMEDIATE.
+   */
+  private async takeTable(
+    tx: MigrationTransaction,
+    try_: TryContext,
+    table: string
+  ): Promise<void> {
+    if (this.dialect === "postgresql") {
+      const session = await tx.session();
+      if (session !== undefined) try_.onSession(session);
+      await tx.execute(
+        `SET LOCAL lock_timeout = '${String(Math.round(try_.tryMs) + 500)}ms'`
+      );
+      await tx.execute(`LOCK TABLE ${table} IN ACCESS EXCLUSIVE MODE`);
+    }
+    // The try's one wait is over, and its lock is held to the end of the transaction. The watch
+    // ends here, so it cannot cancel a later statement of this conversion that waits for
+    // something else, which then fails the column as its own failure rather than as this table
+    // being busy.
+    await try_.tableReached(true);
+  }
+
+  /**
+   * The column's conversion inside the try's transaction, with the values `cleared` names
+   * cleared where the dialect needs them cleared: before PostgreSQL's cast, which refuses a value
+   * the new type cannot hold, or after SQLite's rebuild, which copies each value as the new
+   * column keeps it.
+   */
+  private async convertWithin(
+    tx: MigrationTransaction,
+    now: DiffersFinding,
+    cleared: readonly RowKey[]
+  ): Promise<void> {
+    const liveTable = this.liveTableOf(now);
+    const liveColumn = now.judged?.liveColumn ?? now.location.column;
+    const clear = clearingStatements({
+      table: liveTable,
+      column: liveColumn,
+      keyedBy: now.judged?.keyedBy ?? "none",
+      keys: cleared,
+    });
+    if (this.dialect === "postgresql" && clear.length > 0) {
+      await this.clearBeforeCast(tx, now, liveTable, liveColumn, clear);
+    }
+    for (const [index, group] of (now.conversion?.steps ?? []).entries()) {
+      await this.step(now, index);
+      for (const statement of group) await tx.execute(statement);
+    }
+    if (this.dialect === "sqlite") {
+      for (const statement of clear) {
+        await runSql(tx.db, this.dialect, statement);
+      }
+    }
+  }
+
+  /**
+   * PostgreSQL: clear the named values before the cast. A column that does not allow a null yet
+   * (its field allows one, or the clearing would be blocked) drops NOT NULL first, as its
+   * conversion would.
+   */
+  private async clearBeforeCast(
+    tx: MigrationTransaction,
+    now: DiffersFinding,
+    liveTable: string,
+    liveColumn: string,
+    clear: readonly SQL[]
+  ): Promise<void> {
+    if (!now.live.nullable) {
+      await runSql(
+        tx.db,
+        this.dialect,
+        sql`ALTER TABLE ${sql.identifier(liveTable)} ALTER COLUMN ${sql.identifier(liveColumn)} DROP NOT NULL`
+      );
+    }
+    for (const statement of clear) {
+      await runSql(tx.db, this.dialect, statement);
+    }
+  }
+
   /** The body of one try's transaction (`convertOnce`). */
   private async convertIn(
     tx: MigrationTransaction,
@@ -840,62 +935,14 @@ class ApplyRun {
     try_: TryContext,
     table: string
   ): Promise<Converted> {
-    const liveTable = this.liveTableOf(finding);
-    if (this.dialect === "postgresql") {
-      const session = await tx.session();
-      if (session !== undefined) try_.onSession(session);
-      // The table is closed first, as the type change closes it anyway, so no write comes
-      // between the judgement below and the change. The try's watch ends the wait at its
-      // bound; this setting half a second past it is the backstop.
-      await tx.execute(
-        `SET LOCAL lock_timeout = '${String(Math.round(try_.tryMs) + 500)}ms'`
-      );
-      await tx.execute(`LOCK TABLE ${table} IN ACCESS EXCLUSIVE MODE`);
-    }
-    // The try's one wait is over: PostgreSQL holds the table's lock to the end of the transaction,
-    // SQLite the database's write lock from its BEGIN IMMEDIATE. The watch ends here, so it cannot
-    // cancel a later statement of this conversion that waits for something else, which then fails
-    // the column as its own failure rather than as this table being busy.
-    await try_.tableReached(true);
+    await this.takeTable(tx, try_, table);
     const judged = await this.judged(tx.db, finding);
     const stopped = this.stillConverts(judged, clearing);
     if (stopped !== null) return stopped;
     const now = judged.finding;
     const cls = findingClass(now) ?? "safe";
     const cleared = cls === "lossy" ? judged.cleared : [];
-    const clear = clearingStatements({
-      table: liveTable,
-      column: now.judged?.liveColumn ?? now.location.column,
-      keyedBy: now.judged?.keyedBy ?? "none",
-      keys: cleared,
-    });
-    const liveColumn = now.judged?.liveColumn ?? now.location.column;
-    if (this.dialect === "postgresql" && clear.length > 0) {
-      // PostgreSQL's cast refuses a value the new type cannot hold, so the named values are
-      // cleared before it runs; a column that does not allow a null yet (its field allows
-      // one, or the clearing would be blocked) drops NOT NULL first, as its conversion would.
-      if (!now.live.nullable) {
-        await runSql(
-          tx.db,
-          this.dialect,
-          sql`ALTER TABLE ${sql.identifier(liveTable)} ALTER COLUMN ${sql.identifier(liveColumn)} DROP NOT NULL`
-        );
-      }
-      for (const statement of clear) {
-        await runSql(tx.db, this.dialect, statement);
-      }
-    }
-    for (const [index, group] of (now.conversion?.steps ?? []).entries()) {
-      await this.step(now, index);
-      for (const statement of group) await tx.execute(statement);
-    }
-    if (this.dialect === "sqlite") {
-      // SQLite's rebuild copies each value as the new column keeps it, so the named values
-      // are cleared in the rebuilt table, before the transaction commits.
-      for (const statement of clear) {
-        await runSql(tx.db, this.dialect, statement);
-      }
-    }
+    await this.convertWithin(tx, now, cleared);
     const steps = now.conversion?.steps.length ?? 0;
     await insertRepair(
       tx.db,
@@ -1347,13 +1394,9 @@ class ApplyRun {
     const recordedStep = progressStepName(progress, progress.step);
     // Its live step is read in its table's tries; where they run out, the column and its record
     // stay as they are, and it stays interrupted at its recorded step, with the lock.
-    const read = await this.waits.read(progress.table, async db => {
-      const state = await readLiveState(db, this.dialect, progress);
-      return {
-        live: state,
-        reached: await liveStepOf(db, this.dialect, progress, state),
-      };
-    });
+    const read = await this.waits.read(progress.table, db =>
+      liveProgressOf(db, this.dialect, progress)
+    );
     if (read.kind === "ran-out") {
       return {
         finding: progressFinding(progress, findings, this.args.entities, null),
@@ -1382,45 +1425,78 @@ class ApplyRun {
       };
     }
     if (reached === progress.steps) {
-      // The column already holds its field's definition: only the record is behind. A list
-      // conversion stopped between its retype and the normalising that follows it can still
-      // hold a scalar written before the retype, so that is finished first.
-      if (progress.steps === LIST_CONVERSION_STEPS && !clearsFirst(progress)) {
-        const normalise = mysqlReferenceListNormalise(
-          progress.table,
-          progress.column
-        );
-        let lock: TableLockFacts | null = null;
-        await this.onTriedSession(progress.table, async (inTries, session) => {
-          const waited = await inTries(
-            () => session.execute(normalise),
-            () => this.statementLasting(normalise, 1)
-          );
-          if (waited.kind === "ran-out") lock = waited.lock;
-        });
-        if (lock !== null) {
-          return {
-            finding,
-            facts: {
-              ...NO_RUN_FACTS,
-              progress: {
-                recordedStep,
-                liveStep: progressStepName(progress, reached),
-              },
-              lock,
-            },
-          };
-        }
-      }
-      await recordStep(
-        this.db,
-        this.dialect,
-        progress.id,
-        reached,
-        progress.steps
-      );
-      return { finding, facts: { ...NO_RUN_FACTS, converted: true } };
+      return this.finishRecord(progress, finding, recordedStep);
     }
+    return this.resumeFrom(progress, finding, reached, recordedStep);
+  }
+
+  /**
+   * A column that already holds its field's definition: only the record is behind. A list
+   * conversion stopped between its retype and the normalising that follows it can still hold a
+   * scalar written before the retype, so that is finished first, in its table's tries.
+   */
+  private async finishRecord(
+    progress: RecordedProgress,
+    finding: DiffersFinding,
+    recordedStep: string
+  ): Promise<Converted> {
+    if (progress.steps === LIST_CONVERSION_STEPS && !clearsFirst(progress)) {
+      const lock = await this.normaliseList(progress);
+      if (lock !== null) {
+        return {
+          finding,
+          facts: {
+            ...NO_RUN_FACTS,
+            progress: {
+              recordedStep,
+              liveStep: progressStepName(progress, progress.steps),
+            },
+            lock,
+          },
+        };
+      }
+    }
+    await recordStep(
+      this.db,
+      this.dialect,
+      progress.id,
+      progress.steps,
+      progress.steps
+    );
+    return { finding, facts: { ...NO_RUN_FACTS, converted: true } };
+  }
+
+  /** Normalise a list column's scalars in its table's tries; the lock facts where they run out. */
+  private async normaliseList(
+    progress: RecordedProgress
+  ): Promise<TableLockFacts | null> {
+    const normalise = mysqlReferenceListNormalise(
+      progress.table,
+      progress.column
+    );
+    let lock: TableLockFacts | null = null;
+    await this.onTriedSession(progress.table, async (inTries, session) => {
+      const waited = await inTries(
+        () => session.execute(normalise),
+        () => this.statementLasting(normalise, 1)
+      );
+      if (waited.kind === "ran-out") lock = waited.lock;
+    });
+    return lock;
+  }
+
+  /**
+   * A column stopped before its last step, resumed from the step its live column has reached. The
+   * clearing still to run needs this run's consent naming the column, or the yes given for it
+   * before the lock; the rows it clears are the ones judged now, and under a yes only those the
+   * person was shown.
+   */
+  private async resumeFrom(
+    progress: RecordedProgress,
+    finding: DiffersFinding,
+    reached: number,
+    recordedStep: string
+  ): Promise<Converted> {
     const interrupted: Converted = {
       finding,
       facts: {
@@ -1434,19 +1510,13 @@ class ApplyRun {
     if (finding.judged === undefined || finding.conversion === null)
       return interrupted;
     const offset = clearsFirst(progress) ? 1 : 0;
-    // The clearing still to run needs this run's consent naming the column, or the yes given for
-    // it before the lock; the rows it clears are the ones judged now, and under a yes only those
-    // the person was shown.
-    let clearing: Clearing | null = null;
-    if (offset === 1 && reached === 0) {
-      const decided = this.consentFor(finding);
-      if (!("given" in decided)) {
-        return {
-          finding: decided.finding,
-          facts: { ...interrupted.facts, ...decided.facts },
-        };
-      }
-      clearing = decided;
+    const decided =
+      offset === 1 && reached === 0 ? this.consentFor(finding) : null;
+    if (decided !== null && !("given" in decided)) {
+      return {
+        finding: decided.finding,
+        facts: { ...interrupted.facts, ...decided.facts },
+      };
     }
     const judging = await this.waits.read(progress.table, db =>
       this.judged(db, finding)
@@ -1457,46 +1527,67 @@ class ApplyRun {
         facts: { ...interrupted.facts, lock: judging.lock },
       };
     }
-    const judged = judging.value;
+    return this.resumeJudged(progress, judging.value, {
+      reached,
+      offset,
+      clearing: decided,
+      interrupted,
+    });
+  }
+
+  /**
+   * Run the rest of a recorded conversion judged again now. The conversion the column needs now
+   * must be the one its record began, towards the same target; anything else is left for its
+   * owner, never run in its place.
+   */
+  private async resumeJudged(
+    progress: RecordedProgress,
+    judged: Judged,
+    at: {
+      reached: number;
+      offset: 0 | 1;
+      clearing: Clearing | null;
+      interrupted: Converted;
+    }
+  ): Promise<Converted> {
     const now = judged.finding;
     const statements = now.conversion?.steps ?? [];
-    const cls = findingClass(now);
-    // The conversion the column needs now must be the one its record began, towards the same
-    // target; anything else is left for its owner, never run in its place.
+    const clearingLeft = at.offset === 1 && at.reached === 0;
     const sameConversion =
-      offset + statements.length === progress.steps &&
+      at.offset + statements.length === progress.steps &&
       compareColumn(now.expected, progress.to) === null;
-    const clearingLeft = offset === 1 && reached === 0;
-    if (!sameConversion || cls !== (clearingLeft ? "lossy" : "safe")) {
-      return { ...interrupted, finding: now };
+    if (
+      !sameConversion ||
+      findingClass(now) !== (clearingLeft ? "lossy" : "safe")
+    ) {
+      return { ...at.interrupted, finding: now };
     }
-    if (clearing !== null) {
-      const stopped = this.stillConverts(judged, clearing);
-      if (stopped !== null) {
-        return {
-          finding: now,
-          facts: {
-            ...interrupted.facts,
-            consent: stopped.facts.consent,
-            failure: stopped.facts.failure,
-          },
-        };
-      }
+    const stopped =
+      at.clearing === null ? null : this.stillConverts(judged, at.clearing);
+    if (stopped !== null) {
+      return {
+        finding: now,
+        facts: {
+          ...at.interrupted.facts,
+          consent: stopped.facts.consent,
+          failure: stopped.facts.failure,
+        },
+      };
     }
-    if (reached !== progress.step) {
+    if (at.reached !== progress.step) {
       await recordStep(
         this.db,
         this.dialect,
         progress.id,
-        reached,
+        at.reached,
         progress.steps
       );
     }
-    return this.runSteps(now, progress.id, reached, {
+    return this.runSteps(now, progress.id, at.reached, {
       statements,
-      offset: offset === 1 ? 1 : 0,
+      offset: at.offset,
       clear: clearingLeft ? judged.cleared : null,
-      consent: clearing === null ? null : consentRan(clearing, 0),
+      consent: at.clearing === null ? null : consentRan(at.clearing, 0),
     });
   }
 }

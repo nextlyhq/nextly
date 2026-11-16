@@ -21,7 +21,6 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
-import { NextlyError } from "../../../errors/nextly-error";
 import type { BusyTableBounds } from "../busy-table/bounds";
 import { causeChain } from "../busy-table/ended-waiting";
 import type { NoRetryReason, StatementJudgement } from "../busy-table/judge";
@@ -102,7 +101,7 @@ export interface TableWaitsOptions {
  * Why a table's tries ran out: its total (no whole try was left), a statement the next try would
  * send again that may not run twice, or, on SQLite under the schema lock, the lock's lease.
  */
-export type TriesEnding =
+type TriesEnding =
   | { readonly kind: "total" }
   | { readonly kind: "no-retry"; readonly reason: NoRetryReason }
   | { readonly kind: "lease" };
@@ -129,6 +128,9 @@ const TOTAL_USED_HOLDER: HolderReport = {
     "the table's waits in this run used its total, each getting it in the end, so no try was left to read who uses it",
 };
 
+/** The code of a stop that names this process as the lock's holder (`ownWriteLockError`). */
+const OWN_LOCK = "NEXTLY_LOCK_HELD_BY_THIS_PROCESS";
+
 /** What SQLite's answer that a table is locked says of its holder. */
 const SQLITE_LOCKED_HOLDER: HolderReport = {
   kind: "unnamed",
@@ -141,19 +143,13 @@ const SQLITE_LOCKED_HOLDER: HolderReport = {
  * holds, which the engine's reading (SQLITE_BUSY only) leaves out. Never for a stop that names
  * this process as the holder, as the engine reads it.
  */
-export function sqliteLockedWait(error: unknown): boolean {
-  const links = causeChain(error);
-  if (
-    links.some(link =>
-      NextlyError.isCode(link, "NEXTLY_LOCK_HELD_BY_THIS_PROCESS")
-    )
-  ) {
-    return false;
-  }
-  return links.some(
-    link =>
-      typeof link.code === "string" &&
-      link.code.toUpperCase().startsWith("SQLITE_LOCKED")
+function sqliteLockedWait(error: unknown): boolean {
+  const codes = causeChain(error).map(link =>
+    typeof link.code === "string" ? link.code.toUpperCase() : ""
+  );
+  return (
+    !codes.includes(OWN_LOCK) &&
+    codes.some(code => code.startsWith("SQLITE_LOCKED"))
   );
 }
 

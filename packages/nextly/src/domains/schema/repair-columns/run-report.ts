@@ -38,11 +38,10 @@ import {
   type SchemaLockState,
 } from "./report-json";
 import {
-  liveStepOf,
+  liveProgressOf,
   noStepReason,
   notResumed,
   progressFinding,
-  readLiveState,
   progressStepName,
 } from "./resume";
 import { TableWaits } from "./table-wait";
@@ -169,7 +168,7 @@ async function schemaLockBefore(
  * found it held (the earlier holder first), so a change that overlapped the scan from either end
  * is named; else unknown where either could not tell; else free.
  */
-export function overScan(
+function overScan(
   before: SchemaLockReading,
   after: SchemaLockReading
 ): SchemaLockReading {
@@ -290,13 +289,8 @@ async function unfinishedRecords(
   const places = await readUnfinishedRepairs(db, args.dialect);
   const records: RepairRecord[] = [];
   for (const progress of places) {
-    const readStep = async (on: unknown) => {
-      const live = await readLiveState(on, args.dialect, progress);
-      return {
-        live,
-        reached: await liveStepOf(on, args.dialect, progress, live),
-      };
-    };
+    const readStep = (on: unknown) =>
+      liveProgressOf(on, args.dialect, progress);
     const read =
       waits === undefined
         ? { kind: "done" as const, value: await readStep(db) }
