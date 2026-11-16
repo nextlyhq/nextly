@@ -9,7 +9,12 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { isAllowedRemoteUrl, isFetchableUrl, isRemoteUrl } from "./url-policy";
+import {
+  isAllowedRemoteUrl,
+  isFetchableUrl,
+  isImageAddress,
+  isRemoteUrl,
+} from "./url-policy";
 
 describe("a URL used as a pattern", () => {
   // `next/image`'s `matchRemotePattern` takes `RemotePattern | URL` and applies
@@ -122,5 +127,45 @@ describe("what counts as reaching another host", () => {
     expect(isFetchableUrl("a.png", [])).toBe(true);
     // And an empty list really is a policy: it admits no remote host at all.
     expect(isFetchableUrl("https://cdn.example/a.png", [])).toBe(false);
+  });
+});
+
+describe("an address an image may be drawn from", () => {
+  it("is absolute over HTTP or HTTPS, or a path on this site", () => {
+    for (const address of [
+      "https://cdn.example/a.png",
+      "HTTP://cdn.example/a.png",
+      "/media/a.png",
+      "  /media/a.png  ",
+    ]) {
+      expect(isImageAddress(address), address).toBe(true);
+    }
+  });
+
+  it("is never another scheme, a host-relative or relative path, or a hidden one", () => {
+    for (const value of [
+      "javascript:alert(1)",
+      "data:image/png;base64,AAAA",
+      "mailto:a@example.com",
+      "tel:+1555",
+      "//elsewhere.example/a.png",
+      // A backslash is read as a slash, so this reaches another host.
+      "/\\elsewhere.example/a.png",
+      "a.png",
+      "https:///a.png",
+      // Written like an address but naming no host the parser can read.
+      "https://?version=1",
+      "https://#fragment",
+      "https:// user.example/a.png",
+      "https:a.png",
+      "java\tscript:alert(1)",
+      "/media/\u0001a.png",
+      "",
+      "   ",
+      42,
+      undefined,
+    ]) {
+      expect(isImageAddress(value), String(value)).toBe(false);
+    }
   });
 });

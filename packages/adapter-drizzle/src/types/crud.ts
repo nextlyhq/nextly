@@ -79,6 +79,19 @@ export interface SelectOptions {
    * serializing writers.
    */
   forUpdate?: boolean;
+
+  /**
+   * Take a `FOR SHARE` row lock on the selected rows for the rest of the
+   * transaction: a locking read, so it sees the latest committed values
+   * rather than the transaction's snapshot (MySQL's REPEATABLE READ), and no
+   * other transaction can change those rows until this one ends. Unlike
+   * `forUpdate` it lets other readers take the same lock.
+   *
+   * Requires a transaction executor, as `forUpdate` does, and no-ops on
+   * SQLite for the same reason. Ignored when `forUpdate` is set: the stronger
+   * lock already holds the rows.
+   */
+  forShare?: boolean;
 }
 
 /**

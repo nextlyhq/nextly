@@ -45,6 +45,7 @@ import {
   isPlainObject,
   refuseFilterProblems,
   snapshotFilter,
+  unknownFieldProblem,
   type FilterProblem,
 } from "./filter-shape";
 import type { GeoFilter } from "./geo-utils";
@@ -829,6 +830,14 @@ function liftComponent(
   }
 
   const componentFieldPath = field.slice(dotIndex + 1);
+  // A path that goes on past one of the component's own fields names no column of its table: a
+  // field group placed in it is a row of its own table, and a group's or a repeater's children live
+  // in that container's value. Refused as a name the collection cannot be filtered on, rather than
+  // read as a column named after the whole path, which answers with the wrong rows.
+  if (componentFieldPath.includes(".")) {
+    out.misplaced.push(unknownFieldProblem(site.path, field));
+    return undefined;
+  }
   const target = {
     fieldName: field.slice(0, dotIndex),
     componentSlugs: componentSlugsOf(componentField),

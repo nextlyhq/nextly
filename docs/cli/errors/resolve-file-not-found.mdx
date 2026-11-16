@@ -1,0 +1,24 @@
+---
+title: RESOLVE_FILE_NOT_FOUND
+description: "The migration file named to `nextly migrate:resolve` is not in the migrations folder."
+---
+
+## Cause
+
+The migration file named to `nextly migrate:resolve` is not in the migrations folder.
+
+`nextly migrate:resolve` acts on a file of the project's migrations folder (`db.migrationsDir` in `nextly.config.ts`). No file there has the name it was given, so it recorded nothing.
+
+## Fix
+
+- Run `nextly migrate:status` to see each migration's name.
+- Pass the name as listed, with or without `.sql`, for example `nextly migrate:resolve --applied 20261020_120000_add_posts`.
+
+## Example
+
+```text
+✗ Migration file not found: 20261020_120000_add_posts.sql.
+  Why:  `nextly migrate:resolve` records a file of the project's migrations folder (`db.migrationsDir`), and none has this name.
+  Next: Check the name with `nextly migrate:status`, and pass it as listed there, with or without `.sql`.
+  Docs: https://nextlyhq.com/docs/cli/errors/resolve-file-not-found  (RESOLVE_FILE_NOT_FOUND)
+```

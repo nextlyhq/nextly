@@ -1,22 +1,33 @@
+import { readCaller } from "../../api/authenticated-read";
 import { buildErrorResponse } from "../../api/error-response";
+import { readBoundedJsonBody } from "../../api/read-json-body";
 import { readOrGenerateRequestId } from "../../api/request-id";
 import { applySessionCacheHeaders } from "../../api/response-shapes";
 import {
   apiKeyScopeFrom,
   type AuthenticatedScope,
 } from "../../auth/authenticated-scope";
-import { runWithCallerScope } from "../../auth/caller-scope";
+import {
+  runWithCallerScope,
+  runWithRouteActor,
+  type RouteActor,
+} from "../../auth/caller-scope";
 import { withoutRefreshCookie } from "../../auth/cookies/refresh-token-cookie";
 import { readCsrfBody } from "../../auth/csrf/read-csrf-body";
 import { carriesBearerToken } from "../../auth/csrf/validate";
 import {
+  authorizeCaller,
   isErrorResponse,
   requireAuthentication,
   requirePermission,
 } from "../../auth/middleware";
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
 import { beginSessionConsultation } from "../../auth/plugin-auth-api";
+import { signInForNavigation } from "../../auth/redirect/sign-in-for-navigation";
+import { actorFromAuthContext } from "../../auth/request-actor";
 import { getSession } from "../../auth/session/get-session";
+import { container } from "../../di/container";
+import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
 import { runWithRequestScope } from "../../hooks/request-scope";
 import { currentFlattenedErrors } from "../../hooks/side-effect-warnings";
@@ -30,6 +41,8 @@ import {
   type RestLimitGate,
   type RestLimitTarget,
 } from "../../middleware/rest-limit-gate";
+import { getNextlyLogger } from "../../observability/logger";
+import type { CollectionsHandler } from "../../services/collections-handler";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import type { AuthUser } from "../../types/auth";
 import {
@@ -39,14 +52,20 @@ import {
 import type { Principal, PluginRoutePrincipal } from "../principals/types";
 import type { PluginSelf } from "../self";
 
+import {
+  actionRouteRefusal,
+  MAX_ACTION_BODY_BYTES,
+} from "./action-route-check";
 import { composeMiddleware } from "./middleware";
 import { parsePermissionSlug } from "./permission-slug";
+import { noteRetiredManageAsked } from "./retired-manage-asked";
 import { buildPluginRouteCaller } from "./route-caller";
 import {
   checkRouteCsrf,
   publicCallerCredential,
   rateLimitKey,
   routeCsrfMode,
+  routeDeclaresAccess,
   shouldNotStore,
   type CallerCredential,
 } from "./route-options";
@@ -95,7 +114,24 @@ interface RouteAuth {
   principal: Principal | null;
   /** How the caller actually authenticated, for the CSRF decision. */
   credential: CallerCredential;
+  /**
+   * Who the handler's writes as this caller are recorded under: the API key
+   * itself when one authenticated. Attribution only; it admits nothing.
+   */
+  routeActor?: RouteActor;
+  /**
+   * The staff caller as authentication resolved it, kept so a later check of
+   * this request (a bound route's action) judges the same caller without
+   * authenticating it again, which would spend an API key's limit twice.
+   */
+  account?: AuthenticatedRequest;
 }
+
+/** A request's staff caller, as `requireAuthentication` resolves it. */
+type AuthenticatedRequest = Exclude<
+  Awaited<ReturnType<typeof requireAuthentication>>,
+  { statusCode: number }
+>;
 
 /**
  * Resolve secure-by-default auth for a route. `public: true` skips auth
@@ -135,8 +171,30 @@ async function resolvePluginRouteAuth(
     };
   }
 
+  // A route that says nothing about what reaching it takes could act on the
+  // whole site for anyone signed in, a role-less account or a key with no
+  // grants included. Refused for every caller, before any credential is read,
+  // until it declares a permission, `checksAccess: true` or `siteWide: false`.
+  if (!routeDeclaresAccess(route)) {
+    return {
+      error: NextlyError.forbidden({
+        logContext: {
+          reason: "plugin-route-undeclared",
+          plugin: self.name,
+          method: route.method,
+          path: route.path,
+        },
+      }),
+    };
+  }
+
   const required = requiredPermissionOrRefusal(route, self);
   if ("error" in required) return required;
+  // A route asking a retired permission is answered by the plain four, and
+  // its plugin is told once what to ask instead.
+  if (required.permission) {
+    noteRetiredManageAsked(self.name, ...permissionArgs(required.permission));
+  }
 
   // requirePermission already enforces authentication, so the permission-gated
   // path needs a single call (avoids verifying the session twice).
@@ -147,7 +205,7 @@ async function resolvePluginRouteAuth(
   if (isErrorResponse(authResult)) {
     return { error: toNextlyAuthError(authResult) };
   }
-  return authenticatedCaller(authResult);
+  return authenticatedCaller(authResult, self);
 }
 
 /**
@@ -244,7 +302,8 @@ function authenticatedCaller(
   authResult: Exclude<
     Awaited<ReturnType<typeof requireAuthentication>>,
     { statusCode: number }
-  >
+  >,
+  self: PluginSelf
 ): RouteAuth & { user: AuthUser; caller: PluginRouteCaller } {
   const user: AuthUser = {
     id: authResult.userId as AuthUser["id"],
@@ -260,10 +319,147 @@ function authenticatedCaller(
     // Built from the same `authResult` the scope above is derived from, so
     // the raw grant and the question asked of it cannot disagree about who
     // is asking.
-    caller: buildPluginRouteCaller(authResult),
+    caller: buildPluginRouteCaller(authResult, self.name),
     principal: null,
     credential: authResult.authMethod === "session" ? "cookie" : "bearer",
+    // Derived as the REST route handler derives its actor, so a key's write
+    // through a plugin route is recorded as the key, as it is through REST.
+    routeActor: Object.freeze({
+      userId: user.id,
+      actor: Object.freeze(actorFromAuthContext(authResult)),
+    }),
+    account: authResult,
   };
+}
+
+/** The answers of a list read that mean "none of it is yours to read". */
+const ACCESS_REFUSALS = new Set([403, 404]);
+
+/**
+ * The rows of `collection` with these ids that `account` may read, as it
+ * reads them: one list read of the collection, as the caller, with drafts,
+ * told about the request as the handler's own reads are, so a read hook that
+ * scopes by it (a tenant from a header) scopes this read too. A collection
+ * the caller may not read answers no rows, as rows it may not read do, so a
+ * refusal built from this says nothing of what exists. Any other failure is
+ * answered as itself, with its own code and status.
+ */
+async function readRowsAs(
+  req: Request,
+  account: AuthenticatedRequest,
+  collection: string,
+  ids: readonly string[]
+): Promise<ReadonlyMap<string, unknown>> {
+  const caller = await readCaller(account);
+  const read = await container
+    .get<CollectionsHandler>("collectionsHandler")
+    .listEntries({
+      request: req,
+      collectionName: collection,
+      where: { id: { in: [...ids] } },
+      limit: ids.length,
+      depth: 0,
+      status: "all",
+      overrideAccess: false,
+      user: caller.user,
+      authenticatedScope: caller.authenticatedScope,
+    });
+  if (!read.success) {
+    if (ACCESS_REFUSALS.has(read.statusCode ?? 500)) return new Map();
+    throw errorFromServiceEnvelope(read, {
+      reason: "action-rows-unread",
+      collection,
+    });
+  }
+  const docs =
+    (read.data as { docs?: Array<Record<string, unknown>> } | undefined)
+      ?.docs ?? [];
+  return new Map(docs.map(doc => [String(doc.id), doc]));
+}
+
+/**
+ * The last refusals before anything of the plugin's runs, or `null`: the
+ * route's CSRF check, then, for a route bound to a declared action, that
+ * action's check. Both after the route's own gate and rate limit, and before
+ * its context, middleware and handler.
+ */
+async function refusedBeforeHandler(
+  req: Request,
+  matched: RouteMatch,
+  auth: RouteAuth
+): Promise<Response | null> {
+  const csrf = await applyRouteCsrf(req, matched, auth.credential);
+  if (csrf) return markPluginResponse(csrf, matched.route);
+  let refusedAction: NextlyError | undefined;
+  try {
+    // In the scopes the handler runs in, so the rows are read for this
+    // request and as this caller, exactly as the handler would read them.
+    refusedAction = await runWithRequestScope(req, () =>
+      runWithCallerScope(auth.authenticatedScope, () =>
+        boundActionRefusal(req, matched, auth)
+      )
+    );
+  } catch (err) {
+    // A check that could not decide answers as the handler's failures do,
+    // and the handler does not run.
+    return markPluginResponse(
+      withNoStore(toErrorResponse(req, err), matched.route),
+      matched.route
+    );
+  }
+  if (refusedAction === undefined) return null;
+  return markPluginResponse(
+    withNoStore(
+      buildErrorResponse(refusedAction, {
+        requestId: readOrGenerateRequestId(req),
+        flattened: currentFlattenedErrors(),
+      }),
+      matched.route
+    ),
+    matched.route
+  );
+}
+
+/**
+ * Why a request to a route bound to declared actions is refused, or
+ * `undefined` when the route is bound to none or the request may run: the
+ * action it names, that action's permission, and its rule on every row the
+ * request names, read as the caller (see `action-route-check`). The body is
+ * read from a copy, bounded as the CSRF check bounds it, so the handler
+ * still reads it whole.
+ */
+async function boundActionRefusal(
+  req: Request,
+  matched: RouteMatch,
+  auth: RouteAuth
+): Promise<NextlyError | undefined> {
+  const bound = matched.boundActions ?? [];
+  if (bound.length === 0) return undefined;
+  const account = auth.account;
+  // Boot refuses an action naming a public route or a person's, so a bound
+  // route always has a staff caller; one without is refused, never let by.
+  if (account === undefined) {
+    return NextlyError.forbidden({
+      logContext: { reason: "action-route-no-staff-caller" },
+    });
+  }
+  let body: unknown;
+  try {
+    body = await readBoundedJsonBody(req.clone(), MAX_ACTION_BODY_BYTES);
+  } catch {
+    body = undefined;
+  }
+  return actionRouteRefusal(body, bound, {
+    self: matched.baseCtx.self,
+    refusalFor: async permission => {
+      const decided = await authorizeCaller(
+        account,
+        ...permissionArgs(permission)
+      );
+      return isErrorResponse(decided) ? toNextlyAuthError(decided) : undefined;
+    },
+    readRows: (collection, ids) => readRowsAs(req, account, collection, ids),
+  });
 }
 
 /**
@@ -286,11 +482,28 @@ function requiredPermissionOrRefusal(
       permission: resolveRoutePermission(route.requiredPermission, self),
     };
   } catch (cause) {
+    // A permission the route cannot work out is the plugin's fault, not the
+    // caller's: answered 500, as any server fault is, and never let through.
+    // A 403 told the caller their grant fell short when no grant could have
+    // been enough. The resolver's own error, or the empty slug's, goes to the
+    // log.
+    // A resolver's own NextlyError, such as an empty slug's, already says what
+    // went wrong; its message and reason are kept, since the log would
+    // otherwise reduce it to the generic public message it carries.
+    const explained = NextlyError.is(cause) ? cause : undefined;
     return {
-      error: NextlyError.forbidden({
+      error: new NextlyError({
+        code: "INTERNAL_ERROR",
+        publicMessage: "An unexpected error occurred.",
+        logMessage:
+          explained?.logMessage ??
+          "a plugin route's requiredPermission could not be resolved",
         ...(cause instanceof Error ? { cause } : {}),
         logContext: {
           reason: "plugin-route-permission-unresolved",
+          ...(explained?.logContext?.reason !== undefined
+            ? { causeReason: explained.logContext.reason }
+            : {}),
           plugin: self.name,
           path: route.path,
         },
@@ -396,19 +609,19 @@ export function pluginRouteAuthRequired(
   req: Request,
   route: PluginRoute
 ): Response {
+  const refusal = NextlyError.authRequired({
+    logContext: {
+      reason: "plugin-route-auth-required-before-boot",
+      path: route.path,
+    },
+  });
+  // A browser opening the route is sent to sign in, as once booted.
   return markPluginResponse(
-    buildErrorResponse(
-      NextlyError.authRequired({
-        logContext: {
-          reason: "plugin-route-auth-required-before-boot",
-          path: route.path,
-        },
-      }),
-      {
+    staffSignIn(req, route, refusal) ??
+      buildErrorResponse(refusal, {
         requestId: readOrGenerateRequestId(req),
         flattened: currentFlattenedErrors(),
-      }
-    ),
+      }),
     route
   );
 }
@@ -448,7 +661,7 @@ async function generalRouteBudget(method: string): Promise<{
   limit: number;
   windowMs: number;
 } | null> {
-  const { getService } = await import("../../di/register");
+  const { getService } = await import("../../di/service-access");
   const config = getService("config") as
     | {
         rateLimit?: {
@@ -603,7 +816,7 @@ async function applyRouteRateLimit(
     "../../utils/get-trusted-client-ip"
   );
   const { readProxyTrustSettings } = await import("../../utils/proxy-trust");
-  const { getService } = await import("../../di/register");
+  const { getService } = await import("../../di/service-access");
 
   const trust = readProxyTrustSettings(() => getService("config"));
   const resolved = getTrustedClientIp(req, trust);
@@ -720,7 +933,7 @@ async function auditRouteCsrfFailure(
   req: Request,
   matched: RouteMatch
 ): Promise<void> {
-  const { getService } = await import("../../di/register");
+  const { getService } = await import("../../di/service-access");
   const { buildAuditLogWriter } = await import(
     "../../domains/audit/audit-log-writer"
   );
@@ -805,6 +1018,55 @@ async function routeAuthWithinLimit(
 }
 
 /**
+ * The redirect to sign in and back for a browser opening a staff route
+ * without a usable session, or `null` when the refusal is answered as it is
+ * (`signInForNavigation`). Not for a route asking for a plugin's kind of
+ * person: the admin's sign-in is not how that person signs in, so it would
+ * only send them back to the same refusal.
+ */
+function staffSignIn(
+  req: Request,
+  route: PluginRoute,
+  error: NextlyError
+): Response | null {
+  return route.principal === undefined ? signInForNavigation(req, error) : null;
+}
+
+/** The answer to a request its route's auth refused with `error`. */
+function refusedAuth(
+  req: Request,
+  matched: RouteMatch,
+  error: NextlyError
+): Response {
+  const signIn = staffSignIn(req, matched.route, error);
+  if (signIn) return markPluginResponse(signIn, matched.route);
+  const requestId = readOrGenerateRequestId(req);
+  // A server fault here, such as a permission the route cannot work out, is
+  // the plugin's to fix, so it is logged with what caused it. A refusal of
+  // the caller is not: it is the gate working.
+  if (error.statusCode >= 500) {
+    try {
+      getNextlyLogger().error({
+        kind: "plugin-route-error",
+        ...error.toLogJSON(requestId),
+        plugin: matched.pluginName,
+        path: matched.route.path,
+      });
+    } catch {
+      // A logger that fails must not cost the caller the answer below, as
+      // the dispatcher and `withErrorHandler` hold for theirs.
+    }
+  }
+  return markPluginResponse(
+    buildErrorResponse(error, {
+      requestId,
+      flattened: currentFlattenedErrors(),
+    }),
+    matched.route
+  );
+}
+
+/**
  * Run a matched plugin route. Enforces secure-by-default auth,
  * builds the per-request {@link PluginRouteContext} (the plugin's boot context
  * plus `user`/`params`), and invokes the handler, isolating any thrown error
@@ -851,15 +1113,7 @@ export async function runPluginRoute(
     );
   }
   const auth = settled.resolved;
-  if ("error" in auth) {
-    return markPluginResponse(
-      buildErrorResponse(auth.error, {
-        requestId: readOrGenerateRequestId(req),
-        flattened: currentFlattenedErrors(),
-      }),
-      matched.route
-    );
-  }
+  if ("error" in auth) return refusedAuth(req, matched, auth.error);
 
   // Before the handler: a rate limit that runs after the work it is limiting
   // has already paid for the request it meant to refuse. Through
@@ -876,8 +1130,8 @@ export async function runPluginRoute(
     );
   }
 
-  const csrf = await applyRouteCsrf(req, matched, auth.credential);
-  if (csrf) return markPluginResponse(csrf, matched.route);
+  const refusedBefore = await refusedBeforeHandler(req, matched, auth);
+  if (refusedBefore) return refusedBefore;
 
   const ctx: PluginRouteContext = {
     ...matched.baseCtx,
@@ -926,7 +1180,13 @@ export async function runPluginRoute(
     const response = await session.run(() =>
       runWithRequestScope(req, () =>
         runWithPrincipalAnswers(req, () =>
-          runWithCallerScope(auth.authenticatedScope, () => run(req, ctx))
+          runWithCallerScope(auth.authenticatedScope, () =>
+            // The actor, too: a write the handler makes as this caller is
+            // recorded under the key that authenticated, not its owner. It
+            // is not a `RequestCaller`, which would tell services a gate
+            // already ran for the write and let them skip their own.
+            runWithRouteActor(auth.routeActor, () => run(req, ctx))
+          )
         )
       )
     );

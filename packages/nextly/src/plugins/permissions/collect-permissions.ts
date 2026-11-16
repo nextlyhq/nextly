@@ -15,16 +15,18 @@ export interface CollectedPermission {
   slug: string;
   name: string;
   description?: string;
-  /** Declaring plugin name ("app" for app-declared). Persisted on the row. */
+  /** Declaring plugin name (`APP_OWNER` for app-declared). Persisted on the row. */
   owner: string;
   /**
    * Which KIND of declaration this came from, host or plugin.
    *
    * Carried beside `owner` rather than read out of it, because `owner` cannot
-   * answer the question: the host's sentinel is the literal string `"app"`, and
-   * a plugin may legally be named `app`. Anything grouping these by plugin would
-   * then file every host-declared permission under that plugin. Not persisted —
-   * `owner` remains the stored attribution, so no row changes shape.
+   * answer the question on its own: the host's sentinel is the literal string
+   * `"app"`. Plugin resolution refuses a plugin of that name
+   * (`validatePluginNames`), but a snapshot written before that refusal may
+   * still record one, and anything grouping these by plugin must not file every
+   * host-declared permission under it. Not persisted: `owner` remains the
+   * stored attribution, so no row changes shape.
    */
   source: "app" | "plugin";
   /**
@@ -35,6 +37,14 @@ export interface CollectedPermission {
   /** True for a permission the admin should warn before granting. */
   danger: boolean;
 }
+
+/**
+ * The owner key the app's own permissions are stored under, where a plugin's
+ * are stored under the plugin's name. The one spelling of it: the readers of
+ * stored owners import it, and plugin resolution refuses a plugin named after
+ * it, so the app's rows and a plugin's can never share a key.
+ */
+export const APP_OWNER = "app";
 
 /** Where a permission lands when its plugin does not group its own. */
 export const DEFAULT_PERMISSION_GROUP = "General";
@@ -239,7 +249,7 @@ function eachDeclaredPermission(
     source: "app" | "plugin"
   ) => void
 ): void {
-  for (const perm of config.permissions ?? []) visit(perm, "app", "app");
+  for (const perm of config.permissions ?? []) visit(perm, APP_OWNER, "app");
   for (const plugin of plugins) {
     for (const perm of plugin.contributes?.permissions ?? []) {
       visit(perm, plugin.name, "plugin");

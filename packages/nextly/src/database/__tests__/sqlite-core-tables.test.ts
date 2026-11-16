@@ -183,6 +183,9 @@ describe("the SQLite bootstrap DDL", () => {
     // database built from this fallback has no general settings and no
     // migration lock.
     "nextly_field_group_lock",
+    // The schema lock creates its own table, from the same declaration, the
+    // first time anything contends for it; this fallback does not need to.
+    "nextly_schema_lock",
     "site_settings",
     "api_keys",
     "audit_log",
@@ -191,7 +194,6 @@ describe("the SQLite bootstrap DDL", () => {
     "nextly_deleted_principals",
     "email_providers",
     "email_templates",
-    "image_sizes",
     "nextly_events",
     // Newly VISIBLE rather than newly missing: the source-text extractor this
     // suite used could not see it, so it was never compared. It is a real gap.

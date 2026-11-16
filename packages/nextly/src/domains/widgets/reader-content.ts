@@ -29,6 +29,10 @@
 
 import { callerMayPerform } from "../../auth/access/route-gate-adapters";
 import {
+  registeredWriteLanguagesFor,
+  withRuleLanguage,
+} from "../../auth/access/rule-language";
+import {
   AUTHORIZATION_CONCURRENCY,
   authorizationGroups,
   readAccessCaller,
@@ -36,6 +40,7 @@ import {
 import { requireNextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
 import { NextlyError } from "../../errors/nextly-error";
+import { rethrowIfAnyRuleCouldNotRun } from "../../errors/rule-could-not-run";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import { readableSlugsOfKind } from "../../services/lib/readable-slug-allowlist";
 
@@ -95,7 +100,9 @@ export async function readableCollectionSlugs(
  *
  * Less what the dashboard keeps off: a collection or Single kept off it does
  * not make a card worth offering, since the card would leave it out and draw
- * empty.
+ * empty. That includes one removed from code (`keptOffDashboard`), whose
+ * registry row can outlive its table, so no reader of this list queries a
+ * table that is gone.
  */
 export async function readableOfKind(
   caller: ReadCaller,
@@ -161,6 +168,9 @@ export async function readerMayCreateEntry(
     const settled = await Promise.allSettled(
       group.map(slug => mayCreateIn(slug))
     );
+    // A rule that could not run never answered: the request ends with that,
+    // not with its collection counted as refused.
+    rethrowIfAnyRuleCouldNotRun(settled);
     if (settled.some(result => result.status === "fulfilled" && result.value)) {
       return true;
     }
@@ -169,14 +179,44 @@ export async function readerMayCreateEntry(
 }
 
 /**
- * Whether this reader may create an entry in one collection: the decision a
- * real write makes, through {@link callerMayPerform}.
+ * Whether this reader may `action` one collection or Single: the decision a
+ * real write makes, through {@link callerMayPerform}, judged in the languages
+ * that write involves.
+ *
+ * The action a card offers opens a page by a link that names no language
+ * (`/admin/collections/<slug>/create`, `/admin/singles/<slug>`), and the
+ * write that page makes names none either, so it is judged as the route
+ * gate judges a write naming no language: in the default language alone
+ * (`registeredWriteLanguagesFor(undefined)`). Outside that, a rule would be
+ * told every configured language, and one that allows a reader the default
+ * language only would refuse here what the page then lets them do.
  */
+function writeVerdict(
+  caller: ReadCaller,
+  action: "create" | "update"
+): (slug: string) => Promise<boolean> {
+  return slug =>
+    withRuleLanguage(registeredWriteLanguagesFor(undefined), () =>
+      callerMayPerform(caller.authenticatedScope, action, slug, caller.user)
+    );
+}
+
+/** Whether this reader may create an entry in one collection ({@link writeVerdict}). */
 export function createVerdict(
   caller: ReadCaller
 ): (slug: string) => Promise<boolean> {
-  return slug =>
-    callerMayPerform(caller.authenticatedScope, "create", slug, caller.user);
+  return writeVerdict(caller, "create");
+}
+
+/**
+ * Whether this reader may update one Single or a collection's entries
+ * ({@link writeVerdict}), as {@link createVerdict} decides creating, so the
+ * two never come to disagree with the write about who may.
+ */
+export function updateVerdict(
+  caller: ReadCaller
+): (slug: string) => Promise<boolean> {
+  return writeVerdict(caller, "update");
 }
 
 /**

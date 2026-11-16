@@ -116,6 +116,9 @@ describe("/api/notices", () => {
       await markNoticesRead(post({ all: true })),
     ]) {
       expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({
+        error: { message: "Only a signed-in person can have notices." },
+      });
     }
     expect(service.find).not.toHaveBeenCalled();
     expect(service.count).not.toHaveBeenCalled();

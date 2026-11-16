@@ -37,9 +37,31 @@
  * @module canvas-geometry-watch
  */
 
-import { nodeElements } from "./canvas";
-import { canvasRootFrom } from "./geometry-dom";
+import { isEditableText, isTextEntry } from "./canvas-escape";
+import { isElement, isFormField } from "./dom-kind";
+import {
+  overlaySpaceOf,
+  screenScrollers,
+  scrollEventTarget,
+} from "./geometry-dom";
+import { nodeElements, nodeElementsIn } from "./rendered-nodes";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
+
+/**
+ * Marks a layer the editor draws OVER the page — absolutely positioned and
+ * taking no part in layout — whose own redrawing can move no block.
+ *
+ * Every overlay's watch ignores what happens inside one, not only the caller's
+ * own: one overlay drawing would otherwise make every other re-measure, for a
+ * change that cannot have moved anything they measure.
+ */
+export const OVERLAY_OUTPUT_ATTRIBUTE = "data-nx-overlay-output";
+
+/** Whether a mutated node sits inside a layer marked as overlay output. */
+function insideOverlayOutput(target: Node): boolean {
+  const element = isElement(target) ? target : target.parentElement;
+  return element?.closest(`[${OVERLAY_OUTPUT_ATTRIBUTE}]`) != null;
+}
 
 /**
  * Everything an overlay drawn over this canvas has to re-measure for.
@@ -66,8 +88,12 @@ export function watchCanvasFor(
   moved: () => void
 ): (() => void) | undefined {
   const element = ownLayer();
+  // The root the layer is drawn over: its ancestor when the canvas shares the
+  // layer's document, the root in the frame the layer is drawn over otherwise.
   const root =
-    element === null ? null : canvasRootFrom(element, CANVAS_ROOT_CLASS);
+    element === null
+      ? null
+      : (overlaySpaceOf(element, CANVAS_ROOT_CLASS)?.root ?? null);
   if (root === null) return undefined;
   const geometry = watchCanvasGeometry(root, moved);
   const styles = watchCanvasStyleMutations(root, ownLayer, moved);
@@ -101,15 +127,43 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
    * answer different questions: a runtime missing the observer must still hear
    * a scroll. A missing observer costs a re-measure, not correctness — every
    * caller measures on render as well.
+   *
+   * Built from the ROOT's window, the realm of everything it observes: a
+   * canvas rendered in a frame is laid out by that frame, and an observer from
+   * another window is not guaranteed to report on its nodes.
    */
-  const sizes =
-    typeof ResizeObserver === "undefined"
-      ? null
-      : new ResizeObserver(() => moved());
+  const view = root.ownerDocument.defaultView;
+  const Sizes = view?.ResizeObserver;
+  const sizes = typeof Sizes === "function" ? new Sizes(() => moved()) : null;
   if (sizes !== null) {
     sizes.observe(root);
     for (const node of nodeElements(root)) sizes.observe(node);
   }
+  /*
+   * And every node that arrives LATER, which the snapshot above cannot see: a
+   * block that resolves after a Suspense fallback, or one an edit inserts. Its
+   * insertion is heard as a mutation and measured then, but an image loading
+   * inside it afterwards resizes only that block — no ancestor need change —
+   * so unobserved, nothing would report it. A node leaving is released, so the
+   * observer does not hold elements the page no longer has.
+   */
+  const Arrivals = view?.MutationObserver;
+  const arrivals =
+    sizes === null || typeof Arrivals !== "function"
+      ? null
+      : new Arrivals(records => {
+          for (const record of records) {
+            record.addedNodes.forEach(added => {
+              if (!isElement(added)) return;
+              for (const node of nodeElementsIn(added)) sizes.observe(node);
+            });
+            record.removedNodes.forEach(removed => {
+              if (!isElement(removed)) return;
+              for (const node of nodeElementsIn(removed)) sizes.unobserve(node);
+            });
+          }
+        });
+  arrivals?.observe(root, { childList: true, subtree: true });
 
   /*
    * `overflow: auto` and `overflow: scroll` are catalog values, so a block can
@@ -127,23 +181,154 @@ function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
    * geometry rather than following the animation: tracking the frames between
    * would mean measuring on every one, which costs more than an overlay being
    * briefly behind a transition the author is watching.
+   *
+   * `animation` likewise: an entrance motion or a site's `@keyframes` moves a
+   * block by transform, and its end and cancel bubble the same way. A block
+   * animating FOREVER never ends; its marks follow the geometry of the last
+   * measurement, re-taken whenever anything else re-measures, rather than
+   * chasing every frame — `animationiteration` would re-measure at whatever
+   * point of the motion each loop boundary falls, which moves the ring without
+   * making it right.
    */
   const settled = (): void => moved();
   root.addEventListener("transitionend", settled);
   root.addEventListener("transitioncancel", settled);
+  root.addEventListener("animationend", settled);
+  root.addEventListener("animationcancel", settled);
+  /*
+   * An authored `:hover` or `:focus-visible` rule can move a block — a
+   * transform, a margin — with no transition, so the change of state is the
+   * only signal there is. Pointer and focus entering or leaving a block
+   * bubble, so the root hears every block's. Measured on the next frame,
+   * once the state's styles apply, and once per frame however many changes
+   * arrive in it: a pointer crossing the page enters and leaves many blocks.
+   */
+  let frame: number | undefined;
+  const restated = (): void => {
+    if (frame !== undefined) return;
+    if (view === null || typeof view.requestAnimationFrame !== "function") {
+      moved();
+      return;
+    }
+    frame = view.requestAnimationFrame(() => {
+      frame = undefined;
+      moved();
+    });
+  };
+  /*
+   * Hover and focus entering or leaving a block, and a press ending. The
+   * input modality, which `:focus-visible` can follow with no focus event at
+   * all, is heard by the key and pointer listeners below.
+   */
+  const STATE_EVENTS = [
+    "pointerover",
+    "pointerout",
+    "focusin",
+    "focusout",
+    // A press ending ends an authored `:active` state, with no pointer
+    // leaving and no focus changing.
+    "pointerup",
+    "pointercancel",
+  ];
+  for (const type of STATE_EVENTS) root.addEventListener(type, restated);
+  /*
+   * A value can change with no DOM mutation: a form field's, or a custom
+   * element's kept in script, and either can change what `:valid`,
+   * `:invalid`, `:placeholder-shown` or a custom state styles. So every
+   * `input` and `change` re-measures, with ONE exception: editable text in
+   * the canvas's own tree, whose edits mutate the DOM, which the mutation
+   * watch already measures — hearing its `input` too would measure every
+   * character twice. An edit inside a custom element's shadow root is a
+   * mutation no observer on the root sees, so it is not the exception.
+   *
+   * Read from the composed path, whose first entry is the element the edit
+   * reached: `target` is retargeted to the shadow host by the time the event
+   * reaches the root.
+   */
+  const valueChanged = (event: Event): void => {
+    const origin = event.composedPath()[0] ?? event.target;
+    // The editing host itself, the element carrying `contenteditable`, is
+    // where a browser fires an edit's `input`. A control nested in editable
+    // text that dispatches on itself inherits editability without being one,
+    // and its value can change with no mutation at all.
+    const mutatesOurTree =
+      isElement(origin) &&
+      !isFormField(origin) &&
+      origin.hasAttribute("contenteditable") &&
+      origin.getRootNode() === root.getRootNode() &&
+      isEditableText(origin);
+    if (!mutatesOurTree) restated();
+  };
+  root.addEventListener("input", valueChanged);
+  root.addEventListener("change", valueChanged);
+  /*
+   * The keyboard is heard for what it can change, not for every key: an
+   * author typing would otherwise re-measure every overlay once a frame. A
+   * key changes what a style reads when it is the first after a pointer (the
+   * modality, which `:focus-visible` follows), or when it activates a
+   * control — Space or Enter down and up, outside editable text — which
+   * `:active` follows. A pointer press is always a change: it starts
+   * `:active`, and hands the modality back to the pointer.
+   */
+  let modality: "keyboard" | "pointer" | undefined;
+  const activates = (event: Event): boolean => {
+    // Read by shape: a canvas in a frame dispatches the frame's own
+    // KeyboardEvent, which no `instanceof` against this window matches.
+    const key = "key" in event ? event.key : undefined;
+    if (key !== " " && key !== "Enter") return false;
+    // Text entry is the one place these keys activate nothing; a checkbox,
+    // a radio or a button the keyboard presses is a control, as Escape's
+    // own reading of the canvas already tells them apart.
+    const target = event.target;
+    return !(isElement(target) && isTextEntry(target));
+  };
+  const keyDown = (event: Event): void => {
+    if (modality !== "keyboard") {
+      modality = "keyboard";
+      restated();
+    } else if (activates(event)) {
+      restated();
+    }
+  };
+  const keyUp = (event: Event): void => {
+    if (activates(event)) restated();
+  };
+  const pointerDown = (): void => {
+    modality = "pointer";
+    restated();
+  };
+  root.addEventListener("keydown", keyDown);
+  root.addEventListener("keyup", keyUp);
+  root.addEventListener("pointerdown", pointerDown);
   root.addEventListener("scroll", settled, true);
+  /*
+   * And the root's DOCUMENT, in the bubble phase, for the viewport itself
+   * scrolling. A canvas in a frame of its own is scrolled by that frame's
+   * viewport, and a viewport's scroll is dispatched at the document, which no
+   * listener on the root can hear. Not in the capture phase: that would hear
+   * every element's scroll anywhere in the document, which the listener above
+   * already covers for the ones inside the canvas.
+   */
+  const doc = root.ownerDocument;
+  doc.addEventListener("scroll", settled);
 
   return () => {
     sizes?.disconnect();
+    arrivals?.disconnect();
     root.removeEventListener("transitionend", settled);
     root.removeEventListener("transitioncancel", settled);
+    root.removeEventListener("animationend", settled);
+    root.removeEventListener("animationcancel", settled);
+    for (const type of STATE_EVENTS) root.removeEventListener(type, restated);
+    root.removeEventListener("input", valueChanged);
+    root.removeEventListener("change", valueChanged);
+    root.removeEventListener("keydown", keyDown);
+    root.removeEventListener("keyup", keyUp);
+    root.removeEventListener("pointerdown", pointerDown);
+    if (frame !== undefined) view?.cancelAnimationFrame(frame);
     root.removeEventListener("scroll", settled, true);
+    doc.removeEventListener("scroll", settled);
   };
-}
-
-/** A node this can read an attribute off, asked without naming a realm. */
-function isElement(node: Node): node is Element {
-  return node.nodeType === 1 && "getAttribute" in node;
 }
 
 /**
@@ -175,6 +360,7 @@ function beforeBatch(
   for (const record of records) {
     const name = record.attributeName;
     if (record.type !== "attributes" || name === null) return undefined;
+    // A node this can read an attribute off, asked without naming a realm.
     if (!isElement(record.target)) return undefined;
     const namespace = record.attributeNamespace;
     const byName =
@@ -257,9 +443,11 @@ function watchCanvasStyleMutations(
 ): () => void {
   // Absent in jsdom unless a test supplies one, and absent in older browsers.
   // A missing observer costs a re-measure rather than correctness: every caller
-  // measures on render as well.
-  if (typeof MutationObserver === "undefined") return () => {};
-  const styles = new MutationObserver(records => {
+  // measures on render as well. From the root's window, the realm of the
+  // subtree it watches.
+  const Mutations = root.ownerDocument.defaultView?.MutationObserver;
+  if (typeof Mutations !== "function") return () => {};
+  const styles = new Mutations(records => {
     const own = ownOutput();
     /*
      * `own === null` counts as OUTSIDE rather than as the caller's own. The
@@ -276,7 +464,9 @@ function watchCanvasStyleMutations(
      * layer's `childList` records and reports a change the caller caused.
      */
     const foreign = records.filter(
-      record => own === null || !own.contains(record.target)
+      record =>
+        (own === null || !own.contains(record.target)) &&
+        !insideOverlayOutput(record.target)
     );
     if (foreign.length > 0 && !changedNothing(foreign)) moved();
   });
@@ -297,4 +487,54 @@ function watchCanvasStyleMutations(
     characterData: true,
   });
   return () => styles.disconnect();
+}
+
+/**
+ * Call `moved` whenever what of the canvas is on screen may have changed:
+ * a scroll of the canvas's own scroller or of the host's around its frame,
+ * either one resizing, or a window resizing. Chrome kept to the screen band
+ * (the block toolbar, the marks' tags) re-measures for all of them.
+ *
+ * One subscription rather than each consumer listening for its own share, for
+ * the reason this module exists: an overlay that heard the scrolls and not
+ * the resizes looked complete and stayed where a resized panel had left the
+ * band. A scroller's scroll is heard where it is dispatched
+ * (`scrollEventTarget`): a document's scrolling element scrolls at its
+ * document, never at itself.
+ *
+ * @param root - the canvas root the band is read for
+ * @param frame - the frame the canvas is drawn in, or `null`
+ * @param moved - re-measure; called once per change
+ * @returns unsubscribes everything this installed
+ */
+export function watchScreenBand(
+  root: HTMLElement,
+  frame: HTMLIFrameElement | null,
+  moved: () => void
+): () => void {
+  const changed = (): void => moved();
+  const stops: (() => void)[] = [];
+  const views = new Set<Window>();
+  for (const scroller of screenScrollers(root, frame)) {
+    const source = scrollEventTarget(scroller);
+    source.addEventListener("scroll", changed, { passive: true });
+    stops.push(() => source.removeEventListener("scroll", changed));
+    const view = scroller.ownerDocument.defaultView;
+    if (view === null) continue;
+    views.add(view);
+    // Absent in jsdom unless a test supplies one, and in older browsers: a
+    // missing observer costs a re-measure, not correctness.
+    const Sizes = view.ResizeObserver;
+    if (typeof Sizes !== "function") continue;
+    const sizes = new Sizes(changed);
+    sizes.observe(scroller);
+    stops.push(() => sizes.disconnect());
+  }
+  for (const view of views) {
+    view.addEventListener("resize", changed);
+    stops.push(() => view.removeEventListener("resize", changed));
+  }
+  return () => {
+    for (const stop of stops) stop();
+  };
 }

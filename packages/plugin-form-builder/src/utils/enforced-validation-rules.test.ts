@@ -42,6 +42,7 @@ const ACCEPTED: Record<FormFieldType, unknown> = {
   date: "2026-01-01",
   time: "10:00",
   hidden: "abcdef",
+  consent: { agreed: true, text: "I agree" },
 };
 
 /**
@@ -160,7 +161,13 @@ describe("the message rule", () => {
       // to a checkbox produces a type error rather than a required failure, so
       // the candidate never reaches the message path and the observation would
       // be of coercion instead of the rule under test.
-      const empty = typeof ACCEPTED[type] === "boolean" ? false : "";
+      // A consent's empty answer is one not agreed to, in its stored shape.
+      const empty =
+        typeof ACCEPTED[type] === "boolean"
+          ? false
+          : type === "consent"
+            ? { agreed: false, text: "I agree" }
+            : "";
       const candidates: { f: FormField; v: unknown }[] = bound
         ? [
             {

@@ -1,0 +1,24 @@
+---
+title: UI_SCHEMA_UNREADABLE
+description: "The Schema Builder's `ui-schema.json` exists but could not be read."
+---
+
+## Cause
+
+The Schema Builder's `ui-schema.json` exists but could not be read.
+
+Entities built in the Schema Builder are kept in `ui-schema.json`, or the file `db.uiSchemaFile` names. A missing file means none were built; a file that is there but cannot be opened stops the command, since reading on without it would drop those entities.
+
+## Fix
+
+- Check that the user running the command can read the file the What line names.
+- If `db.uiSchemaFile` in `nextly.config.ts` points at the wrong file, correct it.
+
+## Example
+
+```text
+✗ Failed to read ui-schema file at /home/you/app/ui-schema.json.
+  Why:  EACCES: permission denied, open '/home/you/app/ui-schema.json'
+  Next: Check that the file is readable by the user running the command, or point `db.uiSchemaFile` in `nextly.config.ts` at the right file.
+  Docs: https://nextlyhq.com/docs/cli/errors/ui-schema-unreadable  (UI_SCHEMA_UNREADABLE)
+```

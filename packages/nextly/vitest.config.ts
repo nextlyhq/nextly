@@ -3,7 +3,10 @@ import { createRequire } from "module";
 import path from "path";
 
 import tsconfigPaths from "vite-tsconfig-paths";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
+
+import { nextlyForTemplates } from "./src/__tests__/template-imports";
+import { UNIT_FILE } from "./src/__tests__/unit-files";
 
 // Mirror the tsdown `define` so `getCoreVersion()` resolves under test (D6).
 const require = createRequire(import.meta.url);
@@ -42,8 +45,6 @@ const LEAVES_STATE = new RegExp(
     String.raw`better-sqlite3|createTestNextly|:memory:`,
   ].join("|")
 );
-
-const UNIT_FILE = /\.(?:test|spec)\.ts$/;
 
 /** The unit files that keep a module graph of their own, relative to this folder. */
 function filesThatLeaveState(): string[] {
@@ -138,7 +139,8 @@ const isolatedFiles = [
 ];
 
 export default defineConfig({
-  plugins: [tsconfigPaths()],
+  // A template's `nextly` imports resolve to this package's source.
+  plugins: [tsconfigPaths(), nextlyForTemplates()],
   define: {
     __NEXTLY_CORE_VERSION__: JSON.stringify(coreVersion),
   },
@@ -151,6 +153,13 @@ export default defineConfig({
     // What each file loaded on its last run, so `--changed` and `related` pick
     // tests from real dependencies rather than a static import graph.
     experimental: { recordDependencies: true },
+    // Vitest's own reporters for wherever this runs (GitHub's annotations in
+    // CI), plus the module budget, which reads the records above at the end
+    // of a whole-suite run and fails it when the suite has grown heavier.
+    reporters: [
+      ...configDefaults.reporters,
+      "./src/__tests__/module-budget-reporter.ts",
+    ],
     globals: true,
     environment: "node",
     setupFiles: ["./src/__tests__/setup.ts"],

@@ -13,7 +13,7 @@ import {
 } from "@nextlyhq/ui";
 import type React from "react";
 import { useEffect } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, type Control } from "react-hook-form";
 import { z } from "zod";
 
 import {
@@ -21,12 +21,21 @@ import {
   SettingsSection,
 } from "@admin/components/features/settings";
 import { PageContainer } from "@admin/components/layout/page-container";
+import { PlaceTabs, TargetSlot } from "@admin/components/shared/target-slot";
 import { toast } from "@admin/components/ui";
 import { Form, FormField } from "@admin/components/ui/form";
 import {
   useGeneralSettings,
   useUpdateGeneralSettings,
 } from "@admin/hooks/queries/useGeneralSettings";
+import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import { useDashboardUser } from "@admin/hooks/useDashboardUser";
+import { useT } from "@admin/lib/i18n/I18nProvider";
+import { settingsChangesAllowed } from "@admin/lib/permissions/settings-changes";
+import type {
+  GeneralSettingsRecord,
+  UpdateGeneralSettingsPayload,
+} from "@admin/services/generalSettingsApi";
 
 import { GeneralSettingsSkeleton } from "./components/GeneralSettingsSkeleton";
 
@@ -135,211 +144,220 @@ const formSchema = z.object({
 
 type FormValues = z.infer<typeof formSchema>;
 
+/** The form's values for the stored settings: each one as stored, or empty. */
+function formValuesFrom(
+  settings: GeneralSettingsRecord | undefined
+): FormValues {
+  const stored = (key: keyof FormValues) => settings?.[key] ?? "";
+  return {
+    applicationName: stored("applicationName"),
+    siteUrl: stored("siteUrl"),
+    adminEmail: stored("adminEmail"),
+    timezone: stored("timezone"),
+    dateFormat: stored("dateFormat"),
+    timeFormat: stored("timeFormat"),
+    logoUrl: stored("logoUrl"),
+  };
+}
+
+/**
+ * What a save sends: an empty text field clears its setting, and so does a
+ * choice left empty or blank.
+ */
+function payloadFrom(values: FormValues): UpdateGeneralSettingsPayload {
+  const textOrNull = (value?: string) => value || null;
+  const choiceOrNull = (value?: string) => (value?.trim() ? value : null);
+  return {
+    applicationName: textOrNull(values.applicationName),
+    siteUrl: textOrNull(values.siteUrl),
+    adminEmail: textOrNull(values.adminEmail),
+    timezone: choiceOrNull(values.timezone),
+    dateFormat: choiceOrNull(values.dateFormat),
+    timeFormat: choiceOrNull(values.timeFormat),
+    logoUrl: textOrNull(values.logoUrl),
+  };
+}
+
+/** One of the page's choices: a labelled select over its options. */
+function SettingSelect({
+  control,
+  name,
+  label,
+  description,
+  placeholder,
+  options,
+  disabled,
+}: {
+  control: Control<FormValues>;
+  name: "timezone" | "dateFormat" | "timeFormat";
+  label: string;
+  description: string;
+  placeholder: string;
+  options: readonly { value: string; label: string }[];
+  disabled: boolean;
+}) {
+  return (
+    <FormField
+      control={control}
+      name={name}
+      render={({ field, fieldState }) => (
+        <FieldShell
+          label={label}
+          description={description}
+          error={fieldState.error?.message}
+        >
+          {({ id, describedBy, invalid }) => (
+            <Select
+              onValueChange={field.onChange}
+              value={field.value ?? ""}
+              disabled={disabled}
+            >
+              <SelectTrigger
+                id={id}
+                aria-describedby={describedBy}
+                aria-invalid={invalid}
+              >
+                <SelectValue placeholder={placeholder} />
+              </SelectTrigger>
+              <SelectContent>
+                {options.map(opt => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </FieldShell>
+      )}
+    />
+  );
+}
+
 // ============================================================
 // Page
 // ============================================================
 
 const SettingsGeneralPage: React.FC = () => {
-  const { data: settings, isLoading } = useGeneralSettings();
+  // Pending, not loading: the read waits for the session before it is asked,
+  // and the form is held until it has answered.
+  const { data: settings, isPending: isLoading } = useGeneralSettings();
   const { mutate: updateSettings, isPending } = useUpdateGeneralSettings();
+  // A reader without `update-settings` sees the settings read-only: the server
+  // refuses their save, so none is offered.
+  const { hasPermission } = useCurrentUserPermissions();
+  const mayUpdate = settingsChangesAllowed(hasPermission).update;
+  const { user } = useDashboardUser();
+  const t = useT();
+  // What a plugin's block or tab on this page is told: who is looking. Held
+  // while the viewer is not known yet, so no contribution is handed an id
+  // that is not theirs.
+  const placeContext = user ? { userId: user.id } : null;
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: {
-      applicationName: settings?.applicationName ?? "",
-      siteUrl: settings?.siteUrl ?? "",
-      adminEmail: settings?.adminEmail ?? "",
-      timezone: settings?.timezone ?? "",
-      dateFormat: settings?.dateFormat ?? "",
-      timeFormat: settings?.timeFormat ?? "",
-      logoUrl: settings?.logoUrl ?? "",
-    },
+    defaultValues: formValuesFrom(settings),
   });
 
   // When settings data arrives or changes, update the form immediately.
   useEffect(() => {
     if (settings) {
-      form.reset({
-        applicationName: settings.applicationName ?? "",
-        siteUrl: settings.siteUrl ?? "",
-        adminEmail: settings.adminEmail ?? "",
-        timezone: settings.timezone ?? "",
-        dateFormat: settings.dateFormat ?? "",
-        timeFormat: settings.timeFormat ?? "",
-        logoUrl: settings.logoUrl ?? "",
-      });
+      form.reset(formValuesFrom(settings));
     }
   }, [settings, form]);
 
   function onSubmit(values: FormValues) {
-    const timezoneToSave = values.timezone?.trim() ? values.timezone : null;
-
-    const dateFormatToSave = values.dateFormat?.trim()
-      ? values.dateFormat
-      : null;
-    const timeFormatToSave = values.timeFormat?.trim()
-      ? values.timeFormat
-      : null;
-
-    updateSettings(
-      {
-        applicationName: values.applicationName || null,
-        siteUrl: values.siteUrl || null,
-        adminEmail: values.adminEmail || null,
-        timezone: timezoneToSave,
-        dateFormat: dateFormatToSave,
-        timeFormat: timeFormatToSave,
-        logoUrl: values.logoUrl || null,
+    updateSettings(payloadFrom(values), {
+      onSuccess: () => {
+        // Reset the form to make it "clean" again after a successful save.
+        form.reset(values);
+        toast.success("Settings saved", {
+          description: "General settings have been updated.",
+        });
       },
-      {
-        onSuccess: () => {
-          // Reset the form to make it "clean" again after a successful save.
-          form.reset(values);
-          toast.success("Settings saved", {
-            description: "General settings have been updated.",
-          });
-        },
-        onError: err => {
-          toast.error("Failed to save settings", {
-            description: err.message,
-          });
-        },
-      }
-    );
+      onError: err => {
+        toast.error("Failed to save settings", {
+          description: err.message,
+        });
+      },
+    });
   }
 
   return (
-    <PageContainer width="form">
-      <Form {...form}>
-        <form
-          onSubmit={e => {
-            void form.handleSubmit(onSubmit)(e);
+    <PageContainer type="form">
+      {/* The page's own form is the `content` built-in: plugins' blocks
+          draw around it and their tabs beside it, in the order sent. */}
+      <PlaceTabs
+        place="settings"
+        context={placeContext}
+        contentLabel={t("nextly.places.settings.content")}
+      >
+        <TargetSlot
+          place="settings"
+          context={placeContext}
+          builtIns={{
+            content: (
+              <Form {...form}>
+                <form
+                  onSubmit={e => {
+                    void form.handleSubmit(onSubmit)(e);
+                  }}
+                >
+                  <SettingsLayout
+                    title="General Settings"
+                    description="Manage your application and configuration"
+                  >
+                    {isLoading ? (
+                      <GeneralSettingsSkeleton />
+                    ) : (
+                      // ── Section: Locale & Formatting ──
+                      <SettingsSection label="Locale & Formatting">
+                        <SettingSelect
+                          control={form.control}
+                          name="timezone"
+                          label="Timezone"
+                          description="Time zone used across the admin and email notifications."
+                          placeholder="Select a timezone"
+                          options={TIMEZONE_OPTIONS}
+                          disabled={isLoading || !mayUpdate}
+                        />
+
+                        <SettingSelect
+                          control={form.control}
+                          name="dateFormat"
+                          label="Date Format"
+                          description="How dates appear in lists and detail pages."
+                          placeholder="Select a date format"
+                          options={DATE_FORMAT_OPTIONS}
+                          disabled={isLoading || !mayUpdate}
+                        />
+
+                        <SettingSelect
+                          control={form.control}
+                          name="timeFormat"
+                          label="Time Format"
+                          description="12-hour vs 24-hour clock."
+                          placeholder="Select a time format"
+                          options={TIME_FORMAT_OPTIONS}
+                          disabled={isLoading || !mayUpdate}
+                        />
+                      </SettingsSection>
+                    )}
+
+                    <FormActions dirty={form.formState.isDirty}>
+                      {mayUpdate && (
+                        <Button type="submit" disabled={isPending || isLoading}>
+                          {isPending ? "Saving…" : "Save Changes"}
+                        </Button>
+                      )}
+                    </FormActions>
+                  </SettingsLayout>
+                </form>
+              </Form>
+            ),
           }}
-        >
-          <SettingsLayout
-            title="General Settings"
-            description="Manage your application and configuration"
-          >
-            {isLoading ? (
-              <GeneralSettingsSkeleton />
-            ) : (
-              // ── Section: Locale & Formatting ──
-              <SettingsSection label="Locale & Formatting">
-                <FormField
-                  control={form.control}
-                  name="timezone"
-                  render={({ field, fieldState }) => (
-                    <FieldShell
-                      label="Timezone"
-                      description="Time zone used across the admin and email notifications."
-                      error={fieldState.error?.message}
-                    >
-                      {({ id, describedBy, invalid }) => (
-                        <Select
-                          onValueChange={field.onChange}
-                          value={field.value ?? ""}
-                          disabled={isLoading}
-                        >
-                          <SelectTrigger
-                            id={id}
-                            aria-describedby={describedBy}
-                            aria-invalid={invalid}
-                          >
-                            <SelectValue placeholder="Select a timezone" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {TIMEZONE_OPTIONS.map(opt => (
-                              <SelectItem key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      )}
-                    </FieldShell>
-                  )}
-                />
-
-                <FormField
-                  control={form.control}
-                  name="dateFormat"
-                  render={({ field, fieldState }) => (
-                    <FieldShell
-                      label="Date Format"
-                      description="How dates appear in lists and detail pages."
-                      error={fieldState.error?.message}
-                    >
-                      {({ id, describedBy, invalid }) => (
-                        <Select
-                          onValueChange={field.onChange}
-                          value={field.value ?? ""}
-                          disabled={isLoading}
-                        >
-                          <SelectTrigger
-                            id={id}
-                            aria-describedby={describedBy}
-                            aria-invalid={invalid}
-                          >
-                            <SelectValue placeholder="Select a date format" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {DATE_FORMAT_OPTIONS.map(opt => (
-                              <SelectItem key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      )}
-                    </FieldShell>
-                  )}
-                />
-
-                <FormField
-                  control={form.control}
-                  name="timeFormat"
-                  render={({ field, fieldState }) => (
-                    <FieldShell
-                      label="Time Format"
-                      description="12-hour vs 24-hour clock."
-                      error={fieldState.error?.message}
-                    >
-                      {({ id, describedBy, invalid }) => (
-                        <Select
-                          onValueChange={field.onChange}
-                          value={field.value ?? ""}
-                          disabled={isLoading}
-                        >
-                          <SelectTrigger
-                            id={id}
-                            aria-describedby={describedBy}
-                            aria-invalid={invalid}
-                          >
-                            <SelectValue placeholder="Select a time format" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {TIME_FORMAT_OPTIONS.map(opt => (
-                              <SelectItem key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      )}
-                    </FieldShell>
-                  )}
-                />
-              </SettingsSection>
-            )}
-
-            <FormActions dirty={form.formState.isDirty}>
-              <Button type="submit" disabled={isPending || isLoading}>
-                {isPending ? "Saving…" : "Save Changes"}
-              </Button>
-            </FormActions>
-          </SettingsLayout>
-        </form>
-      </Form>
+        />
+      </PlaceTabs>
     </PageContainer>
   );
 };

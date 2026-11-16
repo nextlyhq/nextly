@@ -25,9 +25,16 @@ export async function streamOverPost(): Promise<typeof StreamModule> {
   const { protectedApi } = await import("@admin/lib/api/protectedApi");
   return {
     ...actual,
-    fetchWidgetBatch: async queries =>
+    // Posted as the real request sends it: the queries, and the layout answer's token when the
+    // batch is asked under one.
+    fetchWidgetBatch: async (queries, { readAheadToken }) =>
       actual.readResults(
-        await protectedApi.post<unknown>("/dashboard/query", { queries })
+        await protectedApi.post<unknown>(
+          "/dashboard/query",
+          readAheadToken === undefined
+            ? { queries }
+            : { queries, readAheadToken }
+        )
       ),
   };
 }

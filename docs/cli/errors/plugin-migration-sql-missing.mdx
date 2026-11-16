@@ -1,0 +1,23 @@
+---
+title: PLUGIN_MIGRATION_SQL_MISSING
+description: "A plugin migration changes the schema on this database's dialect and has no statements for it."
+---
+
+## Cause
+
+A plugin migration changes the schema on this database's dialect and has no statements for it.
+
+A migration written for its author's SQL, such as one from `nextly migrate:create --plugin <entry> --blank`, runs only the statements it is given. This one records a schema change on the database's dialect and has no statements for it, so running it would record a change it never made. Nothing was applied.
+
+## Fix
+
+- As the plugin's author, write the module's `up` and `down` for the dialect named, then run `nextly migrate` again.
+
+## Example
+
+```text
+✗ Plugin "@acme/seo" migration 20261020_120000_add_redirects changes the schema on sqlite but has no sqlite statements, so running it would record a change it never made.
+  Why:  A module written for its author's SQL, such as one from `nextly migrate:create --plugin <entry> --blank`, runs only the statements it is given. Nothing was applied.
+  Next: Write the module's sqlite `up` and `down` in the plugin, then run `nextly migrate` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-migration-sql-missing  (PLUGIN_MIGRATION_SQL_MISSING)
+```

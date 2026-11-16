@@ -32,6 +32,11 @@ export function usersColumns() {
     emailVerifiedVia: text("email_verified_via"),
     passwordUpdatedAt: integer("password_updated_at", { mode: "timestamp" }),
     image: text("image"),
+    // The interface language this person chose for the admin, as a language
+    // tag (`fr`, `pt-BR`); null follows the browser, then English. Kept apart
+    // from any content language. Nullable, so adding it to an existing table
+    // rewrites no row and every existing person keeps today's behaviour.
+    interfaceLanguage: text("interface_language"),
     passwordHash: text("password_hash"),
     isActive: integer("is_active", { mode: "boolean" })
       .notNull()

@@ -77,7 +77,7 @@ describe("a bulk update a hook turns into a publish", () => {
 
     const result = await batch.updateEntries(
       { collectionName: "bulletins", overrideAccess: true },
-      [{ id, data: { tag: "b" } }]
+      [{ id, data: { tag: "b", _overwrite: true } }]
     );
 
     expect(result.failed, JSON.stringify(result)).toBe(1);
@@ -120,7 +120,7 @@ describe("a status-only publish on a collection that keeps no drafts", () => {
       .update({
         collection: "memos",
         id,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
         overrideAccess: true,
       })
       .then(

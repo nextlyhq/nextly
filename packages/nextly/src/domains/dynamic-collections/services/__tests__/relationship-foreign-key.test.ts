@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import { foreignKeyNameForColumns } from "../../../schema/services/index-name";
+import { builderKeyTables, type CollectionTables } from "../collection-tables";
 import { DynamicCollectionSchemaService } from "../dynamic-collection-schema-service";
 
 const builder = (dialect: "postgresql" | "mysql" | "sqlite" = "mysql") =>
@@ -88,5 +89,181 @@ describe("relationshipForeignKey", () => {
         relationship("tags", { relationType: "manyToMany" })
       )
     ).toBeNull();
+  });
+});
+
+/**
+ * A relationship's target table is the one the target collection was created under: a hyphen in
+ * its address is written as an underscore, as every create names the table. Before hyphenated
+ * addresses were accepted in the Builder, the target was spliced in as written, so a relationship
+ * to `team-updates` referenced a `dc_team-updates` that no create makes. A junction table's NAME is
+ * a stored spelling and stays as it was.
+ */
+describe("a relationship's target table", () => {
+  const toTeamUpdates = (relationType: string, options = {}) =>
+    relationship("update", {
+      target: "team-updates",
+      relationType,
+      ...options,
+    });
+
+  it("is the table the target was created under, for each target address", () => {
+    for (const [target, table] of [
+      ["team-updates", "dc_team_updates"],
+      ["dc_posts", "dc_dc_posts"],
+      ["authors", "dc_authors"],
+    ] as const) {
+      expect(
+        builder().relationshipForeignKey(
+          "dc_notes",
+          relationship("update", { target })
+        )?.referencesTable,
+        target
+      ).toBe(table);
+    }
+  });
+
+  it.each(["postgresql", "mysql"] as const)(
+    "references it when a relationship is added or its actions change (%s)",
+    dialect => {
+      const added = builder(dialect).generateAlterTableMigration(
+        "dc_notes",
+        [],
+        [toTeamUpdates("manyToOne")]
+      );
+      const changed = builder(dialect).generateAlterTableMigration(
+        "dc_notes",
+        [toTeamUpdates("manyToOne", { onDelete: "cascade" })],
+        [toTeamUpdates("manyToOne", { onDelete: "restrict" })]
+      );
+      for (const sql of [added, changed]) {
+        expect(sql).toContain("dc_team_updates");
+        expect(sql).not.toContain("dc_team-updates");
+      }
+    }
+  );
+
+  it("points a junction at it, and keeps the junction's own name", () => {
+    const service = builder("postgresql");
+    const field = toTeamUpdates("manyToMany");
+    const shape = service.junctionShape("dc_notes", field);
+
+    expect(shape.targetTable).toBe("dc_team_updates");
+    expect(shape.table).toBe(
+      service.generateJunctionTableName("dc_notes", "dc_team-updates", "update")
+    );
+  });
+});
+
+/**
+ * Which relationships carry a key is one rule, read by the CREATE, by a column an edit adds, by the
+ * keys a create is predicted to install and by the key the push pipeline expects. A Builder
+ * collection's own keys read the admin's `relationTo`; every other reader keys `options.target`
+ * alone. A relationship stored as JSON, or whose target has no table, gets a key from none of them.
+ */
+describe("which relationships carry a key", () => {
+  const builderTables = builderKeyTables([
+    ["authors", "writers"],
+    ["posts", "dc_posts"],
+  ]);
+  const adminShape = {
+    name: "writer",
+    type: "relationship",
+    relationTo: "authors",
+  } as unknown as FieldDefinition;
+  const toUsers = {
+    name: "owner",
+    type: "relationship",
+    relationTo: "users",
+  } as unknown as FieldDefinition;
+  const toSingle = {
+    name: "settings",
+    type: "relationship",
+    relationTo: "site-settings",
+  } as unknown as FieldDefinition;
+  const multiValue = {
+    name: "authors",
+    type: "relationship",
+    hasMany: true,
+    relationTo: "authors",
+  } as unknown as FieldDefinition;
+  const several = {
+    name: "subject",
+    type: "relationship",
+    relationTo: ["authors", "posts"],
+  } as unknown as FieldDefinition;
+
+  /** Every place a key is described, created or predicted, for one field on `dc_notes`. */
+  function keysFor(field: FieldDefinition, targetTables?: CollectionTables) {
+    const service = builder("postgresql");
+    const described = service.relationshipForeignKey(
+      "dc_notes",
+      field,
+      true,
+      targetTables
+    );
+    const created = service.generateMigrationSQL("dc_notes", [field], {
+      targetTables,
+    });
+    const added = service.generateAlterTableMigration("dc_notes", [], [field], {
+      targetTables,
+    });
+    const planned = service.plannedAttachments(
+      "dc_notes",
+      [field],
+      targetTables
+    );
+    return [
+      ...(described ? [`described ${described.referencesTable}`] : []),
+      ...(/FOREIGN KEY/.test(created) ? ["created"] : []),
+      ...(/FOREIGN KEY/.test(added) ? ["added"] : []),
+      ...(planned.foreignKeysByColumn.size > 0 ? ["planned"] : []),
+    ];
+  }
+
+  it("keys the admin's relationTo everywhere, to the registry's table, for a Builder collection", () => {
+    expect(keysFor(adminShape, builderTables)).toEqual([
+      "described writers",
+      "created",
+      "added",
+      "planned",
+    ]);
+    expect(
+      builder("postgresql").generateMigrationSQL("dc_notes", [adminShape], {
+        targetTables: builderTables,
+      })
+    ).toContain(`REFERENCES "writers"`);
+  });
+
+  it("keys the admin's relationTo nowhere for any other reader", () => {
+    expect(keysFor(adminShape, new Map([["authors", "writers"]]))).toEqual([]);
+    expect(keysFor(adminShape)).toEqual([]);
+  });
+
+  it("keys a relationship to Users everywhere, to the core users table", () => {
+    expect(keysFor(toUsers, builderTables)).toEqual([
+      "described users",
+      "created",
+      "added",
+      "planned",
+    ]);
+  });
+
+  it("keys a relationTo to a target the registry does not hold nowhere", () => {
+    expect(keysFor(toSingle, builderTables)).toEqual([]);
+  });
+
+  it("keys a relationship holding a list, or naming several targets, nowhere", () => {
+    expect(keysFor(multiValue, builderTables)).toEqual([]);
+    expect(keysFor(several, builderTables)).toEqual([]);
+  });
+
+  it("keys an options.target relationship everywhere, as before", () => {
+    expect(keysFor(relationship("author"))).toEqual([
+      "described dc_authors",
+      "created",
+      "added",
+      "planned",
+    ]);
   });
 });

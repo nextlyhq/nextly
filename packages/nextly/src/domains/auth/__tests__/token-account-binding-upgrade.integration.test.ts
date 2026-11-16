@@ -164,6 +164,9 @@ async function migrate(t: TestNextly, dialect: TestDialect): Promise<boolean> {
       isConnected: () => true,
       getCapabilities: () => ({ dialect }),
       executeQuery: (statement: string) => t.adapter.executeQuery(statement),
+      // Asked before the run's first write, whether the ledger is there to
+      // read the app's migration history from.
+      tableExists: (table: string) => t.adapter.tableExists(table),
     } as unknown as Parameters<typeof migrateCore>[0]["adapter"],
     migrationsDir: NO_MIGRATIONS,
     logger: {
@@ -173,6 +176,12 @@ async function migrate(t: TestNextly, dialect: TestDialect): Promise<boolean> {
       debug: () => {},
     } as never,
     lockMode: "fail-fast",
+    // The schema lock needs a whole adapter, which this wrapper is not, and it is exercised against
+    // real databases in its own suites; here it runs the work as given.
+    withLock: async (_adapter, _dialect, fn) => ({
+      ran: true,
+      value: await fn(),
+    }),
     ensureLedger: async () => {
       if ((await columnsOf(t, dialect, "nextly_schema_events")).length > 0) {
         return;

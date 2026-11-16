@@ -25,6 +25,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  PageHeader,
   Table,
   TableBody,
   TableCell,
@@ -83,13 +84,20 @@ import {
   useUserFields,
 } from "@admin/hooks/queries/useUserFields";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
+import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { usePagination } from "@admin/hooks/usePagination";
 import { navigateTo } from "@admin/lib/navigation";
+import {
+  settingsChangesAllowed,
+  type SettingsChanges,
+} from "@admin/lib/permissions/settings-changes";
 import { cn } from "@admin/lib/utils";
 import type {
   UserFieldDefinitionRecord,
   UserFieldType,
 } from "@admin/services/userFieldsApi";
+
+import { UserFieldsGuard } from "./user-fields-guard";
 
 // ============================================================
 // Field Type Badge Config
@@ -321,12 +329,19 @@ function SortableFieldRow({
   onEdit,
   onView,
   onDelete,
+  changes,
 }: {
   field: UserFieldDefinitionRecord;
   onEdit: (field: UserFieldDefinitionRecord) => void;
   onView: (field: UserFieldDefinitionRecord) => void;
   onDelete: (field: UserFieldDefinitionRecord) => void;
+  /** The settings changes the reader may make; without one, its control is not offered. */
+  changes: SettingsChanges;
 }) {
+  // Reordering and editing a field are offered only to a reader holding
+  // update, and deleting one only to a reader holding delete. Every reader may
+  // open a field to see it: one that may not change it, like anyone opening a
+  // code-defined field, gets View, and the form shows it read-only.
   const {
     attributes,
     listeners,
@@ -334,7 +349,7 @@ function SortableFieldRow({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: field.id });
+  } = useSortable({ id: field.id, disabled: !changes.update });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -344,6 +359,8 @@ function SortableFieldRow({
   const typeConfig = fieldTypeConfig(field.type);
   const TypeIcon = typeConfig.icon;
   const isCode = field.source === "code";
+  const viewOnly = isCode || !changes.update;
+  const open = () => (viewOnly ? onView(field) : onEdit(field));
 
   return (
     <TableRow
@@ -353,41 +370,35 @@ function SortableFieldRow({
         "hover-unified-table-row cursor-pointer",
         isDragging && "bg-muted opacity-80"
       )}
-      onClick={() => (isCode ? onView(field) : onEdit(field))}
+      onClick={open}
     >
       {/* Drag handle + Name */}
       <TableCell className="whitespace-nowrap text-base">
         <div className="flex items-center gap-2">
-          <span
-            className="shrink-0 cursor-grab touch-none text-muted-foreground hover:text-foreground"
-            {...attributes}
-            {...listeners}
-            tabIndex={0}
-            aria-label={`Drag to reorder ${field.label}`}
-            onClick={e => e.stopPropagation()}
-          >
-            <GripVertical className="h-4 w-4" />
-          </span>
+          {changes.update && (
+            <span
+              className="shrink-0 cursor-grab touch-none text-muted-foreground hover:text-foreground"
+              {...attributes}
+              {...listeners}
+              tabIndex={0}
+              aria-label={`Drag to reorder ${field.label}`}
+              onClick={e => e.stopPropagation()}
+            >
+              <GripVertical className="h-4 w-4" />
+            </span>
+          )}
           <code
             className="text-sm bg-muted px-1.5 py-0.5 rounded-sm font-mono cursor-pointer hover-unified transition-colors"
             onClick={e => {
               e.stopPropagation();
-              if (isCode) {
-                onView(field);
-              } else {
-                onEdit(field);
-              }
+              open();
             }}
             role="button"
             tabIndex={0}
             onKeyDown={e => {
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
-                if (isCode) {
-                  onView(field);
-                } else {
-                  onEdit(field);
-                }
+                open();
               }
             }}
           >
@@ -456,17 +467,19 @@ function SortableFieldRow({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">
-            {isCode ? (
+            {viewOnly ? (
               <DropdownMenuItem onClick={() => onView(field)}>
                 <Eye className="h-4 w-4" />
                 View
               </DropdownMenuItem>
             ) : (
+              <DropdownMenuItem onClick={() => onEdit(field)}>
+                <Edit className="h-4 w-4" />
+                Edit
+              </DropdownMenuItem>
+            )}
+            {!isCode && changes.delete && (
               <>
-                <DropdownMenuItem onClick={() => onEdit(field)}>
-                  <Edit className="h-4 w-4" />
-                  Edit
-                </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={() => onDelete(field)}
@@ -489,6 +502,11 @@ function SortableFieldRow({
 // ============================================================
 
 function UserFieldsTable() {
+  // The settings changes this reader may make, each offered only to a reader
+  // holding the permission it asks.
+  const { hasPermission } = useCurrentUserPermissions();
+  const changes = settingsChangesAllowed(hasPermission);
+
   // Pagination state
   const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
 
@@ -585,7 +603,8 @@ function UserFieldsTable() {
   }, []);
 
   const handleView = useCallback((field: UserFieldDefinitionRecord) => {
-    // For code-sourced fields, navigate to edit page (form will be read-only)
+    // The edit page, which shows the field read-only to a reader who may not
+    // change it (anyone, for a code-defined field)
     navigateTo(buildRoute(ROUTES.USERS_FIELDS_EDIT, { id: field.id }));
   }, []);
 
@@ -796,6 +815,7 @@ function UserFieldsTable() {
                       onEdit={handleEdit}
                       onView={handleView}
                       onDelete={handleDelete}
+                      changes={changes}
                     />
                   ))}
                 </SortableContext>
@@ -842,33 +862,38 @@ function UserFieldsTable() {
 // ============================================================
 
 const UserFieldsPage: React.FC = () => {
+  const { hasPermission } = useCurrentUserPermissions();
+  const mayCreate = settingsChangesAllowed(hasPermission).create;
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
         <div>
-          <div className="mb-6">
+          <div className="mb-6 empty:hidden">
             <UserBreadcrumbs currentPage="fields" />
           </div>
 
           {/* Page Header */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-            <div>
-              <h1 className="text-xl font-semibold tracking-tight">
-                User Fields
-              </h1>
-              <p className="text-sm font-normal text-muted-foreground mt-1">
-                Manage custom attributes for user accounts
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <Link href={ROUTES.USERS_FIELDS_CREATE}>
-                <Button size="md" className="flex items-center gap-1 shrink-0">
-                  <Plus className="h-4 w-4" />
-                  <span>Add Field</span>
-                </Button>
-              </Link>
-            </div>
-          </div>
+          <PageHeader
+            title="User Fields"
+            description="Manage custom attributes for user accounts"
+            actions={
+              <>
+                {mayCreate && (
+                  <div className="flex items-center gap-2">
+                    <Link href={ROUTES.USERS_FIELDS_CREATE}>
+                      <Button
+                        size="md"
+                        className="flex items-center gap-1 shrink-0"
+                      >
+                        <Plus className="h-4 w-4" />
+                        <span>Add Field</span>
+                      </Button>
+                    </Link>
+                  </div>
+                )}
+              </>
+            }
+          />
 
           <UserFieldsTable />
         </div>
@@ -877,4 +902,13 @@ const UserFieldsPage: React.FC = () => {
   );
 };
 
-export default UserFieldsPage;
+/** The page, opened only to a reader who may also see users (`UserFieldsGuard`). */
+function GuardedUserFieldsPage(): React.JSX.Element {
+  return (
+    <UserFieldsGuard>
+      <UserFieldsPage />
+    </UserFieldsGuard>
+  );
+}
+
+export default GuardedUserFieldsPage;

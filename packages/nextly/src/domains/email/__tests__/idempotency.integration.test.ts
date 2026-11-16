@@ -52,6 +52,8 @@ const behaviour: {
   gate?: Promise<void>;
   /** Fail only the call to this `to` address, while `failures` lasts. */
   failFor?: string;
+  /** A copied address every call refuses, as an SMTP server would. */
+  refuse?: string;
 } = { failures: 0 };
 
 const contexts: Record<string, PluginContext> = {};
@@ -64,6 +66,7 @@ afterEach(async () => {
   behaviour.failures = 0;
   behaviour.gate = undefined;
   behaviour.failFor = undefined;
+  behaviour.refuse = undefined;
 });
 
 /** A provider that records what it is handed, and accepts it unless told. */
@@ -89,7 +92,25 @@ function capturing(
           behaviour.failures -= 1;
           throw new Error("provider down");
         }
-        return { success: true, messageId: `captured-${messages.length}` };
+        const refused = [
+          ...(options.toList ?? []),
+          ...(options.cc ?? []),
+          ...(options.bcc ?? []),
+        ].filter(address => address === behaviour.refuse);
+        return {
+          success: true,
+          messageId: `captured-${messages.length}`,
+          ...(refused.length > 0
+            ? {
+                rejected: refused,
+                refusals: refused.map(address => ({
+                  address,
+                  retryable: false,
+                  status: 550,
+                })),
+              }
+            : {}),
+        };
       },
     }),
   });
@@ -111,6 +132,7 @@ async function boot(dialect: TestDialect): Promise<{
   t: TestNextly;
   keyless: string;
   oneAtATime: string;
+  keyedOneAtATime: string;
 }> {
   const t = await createTestNextly({
     dialect,
@@ -120,6 +142,8 @@ async function boot(dialect: TestDialect): Promise<{
         capturing("capturing-keyless", false),
         // One `to` per message, so a send to two people is two calls.
         capturing("capturing-one", false, 1),
+        // Takes a key and one `to` per message.
+        capturing("capturing-keyed-one", true, 1),
       ]),
       mailerPlugin("other-mailer", []),
     ],
@@ -159,7 +183,20 @@ async function boot(dialect: TestDialect): Promise<{
       configuration: {},
     },
   });
-  return { t, keyless: keyless.item.id, oneAtATime: one.item.id };
+  const keyedOne = await t.nextly.emailProviders.create({
+    data: {
+      name: "Keyed one",
+      type: "capturing-keyed-one",
+      fromEmail: "provider@example.com",
+      configuration: {},
+    },
+  });
+  return {
+    t,
+    keyless: keyless.item.id,
+    oneAtATime: one.item.id,
+    keyedOneAtATime: keyedOne.item.id,
+  };
 }
 
 function plugin(name = "mailer"): PluginContext {
@@ -360,6 +397,201 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.email.send(keyed);
 
       expect(messages.map(m => m.options.to)).toEqual([A, B, B]);
+    }, 120_000);
+
+    it("reports a partly delivered send recipient by recipient, and an all-accepted one as before", async () => {
+      const { t, oneAtATime } = await boot(dialect);
+      behaviour.failures = 1;
+      behaviour.failFor = B;
+
+      const partly = await t.nextly.email.send({
+        to: [A, B],
+        subject: "Hi",
+        html: "<p>x</p>",
+        idempotencyKey: KEY,
+        providerId: oneAtATime,
+      });
+      const whole = await t.nextly.email.send({
+        to: [A, B],
+        subject: "Hi",
+        html: "<p>x</p>",
+        idempotencyKey: "another-key",
+        providerId: oneAtATime,
+      });
+
+      expect(partly).toMatchObject({
+        success: false,
+        partlyDelivered: true,
+        recipients: [
+          { kind: "to", position: 0, outcome: "accepted" },
+          // A plain error is a failed call, not a lost answer.
+          { kind: "to", position: 1, outcome: "refused", retryable: true },
+        ],
+      });
+      // Exactly as a send of two was before: nothing added.
+      expect(whole).toEqual({ success: true, messageId: "captured-3" });
+    }, 120_000);
+
+    it("retries through a provider that groups recipients differently, only to those not yet accepted", async () => {
+      const { t, oneAtATime, keyless } = await boot(dialect);
+      behaviour.failures = 1;
+      behaviour.failFor = B;
+      const keyed = {
+        to: [A, B],
+        subject: "Hi",
+        html: "<p>x</p>",
+        idempotencyKey: KEY,
+      };
+
+      await t.nextly.email.send({ ...keyed, providerId: oneAtATime });
+      const retried = await t.nextly.email.send({
+        ...keyed,
+        providerId: keyless,
+      });
+
+      expect(retried).toEqual({ success: true, messageId: "captured-3" });
+      // A once through the first provider; B again through the batching one.
+      expect(
+        messages.map(m => [m.provider, m.options.toList ?? [m.options.to]])
+      ).toEqual([
+        ["capturing-one", [A]],
+        ["capturing-one", [B]],
+        ["capturing-keyless", [B]],
+      ]);
+    }, 120_000);
+
+    it("keeps a refused copy's outcome on a keyed retry, at its place in the send", async () => {
+      const { t, oneAtATime } = await boot(dialect);
+      const C = "c@example.com";
+      behaviour.failures = 1;
+      behaviour.failFor = B;
+      behaviour.refuse = C;
+      const keyed = {
+        to: [A, B],
+        cc: [C],
+        subject: "Hi",
+        html: "<p>x</p>",
+        idempotencyKey: KEY,
+        providerId: oneAtATime,
+      };
+
+      await t.nextly.email.send(keyed);
+      const retried = await t.nextly.email.send(keyed);
+
+      expect(retried).toMatchObject({
+        success: true,
+        refused: [{ kind: "cc", position: 0, retryable: false, status: 550 }],
+      });
+    }, 120_000);
+
+    it("honours a partly delivered claim that recorded its accepted calls, as claims did before", async () => {
+      const { t, keyedOneAtATime } = await boot(dialect);
+      behaviour.failures = 1;
+      behaviour.failFor = B;
+      const keyed = {
+        to: [A, B],
+        subject: "Hi",
+        html: "<p>x</p>",
+        idempotencyKey: KEY,
+        providerId: keyedOneAtATime,
+      };
+      await t.nextly.email.send(keyed);
+      // As an earlier version wrote it: the call to A, by its provider key.
+      await t.adapter.update(
+        "email_send_claims",
+        {
+          result: JSON.stringify({
+            acceptedLegs: [messages[0].options.idempotencyKey],
+          }),
+        },
+        { and: [{ column: "state", op: "=", value: "partial" }] }
+      );
+
+      await t.nextly.email.send(keyed);
+
+      expect(messages.map(m => m.options.to)).toEqual([A, B, B]);
+    }, 120_000);
+
+    it("honours an earlier version's accepted call when the retry goes through a provider that groups recipients", async () => {
+      const { t, keyedOneAtATime } = await boot(dialect);
+      behaviour.failures = 1;
+      behaviour.failFor = B;
+      const keyed = {
+        to: [A, B],
+        subject: "Hi",
+        html: "<p>x</p>",
+        idempotencyKey: KEY,
+      };
+      await t.nextly.email.send({ ...keyed, providerId: keyedOneAtATime });
+      // As an earlier version wrote it: the one-recipient call to A.
+      await t.adapter.update(
+        "email_send_claims",
+        {
+          result: JSON.stringify({
+            acceptedLegs: [messages[0].options.idempotencyKey],
+          }),
+        },
+        { and: [{ column: "state", op: "=", value: "partial" }] }
+      );
+
+      // The default provider sends both in one message.
+      await t.nextly.email.send(keyed);
+
+      expect(
+        messages.map(m => [m.provider, m.options.toList ?? [m.options.to]])
+      ).toEqual([
+        ["capturing-keyed-one", [A]],
+        ["capturing-keyed-one", [B]],
+        ["capturing-keyed", [B]],
+      ]);
+    }, 120_000);
+
+    it("writes a partly delivered claim's accepted calls too, for an instance of the earlier version", async () => {
+      const { t, keyedOneAtATime } = await boot(dialect);
+      behaviour.failures = 1;
+      behaviour.failFor = B;
+
+      await t.nextly.email.send({
+        to: [A, B],
+        subject: "Hi",
+        html: "<p>x</p>",
+        idempotencyKey: KEY,
+        providerId: keyedOneAtATime,
+      });
+
+      const [claim] = await t.adapter.select<{ result: string }>(
+        "email_send_claims"
+      );
+      expect(JSON.parse(claim.result)).toEqual({
+        accepted: ["to:0"],
+        acceptedLegs: [messages[0].options.idempotencyKey],
+      });
+    }, 120_000);
+
+    it("writes a call that took some of its recipients as accepted, so an instance of the earlier version never sends it again", async () => {
+      const { t } = await boot(dialect);
+      // One call to both, which takes A and refuses B: the send is partly
+      // delivered within the call. The earlier version knows calls only, so
+      // the call is recorded as accepted: B is not retried there, and A is
+      // never sent twice.
+      behaviour.refuse = B;
+
+      await t.nextly.email.send({
+        to: [A, B],
+        subject: "Hi",
+        html: "<p>x</p>",
+        idempotencyKey: KEY,
+      });
+
+      expect(messages).toHaveLength(1);
+      const [claim] = await t.adapter.select<{ state: string; result: string }>(
+        "email_send_claims"
+      );
+      expect(claim.state).toBe("partial");
+      expect(JSON.parse(claim.result)).toEqual({
+        accepted: ["to:0"],
+        acceptedLegs: [messages[0].options.idempotencyKey],
+      });
     }, 120_000);
 
     it("refuses the key with a different message, through the Direct API", async () => {

@@ -11,19 +11,38 @@
  * A row is retired only when its element is gone from BOTH the config and the
  * database. Declared-but-absent is a migration still to run; present-but-
  * undeclared is a drop still to run — in either case the row is still true.
+ * "Declared" means declared by the row's own owner: when the config hands an
+ * element's name to another owner, the old owner's row says nothing true
+ * once its element is gone, and kept, it would put the new owner's element
+ * in the old owner's stream.
  *
  * @module domains/schema/ownership/retired-elements
  */
+import type { SchemaOwner } from "../extension/types";
 import type { NextlySchemaSnapshot, TableSpec } from "../pipeline/diff/types";
 
 import { ownerRecordKey, type OwnerRecord } from "./owner-registry";
 
 type ElementKind = "column" | "index" | "fk" | "check";
 
-/** One element, as the compiled schema declares it. */
+/** One element, as the compiled schema declares it, and who declares it. */
 export interface DeclaredElement {
   elementKind: ElementKind;
   elementName: string;
+  owner: SchemaOwner;
+}
+
+/**
+ * An element and its owner as one key, the owner spelled as an owner row
+ * spells it (`app`, or the plugin's name), so a row and a declaration of the
+ * same element by the same owner meet.
+ */
+function ownedElementKey(
+  element: Parameters<typeof ownerRecordKey>[0],
+  ownerKind: string,
+  ownerId: string
+): string {
+  return `${ownerRecordKey(element)}\u0000${ownerKind}\u0000${ownerId}`;
 }
 
 /** An element row, which is what retirement ever returns. */
@@ -53,7 +72,17 @@ export function retiredElementRows(input: {
   const declaredKeys = new Set<string>();
   for (const [table, elements] of input.declared) {
     for (const element of elements) {
-      declaredKeys.add(ownerRecordKey({ tableName: table, ...element }));
+      declaredKeys.add(
+        ownedElementKey(
+          {
+            tableName: table,
+            elementKind: element.elementKind,
+            elementName: element.elementName,
+          },
+          element.owner.kind,
+          element.owner.kind === "plugin" ? element.owner.id : "app"
+        )
+      );
     }
   }
   const liveByName = new Map(
@@ -64,7 +93,9 @@ export function retiredElementRows(input: {
     const kind = row.elementKind ?? "table";
     if (kind === "table") return false;
     const name = row.elementName ?? "";
-    if (declaredKeys.has(ownerRecordKey(row))) return false;
+    if (declaredKeys.has(ownedElementKey(row, row.ownerKind, row.ownerId))) {
+      return false;
+    }
     const liveTable = liveByName.get(row.tableName);
     if (liveTable === undefined) return true;
     const present = liveTable[LIVE_DIMENSION[kind]] as

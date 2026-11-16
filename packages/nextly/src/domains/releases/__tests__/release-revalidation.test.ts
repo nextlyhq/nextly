@@ -67,3 +67,64 @@ describe("releaseRevalidationIntent", () => {
     expect(releaseRevalidationIntent([])).toBeNull();
   });
 });
+
+/*
+ * A release is one more way to write a document, so its flush follows the same
+ * `revalidate` config every other write does: an opted-out collection or Single
+ * is skipped exactly, and extra tags are flushed with the rest.
+ */
+describe("releaseRevalidationIntent, with each scope's revalidate config", () => {
+  const configs: Record<string, { disable?: boolean; tags?: string[] }> = {
+    "collection:posts": { tags: ["navigation"] },
+    "collection:drafts": { disable: true },
+    "single:homepage": { tags: ["home-hero"] },
+    "single:footer": { disable: true },
+  };
+  const configFor = (kind: "collection" | "single", slug: string) =>
+    configs[`${kind}:${slug}`];
+
+  it("skips exactly the members whose collection or Single opts out", () => {
+    const intent = releaseRevalidationIntent(
+      [
+        member({ scopeSlug: "posts", entryId: "e1" }),
+        member({ scopeSlug: "drafts", entryId: "e2" }),
+        member({ scopeKind: "single", scopeSlug: "homepage" }),
+        member({ scopeKind: "single", scopeSlug: "footer" }),
+      ],
+      configFor
+    );
+    expect(intent?.tags.sort()).toEqual(
+      [
+        "home-hero",
+        "navigation",
+        "nextly:posts",
+        "nextly:posts:id:e1",
+        "nextly:single:homepage",
+      ].sort()
+    );
+  });
+
+  it("is null when every member opts out", () => {
+    expect(
+      releaseRevalidationIntent(
+        [
+          member({ scopeSlug: "drafts" }),
+          member({ scopeKind: "single", scopeSlug: "footer" }),
+        ],
+        configFor
+      )
+    ).toBeNull();
+  });
+
+  it("asks a page member's config as a collection entry's", () => {
+    const asked: string[] = [];
+    releaseRevalidationIntent(
+      [member({ scopeKind: "page", scopeSlug: "pages" })],
+      (kind, slug) => {
+        asked.push(`${kind}:${slug}`);
+        return undefined;
+      }
+    );
+    expect(asked).toEqual(["collection:pages"]);
+  });
+});

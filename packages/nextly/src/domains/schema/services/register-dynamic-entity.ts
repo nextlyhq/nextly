@@ -26,6 +26,10 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { SchemaRegistry } from "../../../database/schema-registry";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections/legacy-types";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
 import { builtByFor } from "../pipeline/registered-collections";
 
 export interface RegisterDynamicEntityArgs {
@@ -45,13 +49,34 @@ export interface RegisterDynamicEntityArgs {
    * ownership decides rather than the caller.
    */
   builderOwned: boolean | undefined;
+  /**
+   * Whether a missing translation table is created here. Default true. A
+   * production start passes false: it defines no structure, so an entity whose
+   * translation table no migration made is registered as it is, and its reads
+   * and writes say the table is not ready (`isCompanionReady`).
+   */
+  createMissingCompanion?: boolean;
 }
 
 export async function registerDynamicEntitySchema(
   args: RegisterDynamicEntityArgs
 ): Promise<void> {
-  const { adapter, registry, dialect, tableName, fields, status, localized } =
-    args;
+  const {
+    adapter,
+    registry,
+    dialect,
+    tableName,
+    fields,
+    status,
+    localized: entityLocalized,
+  } = args;
+  // Where its translatable columns live, for its table and its companion alike.
+  const localized = storesPerLanguage({ localized: entityLocalized });
+  // A per-language `_status` only where the entity publishes each language on its own.
+  const companionStatus = publishesPerLanguage({
+    localized: entityLocalized,
+    status,
+  });
 
   const { generateRuntimeSchema } = await import("./runtime-schema-generator");
   // A localized entity omits its translatable columns from the main runtime
@@ -65,18 +90,21 @@ export async function registerDynamicEntitySchema(
   if (!localized) return;
 
   // Created here if a migration has not already (idempotent), so a code-first
-  // localized entity works without a manual migrate.
-  const { ensureCompanionTable } = await import(
-    "../../i18n/runtime/companion-io"
-  );
-  await ensureCompanionTable(adapter, {
-    builtBy: builtByFor(args.kind, args.builderOwned),
-    slug: tableName,
-    tableName,
-    fields,
-    dialect,
-    status,
-  });
+  // localized entity works without a manual migrate, where the caller may
+  // define structure.
+  if (args.createMissingCompanion !== false) {
+    const { ensureCompanionTable } = await import(
+      "../../i18n/runtime/companion-io"
+    );
+    await ensureCompanionTable(adapter, {
+      builtBy: builtByFor(args.kind, args.builderOwned),
+      slug: tableName,
+      tableName,
+      fields,
+      dialect,
+      status: companionStatus,
+    });
+  }
 
   const { buildCompanionRuntimeTable } = await import(
     "../../i18n/runtime/companion-registration"
@@ -89,7 +117,7 @@ export async function registerDynamicEntitySchema(
     localized: true,
     // Carries `_status`, so a Draft/Published localized entity's registered
     // companion matches what `loadCompanionSchema` expects.
-    status,
+    status: companionStatus,
   });
   if (companion) {
     registry.registerDynamicSchema(

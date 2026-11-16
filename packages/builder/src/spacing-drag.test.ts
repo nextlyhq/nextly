@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_ACTIVATION_PX } from "./canvas-drag";
 import type { SideOrientation } from "./side-orientation";
 import type { SpacingBox, SpacingSide } from "./spacing-bands";
 import {
@@ -13,7 +12,6 @@ import {
   spacingSidesFor,
   spacingStart,
   spacingValue,
-  SPACING_ACTIVATION_PX,
 } from "./spacing-drag";
 import { measurementOf } from "./style-numeric";
 import type { LogicalSide } from "./style-sides";
@@ -629,13 +627,4 @@ describe("addresses and values", () => {
   it("writes a pixel length", () => {
     expect(spacingCssValue(-12)).toBe("-12px");
   });
-});
-
-/*
- * Identity, not equality. A second threshold spelled here would agree with the
- * canvas today and drift the moment either moves, leaving one editor with two
- * answers to "did the hand mean to move".
- */
-it("takes its activation threshold from the canvas", () => {
-  expect(SPACING_ACTIVATION_PX).toBe(DEFAULT_ACTIVATION_PX);
 });

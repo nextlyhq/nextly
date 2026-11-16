@@ -1,11 +1,15 @@
 /**
  * The single-language read benchmark: list and detail reads, through the
- * Direct API and REST, on a site storing its translatable fields on the main
- * table (`main`, today) and per language from the start (`per-language`), on
- * each database. Prints a table and a verdict; `--out` keeps every
- * measurement as JSON.
+ * Direct API and REST, on two storage modes of one site, on each database.
+ * `--modes base,candidate` names them, from the fixture's: its translatable
+ * fields on the main table (`main`, today), per language from the start as a
+ * one-language translated site (`per-language`), or per language from the
+ * start under the site-wide storage option (`e4`). Prints a table and a
+ * verdict on the candidate against the base; `--out` keeps every measurement
+ * as JSON.
  *
- *   node scripts/read-benchmark/run.mjs [--dialects sqlite,postgresql,mysql]
+ *   node scripts/read-benchmark/run.mjs [--modes main,per-language]
+ *     [--dialects sqlite,postgresql,mysql]
  *     [--runs 4] [--max-runs 6] [--docs 1000] [--iterations 3000] [--warmup 300]
  *     [--rest-iterations 600] [--seed 1] [--max-load <cores>] [--spread-limit 0.05]
  *     [--bound 10] [--save measurements.jsonl] [--out results.json]
@@ -49,15 +53,29 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..", "..");
 const MAX_RETAKES = 3;
 
-/** The order a run measures the modes in: A then B on even runs, B then A on odd ones. */
-export function orderFor(runIndex) {
-  return runIndex % 2 === 0 ? [...MODES] : [...MODES].reverse();
+/**
+ * The two modes a run compares, base first, from `--modes base,candidate`: two
+ * different modes the fixture knows, or nothing is measured. One alone has
+ * nothing to compare with, and a mode against itself measures only noise.
+ */
+export function modePair(value) {
+  const modes = String(value).split(",");
+  if (modes.length !== 2 || modes[0] === modes[1] || !modes.every(mode => MODES.includes(mode))) {
+    throw new RangeError(`--modes ${value} is not two different modes of ${MODES.join(", ")}`);
+  }
+  return modes;
 }
 
-/** Whether every read's p95 agrees across a database's runs, mode by mode. */
+/** The order a run measures `modes` in: A then B on even runs, B then A on odd ones. */
+export function orderFor(runIndex, modes) {
+  return runIndex % 2 === 0 ? [...modes] : [...modes].reverse();
+}
+
+/** Whether every read's p95 agrees across a database's runs, for each mode the runs hold. */
 export function runsAgree(runs, spreadLimit) {
-  const reads = Object.keys(runs[0][MODES[0]].results);
-  return reads.every(read => MODES.every(mode => spread(runs.map(run => run[mode].results[read].p95)) <= spreadLimit));
+  const modes = Object.keys(runs[0]);
+  const reads = Object.keys(runs[0][modes[0]].results);
+  return reads.every(read => modes.every(mode => spread(runs.map(run => run[mode].results[read].p95)) <= spreadLimit));
 }
 
 /**
@@ -106,11 +124,12 @@ export function checkLimits({ minRuns, maxRuns }) {
   if (minRuns > maxRuns) throw new RangeError(`--runs ${minRuns} is above --max-runs ${maxRuns}`);
 }
 
-/** The settings every measurement in a report was taken with, as numbers. */
+/** The settings every measurement in a report was taken with: the modes, and the rest as numbers. */
 export function reportSettings(options) {
   const number = name => Number(options[name]);
   return {
     revision: options.revision,
+    modes: modePair(options.modes),
     seed: number("seed"),
     docs: number("docs"),
     iterations: number("iterations"),
@@ -127,19 +146,20 @@ export function overallCall(dialects) {
   return gating.some(r => r.verdict === "over") ? "over" : "inconclusive";
 }
 
-/** The report as a Markdown table, one row per database and read. */
-export function tableLines(dialects) {
+/** The report as a Markdown table, one row per database and read, `modes` named as compared. */
+export function tableLines(dialects, modes) {
+  const [base, candidate] = modes;
   const ms = v => v.toFixed(2);
   const pct = v => `${(v * 100).toFixed(1)}%`;
   const lines = [
-    "| Database | Read | main p50 / p95 (median of runs) | per-language p50 / p95 | p95 ratio | p95 spread (main, per-language) | Verdict |",
+    `| Database | Read | ${base} p50 / p95 (median of runs) | ${candidate} p50 / p95 | p95 ratio | p95 spread (${base}, ${candidate}) | Verdict |`,
     "| --- | --- | --- | --- | --- | --- | --- |",
   ];
   for (const [dialect, { runs, verdict }] of Object.entries(dialects)) {
     for (const row of verdict.reads) {
       const at = (mode, stat) => median(runs.map(run => run[mode].results[row.read][stat]));
       lines.push(
-        `| ${dialect} | ${row.read} | ${ms(at("main", "p50"))} / ${ms(at("main", "p95"))} ms | ${ms(at("per-language", "p50"))} / ${ms(at("per-language", "p95"))} ms | ${row.ratio.toFixed(3)} | ${pct(row.spread.main)}, ${pct(row.spread["per-language"])} | ${row.verdict} |`
+        `| ${dialect} | ${row.read} | ${ms(at(base, "p50"))} / ${ms(at(base, "p95"))} ms | ${ms(at(candidate, "p50"))} / ${ms(at(candidate, "p95"))} ms | ${row.ratio.toFixed(3)} | ${pct(row.spread[base])}, ${pct(row.spread[candidate])} | ${row.verdict} |`
       );
     }
   }
@@ -222,8 +242,8 @@ async function steadyMeasure(dialect, mode, options, skipped) {
 }
 
 /** A run's saved measurements, only when both its modes were saved; `null` otherwise. */
-export function savedRun(saved, dialect, runIndex) {
-  const pair = MODES.map(mode => [mode, saved.get(keyFor(dialect, runIndex, mode))]);
+export function savedRun(saved, dialect, runIndex, modes) {
+  const pair = modes.map(mode => [mode, saved.get(keyFor(dialect, runIndex, mode))]);
   return pair.every(([, result]) => result !== undefined) ? Object.fromEntries(pair) : null;
 }
 
@@ -238,7 +258,7 @@ async function measured(dialect, runIndex, mode, context) {
 /** A run taken now: both modes, in the run's order. */
 async function measuredRun(dialect, runIndex, context) {
   const run = {};
-  for (const mode of orderFor(runIndex)) run[mode] = await measured(dialect, runIndex, mode, context);
+  for (const mode of orderFor(runIndex, context.modes)) run[mode] = await measured(dialect, runIndex, mode, context);
   return run;
 }
 
@@ -246,7 +266,7 @@ async function measuredRun(dialect, runIndex, context) {
 async function runsFor(dialect, limits, context) {
   const runs = [];
   while (needsAnotherRun(runs, limits)) {
-    runs.push(savedRun(context.store.saved, dialect, runs.length) ?? (await measuredRun(dialect, runs.length, context)));
+    runs.push(savedRun(context.store.saved, dialect, runs.length, context.modes) ?? (await measuredRun(dialect, runs.length, context)));
   }
   return runs;
 }
@@ -261,6 +281,7 @@ export function optionsOf(argv) {
   const { values } = parseArgs({
     args: argv,
     options: {
+      modes: { type: "string", default: "main,per-language" },
       dialects: { type: "string", default: "sqlite,postgresql,mysql" },
       runs: { type: "string", default: "4" },
       "max-runs": { type: "string", default: "6" },
@@ -283,20 +304,21 @@ export function optionsOf(argv) {
 async function main(argv) {
   const options = { ...optionsOf(argv), revision: revisionOf(root) };
   checkNumbers(options);
+  const modes = modePair(options.modes);
   const limits = { minRuns: Number(options.runs), maxRuns: Number(options["max-runs"]), spreadLimit: Number(options["spread-limit"]) };
   checkLimits(limits);
   const bound = Number(options.bound) / 100;
   const report = { ...reportSettings(options), ...limits, bound, dialects: {}, skipped: [] };
-  const context = { options, skipped: report.skipped, store: openSaved(options.save, options) };
+  const context = { options, modes, skipped: report.skipped, store: openSaved(options.save, options) };
   for (const dialect of options.dialects.split(",")) {
     const runs = await runsFor(dialect, limits, context);
-    report.dialects[dialect] = { runs, verdict: verdictFor(runs, { bound }) };
+    report.dialects[dialect] = { runs, verdict: verdictFor(runs, { bound, modes }) };
   }
   writeReport(options.out, report);
-  console.log(tableLines(report.dialects).join("\n"));
+  console.log(tableLines(report.dialects, modes).join("\n"));
   const counts = Object.entries(report.dialects).map(([d, { runs }]) => `${d} ${runs.length}`).join(", ");
   console.log(`\nRuns per database: ${counts}. Measurements retaken for load: ${report.skipped.length}.`);
-  console.log(`Verdict on the Direct API reads, bound ${(bound * 100).toFixed(0)}%: ${overallCall(report.dialects)}.`);
+  console.log(`Verdict on the Direct API reads, ${modes[1]} against ${modes[0]}, bound ${(bound * 100).toFixed(0)}%: ${overallCall(report.dialects)}.`);
 }
 
 if (isCliEntry(import.meta.url)) await main(process.argv.slice(2));

@@ -14,13 +14,19 @@
  * export { GET, PATCH, DELETE } from 'nextly/api/email-providers-detail';
  * ```
  *
- * Auth is a header-only presence check; real verification lives downstream.
+ * Auth is the canonical route gate: a verified session or API key plus the
+ * permission each handler names, the same model the dispatcher's catch-all
+ * router enforces.
  *
  * @module api/email-providers-detail
  */
 
 import { actorFromAuthContext } from "../auth/request-actor";
 import { container } from "../di";
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+} from "../domains/auth/system-write-policy";
 import { getCachedNextly } from "../init";
 import type { EmailProviderService } from "../services/email/email-provider-service";
 
@@ -41,7 +47,9 @@ async function getEmailProviderService(): Promise<EmailProviderService> {
 /**
  * GET handler for retrieving a single email provider by ID.
  *
- * Requires authentication. Returns provider with masked configuration.
+ * Requires authentication. Returns the provider with masked configuration
+ * and its sending domain's status, the same document the catch-all router
+ * serves the admin.
  *
  * Response Codes:
  * - 200 OK: Provider retrieved successfully
@@ -54,13 +62,14 @@ async function getEmailProviderService(): Promise<EmailProviderService> {
 export const GET = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
     await requireRouteAnyPermission(request, [
-      { action: "read", resource: "email-providers" },
-      { action: "manage", resource: "email-providers" },
+      ...SYSTEM_READ_POLICY.emailProviders.read.anyOf,
     ]);
 
     const { id } = await context.params;
     const service = await getEmailProviderService();
-    const provider = await service.getProvider(id);
+    // One lookup, so the record and the domain status cannot describe
+    // different saved states.
+    const provider = await service.getProviderWithDomainStatus(id);
 
     return respondDoc(provider);
   }
@@ -98,8 +107,7 @@ export const PATCH = withErrorHandler(
     // mutation through them recorded nothing -- the trail would have covered
     // one supported REST surface and not the other.
     const auth = await requireRouteAnyPermission(request, [
-      { action: "update", resource: "email-providers" },
-      { action: "manage", resource: "email-providers" },
+      ...SYSTEM_WRITE_POLICY.emailProviders.update.anyOf,
     ]);
 
     const { id } = await context.params;
@@ -156,8 +164,7 @@ export const DELETE = withErrorHandler(
     // mutation through them recorded nothing -- the trail would have covered
     // one supported REST surface and not the other.
     const auth = await requireRouteAnyPermission(request, [
-      { action: "delete", resource: "email-providers" },
-      { action: "manage", resource: "email-providers" },
+      ...SYSTEM_WRITE_POLICY.emailProviders.delete.anyOf,
     ]);
 
     const { id } = await context.params;

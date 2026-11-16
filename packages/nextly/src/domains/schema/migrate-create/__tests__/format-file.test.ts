@@ -2,6 +2,8 @@
 
 import { describe, expect, it } from "vitest";
 
+import type { Deletion } from "../../migrate/data-loss-consent";
+import { parseSqlSections } from "../../migrate/sql-sections";
 import { marksNoTransaction } from "../../migrate/split-sql";
 
 import {
@@ -139,6 +141,166 @@ describe("formatMigrationFile", () => {
       now: NOW,
     });
     expect(out).toContain("-- Collections: posts, comments");
+  });
+});
+
+// A header line names what a config or a plugin declares, text the generator does not write
+// itself: a line break in it would end the comment and leave the rest as a statement that
+// `nextly migrate` runs. Every header line stays one comment line.
+describe("a header line that names declared text", () => {
+  it.each([
+    [
+      "a permission change",
+      { permissionChanges: ["p: + export-reports\nDELETE FROM users"] },
+    ],
+    [
+      "a settings change",
+      { settingsChanges: ["posts: description\r\nDROP TABLE x"] },
+    ],
+  ])("keeps %s on one comment line", (_n, changes) => {
+    const out = formatMigrationFile({
+      name: "change",
+      dialect: "postgresql",
+      sqlStatements: [],
+      downSqlStatements: [],
+      collections: [],
+      singles: [],
+      components: [],
+      hasUserExt: false,
+      changesNoTable: true,
+      now: new Date("2026-04-29T15:45:00.123Z"),
+      ...changes,
+    });
+    const named = out
+      .split("\n")
+      .filter(line => /DELETE FROM users|DROP TABLE x/.test(line));
+    expect(named).toHaveLength(1);
+    expect(named[0]).toMatch(/^-- /);
+  });
+});
+
+// A file that deletes data says so in its header, naming every table and column it deletes and the
+// consent `nextly migrate` needs for it, so a reviewer sees it in the diff before it is applied.
+describe("the destructive mark", () => {
+  const file = (deletions: Deletion[]) =>
+    formatMigrationFile({
+      name: "change",
+      dialect: "postgresql",
+      sqlStatements: ["SELECT 1"],
+      downSqlStatements: [],
+      collections: [],
+      singles: [],
+      components: [],
+      hasUserExt: false,
+      now: new Date("2026-04-29T15:45:00.123Z"),
+      deletions,
+    });
+  const header = (out: string) => out.slice(0, out.indexOf("-- UP"));
+  const marks = (out: string) =>
+    header(out)
+      .split("\n")
+      .filter(line => /^-- (Destructive|Deletes):/.test(line));
+
+  it.each<[string, Deletion, string[]]>([
+    [
+      "a removed entity's table",
+      {
+        kind: "table",
+        table: "dc_posts",
+        reason: "collection posts is no longer in the config",
+      },
+      [
+        "-- Destructive: this migration deletes data. nextly migrate needs consent: --accept-data-loss=dc_posts (or NEXTLY_ACCEPT_DATA_LOSS=dc_posts)",
+        "-- Deletes: table dc_posts: collection posts is no longer in the config",
+      ],
+    ],
+    [
+      "a dropped column",
+      { kind: "column", table: "dc_pages", column: "legacy" },
+      [
+        "-- Destructive: this migration deletes data. nextly migrate needs consent: --accept-data-loss=dc_pages.legacy (or NEXTLY_ACCEPT_DATA_LOSS=dc_pages.legacy)",
+        "-- Deletes: column dc_pages.legacy",
+      ],
+    ],
+    [
+      "a declined rename",
+      {
+        kind: "column",
+        table: "dc_pages",
+        column: "summary",
+        reason: "rename to excerpt declined",
+      },
+      [
+        "-- Destructive: this migration deletes data. nextly migrate needs consent: --accept-data-loss=dc_pages.summary (or NEXTLY_ACCEPT_DATA_LOSS=dc_pages.summary)",
+        "-- Deletes: column dc_pages.summary: rename to excerpt declined",
+      ],
+    ],
+    [
+      "a type change",
+      {
+        kind: "column",
+        table: "dc_products",
+        column: "price",
+        reason: "type changes from text to integer",
+      },
+      [
+        "-- Destructive: this migration deletes data. nextly migrate needs consent: --accept-data-loss=dc_products.price (or NEXTLY_ACCEPT_DATA_LOSS=dc_products.price)",
+        "-- Deletes: column dc_products.price: type changes from text to integer",
+      ],
+    ],
+    [
+      "rows a person's answer removes",
+      {
+        kind: "rows",
+        table: "dc_posts",
+        reason: "rows with no author removed, so the column can be required",
+      },
+      [
+        "-- Destructive: this migration deletes data. nextly migrate needs consent: --accept-data-loss=dc_posts (or NEXTLY_ACCEPT_DATA_LOSS=dc_posts)",
+        "-- Deletes: rows of dc_posts: rows with no author removed, so the column can be required",
+      ],
+    ],
+  ])("names %s", (_kind, deletion, expected) => {
+    expect(marks(file([deletion]))).toEqual(expected);
+  });
+
+  it("names every deletion, and one consent covering them all", () => {
+    expect(
+      marks(
+        file([
+          { kind: "table", table: "dc_posts" },
+          { kind: "column", table: "dc_pages", column: "summary" },
+        ])
+      )
+    ).toEqual([
+      "-- Destructive: this migration deletes data. nextly migrate needs consent: --accept-data-loss=dc_posts,dc_pages.summary (or NEXTLY_ACCEPT_DATA_LOSS=dc_posts,dc_pages.summary)",
+      "-- Deletes: table dc_posts",
+      "-- Deletes: column dc_pages.summary",
+    ]);
+  });
+
+  it("marks nothing on a file that deletes nothing", () => {
+    expect(marks(file([]))).toEqual([]);
+  });
+
+  it("names no count: the file runs against databases other than the one counted", () => {
+    expect(
+      marks(file([{ kind: "table", table: "dc_posts", count: 12 }]))[1]
+    ).toBe("-- Deletes: table dc_posts");
+  });
+
+  it("keeps a reason on one comment line", () => {
+    const named = marks(
+      file([{ kind: "table", table: "dc_x", reason: "a\nDROP TABLE users" }])
+    );
+    expect(named[1]).toBe("-- Deletes: table dc_x: a DROP TABLE users");
+  });
+
+  it("leaves the UP and DOWN `nextly migrate` reads unchanged", () => {
+    const marked = file([{ kind: "table", table: "dc_posts" }]);
+    expect(marks(marked)).toHaveLength(2);
+    expect(parseSqlSections(marked)).toEqual(parseSqlSections(file([])));
+    expect(parseSqlSections(marked).upSql).toBe("SELECT 1;");
   });
 });
 

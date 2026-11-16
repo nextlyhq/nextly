@@ -1,10 +1,11 @@
 /**
- * A card's quick setting: the one setting its widget marks `quick`, changed on the card itself
- * rather than in the settings sheet.
+ * A card's quick setting: what its widget lets a reader change on the card itself, as well as
+ * in its settings drawer.
  *
- * Only a choice can sit on a card header: a `select`, drawn as a compact menu, or a `checkbox`,
- * drawn as a toggle. A widget marking any other type quick keeps it in the sheet, where every
- * setting is drawn.
+ * The header draws one: the first setting its widget marks `quick` that a header can hold, a
+ * `select` drawn as a compact menu (or, with exactly two options, as a segmented control
+ * showing both) or a `checkbox` drawn as a toggle. A setting of any other type is changed in
+ * the drawer alone, where every setting is drawn.
  *
  * @module components/features/widgets/edit/quick-setting
  */
@@ -17,15 +18,17 @@ export type QuickSetting = Extract<
   { type: "select" | "checkbox" }
 >;
 
-/** The widget's quick setting, when it marks one the header can draw. */
+/** The widget's header quick setting, when it marks one the header can draw. */
 export function quickSettingOf(
   settings: readonly AnyWidgetSetting[] | undefined
 ): QuickSetting | undefined {
-  const marked = settings?.find(setting => setting.quick === true);
-  if (marked?.type === "select" || marked?.type === "checkbox") {
-    return marked;
-  }
-  return undefined;
+  // The first marked one the header CAN draw: a widget may mark up to three, and one of another
+  // type, marked first, is drawn in the drawer alone rather than taking the header's place.
+  return settings?.find(
+    (setting): setting is QuickSetting =>
+      setting.quick === true &&
+      (setting.type === "select" || setting.type === "checkbox")
+  );
 }
 
 /** What the reader is told a quick setting's value now is: its option's label, or On / Off. */

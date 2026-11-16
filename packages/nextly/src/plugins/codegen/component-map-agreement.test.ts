@@ -47,7 +47,7 @@ const LIST = "plugin-admin-components.generated.ts";
 const STUBS = "stubs.d.ts";
 const STUB_SOURCE = `
 declare module "@nextlyhq/admin" {
-  export function registerComponents(map: Record<string, unknown>): void;
+  export function registerComponentMap(map: Record<string, unknown>): void;
 }
 declare module "@acme/shop/admin" {
   export const A: unknown;
@@ -62,9 +62,14 @@ declare module "@acme/shop/admin" {
  * version. Errors in anything else the program reads are not the pair's.
  */
 function compileErrors(map: string, list: string): string[] {
+  return compileErrorsWith(map, list, STUB_SOURCE);
+}
+
+/** {@link compileErrors}, with the declarations the map's imports resolve to. */
+function compileErrorsWith(map: string, list: string, stubs: string): string[] {
   const dir = mkdtempSync(join(tmpdir(), "component-map-"));
   try {
-    const files = { [MAP]: map, [LIST]: list, [STUBS]: STUB_SOURCE };
+    const files = { [MAP]: map, [LIST]: list, [STUBS]: stubs };
     for (const [name, text] of Object.entries(files)) {
       writeFileSync(join(dir, name), text);
     }
@@ -94,10 +99,10 @@ function compileErrors(map: string, list: string): string[] {
 function load(
   map: string,
   listed: readonly string[],
-  registerComponents = vi.fn()
+  registerComponentMap = vi.fn()
 ) {
   const modules: Record<string, unknown> = {
-    "@nextlyhq/admin": { registerComponents },
+    "@nextlyhq/admin": { registerComponentMap },
     "@acme/shop/admin": { A: "A", B: "B" },
     "./plugin-admin-components.generated": {
       registeredComponentPaths: listed,
@@ -113,7 +118,7 @@ function load(
   const run = new Function("require", "module", "exports", code);
   const module = { exports: {} };
   run((name: string) => modules[name], module, module.exports);
-  return registerComponents;
+  return registerComponentMap;
 }
 
 const map = buildComponentImportMap([shop]);
@@ -127,6 +132,62 @@ describe("the map and its list, written together", () => {
       "@acme/shop/admin#A": "A",
       "@acme/shop/admin#B": "B",
     });
+  });
+});
+
+describe("the pair in an app without the admin", () => {
+  // The stubs declare the components' module and nothing of the admin's, as an app that never
+  // installed `@nextlyhq/admin` resolves nothing of it.
+  const WITHOUT_ADMIN = `
+declare module "@acme/shop/admin" {
+  export const A: unknown;
+  export const B: unknown;
+}
+`;
+
+  it("compiles and loads, importing nothing of the admin, empty or not", () => {
+    for (const plugins of [[], [shop]]) {
+      const bare = buildComponentImportMap(
+        plugins,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        false
+      );
+      const bareList = buildComponentPathsModule(plugins);
+      expect(compileErrorsWith(bare, bareList, WITHOUT_ADMIN)).toEqual([]);
+      const listed =
+        plugins.length === 0
+          ? []
+          : ["@acme/shop/admin#A", "@acme/shop/admin#B"];
+      // Loaded with no admin module to give it: a require of one would read undefined and throw.
+      const register = vi.fn();
+      const { code } = transformSync(bare, {
+        loader: "ts",
+        format: "cjs",
+        target: "es2022",
+      });
+      const modules: Record<string, unknown> = {
+        "@acme/shop/admin": { A: "A", B: "B" },
+        "./plugin-admin-components.generated": {
+          registeredComponentPaths: listed,
+        },
+      };
+      const required: string[] = [];
+      const module = { exports: {} as Record<string, unknown> };
+      new Function("require", "module", "exports", code)(
+        (name: string) => {
+          required.push(name);
+          return modules[name];
+        },
+        module,
+        module.exports
+      );
+      expect(required).not.toContain("@nextlyhq/admin");
+      expect(register).not.toHaveBeenCalled();
+      expect(module.exports.registeredComponentPaths).toEqual(listed);
+    }
   });
 });
 
@@ -162,5 +223,111 @@ describe("a pair edited by hand", () => {
       "NEXTLY_ADMIN_COMPONENT_MAP_MISMATCH"
     );
     expect((thrown as Error).message).toContain(COMPONENT_MAP_MISMATCH_MESSAGE);
+  });
+});
+
+/*
+ * A site whose plugins contribute blocks: the map hands each declared editor
+ * entry, and each declared block inspector, to the page builder, and the entry
+ * is listed beside the components so the same agreement holds for it.
+ */
+const blocks = {
+  name: "@acme/blocks",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: {
+    declarations: {
+      "@nextlyhq/plugin-page-builder": {
+        blocks: [
+          {
+            name: "acme/hero",
+            editor: { component: "@acme/blocks/editor#Hero" },
+          },
+        ],
+        editorEntry: "@acme/blocks/editor#editorBlocks",
+      },
+    },
+  },
+} as unknown as PluginDefinition;
+const pageBuilder = {
+  name: "@nextlyhq/plugin-page-builder",
+  version: "1.0.0",
+  nextly: "*",
+} as unknown as PluginDefinition;
+
+const BLOCK_STUBS = `
+declare module "@nextlyhq/admin" {
+  export function registerComponentMap(map: Record<string, unknown>): void;
+}
+declare module "@nextlyhq/plugin-page-builder/admin" {
+  export function registerBlockEditorModules(modules: {
+    entries?: Record<string, unknown>;
+    components?: Record<string, unknown>;
+  }): void;
+}
+declare module "@acme/blocks/editor" {
+  export const Hero: unknown;
+  export const editorBlocks: unknown;
+}
+`;
+
+describe("a map handing block modules to the page builder", () => {
+  const blockMap = buildComponentImportMap([pageBuilder, blocks]);
+  const blockList = buildComponentPathsModule([pageBuilder, blocks]);
+
+  /** Runs the map with both registrars stubbed. */
+  function loadBlocks(map: string, listed: readonly string[]) {
+    const registerComponentMap = vi.fn();
+    const registerBlockEditorModules = vi.fn();
+    const modules: Record<string, unknown> = {
+      "@nextlyhq/admin": { registerComponentMap },
+      "@nextlyhq/plugin-page-builder/admin": { registerBlockEditorModules },
+      "@acme/blocks/editor": { Hero: "Hero", editorBlocks: "editorBlocks" },
+      "./plugin-admin-components.generated": {
+        registeredComponentPaths: listed,
+      },
+    };
+    const { code } = transformSync(map, {
+      loader: "ts",
+      format: "cjs",
+      target: "es2022",
+    });
+    const run = new Function("require", "module", "exports", code);
+    const module = { exports: {} };
+    run((name: string) => modules[name], module, module.exports);
+    return { registerComponentMap, registerBlockEditorModules };
+  }
+
+  it("lists the entry, compiles, and hands the entry and the inspector over", () => {
+    expect(blockList).toContain('"@acme/blocks/editor#editorBlocks"');
+    expect(compileErrorsWith(blockMap, blockList, BLOCK_STUBS)).toEqual([]);
+
+    const { registerComponentMap, registerBlockEditorModules } = loadBlocks(
+      blockMap,
+      ["@acme/blocks/editor#Hero", "@acme/blocks/editor#editorBlocks"]
+    );
+    // The entry exports definitions, not a component, so the component
+    // registry never receives it.
+    expect(registerComponentMap).toHaveBeenCalledWith({
+      "@acme/blocks/editor#Hero": "Hero",
+    });
+    expect(registerBlockEditorModules).toHaveBeenCalledWith({
+      entries: { "@acme/blocks/editor#editorBlocks": "editorBlocks" },
+      components: { "@acme/blocks/editor#Hero": "Hero" },
+    });
+  });
+
+  it("holds the entry to the list, at build and at load", () => {
+    const listMissingEntry = blockList.replace(
+      '"@acme/blocks/editor#editorBlocks",',
+      ""
+    );
+    expect(listMissingEntry).not.toBe(blockList);
+    expect(
+      compileErrorsWith(blockMap, listMissingEntry, BLOCK_STUBS).join("\n")
+    ).toContain(COMPONENT_MAP_MISMATCH_MESSAGE);
+    expect(() => loadBlocks(blockMap, ["@acme/blocks/editor#Hero"])).toThrow(
+      COMPONENT_MAP_MISMATCH_MESSAGE
+    );
   });
 });

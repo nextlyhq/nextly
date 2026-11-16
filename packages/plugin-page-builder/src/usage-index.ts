@@ -2,7 +2,7 @@
  * What every usage index has in common, and what each one supplies for itself.
  *
  * Two indexes derive rows from the same documents by the same rules and differ
- * only in WHAT they record a reference to: `nx_pb_class_usage` records the
+ * only in WHAT they record a reference to: the class index records the
  * named classes a document applies, and the component index records the
  * component definitions it embeds. Everything between — which subjects a
  * written document has, how stored rows are read back, which are inserted and
@@ -193,6 +193,22 @@ export interface UsageIndex<TRow extends UsageSubject> {
    * read back and sorted through here.
    */
   whereReferencing(referenceId: string): Record<string, { equals: string }>;
+
+  /**
+   * Which stored rows record a reference to ANY of `referenceIds`: the same
+   * question as {@link whereReferencing}, asked for a page of references at
+   * once, so a screen listing fifty pays one read rather than fifty.
+   */
+  whereReferencingAny(
+    referenceIds: readonly string[]
+  ): Record<string, { equals: string } | { in: string[] }>;
+
+  /**
+   * The reference a stored row's own columns record, as
+   * {@link whereReferencingAny} matched it: what a batch read files the row
+   * under.
+   */
+  referenceOf(own: Omit<TRow, keyof UsageSubject>): string;
 
   /**
    * Which stored rows are the marker, whatever document wrote it.

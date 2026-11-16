@@ -14,6 +14,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import {
   checkbox,
   defineCollection,
@@ -59,6 +60,9 @@ async function boot(): Promise<{
     ],
   });
 
+  // The signed-in writer. A code rule only narrows the permission, so it holds
+  // read on authors, which the populated author row is judged by.
+  await userWhoMay(current, "writer-1", "read", ["authors"]);
   const handler = current.getService<CollectionsHandler>("collectionsHandler");
   const author = await handler.createEntry(
     { collectionName: "authors", overrideAccess: true },
@@ -105,7 +109,7 @@ describe("collection write response — related-row field access (integration)",
         routeAuthorized: true,
         depth: 1,
       },
-      { title: "Hello again" }
+      { title: "Hello again", _overwrite: true }
     );
 
     expect(result.success).toBe(true);

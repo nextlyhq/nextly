@@ -19,6 +19,41 @@ export {
 } from "nextly/testing";
 
 /**
+ * `runWidgetLoad`: one card of a widget answered for a given person against a
+ * test instance, through the dashboard's own route, so the person's access
+ * applies exactly as it does on the dashboard.
+ *
+ * ```ts
+ * import { createTestNextly, runWidgetLoad } from "@nextlyhq/plugin-sdk/testing";
+ *
+ * const t = await createTestNextly({ plugins: [myPlugin] });
+ * const answer = await runWidgetLoad(t, ordersWidget, { as: { id: editorId } });
+ * expect(answer).toEqual({ state: "ready", data: { total: 3 } });
+ * ```
+ *
+ * @experimental Until the widget SDK's test helpers settle.
+ */
+export {
+  runWidgetLoad,
+  type RunWidgetLoadOptions,
+  type WidgetLoadResult,
+} from "nextly/testing";
+
+/**
+ * @public A plugin's routes that declare neither `requiredPermission`,
+ * `public`, `principal` nor `siteWide: false`: each is refused for every
+ * caller. Stable: assert it is empty in the plugin's own test, so an
+ * undeclared route fails the suite instead of every request.
+ *
+ * @example
+ * ```ts
+ * import { undeclaredPluginRoutes } from "@nextlyhq/plugin-sdk/testing";
+ * expect(undeclaredPluginRoutes(myPlugin())).toEqual([]);
+ * ```
+ */
+export { undeclaredPluginRoutes } from "nextly/testing";
+
+/**
  * The aborted-transaction guard, for a suite booting against a real PostgreSQL server.
  *
  * `createTestNextly` records any transaction it leaves in PostgreSQL's aborted state, which is the

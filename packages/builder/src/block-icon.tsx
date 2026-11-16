@@ -18,6 +18,8 @@ import {
   ChevronsUpDown,
   Code,
   Columns3,
+  Component,
+  FileText,
   Frame,
   Grid3x3,
   Heading,
@@ -34,6 +36,7 @@ import {
   Quote,
   RectangleVertical,
   Repeat,
+  ScanText,
   Search,
   ShoppingCart,
   Square,
@@ -89,6 +92,7 @@ const ICONS: Record<string, LucideIcon> = {
   // Content
   heading: Heading,
   text: Type,
+  "rich-text": FileText,
   list: List,
   quote: Quote,
   code: Code,
@@ -111,6 +115,10 @@ const ICONS: Record<string, LucideIcon> = {
   user: User,
   cart: ShoppingCart,
   star: Star,
+  component: Component,
+  // An entry's own content, drawn read-only inside its template: a page of
+  // lines inside a frame, the content and the template around it.
+  entry: ScanText,
 };
 
 /**

@@ -1,6 +1,6 @@
 import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeAll } from "vitest";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
@@ -26,6 +26,13 @@ import {
   isRenewalStatement,
   type LockStatementKind,
 } from "./helpers/migration-lock-double";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 /**
  * A single-row lock table backed by an object, plus the two behaviours of the

@@ -16,6 +16,12 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { Logger } from "../../../services/shared/types";
+import {
+  IMPLICIT_LANGUAGE,
+  localizationFromStoredLanguages,
+} from "../config/stored-languages";
+import { perLanguageStorageEnabled } from "../per-language-storage";
+import { storedLanguageReader } from "../stored-language-reader";
 
 import type { TransitionStateStore } from "./transition-state";
 
@@ -92,11 +98,32 @@ export async function resolveTransitionStore(
  */
 export function bindTransitionRecorder(
   store: TransitionStateStore,
-  config: { localization?: { defaultLocale?: string } }
+  defaultLocale: string | undefined
 ): TransitionRecorder | undefined {
-  const defaultLocale = config.localization?.defaultLocale;
   if (typeof defaultLocale !== "string" || defaultLocale.length === 0) {
     return undefined;
   }
   return { defaultLocale, ...store };
+}
+
+/**
+ * The language a transition records the existing content in: the configured default. Under
+ * `experimental.perLanguageStorage` a site stores its values under one language even before it
+ * configures any, so with none configured it is the default stored in Settings, or the implicit
+ * language the site keeps its values under until then. Undefined otherwise: an entity cannot be
+ * translated without a language, so there is no transition to begin.
+ */
+export async function transitionDefaultLocale(
+  adapter: DrizzleAdapter,
+  config: { localization?: { defaultLocale?: string } }
+): Promise<string | undefined> {
+  const configured = config.localization?.defaultLocale;
+  if (typeof configured === "string" && configured.length > 0) {
+    return configured;
+  }
+  if (!perLanguageStorageEnabled()) return undefined;
+  const stored = localizationFromStoredLanguages(
+    await storedLanguageReader(adapter).rows()
+  );
+  return stored?.defaultLocale ?? IMPLICIT_LANGUAGE.code;
 }

@@ -139,8 +139,10 @@ const REVIEWED_BROWSER_PACKAGES: readonly string[] = [
   // only behind a `typeof process` guard. 4.0.7 read 2026-10-22: against 4.0.5 it changes only glob
   // parsing in `lib/parse.js` and `lib/scan.js`, and adds no import.
   "picomatch@4.0.7",
-  // Validation with no runtime dependencies, written to run in browsers.
-  "zod@4.6.2",
+  // Validation with no runtime dependencies, written to run in browsers. 4.6.7 read 2026-10-25:
+  // against 4.6.2 it imports nothing but itself and no Node built-in; the changes are its own
+  // check and schema logic.
+  "zod@4.6.7",
 ];
 
 /**

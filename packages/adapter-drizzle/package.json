@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/adapter-drizzle",
-  "version": "0.0.2-alpha.68",
+  "version": "0.0.2-alpha.78",
   "description": "Shared Drizzle ORM adapter logic for Nextly database adapters",
   "license": "MIT",
   "type": "module",
@@ -28,10 +28,20 @@
       "import": "./dist/migrations.mjs",
       "require": "./dist/migrations.cjs"
     },
+    "./build-phase": {
+      "types": "./dist/build-phase.d.ts",
+      "import": "./dist/build-phase.mjs",
+      "require": "./dist/build-phase.cjs"
+    },
     "./schema-name": {
       "types": "./dist/schema-name.d.ts",
       "import": "./dist/schema-name.mjs",
       "require": "./dist/schema-name.cjs"
+    },
+    "./serverless": {
+      "types": "./dist/serverless.d.ts",
+      "import": "./dist/serverless.mjs",
+      "require": "./dist/serverless.cjs"
     },
     "./text-match": {
       "types": "./dist/text-match.d.ts",
@@ -50,7 +60,7 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
-    "check-types": "tsc --noEmit",
+    "check-types": "node ../../scripts/tsc.mjs --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
@@ -69,7 +79,7 @@
     "@vitest/coverage-v8": "^5.0.5",
     "@vitest/ui": "^5.0.5",
     "tsdown": "^0.23.1",
-    "typescript": "^7.0.2",
+    "typescript": "7.0.2",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^5.0.5"
   },

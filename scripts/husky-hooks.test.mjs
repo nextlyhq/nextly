@@ -195,6 +195,23 @@ describe("the pre-push hook specifically", () => {
     expect(buildAt).toBeLessThan(lintAt);
   });
 
+  it("runs the root scripts tests BEFORE every workspace's tests, so a failure there stops first", async () => {
+    /*
+     * The scripts tests take a few minutes and the workspace suites a quarter
+     * of an hour. Run after them, a push that failed the scripts tests learned
+     * it only once both were done. Under `set -e` the first failure ends the
+     * hook, so the order is what decides how long a red takes.
+     */
+    const source = shellCode(await hook("pre-push"));
+
+    const scriptsAt = source.search(/^\s*node scripts\/test-changed\.mjs --scripts-only\s*$/m);
+    const everyWorkspaceAt = source.search(/^\s*pnpm turbo test\b/m);
+
+    expect(scriptsAt).toBeGreaterThan(-1);
+    expect(everyWorkspaceAt).toBeGreaterThan(-1);
+    expect(scriptsAt).toBeLessThan(everyWorkspaceAt);
+  });
+
   it("records what is uncommitted BEFORE the first gate runs", async () => {
     /*
      * Every gate here runs against the working tree while Git pushes HEAD, so
@@ -331,6 +348,114 @@ describe("the pre-push hook before its gates", () => {
     const result = push(deletion("gone"), { NEXTLY_BOUNDED: "1" });
     expect(result.status).toBe(99);
     expect(result.stderr).toMatch(/^stub node scripts\/local-limits\.mjs/m);
+  });
+});
+
+/*
+ * A push of screenshots alone: `pnpm visual-check --publish` pushes a branch
+ * under `pr-screenshots/` whose every commit holds PNG files and nothing else.
+ * It carries no code, so it is let through ungated like a deletion — and only
+ * when git's own objects say so. A branch named that way that holds code, or
+ * sits on history that does, is gated like any other.
+ *
+ * Run in a repository of its own, made here, so the commits the hook reads
+ * are real ones and nothing is written into this checkout's object store. The
+ * hook and the runner it asks about CI are the checkout's own; `node` and
+ * `pnpm` are stubs that end the run where a gate would start.
+ */
+describe("the pre-push hook and a push of screenshots", () => {
+  const ROOT = path.join(HERE, "..");
+  const ZERO = "0".repeat(40);
+  let dir;
+  let stubs;
+  const commits = {};
+
+  // Without the hook's own repository pointers, should this run inside one: the commits
+  // belong in the repository made here.
+  const gitEnv = { ...process.env };
+  delete gitEnv.GIT_DIR;
+  delete gitEnv.GIT_WORK_TREE;
+  const git = (...args) => spawnSync("git", args, { cwd: dir, encoding: "utf8", env: gitEnv }).stdout.trim();
+
+  beforeAll(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "pre-push-screenshots-"));
+    stubs = mkdtempSync(path.join(tmpdir(), "pre-push-screenshot-stubs-"));
+    for (const name of ["node", "pnpm"]) {
+      const passThrough =
+        name === "node"
+          ? `if [ "$1" = "scripts/bounded.mjs" ] && [ "$2" = "--is-ci" ]; then exec ${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(ROOT, "scripts", "bounded.mjs"))} --is-ci; fi\n`
+          : "";
+      writeFileSync(path.join(stubs, name), `#!/bin/sh\n${passThrough}echo "stub ${name} $*" >&2\nexit 99\n`);
+      chmodSync(path.join(stubs, name), 0o755);
+    }
+    spawnSync("git", ["init", "--quiet", dir], { env: gitEnv });
+    const blob = content => {
+      const file = path.join(dir, "blob");
+      writeFileSync(file, content);
+      return git("hash-object", "-w", file);
+    };
+    const tree = entries =>
+      spawnSync("git", ["mktree"], {
+        cwd: dir,
+        env: gitEnv,
+        input: entries.map(([name, sha]) => `100644 blob ${sha}\t${name}\n`).join(""),
+        encoding: "utf8",
+      }).stdout.trim();
+    const commit = (treeSha, parent) =>
+      git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit-tree", treeSha, ...(parent ? ["-p", parent] : []), "-m", "c");
+    const png = blob("png");
+    commits.images = commit(tree([["admin-390-light.png", png]]));
+    commits.imagesAgain = commit(tree([["admin-390-dark.png", png]]), commits.images);
+    commits.code = commit(tree([["admin-390-light.png", png], ["code.mjs", blob("export {};\n")]]));
+    commits.imagesOnCode = commit(tree([["admin-390-light.png", png]]), commits.code);
+  });
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(stubs, { recursive: true, force: true });
+  });
+
+  function push(stdin) {
+    const env = { ...process.env };
+    for (const name of ["CI", "NEXTLY_BOUNDED"]) delete env[name];
+    return spawnSync("sh", ["-e", path.join(ROOT, ".husky", "pre-push"), "origin", "git@example.com:o/r.git"], {
+      cwd: dir,
+      input: stdin,
+      encoding: "utf8",
+      env: { ...env, PATH: `${stubs}${path.delimiter}${env.PATH}` },
+    });
+  }
+
+  const to = (sha, branch) => `refs/heads/local ${sha} refs/heads/${branch} ${ZERO}\n`;
+
+  // Every commit made, so a fixture that silently failed cannot pass as a malformed line.
+  it.runIf(process.platform !== "win32")("made every commit it reads", () => {
+    for (const sha of Object.values(commits)) expect(sha).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it.runIf(process.platform !== "win32")("lets screenshots alone through to a pr-screenshots branch without a gate", () => {
+    for (const sha of [commits.images, commits.imagesAgain]) {
+      const result = push(to(sha, "pr-screenshots/posts-list"));
+      expect(result.status).toBe(0);
+      expect(result.stdout).toMatch(/nothing to gate/);
+      expect(result.stderr).not.toMatch(/stub/);
+    }
+    const deletion = `refs/heads/gone ${ZERO} refs/heads/gone ${"a".repeat(40)}\n`;
+    expect(push(to(commits.images, "pr-screenshots/posts-list") + deletion).status).toBe(0);
+  });
+
+  it.runIf(process.platform !== "win32")("gates the same images pushed to any other branch", () => {
+    expect(push(to(commits.images, "feature")).status).toBe(99);
+  });
+
+  it.runIf(process.platform !== "win32")("gates a pr-screenshots branch that holds code, or sits on code", () => {
+    expect(push(to(commits.code, "pr-screenshots/posts-list")).status).toBe(99);
+    expect(push(to(commits.imagesOnCode, "pr-screenshots/posts-list")).status).toBe(99);
+    expect(push(to(commits.images, "pr-screenshots/posts-list") + to(commits.code, "feature")).status).toBe(99);
+  });
+
+  it.runIf(process.platform !== "win32")("gates a pr-screenshots push whose commit it cannot read", () => {
+    expect(push(to("b".repeat(40), "pr-screenshots/posts-list")).status).toBe(99);
   });
 });
 

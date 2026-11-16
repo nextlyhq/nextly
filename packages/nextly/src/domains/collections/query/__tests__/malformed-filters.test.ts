@@ -201,7 +201,11 @@ describe("empty lists keep their meaning", () => {
     title: text("title"),
   });
   const render = (where: WhereFilter) => {
-    const condition = buildDrizzleCondition(buildWhereClause(where), table);
+    const condition = buildDrizzleCondition(
+      buildWhereClause(where),
+      table,
+      "postgresql"
+    );
     return condition ? dialect.sqlToQuery(condition).sql : undefined;
   };
 
@@ -239,7 +243,7 @@ describe("the condition builder refuses a key it cannot resolve", () => {
     author: uuid("author"),
   });
   const build = (where: WhereFilter) => () =>
-    buildDrizzleCondition(buildWhereClause(where), table);
+    buildDrizzleCondition(buildWhereClause(where), table, "postgresql");
 
   it("refuses an unknown field", () => {
     expect(refusalCodes(build({ titel: { equals: "a" } }))).toContain(
@@ -303,7 +307,8 @@ describe("the condition builder refuses a key it cannot resolve", () => {
     });
     const condition = buildDrizzleCondition(
       buildWhereClause({ createdAt: { greater_than: new Date(0) } }),
-      withTimestamps
+      withTimestamps,
+      "postgresql"
     );
     expect(condition).toBeDefined();
     expect(new PgDialect().sqlToQuery(condition!).sql).toContain(
@@ -351,6 +356,20 @@ describe("component fields refuse the same malformed conditions", () => {
         )
       )
     ).toContain("FILTER_NOT_IN_OR");
+  });
+
+  it("refuses a path that reaches past the component's own fields, as an unknown field", () => {
+    // `seo.inner.title` names no column of the component's table: a field group placed in it is a
+    // row of its own table, and a group's children live in that group's value. Turned into a
+    // lookup it would read a column named after the whole path and answer with the wrong rows.
+    expect(
+      refusalCodes(() =>
+        extractComponentFieldConditions(
+          { "seo.inner.title": { equals: "b" } },
+          fields
+        )
+      )
+    ).toContain("FILTER_UNKNOWN_FIELD");
   });
 
   it("still extracts a well-formed component condition", () => {

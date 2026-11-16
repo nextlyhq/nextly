@@ -119,7 +119,7 @@ async function germanOnlyAndPublished(t: TestNextly): Promise<string> {
   if (typeof id !== "string") throw new Error("no id from create");
   await handlerOf(t).updateEntry(
     { collectionName: SLUG, entryId: id, overrideAccess: true, locale: "*" },
-    { status: "published" }
+    { status: "published", _overwrite: true }
   );
   return id;
 }
@@ -138,7 +138,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "en",
         },
-        { title: "EN pending" }
+        { title: "EN pending", _overwrite: true }
       );
 
       // POPULATION CONTROL: the edit really was held. Without it, a later
@@ -153,7 +153,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       // Separating assertions: a wildcard that refused, or quietly became a
@@ -176,7 +176,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "en",
         },
-        { title: "EN pending" }
+        { title: "EN pending", _overwrite: true }
       );
       expect(await pendingDrafts(t, id)).toContain("EN pending");
 
@@ -187,7 +187,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "en",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       const readable = await readTitle(t, id, "en");
@@ -214,7 +214,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       const before = await t.adapter.select<{ _locale?: unknown }>(
@@ -231,7 +231,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "en",
         },
-        { note: "n2" }
+        { note: "n2", _overwrite: true }
       );
       expect(await pendingDrafts(t, id)).toContain("n2");
 
@@ -242,7 +242,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       // No English row was manufactured for a language nobody translated.
@@ -267,7 +267,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "en",
         },
-        { title: "" }
+        { title: "", _overwrite: true }
       );
       const after0 = await t.adapter.select<{ _locale?: unknown }>(
         `dc_${SLUG}_locales`,
@@ -282,7 +282,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       const after = await t.adapter.select<{ _locale?: unknown }>(
@@ -315,7 +315,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "en",
         },
-        { title: null }
+        { title: null, _overwrite: true }
       );
       expect(await pendingDrafts(t, id)).not.toBe("[]");
 
@@ -326,7 +326,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       // The clear must LAND, not merely fail to be lost: a refusal or a no-op
@@ -350,7 +350,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "en",
         },
-        { title: "EN pending" }
+        { title: "EN pending", _overwrite: true }
       );
       await handlerOf(t).updateEntry(
         {
@@ -359,7 +359,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       expect(await readTitle(t, id, "de", false)).toBe("DE live");

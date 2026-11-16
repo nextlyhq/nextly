@@ -2,12 +2,13 @@
  * The collection row cache on every dialect, on the read benchmark's site:
  *
  * - reads are the same with the cache warm as with it cold;
- * - a warm read sends the database 4 statements for an entry and 5 for a page,
+ * - a warm read sends the database 3 statements for an entry and 4 for a page,
  *   where the same read without the cache sends 11 and 13;
  * - every registry write a registry service makes is seen at once, and so is
  *   a Builder schema save's own write, past a read made during the save;
- * - a change made elsewhere is seen once the cached row's second is up, and
- *   not before;
+ * - a change made elsewhere, which moves the stored count of registry writes
+ *   as every registry write does, is seen once this process reads that count
+ *   again, and not before;
  * - a read inside a transaction never comes from the cache.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -26,6 +27,26 @@ vi.mock("../services/collection-row-cache", async importOriginal => {
       read: () => Promise<Record<string, unknown>>
     ) =>
       bypass.on ? read() : actual.cachedCollectionRow(database, slug, read),
+    // The registry rows of Singles and components, cached the same way.
+    cachedRegistryRow: <T extends Record<string, unknown> | null>(
+      database: object,
+      table: string,
+      slug: string,
+      read: () => Promise<T>
+    ) =>
+      bypass.on
+        ? read()
+        : actual.cachedRegistryRow(database, table, slug, read),
+    // And each registry table's listing.
+    cachedRegistryListing: async <T>(
+      database: object,
+      table: string,
+      read: () => Promise<Record<string, unknown>[]>,
+      view: (rows: readonly Readonly<Record<string, unknown>>[]) => T
+    ) =>
+      bypass.on
+        ? view(await read())
+        : actual.cachedRegistryListing(database, table, read, view),
   };
 });
 
@@ -50,10 +71,12 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
 import { consoleLogger } from "../../../shared/types";
+import { storeSchemaVersion } from "../../schema/schema-version";
 import {
-  clearCollectionRowCache,
-  COLLECTION_ROW_LIFETIME_MS,
-} from "../services/collection-row-cache";
+  SCHEMA_VERSION_READ_INTERVAL_MS,
+  storedSchemaSeq,
+} from "../../schema/stored-schema-seq";
+import { clearRegistryRowCache } from "../services/collection-row-cache";
 import {
   DynamicCollectionRegistryService,
   type CollectionMetadata,
@@ -168,14 +191,21 @@ async function singularOf(
 
 /**
  * Writes the `articles` row's labels through the adapter alone, past the
- * registry services: what this process sees of another process's write.
+ * registry services, and moves the stored count of registry writes in the
+ * same transaction, as every registry write does: what this process sees of
+ * another process's write.
  */
 async function writeLabelsElsewhere(t: TestNextly, singular: string) {
-  await t.adapter.update(
-    "dynamic_collections",
-    { labels: { singular, plural: `${singular}s` } },
-    { and: [{ column: "slug", op: "=", value: "articles" }] }
-  );
+  await t.adapter.transaction(async tx => {
+    await tx.update(
+      "dynamic_collections",
+      { labels: { singular, plural: `${singular}s` } },
+      { and: [{ column: "slug", op: "=", value: "articles" }] }
+    );
+    await storeSchemaVersion(tx.getDrizzle(), t.adapter.dialect, {
+      wrote: true,
+    });
+  });
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -185,14 +215,17 @@ describe.each(getConfiguredTestDialects())(
       const { t, articleId } = await bootSite(dialect);
       const reads = readsOf(t, articleId);
       for (const read of [reads.detail, reads.list]) {
-        clearCollectionRowCache();
+        clearRegistryRowCache();
         const cold = await read();
         const warm = await read();
         expect(JSON.stringify(warm)).toBe(JSON.stringify(cold));
       }
     });
 
-    it("sends a warm read 4 statements for an entry and 5 for a page, where without the cache it sends 11 and 13", async () => {
+    // The card component's registry row comes from the cache as well, a statement off each read.
+    // Without the cache, a read asks for that row twice since field groups placed in field groups
+    // are read at any depth: the cache answers both.
+    it("sends a warm read 3 statements for an entry and 4 for a page, where without the cache it sends 12 and 14", async () => {
       const { t, articleId } = await bootSite(dialect);
       const reads = readsOf(t, articleId);
       const counted = async (read: () => Promise<unknown>) => {
@@ -200,11 +233,19 @@ describe.each(getConfiguredTestDialects())(
         return (await statementsOf(dialect, read)).length;
       };
 
-      expect(await counted(reads.detail)).toBe(4);
-      expect(await counted(reads.list)).toBe(5);
+      const warm = {
+        detail: await counted(reads.detail),
+        list: await counted(reads.list),
+      };
       bypass.on = true;
-      expect(await counted(reads.detail)).toBe(11);
-      expect(await counted(reads.list)).toBe(13);
+      const cold = {
+        detail: await counted(reads.detail),
+        list: await counted(reads.list),
+      };
+      expect({ warm, cold }).toEqual({
+        warm: { detail: 3, list: 4 },
+        cold: { detail: 12, list: 14 },
+      });
     });
 
     it("sees every registry write a registry service makes at once", async () => {
@@ -315,17 +356,20 @@ describe.each(getConfiguredTestDialects())(
       expect(await fieldNames()).toEqual(["heading", "summary"]);
     });
 
-    it("sees a change made elsewhere once the cached row's second is up, and not before", async () => {
+    it("sees a change made elsewhere once the stored count is read again, and not before", async () => {
       const { t } = await bootSite(dialect);
       const registry = registryOf(t);
       vi.useFakeTimers({ toFake: ["performance"] });
-      // Rows cached while the site booted were timed on the real clock; the
-      // read below is the first on the faked one.
-      clearCollectionRowCache();
+      // Rows cached, and the count read, while the site booted were timed on
+      // the real clock; the reads below are the first on the faked one.
+      clearRegistryRowCache();
+      // The count read now, on the faked clock, as a server's first request
+      // reads it: the cache follows it from here.
+      await storedSchemaSeq(t.adapter, { fresh: true });
       const before = await singularOf(registry);
 
       await writeLabelsElsewhere(t, "Report");
-      vi.advanceTimersByTime(COLLECTION_ROW_LIFETIME_MS - 1);
+      vi.advanceTimersByTime(SCHEMA_VERSION_READ_INTERVAL_MS - 1);
       expect(await singularOf(registry)).toBe(before);
 
       vi.advanceTimersByTime(1);

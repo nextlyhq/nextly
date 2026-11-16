@@ -408,6 +408,23 @@ export interface SingleConfig {
   fields: FieldConfig[];
 
   /**
+   * @experimental Where this Single is served on the site, as one fixed path:
+   * `"/"` for a homepage, `"/about"` for an About page.
+   *
+   * One answer for every reader that needs the page's public address, read
+   * through `publicAddressOf`. A Single without one is not public yet: it
+   * gets no address, never a guessed one.
+   *
+   * The path starts with `/`, has no trailing `/` (except `"/"` itself),
+   * query, fragment or placeholder, and is spelled as a browser sends it.
+   * Nothing may sit under `/admin`, `/api` or another path the runtime keeps.
+   * Two Singles at one address stop the configuration, naming both.
+   *
+   * @example "/", "/about", "/legal/privacy"
+   */
+  publicAddress?: string;
+
+  /**
    * @experimental Internal/private storage (D30). Stays in the merged schema
    * (accessible via services / raw db) but hidden from the admin nav (implies
    * `admin.hidden`).

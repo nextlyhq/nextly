@@ -33,14 +33,19 @@ import type {
   BaseListOptions,
   BaseListResult,
 } from "../../../shared/base-registry-service";
+import { canonicalJson } from "../../../shared/lib/canonical-json";
 import { fieldDefaultsSignature } from "../../../shared/lib/field-defaults";
-import { clearCollectionRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { flushContentChange } from "../../flush-content-change";
 import { stopReleasesHolding } from "../../releases/early-stop";
+import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
+import { settingsOf } from "../../schema/migrate-create/entity-settings";
+import type { ExtensionSchemaRecord } from "../../schema/ownership/dependent-elements";
 import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
-import { deleteEntityRegistryRow } from "../../versions/entity-teardown";
+import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 import {
   clearWebhookRecording,
   setWebhookRecording,
@@ -57,6 +62,62 @@ export interface UpdateCollectionOptions {
 }
 
 /** Input for registering a code-first collection during sync. */
+/** The validation entry a refused `dbName` move carries, which the sync reports and never recovers from. */
+const TABLE_RENAME_REFUSED = "TABLE_RENAME_REFUSED";
+
+/**
+ * The refusal of a code-first collection's move from table `from` to table `to`, naming both and
+ * why. It is the collection's configuration that asks for the move, so the message is the
+ * operator's to read in full.
+ */
+function tableRenameRefused(
+  move: { slug: string; from: string; to: string },
+  reason: string,
+  cause?: unknown
+): NextlyError {
+  const message = `Collection '${move.slug}' cannot move from table '${move.from}' to '${move.to}': ${reason}. It keeps table '${move.from}'.`;
+  return new NextlyError({
+    code: "VALIDATION_ERROR",
+    publicMessage: message,
+    publicData: {
+      errors: [{ path: "dbName", code: TABLE_RENAME_REFUSED, message }],
+    },
+    logContext: { reason: "table-rename-refused", ...move },
+    cause: cause instanceof Error ? cause : undefined,
+  });
+}
+
+/**
+ * Whether a code-first sync's failure is a registration an earlier sync already made, which the
+ * sync recovers from by reading the row back. Classified on the thrown error's own message: a
+ * description concatenates the cause chain, so a genuine failure that merely wraps something
+ * saying "already exists" would enter duplicate recovery and mask the real error. The structured
+ * `DUPLICATE` code is preferred, with the message read for an error that bubbles up from a deeper
+ * layer without one. A refused `dbName` move is never one: it is reported as it is.
+ */
+function isDuplicateRegistration(error: unknown): boolean {
+  if (isTableRenameRefusal(error)) return false;
+  if (NextlyError.is(error) && error.code === "DUPLICATE") return true;
+  const immediate = immediateMessage(error).toLowerCase();
+  return (
+    immediate.includes("already exists") ||
+    immediate.includes("duplicate") ||
+    immediate.includes("unique constraint")
+  );
+}
+
+/** Whether `error` is a refused `dbName` move (`tableRenameRefused`). */
+function isTableRenameRefusal(error: unknown): boolean {
+  if (!NextlyError.is(error)) return false;
+  const errors = (
+    error.publicData as { errors?: { code?: unknown }[] } | undefined
+  )?.errors;
+  return (
+    Array.isArray(errors) &&
+    errors.some(entry => entry?.code === TABLE_RENAME_REFUSED)
+  );
+}
+
 export interface CodeFirstCollectionConfig {
   slug: string;
   labels: { singular: string; plural: string };
@@ -90,6 +151,227 @@ export interface CodeFirstCollectionConfig {
   source?: CollectionSource;
 }
 
+/**
+ * The columns a collection's declaration gives a row it registers, before
+ * where the row came from (source, lock, config path), which each caller
+ * adds. One projection for the start's sync and `nextly migrate`'s writer.
+ */
+function declaredRegistration(
+  config: CodeFirstCollectionConfig,
+  schemaHash: string,
+  tableName: string
+): Omit<DynamicCollectionInsert, "source" | "locked" | "configPath"> {
+  return {
+    slug: config.slug,
+    labels: config.labels,
+    tableName,
+    description: config.description,
+    fields: config.fields,
+    timestamps: config.timestamps ?? true,
+    admin: config.admin,
+    // Forward Draft/Published flag so code-first collections that
+    // opt in actually write the column on first sync.
+    status: config.status === true,
+    // Forward the resolved versioning config on first sync.
+    versions: config.versions,
+    // Forward the cache-revalidation config on first sync.
+    revalidate: config.revalidate,
+    // Forward the webhook recording policy on first sync.
+    webhooks: config.webhooks,
+    localized: config.localized === true,
+    schemaHash,
+  };
+}
+
+/**
+ * The columns a collection's declaration rewrites on a schema change: its
+ * fields, the switches that change its tables, its table and its metadata.
+ * Where the row came from is the caller's to add, or to leave.
+ */
+function declaredRow(
+  config: CodeFirstCollectionConfig,
+  schemaHash: string,
+  tableName: string
+): Partial<DynamicCollectionInsert> {
+  return {
+    ...declaredMetadata(config),
+    fields: config.fields,
+    // Resolved, as a registration resolves it: a config that drops
+    // `timestamps: false` returns the collection to the default, which an
+    // undefined value would leave unwritten.
+    timestamps: config.timestamps ?? true,
+    schemaHash,
+    status: config.status === true,
+    versions: config.versions,
+    // Send explicit null (not undefined) when the config removed
+    // `revalidate`, so updateCollection actually clears the column
+    // instead of leaving the stale config persisted.
+    revalidate: config.revalidate ?? null,
+    // Send explicit null (not undefined) when the config removed
+    // `webhooks`, so updateCollection actually clears the column
+    // instead of leaving a stale opt-out suppressing the outbox.
+    webhooks: config.webhooks ?? null,
+    localized: config.localized === true,
+    tableName,
+  };
+}
+
+/** The columns a metadata-only change rewrites: labels, description and admin options. */
+function declaredMetadata(
+  config: CodeFirstCollectionConfig
+): Partial<DynamicCollectionInsert> {
+  return {
+    labels: config.labels,
+    // Resolved, because a collection may spell its description under `admin` — and
+    // compared in `codeFirstSyncStep` for the same reason: without it, editing or removing
+    // that spelling leaves the row stale until some unrelated schema change happens to
+    // trigger a write.
+    description: resolveDescription(config) ?? null,
+    // Explicit null when the config no longer declares an admin block, so
+    // `updateCollection` clears the column instead of reading `undefined` as "leave
+    // unchanged" and stranding a sidebar position the config has dropped. Same
+    // reasoning as `revalidate` and `webhooks` in `declaredRow`.
+    admin: config.admin ?? null,
+  };
+}
+
+/** How `nextly migrate`'s writer hands a recorded entity to its registry service. */
+export interface RecordedWriteOptions<TRecord> {
+  /**
+   * The row as read before this write, `null` for none, so a caller that
+   * reads the whole registry once asks for no row of its own. Absent, the
+   * service reads it.
+   */
+  existing?: TRecord | null;
+  /**
+   * A Builder record leaves what it does not say: a description or admin
+   * block it omits keeps the stored one, as the Builder's own registry upsert
+   * does, rather than clearing it.
+   */
+  leavesUnsaid?: boolean;
+  /**
+   * Of the settings a Builder record leaves unsaid, those an applied
+   * migration cleared: its record no longer says one an earlier record of
+   * the entity said. These are cleared rather than kept, so a clearing made
+   * in the Builder travels like any other settings change.
+   */
+  cleared?: ReadonlySet<UnsaidSetting>;
+  /**
+   * Answer what the write would do, writing nothing: `created` for a row the
+   * registry lacks, `updated` for one that differs, `unchanged` for one that
+   * matches. The read-only comparison of the registry with the newest applied
+   * snapshot (`registry-consistency`) asks the writer itself, so a row it
+   * reports as differing is exactly one `nextly migrate` would rewrite.
+   */
+  judgeOnly?: boolean;
+}
+
+/** A setting a Builder record may leave unsaid (`RecordedWriteOptions.leavesUnsaid`). */
+export type UnsaidSetting = "description" | "admin";
+
+/**
+ * `config` with the description and admin block it does not say taken from
+ * `existing`, so they are neither compared nor written (`leavesUnsaid`),
+ * unless a migration cleared them (`cleared`). One rule for every kind's
+ * recorded writer.
+ */
+export function withUnsaidKept<
+  TConfig extends { description?: string; admin?: unknown },
+>(
+  config: TConfig,
+  existing: { description?: string | null; admin?: unknown } | null,
+  cleared: ReadonlySet<UnsaidSetting> = new Set()
+): TConfig {
+  if (existing === null) return config;
+  return {
+    ...config,
+    ...(config.description === undefined &&
+    !cleared.has("description") &&
+    existing.description !== null &&
+    existing.description !== undefined
+      ? { description: existing.description }
+      : {}),
+    ...(config.admin === undefined && !cleared.has("admin") && existing.admin
+      ? { admin: existing.admin }
+      : {}),
+  };
+}
+
+/**
+ * Whether the settings of a declared field list differ from a stored one's
+ * where the schema hash cannot see them: each field's admin options (help
+ * text, placeholder, hidden and the rest), custom data, allowed components,
+ * filter options and declared defaults, at any depth.
+ * They change no column, so the hash leaves them out, yet the row carries
+ * them and the admin reads them from it.
+ *
+ * Each side is read as a snapshot records it (`settingsOf`): functions and
+ * what held only functions or nothing are left out, and an empty object is
+ * no setting. A declaration, the row a start stored from it and the row
+ * `nextly migrate` wrote from its snapshot then compare equal, so no writer
+ * undoes another's row. One answer for every kind's code-first decision.
+ */
+export function fieldSettingsChanged(
+  declared: unknown,
+  stored: unknown
+): boolean {
+  return (
+    canonicalJson(fieldSettingsOf(declared)) !==
+    canonicalJson(fieldSettingsOf(stored))
+  );
+}
+
+/** The settings `fieldSettingsChanged` compares, field by field, in order. */
+function fieldSettingsOf(fields: unknown): unknown[] {
+  if (!Array.isArray(fields)) return [];
+  return fields.map((field: unknown) => {
+    if (field === null || typeof field !== "object") return null;
+    const {
+      name,
+      admin,
+      custom,
+      components,
+      filterOptions,
+      defaultValue,
+      fields: nested,
+      blocks,
+    } = field as Record<string, unknown>;
+    return {
+      name: name ?? null,
+      admin: recordedSetting(admin),
+      custom: recordedSetting(custom),
+      // Hash-excluded too, and stored with the field where they are data: a
+      // component field's allowed components, a relationship's filter.
+      components: recordedSetting(components),
+      filterOptions: recordedSetting(filterOptions),
+      // A declared default (a computed one is a function, left out): Singles
+      // and field groups have no other comparison of it.
+      defaultValue: recordedSetting(defaultValue),
+      fields: fieldSettingsOf(nested),
+      blocks: Array.isArray(blocks)
+        ? blocks.map((block: unknown) => {
+            const { slug, fields: inBlock } =
+              block !== null && typeof block === "object"
+                ? (block as Record<string, unknown>)
+                : {};
+            return { slug: slug ?? null, fields: fieldSettingsOf(inBlock) };
+          })
+        : [],
+    };
+  });
+}
+
+/** A setting as a snapshot records it, or null where it records none. */
+function recordedSetting(value: unknown): unknown {
+  const recorded = settingsOf({ value }, "code").value;
+  if (recorded === undefined || recorded === null) return null;
+  return typeof recorded === "object" &&
+    !Array.isArray(recorded) &&
+    Object.keys(recorded).length === 0
+    ? null
+    : recorded;
+}
+
 /** Result of syncing code-first collections. */
 export interface SyncResult {
   created: string[];
@@ -107,6 +389,18 @@ export interface SyncResult {
 function isPipelineSource(source: CollectionSource | undefined): boolean {
   return source === "code" || (!!source && source.startsWith("plugin:"));
 }
+
+/**
+ * What a code-first sync does with one collection (`codeFirstSyncStep`), with the record it acts
+ * on when the registry holds one, the schema hash it records and the table it addresses.
+ */
+type CodeFirstSyncStep = { schemaHash: string; desiredTableName: string } & (
+  | { step: "create" }
+  | {
+      step: "update" | "metadata" | "unchanged";
+      existing: DynamicCollectionRecord;
+    }
+);
 
 /** Options for listing collections. */
 export interface ListCollectionsOptions extends BaseListOptions {
@@ -167,10 +461,60 @@ export class CollectionRegistryService extends BaseRegistryService<
     return this.getRecordOrThrow(slug);
   }
 
+  /**
+   * Every collection's slug and labels, read without the rest of its record:
+   * what a screen naming every collection needs.
+   */
+  async getAllLabels(
+    options: { forWrite?: boolean } = {}
+  ): Promise<Array<Pick<DynamicCollectionRecord, "slug" | "labels">>> {
+    const records = await this.getAllRecordsWithColumns(["labels"], options);
+    return records.map(({ slug, labels }) => ({ slug, labels }));
+  }
+
+  /**
+   * Every collection's slug and `revalidate` setting, read without the rest of its record: what a
+   * change that busts every collection's cached reads at once needs.
+   */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async getAllRevalidateConfigs(): Promise<
+    Array<Pick<DynamicCollectionRecord, "slug" | "revalidate">>
+  > {
+    const records = await this.getAllRecordsWithColumns(["revalidate"]);
+    return records.map(({ slug, revalidate }) => ({ slug, revalidate }));
+  }
+
+  /**
+   * The slugs of every collection with a Draft/Published lifecycle, read
+   * without the rest of their records: what a decision about publishing
+   * across collections needs.
+   */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async getSlugsWithStatus(): Promise<Set<string>> {
+    const records = await this.getAllRecordsWithColumns(["status"]);
+    return new Set(
+      records.filter(({ status }) => status === true).map(({ slug }) => slug)
+    );
+  }
+
   async getAllCollections(
     options?: ListCollectionsOptions
   ): Promise<DynamicCollectionRecord[]> {
     return this.getAllRecords(options);
+  }
+
+  /**
+   * Every collection, oldest first, from the registry cache outside a
+   * transaction (`getAllRecordsForRead`): for a read that decides no write,
+   * such as a screen or a widget listing the collections. A write decides
+   * from `getAllCollections`, which reads them as stored.
+   */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async getAllCollectionsForRead(): Promise<DynamicCollectionRecord[]> {
+    return this.getAllRecordsForRead();
   }
 
   /**
@@ -206,7 +550,7 @@ export class CollectionRegistryService extends BaseRegistryService<
     await this.updateRecordMigrationStatus(slug, status, migrationId);
     // Every write to a collection's registry row clears the cached rows, so
     // this process never serves the row as it was (`collection-row-cache`).
-    clearCollectionRowCache();
+    clearRegistryRowCache();
   }
 
   async updateMigrationStatusWithVerification(
@@ -217,7 +561,7 @@ export class CollectionRegistryService extends BaseRegistryService<
       slug,
       tableName
     );
-    clearCollectionRowCache();
+    clearRegistryRowCache();
     return result;
   }
 
@@ -225,21 +569,105 @@ export class CollectionRegistryService extends BaseRegistryService<
     return this.getRecordsWithPendingMigrations();
   }
 
-  async registerCollection(
-    data: DynamicCollectionInsert
-  ): Promise<DynamicCollectionRecord> {
-    this.logger.debug("Registering collection", { slug: data.slug });
+  /**
+   * What `registerCollection` refuses before it writes: a slug another resource holds, or one this
+   * registry already has. Reads only, so a dry run asks the registration's own question.
+   */
+  async assertRegistrable(slug: string): Promise<void> {
+    await assertGlobalResourceSlugAvailable(this.adapter, slug);
 
-    await assertGlobalResourceSlugAvailable(this.adapter, data.slug);
-
-    const existing = await this.getCollectionBySlug(data.slug);
+    const existing = await this.getCollectionBySlug(slug);
     if (existing) {
       // Generic "Resource already exists." from the factory; the slug moves
       // to logContext (operator only, never wire-bound) per §13.8.
       throw NextlyError.duplicate({
-        logContext: { reason: "collection-slug-conflict", slug: data.slug },
+        logContext: { reason: "collection-slug-conflict", slug },
       });
     }
+  }
+
+  /**
+   * What `updateCollection` refuses before it writes, answering the record it would update: a
+   * missing record, a new pair of sibling fields, a slug another resource holds, or a record
+   * defined in code changed from anywhere but the sync. Reads only, so a dry run asks the update's
+   * own question.
+   */
+  async assertUpdatable(
+    slug: string,
+    data: Partial<DynamicCollectionInsert>,
+    options?: UpdateCollectionOptions
+  ): Promise<DynamicCollectionRecord> {
+    const existing = await this.getCollection(slug);
+    // Every road that rewrites a collection's registry row reaches this write, the schema
+    // endpoint's among them, so the sibling rule is asked here too, before the row changes: only a
+    // pair of sibling fields this update creates is refused, and one already held keeps working.
+    if (data.fields !== undefined) {
+      assertNoNewSiblingClashes(
+        { kind: "collection", slug },
+        data.fields,
+        existing.fields ?? [],
+        // The configuration's and plugins' sync writes `define*` output, with its added
+        // system fields; every other caller writes fields as it was sent.
+        isPipelineSource(options?.source) ? { definedInCode: "collection" } : {}
+      );
+    }
+
+    const targetSlug = data.slug ?? slug;
+    await assertGlobalResourceSlugAvailable(this.adapter, targetSlug, {
+      currentResourceType: "collection",
+      currentResourceId: existing.id,
+    });
+
+    if (existing.locked && !isPipelineSource(options?.source)) {
+      // Defined in code: the caller is told so, which is a fact about the
+      // thing and not about their permissions; slug and source go to the log.
+      throw NextlyError.definedInCode({
+        thing: "collection",
+        change: "change",
+        logContext: {
+          reason: "collection-locked",
+          slug,
+          source: options?.source,
+        },
+      });
+    }
+    return existing;
+  }
+
+  /**
+   * What `deleteCollection` refuses before it deletes, answering the record it would delete: a
+   * missing record, or one defined in code without `force`. Reads only, so a dry run asks the
+   * deletion's own question.
+   */
+  async assertDeletable(
+    slug: string,
+    options?: { force?: boolean }
+  ): Promise<DynamicCollectionRecord> {
+    const existing = await this.getCollection(slug);
+
+    if (existing.locked && !options?.force) {
+      // Defined in code, as the caller is told; the slug goes to the log.
+      // `force` is the explicit, authorized drop path (e.g. `nextly prune`).
+      throw NextlyError.definedInCode({
+        thing: "collection",
+        change: "delete",
+        logContext: { reason: "collection-locked-delete", slug },
+      });
+    }
+    return existing;
+  }
+
+  async registerCollection(
+    data: DynamicCollectionInsert,
+    /**
+     * `seedPermissions: false` leaves the collection's permissions to a seeding
+     * the caller knows follows, as a start's does (`syncCodeFirstCollections`).
+     */
+    options: { seedPermissions?: boolean } = {}
+  ): Promise<DynamicCollectionRecord> {
+    this.logger.debug("Registering collection", { slug: data.slug });
+
+    await this.assertRegistrable(data.slug);
 
     const now = this.formatDateForDb();
     const tableName = this.ensureTableNamePrefix(data.tableName);
@@ -281,12 +709,15 @@ export class CollectionRegistryService extends BaseRegistryService<
     };
 
     try {
-      const result = await this.adapter.insert<DynamicCollectionRecord>(
-        this.registryTableName,
-        record,
-        { returning: "*" }
+      // With the stored schema version's count (`writeRegistry`).
+      const result = await this.writeRegistry(() =>
+        this.adapter.insert<DynamicCollectionRecord>(
+          this.registryTableName,
+          record,
+          { returning: "*" }
+        )
       );
-      clearCollectionRowCache();
+      clearRegistryRowCache();
 
       // Publish the decision into the live policy as well as the column. The
       // boot-time read only runs at startup, so without this a Builder-created
@@ -309,7 +740,11 @@ export class CollectionRegistryService extends BaseRegistryService<
 
       const deserializedRecord = this.deserializeRecord(result);
 
-      if (this.permissionSeedService && data.slug) {
+      if (
+        this.permissionSeedService &&
+        data.slug &&
+        options.seedPermissions !== false
+      ) {
         try {
           const permResult =
             await this.permissionSeedService.seedCollectionPermissions(
@@ -351,25 +786,7 @@ export class CollectionRegistryService extends BaseRegistryService<
   ): Promise<DynamicCollectionRecord> {
     this.logger.debug("Updating collection", { slug });
 
-    const existing = await this.getCollection(slug);
-
-    const targetSlug = data.slug ?? slug;
-    await assertGlobalResourceSlugAvailable(this.adapter, targetSlug, {
-      currentResourceType: "collection",
-      currentResourceId: existing.id,
-    });
-
-    if (existing.locked && !isPipelineSource(options?.source)) {
-      // Generic forbidden message per §13.8; lock policy detail and slug
-      // move to logContext only.
-      throw NextlyError.forbidden({
-        logContext: {
-          reason: "collection-locked",
-          slug,
-          source: options?.source,
-        },
-      });
-    }
+    const existing = await this.assertUpdatable(slug, data, options);
 
     const updateData: Record<string, unknown> = {
       updated_at: this.formatDateForDb(),
@@ -463,13 +880,12 @@ export class CollectionRegistryService extends BaseRegistryService<
     }
 
     try {
-      const results = await this.adapter.update<DynamicCollectionRecord>(
+      // With the stored schema version's count (`updateRowBySlug`).
+      const results = await this.updateRowBySlug<DynamicCollectionRecord>(
         this.registryTableName,
-        updateData,
-        this.whereEq("slug", slug),
-        { returning: "*" }
+        slug,
+        updateData
       );
-      clearCollectionRowCache();
 
       if (results.length === 0) {
         // Generic "Not found." from the factory; slug moves to logContext.
@@ -525,21 +941,62 @@ export class CollectionRegistryService extends BaseRegistryService<
     );
   }
 
+  /**
+   * Refuse, before anything is removed, to delete collections something
+   * outside the set still depends on: a field that points at one, a foreign
+   * key a plugin or the app declares on one of their tables, or another
+   * owner's column, index, foreign key or check on one of them. Also refused
+   * when any of those cannot be read (`collection-dependents`).
+   *
+   * Separate from {@link deleteCollection}, which removes only the registry
+   * row: promotion hands a collection's table and slug to its code-first
+   * definition, so whatever points at it still points at a collection there.
+   * Every path that goes on to drop the table asks this first.
+   *
+   * @param slugs the collections deleted in one operation
+   * @param options where the extension schema comes from; the one this
+   *   process published unless a command compiled its own
+   */
+  async assertNothingDependsOn(
+    slugs: readonly string[],
+    options: {
+      extensionSchema?: () => Promise<ExtensionSchemaRecord | null>;
+    } = {}
+  ): Promise<void> {
+    // Loaded when a delete asks, not with the registry: every caller of the
+    // registry would otherwise load the dependents readers it never uses.
+    const [
+      { assertNothingDependsOn, databaseDependentsSources },
+      { collectionOwnTables },
+    ] = await Promise.all([
+      import("./collection-dependents"),
+      import("../../schema/services/field-column-descriptor"),
+    ]);
+    const collections = [];
+    for (const slug of slugs) {
+      const record = await this.getCollection(slug);
+      collections.push({
+        slug,
+        tables: collectionOwnTables(record.tableName, record.fields ?? []),
+      });
+    }
+    await assertNothingDependsOn(
+      collections,
+      databaseDependentsSources(
+        this.adapter,
+        options.extensionSchema ??
+          (() => Promise.resolve(getActiveExtensionSchema(this.dialect)))
+      )
+    );
+  }
+
   async deleteCollection(
     slug: string,
     options?: { force?: boolean }
   ): Promise<void> {
     this.logger.debug("Deleting collection", { slug });
 
-    const existing = await this.getCollection(slug);
-
-    if (existing.locked && !options?.force) {
-      // Generic forbidden message; lock policy detail goes to logContext.
-      // `force` is the explicit, authorized drop path (e.g. `nextly prune`).
-      throw NextlyError.forbidden({
-        logContext: { reason: "collection-locked-delete", slug },
-      });
-    }
+    await this.assertDeletable(slug, options);
 
     try {
       // Recovery points and version pins go with the collection, in the SAME
@@ -556,12 +1013,12 @@ export class CollectionRegistryService extends BaseRegistryService<
       //
       // What is swept, and what is deliberately kept, is for
       // `deleteEntityRegistryRow` to say.
-      const count = await this.adapter.transaction(async tx => {
-        return deleteEntityRegistryRow(tx, "collection", slug);
-      });
-      // Once the transaction has committed, so no read in between keeps the
-      // row it is deleting.
-      clearCollectionRowCache();
+      // The row, its sweep and the stored schema version's count in one
+      // transaction (`deleteEntityRow`).
+      const { deleted: count, expire } = await this.deleteEntityRow(
+        "collection",
+        slug
+      );
 
       if (count === 0) {
         throw NextlyError.notFound({ logContext: { slug } });
@@ -577,6 +1034,16 @@ export class CollectionRegistryService extends BaseRegistryService<
       // Its documents are gone with it, so a scheduled release holding one
       // cannot run: stopped now rather than at its instant.
       await this.recheckReleasesHolding(slug);
+
+      // Every cached read of it now describes rows that are gone: expired
+      // here, the method every deletion path reaches, with the setting the
+      // deleted row held. A delete that removed no row has thrown above.
+      // Once the delete is durable: inside an enclosing transaction (a
+      // plugin's `ctx.db.transaction` on SQLite) only when that commits, and
+      // never for one that rolls back.
+      await this.afterCommit(() =>
+        flushContentChange(expire, this.logger, "a collection was deleted")
+      );
     } catch (error) {
       if (NextlyError.is(error)) {
         throw error;
@@ -586,12 +1053,180 @@ export class CollectionRegistryService extends BaseRegistryService<
     }
   }
 
+  /**
+   * The record the registry holds for a slug, from one read of every record
+   * rather than a read per slug, so a sync costs the same number of reads for
+   * five collections as for fifty. Where that read fails (a registry a
+   * migration has not created yet), each slug is read on its own, as before, so
+   * each failure lands on the collection it belongs to.
+   */
+  private async recordsBySlug(): Promise<
+    (slug: string) => Promise<DynamicCollectionRecord | null>
+  > {
+    try {
+      const records = new Map(
+        (await this.getAllCollections()).map(record => [record.slug, record])
+      );
+      return slug => Promise.resolve(records.get(slug) ?? null);
+    } catch {
+      return slug => this.getCollectionBySlug(slug);
+    }
+  }
+
+  /**
+   * What a code-first sync does with `config`, given the record the registry holds for its slug
+   * (null for none): register it (`create`), write a schema change through (`update`: fields, the
+   * status switch, a declared default or the physical table changed), write only its metadata
+   * (`metadata`: admin options, labels or description changed), or leave it (`unchanged`).
+   *
+   * The one decision of it: `syncCodeFirstCollections` acts on it, and
+   * `planCodeFirstCollections` reports it without writing.
+   */
+  private codeFirstSyncStep(
+    config: CodeFirstCollectionConfig,
+    existing: DynamicCollectionRecord | null
+  ): CodeFirstSyncStep {
+    const schemaHash = calculateSchemaHash(config.fields);
+    const desiredTableName = config.tableName
+      ? this.ensureTableNamePrefix(config.tableName)
+      : this.generateTableName(config.slug);
+    if (!existing) return { step: "create", schemaHash, desiredTableName };
+    const decided = (
+      step: "update" | "metadata" | "unchanged"
+    ): CodeFirstSyncStep => ({ step, existing, schemaHash, desiredTableName });
+    if (
+      this.schemaSyncNeeded(
+        config,
+        existing,
+        !schemaHashesMatch(schemaHash, existing.schemaHash)
+      ) ||
+      // Declared defaults are read from the stored definitions when an
+      // entry is created, and the schema hash omits them, so they need
+      // their own comparison or a changed default never reaches the write.
+      fieldDefaultsSignature(config.fields) !==
+        fieldDefaultsSignature(existing.fields) ||
+      // Field settings the hash omits (help text, placeholder, hidden): the
+      // stored field list carries them, so a change to one alone rewrites it.
+      fieldSettingsChanged(config.fields, existing.fields) ||
+      // A collection's physical table: a changed `dbName` moves it.
+      desiredTableName !== existing.tableName ||
+      // The timestamp columns, which the schema hash omits: turning them on
+      // or off changes the table, so the row must follow. The stored flag
+      // may read back as 0/1, so it is compared as a boolean.
+      (config.timestamps ?? true) !==
+        (existing.timestamps == null ? true : Boolean(existing.timestamps))
+    ) {
+      return decided("update");
+    }
+    if (
+      this.adminConfigChanged(config.admin, existing.admin) ||
+      this.labelsChanged(config.labels, existing.labels) ||
+      resolveDescription(config) !== (existing.description ?? undefined)
+    ) {
+      return decided("metadata");
+    }
+    return decided("unchanged");
+  }
+
+  /**
+   * Which of `configs` a code-first sync would register (`created`) and which it would write
+   * (`updated`), as `syncCodeFirstCollections` reports them, reading the registry and writing
+   * nothing. `registryPresent: false` answers for a registry the sync is about to create, which
+   * holds no record: every collection is created.
+   */
+  async planCodeFirstCollections(
+    configs: CodeFirstCollectionConfig[],
+    { registryPresent = true }: { registryPresent?: boolean } = {}
+  ): Promise<Pick<SyncResult, "created" | "updated" | "unchanged">> {
+    const planned: Pick<SyncResult, "created" | "updated" | "unchanged"> = {
+      created: [],
+      updated: [],
+      unchanged: [],
+    };
+    for (const config of configs) {
+      const existing = registryPresent
+        ? await this.getCollectionBySlug(config.slug)
+        : null;
+      const { step } = this.codeFirstSyncStep(config, existing);
+      if (step === "create") planned.created.push(config.slug);
+      else if (step === "unchanged") planned.unchanged.push(config.slug);
+      else planned.updated.push(config.slug);
+    }
+    return planned;
+  }
+
+  /**
+   * Brings the registry row of a collection the registry source records to
+   * that record, as `nextly migrate` does after its migrations apply, and
+   * writes nothing where the row already matches. The decision is the
+   * code-first sync's (`codeFirstSyncStep`) and the columns are the ones it
+   * writes (`declaredRow`), so migrate and a start agree on what matching
+   * means.
+   *
+   * Unlike the sync it changes only what the declaration says: never where
+   * the row came from (its source, lock or config path), never a physical
+   * table (the migrations moved it), and no permission, which is another
+   * writer's. `origin` is used only for a row it creates.
+   */
+  async writeRecordedCollection(
+    recorded: CodeFirstCollectionConfig,
+    origin: { source: CollectionSource; locked: boolean },
+    options: RecordedWriteOptions<DynamicCollectionRecord> = {}
+  ): Promise<"created" | "updated" | "unchanged"> {
+    const existing =
+      options.existing === undefined
+        ? await this.getCollectionBySlug(recorded.slug)
+        : options.existing;
+    const config =
+      options.leavesUnsaid === true
+        ? withUnsaidKept(recorded, existing, options.cleared)
+        : recorded;
+    const decision = this.codeFirstSyncStep(config, existing);
+    const { schemaHash, desiredTableName } = decision;
+    if (decision.step === "unchanged") return "unchanged";
+    // Judged, not written (`RecordedWriteOptions.judgeOnly`).
+    if (options.judgeOnly === true) {
+      return decision.step === "create" ? "created" : "updated";
+    }
+    if (decision.step === "create") {
+      await this.registerCollection({
+        ...declaredRegistration(config, schemaHash, desiredTableName),
+        ...origin,
+      });
+      return "created";
+    }
+    await this.updateCollection(
+      config.slug,
+      decision.step === "update"
+        ? declaredRow(config, schemaHash, desiredTableName)
+        : declaredMetadata(config),
+      // The row's own source, so a row defined in code is written as the
+      // pipeline writes it, and its source is left as it is.
+      { source: decision.existing.source }
+    );
+    return "updated";
+  }
+
   async syncCodeFirstCollections(
-    configs: CodeFirstCollectionConfig[]
+    configs: CodeFirstCollectionConfig[],
+    /**
+     * `seedPermissions: false` when a seeding of every entity's permissions
+     * follows, as at a start: the sync then leaves them to it, so each is
+     * ensured once. Every other caller has its collections' permissions seeded
+     * here, as before.
+     */
+    options: { seedPermissions?: boolean } = {}
   ): Promise<SyncResult> {
     this.logger.info("Syncing code-first collections", {
       count: configs.length,
     });
+    const seedPermissions = options.seedPermissions !== false;
+    // This collection's permissions, or nothing where a later seeding is left to.
+    const seedFor = (slug: string): Promise<void> =>
+      seedPermissions
+        ? this.seedPermissionsForCollection(slug)
+        : Promise.resolve();
+    const recordOf = await this.recordsBySlug();
 
     const result: SyncResult = {
       created: [],
@@ -602,52 +1237,27 @@ export class CollectionRegistryService extends BaseRegistryService<
 
     for (const config of configs) {
       try {
-        const existing = await this.getCollectionBySlug(config.slug);
-        const schemaHash = calculateSchemaHash(config.fields);
-        const desiredTableName = config.tableName
-          ? this.ensureTableNamePrefix(config.tableName)
-          : this.generateTableName(config.slug);
+        const decision = this.codeFirstSyncStep(
+          config,
+          await recordOf(config.slug)
+        );
+        const { schemaHash, desiredTableName } = decision;
 
-        if (!existing) {
-          await this.registerCollection({
-            slug: config.slug,
-            labels: config.labels,
-            tableName: desiredTableName,
-            description: config.description,
-            fields: config.fields,
-            timestamps: config.timestamps ?? true,
-            admin: config.admin,
-            source: config.source ?? "code",
-            locked: true,
-            // Forward Draft/Published flag so code-first collections that
-            // opt in actually write the column on first sync.
-            status: config.status === true,
-            // Forward the resolved versioning config on first sync.
-            versions: config.versions,
-            // Forward the cache-revalidation config on first sync.
-            revalidate: config.revalidate,
-            // Forward the webhook recording policy on first sync.
-            webhooks: config.webhooks,
-            localized: config.localized === true,
-            configPath: config.configPath,
-            schemaHash,
-          });
+        if (decision.step === "create") {
+          await this.registerCollection(
+            {
+              ...declaredRegistration(config, schemaHash, desiredTableName),
+              source: config.source ?? "code",
+              locked: true,
+              configPath: config.configPath,
+            },
+            // Registering seeds the collection's permissions, unless a later
+            // seeding of every entity's is left to.
+            { seedPermissions }
+          );
           result.created.push(config.slug);
-          await this.seedPermissionsForCollection(config.slug);
-        } else if (
-          this.schemaSyncNeeded(
-            config,
-            existing,
-            !schemaHashesMatch(schemaHash, existing.schemaHash)
-          ) ||
-          // Declared defaults are read from the stored definitions when an
-          // entry is created, and the schema hash omits them, so they need
-          // their own comparison or a changed default never reaches the write.
-          fieldDefaultsSignature(config.fields) !==
-            fieldDefaultsSignature(existing.fields) ||
-          // A collection's physical table, which a Single has no equivalent of.
-          desiredTableName !== existing.tableName
-        ) {
+        } else if (decision.step === "update") {
+          const { existing } = decision;
           // Fields changed, status toggle flipped, or `dbName` resolved to a
           // new physical table — all three need to be written through.
           if (desiredTableName !== existing.tableName) {
@@ -661,61 +1271,23 @@ export class CollectionRegistryService extends BaseRegistryService<
           await this.updateCollection(
             config.slug,
             {
-              labels: config.labels,
-              description: resolveDescription(config) ?? null,
-              fields: config.fields,
-              timestamps: config.timestamps,
-              // Explicit null when the config no longer declares an admin block, matching the
-              // metadata-only branch below. Removing `admin` usually accompanies some other
-              // edit, and that edit selects THIS branch — so without it the common case is the
-              // one where stale placement survives.
-              admin: config.admin ?? null,
+              ...declaredRow(config, schemaHash, desiredTableName),
               configPath: config.configPath,
-              schemaHash,
               locked: true,
-              status: config.status === true,
-              versions: config.versions,
-              // Send explicit null (not undefined) when the config removed
-              // `revalidate`, so updateCollection actually clears the column
-              // instead of leaving the stale config persisted.
-              revalidate: config.revalidate ?? null,
-              // Send explicit null (not undefined) when the config removed
-              // `webhooks`, so updateCollection actually clears the column
-              // instead of leaving a stale opt-out suppressing the outbox.
-              webhooks: config.webhooks ?? null,
-              localized: config.localized === true,
-              tableName: desiredTableName,
             },
             { source: config.source ?? "code" }
           );
           result.updated.push(config.slug);
-          await this.seedPermissionsForCollection(config.slug);
-        } else if (
-          this.adminConfigChanged(config.admin, existing.admin) ||
-          this.labelsChanged(config.labels, existing.labels) ||
-          resolveDescription(config) !== (existing.description ?? undefined)
-        ) {
+          await seedFor(config.slug);
+        } else if (decision.step === "metadata") {
           await this.updateCollection(
             config.slug,
-            {
-              labels: config.labels,
-              // Resolved, because a collection may spell its description under `admin` — and
-              // compared above for the same reason: without it, editing or removing that
-              // spelling leaves the row stale until some unrelated schema change happens to
-              // trigger a write.
-              description: resolveDescription(config) ?? null,
-              // Explicit null when the config no longer declares an admin block, so
-              // `updateCollection` clears the column instead of reading `undefined` as "leave
-              // unchanged" and stranding a sidebar position the config has dropped. Same
-              // reasoning as `revalidate` and `webhooks` above.
-              admin: config.admin ?? null,
-              locked: true,
-            },
+            { ...declaredMetadata(config), locked: true },
             { source: config.source ?? "code" }
           );
           result.updated.push(config.slug);
         } else {
-          await this.seedPermissionsForCollection(config.slug);
+          await seedFor(config.slug);
           result.unchanged.push(config.slug);
         }
       } catch (error) {
@@ -727,19 +1299,8 @@ export class CollectionRegistryService extends BaseRegistryService<
         // with a debugger. Fall back to plain `error.message` for
         // non-NextlyError throws.
         const message = describeError(error);
-        // Classify on the thrown error's own message: a description
-        // concatenates the cause chain, so a genuine failure that merely
-        // wraps something saying "already exists" would enter duplicate
-        // recovery and mask the real error.
-        const immediate = immediateMessage(error).toLowerCase();
-        // Prefer the structured NextlyError code over message string matching.
-        // Falls back to legacy substring sniffing for any non-NextlyError that
-        // bubbles up from deeper layers during the migration window.
-        const isDuplicate =
-          (NextlyError.is(error) && error.code === "DUPLICATE") ||
-          immediate.includes("already exists") ||
-          immediate.includes("duplicate") ||
-          immediate.includes("unique constraint");
+        // Whether the row is one an earlier sync made (`isDuplicateRegistration`).
+        const isDuplicate = isDuplicateRegistration(error);
         if (isDuplicate) {
           const refetched = await this.getCollectionBySlug(config.slug).catch(
             () => null
@@ -864,17 +1425,26 @@ export class CollectionRegistryService extends BaseRegistryService<
       record,
       { returning: "*" }
     );
+    // The stored schema version's count moves in the caller's transaction.
+    await this.countWriteOn(tx);
     // A new row: until the caller commits, a read outside the transaction
     // finds none, and a missing row is never cached.
-    clearCollectionRowCache();
+    clearRegistryRowCache();
 
     return this.deserializeRecord(result);
   }
 
   /**
-   * Rename the physical table when a code-first collection's `dbName` changes.
-   * Renames only when old exists and new doesn't; warns when both exist; no-op
-   * otherwise (boot auto-create handles the missing-table case).
+   * Rename the physical table when a code-first collection's `dbName` changes, before the registry
+   * names the new one. Renames when the old table is there and the new one is not; does nothing
+   * when the old one is not there (boot creates the missing table).
+   *
+   * Refused, so the registry keeps naming the old table, when a table of the new name is there too
+   * (renaming onto it would lose one of the two), when the database refuses the rename, and when
+   * the tables cannot be read to decide: in each case the old table still holds the entries, and
+   * recording the new name would serve the collection from a table that does not.
+   *
+   * @throws NextlyError `VALIDATION_ERROR` with a `TABLE_RENAME_REFUSED` entry naming both tables
    */
   private async renamePhysicalTable(
     oldTableName: string,
@@ -887,27 +1457,31 @@ export class CollectionRegistryService extends BaseRegistryService<
       oldExists = await this.adapter.tableExists(oldTableName);
       newExists = await this.adapter.tableExists(newTableName);
     } catch (error) {
-      this.logger.warn(
-        `Skipping rename for collection "${slug}": table introspection failed (${error instanceof Error ? error.message : String(error)}). Boot pipeline will reconcile.`
+      throw tableRenameRefused(
+        { slug, from: oldTableName, to: newTableName },
+        "its tables could not be read to decide",
+        error
       );
-      return;
     }
 
-    if (oldExists && !newExists) {
-      try {
-        const { dialect } = this.adapter.getCapabilities();
-        const q = dialect === "mysql" ? "`" : '"';
-        await this.adapter.executeQuery(
-          `ALTER TABLE ${q}${oldTableName}${q} RENAME TO ${q}${newTableName}${q}`
-        );
-      } catch (error) {
-        this.logger.warn(
-          `Failed to rename physical table for collection "${slug}" (${oldTableName} → ${newTableName}): ${error instanceof Error ? error.message : String(error)}`
-        );
-      }
-    } else if (oldExists && newExists) {
-      this.logger.warn(
-        `Cannot rename physical table for collection "${slug}": both "${oldTableName}" and "${newTableName}" exist. Resolve manually (drop one or copy rows).`
+    if (!oldExists) return;
+    if (newExists) {
+      throw tableRenameRefused(
+        { slug, from: oldTableName, to: newTableName },
+        `a table named '${newTableName}' is there too. Remove one of the two, or copy its rows across, then start again`
+      );
+    }
+    try {
+      const { dialect } = this.adapter.getCapabilities();
+      const q = dialect === "mysql" ? "`" : '"';
+      await this.adapter.executeQuery(
+        `ALTER TABLE ${q}${oldTableName}${q} RENAME TO ${q}${newTableName}${q}`
+      );
+    } catch (error) {
+      throw tableRenameRefused(
+        { slug, from: oldTableName, to: newTableName },
+        "the database refused the rename",
+        error
       );
     }
   }

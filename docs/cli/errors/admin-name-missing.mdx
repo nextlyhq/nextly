@@ -1,0 +1,23 @@
+---
+title: ADMIN_NAME_MISSING
+description: "`nextly users:create-admin` was given no name for the administrator."
+---
+
+## Cause
+
+`nextly users:create-admin` was given no name for the administrator.
+
+`nextly users:create-admin` needs the first administrator's name, from `--name` or, in a terminal, a prompt. None was given.
+
+## Fix
+
+- Pass the name: `nextly users:create-admin --email ada@example.com --name Ada`.
+
+## Example
+
+```text
+✗ No name was given for the administrator.
+  Why:  No name was given with `--name` or at the prompt.
+  Next: Give the administrator's name with `--name`.
+  Docs: https://nextlyhq.com/docs/cli/errors/admin-name-missing  (ADMIN_NAME_MISSING)
+```

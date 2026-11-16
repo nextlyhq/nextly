@@ -16,6 +16,10 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, defineSingle, text } from "../../../config";
 import {
   createTestNextly,
@@ -79,6 +83,12 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     ],
     localization: { locales: ["en", "de"], defaultLocale: "en" },
   });
+  // A code rule only narrows the permission, so the releases' author holds
+  // read, update, publish and unpublish on the pages and the Single.
+  await userWhoMay(current, AUTHOR, "read", [SLUG, SINGLE_SLUG]);
+  for (const action of ["update", "publish", "unpublish"]) {
+    await grantTo(current, AUTHOR, action, [SLUG, SINGLE_SLUG]);
+  }
   return current;
 }
 
@@ -136,7 +146,7 @@ async function publishedInBothLanguages(t: TestNextly): Promise<string> {
 
   await handlerOf(t).updateEntry(
     { collectionName: SLUG, entryId: id, overrideAccess: true, locale: "de" },
-    { title: "Seite DE", status: "published" }
+    { title: "Seite DE", status: "published", _overwrite: true }
   );
   return id;
 }
@@ -238,7 +248,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "de",
         },
-        { title: "Seite DE", status: "draft" }
+        { title: "Seite DE", status: "draft", _overwrite: true }
       );
 
       const before = await companionStatuses(t, `dc_${SLUG}_locales`);
@@ -292,12 +302,12 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       await singlesOf(t).update(
         SINGLE_SLUG,
-        { siteName: "Prefs EN", status: "published" },
+        { siteName: "Prefs EN", status: "published", _overwrite: true },
         { locale: "en", overrideAccess: true }
       );
       await singlesOf(t).update(
         SINGLE_SLUG,
-        { siteName: "Prefs DE", status: "published" },
+        { siteName: "Prefs DE", status: "published", _overwrite: true },
         { locale: "de", overrideAccess: true }
       );
 
@@ -341,7 +351,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { title: "overwritten everywhere", status: "draft" }
+        { title: "overwritten everywhere", status: "draft", _overwrite: true }
       );
 
       expect(refused.success).toBe(false);

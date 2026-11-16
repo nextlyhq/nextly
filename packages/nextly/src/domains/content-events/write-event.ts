@@ -32,6 +32,7 @@ import {
   ensureCoreContentEventKinds,
   type CoreContentEventKind,
 } from "./core-kinds";
+import type { ContentEventKind } from "./kinds";
 import {
   recordContentEvent,
   type ContentEventInput,
@@ -45,9 +46,23 @@ import {
  */
 export interface WriteEventInput {
   subject: ContentEventSubject;
-  kind: CoreContentEventKind;
+  /**
+   * A core kind by its key, or a kind another core feature registered
+   * itself (the document lock's takeover), so that feature's events take
+   * their actor from this one assembly too.
+   */
+  kind: CoreContentEventKind | Readonly<ContentEventKind>;
   /** Who made the write, as the write path resolved it. */
   actor: RequestActor;
+  /**
+   * The plugin a write made as the system was made by, by the name it booted
+   * under: the event names the plugin rather than a nameless system. Taken
+   * from the plugin's own identity by the write path, never from a request.
+   * Ignored for any other actor, who is named as they are.
+   */
+  plugin?: string;
+  /** Why the change was made, in the caller's words, where it gave a reason. */
+  note?: string | null;
   /**
    * The person's display name, when the write path has it. An API key is
    * named by its own name, read here; the system is named by nothing.
@@ -60,6 +75,11 @@ export interface WriteEventInput {
   /** The version the write produced or points at. */
   versionNo?: number | null;
   payload?: Record<string, unknown> | null;
+  /**
+   * The hash of the definition a feature acted under, where it has one: a workflow's, for the
+   * withdrawal of an approval a save caused.
+   */
+  definitionHash?: string | null;
 }
 
 /**
@@ -122,7 +142,10 @@ export async function recordWriteEvent(
   input: WriteEventInput
 ): Promise<{ id: string }> {
   ensureCoreContentEventKinds();
-  const actor = contentEventActor(input.actor, await actorName(tx, input));
+  const actor =
+    input.plugin !== undefined && input.actor.type === "system"
+      ? { kind: "plugin" as const, id: input.plugin, name: input.plugin }
+      : contentEventActor(input.actor, await actorName(tx, input));
   const dialect = deps.adapter.getCapabilities().dialect;
   // Read under the shared deleted-people lock only for a plugin-defined
   // person: no other actor can have been reported deleted.
@@ -140,13 +163,19 @@ export async function recordWriteEvent(
     tx,
     {
       subject: input.subject,
-      kind: CORE_CONTENT_EVENT_KINDS[input.kind].name,
+      kind:
+        typeof input.kind === "string"
+          ? CORE_CONTENT_EVENT_KINDS[input.kind].name
+          : input.kind.name,
       actor,
       parts: input.parts,
       fromState: input.fromState ?? null,
       toState: input.toState ?? null,
       versionNo: input.versionNo ?? null,
       payload: input.payload ?? null,
+      note: input.note ?? null,
+      // Passed through as given: only a feature with a definition names one.
+      definitionHash: input.definitionHash ?? null,
     },
     { principals }
   );
@@ -196,6 +225,51 @@ export async function recordTransitionEvents(
       versionNo: write.versionNo ?? null,
     });
   }
+}
+
+/**
+ * How an overwrite stood against the document, and who made the changes it
+ * replaced, as the `overwritten` event keeps them.
+ *
+ * @experimental
+ */
+export interface OverwriteRecord {
+  given: "none" | "current" | "stale";
+  replaced: {
+    kind: string;
+    id: string | null;
+    principalKind: string | null;
+  } | null;
+}
+
+/**
+ * Record an overwrite in the document's history. Always, whether or not the
+ * document keeps versions: an update applied whatever the current version is
+ * accountable only through this record, so a write that cannot record it
+ * fails with it.
+ *
+ * @experimental
+ */
+export async function recordOverwriteEvent(
+  tx: TransactionContext,
+  deps: WriteEventDeps,
+  overwrite: Pick<WriteEventInput, "subject" | "actor" | "personName"> & {
+    locale?: string | null;
+  } & OverwriteRecord
+): Promise<void> {
+  await recordWriteEvent(tx, deps, {
+    subject: overwrite.subject,
+    kind: "overwritten",
+    actor: overwrite.actor,
+    personName: overwrite.personName,
+    ...(overwrite.locale ? { parts: { locales: [overwrite.locale] } } : {}),
+    // Only "stale" names anyone: no version, or the current one, replaced
+    // nobody this record can name.
+    payload: {
+      given: overwrite.given,
+      replaced: overwrite.given === "stale" ? overwrite.replaced : null,
+    },
+  });
 }
 
 /**

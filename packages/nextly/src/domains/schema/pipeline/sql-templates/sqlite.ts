@@ -19,6 +19,7 @@
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { DropIndexOp, DropTableOp, Operation } from "../diff/types";
+import { referenceConversionStatements } from "../reference-list-conversion";
 
 import { commonStatementSql } from "./common-statements";
 import { createIndexSql } from "./create-index";
@@ -113,6 +114,15 @@ export function generateSqliteSQL(op: Operation): string {
     case "drop_table":
       return generateDropTable(op);
     case "change_column_type":
+      // A relation's switch keeps the column's type on SQLite (text) and rewrites, or requires
+      // absent, only the values: its own statements, which need no rebuild.
+      if (op.conversion !== undefined && op.fromType === op.toType) {
+        return referenceConversionStatements(op, "sqlite").join(";\n");
+      }
+      throw new SqliteUnsupportedOperationError(
+        op.type,
+        RECREATE_TABLE_HINTS[op.type]
+      );
     case "change_column_nullable":
     case "change_column_default":
     case "change_foreign_key_action":

@@ -19,12 +19,12 @@
 // ## Why the accepted list, rather than fixing them here
 //
 // The disagreements below are recorded, not endorsed. Most resolve by moving the generator to the
-// descriptor. Some must move the DESCRIPTOR instead: on MySQL a select renders as `text` in the
-// generator and `varchar(255)` in the descriptor, so taking the descriptor's answer would cap
-// existing content at 255 characters, and a multi-select is stored as JSON by the field-group
-// generator while the descriptor still describes a single string. The same field type resolves the
-// OTHER way on PostgreSQL, where the generator is the one that bounds. Deciding those one at a time
-// is a different job from stopping new ones appearing, and this file is the second job.
+// descriptor. The field-group generator has moved whole: it reads every column type from the
+// descriptor, which is also what a Builder save's migration builds a field group's table from, so
+// the two routes make one table. Whether the descriptor's own answer is right for a type (a
+// multi-select is described as a single string, `varchar(255)` on MySQL, for every entity) is a
+// question for the descriptor, decided once for everything that reads it. Deciding those one at a
+// time is a different job from stopping new ones appearing, and this file is the second job.
 //
 // The list is therefore a ratchet, not a permission slip. It is checked in both directions: an
 // entry describing a disagreement that no longer happens fails too, so resolving one forces its
@@ -85,8 +85,9 @@ interface BuilderPath {
 const BUILDERS: BuilderPath[] = [
   { origin: "collection", path: "create", label: "collection" },
   { origin: "collection", path: "alter", label: "collection-alter" },
+  // A field group's columns are only ever created: its table gains columns through the pipeline's
+  // diff, not an ALTER generator of its own.
   { origin: "fieldGroup", path: "create", label: "fieldGroup" },
-  { origin: "fieldGroup", path: "alter", label: "fieldGroup-alter" },
 ];
 
 /**
@@ -136,6 +137,10 @@ const CASES: Record<DynamicFieldType, FieldCase[]> = {
   email: [{ label: "plain", field: { type: "email" } }],
   password: [{ label: "plain", field: { type: "password" } }],
   code: [{ label: "plain", field: { type: "code" } }],
+  icon: [
+    { label: "plain", field: { type: "icon" } },
+    { label: "required", field: { type: "icon", required: true } },
+  ],
   number: [
     { label: "integer", field: { type: "number" } },
     // `dbType` is how a number states it wants exact fixed-point storage, which is what a money
@@ -332,50 +337,13 @@ function everywhere(
   );
 }
 
-const FK_TYPES: DynamicFieldType[] = ["upload", "relationship"];
-
 const ACCEPTED = byAspect([
-  // --- 🔴 A field type one generator has never heard of ---------------------
-  // The field-group generator has no case for `chips` and emits NOTHING: the column is absent from
-  // the CREATE TABLE while the descriptor names a JSON column, so the runtime table binds a column
-  // the database does not have. Not a shape disagreement, an absence. Fixed on its own, not here.
-  ...everywhere(
-    ["chips"],
-    ["plain"],
-    "absence",
-    "field-group generator emits no column at all for chips; descriptor names a JSON column",
-    { origins: ["fieldGroup"] }
-  ),
-
-  // --- Required foreign keys: nullability ----------------------------------
-  // The descriptor states that every FK column is nullable and that requiredness is enforced above
-  // the database. Both generators emit NOT NULL, so a row the application would have rejected with
-  // a field-level message is refused by the database with a driver error instead.
-  ...everywhere(
-    FK_TYPES,
-    ["required"],
-    "nullability",
-    "generator emits NOT NULL for a required FK column; descriptor calls every FK column nullable"
-  ),
-
-  // --- Foreign keys on PostgreSQL: type ------------------------------------
-  // The field-group generator gives an FK column the UUID type; the descriptor calls it text, which
-  // is what the runtime table binds and what a collection's own FK columns are. A UUID column
-  // refuses any id that is not one.
-  ...everywhere(
-    FK_TYPES,
-    ["optional", "required"],
-    "type",
-    "field-group generator types an FK column as UUID; descriptor and the runtime say text",
-    { origins: ["fieldGroup"], dialects: ["postgresql"] }
-  ),
-
   // --- 🔴 Many values in one column ----------------------------------------
   // A field that holds MANY values stores them as a JSON array, and the descriptor says so for
-  // every one of them. Neither generator asks the question: both route these through the same
-  // scalar mapping a single-valued field of that type gets, so the column holds one value while
-  // the runtime binds an array to it. `dbType` does not rescue the number case — the descriptor
-  // ignores it once `hasMany` is set, and the field-group generator still emits DECIMAL.
+  // every one of them. The collection generator does not ask the question for a number: it routes
+  // one through the same scalar mapping a single-valued number gets, so the column holds one value
+  // while the runtime binds an array to it. `dbType` does not rescue it — the descriptor ignores
+  // it once `hasMany` is set.
   //
   // 🔴 These stay recorded even though the collection generator now reads the descriptor for the
   // columns it creates, because this disagreement changes the column's STORAGE CLASS rather than
@@ -390,80 +358,14 @@ const ACCEPTED = byAspect([
     ["number"],
     ["hasMany", "hasMany decimal"],
     "type",
-    "generator emits a scalar number column for a hasMany field; descriptor stores the array as JSON"
+    "generator emits a scalar number column for a hasMany field; descriptor stores the array as JSON",
+    // The field-group generator reads every column type from the descriptor, so only the
+    // collection generator still has this.
+    { origins: ["collection"] }
   ),
-  // SQLite is absent from the two below on purpose: it stores JSON as text, so the two sides land
-  // on the same column there and there is nothing to accept.
-  ...everywhere(
-    ["upload"],
-    ["hasMany"],
-    "type",
-    "collection generator emits a single FK column for a hasMany upload; descriptor stores the ids as JSON",
-    { origins: ["collection"], dialects: ["postgresql", "mysql"] }
-  ),
-  ...everywhere(
-    ["relationship"],
-    ["hasMany", "polymorphic"],
-    "type",
-    "collection generator emits a single FK column for a multi-reference relationship; descriptor stores the ids as JSON",
-    { origins: ["collection"], dialects: ["postgresql", "mysql"] }
-  ),
-  // --- 🔴 A select that holds several choices -------------------------------
-  // The field-group generator switches a hasMany select to a JSON column; the descriptor does not
-  // look at `hasMany` for a select at all and keeps describing a single string. Recorded against the
-  // DESCRIPTOR: the generator is storing several values the way several values have to be stored.
-  ...everywhere(
-    ["select"],
-    ["hasMany"],
-    "type",
-    "field-group generator stores a multi-select as JSON; descriptor still describes a single string",
-    { origins: ["fieldGroup"], dialects: ["postgresql", "mysql"] }
-  ),
-
-  // --- Bounded strings: the two directions ---------------------------------
-  // 🔴 These do NOT resolve the same way, which is why each is written down separately rather than
-  // as one rule. On MySQL a generator emits `text` (65 535 characters) and the descriptor
-  // `varchar(255)`; on PostgreSQL it is the reverse, the generator bounds at 255 and the descriptor
-  // leaves it unbounded, where the generator can move safely because widening loses nothing.
-  //
-  // 🔴 The collection generator's MySQL rows are no longer here, and NOT because that direction was
-  // judged safe. New columns now read the descriptor, so a select or radio created from today on is
-  // `varchar(255)` where it used to be `text` — a bound on values that could previously be longer.
-  // Nothing existing was touched and nothing can be truncated, because only columns that do not yet
-  // exist are rendered this way. Whether the DESCRIPTOR should move to `text` for these types is
-  // still open, and is tracked as its own question rather than settled by this file.
-  ...everywhere(
-    ["select"],
-    ["plain", "camelCase name"],
-    "type",
-    "field-group generator bounds the column at varchar(255); descriptor leaves it text",
-    { origins: ["fieldGroup"], dialects: ["postgresql"] }
-  ),
-  ...everywhere(
-    ["radio"],
-    ["plain"],
-    "type",
-    "field-group generator bounds the column at varchar(255); descriptor leaves it text",
-    { origins: ["fieldGroup"], dialects: ["postgresql"] }
-  ),
-  ...everywhere(
-    ["email", "password"],
-    ["plain"],
-    "type",
-    "field-group generator bounds the column at varchar(255); descriptor leaves it unbounded text",
-    { origins: ["fieldGroup"], dialects: ["postgresql"] }
-  ),
-
-  // --- Timestamps on MySQL --------------------------------------------------
-  // DATETIME and TIMESTAMP differ in MySQL by range and by time-zone handling, so this is a real
-  // storage difference rather than a spelling one.
-  ...everywhere(
-    ["date"],
-    ["plain"],
-    "type",
-    "field-group generator emits DATETIME; descriptor says timestamp",
-    { origins: ["fieldGroup"], dialects: ["mysql"] }
-  ),
+  // A hasMany upload and a multi-reference relationship are not recorded: the collection
+  // generator takes the descriptor's JSON list for them, and moves the index, foreign key, CHECK
+  // and backfill with it, so both sides name the same column.
 ]);
 
 const PROBE_TABLE = "conformance_probe";
@@ -492,11 +394,9 @@ function emittedColumns(
   const asConfigs = fields as unknown as Parameters<
     FieldGroupSchemaService["generateMigrationSQL"]
   >[1];
-  return builder.path === "create"
-    ? parseCreateTable(service.generateMigrationSQL(PROBE_TABLE, asConfigs, {}))
-    : parseAddColumns(
-        service.generateAlterTableMigration(PROBE_TABLE, [], asConfigs)
-      );
+  return parseCreateTable(
+    service.generateMigrationSQL(PROBE_TABLE, asConfigs, {})
+  );
 }
 
 /**
@@ -660,7 +560,7 @@ describe("column conformance: the generators against the descriptor", () => {
   it("measured every field type through both generators on every dialect", () => {
     const types = Object.keys(CASES).length;
     const variations = Object.values(CASES).reduce((n, c) => n + c.length, 0);
-    expect(types, "every DynamicFieldType has a row").toBe(19);
+    expect(types, "every DynamicFieldType has a row").toBe(20);
     // A Record satisfied by `newType: []` type-checks and measures nothing, and the aggregate below
     // would stay comfortably over its floor while the new type entered uncovered.
     expect(

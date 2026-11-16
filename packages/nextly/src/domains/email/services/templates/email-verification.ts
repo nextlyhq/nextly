@@ -40,8 +40,8 @@ export const emailVerificationTemplate: OwnerTemplate = {
 <table role="presentation" border="0" cellspacing="0" cellpadding="0" width="100%">
   <tr>
     <td style="padding: 16px 0 0; border-top: 1px solid #e4e4e7;">
-      <p style="margin: 0; font-size: 12px; color: #a1a1aa; line-height: 18px;">If the button above doesn't work, copy and paste the following URL into your browser:</p>
-      <p style="margin: 0; padding: 4px 0 0; font-size: 12px; color: #a1a1aa; line-height: 18px; word-break: break-all;">{{verifyLink}}</p>
+      <p style="margin: 0; font-size: 12px; color: #71717a; line-height: 18px;">If the button above doesn't work, copy and paste the following URL into your browser:</p>
+      <p style="margin: 0; padding: 4px 0 0; font-size: 12px; color: #71717a; line-height: 18px; word-break: break-all;">{{verifyLink}}</p>
     </td>
   </tr>
 </table>`,
@@ -59,29 +59,51 @@ If you didn't create an account, you can safely ignore this email.`,
   variables: [
     {
       name: "userName",
+      type: "text",
+      label: "Name",
       description: "The user's display name",
       required: false,
+      example: "Ada Lovelace",
     },
     {
       name: "verifyLink",
+      type: "link",
+      label: "Verification link",
       description: "Email verification URL",
       required: true,
+      example: "https://example.com/admin/verify-email?token=sample",
     },
     {
       name: "expiresIn",
+      type: "text",
+      label: "Link expires in",
       description: "Token expiration time (e.g., '24 hours')",
       required: true,
+      example: "24 hours",
     },
-    { name: "appName", description: "Application name", required: true },
+    {
+      name: "appName",
+      type: "text",
+      label: "App name",
+      description: "Application name",
+      required: true,
+      example: "Acme",
+    },
     {
       name: "userEmail",
+      type: "text",
+      label: "Email address",
       description: "The user's email address",
       required: false,
+      example: "ada@example.com",
     },
     {
       name: "year",
+      type: "number",
+      label: "Year",
       description: "Current year (used in layout footer)",
       required: false,
+      example: 2026,
     },
   ],
   useLayout: true,

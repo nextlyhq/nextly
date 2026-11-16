@@ -1,0 +1,24 @@
+---
+title: PRODUCTION_ROLLBACK_UNCONFIRMED
+description: "`nextly migrate:down` was run with `NODE_ENV=production` and without `--yes`."
+---
+
+## Cause
+
+`nextly migrate:down` was run with `NODE_ENV=production` and without `--yes`.
+
+With `NODE_ENV=production`, `nextly migrate:down` asks for `--yes` before it rolls anything back: a rollback drops what the migrations added and restores no data.
+
+## Fix
+
+- Prefer rolling forward with a corrective migration, or restoring from a backup.
+- To roll back anyway, re-run with `--yes`.
+
+## Example
+
+```text
+✗ Refusing to roll back in production without --yes.
+  Why:  `NODE_ENV` is `production`. Prefer rolling forward with a corrective migration, or restore from backup.
+  Next: Re-run with --yes to override.
+  Docs: https://nextlyhq.com/docs/cli/errors/production-rollback-unconfirmed  (PRODUCTION_ROLLBACK_UNCONFIRMED)
+```

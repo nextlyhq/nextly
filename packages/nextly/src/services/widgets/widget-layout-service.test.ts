@@ -65,7 +65,7 @@ class StubbedService extends WidgetLayoutService {
 }
 
 const placements: WidgetPlacement[] = [
-  { id: "p1", widgetId: "core/a", width: "full", removed: false },
+  { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: false },
 ];
 
 describe("a failed insert", () => {
@@ -129,27 +129,31 @@ class StoredRowService extends WidgetLayoutService {
 function recordingLogger(): {
   logger: Logger;
   warnings: { message: string; meta?: Record<string, unknown> }[];
+  errors: string[];
 } {
   const warnings: { message: string; meta?: Record<string, unknown> }[] = [];
+  const errors: string[] = [];
   return {
     warnings,
+    errors,
     logger: {
       debug: () => {},
       info: () => {},
       warn: (message: string, meta?: Record<string, unknown>) => {
         warnings.push({ message, ...(meta === undefined ? {} : { meta }) });
       },
-      error: () => {},
+      error: (message: string) => {
+        errors.push(message);
+      },
     },
   };
 }
 
 const twiceKeyed = JSON.stringify({
-  schemaVersion: 2,
-  columnCount: 2,
+  schemaVersion: 4,
   placements: [
-    { id: "same", widgetId: "core/a", column: 0, order: 0, hidden: false },
-    { id: "same", widgetId: "core/b", column: 1, order: 1, hidden: false },
+    { id: "same", widgetId: "core/a", w: 6, h: 3, removed: false },
+    { id: "same", widgetId: "core/b", w: 6, h: 3, removed: false },
   ],
 });
 
@@ -195,11 +199,10 @@ describe("a stored row whose placement ids collide", () => {
 
   it("CONTROL: a sound row is served with no warning at all", async () => {
     const sound = JSON.stringify({
-      schemaVersion: 2,
-      columnCount: 2,
+      schemaVersion: 4,
       placements: [
-        { id: "a", widgetId: "core/a", column: 0, order: 0, hidden: false },
-        { id: "b", widgetId: "core/b", column: 1, order: 1, hidden: false },
+        { id: "a", widgetId: "core/a", w: 6, h: 3, removed: false },
+        { id: "b", widgetId: "core/b", w: 6, h: 3, removed: false },
       ],
     });
     const { logger, warnings } = recordingLogger();
@@ -211,5 +214,45 @@ describe("a stored row whose placement ids collide", () => {
     expect(row.layout?.placements.map(p => p.id)).toEqual(["a", "b"]);
     expect(row.layout?.duplicatePlacementIds).toBeUndefined();
     expect(warnings).toEqual([]);
+  });
+});
+
+describe("a stored row of an earlier format", () => {
+  const earlier = JSON.stringify({
+    schemaVersion: 3,
+    placements: [
+      { id: "a", widgetId: "core/a", width: "half", removed: true },
+      { id: "a", widgetId: "core/b", width: "full", removed: false },
+    ],
+  });
+
+  it("is no saved arrangement, not an unreadable one, and keeps the row's own version", async () => {
+    // 🔴 The version is the row's, not 0: the reader's next write then takes
+    // the guarded UPDATE that replaces the row, where 0 would send an INSERT
+    // into the row that is still there.
+    const { logger, warnings, errors } = recordingLogger();
+    const row = await new StoredRowService(earlier, logger).getLayout(
+      "user",
+      "u1"
+    );
+
+    expect(row).toEqual({ layout: undefined, version: 3, unreadable: false });
+    // Nothing of its content is read, so its repeated id is reported nowhere,
+    // and an earlier row is no fault for an operator to see.
+    expect(warnings).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  it("CONTROL: a row with no version, or one this core never wrote, is unreadable and logged", async () => {
+    for (const schemaVersion of [undefined, 0, 99]) {
+      const { logger, errors } = recordingLogger();
+      const row = await new StoredRowService(
+        JSON.stringify({ schemaVersion, placements: [] }),
+        logger
+      ).getLayout("user", "u1");
+
+      expect(row).toEqual({ layout: undefined, version: 3, unreadable: true });
+      expect(errors).toHaveLength(1);
+    }
   });
 });

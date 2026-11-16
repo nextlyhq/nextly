@@ -106,7 +106,7 @@ const ApiKeysPage: React.FC = () => {
   const { hasPermission } = useCurrentUserPermissions();
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer width="wide">
+      <PageContainer type="list">
         <SettingsLayout
           title="API Keys"
           description="Manage secure access keys for API integrations"

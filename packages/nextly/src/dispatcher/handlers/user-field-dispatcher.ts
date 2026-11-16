@@ -18,12 +18,16 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import type { NextlyServiceConfig } from "../../di/register";
+import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
+import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import { NextlyError } from "../../errors";
 import type { UserExtSchemaService } from "../../services/users/user-ext-schema-service";
 import type { UserFieldDefinitionService } from "../../services/users/user-field-definition-service";
+import { consoleLogger } from "../../shared/types";
 import {
   getAdapterFromDI,
   getConfigFromDI,
+  getLoggerFromDI,
   getUserExtSchemaServiceFromDI,
   getUserFieldDefinitionServiceFromDI,
 } from "../helpers/di";
@@ -40,8 +44,95 @@ async function syncUserExtSchema(
 ): Promise<void> {
   if (!userExtSchemaService) return;
   await userExtSchemaService.reloadMergedFields();
-  const drizzleDb = getAdapterFromDI()?.getDrizzle();
-  await userExtSchemaService.ensureUserExtSchema(drizzleDb);
+  const adapter = getAdapterFromDI();
+  // A user field's column waits for a table another session is using in short tries, as
+  // `nextly migrate` waits, each try after the first noted in the log.
+  await userExtSchemaService.ensureUserExtSchema(
+    adapter?.getDrizzle(),
+    adapter === undefined
+      ? {}
+      : {
+          busyTable: {
+            adapter,
+            notify: line => (getLoggerFromDI() ?? consoleLogger).warn(line),
+          },
+        }
+  );
+}
+
+/**
+ * Run a user field change and the `user_ext` sync that follows it as one schema change, holding
+ * the schema lock throughout and refused at once while a migration holds it.
+ *
+ * The definition row and the `user_ext` column are the two halves of one field, and the sync is
+ * DDL. Held only around the sync, a migration could run between the row write and the column
+ * change; held only around the row, the column change would run unguarded. So both run inside one
+ * exclusion, which may create the lock table because the sync issues DDL.
+ */
+function withUserFieldChangeExcluded<T>(
+  label: string,
+  svc: UserFieldsServices,
+  change: () => Promise<T>,
+  /**
+   * Takes back what `change` wrote when the `user_ext` sync after it fails (a busy table whose
+   * tries ran out, say), so the change reads as not made and can be made again as it was.
+   */
+  undo?: (result: T) => Promise<void>
+): Promise<T> {
+  // The bounds a busy table is waited for within, read before anything changes: a value out of
+  // range refuses the change here rather than after its definition was written.
+  if (getAdapterFromDI() !== undefined) busyTableBounds({ env: process.env });
+  return withSchemaChangeExcluded(
+    {
+      adapter: getAdapterFromDI(),
+      // An app whose DI registered no logger still saves; the refusal's log line then goes to the
+      // console.
+      logger: getLoggerFromDI() ?? consoleLogger,
+      label,
+      // May create the lock table only in development, as a collection save may. In production
+      // the application's role can hold data rights and no DDL rights, so the save never creates
+      // the lock table: it takes the lock wherever that table exists, and runs its best-effort
+      // `user_ext` DDL (a statement the role may not run is skipped, as before) under it. On a
+      // database that has not run `nextly migrate` since the lock table was added, the table is
+      // absent and that DDL runs unlocked, the residual `withMigrationExcluded` documents.
+      issuesDdl: process.env.NODE_ENV === "development",
+    },
+    async () => {
+      const result = await change();
+      try {
+        await syncUserExtSchema(svc.userExtSchemaService);
+      } catch (error) {
+        if (undo !== undefined) {
+          const logger = getLoggerFromDI() ?? consoleLogger;
+          const message = (failure: unknown): string =>
+            failure instanceof Error ? failure.message : String(failure);
+          const undone = await undo(result).then(
+            () => true,
+            (undoError: unknown) => {
+              logger.error(
+                `The ${label} failed, and what it wrote could not be taken back: ${message(undoError)}`
+              );
+              return false;
+            }
+          );
+          // The sync loaded the fields with the change in them; once it is taken back they are
+          // loaded again, so the user model is not built with a field that is not there. A reload
+          // that fails is logged as such: what the change wrote was taken back all the same.
+          if (undone) {
+            await Promise.resolve(
+              svc.userExtSchemaService?.reloadMergedFields()
+            ).catch((reloadError: unknown) =>
+              logger.error(
+                `The ${label} failed and was taken back, but the user fields could not be loaded again: ${message(reloadError)}`
+              )
+            );
+          }
+        }
+        throw error;
+      }
+      return result;
+    }
+  );
 }
 
 /**
@@ -96,10 +187,16 @@ const USER_FIELDS_METHODS: Record<string, MethodHandler<UserFieldsServices>> = {
     // implies "field is queryable".
     execute: async (svc, _p, body) => {
       requireFieldDefinitionService(svc);
-      const field = await svc.fieldDefinitionService.createField(
-        body as Parameters<typeof svc.fieldDefinitionService.createField>[0]
+      const field = await withUserFieldChangeExcluded(
+        "create user field",
+        svc,
+        () =>
+          svc.fieldDefinitionService.createField(
+            body as Parameters<typeof svc.fieldDefinitionService.createField>[0]
+          ),
+        // A field whose column could not be made is not created: its definition goes too.
+        created => svc.fieldDefinitionService.deleteField(created.id)
       );
-      await syncUserExtSchema(svc.userExtSchemaService);
       return respondMutation("User field created.", field, { status: 201 });
     },
   },
@@ -117,11 +214,15 @@ const USER_FIELDS_METHODS: Record<string, MethodHandler<UserFieldsServices>> = {
   updateField: {
     execute: async (svc, p, body) => {
       requireFieldDefinitionService(svc);
-      const field = await svc.fieldDefinitionService.updateField(
-        p.fieldId,
-        body as Parameters<typeof svc.fieldDefinitionService.updateField>[1]
+      const field = await withUserFieldChangeExcluded(
+        `update user field "${p.fieldId}"`,
+        svc,
+        () =>
+          svc.fieldDefinitionService.updateField(
+            p.fieldId,
+            body as Parameters<typeof svc.fieldDefinitionService.updateField>[1]
+          )
       );
-      await syncUserExtSchema(svc.userExtSchemaService);
       return respondMutation("User field updated.", field);
     },
   },
@@ -136,13 +237,19 @@ const USER_FIELDS_METHODS: Record<string, MethodHandler<UserFieldsServices>> = {
     // the deleted record, switch this back to respondMutation.
     execute: async (svc, p) => {
       requireFieldDefinitionService(svc);
-      await svc.fieldDefinitionService.deleteField(p.fieldId);
-      await syncUserExtSchema(svc.userExtSchemaService);
+      await withUserFieldChangeExcluded(
+        `delete user field "${p.fieldId}"`,
+        svc,
+        () => svc.fieldDefinitionService.deleteField(p.fieldId)
+      );
       return respondAction("User field deleted.", { fieldId: p.fieldId });
     },
   },
 
   reorderFields: {
+    // Takes no schema lock: a reorder rewrites the definitions' sort order and nothing else, so no
+    // `user_ext` column changes and there is no DDL for a migration to collide with.
+    //
     // reorderFields is a non-CRUD mutation: there's no single "item"; a
     // batch of records was rewritten in place. Surface the new ordered
     // list as a sibling field.

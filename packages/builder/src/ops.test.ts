@@ -747,17 +747,25 @@ describe("a node its author locked", () => {
     );
   });
 
-  it("can still be restyled", () => {
-    // The control, and the scope of the lock: it is against being moved and
-    // deleted, not against being edited. A lock that also froze styling would
-    // be a different feature, and asserting only the refusals above would not
-    // notice it had become one.
-    const { document } = applyOp(doc(withLocked()), {
+  it("cannot be restyled until it is unlocked", () => {
+    // The scope of the lock: a block locked in Layers refuses every change,
+    // styling included, not only being moved and deleted. The unlock is the
+    // one edit it takes, and after it the same restyle applies, which is the
+    // control that the refusal is the lock's and not the patch's.
+    const restyle: BuilderOp = {
       kind: "update",
       id: "b",
       patch: { customCss: ".x { color: red }" },
-    });
+    };
+    expect(() => applyOp(doc(withLocked()), restyle)).toThrow(/is locked/);
 
+    const unlocked = applyOp(doc(withLocked()), {
+      kind: "update",
+      id: "b",
+      patch: {},
+      unset: ["locked"],
+    }).document;
+    const { document } = applyOp(unlocked, restyle);
     expect(JSON.stringify(document.nodes)).toContain("color: red");
   });
 });

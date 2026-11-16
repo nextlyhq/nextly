@@ -16,7 +16,7 @@ import {
   FormLabel,
   FormMessage,
 } from "@admin/components/ui/form";
-import { passwordSchema } from "@admin/lib/validation";
+import { passwordSchema } from "@admin/lib/password-schema";
 
 /**
  * The form shape behind {@link AuthSignupFields}.

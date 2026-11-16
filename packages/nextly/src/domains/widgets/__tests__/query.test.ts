@@ -1281,6 +1281,80 @@ describe("a read's window", () => {
   });
 });
 
+describe("a timeseries' range", () => {
+  beforeEach(() => {
+    registerSource({
+      id: "collection:dated",
+      label: "Dated",
+      kind: "collection",
+      supports: ["count", "list", "timeseries"],
+      fields: [
+        { name: "title", type: "string" },
+        { name: "createdAt", type: "date" },
+      ],
+    });
+  });
+
+  it("carries the range alone, with no interval: the range sets it", () => {
+    const asked = validateWidgetQuery({
+      source: "collection:dated",
+      op: "timeseries",
+      dateField: "createdAt",
+      range: "90d",
+    });
+    expect(asked).toMatchObject({ dateField: "createdAt", range: "90d" });
+    expect(asked).not.toHaveProperty("interval");
+  });
+
+  it.each([
+    // 🔴 Two windows in one query: resolved by precedence, one of them would
+    // be silently ignored.
+    [
+      { range: "30d", since: "30d" },
+      /range and since or until each name a window/,
+    ],
+    [
+      { range: "30d", until: "30d" },
+      /range and since or until each name a window/,
+    ],
+    [{ range: "30d", interval: "day" }, /range sets the interval/],
+    // 🔴 The range sets the points drawn, so a limit beside it would be accepted and ignored.
+    [{ range: "30d", limit: 1 }, /range sets how many points are drawn/],
+    [{ range: "60d" }, /range must be one of 7d, 30d, 90d, 12m/],
+  ])("refuses %j on a timeseries", (keys, reason) => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:dated",
+        op: "timeseries",
+        dateField: "createdAt",
+        ...keys,
+      })
+    ).toThrow(reason);
+  });
+
+  it("carries no limit on a ranged query, so what it returns validates again unchanged", () => {
+    // 🔴 A limit added by default would be refused the next time the query is checked.
+    const once = validateWidgetQuery({
+      source: "collection:dated",
+      op: "timeseries",
+      dateField: "createdAt",
+      range: "30d",
+    });
+    expect(once).not.toHaveProperty("limit");
+    expect(validateWidgetQuery(once)).toEqual(once);
+  });
+
+  it("refuses a range on any op but a timeseries", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:dated",
+        op: "count",
+        range: "7d",
+      })
+    ).toThrow(/range draws a timeseries, not a count/);
+  });
+});
+
 describe("relativeSpanStart", () => {
   const now = new Date("2026-03-31T10:20:30.400Z");
 
@@ -1396,6 +1470,32 @@ describe("validateWidgetQuery, a source's declared filters", () => {
       where: { collection: "posts", onlyMine: true },
     });
     expect(q.where).toEqual({ collection: "posts", onlyMine: true });
+  });
+
+  it("admits Role as a role's slug, and refuses any other value", () => {
+    registerSource({
+      id: "system:people",
+      label: "People",
+      kind: "system",
+      supports: ["list"],
+      fields: [{ name: "name", type: "string" }],
+      filters: ["role"],
+    });
+    const q = validateWidgetQuery({
+      source: "system:people",
+      op: "list",
+      where: { role: "editor" },
+    });
+    expect(q.where).toEqual({ role: "editor" });
+    for (const role of ["", 3, { equals: "editor" }]) {
+      expect(() =>
+        validateWidgetQuery({
+          source: "system:people",
+          op: "list",
+          where: { role },
+        })
+      ).toThrow(/where filter "role" on "system:people" must be a role's slug/);
+    }
   });
 
   it("refuses a filter in a value it does not take, and one the source does not declare", () => {

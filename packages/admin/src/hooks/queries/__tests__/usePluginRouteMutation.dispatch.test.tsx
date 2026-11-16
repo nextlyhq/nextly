@@ -30,7 +30,7 @@ vi.mock("../../../../../nextly/src/auth/middleware", () => ({
 vi.mock("../../../../../nextly/src/domains/audit/audit-log-writer", () => ({
   buildAuditLogWriter: () => ({ write: vi.fn() }),
 }));
-vi.mock("../../../../../nextly/src/di/register", () => ({
+vi.mock("../../../../../nextly/src/di/service-access", () => ({
   getService: () => ({}),
 }));
 // Refuses to load where `window` exists, as server code must in a browser.
@@ -91,6 +91,9 @@ let written: Array<{ path: string; body: unknown }> = [];
 
 function note(path: string, csrf?: true) {
   return {
+    // Declared, as every plugin route must be: a route that says nothing is
+    // refused before CSRF is weighed, which is what these cases are about.
+    siteWide: false as const,
     method: "POST" as const,
     path,
     ...(csrf ? { csrf } : {}),

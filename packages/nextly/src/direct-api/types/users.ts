@@ -70,7 +70,8 @@ export interface FindUsersArgs
   hasPassword?: boolean;
 
   /** Sort field */
-  sortBy?: "createdAt" | "name" | "email";
+  /** A built-in column, or a custom user field by its name. */
+  sortBy?: "createdAt" | "name" | "email" | (string & {});
 
   /** Sort direction */
   sortOrder?: "asc" | "desc";

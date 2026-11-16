@@ -24,7 +24,6 @@
 
 import {
   and,
-  eq,
   inArray,
   type Column,
   type SQL,
@@ -34,6 +33,12 @@ import {
 } from "drizzle-orm";
 
 import { ERASED_RECIPIENT_HASH, recipientDigests } from "./delivery-record";
+import {
+  cancelQueuedEmailsOf,
+  cancelQueuedEmailsTo,
+  namingPerson,
+  queueTablesBeside,
+} from "./queued-erasure";
 import { sendClaimsTableBeside } from "./send-claims";
 
 /**
@@ -54,6 +59,8 @@ export interface RecipientErasureCapableDb {
   update(table: unknown): {
     set(data: unknown): { where(condition: unknown): Promise<unknown> };
   };
+  /** For the digests of a queued email's recipients (`queued-erasure`). */
+  delete(table: unknown): { where(condition: unknown): Promise<unknown> };
 }
 
 /** The delivery table, as a dialect bundle exposes it. */
@@ -166,11 +173,38 @@ export async function eraseRecipientDeliveries(
   address: string
 ): Promise<void> {
   const erased = inArray(deliveries.recipientHash, recipientDigests(address));
+  await eraseSelected(db, deliveries, erased, address);
+}
+
+/**
+ * Erase the delivery rows `erased` selects, as every erasure by address does,
+ * and cancel and clear the queued email to `address` that names nobody.
+ */
+async function eraseSelected(
+  db: RecipientErasureCapableDb,
+  deliveries: ErasableDeliveriesTable,
+  erased: SQL | undefined,
+  address: string
+): Promise<void> {
   await clearSendKeyDigests(db, deliveries, erased);
   await db
     .update(deliveries)
     .set({ recipientHash: ERASED_RECIPIENT_HASH })
     .where(erased);
+  await cancelQueuedEmailsToAddress(db, deliveries, address);
+}
+
+/**
+ * Cancel and clear the queued email to `address` that names nobody, beside
+ * the delivery table its records are erased from (`queued-erasure`).
+ */
+async function cancelQueuedEmailsToAddress(
+  db: RecipientErasureCapableDb,
+  deliveries: unknown,
+  address: string
+): Promise<void> {
+  const tables = queueTablesBeside(deliveries);
+  if (tables) await cancelQueuedEmailsTo(db, tables, address);
 }
 
 /** The delivery table's columns a person's erasure reads and writes. */
@@ -196,11 +230,40 @@ export async function eraseUnnamedRecipientDeliveries(
     inArray(deliveries.recipientHash, recipientDigests(address)),
     isNull(deliveries.principalKind)
   );
-  await clearSendKeyDigests(db, deliveries, erased);
-  await db
-    .update(deliveries)
-    .set({ recipientHash: ERASED_RECIPIENT_HASH })
-    .where(erased);
+  await eraseSelected(db, deliveries, erased, address);
+}
+
+/**
+ * Erase every delivery recorded for the sends whose key digests are
+ * `keyDigests`, and then the digests themselves, from those records and from
+ * the sends' claims. The records are erased first, each by its key digest,
+ * since clearing the digests is what would otherwise stop the rest of a
+ * send's records being found. The rows stay, with no address.
+ */
+export async function eraseKeyedDeliveries(
+  db: RecipientErasureCapableDb,
+  deliveries: ErasableDeliveriesTable,
+  keyDigests: readonly string[]
+): Promise<void> {
+  const claims = sendClaimsTableBeside(deliveries);
+  for (let start = 0; start < keyDigests.length; start += KEY_DIGEST_BATCH) {
+    const batch = keyDigests.slice(start, start + KEY_DIGEST_BATCH);
+    const sends = inArray(deliveries.keyDigest, batch);
+    await db
+      .update(deliveries)
+      .set({ recipientHash: ERASED_RECIPIENT_HASH })
+      .where(sends);
+    await clearSendKeyDigests(db, deliveries, sends);
+    // The claims by the digests themselves as well: a send whose records
+    // failed to be written after its claim committed has a claim and no
+    // record, and clearing through the records would never reach it.
+    if (claims) {
+      await db
+        .update(claims)
+        .set({ keyDigest: null, messageDigest: null })
+        .where(inArray(claims.keyDigest, batch));
+    }
+  }
 }
 
 /**
@@ -217,13 +280,14 @@ export async function erasePrincipalDeliveries(
   person: { kind: string; id: string },
   digest: string
 ): Promise<void> {
-  const erased = and(
-    eq(deliveries.principalKind, person.kind),
-    eq(deliveries.principalId, person.id)
-  );
+  const tables = queueTablesBeside(deliveries);
+  const erased = namingPerson(deliveries, tables?.dialect, person);
   await clearSendKeyDigests(db, deliveries, erased);
   await db
     .update(deliveries)
     .set({ recipientHash: ERASED_RECIPIENT_HASH, principalId: digest })
     .where(erased);
+  // Their queued email too, in the same transaction, so a deletion leaves
+  // nothing queued to them either way or both.
+  if (tables) await cancelQueuedEmailsOf(db, tables, person, digest);
 }

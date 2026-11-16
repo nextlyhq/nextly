@@ -272,8 +272,11 @@ describe("runWebhookDrain (real SQLite)", () => {
       emailDeliveries: 0,
       notices: 0,
       oneTimeSecrets: 0,
+      receivedWebhooks: 0,
+      pluginEvents: 0,
       previewLinks: 0,
       contentEvents: 0,
+      cacheTagExpiries: 0,
     });
   });
 
@@ -297,8 +300,11 @@ describe("runWebhookDrain (real SQLite)", () => {
       emailDeliveries: 0,
       notices: 0,
       oneTimeSecrets: 0,
+      receivedWebhooks: 0,
+      pluginEvents: 0,
       previewLinks: 0,
       contentEvents: 0,
+      cacheTagExpiries: 0,
     });
   });
 

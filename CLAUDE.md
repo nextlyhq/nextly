@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (a75961acc9fdd9c3). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (62fc29f3f4b61fb7). Edit that file, never this one. -->
 
 # Nextly Monorepo: Agent Guide
 
@@ -21,10 +21,9 @@ Procedures live in `.agents/skills/` rather than here, because a procedure
 needed once per task should not occupy context in every session. Codex reads
 them there; Claude Code reads `.claude/skills/`, a generated copy that
 `pnpm skills:sync` rewrites and `pnpm check:agent-contract` holds identical —
-edit the skills, never the copy. This table is the router: an agent selects a
-skill from its description, and the table is what survives a description that
-underperforms. Load the skill BEFORE the act, not
-after it goes wrong.
+edit the skills, never the copy. This table is the router, for when a skill's
+description underperforms. Load the skill BEFORE the act, not after it goes
+wrong.
 
 | Load this                     | When you are about to                                    |
 | ----------------------------- | -------------------------------------------------------- |
@@ -41,6 +40,7 @@ after it goes wrong.
 | `running-builds-and-tests`    | build, typecheck, lint or run tests, or size a local run |
 | `working-in-worktrees`        | create, work in or remove a worktree                     |
 | `running-the-fallow-gate`     | commit, push, or act on a fallow or code-hygiene finding |
+| `visual-check`                | change how an admin screen looks, before its PR          |
 
 A rule both tools must hold in every session lives in this file, since only it
 reaches both: the whole-file write rule below. `.claude/rules/` keeps the rule
@@ -143,7 +143,8 @@ slot left RESERVED: the `working-in-worktrees` skill.
   self-skip when the dialect's URL is unset. Their databases are the
   containers in `docker-compose.test.yml`, which neither `pnpm docker:test`
   nor `pnpm docker:up` starts. NEVER point a TEST\_\* URL at a database you did
-  not create for the run, and never re-enable integration parallelism.
+  not create for the run; parallel integration files need a database per
+  worker.
 - E2E: the root `e2e/` package (Playwright) boots its own playground on :3100
   with a fresh SQLite database per run.
 - Some unit suites have a known pre-existing failing baseline. NEVER add to
@@ -298,8 +299,8 @@ pnpm worktree remove <branch>
 ```
 
 Stopping the test containers is safe and cheap — `docker start` by name brings
-them back with their data, which is why the start commands in the
-`running-builds-and-tests` skill are `start` rather than `compose up`.
+them back (empty: run `pnpm worktree provision`), which is why the start
+commands in the `running-builds-and-tests` skill are `start`, not `compose up`.
 
 ## A whole-file write is a delete plus a create
 
@@ -321,21 +322,20 @@ Why, as measured, and how to recover a file once it has been clobbered: the
 
 ## Git and PR rules
 
-- One flow: a short-lived branch off `main` for each pull request,
-  squash-merged into `main`, its title becoming the commit message. Never
-  commit to `main` directly, and keep no long-lived branch (`dev`, release,
-  integration): lint, type-checking, the unit and integration tests and the
-  secret scan never run on a pull request into one, and a branch that gathers
-  weeks of work is too large to review. A feature too large for one pull
-  request lands in slices, each complete and tested; public API not yet
-  finished is marked `@experimental` until the feature is, as
-  `packages/ui/STABILITY.md` uses the tag.
-- Every pull request merges through the merge queue, which runs the required
-  checks on it combined with the latest `main` and squash-merges only what
-  passes, so no branch is brought up to date by hand. `node
-scripts/verify-merge.mjs <pr-number>` reads a pull request's checks and
-  threads before it joins the queue, and checks that a merged one landed
-  whole.
+- One flow: a short-lived branch off `dev`, the default branch
+  (`pnpm worktree new` starts there), for each pull request, squash-merged
+  into `dev`, its title becoming the commit message. A merge does not wait
+  for CI: `git fetch origin dev`, then `pnpm check:quick`. Never commit to `dev` or `main`
+  directly, and keep no other long-lived branch: no check runs on a pull
+  request into one, and a branch that gathers weeks of work is too large to
+  review. A feature too large for one pull request lands in slices, each
+  complete and tested; public API not yet finished is marked `@experimental`
+  until the feature is, as `packages/ui/STABILITY.md` uses the tag.
+- `dev` is promoted to `main` daily when green, through `main`'s merge
+  queue; a red `dev` blocks the promotion, and its author fixes it that day.
+  Releases come from `main` alone.
+  `node scripts/verify-merge.mjs <pr-number>` reads a pull request's checks
+  and threads, and checks that a merged one landed whole.
 - Do not add a "generated with" line naming an AI tool, an AI co-author
   trailer, or any other AI attribution to commits or PR bodies.
 - Husky runs gitleaks + lint-staged on commit, commitlint on the message, and
@@ -390,9 +390,8 @@ already in hand may move; preconditions may not.
 `overrideAccess: false` is judged by a single gate. Flag a second place that
 decides whether a caller may read or write, a hand-assembled caller literal
 instead of `readAccessCaller`, or a rule handed permissions not spelled as
-stored (`read-posts`); the earlier `posts:read` also rides along, warned, for
-one release. Two doors that answer one key differently is a defect this
-repository has already had.
+stored (`read-posts`), such as the earlier `posts:read`. Two doors that answer
+one key differently is a defect this repository has already had.
 
 ### One question has one implementation
 
@@ -428,7 +427,7 @@ missed.
 
 Before any `git commit` or `git push`, run
 `fallow audit --format json --quiet --explain --gate-marker agent`, with
-`FALLOW_AUDIT_BASE=origin/main` (`.claude/settings.json` sets it for Claude
+`FALLOW_AUDIT_BASE=origin/dev` (`.claude/settings.json` sets it for Claude
 Code sessions). If the verdict is `fail`, fix the reported findings before
 retrying; treat a JSON runtime error (`{ "error": true, ... }`) as
 non-blocking. Only findings the change introduces decide the verdict. What CI

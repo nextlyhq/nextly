@@ -28,7 +28,10 @@
  * @module domains/retention/gate
  */
 
-import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  SelectOptions,
+  WhereClause,
+} from "@nextlyhq/adapter-drizzle/types";
 
 /**
  * Where a pass's last-run timestamp lives, in the `nextly_meta` KV table.
@@ -39,9 +42,21 @@ import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
  */
 export const WEBHOOK_RETENTION_GATE_KEY = "webhooks.retention.lastPassAt";
 
+/** Cache tag expiries older than the ledger keeps them; its own key, as each pass has. */
+export const CACHE_TAG_EXPIRIES_RETENTION_GATE_KEY =
+  "cache-tags.retention.lastPassAt";
+
 /** Plugins' one-purpose secrets past their expiry; its own key, as each pass has. */
 export const ONE_TIME_SECRETS_RETENTION_GATE_KEY =
   "secrets.retention.lastPassAt";
+
+/** Plugins' received-webhook claims past their retention; its own key, as each pass has. */
+export const RECEIVED_WEBHOOKS_RETENTION_GATE_KEY =
+  "received-webhooks.retention.lastPassAt";
+
+/** Plugins' durable events finished past their retention; its own key, as each pass has. */
+export const PLUGIN_EVENTS_RETENTION_GATE_KEY =
+  "plugin-events.retention.lastPassAt";
 
 /** Recorded preview links long past their end; its own key, as each pass has. */
 export const PREVIEW_LINKS_RETENTION_GATE_KEY =
@@ -150,6 +165,7 @@ export interface RetentionGateStore {
 
 /** The subset of the adapter the gate needs. */
 export interface RetentionGateAdapter {
+  selectOne(table: string, options: SelectOptions): Promise<unknown>;
   delete(table: string, where: WhereClause): Promise<number>;
   insert(table: string, data: Record<string, unknown>): Promise<unknown>;
 }
@@ -171,6 +187,25 @@ export class MetaRetentionGate implements RetentionGateStore {
   }
 
   async claim(key: string, dueBefore: Date, now: Date): Promise<boolean> {
+    // A current marker refuses the claim, and it is the usual answer: every
+    // process offers each pass once per interval, and all but one find the
+    // marker another wrote. Read first, so that answer costs one statement
+    // and none that fails. Without the read, the insert below would learn it
+    // from the primary key, and PostgreSQL, MySQL and SQLite would each log a
+    // failed statement every time. Only a read: the claim itself is still the
+    // delete or the first insert, so two callers that both find the marker
+    // stale or absent still let exactly one through.
+    const current = await this.adapter.selectOne(META_TABLE, {
+      columns: ["key"],
+      where: {
+        and: [
+          { column: "key", op: "=", value: key },
+          { column: "updatedAt", op: ">=", value: dueBefore },
+        ],
+      },
+    });
+    if (current !== null && current !== undefined) return false;
+
     // Removing the stale marker IS the claim: only one caller can delete a
     // given row, and the count says whether it was this one.
     const removed = await this.adapter.delete(META_TABLE, {
@@ -189,9 +224,9 @@ export class MetaRetentionGate implements RetentionGateStore {
       return true;
     }
 
-    // Nothing stale to remove: either the marker is current, or none exists
-    // yet. Inserting distinguishes the two — the primary key rejects the first
-    // case, so only a genuinely first run gets through.
+    // Nothing stale to remove: none exists yet, or another caller claimed it
+    // since the read above. Inserting distinguishes the two — the primary key
+    // rejects the second, so only a genuinely first run gets through.
     try {
       await this.adapter.insert(META_TABLE, {
         key,
@@ -263,9 +298,34 @@ export const ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY =
   "secrets.retention.lastDrainPassAt";
 
 /**
+ * The scheduled drain's turn at plugins' received-webhook claims, for the
+ * secrets sweep's reason: an install that stops receiving webhooks makes no
+ * write that offers the pass.
+ */
+export const RECEIVED_WEBHOOKS_RETENTION_DRAIN_GATE_KEY =
+  "received-webhooks.retention.lastDrainPassAt";
+
+/**
+ * The scheduled drain's turn at plugins' finished durable events, for the
+ * secrets sweep's reason: an install whose plugins stop recording events makes
+ * no write that offers the pass.
+ */
+export const PLUGIN_EVENTS_RETENTION_DRAIN_GATE_KEY =
+  "plugin-events.retention.lastDrainPassAt";
+
+/**
  * The scheduled drain's own marker for the preview-links sweep, for the reason
  * the secrets sweep has one: an install that goes quiet makes no write that
  * offers the pass, and the drain is the trigger that keeps running.
  */
 export const PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY =
   "preview-links.retention.lastDrainPassAt";
+
+/**
+ * The scheduled drain's own marker for the cache tag expiry ledger's prune,
+ * for the reason the secrets sweep has one: an install that goes quiet makes
+ * no write that offers the pass, and the drain is the trigger that keeps
+ * running.
+ */
+export const CACHE_TAG_EXPIRIES_RETENTION_DRAIN_GATE_KEY =
+  "cache-tags.retention.lastDrainPassAt";

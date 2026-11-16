@@ -112,13 +112,22 @@ describe("formatRetiredAccessRulesWarning", () => {
 
     expect(message).toContain("no longer enforces them");
     // The whole decision order, not only the code-defined half: an operator
-    // reading that only code rules decide would take their role grants for
-    // ignored, or add a code rule that overrides them.
-    expect(message).toContain("falls through to the roles and permissions");
+    // reading that code rules decide alone would translate a stored rule into
+    // code without granting the permission it narrows.
+    expect(message).toContain("needs the role permission for the operation");
+    expect(message).toContain("only narrows that permission");
     expect(message).toContain("Existing role grants still apply");
     expect(message).toContain("dynamic_collections: 2 rows carry");
     expect(message).toContain("dynamic_singles: 1 row carries");
     expect(message).toContain("nextly migrate");
-    expect(message).toContain("NEXTLY_ALLOW_CORE_DESTRUCTIVE=1");
+    // The consent `nextly migrate` honours, in both its spellings, and the
+    // earlier variable named as what it now is.
+    expect(message).toContain(
+      "--accept-data-loss=dynamic_collections.access_rules,dynamic_singles.access_rules"
+    );
+    expect(message).toContain("NEXTLY_ACCEPT_DATA_LOSS");
+    expect(message).toMatch(
+      /NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 still works but is\s+deprecated/
+    );
   });
 });

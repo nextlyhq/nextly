@@ -1,11 +1,14 @@
 "use client";
 
 /**
- * A card's quick setting, drawn in its header outside customise mode.
+ * A card's quick setting on the card itself: the one its header draws outside customise mode,
+ * the first setting its widget marks `quick` that a header can hold (`quickSettingOf`).
  *
- * Changed here, it is saved at once, for this reader, and only this card is asked again. The
- * control shows the chosen value straight away and goes back to the stored one if the save does
- * not land; while a save is in flight it waits, so two changes never race one version guard.
+ * Changed there, a setting applies to the card at once: it is saved for this reader and only
+ * this card is asked again (`useCardQuickSetting`). The control shows the chosen value straight
+ * away and goes back to the stored one if the save does not land; while a save is in flight it
+ * waits, so two changes never race one version guard. Every setting, this one too, is also in
+ * the card's settings drawer.
  *
  * @module components/features/widgets/edit/CardQuickSetting
  */
@@ -20,6 +23,8 @@ import {
 } from "@nextlyhq/ui";
 import type { JSX } from "react";
 import { useEffect, useState } from "react";
+
+import { SegmentedChoice } from "@admin/components/ui/segmented-choice";
 
 import { useCardTier } from "../frame/tier";
 
@@ -51,8 +56,8 @@ export function CardQuickSetting({
   const [shown, setShown] = useState(value);
   useEffect(() => setShown(value), [value]);
 
-  // A small card's header has no room beside its title: there the setting is reached through
-  // the card's menu instead, which is drawn at every size.
+  // A small card's header has no room beside its title: there the setting is changed in the
+  // card's settings drawer, reached from its menu at every size.
   const tier = useCardTier();
 
   const label = setting.label ?? setting.name;
@@ -80,6 +85,22 @@ export function CardQuickSetting({
       >
         {label}
       </Button>
+    );
+  }
+
+  // A choice of exactly two is drawn as both choices, side by side, so the one not chosen is
+  // one press away and in view; a longer list keeps the compact menu.
+  if (setting.options.length === 2) {
+    return (
+      <SegmentedChoice
+        aria-label={name}
+        options={setting.options}
+        value={typeof shown === "string" ? shown : undefined}
+        disabled={inert}
+        title={unavailable}
+        onSelect={change}
+        data-testid="card-quick-segmented"
+      />
     );
   }
 

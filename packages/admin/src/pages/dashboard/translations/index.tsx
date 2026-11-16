@@ -12,6 +12,7 @@
  * @module pages/dashboard/translations
  */
 
+import { PageHeader } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
 import { TranslationWorklist } from "@admin/components/features/translations/TranslationWorklist";
@@ -50,18 +51,15 @@ export default function TranslationsPage(): JSX.Element {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
-        <div className="mb-8">
-          <h1 className="text-xl font-semibold tracking-tight">Translations</h1>
-          {/* 🔴 Generic, not "what needs translating". The review tab lists translations that ARE
+        {/* 🔴 Generic, not "what needs translating". The review tab lists translations that ARE
               written and may still be published -- their source simply moved on afterwards -- so a
               subtitle promising untranslated work describes them as the opposite of what they are.
               Naming the page's SUBJECT rather than one of its questions keeps it true whichever tab
               is showing, and does not need updating when another is added. */}
-          <p className="mt-1 text-sm font-normal text-muted-foreground">
-            Outstanding translation work, across every collection, in one
-            language.
-          </p>
-        </div>
+        <PageHeader
+          title="Translations"
+          description="Outstanding translation work, across every collection, in one language."
+        />
         <TranslationWorklist
           locale={localeParam ?? undefined}
           state={state}

@@ -10,6 +10,8 @@
  * created the tag bust refreshes this automatically.
  */
 
+// Registers Nextly's cached reads under Cache Components (see the file).
+import "@/nextly/cached-read";
 import { cache } from "react";
 
 // Pass nextlyConfig (loaded via the -config path alias) so

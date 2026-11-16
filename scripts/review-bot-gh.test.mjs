@@ -105,6 +105,19 @@ describe("reading the local history through the gateway", () => {
     expect(commits(gateway("line-history", "2,2", "f.txt", "main"))).toBe(1);
   });
 
+  it("reads the base side from the pull request's recorded base branch when there is one", () => {
+    // `dev` already holds the head's version; `main` still has the first.
+    git("update-ref", "refs/review/base", "HEAD");
+    try {
+      expect(gateway("base-file", "f.txt").stdout).toBe("one\nTWO\nthree\n");
+      const commits = run => run.stdout.split("\n").filter(line => line.startsWith("commit ")).length;
+      expect(commits(gateway("line-history", "2,2", "f.txt", "base"))).toBe(2);
+    } finally {
+      git("update-ref", "-d", "refs/review/base");
+    }
+    expect(gateway("base-file", "f.txt").stdout).toBe("one\ntwo\nthree\n");
+  });
+
   it.each([
     ["delta", `--output=${MARK}`],
     ["line-history", "1,2", `--output=${MARK}`],

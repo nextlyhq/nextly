@@ -28,6 +28,11 @@ export interface PrunableVersion {
   label: string | null;
   /** The version a restore was made from, when this row records a restore. */
   sourceVersionNo: number | null;
+  /**
+   * The version each restored field came from, when the save this row records
+   * carried restored values; absent or null when it carried none.
+   */
+  fieldSources?: Readonly<Record<string, number>> | null;
 }
 
 /**
@@ -42,8 +47,12 @@ export interface PrunableVersion {
  *   snapshot, and with it the only copy of what that language's readers see;
  * - every named version: someone (or a restore, for its undo point) chose to
  *   keep it;
- * - every row that records a restore, and the version it was made from, so
- *   "restored from" never points at a version that is gone;
+ * - every row that records a restore, and the version it was made from, and
+ *   each field's source a save's restored fields name, so "restored from"
+ *   never points at a version that is gone. The save's own row is not pinned
+ *   for naming sources: a client's save names them (`_restoredFrom`), and
+ *   pinning every such row would let a caller keep each new version past the
+ *   cap by naming the same source again;
  * - every version a feature has pinned (`pinnedVersionNos`): a feature holds
  *   it for as long as it needs it, whatever the limit;
  * - the version numbers the caller names for this pass.
@@ -111,6 +120,9 @@ function protectedVersionIds(
   const keepVersionNos = [
     ...protectVersionNos,
     ...rows.map(r => r.sourceVersionNo),
+    // Every version a saved field was restored from, so each "Restored from"
+    // still points at a version that is there.
+    ...rows.flatMap(r => Object.values(sourcesOf(r))),
   ];
   for (const versionNo of keepVersionNos) {
     const id = typeof versionNo === "number" && idByVersionNo.get(versionNo);
@@ -153,7 +165,20 @@ function isNamed(row: PrunableVersion): boolean {
   return row.label !== null && row.label !== "";
 }
 
-/** Whether a row records a restore, which names the version it came from. */
+/**
+ * Whether a row records a restore, which names the version it came from: the
+ * server writes that, never a client's save. A save's restored fields protect
+ * the versions they name, not the row that names them.
+ */
 function isRestore(row: PrunableVersion): boolean {
   return typeof row.sourceVersionNo === "number";
+}
+
+/**
+ * A row's field sources as a map, or an empty one. A read that handed the
+ * JSON back as text would otherwise be walked character by character.
+ */
+function sourcesOf(row: PrunableVersion): Readonly<Record<string, number>> {
+  const sources = row.fieldSources;
+  return sources && typeof sources === "object" ? sources : {};
 }

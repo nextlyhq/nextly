@@ -52,7 +52,7 @@ const dialects: SupportedDialect[] = ["sqlite", "postgresql", "mysql"];
 describe("DynamicCollectionSchemaService.generateJunctionTable", () => {
   for (const dialect of dialects) {
     describe(`dialect=${dialect}`, () => {
-      it("emits exactly one CREATE TABLE statement, two CREATE INDEX statements, and no orphaned CONSTRAINT fragment", () => {
+      it("emits exactly one CREATE TABLE statement, its two indexes, and no orphaned CONSTRAINT fragment", () => {
         const service = new DynamicCollectionSchemaService(undefined, dialect);
         const sql = service.generateJunctionTable("dc_posts", m2mField);
 
@@ -74,7 +74,22 @@ describe("DynamicCollectionSchemaService.generateJunctionTable", () => {
         const createIndexStatements = cleaned.filter(s =>
           /CREATE INDEX/i.test(s)
         );
-        expect(createIndexStatements).toHaveLength(2);
+        if (dialect === "mysql") {
+          // MySQL commits each schema statement alone and has no `IF NOT
+          // EXISTS` on CREATE INDEX, so the indexes are declared inside the
+          // CREATE TABLE: the junction and its indexes land together, and a
+          // save retried after MySQL stopped part-way passes over the whole.
+          expect(createIndexStatements).toHaveLength(0);
+          expect(cleaned).toHaveLength(1);
+          expect(cleaned[0]).toMatch(/^CREATE TABLE IF NOT EXISTS/);
+          expect(cleaned[0]).toMatch(/INDEX `idx_[^`]+_posts` \(`posts_id`\)/);
+          expect(cleaned[0]).toMatch(/INDEX `idx_[^`]+_tags` \(`tags_id`\)/);
+        } else {
+          expect(createIndexStatements).toHaveLength(2);
+          for (const statement of createIndexStatements) {
+            expect(statement).toMatch(/^CREATE INDEX IF NOT EXISTS/);
+          }
+        }
 
         // Every statement must be non-empty and end with a semicolon — a
         // truncated/duplicated fragment would fail this on at least one

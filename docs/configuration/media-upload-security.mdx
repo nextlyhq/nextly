@@ -5,7 +5,7 @@ description: How Nextly validates and sanitizes uploaded media — MIME allowlis
 
 Every file uploaded through Nextly's server passes through a unified validation pipeline at `services/upload-validation/`.
 
-> **Direct uploads are not checked.** A collection with `clientUploads: true` hands the browser a pre-signed URL, and the browser sends the file straight to the storage provider. Those bytes never reach this pipeline: only the claimed content type is bound to the URL, so none of the checks below (extension, size, magic bytes, SVG sanitization) applies to them. Leave `clientUploads` off for any collection whose uploads must be validated.
+> **Direct uploads are checked by what they say, not by their bytes.** A collection with `clientUploads: true` hands the browser a pre-signed URL, and the browser sends the file straight to the storage provider, so its bytes never reach this pipeline. Before the URL is signed, the file's name, extension, claimed type and size go through the same checks as any upload (steps 1 to 4 below), with the same settings. On top of that, the extension must name the claimed type, and an SVG is never signed: it goes through the standard upload, where it is sanitized. The URL binds the checked type and the exact size, so the provider refuses any other file. What a direct upload can't be checked for is its content: the magic-byte comparison and SVG sanitizing need the bytes. Leave `clientUploads` off for any collection whose uploads must be checked byte by byte. Only `@nextlyhq/storage-s3` signs direct uploads.
 
 This page explains what gets checked, what gets stripped, and how to tune the policy for your deployment.
 

@@ -19,6 +19,7 @@
 import { ArrowDown, ArrowUp } from "lucide-react";
 import type { FieldConfig } from "nextly/config";
 import { useMemo, useState, type ReactNode, type JSX } from "react";
+import { createPortal } from "react-dom";
 
 import { EntryFormToolbarSlots } from "@admin/components/features/entries/EntryForm/EntryFormToolbarSlots";
 import { ReadOnlyDocumentForm } from "@admin/components/features/entries/EntryForm/ReadOnlyDocumentForm";
@@ -41,6 +42,7 @@ import {
   type TakeoverType,
 } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
+import type { VersionScope } from "@admin/services/versionApi";
 
 import {
   ChangesLayoutProvider,
@@ -51,9 +53,12 @@ import {
 import {
   useDocumentHistory,
   type DocumentHistoryValue,
+  type EditorRestoreSurface,
   type RestoreAffordance,
   type ViewedVersion,
 } from "./document-history-context";
+import { restoreIntoEditor } from "./restore-into-editor";
+import { removedFieldsOf, restorePlan, restoresInEditor } from "./restore-plan";
 import { snapshotToFormValues } from "./snapshot-to-form-values";
 import { useChangeNavigation } from "./useChangeNavigation";
 import {
@@ -69,8 +74,12 @@ import {
   type ChangesState,
   type VersionChanges,
 } from "./version-changes";
-import { VersionChangesForm } from "./VersionChangesForm";
+import {
+  VersionChangesForm,
+  type VersionFieldRestore,
+} from "./VersionChangesForm";
 import { VersionComparisonBar } from "./VersionComparisonBar";
+import { WithheldFieldsProvider } from "./withheld-fields-context";
 
 /**
  * Whether the editor's write affordances are withheld: they act on the LIVE
@@ -166,13 +175,22 @@ export interface ViewedVersionHost {
  * Holds everything an editor needs to answer a published version, so each
  * editor states the wiring once and neither answers the panel differently.
  *
- * @param fields - every field the document declares, system fields included
+ * @param fields - the fields the editor draws, system fields included
  * @param takeoverTypes - the takeover field types, from the same source the
  *   live layout used
+ * @param valueFields - every field the document declares, where the editor
+ *   draws fewer (a plugin's switch keeps some off the type): the version's
+ *   values are read over these, so a drawn field conditioned on one it does
+ *   not draw is judged on the value the version stored. Defaults to `fields`.
  */
 export function useViewedVersion(
   fields: FieldConfig[],
-  takeoverTypes: TakeoverType[]
+  takeoverTypes: TakeoverType[],
+  /** The editor's version in a language; see `DocumentHistoryValue`. */
+  versionFor?: (locale: string | null) => Promise<string | undefined>,
+  /** The editor a restore puts values back into; see `DocumentHistoryValue`. */
+  editor?: EditorRestoreSurface,
+  valueFields: FieldConfig[] = fields
 ): ViewedVersionHost {
   // Which past version the document area is showing, or null for the live
   // document. Held by the component that swaps the document, and published
@@ -191,8 +209,10 @@ export function useViewedVersion(
       setViewing: setViewingVersion,
       restore: restoreAffordance,
       setRestore: setRestoreAffordance,
+      ...(versionFor ? { versionFor } : {}),
+      ...(editor ? { editor } : {}),
     }),
-    [viewingVersion, restoreAffordance]
+    [viewingVersion, restoreAffordance, versionFor, editor]
   );
 
   // One normalization of the version's snapshot, over EVERY declared field.
@@ -201,8 +221,8 @@ export function useViewedVersion(
   // still hold the values the version stored.
   const historicalValues = useMemo(() => {
     if (!viewingVersion) return null;
-    return snapshotToFormValues(fields, viewingVersion.snapshot);
-  }, [viewingVersion, fields]);
+    return snapshotToFormValues(valueFields, viewingVersion.snapshot);
+  }, [viewingVersion, valueFields]);
 
   const historicalFields = useMemo(() => {
     if (!viewingVersion || !historicalValues) return null;
@@ -306,8 +326,10 @@ export function versionAwareToolbarSlots(
 
 /**
  * A past version's actions on a phone: the moves through its changes, Back to
- * current and Restore…, in a bar at the bottom, under the thumb. Wider
- * screens carry the same actions in the title bar and the comparison bar.
+ * current and Restore this version, in a bar at the bottom, under the thumb.
+ * Wider screens carry the same actions in the document bar and the
+ * comparison bar, under the same names (on a phone, Restore shows its first
+ * word and speaks the whole name).
  */
 /**
  * Where the reader is among the changes, in the phone bar's few words. Says
@@ -350,56 +372,74 @@ function VersionPhoneBar({
   position: number;
   onMove: (delta: -1 | 1) => void;
 }) {
+  // The moves only where there are changes to move between. With one change
+  // or none they could only be disabled, and on a phone their width is what
+  // the version's own actions need.
+  const movable = changed > 1;
   return (
     <div
       role="toolbar"
       aria-label="Version actions"
-      className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-2 border-t border-border bg-background px-3 py-2 sm:hidden"
+      // Wraps deliberately where a narrow phone cannot fit the position and
+      // both actions on one row: the actions drop to a row of their own,
+      // still whole, rather than running off the edge.
+      className="fixed inset-x-0 bottom-0 z-30 flex flex-wrap items-center gap-2 border-t border-border bg-background px-3 py-2 sm:hidden"
     >
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="px-2"
-        aria-label="Previous change"
-        disabled={changed < 2}
-        onClick={() => onMove(-1)}
-      >
-        <ArrowUp className="h-4 w-4" aria-hidden="true" />
-      </Button>
-      <span className="text-sm tabular-nums text-muted-foreground">
-        {phonePositionText(state, changed, position)}
-      </span>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="px-2"
-        aria-label="Next change"
-        disabled={changed < 2}
-        onClick={() => onMove(1)}
-      >
-        <ArrowDown className="h-4 w-4" aria-hidden="true" />
-      </Button>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="ml-auto"
-        onClick={actions.returnToCurrent}
-      >
-        Back to current
-      </Button>
-      {actions.restore ? (
+      <div className="flex items-center gap-1.5">
+        {movable ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="px-2"
+            aria-label="Previous change"
+            onClick={() => onMove(-1)}
+          >
+            <ArrowUp className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        ) : null}
+        {/* One line always: a position broken over two lines reads as two
+            things. */}
+        <span className="whitespace-nowrap text-sm tabular-nums text-muted-foreground">
+          {phonePositionText(state, changed, position)}
+        </span>
+        {movable ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="px-2"
+            aria-label="Next change"
+            onClick={() => onMove(1)}
+          >
+            <ArrowDown className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        ) : null}
+      </div>
+      <div className="ml-auto flex shrink-0 items-center gap-2">
         <Button
           type="button"
+          variant="outline"
           size="sm"
-          disabled={actions.restoreDisabled}
-          onClick={actions.restore}
+          onClick={actions.returnToCurrent}
         >
-          Restore…
+          Back to current
         </Button>
-      ) : null}
+        {actions.restore ? (
+          <Button
+            type="button"
+            size="sm"
+            disabled={actions.restoreDisabled}
+            onClick={actions.restore}
+          >
+            {/* "Restore" is what fits beside Back to current on a phone; the
+                name spoken is the document bar's, which says which document
+                state it brings back. The confirmation that follows says what
+                happens to the live document. */}
+            Restore <span className="sr-only">this version</span>
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -409,6 +449,30 @@ function baselineOf(viewing: ViewedVersion): number | null {
   return viewing.comparedWith.kind === "version"
     ? viewing.comparedWith.versionNo
     : null;
+}
+
+/**
+ * The fields the version on screen holds that the content type no longer has,
+ * as the comparison the version view draws names them: the history's restore
+ * lists them disabled. Read from the same comparison, so it is fetched once.
+ */
+export function useViewedRemovedFields(
+  scope: VersionScope,
+  viewing: ViewedVersion | null
+): ReadonlySet<string> {
+  const from = viewing ? baselineOf(viewing) : null;
+  const to = viewing ? viewing.versionNo : null;
+  const diff = useVersionDiff({
+    scope,
+    from,
+    to,
+    enabled: from !== null && to !== null,
+  });
+  const data = to === null ? undefined : diffForPair(diff.data, from, to);
+  return useMemo(
+    () => removedFieldsOf(data ? versionChangesOf(data) : null),
+    [data]
+  );
 }
 
 /**
@@ -455,6 +519,7 @@ function VersionContent({
   changes,
   order,
   current,
+  restoreField,
 }: {
   viewing: ViewedVersion;
   fields: FieldConfig[];
@@ -462,6 +527,8 @@ function VersionContent({
   changes: VersionChanges | null;
   order: readonly string[];
   current: string | null;
+  /** "Restore this field" on each changed field, where restore is offered. */
+  restoreField?: VersionFieldRestore;
 }) {
   const outerLocale = useEntryLocale();
   const { getLocale, defaultLocale } = useLocalization();
@@ -509,24 +576,84 @@ function VersionContent({
           writing into the version this area claims is frozen. Empty is the
           context's own answer for "offers nothing". */}
       <TranslationFieldProvider value={{}}>
-        {changes ? (
-          <VersionChangesForm
-            fields={fields}
-            values={values}
-            changes={changes}
-            order={order}
-            current={current}
-            showUnchanged={showUnchanged}
-            onToggleUnchanged={() => setShowUnchanged(v => !v)}
-          />
-        ) : (
-          // Nothing to mark yet (the first version, or while what changed is
-          // read): the version reads whole.
-          <ReadOnlyDocumentForm fields={fields} values={values} mode="edit" />
-        )}
+        {/* What the read held back, so a field whose value was withheld says
+            so where the value would be. It wraps both forms: a field is
+            withheld whether or not what changed has been read yet. */}
+        <WithheldFieldsProvider paths={viewing.withheld}>
+          {changes ? (
+            <VersionChangesForm
+              fields={fields}
+              values={values}
+              changes={changes}
+              order={order}
+              current={current}
+              showUnchanged={showUnchanged}
+              onToggleUnchanged={() => setShowUnchanged(v => !v)}
+              {...(restoreField ? { restoreField } : {})}
+            />
+          ) : (
+            // Nothing to mark yet (the first version, or while what changed is
+            // read): the version reads whole.
+            <ReadOnlyDocumentForm fields={fields} values={values} mode="edit" />
+          )}
+        </WithheldFieldsProvider>
       </TranslationFieldProvider>
     </EntryLocaleProvider>
   );
+}
+
+/**
+ * "Restore this field" for the version on screen: the same restore as
+ * "Restore…", one field at a time, offered only where the history offers
+ * restoring and an editor is there to take the value. Each field is judged
+ * against the editor as it stands when the version is shown.
+ */
+function useFieldRestore(
+  viewing: ViewedVersion,
+  editor: EditorRestoreSurface | undefined,
+  restore: RestoreAffordance | null,
+  changes: VersionChanges | null
+): VersionFieldRestore | undefined {
+  const offered = Boolean(
+    editor &&
+      restore?.canRestore &&
+      restoresInEditor(viewing.locale, editor.locale)
+  );
+  const rows = useMemo(() => {
+    if (!offered || !editor || viewing.isLoading || viewing.error) return null;
+    const snapshot =
+      typeof viewing.snapshot === "object" && viewing.snapshot !== null
+        ? (viewing.snapshot as Record<string, unknown>)
+        : {};
+    return restorePlan({
+      fields: editor.fields,
+      snapshot,
+      current: editor.currentValues(),
+      dirty: editor.dirtyFields(),
+      withheld: viewing.withheld,
+      canEdit: editor.canEdit,
+      ...(editor.translatable ? { translatable: editor.translatable } : {}),
+      removed: removedFieldsOf(changes),
+      // As "Restore…" judges it: a version holding no language restores only
+      // its shared fields on a translated document.
+      versionLocale: viewing.locale,
+    });
+  }, [offered, editor, viewing, changes]);
+  return useMemo(() => {
+    if (!rows || !editor) return undefined;
+    const byName = new Map(rows.map(row => [row.name, row]));
+    return {
+      rowFor: name => byName.get(name),
+      restore: name =>
+        restoreIntoEditor({
+          editor,
+          rows,
+          names: [name],
+          versionNo: viewing.versionNo,
+          savedAt: viewing.about?.createdAt ?? null,
+        }),
+    };
+  }, [rows, editor, viewing.versionNo, viewing.about]);
 }
 
 /**
@@ -539,15 +666,18 @@ function ViewedVersionFrame({
   fields,
   values,
   actionsDisabled,
+  bannerSlot,
 }: {
   viewing: ViewedVersion;
   fields: FieldConfig[];
   values: Record<string, unknown>;
   actionsDisabled: boolean;
+  bannerSlot: HTMLElement | null;
 }) {
-  const { restore } = useDocumentHistory();
+  const { restore, editor } = useDocumentHistory();
   const actions = useVersionActions(actionsDisabled);
   const { changes, state } = useViewedChanges(viewing);
+  const restoreField = useFieldRestore(viewing, editor, restore, changes);
   const layout = useMemo(() => layoutNames(fields), [fields]);
   const order = useMemo(
     () => (changes ? changeOrder(changes, layout) : []),
@@ -562,30 +692,37 @@ function ViewedVersionFrame({
   return (
     // The reader's remembered layout, for every change drawn below.
     <ChangesLayoutProvider value={changesLayout}>
-      {/* Room under the last field for the phone's bottom bar. The container
+      {/* Room under the last field for the phone's bottom bar, even where it
+          wraps to two rows (6rem). The container
           the changes query, as on the comparison page: side by side, each
           change's two sides take columns only where this box has room. */}
-      <div className="@container/diff @4xl/content:p-8 pt-6 pb-20 sm:pb-0">
-        <VersionComparisonBar
-          layoutToggle={
-            order.length > 0 ? (
-              <ChangesLayoutToggle
-                layout={changesLayout}
-                onChange={setChangesLayout}
-                splittable={splittable}
-              />
-            ) : null
-          }
-          versionNo={viewing.versionNo}
-          about={viewing.about}
-          comparedWith={viewing.comparedWith}
-          changes={state}
-          position={position}
-          onMove={move}
-          onBackToHistory={restore?.backToHistory}
-          onOpenComparison={restore?.compare}
-          onCompareCurrent={restore?.compareCurrent}
-        />
+      <div className="@container/diff @4xl/content:p-8 pt-6 pb-24 sm:pb-0">
+        <VersionBanner slot={bannerSlot}>
+          <VersionComparisonBar
+            // Inside the host's band, the bar drops its own card surface.
+            {...(bannerSlot
+              ? { className: "mb-0 rounded-none border-0 bg-transparent p-0" }
+              : {})}
+            layoutToggle={
+              order.length > 0 ? (
+                <ChangesLayoutToggle
+                  layout={changesLayout}
+                  onChange={setChangesLayout}
+                  splittable={splittable}
+                />
+              ) : null
+            }
+            versionNo={viewing.versionNo}
+            about={viewing.about}
+            comparedWith={viewing.comparedWith}
+            changes={state}
+            position={position}
+            onMove={move}
+            onBackToHistory={restore?.backToHistory}
+            onOpenComparison={restore?.compare}
+            onCompareCurrent={restore?.compareCurrent}
+          />
+        </VersionBanner>
         <VersionContent
           viewing={viewing}
           fields={fields}
@@ -593,6 +730,7 @@ function ViewedVersionFrame({
           changes={changes}
           order={order}
           current={current}
+          {...(restoreField ? { restoreField } : {})}
         />
         {actions ? (
           <VersionPhoneBar
@@ -606,6 +744,26 @@ function ViewedVersionFrame({
       </div>
     </ChangesLayoutProvider>
   );
+}
+
+/**
+ * The version's comparison bar, drawn into the host's banner stack when the
+ * host keeps a place for it, and in place otherwise.
+ *
+ * A portal rather than moving the bar up to the host: the bar shares its
+ * change navigation (which change is current, moving between them) with the
+ * fields below, and that state is the frame's, keyed by the version. Drawn
+ * through a portal it keeps that state and sits where the document's other
+ * banners are, under the document bar.
+ */
+function VersionBanner({
+  slot,
+  children,
+}: {
+  slot: HTMLElement | null;
+  children: ReactNode;
+}) {
+  return slot ? createPortal(children, slot) : <>{children}</>;
 }
 
 /**
@@ -637,11 +795,17 @@ export function ViewedVersionBody({
   fields,
   values,
   actionsDisabled,
+  bannerSlot = null,
   children,
 }: {
   fields: FieldConfig[];
   values?: Record<string, unknown>;
   actionsDisabled: boolean;
+  /**
+   * Where the host draws its document banners, for the version's comparison
+   * bar to be drawn among them; null draws it at the top of the version.
+   */
+  bannerSlot?: HTMLElement | null;
   children?: ReactNode;
 }): JSX.Element {
   const { viewing } = useDocumentHistory();
@@ -667,6 +831,7 @@ export function ViewedVersionBody({
           fields={fields}
           values={values ?? {}}
           actionsDisabled={actionsDisabled}
+          bannerSlot={bannerSlot}
         />
       ) : null}
     </>

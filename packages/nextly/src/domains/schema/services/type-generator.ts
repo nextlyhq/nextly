@@ -25,6 +25,7 @@ import {
   isEmailField,
   isPasswordField,
   isCodeField,
+  isIconField,
   isNumberField,
   isCheckboxField,
   isDateField,
@@ -39,6 +40,7 @@ import {
   isFieldGroupField,
   isDataField,
 } from "../../../collections/fields/guards";
+import { declaresOwnId } from "../../../collections/fields/repeater-row-identity";
 import { NextlyError } from "../../../errors";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
@@ -68,6 +70,18 @@ import {
 // ============================================================
 // Types
 // ============================================================
+
+/**
+ * The version a read gives a document, which an update sends back so a save
+ * made since refuses it. Optional: a server that issues none leaves it off.
+ */
+const DOCUMENT_VERSION_MEMBER = "  _rev?: string;";
+
+/**
+ * An update's choice to replace whatever is stored rather than send the
+ * version it read: one of the two an update must say.
+ */
+const OVERWRITE_MEMBER = "_overwrite?: boolean";
 
 /**
  * Result of generating TypeScript types for a single collection.
@@ -207,6 +221,17 @@ export interface TypeGeneratorOptions {
    * @default "nextly"
    */
   moduleToAugment?: string;
+  /**
+   * The language codes the configuration locks, as configured: a read matches the code it is
+   * given against them as written. Absent, or empty, where Settings manages the languages or
+   * there are none, so a language is any code, checked at run time.
+   */
+  locales?: readonly string[];
+  /**
+   * Old codes a read still accepts for one release after their conversion, each with the code to
+   * use instead. Written marked deprecated.
+   */
+  deprecatedLocales?: Readonly<Record<string, string>>;
 }
 
 // ============================================================
@@ -253,6 +278,8 @@ export class TypeGenerator {
   private readonly generateModuleAugmentation: boolean;
   private readonly filename: string;
   private readonly moduleToAugment: string;
+  private readonly locales: readonly string[];
+  private readonly deprecatedLocales: Readonly<Record<string, string>>;
 
   /**
    * Expressions the plugin callbacks returned during this run.
@@ -313,6 +340,8 @@ export class TypeGenerator {
       options.filename ??
       DEFAULT_TYPESCRIPT_CONFIG.outputFile.replace(/^.*\//, "");
     this.moduleToAugment = options.moduleToAugment ?? "nextly";
+    this.locales = options.locales ?? [];
+    this.deprecatedLocales = options.deprecatedLocales ?? {};
   }
 
   // ============================================================
@@ -548,6 +577,7 @@ export class TypeGenerator {
     // Interface definition
     lines.push(`export interface ${interfaceName} {`);
     lines.push("  id: string;");
+    lines.push(DOCUMENT_VERSION_MEMBER);
 
     // Generate field types
     for (const field of collection.fields) {
@@ -636,6 +666,7 @@ export class TypeGenerator {
     // Interface definition
     lines.push(`export interface ${interfaceName} {`);
     lines.push("  id: string;");
+    lines.push(DOCUMENT_VERSION_MEMBER);
 
     // Generate field types
     for (const field of single.fields) {
@@ -923,6 +954,10 @@ export class TypeGenerator {
     else if (isCodeField(field)) {
       tsType = "string";
     }
+    // Icon fields: the icon id, such as "lucide:star"
+    else if (isIconField(field)) {
+      tsType = "string";
+    }
     // Number fields (supports hasMany for array of numbers)
     else if (isNumberField(field)) {
       const numField = field as { hasMany?: boolean };
@@ -1186,9 +1221,15 @@ export class TypeGenerator {
       allCollections,
       allComponents
     );
+    // Each row is saved with an id, which a write keeps when it is sent
+    // back; optional, as a create may leave it out. Rows that declare an
+    // `id` field of their own hold the author's value there instead.
+    const rowId = declaresOwnId(arrayField.fields)
+      ? ""
+      : "    /** The row's saved id; send it back to keep the row's identity. */\n    id?: string;\n";
 
     return `Array<{
-${properties}
+${rowId}${properties}
   }>`;
   }
 
@@ -1324,7 +1365,8 @@ ${properties}
       lines.push(" */");
     }
 
-    const omitFields = ["id"];
+    // A create is never judged by version, so it carries none.
+    const omitFields = ["id", "_rev"];
     if (collection.timestamps) {
       omitFields.push("createdAt", "updatedAt");
     }
@@ -1357,7 +1399,7 @@ ${properties}
     }
 
     lines.push(
-      `export type ${interfaceName}UpdateInput = Partial<${interfaceName}> & { id: string };`
+      `export type ${interfaceName}UpdateInput = Partial<${interfaceName}> & { id: string; ${OVERWRITE_MEMBER} };`
     );
 
     return lines.join("\n");
@@ -1382,7 +1424,7 @@ ${properties}
     }
 
     lines.push(
-      `export type ${interfaceName}UpdateInput = Partial<Omit<${interfaceName}, "id" | "updatedAt">>;`
+      `export type ${interfaceName}UpdateInput = Partial<Omit<${interfaceName}, "id" | "updatedAt">> & { ${OVERWRITE_MEMBER} };`
     );
 
     return lines.join("\n");
@@ -1495,6 +1537,11 @@ ${properties}
       lines.push("  };");
     }
 
+    // Languages section: the codes the configuration locks, and old codes still accepted. Emitted
+    // only when there are some, as the permissions and events above are: an empty map would type
+    // every read's language as `never`, where none written leaves it any code.
+    lines.push(...this.localesConfigSection());
+
     // Workflows section: each attached workflow's stage and step names, by
     // collection and Single. Emitted only when one is attached, as the
     // permissions and events above are.
@@ -1506,6 +1553,33 @@ ${properties}
     lines.push("}");
 
     return lines.join("\n");
+  }
+
+  /**
+   * The `Config` lines naming the site's languages: `locales`, the codes the configuration locks,
+   * exactly as configured; and `deprecatedLocales`, each old code still accepted with the code to
+   * use, marked deprecated. Sorted for deterministic output; none of either where there are none.
+   */
+  private localesConfigSection(): string[] {
+    const lines: string[] = [];
+    const codes = uniqueSorted([...this.locales]);
+    if (codes.length > 0) {
+      lines.push("  locales: {");
+      for (const code of codes)
+        lines.push(`    ${JSON.stringify(code)}: true;`);
+      lines.push("  };");
+    }
+    const old = uniqueSorted(Object.keys(this.deprecatedLocales));
+    if (old.length > 0) {
+      lines.push("  deprecatedLocales: {");
+      for (const code of old) {
+        const current = JSON.stringify(this.deprecatedLocales[code]);
+        lines.push(`    /** @deprecated Use ${current}. */`);
+        lines.push(`    ${JSON.stringify(code)}: ${current};`);
+      }
+      lines.push("  };");
+    }
+    return lines;
   }
 
   // ============================================================

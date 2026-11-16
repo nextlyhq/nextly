@@ -55,6 +55,20 @@ export interface DesiredCollection {
    * state this leaves behaviour exactly as it was.
    */
   builderOwned?: boolean;
+  /**
+   * The fields the registry records for this collection before the change, as it records them, so
+   * a field outside them is one the change adds. A Schema Builder save states it: MySQL commits
+   * each schema statement, so an apply refused part-way can leave an added field's column in place
+   * without its foreign key, and the next apply keys it (`withBuilderForeignKeys`). A recorded
+   * relationship's target tells a column that apply renamed from one it added. Absent, no column
+   * already in place is keyed, as before.
+   *
+   * The roads that apply configuration in code (a reload under `next dev`, `nextly db:sync`) state
+   * it too, from the registry row before their own sync replaces it: on SQLite a relationship
+   * switched between one related entry and many is told by nothing else
+   * (`withRecordedShapes`).
+   */
+  recordedFields?: readonly FieldConfig[];
 }
 
 export interface DesiredSingle {
@@ -67,6 +81,12 @@ export interface DesiredSingle {
   /** Same semantics as DesiredCollection.localized — translatable fields live in
    *  the companion `single_<slug>_locales` table and are omitted from main. */
   localized?: boolean;
+  /**
+   * The fields the registry records for this Single before the change, as it records them: what a
+   * relationship switched between one related entry and many was, which SQLite's column cannot
+   * tell. Same source and use as `DesiredCollection.recordedFields`; absent, nothing is switched.
+   */
+  recordedFields?: readonly FieldConfig[];
   /**
    * Whether this entity is owned by code-first config or a plugin (locked in
    * the registry). A UI/builder save must never emit DDL against a locked
@@ -91,6 +111,12 @@ export interface DesiredFieldGroup {
   slug: string;
   tableName: string;
   fields: FieldConfig[];
+  /**
+   * The fields the registry records for this field group before the change, as it records them:
+   * what a relationship switched between one related entry and many was. Same source and use as
+   * `DesiredCollection.recordedFields`; absent, the diff reads the column's type alone.
+   */
+  recordedFields?: readonly FieldConfig[];
   indexes?: IndexConfig[];
   /** Same semantics as DesiredCollection.localized — translatable fields live in
    *  the companion `comp_<slug>_locales` table and are omitted from main. */

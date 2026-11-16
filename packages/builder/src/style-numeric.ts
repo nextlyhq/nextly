@@ -306,6 +306,26 @@ export function withUnit(
 }
 
 /**
+ * A length field's value as committed: a bare number takes the unit the field
+ * shows (px unless the author chose another), where "24" used to be refused
+ * as "not a length". Anything that already says its own unit, a keyword, an
+ * empty field, or a number the property would refuse even with the unit is
+ * left exactly as typed, so the write path judges it as before.
+ */
+export function withDefaultUnit(
+  leaf: StyleLeaf,
+  value: StyleValue | null,
+  unit: string
+): StyleValue | null {
+  if (leaf.kind !== "dimension" || typeof value !== "string") return value;
+  // CSS whitespace only, as every numeric field here reads it.
+  const text = trimCssWhitespace(value);
+  if (!CSS_NUMBER.test(text)) return value;
+  const next = `${text}${unit}`;
+  return accepts(leaf, next) ? next : value;
+}
+
+/**
  * The value one step away, or `undefined` when this value cannot be stepped or
  * the result would be refused.
  *
@@ -333,6 +353,95 @@ export function steppedValue(
     decimals
   );
   return accepts(leaf, next) ? next : undefined;
+}
+
+/**
+ * Where a drag on a field's label starts, or `undefined` when its value is not
+ * one measurement a drag could move.
+ *
+ * The text in the field, with the unit the field shows given to a bare number,
+ * as a commit would give it. An EMPTY field starts from what it shows instead:
+ * the value reaching it from another tier when that is a measurement, else
+ * zero in the field's unit — dragging an unset padding is the commonest scrub
+ * there is, and refusing it would make the label inert exactly where it is
+ * reached for. Anything else typed — `auto`, a `clamp()`, a shorthand — is
+ * left to the keyboard, as stepping leaves it.
+ */
+export function scrubOrigin(
+  leaf: StyleLeaf,
+  draft: string,
+  unit: string,
+  inherited: string | undefined
+): string | undefined {
+  const text = trimCssWhitespace(draft);
+  const steppable = (value: string): string | undefined =>
+    steppedValue(leaf, value, 0) === undefined ? undefined : value;
+  if (text !== "") {
+    const given = withDefaultUnit(leaf, text, unit);
+    return steppable(typeof given === "string" ? given : text);
+  }
+  const shown = inherited === undefined ? undefined : steppable(inherited);
+  if (shown !== undefined) return shown;
+  return steppable(leaf.kind === "dimension" ? `0${unit}` : "0");
+}
+
+/**
+ * The value `delta` away, or as far toward it as the property takes, for a
+ * drag; `undefined` when not even the smallest step is taken.
+ *
+ * A drag is not a key press. Dragging a padding from `4px` well past zero
+ * must REST at `0px`, where {@link steppedValue} answers `undefined` for the
+ * refused `-20px` and the field would freeze at whatever the last accepted
+ * move happened to be. So the step is shortened, at the drag's own precision,
+ * to the longest one the engine still accepts: the property's bounds are the
+ * engine's, and this only asks.
+ *
+ * The search halves, which assumes what is refused lies beyond a bound — the
+ * only refusal a change of quantity can meet, since the unit and the shape of
+ * the value are kept.
+ */
+export function scrubbedValue(
+  leaf: StyleLeaf,
+  value: StyleValue | undefined,
+  dragged: number
+): string | number | undefined {
+  // An integer moves by whole steps: a fine drag's tenths are dropped toward
+  // zero, so the value moves once they add up to a whole one.
+  const delta =
+    leaf.kind === "number" && leaf.integer === true
+      ? Math.trunc(dragged)
+      : dragged;
+  const whole = steppedValue(leaf, value, delta);
+  if (whole !== undefined || delta === 0) return whole;
+  const current = measurementOf(value);
+  if (current === undefined) return undefined;
+  const decimals = stepDecimals(current.decimals, delta);
+  const quantum = 10 ** -decimals;
+  const sign = Math.sign(delta);
+  // Steps of the smallest unit the drag can move by: `low` is taken, `high`
+  // is not.
+  let low = 0;
+  let high = Math.round(Math.abs(delta) / quantum);
+  let found: string | number | undefined;
+  while (high - low > 1) {
+    const middle = low + Math.floor((high - low) / 2);
+    // Past the safe integers a midpoint can round back onto an end, and the
+    // search would never move again: what it has found is then as close to
+    // the bound as a double can say.
+    if (middle <= low || middle >= high) break;
+    const next = steppedValue(
+      leaf,
+      value,
+      roundedTo(sign * middle * quantum, decimals)
+    );
+    if (next === undefined) {
+      high = middle;
+    } else {
+      low = middle;
+      found = next;
+    }
+  }
+  return found;
 }
 
 /**
@@ -390,6 +499,9 @@ function steppedNumber(
   // A unit on a number leaf is not a number: `opacity: 5px` is stored text the
   // engine refuses, and stepping it would answer `6px`, which it also refuses.
   if (current === undefined || current.unit !== "") return undefined;
+  // A fine step on an integer has no value to land on: rounded back, it would
+  // be a key claimed and a write attempted for a value that did not move.
+  if (leaf.integer === true && !Number.isInteger(delta)) return undefined;
   const stepped =
     leaf.integer === true
       ? Math.round(current.number + delta)
@@ -490,13 +602,38 @@ export function toggleOptionsFor(
   if ((leaf.maxParts ?? 1) !== 1) return undefined;
 
   const values = leaf.values;
-  if (values.length < 2 || values.length > MAX_TOGGLE_OPTIONS) return undefined;
-  if (values.some(value => value.length > MAX_OPTION_LENGTH)) return undefined;
+  return fitsSideBySide(values, STYLE_ROW) ? values : undefined;
+}
 
-  const together = values.reduce((sum, value) => sum + value.length, 0);
-  if (together > MAX_OPTIONS_LENGTH) return undefined;
+/** How much room a row of options has: how many, how long each and together. */
+export interface SideBySideRoom {
+  readonly maxCount: number;
+  readonly maxEach: number;
+  readonly maxTotal: number;
+}
 
-  return values;
+/** A style row's room, beside its label in a rail an author can drag narrow. */
+const STYLE_ROW: SideBySideRoom = {
+  maxCount: MAX_TOGGLE_OPTIONS,
+  maxEach: MAX_OPTION_LENGTH,
+  maxTotal: MAX_OPTIONS_LENGTH,
+};
+
+/**
+ * Whether a whole set of options, by the words that show, fits side by side
+ * in the room given: at least two, and none of the bounds exceeded.
+ *
+ * ONE rule for every surface that draws options as a row of buttons; each
+ * says only how much room it has.
+ */
+export function fitsSideBySide(
+  labels: readonly string[],
+  room: SideBySideRoom
+): boolean {
+  if (labels.length < 2 || labels.length > room.maxCount) return false;
+  if (labels.some(label => label.length > room.maxEach)) return false;
+  const together = labels.reduce((sum, label) => sum + label.length, 0);
+  return together <= room.maxTotal;
 }
 
 /**

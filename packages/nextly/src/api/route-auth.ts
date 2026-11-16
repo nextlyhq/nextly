@@ -16,6 +16,7 @@
 
 import {
   isErrorResponse,
+  requireAllPermissions,
   requireAnyPermission,
   requireAuthentication,
   requireCollectionAccess,
@@ -24,40 +25,16 @@ import {
   type ErrorResponse,
   type RouteOperation,
 } from "../auth/middleware";
-import { NextlyError } from "../errors/nextly-error";
+import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 
-/** Convert a middleware ErrorResponse into the equivalent thrown NextlyError. */
+/**
+ * Throw a middleware ErrorResponse as the equivalent NextlyError, converted
+ * as every other route converts one: the expired-session code, the refusal's
+ * own words, a limit's retry hint and an unavailable service's status are
+ * kept, and its reason goes to the log.
+ */
 function throwAuthError(result: ErrorResponse): never {
-  if (result.statusCode === 401) {
-    // Preserve the middleware's TOKEN_EXPIRED code. The admin refresh
-    // interceptor silently refreshes and retries only on TOKEN_EXPIRED;
-    // AUTH_REQUIRED forces a logout. Collapsing every 401 to authRequired()
-    // would turn a refreshable session into a hard logout on these routes.
-    if (result.code === "TOKEN_EXPIRED") {
-      throw NextlyError.tokenExpired({
-        logContext: { middlewareCode: result.code },
-      });
-    }
-    throw NextlyError.authRequired({
-      logContext: { middlewareCode: result.code },
-    });
-  }
-  if (result.statusCode === 429) {
-    // Forward the backoff the middleware already computed: withErrorHandler
-    // only emits the Retry-After response header when retryAfterSeconds is
-    // present on the error, so a rate-limited client would otherwise lose it.
-    const headerValue = result.headers?.["Retry-After"];
-    const retryAfterSeconds = headerValue ? Number(headerValue) : undefined;
-    throw NextlyError.rateLimited({
-      retryAfterSeconds: Number.isFinite(retryAfterSeconds)
-        ? retryAfterSeconds
-        : undefined,
-      logContext: { middlewareCode: result.code },
-    });
-  }
-  throw NextlyError.forbidden({
-    logContext: { middlewareCode: result.code, detail: result.error },
-  });
+  throw toNextlyAuthError(result);
 }
 
 /**
@@ -83,6 +60,19 @@ export async function requireRoutePermission(
   resource: string
 ): Promise<AuthContext> {
   const result = await requirePermission(request, action, resource);
+  if (isErrorResponse(result)) throwAuthError(result);
+  return result;
+}
+
+/**
+ * Require an authenticated caller holding EVERY one of the given permissions.
+ * Mirrors the dispatcher's `requireAllPermissions`.
+ */
+export async function requireRouteAllPermissions(
+  request: Request,
+  permissions: ReadonlyArray<{ action: string; resource: string }>
+): Promise<AuthContext> {
+  const result = await requireAllPermissions(request, permissions);
   if (isErrorResponse(result)) throwAuthError(result);
   return result;
 }
@@ -118,7 +108,8 @@ export async function requireRouteCollectionAccess(
     request,
     action,
     collectionSlug,
-    operation
+    // This route requires a caller, so it never admits a visitor.
+    operation && { ...operation, admitsVisitor: false }
   );
   if (isErrorResponse(result)) throwAuthError(result);
   return result;

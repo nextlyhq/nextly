@@ -14,7 +14,6 @@ import { setNextlyLogger } from "../../../observability/logger";
 import {
   createDisabledCollections,
   refreshCollectionSources,
-  registeredCollectionSlugs,
 } from "../collection-sources";
 import { setDeferredEntities } from "../deferred-entities";
 import { isKeptOffDashboard } from "../kept-off-dashboard";
@@ -56,7 +55,7 @@ const containerGet = container.get as ReturnType<typeof vi.fn>;
 function registryHolds(rows: Row[]): void {
   containerGet.mockImplementation((name: string) => {
     if (name === "collectionRegistryService") {
-      return { getAllCollections: async () => rows };
+      return { getAllCollectionsForRead: async () => rows };
     }
     throw new Error(`unexpected container.get("${name}") in this test`);
   });
@@ -76,7 +75,7 @@ function registryHoldsWithTables(
   const listTables = vi.fn(async () => tables);
   containerGet.mockImplementation((name: string) => {
     if (name === "collectionRegistryService") {
-      return { getAllCollections: async () => rows };
+      return { getAllCollectionsForRead: async () => rows };
     }
     if (name === "adapter") return { listTables };
     throw new Error(`unexpected container.get("${name}") in this test`);
@@ -811,7 +810,7 @@ describe("a collection whose table is not there yet", () => {
 });
 
 describe("the registry record a refresh keeps beside the sources", () => {
-  it("holds every registered collection, with or without a source, and which turn creating off", async () => {
+  it("holds which collections turn creating off, with or without a source", async () => {
     registryHolds([
       { slug: "posts", fields: [] },
       // Kept off the dashboard: no source, still in the install.
@@ -822,12 +821,6 @@ describe("the registry record a refresh keeps beside the sources", () => {
     ]);
     await refreshCollectionSources();
     expect(getSource("collection:patterns")).toBeUndefined();
-    expect([...(registeredCollectionSlugs() ?? [])].sort()).toEqual([
-      "notes",
-      "patterns",
-      "posts",
-      "submissions",
-    ]);
     expect([...(createDisabledCollections() ?? [])]).toEqual(["submissions"]);
   });
 
@@ -841,6 +834,5 @@ describe("the registry record a refresh keeps beside the sources", () => {
     });
     expect(await refreshCollectionSources()).toBe(false);
     expect([...(createDisabledCollections() ?? [])]).toEqual(["submissions"]);
-    expect([...(registeredCollectionSlugs() ?? [])]).toEqual(["submissions"]);
   });
 });

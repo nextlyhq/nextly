@@ -29,6 +29,10 @@ import {
   COLLECTION_ID_TYPES,
 } from "../../domains/collections/services/collection-db-options";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
+import {
+  publicAddressErrors,
+  publicAddressFieldProblem,
+} from "../../domains/public-addresses/public-address-template";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 import {
   isManagedIndexName,
@@ -46,15 +50,11 @@ import {
   isReservedSystemColumn,
 } from "../../lib/system-columns";
 import {
-  NEWLY_RESERVED_SLUG_NOTES,
-  SYSTEM_RESOURCES,
-} from "../../schemas/_zod/rbac";
-import {
   type BaseValidationError,
-  DEFAULT_SQL_KEYWORDS_SET,
   validateComponentFieldRefShared,
   validateContainerFieldsShared,
   validateFieldTypeShared,
+  validateIconDefaultShared,
   validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
   validatePluginFieldOptionsShared,
@@ -63,17 +63,19 @@ import {
   validateAccessShared,
   COLLECTION_ACCESS_KEYS,
   validateFieldBasicsShared,
+  validateSiblingFieldsShared,
 } from "../../shared/base-validator";
 import { isPlainObject } from "../../shared/lib/plain-copy";
-// RESERVED_SLUGS and SQL_RESERVED_KEYWORDS used to live in this file. They
-// moved to shared/sql-reserved.ts to break a circular dependency with
-// base-validator. Imported here for local use in RESERVED_SLUGS_SET below
-// and re-exported so existing consumers that import them from this file's
-// path continue to work unchanged.
 import {
   RESERVED_SLUGS,
   SQL_RESERVED_KEYWORDS,
 } from "../../shared/sql-reserved";
+import { consoleLogger } from "../../shared/types";
+import { declaresOwnId } from "../fields/repeater-row-identity";
+// RESERVED_SLUGS and SQL_RESERVED_KEYWORDS used to live in this file. They
+// moved to shared/sql-reserved.ts to break a circular dependency with
+// base-validator. Re-exported so existing consumers that import them from this file's
+// path continue to work unchanged.
 // C7/D16 — accept plugin-registered custom field types (must be registered
 // before the config is validated; see field-type-registry).
 
@@ -105,6 +107,7 @@ export type ValidationErrorCode =
   | "FIELD_NAME_REQUIRED"
   | "FIELD_NAME_INVALID_FORMAT"
   | "FIELD_NAME_SQL_KEYWORD"
+  | "FIELD_NEVER_TRANSLATABLE"
   | "FIELD_NAME_DUPLICATE"
   | "FIELD_NAME_RESERVED"
   // A name that reaches a system column under a different spelling. Allowed only as the
@@ -131,6 +134,7 @@ export type ValidationErrorCode =
   | "DECIMAL_PRECISION_INVALID"
   | "DECIMAL_SCALE_INVALID"
   | "DECIMAL_SCALE_EXCEEDS_PRECISION"
+  | "ICON_DEFAULT_INVALID"
   | "BLOCKS_REQUIRED"
   | "BLOCKS_EMPTY"
   | "BLOCK_SLUG_REQUIRED"
@@ -154,7 +158,10 @@ export type ValidationErrorCode =
   | "DB_OPTIONS_INVALID_TYPE"
   | "DB_OPTION_UNKNOWN"
   | "DB_ID_TYPE_INVALID"
-  | "DB_ALLOW_ID_ON_CREATE_INVALID";
+  | "DB_ALLOW_ID_ON_CREATE_INVALID"
+  | "DB_SLUG_PATHS_INVALID"
+  // Public address errors
+  | "PUBLIC_ADDRESS_INVALID";
 
 /**
  * A single validation error with path and context.
@@ -192,17 +199,8 @@ export interface ValidationResult {
 // they now live in shared/sql-reserved.ts and are re-exported above so the
 // public API surface for this file is unchanged.
 
-// System-resource names are added on top of the base reserved slugs. A
-// collection named after a system resource would seed the same permission rows
-// that resource's routes check (a `settings` collection reaches the user-fields
-// and component admin surfaces, a `media` collection the media routes), so it is
-// rejected here — at config validation, before any migration or table is built.
-// The names are NOT in the shared base list, because that list also feeds the
-// component validator and a component does not seed a permission under its slug.
-const RESERVED_SLUGS_SET: Set<string> = new Set<string>([
-  ...RESERVED_SLUGS,
-  ...SYSTEM_RESOURCES,
-]);
+// The slug itself is judged by the one address rule (`shared/address-rule`),
+// which every road that writes an address shares; `validateSlugShared` asks it.
 
 // System columns injected onto a collection table, under both the snake_case
 // name and the camelCase alias that snake-cases to the same column. A code-first
@@ -430,7 +428,6 @@ function validateField(
   field: unknown,
   path: string,
   errors: ValidationError[],
-  seenNames: Set<string>,
   allCollectionSlugs?: string[]
 ): void {
   if (!field || typeof field !== "object") {
@@ -448,7 +445,7 @@ function validateField(
   // the deferral returns before this, and the boot gate asks only whether the
   // token was claimed. A duplicate or SQL-reserved name reached schema
   // generation as a colliding column.
-  validateFieldBasicsShared(f, path, errsBase, seenNames);
+  validateFieldBasicsShared(f, path, errsBase);
 
   if (
     !validateFieldTypeShared(f.type, path, errsBase, type =>
@@ -482,6 +479,7 @@ function validateField(
       break;
 
     case "repeater":
+      warnOfAuthoredRowId(f, path);
       validateContainerFieldsShared(
         f,
         path,
@@ -512,7 +510,28 @@ function validateField(
     case "number":
       validateNumberDecimalDimensionsShared(f, path, errsBase);
       break;
+
+    case "icon":
+      validateIconDefaultShared(f, path, errsBase);
+      break;
   }
+}
+
+/**
+ * Say, while developing, that a repeater declaring its own `id` field takes
+ * that value from its author: rows saved before the field existed carry the
+ * id the system gave them there. A warning, never an error, since schemas
+ * that declare one already work.
+ */
+function warnOfAuthoredRowId(
+  field: Record<string, unknown>,
+  path: string
+): void {
+  if (process.env.NODE_ENV === "production") return;
+  if (!Array.isArray(field.fields) || !declaresOwnId(field.fields)) return;
+  consoleLogger.warn(
+    `[nextly] ${path}: this repeater's rows declare their own 'id' field. Rows saved before this field existed keep their saved row id as its value.`
+  );
 }
 
 /**
@@ -524,11 +543,9 @@ function validateFieldsArray(
   errors: ValidationError[],
   allCollectionSlugs?: string[]
 ): void {
-  const seenNames = new Set<string>();
-
   fields.forEach((field, index) => {
     const fieldPath = `${basePath}[${index}]`;
-    validateField(field, fieldPath, errors, seenNames, allCollectionSlugs);
+    validateField(field, fieldPath, errors, allCollectionSlugs);
   });
 }
 
@@ -595,7 +612,6 @@ function validateFields(
   //
   // Both keys land on `foo_bar` and the second silently overwrites the first, so one of the two
   // authored values is already gone by the time anything decides which table it belongs to.
-  const columnOwners = new Map<string, string>();
   fields.forEach((field, index) => {
     if (!field || typeof field !== "object") return;
     const candidate = field as Record<string, unknown>;
@@ -662,24 +678,8 @@ function validateFields(
       errors.push(statusError);
       return;
     }
-    // Two names that reach one column cannot both be emitted, so the table could never be
-    // created. Checked here rather than in the shared field-name rule because only this level has
-    // columns at all: a repeater or group keeps its children inside a single JSON column, where
-    // two names that convert alike are simply two keys.
-    //
-    // Column-less field types are exempt for the same reason. A component and a many-to-many
-    // relationship store their values in their own tables, keyed by the field's declared name, so
-    // two of them whose names converge stay distinct and nothing is emitted twice.
-    const owner = columnOwners.get(column);
-    if (owner !== undefined) {
-      errors.push({
-        path: `${path}[${index}].name`,
-        message: `Field name '${name}' collides with '${owner}': both become the column '${column}'`,
-        code: "FIELD_NAME_DUPLICATE",
-      });
-      return;
-    }
-    columnOwners.set(column, name);
+    // Two names that reach one column are sibling fields the one sibling rule judges, for the
+    // whole entity at once (`validateSiblingFieldsShared`).
   });
 
   validateFieldsArray(fields, path, errors, allCollectionSlugs);
@@ -730,6 +730,15 @@ function validateDbOptions(db: unknown, errors: ValidationError[]): void {
       path: "db.allowIdOnCreate",
       code: "DB_ALLOW_ID_ON_CREATE_INVALID",
       message: "db.allowIdOnCreate must be true or false.",
+    });
+  }
+  // Read leniently by the write path, which stores paths only for `true`,
+  // so a misspelt value would quietly keep one-segment slugs.
+  if (db.slugPaths !== undefined && typeof db.slugPaths !== "boolean") {
+    errors.push({
+      path: "db.slugPaths",
+      code: "DB_SLUG_PATHS_INVALID",
+      message: "db.slugPaths must be true or false.",
     });
   }
 }
@@ -797,18 +806,19 @@ export function validateCollectionConfig(
   const errors: ValidationError[] = [];
   const errsBase = errors as unknown as BaseValidationError[];
 
-  validateSlugShared(config.slug, errsBase, {
-    entityLabel: "Collection",
-    reservedSlugsSet: RESERVED_SLUGS_SET,
-    reservedSlugNotes: NEWLY_RESERVED_SLUG_NOTES,
-    sqlKeywordsSet: DEFAULT_SQL_KEYWORDS_SET,
-  });
+  validateSlugShared(config.slug, errsBase, "collection");
 
   validateFields(
     config.fields,
     errors,
     allCollectionSlugs,
     (config as { status?: boolean }).status === true
+  );
+  validateSiblingFieldsShared(
+    "collection",
+    config.slug,
+    config.fields,
+    errsBase
   );
 
   validateIndexes(
@@ -821,6 +831,25 @@ export function validateCollectionConfig(
   validateAccess(config.access, errors);
 
   validateDbOptions(config.db, errors);
+
+  // Judged by the rule every public address is, so a template a plugin
+  // supplies for a Builder type and one declared here never disagree.
+  errors.push(
+    ...publicAddressErrors(config.publicAddress, "collection", config.fields)
+  );
+  // The field holding each entry's own address, where one is named.
+  const fieldProblem = publicAddressFieldProblem(
+    config.publicAddressField,
+    config.publicAddress,
+    Array.isArray(config.fields) ? config.fields : []
+  );
+  if (fieldProblem !== null) {
+    errors.push({
+      path: "publicAddressField",
+      code: "PUBLIC_ADDRESS_INVALID",
+      message: fieldProblem,
+    });
+  }
 
   return {
     valid: errors.length === 0,

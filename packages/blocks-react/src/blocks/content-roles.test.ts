@@ -15,10 +15,24 @@ import { coreBlocks } from "./index";
 /** The content props of each core block that has any. */
 const CONTENT: Record<string, readonly string[]> = {
   "core/heading": ["text", "href"],
+  // A whole-block link is content: where the block leads is what an editor
+  // changes, as on Heading and Button.
+  "core/box": ["link"],
+  "core/card": ["link"],
   "core/text": ["text"],
   "core/rich-text": ["content"],
-  "core/image": ["mediaId", "src", "alt", "caption"],
+  "core/table-of-contents": ["title"],
+  "core/image": [
+    "mediaId",
+    "src",
+    "alt",
+    "caption",
+    "href",
+    "entryCollection",
+    "entryId",
+  ],
   "core/button": ["label", "href", "entryCollection", "entryId", "ariaLabel"],
+  "core/icon": ["icon", "label", "href", "entryCollection", "entryId"],
   "core/quote": ["text", "attribution", "source", "citeUrl"],
   "core/list": ["items"],
   "core/embed": ["src", "title"],

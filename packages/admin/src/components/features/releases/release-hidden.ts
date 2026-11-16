@@ -54,3 +54,18 @@ export function describeHidden(
 export function describeHiddenNeedFix(count: number): string {
   return `${count} ${documents(count)} you can't view ${count === 1 ? "needs" : "need"} a fix`;
 }
+
+/**
+ * "1 document can't be shown (deleted, or you can't view it)": what a
+ * release's own page says of the documents the server counts but does not
+ * name. Worded to be true for every reader, since the server counts a
+ * deleted document there as well as one the reader may not view.
+ */
+export function describeUnshown(count: number): string {
+  return `${count} ${documents(count)} can't be shown (deleted, or you can't view ${count === 1 ? "it" : "them"})`;
+}
+
+/** "1 document that can't be shown needs a fix", for the same documents. */
+export function describeUnshownNeedFix(count: number): string {
+  return `${count} ${documents(count)} that can't be shown ${count === 1 ? "needs" : "need"} a fix`;
+}

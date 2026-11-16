@@ -16,7 +16,7 @@ import { describe, expect, it } from "vitest";
 
 import type { EmailProviderDescriptor } from "@admin/services/emailProviderApi";
 
-import { emailCatalogState } from "./EmailProviderForm";
+import { emailCatalogState } from "./email-provider-catalog";
 
 const DESCRIPTOR: EmailProviderDescriptor = {
   type: "resend",

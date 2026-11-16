@@ -1,0 +1,400 @@
+/**
+ * Unit tests for check-bundle-budgets.mjs: the gate's verdicts. A build within
+ * every budget passes; the shipped total, the shared shell and each route are
+ * judged by their own budget; a route is held to its pinned size plus the
+ * headroom; a route with no pin fails; and the boundary itself counts as
+ * within ("at most").
+ */
+
+import { describe, expect, it } from "vitest";
+
+import {
+  BUDGETS,
+  budgetBreaches,
+  describeBreaches,
+  pinRefusal,
+  pinsFrom,
+  routeKey,
+  SHELL_CATEGORY,
+  shellModuleBreaches,
+} from "./check-bundle-budgets.mjs";
+
+const KB = 1024;
+
+/**
+ * A report: a small total, a shell under its budget (derived from it, so a
+ * lowered budget leaves the passing cases passing), and routes with their own
+ * code.
+ */
+/**
+ * A shipped total over the budget, derived from it, so raising the budget
+ * leaves these tests measuring a breach.
+ */
+const OVER_TOTAL_KB = BUDGETS.totalGzipKB + 20;
+
+/**
+ * A report whose shipped total is `totalKB` gzipped, held by the entry chunk,
+ * beside a test-only entry of `testingKB` that the total leaves out.
+ */
+function report(
+  routes,
+  { totalKB = 1000, shellKB = BUDGETS.shellGzipKB - 30, testingKB = 50 } = {}
+) {
+  const chunk = (file, kb, category) => ({
+    file,
+    category,
+    minifiedBytes: kb * 3 * KB,
+    gzippedBytes: kb * KB,
+    staticImports: [],
+    dynamicImports: [],
+  });
+  return {
+    entryChunk: "index.mjs",
+    chunks: [
+      chunk("index.mjs", totalKB, SHELL_CATEGORY),
+      chunk("testing.mjs", testingKB, "other-entry"),
+    ],
+    totals: {
+      firstScreen: { gzippedBytes: shellKB * KB },
+    },
+    routes: routes.map(([root, kb]) => ({
+      root,
+      beyondShell: { gzippedBytes: kb * KB },
+    })),
+  };
+}
+
+/** Pins for the given stable names, in KB. */
+function pins(entries) {
+  return {
+    routes: Object.fromEntries(entries.map(([key, kb]) => [key, kb * KB])),
+  };
+}
+
+describe("routeKey", () => {
+  it("drops the content hash, keeping pages that share a file name apart", () => {
+    expect(routeKey("page.dashboard.users.create-CZ-2Ye0b.mjs")).toBe(
+      "page.dashboard.users.create"
+    );
+    expect(routeKey("page.dashboard.roles.create-B26jfAsp.mjs")).toBe(
+      "page.dashboard.roles.create"
+    );
+    expect(routeKey("RichTextInput-DhOEc_ZM.mjs")).toBe("RichTextInput");
+  });
+});
+
+describe("pinsFrom", () => {
+  it("pins every route's own code under its stable name", () => {
+    const r = report([
+      ["page.b-AAAAAAAA.mjs", 300],
+      ["page.a-BBBBBBBB.mjs", 280],
+    ]);
+    expect(pinsFrom(r).routes).toEqual({
+      "page.a": 280 * KB,
+      "page.b": 300 * KB,
+    });
+  });
+
+  it("pins a route named like a built-in object key as its own entry", () => {
+    const routes = pinsFrom(report([["__proto__-AAAAAAAA.mjs", 3]])).routes;
+    expect(Object.hasOwn(routes, "__proto__")).toBe(true);
+    expect(JSON.parse(JSON.stringify(routes))).toEqual(
+      JSON.parse('{"__proto__": 3072}')
+    );
+  });
+
+  it("refuses two routes that share a stable name rather than keep one", () => {
+    const r = report([
+      ["index-AAAAAAAA.mjs", 300],
+      ["index-BBBBBBBB.mjs", 280],
+    ]);
+    expect(() => pinsFrom(r)).toThrow(/index/);
+  });
+});
+
+describe("pinRefusal", () => {
+  const fresh = {
+    commit: "unversioned",
+    builtAt: "2026-10-27T00:00:00.000Z",
+    buildInfo: { commit: "unversioned" },
+  };
+
+  it("pins a dist its build stamped", () => {
+    expect(pinRefusal(fresh)).toBeNull();
+  });
+
+  it("refuses a dist with no build stamp: its bytes cannot be placed", () => {
+    expect(pinRefusal({ ...fresh, buildInfo: undefined })).toMatch(/stamp/);
+  });
+
+  it("refuses a dist stamped by another commit", () => {
+    expect(
+      pinRefusal({
+        ...fresh,
+        commit: "bbbbbbb",
+        buildInfo: { commit: "aaaaaaa" },
+      })
+    ).toMatch(/predates|another commit/);
+  });
+
+  it("refuses while a build input has uncommitted changes: the bytes are not the commit's", () => {
+    expect(
+      pinRefusal(fresh, ["packages/admin/src/pages/dashboard/index.tsx"])
+    ).toMatch(/uncommitted.*pages\/dashboard\/index\.tsx/);
+  });
+});
+
+describe("budgetBreaches", () => {
+  it("fails two routes that share a stable name: one pin cannot hold both", () => {
+    const r = report([
+      ["index-AAAAAAAA.mjs", 300],
+      ["index-BBBBBBBB.mjs", 280],
+    ]);
+    expect(budgetBreaches(r, pins([["index", 300]]))).toEqual([
+      expect.objectContaining({ kind: "duplicate", name: "route index" }),
+    ]);
+  });
+
+  it("passes a build within every budget", () => {
+    const r = report([["page.a-AAAAAAAA.mjs", 300]]);
+    expect(budgetBreaches(r, pins([["page.a", 300]]))).toEqual([]);
+  });
+
+  it("counts each boundary itself as within: the budgets say at most", () => {
+    const r = report([["page.a-AAAAAAAA.mjs", 330]], {
+      totalKB: BUDGETS.totalGzipKB,
+      shellKB: BUDGETS.shellGzipKB,
+    });
+    // 300 KB pinned plus 10% is 330 KB.
+    expect(budgetBreaches(r, pins([["page.a", 300]]))).toEqual([]);
+  });
+
+  it("fails a route grown past its pin plus the headroom, naming both", () => {
+    const r = report([["page.a-AAAAAAAA.mjs", 331]]);
+    const [breach, ...rest] = budgetBreaches(r, pins([["page.a", 300]]));
+    expect(rest).toEqual([]);
+    expect(breach.kind).toBe("route");
+    expect(breach.name).toContain("page.a");
+    expect(breach.measured).toContain("331.00 KB gzipped of its own");
+    expect(breach.budget).toContain("330.00 KB");
+    expect(breach.budget).toContain("pinned 300.00 KB");
+  });
+
+  it("gives a route that adds almost nothing a 2 KB floor, not 10%", () => {
+    const p = pins([["page.tiny", 1]]);
+    expect(budgetBreaches(report([["page.tiny-AAAAAAAA.mjs", 3]]), p)).toEqual(
+      []
+    );
+    const [breach] = budgetBreaches(
+      report([["page.tiny-AAAAAAAA.mjs", 3.5]]),
+      p
+    );
+    expect(breach.kind).toBe("route");
+  });
+
+  it("fails a route that has no pin, saying how to pin it", () => {
+    const r = report([["page.new-AAAAAAAA.mjs", 270]]);
+    const [breach] = budgetBreaches(r, pins([]));
+    expect(breach.kind).toBe("unpinned");
+    expect(breach.name).toContain("page.new");
+    expect(breach.budget).toContain("--pin");
+  });
+
+  it("fails a new route named like a built-in object key, which no pin holds", () => {
+    const r = report([
+      ["toString-AAAAAAAA.mjs", 3],
+      ["constructor-BBBBBBBB.mjs", 3],
+    ]);
+    expect(budgetBreaches(r, pins([])).map(b => b.kind)).toEqual([
+      "unpinned",
+      "unpinned",
+    ]);
+  });
+
+  it("fails a shell over its cap", () => {
+    const r = report([], { shellKB: BUDGETS.shellGzipKB + 1 });
+    const [breach] = budgetBreaches(r, pins([]));
+    expect(breach.kind).toBe("shell");
+    expect(breach.budget).toContain(`${BUDGETS.shellGzipKB} KB`);
+  });
+
+  it("leaves a test-only entry out of the shipped total, whatever its size", () => {
+    const r = report([], { totalKB: BUDGETS.totalGzipKB, testingKB: 500 });
+    expect(budgetBreaches(r, pins([]))).toEqual([]);
+  });
+
+  it("counts a chunk a test-only entry shares with the application", () => {
+    const r = report([], { totalKB: BUDGETS.totalGzipKB - 10, testingKB: 5 });
+    r.chunks.push({
+      file: "shared-SSSSSSSS.mjs",
+      category: SHELL_CATEGORY,
+      minifiedBytes: 60 * KB,
+      gzippedBytes: 20 * KB,
+      staticImports: [],
+      dynamicImports: [],
+    });
+    r.chunks[0].staticImports.push("shared-SSSSSSSS.mjs");
+    r.chunks[1].staticImports.push("shared-SSSSSSSS.mjs");
+    const [breach] = budgetBreaches(r, pins([]));
+    expect(breach?.kind).toBe("total");
+    expect(breach.measured).toContain(
+      `${(BUDGETS.totalGzipKB + 10).toFixed(2)} KB gzipped`
+    );
+  });
+
+  it("fails a shipped total over its budget", () => {
+    const r = report([], { totalKB: OVER_TOTAL_KB });
+    const [breach] = budgetBreaches(r, pins([]));
+    expect(breach.kind).toBe("total");
+    expect(breach.measured).toContain(`${OVER_TOTAL_KB.toFixed(2)} KB`);
+    expect(breach.budget).toContain(`${BUDGETS.totalGzipKB} KB gzipped`);
+  });
+
+  it("reports every breaching route, not only the first", () => {
+    const r = report([
+      ["page.one-AAAAAAAA.mjs", 400],
+      ["page.fine-BBBBBBBB.mjs", 300],
+      ["page.two-CCCCCCCC.mjs", 500],
+    ]);
+    const p = pins([
+      ["page.one", 300],
+      ["page.fine", 300],
+      ["page.two", 300],
+    ]);
+    expect(budgetBreaches(r, p).map(b => b.name)).toEqual([
+      expect.stringContaining("page.one"),
+      expect.stringContaining("page.two"),
+    ]);
+  });
+});
+
+describe("describeBreaches", () => {
+  it("renders measured size and budget together on one line", () => {
+    const r = report([], { totalKB: OVER_TOTAL_KB });
+    expect(describeBreaches(budgetBreaches(r, pins([])))).toEqual([
+      expect.stringMatching(
+        new RegExp(
+          `total.*${OVER_TOTAL_KB}\\.00 KB gzipped.*${BUDGETS.totalGzipKB} KB gzipped`
+        )
+      ),
+    ]);
+  });
+});
+
+/**
+ * A build of three chunks: the entry and one chunk it shares are the shell,
+ * a route's chunk is not. `modules` places modules in chunks; `imports` says
+ * what each imports.
+ */
+function shellBuild(modules, imports = {}) {
+  return {
+    report: {
+      chunks: [
+        { file: "index.mjs", category: SHELL_CATEGORY },
+        { file: "shared.mjs", category: SHELL_CATEGORY },
+        { file: "route.mjs", category: "route-later" },
+      ],
+    },
+    record: {
+      chunks: {
+        "index.mjs": [],
+        "shared.mjs": [],
+        "route.mjs": [],
+        ...modules,
+      },
+      imports,
+    },
+  };
+}
+
+describe("shellModuleBreaches", () => {
+  const keptOut = ["react-hook-form/", "src/components/field-ui/"];
+
+  it("passes a shell holding none of the modules kept out of it", () => {
+    const { report, record } = shellBuild({
+      "index.mjs": ["src/index.ts", "src/layout/RootLayout.tsx"],
+      "route.mjs": ["react-hook-form/dist/index.esm.mjs"],
+    });
+    expect(shellModuleBreaches(report, record, keptOut, [])).toEqual([]);
+  });
+
+  it("fails a kept-out module in a shell chunk, naming it, its chunk and the imports that brought it", () => {
+    const { report, record } = shellBuild(
+      {
+        "index.mjs": ["src/index.ts", "src/hooks/useThing.ts"],
+        "shared.mjs": ["react-hook-form/dist/index.esm.mjs"],
+      },
+      {
+        "src/index.ts": ["src/hooks/useThing.ts"],
+        "src/hooks/useThing.ts": ["react-hook-form/dist/index.esm.mjs"],
+      }
+    );
+    const [breach, ...rest] = shellModuleBreaches(report, record, keptOut, []);
+    expect(rest).toEqual([]);
+    expect(breach.kind).toBe("shell-module");
+    expect(breach.name).toBe("react-hook-form/");
+    expect(breach.measured).toContain(
+      "react-hook-form/dist/index.esm.mjs in shared.mjs"
+    );
+    expect(breach.measured).toContain(
+      "src/index.ts -> src/hooks/useThing.ts -> react-hook-form/dist/index.esm.mjs"
+    );
+  });
+
+  it("says when no import from the entry leads to it, rather than inventing a chain", () => {
+    const { report, record } = shellBuild({
+      "index.mjs": ["src/index.ts"],
+      "shared.mjs": ["src/components/field-ui/FieldPicker.tsx"],
+    });
+    const [breach] = shellModuleBreaches(report, record, keptOut, []);
+    expect(breach.name).toBe("src/components/field-ui/");
+    expect(breach.measured).toContain("placed there beside");
+  });
+
+  it("follows an import through a module the bundler folded away, never through a route's", () => {
+    const { report, record } = shellBuild(
+      {
+        "index.mjs": ["src/index.ts", "src/lib/check.ts"],
+        "shared.mjs": ["react-hook-form/dist/form.mjs"],
+        "route.mjs": ["src/pages/form.tsx"],
+      },
+      {
+        "src/index.ts": ["src/lib/check.ts", "src/pages/form.tsx"],
+        // Through a route's module: not how the shell reached it.
+        "src/pages/form.tsx": ["react-hook-form/dist/form.mjs"],
+        // Through a package index no chunk holds: how it did.
+        "src/lib/check.ts": ["react-hook-form/index.mjs"],
+        "react-hook-form/index.mjs": ["react-hook-form/dist/form.mjs"],
+      }
+    );
+    const [breach] = shellModuleBreaches(report, record, keptOut, []);
+    expect(breach.measured).toContain(
+      "src/index.ts -> src/lib/check.ts -> react-hook-form/index.mjs -> react-hook-form/dist/form.mjs"
+    );
+  });
+
+  it("lets the shell hold a module it is allowed to, under a kept-out start", () => {
+    const { report, record } = shellBuild({
+      "index.mjs": ["src/index.ts", "src/components/field-ui/constants.ts"],
+    });
+    expect(
+      shellModuleBreaches(report, record, keptOut, [
+        "src/components/field-ui/constants.ts",
+      ])
+    ).toEqual([]);
+  });
+
+  it("fails when the build left no record, since nothing could be said of the shell", () => {
+    const { report } = shellBuild({});
+    const [breach] = shellModuleBreaches(report, null, keptOut, []);
+    expect(breach.kind).toBe("shell-module");
+    expect(breach.budget).toContain("rebuild");
+  });
+
+  it("fails a record of another build, which names other chunks", () => {
+    const { report, record } = shellBuild({});
+    delete record.chunks["shared.mjs"];
+    const [breach] = shellModuleBreaches(report, record, keptOut, []);
+    expect(breach.budget).toContain("another build");
+  });
+});

@@ -22,6 +22,7 @@ export {
 export type { DocumentScopeKind } from "./lock-key";
 export type {
   AcquireDocumentLockOutcome,
+  DocumentLockChange,
   DocumentLockHolder,
   DocumentRef,
   RenewDocumentLockOutcome,

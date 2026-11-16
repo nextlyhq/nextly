@@ -16,10 +16,18 @@
  */
 import { ShortcutProvider } from "@nextlyhq/ui";
 import { renderToStaticMarkup } from "react-dom/server";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 
+import { PreviewedEntryProvider } from "./previewed-entry";
 import {
   clearBlocks,
   hasBlock,
@@ -30,6 +38,7 @@ import {
 
 import { keyHint } from "./key-hint";
 import { MOVE_KEYS } from "./keyboard-actions";
+import { LAYERS_DEPTH_PX } from "./layers-drop";
 import { LayersPanel } from "./layers-panel";
 import { useEditorState, type EditorState } from "./editor-state";
 
@@ -121,9 +130,13 @@ let editorRef: EditorState | null = null;
 function Host({
   document,
   keys = "bound",
+  regions,
+  componentTitle,
 }: {
   document: BlockDocument;
   keys?: "bound" | "disabled" | "absent";
+  regions?: React.ComponentProps<typeof LayersPanel>["regions"];
+  componentTitle?: React.ComponentProps<typeof LayersPanel>["componentTitle"];
 }): React.JSX.Element {
   const editor = useEditorState({ initialDocument: document });
   editorRef = editor;
@@ -134,7 +147,14 @@ function Host({
    * render without one. A harness that always supplied a provider could not
    * tell that apart from a panel that requires one.
    */
-  return <LayersPanel editor={editor} moveHints={keys === "bound"} />;
+  return (
+    <LayersPanel
+      editor={editor}
+      moveHints={keys === "bound"}
+      regions={regions}
+      componentTitle={componentTitle}
+    />
+  );
 }
 
 function renderPanel(
@@ -166,6 +186,53 @@ function rows(): string[] {
 }
 
 describe("LayersPanel", () => {
+  it("names a component placement by its component's title, and finds it by it", () => {
+    register();
+    render(
+      <Host
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              node("hero", "nextly/component-instance", {
+                props: { componentId: "cmp-hero" },
+              }),
+              node("other", "nextly/component-instance", {
+                props: { componentId: "cmp-gone" },
+              }),
+            ],
+          } as BlockDocument
+        }
+        componentTitle={id => (id === "cmp-hero" ? "Hero banner" : undefined)}
+      />
+    );
+
+    // Named, and marked as a component in words as well as by its mark, so the
+    // title is not mistaken for a block's own name. The fallback is already
+    // the word, so it carries no second one.
+    const label = (id: string) =>
+      window.document.querySelector(`[data-nx-layer="${id}"]`)?.textContent;
+    const tags = () =>
+      [...window.document.querySelectorAll(".nx-layer-row__tag")].map(
+        tag => tag.textContent
+      );
+    expect(label("hero")).toBe("Hero banner");
+    expect(label("other")).toBe("Component");
+    expect(tags()).toEqual(["component"]);
+    expect(
+      window.document.querySelectorAll(".nx-layer-row[data-component]")
+    ).toHaveLength(2);
+
+    React.act(() => {
+      fireEvent.change(screen.getByLabelText("Search layers"), {
+        target: { value: "hero" },
+      });
+    });
+    expect(screen.getAllByRole("treeitem")).toHaveLength(1);
+    expect(label("hero")).toBe("Hero banner");
+  });
+
   it("says how to reorder, in the keys this platform carries", () => {
     /*
      * The bindings already work while this panel holds focus — the tree takes
@@ -512,6 +579,105 @@ describe("LayersPanel", () => {
     );
   });
 
+  it("names a block marked never to be quoted as not quoted in search, to a screen reader too", () => {
+    render(
+      <Host
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              node("a", "core/section", {
+                name: "Pricing table",
+                nosnippet: true,
+              }),
+              node("b", "core/section", { name: "Questions" }),
+            ],
+          } as BlockDocument
+        }
+      />
+    );
+    register();
+
+    expect(
+      screen.getByRole("treeitem", {
+        name: /Pricing table.*not quoted in search/i,
+      })
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("treeitem", { name: /Questions/ }).textContent
+    ).not.toMatch(/quoted/i);
+  });
+
+  it("names a row inside a locked block as locked BY that block, quieter than its own", () => {
+    // A lock covers everything inside the block: each row inside says so in
+    // words, naming the block to unlock, and only the locked block's own row
+    // carries the stronger badge.
+    render(
+      <Host
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              node("hero", "core/heading", {
+                locked: true,
+                name: "Hero",
+                slots: {
+                  children: [
+                    node("inner", "core/heading", {
+                      slots: { children: [node("deep", "core/heading")] },
+                    }),
+                  ],
+                },
+              }),
+            ],
+          } as BlockDocument
+        }
+      />
+    );
+    register();
+    fireEvent.keyDown(screen.getAllByRole("treeitem")[0]!, { key: "*" });
+
+    const [hero, inner] = screen.getAllByRole("treeitem");
+    expect(hero?.querySelector('[data-lock="own"]')?.textContent).toBe(
+      "Locked"
+    );
+    expect(inner?.textContent).toContain("Locked by Hero");
+    expect(inner?.querySelector('[data-lock="own"]')).toBeNull();
+    expect(inner?.querySelector('[data-lock="inherited"]')?.textContent).toBe(
+      "Locked by Hero"
+    );
+  });
+
+  it("offers to open only the rows that hold something", () => {
+    // A row that opens onto nothing would show a twisty that does nothing,
+    // and announce itself as a closed branch to a screen reader.
+    renderPanel();
+    const row = (name: string) =>
+      screen
+        .getAllByRole("treeitem")
+        .find(element => element.textContent?.includes(name));
+    expect(row("Hero")?.getAttribute("aria-expanded")).toBe("false");
+    expect(row("Footnote")?.hasAttribute("aria-expanded")).toBe(false);
+  });
+
+  it("indents a level by exactly the distance a drag moves to nest one level", () => {
+    // The drop line is drawn at a depth by the tree's indent, and the pointer
+    // reaches that depth by the drag's step: two different numbers would put
+    // the line a level away from where the hand is.
+    renderPanel();
+    // Selecting the inner block opens the box, so both rows are drawn.
+    act(() => editorRef?.select("inner"));
+    const padding = (name: string): number => {
+      const row = screen
+        .getAllByRole("treeitem")
+        .find(element => element.textContent?.includes(name));
+      return Number.parseFloat(row?.style.paddingLeft ?? "NaN");
+    };
+    expect(padding("Title") - padding("Hero")).toBe(LAYERS_DEPTH_PX);
+  });
+
   it("points an empty document at the panel that fills it", () => {
     renderPanel({
       formatVersion: 1,
@@ -522,5 +688,248 @@ describe("LayersPanel", () => {
     expect(screen.getByText(/no blocks yet/i).className).toContain(
       "nx-layers-panel__note"
     );
+  });
+});
+
+describe("the regions of the page's Layout in Layers", () => {
+  function renderWithRegions() {
+    register();
+    const header = vi.fn();
+    const footer = vi.fn();
+    render(
+      <Host
+        document={nestedDocument()}
+        regions={[
+          {
+            area: "footer",
+            name: "Footer",
+            origin: "from Layout Main",
+            onActivate: footer,
+          },
+          {
+            area: "header",
+            name: "Header",
+            origin: "from Layout Main",
+            onActivate: header,
+          },
+        ]}
+      />
+    );
+    return { header, footer };
+  }
+
+  it("shows the header above the page's blocks and the footer below them", () => {
+    renderWithRegions();
+    const header = screen.getByRole("button", {
+      name: "Header, from Layout Main, locked",
+    });
+    const footer = screen.getByRole("button", {
+      name: "Footer, from Layout Main, locked",
+    });
+    const tree = screen.getByRole("tree");
+    expect(
+      header.compareDocumentPosition(tree) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      footer.compareDocumentPosition(tree) & Node.DOCUMENT_POSITION_PRECEDING
+    ).toBeTruthy();
+  });
+
+  it("keeps them out of the tree: not rows that select, drag or lock", () => {
+    renderWithRegions();
+    expect(rows().some(row => row.includes("from Layout"))).toBe(false);
+    const header = screen.getByRole("button", { name: /^Header/ });
+    expect(header.closest("[role=tree]")).toBeNull();
+    expect(header.getAttribute("draggable")).not.toBe("true");
+  });
+
+  it("shows the region on the canvas when activated", () => {
+    const { header } = renderWithRegions();
+    fireEvent.click(screen.getByRole("button", { name: /^Header/ }));
+    expect(header).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a collection list's regions in Layers", () => {
+  function listDocument(): BlockDocument {
+    return {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        node("list", "core/collection-loop", {
+          slots: {
+            children: [node("card", "core/heading", { name: "Post card" })],
+            empty: [],
+          },
+        }),
+      ],
+    } as BlockDocument;
+  }
+
+  function registerList(): void {
+    register();
+    if (hasBlock("core/collection-loop")) return;
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "core/collection-loop",
+          editor: { label: "Collection list", icon: "loop" },
+          slots: { children: {}, empty: {} },
+        },
+      ] as never,
+      { source: "layers-panel-test-list" }
+    );
+  }
+
+  it("draws Each entry and When empty between the list and its blocks", async () => {
+    registerList();
+    render(<Host document={listDocument()} />);
+    fireEvent.click(screen.getByRole("treeitem", { name: /Collection list/ }));
+    fireEvent.keyDown(
+      screen.getByRole("treeitem", { name: /Collection list/ }),
+      {
+        key: "ArrowRight",
+      }
+    );
+    await waitFor(() =>
+      expect(rows()).toEqual([
+        "Collection list",
+        "Each entry1 block",
+        "When emptyempty",
+      ])
+    );
+  });
+
+  it("selects the list and shows its empty state when When empty is chosen", async () => {
+    registerList();
+    render(<Host document={listDocument()} />);
+    const list = screen.getByRole("treeitem", { name: /Collection list/ });
+    fireEvent.click(list);
+    fireEvent.keyDown(list, { key: "ArrowRight" });
+    const empty = await screen.findByRole("treeitem", { name: /When empty/ });
+    fireEvent.click(empty);
+    await waitFor(() => {
+      expect(editorRef?.selectedId).toBe("list");
+      expect([...(editorRef?.listsShowingEmpty ?? [])]).toEqual(["list"]);
+    });
+    fireEvent.click(screen.getByRole("treeitem", { name: /Each entry/ }));
+    await waitFor(() => expect(editorRef?.listsShowingEmpty?.size).toBe(0));
+  });
+
+  it("opens the region a selection made elsewhere sits in", async () => {
+    registerList();
+    render(<Host document={listDocument()} />);
+    act(() => editorRef?.select("card"));
+    expect(
+      await screen.findByRole("treeitem", { name: /Post card/ })
+    ).toBeDefined();
+  });
+
+  it("shows a child's region on the canvas when the child is chosen in Layers", async () => {
+    registerList();
+    const document = listDocument();
+    const list = document.nodes[0];
+    if (list?.slots !== undefined) {
+      list.slots.empty = [node("none", "core/heading", { name: "No posts" })];
+    }
+    render(<Host document={document} />);
+    // Both regions opened, as a selection made elsewhere opens them.
+    act(() => editorRef?.select("none"));
+    act(() => editorRef?.select("card"));
+    fireEvent.click(await screen.findByRole("treeitem", { name: /No posts/ }));
+    await waitFor(() => {
+      expect(editorRef?.selectedId).toBe("none");
+      expect([...(editorRef?.listsShowingEmpty ?? [])]).toEqual(["list"]);
+    });
+    fireEvent.click(screen.getByRole("treeitem", { name: /Post card/ }));
+    await waitFor(() => {
+      expect(editorRef?.selectedId).toBe("card");
+      expect(editorRef?.listsShowingEmpty?.size).toBe(0);
+    });
+  });
+
+  it("selects a block whose id reads like a region row, not the list", async () => {
+    registerList();
+    // Any non-empty string is a valid id in a stored document, this one too.
+    const tricky = "nx-slot:empty:list";
+    const document = listDocument();
+    const list = document.nodes[0];
+    if (list?.slots !== undefined) {
+      list.slots.empty = [node(tricky, "core/heading", { name: "Tricky" })];
+    }
+    render(<Host document={document} />);
+    act(() => editorRef?.select(tricky));
+    act(() => editorRef?.select("card"));
+    fireEvent.click(await screen.findByRole("treeitem", { name: /Tricky/ }));
+    await waitFor(() => expect(editorRef?.selectedId).toBe(tricky));
+    // The region row is its own row still, and still selects the list.
+    fireEvent.click(screen.getByRole("treeitem", { name: /When empty/ }));
+    await waitFor(() => expect(editorRef?.selectedId).toBe("list"));
+  });
+});
+
+describe("an Entry content block's row", () => {
+  const collection = (fields: readonly { name: string; label: string }[]) => ({
+    slug: "posts",
+    singular: "post",
+    plural: "Posts",
+    blocksFields: fields,
+    fieldLabel: (name: string) =>
+      fields.find(each => each.name === name)?.label ?? `Words for ${name}`,
+    entryHref: (id: string) => `/admin/collections/posts/${id}`,
+  });
+
+  function template(): BlockDocument {
+    return {
+      formatVersion: 1,
+      kind: "template",
+      nodes: [
+        node("ec", "core/entry-content", { props: { field: "body" } }),
+        node("loose", "core/heading", { name: "Footnote" }),
+      ],
+    } as BlockDocument;
+  }
+
+  it("names the field it draws, and no problem while the collection has it", () => {
+    register();
+    render(
+      <PreviewedEntryProvider
+        value={{ kind: "none", reason: "empty" }}
+        collection={collection([{ name: "body", label: "Body" }])}
+      >
+        <Host document={template()} />
+      </PreviewedEntryProvider>
+    );
+    const row = window.document.querySelector(
+      '[data-nx-layer="ec"]'
+    )?.parentElement;
+    expect(row?.querySelector(".nx-layer-row__tag")?.textContent).toBe("Body");
+    expect(row?.querySelector("[data-problem]")).toBeNull();
+    // The control: the heading's row names no field.
+    const other = window.document.querySelector(
+      '[data-nx-layer="loose"]'
+    )?.parentElement;
+    expect(other?.querySelector(".nx-layer-row__tag")).toBeNull();
+  });
+
+  it("marks a problem, in words, where the collection no longer has the field", () => {
+    register();
+    render(
+      <PreviewedEntryProvider
+        value={{ kind: "none", reason: "empty" }}
+        collection={collection([{ name: "sidebar", label: "Sidebar" }])}
+      >
+        <Host document={template()} />
+      </PreviewedEntryProvider>
+    );
+    const row = window.document.querySelector(
+      '[data-nx-layer="ec"]'
+    )?.parentElement;
+    const problem = row?.querySelector("[data-problem]");
+    expect(problem?.textContent).toBe(
+      "Words for body no longer exists in this collection"
+    );
+    expect(row?.querySelector(".nx-layer-row__tag")).toBeNull();
   });
 });

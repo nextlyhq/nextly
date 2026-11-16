@@ -1,0 +1,138 @@
+{
+  "entities": {
+    "collections": {
+      "notes": {
+        "settings": {
+          "admin": {
+            "pagination": {
+              "defaultLimit": 10,
+              "limits": [10, 25, 50, 100]
+            }
+          },
+          "fields": [
+            {
+              "label": "Title",
+              "localized": false,
+              "name": "title",
+              "required": true,
+              "type": "text"
+            },
+            {
+              "name": "slug",
+              "required": true,
+              "type": "text",
+              "unique": true
+            },
+            {
+              "name": "value",
+              "required": true,
+              "type": "text"
+            }
+          ],
+          "labels": {
+            "plural": "Notes",
+            "singular": "Notes"
+          },
+          "slug": "notes",
+          "timestamps": true
+        },
+        "source": "code"
+      }
+    },
+    "fieldGroups": {},
+    "singles": {}
+  },
+  "migrationHash": "abbf4c2193b5b1bbd1b57b295237d548b716dc5ece92c73e755f39793497f43f",
+  "snapshot": {
+    "tables": [
+      {
+        "columns": [
+          {
+            "name": "_changed_at",
+            "nullable": true,
+            "type": "timestamp"
+          },
+          {
+            "name": "_changed_by_id",
+            "nullable": true,
+            "type": "text"
+          },
+          {
+            "name": "_changed_by_kind",
+            "nullable": true,
+            "type": "varchar"
+          },
+          {
+            "name": "_changed_by_principal_kind",
+            "nullable": true,
+            "type": "varchar"
+          },
+          {
+            "default": "1",
+            "name": "_revision",
+            "nullable": false,
+            "type": "int4"
+          },
+          {
+            "default": "now()",
+            "name": "created_at",
+            "nullable": true,
+            "type": "timestamp"
+          },
+          {
+            "name": "created_by",
+            "nullable": true,
+            "type": "text"
+          },
+          {
+            "name": "id",
+            "nullable": false,
+            "primaryKey": true,
+            "type": "text"
+          },
+          {
+            "name": "slug",
+            "nullable": false,
+            "type": "text"
+          },
+          {
+            "name": "title",
+            "nullable": false,
+            "type": "text"
+          },
+          {
+            "default": "now()",
+            "name": "updated_at",
+            "nullable": true,
+            "type": "timestamp"
+          },
+          {
+            "name": "value",
+            "nullable": false,
+            "type": "text"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": ["created_at"],
+            "name": "idx_dc_notes_created_at",
+            "unique": false
+          },
+          {
+            "columns": ["created_by"],
+            "name": "idx_dc_notes_created_by",
+            "unique": false
+          },
+          {
+            "columns": ["slug"],
+            "name": "idx_dc_notes_slug",
+            "unique": true
+          }
+        ],
+        "name": "dc_notes"
+      }
+    ]
+  },
+  "translatedFieldsRecorded": true,
+  "version": 1
+}

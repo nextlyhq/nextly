@@ -33,7 +33,7 @@ import type {
 } from "@admin/services/emailTemplateApi";
 
 import type { UndoNote } from "./OwnershipNotices";
-import { ownerName } from "./workbench-model";
+import { useOwnerName } from "./useOwnerName";
 import type { WorkbenchMenu } from "./WorkbenchHeader";
 
 export type WorkbenchDialog =
@@ -65,12 +65,13 @@ function versionOf(template: EmailTemplateRecord): EmailTemplateVersion {
 
 /** Why Delete isn't offered for an email the server won't delete. */
 function deleteRefusalFor(
-  template: EmailTemplateRecord | undefined
+  template: EmailTemplateRecord | undefined,
+  nameOwner: (record: EmailTemplateRecord) => string
 ): string | undefined {
   if (!template || isDeletable(template)) return undefined;
   return template.owner.kind === "site"
     ? "The default layout can't be deleted"
-    : `Can't delete: ${ownerName(template)}'s email`;
+    : `Can't delete: ${nameOwner(template)}'s email`;
 }
 
 /** The note offering to undo the last reset or applied review. */
@@ -94,11 +95,14 @@ function menuFor({
   hasPermission,
   startAct,
   setDialog,
+  nameOwner,
 }: {
   template: EmailTemplateRecord | undefined;
   hasPermission: (slug: string) => boolean;
   startAct: (act: SavedAct) => void;
   setDialog: (dialog: WorkbenchDialog) => void;
+  /** Names the email's owner as the admin names it. */
+  nameOwner: (record: EmailTemplateRecord) => string;
 }): WorkbenchMenu {
   if (!template) return {};
   const canDuplicate =
@@ -117,7 +121,7 @@ function menuFor({
     onReview: template.ownerChanged ? () => startAct("review") : undefined,
     onReset: template.overridden ? () => startAct("reset") : undefined,
     onDelete: canDelete ? () => setDialog("delete") : undefined,
-    deleteRefusal: deleteRefusalFor(template),
+    deleteRefusal: deleteRefusalFor(template, nameOwner),
   };
 }
 
@@ -156,12 +160,13 @@ export function useOwnershipActs({
   // The act the unsaved-edits question was asked for, to continue to.
   const [afterUnsaved, setAfterUnsaved] = useState<SavedAct>("review");
   const { hasPermission } = useCurrentUserPermissions();
+  const nameOwner = useOwnerName();
   const override = useOverrideEmailTemplate();
   const reset = useResetEmailTemplate();
   const undoUpdate = useUndoOwnerUpdate();
   const update = useUpdateEmailTemplate();
   const remove = useDeleteEmailTemplate();
-  const owner = template ? ownerName(template) : "";
+  const owner = template ? nameOwner(template) : "";
 
   const confirmOverride = (): void => {
     if (!template) return;
@@ -248,7 +253,7 @@ export function useOwnershipActs({
     dialog,
     setDialog,
     owner,
-    menu: menuFor({ template, hasPermission, startAct, setDialog }),
+    menu: menuFor({ template, hasPermission, startAct, setDialog, nameOwner }),
     undoNote: undoNoteFor(
       undoable,
       owner,

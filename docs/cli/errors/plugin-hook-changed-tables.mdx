@@ -1,0 +1,24 @@
+---
+title: PLUGIN_HOOK_CHANGED_TABLES
+description: "A plugin's `onUninstall` dropped, renamed or replaced a table its DOWN migrations were to drop."
+---
+
+## Cause
+
+A plugin's `onUninstall` dropped, renamed or replaced a table its DOWN migrations were to drop.
+
+A full uninstall reads each table's identity before and after the plugin's `onUninstall`. A table its DOWN migrations were to drop was dropped, renamed or replaced while the hook ran, so none of the DOWN migrations ran: they would have dropped whatever now holds that name, while the original and its rows survived under another.
+
+## Fix
+
+- Put the original table back under its name, in place of any table created there.
+- Then run `nextly plugins uninstall <name>` again.
+
+## Example
+
+```text
+✗ seo_redirects was dropped, renamed or replaced while @acme/seo's onUninstall ran (its boot included), so none of its DOWN migrations, which were to drop it, was run.
+  Why:  A full uninstall reads each table's identity before and after the plugin's `onUninstall`, so its DOWN migrations never drop a table the hook put in place of the one they were judged against.
+  Next: Put the original table back under its name, in place of any table created there, then run the uninstall again.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-hook-changed-tables  (PLUGIN_HOOK_CHANGED_TABLES)
+```

@@ -1,0 +1,24 @@
+---
+title: RESOLVE_SCHEMA_MISMATCH
+description: "`nextly migrate:resolve --applied` found the live schema does not match the migration's snapshot."
+---
+
+## Cause
+
+`nextly migrate:resolve --applied` found the live schema does not match the migration's snapshot.
+
+`nextly migrate:resolve --applied` records a file only once the database stands where the file leaves it, compared against the file's snapshot. Some table or column differs, so recording it would leave the ledger saying something the database does not hold.
+
+## Fix
+
+- Bring the database to the state the migration produces, for example by finishing its statements by hand, then run the command again.
+- If you are sure the difference does not matter, re-run with `--skip-verify`.
+
+## Example
+
+```text
+✗ Live schema does not match the target snapshot for 20261020_120000_add_posts.sql.
+  Why:  `--applied` records a file only once the database stands where the file leaves it, and some table or column differs from its snapshot.
+  Next: Resolve the drift or re-run with --skip-verify.
+  Docs: https://nextlyhq.com/docs/cli/errors/resolve-schema-mismatch  (RESOLVE_SCHEMA_MISMATCH)
+```

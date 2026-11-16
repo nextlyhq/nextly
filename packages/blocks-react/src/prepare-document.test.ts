@@ -1,12 +1,19 @@
 /**
  * The passes every reader shares, and the order they run in.
  */
-import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
-import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
-import { describe, expect, it } from "vitest";
+import {
+  DOCUMENT_FORMAT_VERSION,
+  SITE_SETTING_FIELD_TYPES,
+} from "@nextlyhq/blocks-engine";
+import type {
+  BlockDocument,
+  BlockNode,
+  SiteSettingName,
+} from "@nextlyhq/blocks-engine";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import { coreBlocks } from "./blocks";
-import { defineBlock } from "./context";
+import { defineBlock, type BlocksSiteSettings } from "./context";
 import { prepareDocumentForRead } from "./prepare-document";
 import { createBlockResolver } from "./resolver";
 
@@ -231,5 +238,20 @@ describe("prepareDocumentForRead", () => {
         "footer",
       ]);
     });
+  });
+});
+
+describe("the site settings a page may bind", () => {
+  it("are the settings the renderer hands a page, no more and no fewer", () => {
+    // The save judges a site binding by the engine's table, and the page
+    // reads `BlocksSiteSettings`: a setting in one and not the other would be
+    // refused where it renders, or saved where it falls back.
+    expectTypeOf<SiteSettingName>().toEqualTypeOf<keyof BlocksSiteSettings>();
+    expect(Object.keys(SITE_SETTING_FIELD_TYPES).sort()).toEqual([
+      "applicationName",
+      "logoUrl",
+      "siteUrl",
+      "timezone",
+    ]);
   });
 });

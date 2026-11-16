@@ -5,6 +5,7 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type QueryClient,
   type UseQueryOptions,
   type UseMutationResult,
   type UseQueryResult,
@@ -26,6 +27,10 @@ import type {
   UpdateUserPayload,
 } from "@admin/types/user";
 
+import {
+  invalidateCurrentUserAccess,
+  withAccessRefresh,
+} from "../current-user-access";
 import { useBulkMutation } from "../useBulkMutation";
 import { currentUserKey } from "../useDashboardUser";
 
@@ -249,6 +254,20 @@ export function useCreateUser(): UseMutationResult<
 }
 
 /**
+ * Whether one of `userIds` may be the signed-in user, whose access only an
+ * edit of themselves can change: an edit of someone else asks nothing again,
+ * since invalidating would cost the admin its answer if that refresh failed.
+ * Unknown until the signed-in user has loaded, and then it may be.
+ */
+function mayBeSignedIn(
+  queryClient: QueryClient,
+  userIds: readonly string[]
+): boolean {
+  const signedIn = queryClient.getQueryData<{ id: string }>(currentUserKey);
+  return signedIn === undefined || userIds.includes(signedIn.id);
+}
+
+/**
  * useUpdateUser - Mutation hook for updating an existing user
  *
  * Updates a user's information and automatically invalidates relevant caches.
@@ -348,6 +367,14 @@ export function useUpdateUser(): UseMutationResult<
       // Rollback to previous value on error
       if (context?.previousUser) {
         queryClient.setQueryData(["users", userId], context.previousUser);
+      }
+    },
+    // What the signed-in user may do is asked again only once the change has
+    // landed: a failed edit changed nothing, and invalidating would leave the
+    // admin without an answer if that refresh then failed too.
+    onSuccess: (_, { userId }) => {
+      if (mayBeSignedIn(queryClient, [userId])) {
+        invalidateCurrentUserAccess(queryClient);
       }
     },
     onSettled: (_, __, { userId }) => {
@@ -506,18 +533,22 @@ export function useBulkUpdateUsers(): UseBulkMutationReturn<
 > {
   const queryClient = useQueryClient();
 
-  return useBulkMutation<string, void, Error, Partial<User>>({
-    mutationFn: async (userId, updates) => {
-      await updateUser(userId, updates);
-    },
-    defaultOptions: {
-      onComplete: () => {
-        // Invalidate users cache after all mutations complete
-        // This triggers a refetch of the users list to show updated data
-        void queryClient.invalidateQueries({ queryKey: ["users"] });
+  return withAccessRefresh(
+    useBulkMutation<string, void, Error, Partial<User>>({
+      mutationFn: async (userId, updates) => {
+        await updateUser(userId, updates);
       },
-    },
-  });
+      defaultOptions: {
+        onComplete: () => {
+          // Invalidate users cache after all mutations complete
+          // This triggers a refetch of the users list to show updated data
+          void queryClient.invalidateQueries({ queryKey: ["users"] });
+        },
+      },
+    }),
+    queryClient,
+    result => mayBeSignedIn(queryClient, result.succeededIds)
+  );
 }
 
 /**
@@ -751,19 +782,23 @@ export function useBulkAssignRole(): UseBulkMutationReturn<
 > {
   const queryClient = useQueryClient();
 
-  return useBulkMutation<string, void, Error, { roleId: string }>({
-    mutationFn: async (userId, context) => {
-      // Update user with new role (replaces existing roles)
-      // Use UpdateUserPayload which accepts roles as objects with id property
-      await updateUser(userId, {
-        roles: [{ id: context.roleId }],
-      } satisfies UpdateUserPayload);
-    },
-    defaultOptions: {
-      onComplete: () => {
-        // Invalidate users cache after all mutations complete
-        void queryClient.invalidateQueries({ queryKey: ["users"] });
+  return withAccessRefresh(
+    useBulkMutation<string, void, Error, { roleId: string }>({
+      mutationFn: async (userId, context) => {
+        // Update user with new role (replaces existing roles)
+        // Use UpdateUserPayload which accepts roles as objects with id property
+        await updateUser(userId, {
+          roles: [{ id: context.roleId }],
+        } satisfies UpdateUserPayload);
       },
-    },
-  });
+      defaultOptions: {
+        onComplete: () => {
+          // Invalidate users cache after all mutations complete
+          void queryClient.invalidateQueries({ queryKey: ["users"] });
+        },
+      },
+    }),
+    queryClient,
+    result => mayBeSignedIn(queryClient, result.succeededIds)
+  );
 }

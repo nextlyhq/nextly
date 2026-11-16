@@ -110,6 +110,36 @@ describe("validation issues reach the caller in either envelope shape", () => {
     ]);
   });
 
+  it("keeps the language each issue is in", () => {
+    // A publish of several languages refused in each names, per issue, the language it is in:
+    // two issues on one field would otherwise be indistinguishable.
+    const err = errorFromServiceEnvelope({
+      statusCode: 400,
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          {
+            path: "title",
+            code: "CUSTOM",
+            message: "Not allowed.",
+            locale: "es",
+          },
+          {
+            path: "title",
+            code: "CUSTOM",
+            message: "Not allowed.",
+            locale: "fr",
+          },
+        ],
+      },
+    });
+
+    expect((err.publicData as { errors: unknown[] }).errors).toEqual([
+      { path: "title", code: "CUSTOM", message: "Not allowed.", locale: "es" },
+      { path: "title", code: "CUSTOM", message: "Not allowed.", locale: "fr" },
+    ]);
+  });
+
   it("prefers the envelope's own errors when a write path lifted them", () => {
     // The write path normalises the legacy `{field}` key on the way out, so its
     // array is the more canonical of the two when both are present.
@@ -225,5 +255,33 @@ describe("a typed 409 is not flattened into a generic conflict", () => {
     // The mirror: without a code, telling the user to refresh is the safer
     // answer than implying the write was invalid.
     expect(errorFromServiceEnvelope({ statusCode: 409 }).code).toBe("CONFLICT");
+  });
+});
+
+describe("a write that committed before it failed", () => {
+  it("says the change was saved, never that the database is not migrated", () => {
+    // ENTITY_NOT_MIGRATED asks for `nextly migrate` and the request again;
+    // after a commit, sending it again makes the change a second time.
+    const failure = NextlyError.notMigrated({
+      reason: "column",
+      kind: "collection",
+      slug: "posts",
+      table: "dc_posts",
+      field: "subtitle",
+    });
+    const answer = errorFromServiceEnvelope({
+      ...errorEnvelopeFields(failure),
+      committed: true,
+    });
+    expect(answer.code).toBe("INTERNAL_ERROR");
+    expect(answer.publicMessage).toBe(
+      "The change was saved, but the request could not be completed."
+    );
+    // Before any commit, it is answered as it is.
+    expect(
+      errorFromServiceEnvelope({
+        ...errorEnvelopeFields(failure),
+      }).code
+    ).toBe("ENTITY_NOT_MIGRATED");
   });
 });

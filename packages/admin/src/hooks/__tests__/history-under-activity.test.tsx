@@ -1,0 +1,114 @@
+/**
+ * Next.js keeps a visited route mounted but hidden under Cache Components,
+ * through React's Activity: hiding a page runs its effects' cleanups, and
+ * showing it runs its effects again. The admin patches `history` twice, the
+ * router for the whole admin and the unsaved-changes guard over it while a form
+ * is dirty. A hidden admin must leave the browser's own `history` methods to
+ * the page showing in its place, however often it is hidden and shown again.
+ *
+ * Driven through the real hooks inside React's own Activity, so a cleanup that
+ * puts back the wrong method fails here, not only in a browser with Cache
+ * Components on.
+ */
+import { render } from "@testing-library/react";
+import { Activity } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import {
+  entryBehindIsAdmin,
+  forgetEntryBehind,
+} from "@admin/lib/admin-history";
+
+import { useRouter } from "../useRouter";
+import { useUnsavedChanges } from "../useUnsavedChanges";
+
+vi.mock("../useHydration", () => ({ useHydration: () => true }));
+
+// The browser's own methods live on the prototype; a patch is an own property
+// of `window.history`, and putting the browser's back assigns the prototype's.
+const { pushState, replaceState } = History.prototype;
+
+function Form({ dirty }: { dirty: boolean }) {
+  useUnsavedChanges({ isDirty: dirty });
+  return null;
+}
+
+function Admin({ dirty }: { dirty: boolean }) {
+  useRouter();
+  return <Form dirty={dirty} />;
+}
+
+function page(mode: "visible" | "hidden", dirty: boolean) {
+  return (
+    <Activity mode={mode}>
+      <Admin dirty={dirty} />
+    </Activity>
+  );
+}
+
+/** Whether a move now records the page left, as the router's patch does. */
+function routerPatched(): boolean {
+  forgetEntryBehind();
+  window.history.pushState(null, "", "/admin/collections/tags");
+  const recorded = entryBehindIsAdmin() === true;
+  window.history.replaceState(null, "", "/admin/collections/posts/1");
+  return recorded;
+}
+
+/** Whether a move away from the edited entry is held, as the guard's patch does. */
+function guardHolds(): boolean {
+  window.history.pushState(null, "", "/admin/collections/posts/2");
+  return window.location.pathname === "/admin/collections/posts/1";
+}
+
+function expectBrowserHistory() {
+  expect(window.history.pushState).toBe(pushState);
+  expect(window.history.replaceState).toBe(replaceState);
+}
+
+afterEach(() => {
+  window.history.pushState = pushState;
+  window.history.replaceState = replaceState;
+  window.history.replaceState(null, "", "/");
+});
+
+describe("the admin's history patches under Activity", () => {
+  it("are installed while shown, gone while hidden, and back when shown again", () => {
+    window.history.replaceState(null, "", "/admin/collections/posts/1");
+    const { rerender, unmount } = render(page("visible", false));
+    const routerPatch = window.history.pushState;
+    expect(routerPatch).not.toBe(pushState);
+    expect(routerPatched()).toBe(true);
+
+    // The guard patches over the router's patch, as when the reader edits.
+    rerender(page("visible", true));
+    expect(window.history.pushState).not.toBe(routerPatch);
+    expect(window.history.pushState).not.toBe(pushState);
+    expect(guardHolds()).toBe(true);
+
+    for (let shown = 0; shown < 2; shown += 1) {
+      rerender(page("hidden", true));
+      expectBrowserHistory();
+      rerender(page("visible", true));
+      expect(window.history.pushState).not.toBe(pushState);
+      expect(guardHolds()).toBe(true);
+    }
+    unmount();
+    expectBrowserHistory();
+  });
+
+  it("leave the browser's methods while a page dirty from the start is hidden", () => {
+    window.history.replaceState(null, "", "/admin/collections/posts/1");
+    const { rerender, unmount } = render(page("visible", true));
+    expect(window.history.pushState).not.toBe(pushState);
+    expect(guardHolds()).toBe(true);
+    for (let shown = 0; shown < 2; shown += 1) {
+      rerender(page("hidden", true));
+      expectBrowserHistory();
+      rerender(page("visible", true));
+      expect(guardHolds()).toBe(true);
+    }
+    unmount();
+    expectBrowserHistory();
+  });
+});

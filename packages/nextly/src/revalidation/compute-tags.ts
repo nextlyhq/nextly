@@ -10,6 +10,7 @@
  *   nextly:{collection}:id:{id}:{locale}    one entry in one locale
  *   nextly:{collection}:slug:{slug}         one entry by slug (old AND new on rename)
  *   nextly:single:{slug}                    a singleton / global
+ *   nextly:@plugin:{plugin}:{part}          a plugin's own data (`ctx.cache`)
  */
 import { NextlyError } from "../errors/nextly-error";
 
@@ -27,7 +28,7 @@ const NAMESPACE = "nextly";
  * from an over-long slug would never match and its read could never be
  * invalidated. Bound the slug tag below this and fall back to a hash.
  */
-const MAX_TAG_LENGTH = 256;
+export const MAX_TAG_LENGTH = 256;
 
 /**
  * FNV-1a (32-bit), a small deterministic, dependency-free hash that runs the
@@ -97,6 +98,40 @@ export function singleTag(slug: string): string {
   return `${NAMESPACE}:single:${requireSegment(slug, "slug")}`;
 }
 
+/**
+ * The segment a plugin's tags sit under. It starts with `@`, which no slug can
+ * (slugs start with a lowercase letter), so no collection's or Single's tag can
+ * ever be spelled like a plugin's.
+ */
+const PLUGIN_SEGMENT = "@plugin";
+
+/**
+ * `nextly:@plugin:{plugin}:{part}`: a tag in one plugin's own namespace, for a
+ * read built from the plugin's data (its settings, its redirects) and for the
+ * expiry that clears it. Both sides call this, so they always agree.
+ *
+ * The plugin's name ends at the first `:`, so a name holding one is refused: it
+ * could spell another plugin's tag. A part may hold `:`, being inside the name's
+ * namespace. A part, and if need be the name, long enough to push the tag past
+ * Next's cap is hashed instead, as a long slug is.
+ */
+export function pluginCacheTag(plugin: string, part: string): string {
+  const name = requireSegment(plugin, "plugin");
+  if (name.includes(":")) {
+    throw NextlyError.internal({
+      logContext: { reason: "plugin-name-in-cache-tag-holds-separator", name },
+    });
+  }
+  const value = requireSegment(part, "part");
+  const prefix = `${NAMESPACE}:${PLUGIN_SEGMENT}:${name}:`;
+  const tag = `${prefix}${value}`;
+  if (tag.length <= MAX_TAG_LENGTH) return tag;
+  const hashedPart = `${prefix}h:${fnv1a(value)}`;
+  return hashedPart.length <= MAX_TAG_LENGTH
+    ? hashedPart
+    : `${NAMESPACE}:${PLUGIN_SEGMENT}:h:${fnv1a(name)}:h:${fnv1a(value)}`;
+}
+
 /** Order-preserving de-duplication, so a tag list never carries a repeat. */
 function unique(tags: string[]): string[] {
   return [...new Set(tags)];
@@ -164,6 +199,22 @@ export function computeEntryRevalidation(
 
   tags.push(...normalizeExtraTags(extraTags));
 
+  return { tags: unique(tags) };
+}
+
+/**
+ * The tags every read of a collection carries in common: its collection tag plus any configured
+ * extra tags. What a change that touches every entry at once (the site's languages, say)
+ * invalidates, since no single entry's id or slug narrows it.
+ */
+export function computeCollectionRevalidation(input: {
+  collection: string;
+  extraTags?: string[];
+}): RevalidationIntent {
+  const tags = [
+    collectionTag(input.collection),
+    ...normalizeExtraTags(input.extraTags),
+  ];
   return { tags: unique(tags) };
 }
 

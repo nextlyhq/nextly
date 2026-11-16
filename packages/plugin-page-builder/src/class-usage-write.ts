@@ -47,7 +47,7 @@ import {
 } from "./class-usage-reconcile";
 import { classUsageSubjectsFor } from "./class-usage-subjects";
 import type { ClassUsageVariant } from "./collections/class-usage-index";
-import type { UsageIndex, UsageSubject } from "./usage-index";
+import type { UsageIndex, UsageScope, UsageSubject } from "./usage-index";
 
 /**
  * How the caller obtains the document behind one subject.
@@ -67,7 +67,9 @@ export interface ClassUsageDocumentReader {
 
 /** The collection a write landed on, as the host configured it. */
 export interface WrittenCollectionConfig extends BlocksFieldsCollection {
-  /** The collection's slug, stored as the `entity` of every row. */
+  /** Whether `slug` names a collection or a Single; a collection when absent. */
+  scope?: UsageScope;
+  /** The collection's slug, or the Single's, stored as the `entity` of every row. */
   slug: string;
   /**
    * Whether this collection stores a working draft beside its published row.
@@ -149,7 +151,7 @@ export interface UsageTarget {
    * it, so a list of targets can still hold indexes whose rows differ.
    */
   forgetAbsent(args: {
-    scope: "collection";
+    scope: UsageScope;
     entity: string;
     field: string;
     locale: string;
@@ -225,6 +227,9 @@ export async function reconcileWrittenDocument(args: {
     fields,
     locales: args.locales,
     hasDrafts: args.collection.hasDrafts,
+    ...(args.collection.scope === undefined
+      ? {}
+      : { scope: args.collection.scope }),
   });
 
   // Resolved once, here, rather than per subject: the default allocates a

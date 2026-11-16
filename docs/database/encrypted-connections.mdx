@@ -1,0 +1,65 @@
+---
+title: Encrypted connections
+description: Check whether your site's connection to PostgreSQL or MySQL is encrypted, and turn on TLS when System health says it is not.
+---
+
+When your app talks to a database on another machine, everything it sends crosses the network: the database password, every query, and every row that comes back. Without TLS, anyone on the path between the two machines can read it. This page explains how Nextly checks the connection and how to encrypt it.
+
+## What System health checks
+
+The **Connection** line of the System health card (for super-admins, on the dashboard) reads whether the connection is encrypted from the connection itself, not from your configuration: the database session's own answer (on PostgreSQL its row in `pg_stat_ssl`, on MySQL its `Ssl_cipher` status) and whether your app's own connection negotiated TLS. SQLite is a file on the same machine, so there is nothing to encrypt and the line is not shown.
+
+| The line says                    | What it means                                                                                                                                                                  | Counted as         |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ |
+| **Encrypted**                    | The connection uses TLS.                                                                                                                                                       | Nothing to do      |
+| **Not encrypted**, with **Risk** | Production, a database on another machine, and no TLS. It is also listed in Needs your attention.                                                                              | A problem          |
+| **Not encrypted**                | No TLS, but the database is on the same machine (`localhost`, `127.0.0.1`, a local socket), or the app is not running in production.                                           | Shown, not counted |
+| **Couldn't check**               | The database would not say, or the read failed. It is never treated as encrypted. In production with a database on another machine, it is also listed in Needs your attention. | Something to check |
+
+"Production" means `NODE_ENV=production`. Whether the database is on the same machine is judged from the host the app connects to. The host never leaves the server and is never shown.
+
+### Connection poolers
+
+Behind a connection pooler or proxy (PgBouncer, or the poolers that Neon, Supabase and other hosted providers run), the database session belongs to the pooler. Its `pg_stat_ssl` row or `Ssl_cipher` describes the pooler's own connection to the database, not your app's connection to the pooler. So once the session has answered, System health judges by your app's own connection, the leg your traffic leaves on: **Encrypted** when it negotiated TLS, even if the pooler reaches the database without it inside the provider's network, and **Not encrypted** when it did not, even if the pooler's connection to the database is encrypted.
+
+## Turn on TLS for PostgreSQL
+
+Managed providers (Neon, Supabase, AWS RDS, Cloud SQL, Railway and others) support TLS out of the box. Ask for it in the connection string:
+
+```bash title=".env"
+DATABASE_URL=postgres://user:password@db.example.com:5432/app?sslmode=verify-full
+```
+
+`verify-full` encrypts the connection and checks the server's certificate and host name. If your provider gives you a CA certificate, pass it through the adapter's `ssl` option instead:
+
+```typescript
+import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
+
+const adapter = createPostgresAdapter({
+  url: process.env.DATABASE_URL!,
+  ssl: { rejectUnauthorized: true, ca: process.env.DATABASE_CA_CERT },
+});
+```
+
+For a server you run yourself, TLS must also be on in the server: set `ssl = on` in `postgresql.conf`, with `ssl_cert_file` and `ssl_key_file` pointing at the server's certificate and key, then restart PostgreSQL. To refuse unencrypted connections from other machines, use `hostssl` instead of `host` for those lines in `pg_hba.conf`. See [SSL / TLS](/docs/database/postgres#ssl--tls) for every adapter option.
+
+## Turn on TLS for MySQL
+
+MySQL 8 servers offer TLS by default, but the app uses it only when asked. Set the adapter's `ssl` option:
+
+```typescript
+import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
+
+const adapter = createMySqlAdapter({
+  url: process.env.DATABASE_URL!,
+  ssl: { rejectUnauthorized: true, ca: process.env.DATABASE_CA_CERT },
+});
+```
+
+To make the server refuse unencrypted connections, set `require_secure_transport = ON` in its configuration. See [SSL / TLS](/docs/database/mysql#ssl--tls) for every adapter option.
+
+## Check the result
+
+Restart the app and open the dashboard as a super-admin. The Connection line should say **Encrypted**, and the item in Needs your attention goes away the next time the dashboard loads.
+
+If the line still says **Couldn't check**, the database user may not be allowed to read its own session's status. On PostgreSQL, any user can read their own row in `pg_stat_ssl`; on MySQL, any user can read `SHOW SESSION STATUS`. A proxy that answers for the database (some serverless drivers do) may not support either; in that case, confirm with your provider that connections are encrypted.

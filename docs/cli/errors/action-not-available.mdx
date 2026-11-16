@@ -1,0 +1,24 @@
+---
+title: ACTION_NOT_AVAILABLE
+description: "A plugin's declared action was asked of an entry its rule does not hold for, or in a collection it is not offered on, so its route's handler did not run."
+---
+
+## Cause
+
+A plugin's declared action was asked of an entry its rule does not hold for, or in a collection it is not offered on, so its route's handler did not run.
+
+A route that one of a plugin's declared actions runs checks the action's `visibleWhen` on every entry the request names, as the caller reads it, and that each entry is in a collection the action is offered on. A field the caller may not read is missing from what they read, so a rule that needs it does not hold. A bulk request is refused whole when any entry fails. The answer is a generic 403, which never says which rule or field.
+
+## Fix
+
+- Run the action on an entry the admin offers it on: it appears in an entry's row menu only where its rule holds.
+- If it should be offered there, change the action's `visibleWhen` or `collections` in the plugin's `contributes.admin.contributions`.
+
+## Example
+
+```text
+✗ This action isn't available for this entry.
+  Why:  An action runs only on the entries its plugin declared it for, judged on each entry as its caller reads it. Nothing was run.
+  Next: Run the action on an entry the admin offers it on.
+  Docs: https://nextlyhq.com/docs/cli/errors/action-not-available  (ACTION_NOT_AVAILABLE)
+```

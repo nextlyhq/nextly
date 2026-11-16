@@ -21,7 +21,7 @@ vi.mock("../../auth/handlers/deps-bridge", () => ({
     counts: away.store,
   }),
 }));
-vi.mock("../../di/register", () => ({
+vi.mock("../../di/service-access", () => ({
   getService: () => ({ rateLimit: { enabled: true } }),
 }));
 vi.mock("../../utils/proxy-trust", () => ({

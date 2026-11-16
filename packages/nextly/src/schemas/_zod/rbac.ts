@@ -23,6 +23,9 @@ export const SYSTEM_RESOURCES = [
   "settings",
   "email-providers",
   "email-templates",
+  // Email that was queued and sent: managing it is cancelling a queued email,
+  // and a plugin may ask it before sending one again.
+  "email-deliveries",
   "api-keys",
   "webhooks",
   // NOT "releases". Registering a system resource RESERVES its name, and
@@ -78,6 +81,14 @@ export const NEWLY_RESERVED_SLUG_NOTES: ReadonlyMap<string, string> = new Map([
     "This name became a reserved system resource when the background job runner gained its trigger. " +
       "An installation that already has a collection or Single with this slug must rename it: " +
       "the manage-background-jobs permission is seeded under this name, so a content entity " +
+      "sharing it would have its own permissions treated as system-owned and preset roles " +
+      "would silently lose access to it.",
+  ],
+  [
+    "email-deliveries",
+    "This name became a reserved system resource when queued email could be managed. " +
+      "An installation that already has a collection or Single with this slug must rename it: " +
+      "the manage-email-deliveries permission is seeded under this name, so a content entity " +
       "sharing it would have its own permissions treated as system-owned and preset roles " +
       "would silently lose access to it.",
   ],
@@ -189,6 +200,18 @@ export const RoleSchema = z.object({
     .optional(),
   level: z.number().int().min(0, "Level must be non-negative").default(0),
   isSystem: z.boolean().default(false),
+  /**
+   * Whether the role may be given to a user or an API key, or built on by
+   * another role: false for the built-in Public role, as the roles API sends
+   * it. Optional, so a role read from a source without it still parses; it
+   * is never filled in as `true`.
+   */
+  assignable: z.boolean().optional(),
+  /**
+   * Which built-in role it is, where it is one: the Public role or
+   * super-admin, as the roles API sends it. Absent on every other role.
+   */
+  builtIn: z.enum(["public", "super-admin"]).optional(),
   createdAt: z.date().optional(),
   updatedAt: z.date().optional(),
 });

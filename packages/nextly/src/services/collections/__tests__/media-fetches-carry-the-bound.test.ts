@@ -1,11 +1,12 @@
 /**
  * Every direct read of the media table must carry the trust bound.
  *
- * There are three, in two services, and they do not share a path: the
- * collection batch expansion, the collection single-entry expansion, and the
- * Single read's upload expansion. Each one fetches by id straight from the
- * media table, so nothing applied to the relationship fetches reaches any of
- * them, and each carries the bound or does not, independently.
+ * There is one in each of two services, and they do not share a path: the
+ * collection relationship service's upload expansion, which the batch and
+ * single-entry expansions both go through, and the Single read's upload
+ * expansion. Each fetches by id straight from the media table, so nothing
+ * applied to the relationship fetches reaches it, and each carries the bound
+ * or does not, independently.
  *
  * Asserted on the source rather than by rendering, for the reason a behavioural
  * test cannot cover it: a fetch missing the bound returns exactly the same row
@@ -42,15 +43,12 @@ function mediaFetches(file: string): { called: number; bound: number } {
 }
 
 describe("every media fetch carries the trust bound", () => {
-  it("is exercised — the services do read media by id", () => {
+  it.each(MEDIA_READERS)("is exercised — %s does read media by id", file => {
     // Without this, the assertion below passes against zero matches: a rename
     // of the fetch would silently turn this file into a guard that checks
-    // nothing and reports success.
-    const total = MEDIA_READERS.reduce(
-      (sum, file) => sum + mediaFetches(file).called,
-      0
-    );
-    expect(total).toBeGreaterThanOrEqual(3);
+    // nothing and reports success. Asked of each reader, so one that stops
+    // matching cannot hide behind the other's count.
+    expect(mediaFetches(file).called).toBeGreaterThanOrEqual(1);
   });
 
   it.each(MEDIA_READERS)("binds every media fetch in %s", file => {

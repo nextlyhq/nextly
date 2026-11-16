@@ -17,10 +17,12 @@ import type { PluginDefinition } from "../plugins/plugin-context";
 // graph six times — measured at 10.07s against vitest's 10s default, which is
 // a timeout waiting for a loaded CI machine rather than a real failure.
 const servicesRegistered = vi.fn(() => true);
-vi.mock("../di", () => ({
+vi.mock("../di/register", () => ({
   registerServices: vi.fn(),
-  isServicesRegistered: () => servicesRegistered(),
   shutdownServices: vi.fn(),
+}));
+vi.mock("../di", () => ({
+  isServicesRegistered: () => servicesRegistered(),
   getService: () => undefined,
 }));
 vi.mock("../auth/handlers/deps-bridge", () => ({

@@ -57,10 +57,7 @@ const getCachedNextly = vi.hoisted(() =>
 vi.mock("../../init", () => ({ getCachedNextly }));
 
 import { COOKIE_NAMES } from "../../auth/cookies/cookie-config";
-import {
-  signUnmarkedPendingToken,
-  signUnmarkedPendingTokenWithoutMarker,
-} from "../../auth/jwt/__tests__/unmarked-tokens";
+import { signUnmarkedPendingToken } from "../../auth/jwt/__tests__/unmarked-tokens";
 import { mintPendingToken } from "../../auth/pipeline/pending-token";
 import { GET } from "../auth-state";
 
@@ -96,9 +93,12 @@ describe("GET /api/auth/state and pending tokens minted before tokens named thei
   });
 
   it("answers 'not authenticated' for one, before reading any account", async () => {
-    // Such a token has no header `typ`, which the verifier still lets through
-    // for tokens already in circulation, so its `typ` claim is the only thing
-    // that keeps it from reporting a signed-in state here.
+    // Such a token has no header `typ`. Since the release that made the
+    // header required, the verifier refuses it before its claim is read, and
+    // this endpoint answers 401 without reading any account. The control
+    // beside this test while unmarked tokens were still accepted — the same
+    // shape without the pending claim reporting a signed-in state — went with
+    // that allowance, as its comment said it would.
     const pending = await signUnmarkedPendingToken("u1", SECRET);
 
     const res = await GET(withAccessCookie(pending));
@@ -107,23 +107,5 @@ describe("GET /api/auth/state and pending tokens minted before tokens named thei
     const body = (await res.json()) as { error?: { code?: string } };
     expect(body.error?.code).toBe("AUTH_REQUIRED");
     expect(getCachedNextly).not.toHaveBeenCalled();
-  });
-
-  it("reports a signed-in state for the same unmarked shape without the pending claim", async () => {
-    // The control that makes the refusal above mean something: the same
-    // token, missing only the pending claim, is answered as a session, so the
-    // refusal comes from that claim rather than from the cookie, the
-    // signature or the absent header. It holds only while unmarked tokens are
-    // accepted, and goes when that allowance ends.
-    const unmarked = await signUnmarkedPendingTokenWithoutMarker("u1", SECRET);
-
-    const res = await GET(withAccessCookie(unmarked));
-
-    expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({
-      authenticated: true,
-      user: { id: "u1" },
-    });
-    expect(getCachedNextly).toHaveBeenCalledTimes(1);
   });
 });

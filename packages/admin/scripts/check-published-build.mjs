@@ -333,7 +333,8 @@ function hasComponent(value) {
 }
 
 function routeOf(node) {
-  const isRoute = isAssignment(node) && node.computed && hasComponent(node.value);
+  const isRoute =
+    isAssignment(node) && node.computed && hasComponent(node.value);
   return isRoute ? builderName(node.key) : null;
 }
 
@@ -470,9 +471,9 @@ export async function checkPublishedBuild(packageDir) {
  * `pnpm pack` applies the manifest's `files`, as `pnpm publish` does, so a
  * file the export map names and `files` leaves out is missing here too.
  */
-function packInto(directory) {
+export function packInto(directory, packageRoot = PACKAGE_ROOT) {
   execFileSync("pnpm", ["pack", "--pack-destination", directory], {
-    cwd: PACKAGE_ROOT,
+    cwd: packageRoot,
     stdio: ["ignore", "ignore", "inherit"],
   });
   const tarball = readdirSync(directory).find(name => name.endsWith(".tgz"));
@@ -481,7 +482,8 @@ function packInto(directory) {
   return join(directory, "package");
 }
 
-function option(argv, name) {
+/** The value given after a command-line option, or null. */
+export function option(argv, name) {
   const at = argv.indexOf(name);
   return at === -1 ? null : (argv[at + 1] ?? null);
 }

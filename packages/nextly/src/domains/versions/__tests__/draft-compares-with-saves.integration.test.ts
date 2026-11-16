@@ -32,6 +32,10 @@ import {
 } from "../../../plugins/test-nextly";
 import { seedLiveAuthor } from "../../releases/__tests__/helpers/live-author";
 import { VersionsRepository } from "../versions-repository";
+import {
+  STORAGE_MODES,
+  type StorageMode,
+} from "../../../plugins/__tests__/helpers/dialect-matrix";
 
 let current: TestNextly | undefined;
 
@@ -40,9 +44,10 @@ afterEach(async () => {
   current = undefined;
 });
 
-async function boot(dialect: TestDialect) {
+async function boot(dialect: TestDialect, storage: StorageMode) {
   current = await createTestNextly({
     dialect,
+    perLanguageStorage: storage.perLanguageStorage,
     localization: { locales: ["en", "es"], defaultLocale: "en" },
     fieldGroups: [
       defineFieldGroup({ slug: "hero", fields: [text({ name: "heading" })] }),
@@ -84,11 +89,20 @@ async function versionsOf(t: TestNextly, entryId: string) {
     }));
 }
 
-describe.each(getConfiguredTestDialects())(
-  "a held draft without languages, compared (integration, %s)",
-  dialect => {
+// Both storage layouts: where translatable values live must not change what this answers.
+describe.each(
+  STORAGE_MODES.flatMap(storage =>
+    getConfiguredTestDialects().map(dialect => ({
+      dialect,
+      storage,
+      mode: storage.name,
+    }))
+  )
+)(
+  "a held draft without languages, compared (integration, $dialect, $mode)",
+  ({ dialect, storage }) => {
     it("is tagged as other saves are, and compares with an earlier save", async () => {
-      const { t, reader } = await boot(dialect);
+      const { t, reader } = await boot(dialect, storage);
       const created = await t.nextly.create({
         collection: "notes",
         data: { title: "live", hero: { heading: "h1" }, status: "published" },
@@ -98,7 +112,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "notes",
         id,
-        data: { hero: { heading: "h2" } },
+        data: { hero: { heading: "h2" }, _overwrite: true },
       });
 
       const versions = await versionsOf(t, id);
@@ -121,7 +135,7 @@ describe.each(getConfiguredTestDialects())(
     }, 120_000);
 
     it("is tagged with the language it was saved in, as other saves are", async () => {
-      const { t } = await boot(dialect);
+      const { t } = await boot(dialect, storage);
       const created = await t.nextly.create({
         collection: "notes",
         locale: "es",
@@ -134,7 +148,7 @@ describe.each(getConfiguredTestDialects())(
         collection: "notes",
         id,
         locale: "es",
-        data: { hero: { heading: "h2" } },
+        data: { hero: { heading: "h2" }, _overwrite: true },
       });
 
       const versions = await versionsOf(t, id);
@@ -145,7 +159,7 @@ describe.each(getConfiguredTestDialects())(
     }, 120_000);
 
     it("compares a version stored untagged with a default-language one", async () => {
-      const { t, reader } = await boot(dialect);
+      const { t, reader } = await boot(dialect, storage);
       const created = await t.nextly.create({
         collection: "notes",
         data: { title: "live", hero: { heading: "h1" }, status: "published" },

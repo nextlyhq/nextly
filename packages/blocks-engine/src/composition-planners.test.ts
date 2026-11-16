@@ -29,6 +29,7 @@ import { COMPONENT_INSTANCE_TYPE, DOCUMENT_FORMAT_VERSION } from "./document";
 import type { BlockDocument, BlockNode, ComponentDocument } from "./document";
 import { applyOps } from "./ops";
 import type { BuilderOp } from "./ops";
+import { resolveComponentInstances } from "./resolve-instances";
 import { DEFAULT_LIMITS, MAX_ENVELOPE_ENTRIES } from "./limits";
 import type { DocumentLimits } from "./limits";
 import { componentEnvelopeIssues } from "./validation";
@@ -1031,6 +1032,60 @@ describe("converting a run into an instance", () => {
     expect(() => applyOps(doc, [{ kind: "remove", id: "a" }])).toThrow();
   });
 
+  it("refuses a run inside a locked block, which the remove would take out of it", () => {
+    // The lock covers the subtree: the run itself is unlocked, but removing it
+    // changes what its locked container protects, and the apply refuses that.
+    const doc = page([
+      node("section", { locked: true }, { children: [node("a"), node("b")] }),
+    ]);
+
+    expect(
+      planConvertToComponent(
+        doc,
+        ["a"],
+        componentTarget,
+        "def-1",
+        {},
+        anyParent
+      ).problem
+    ).toBe("destination-locked");
+    expect(() => applyOps(doc, [{ kind: "remove", id: "a" }])).toThrow();
+  });
+
+  it("refuses a pattern put into a locked block, at any depth, as the apply would", () => {
+    const saved = {
+      id: "hero-pattern",
+      document: { ...page([node("p1")]), kind: "pattern" as const },
+    };
+    const doc = page([
+      node(
+        "section",
+        { locked: true },
+        { children: [node("column", {}, { children: [] })] }
+      ),
+      node("open", {}, { children: [] }),
+    ]);
+
+    for (const parentId of ["section", "column"]) {
+      const at = { parentId, slot: "children", index: 0 };
+      expect(planInsertPattern(doc, saved, at, anyParent).problem).toBe(
+        "destination-locked"
+      );
+      expect(() =>
+        applyOps(doc, [{ kind: "insert", node: node("p1"), at }])
+      ).toThrow();
+    }
+    // The control: the same pattern into an unlocked block is planned.
+    expect(
+      planInsertPattern(
+        doc,
+        saved,
+        { parentId: "open", slot: "children", index: 0 },
+        anyParent
+      ).problem
+    ).toBeUndefined();
+  });
+
   it("asks the nesting rule about the INSTANCE, not about what it replaces", () => {
     const instanceNeedsSection = {
       parentsOf: (type: string) =>
@@ -1192,6 +1247,160 @@ describe("a convert refuses everything its ops would meet", () => {
       ).problem
     ).toBe("duplicate-destination");
     expect(() => applyOps(doc, [{ kind: "remove", id: "a" }])).toThrow();
+  });
+});
+
+/** An instance of a component, as a page or a definition places it. */
+function placement(id: string, componentId: string): BlockNode {
+  return {
+    id,
+    type: COMPONENT_INSTANCE_TYPE,
+    version: 1,
+    props: { componentId },
+  };
+}
+
+/**
+ * `levels` components, each placing the next, with the outermost first: `c1`
+ * places `c2`, which places `c3`, and the last holds one plain block.
+ */
+function componentChain(levels: number): Map<string, BlockDocument> {
+  const chain = new Map<string, BlockDocument>();
+  for (let level = 1; level <= levels; level += 1) {
+    chain.set(`c${level}`, {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [
+        level === levels
+          ? node(`leaf-${level}`)
+          : placement(`inner-${level}`, `c${level + 1}`),
+      ],
+    });
+  }
+  return chain;
+}
+
+/** A map of definitions as the planner's lookup. */
+function lookupOf(definitions: Map<string, BlockDocument>) {
+  return {
+    has: (id: string) => definitions.has(id),
+    get: (id: string) => definitions.get(id),
+  };
+}
+
+/**
+ * The longest chain a page may place before its composition refuses it for
+ * depth, asked of the resolver rather than restated, so the tests follow the
+ * limit wherever it is set.
+ */
+function deepestChain(): number {
+  for (let levels = 1; levels < 20; levels += 1) {
+    const resolved = resolveComponentInstances(
+      page([placement("p", "c1")]),
+      lookupOf(componentChain(levels))
+    );
+    if (resolved.unresolved.some(entry => entry.reason === "composed-depth")) {
+      return levels - 1;
+    }
+  }
+  throw new Error("no chain depth was ever refused");
+}
+
+describe("a convert judges the composed depth of the page it leaves", () => {
+  it("refuses a run whose placements would end up one level too deep", () => {
+    const limit = deepestChain();
+    const chain = componentChain(limit);
+    const doc = page([node("before"), placement("p", "c1")]);
+
+    // Converting the placement wraps the whole chain in one more component.
+    const plan = planConvertToComponent(
+      doc,
+      ["p"],
+      componentTarget,
+      "def-new",
+      {},
+      anyParent,
+      DEFAULT_LIMITS,
+      lookupOf(chain)
+    );
+
+    expect(plan.problem).toBe("composed-depth");
+  });
+
+  it("accepts the same run one level shallower", () => {
+    const limit = deepestChain();
+    const doc = page([placement("p", "c1")]);
+
+    const plan = planConvertToComponent(
+      doc,
+      ["p"],
+      componentTarget,
+      "def-new",
+      {},
+      anyParent,
+      DEFAULT_LIMITS,
+      lookupOf(componentChain(limit - 1))
+    );
+
+    expect(plan.problem).toBeUndefined();
+    expect(pageOps(plan).at(-1)).toMatchObject({ kind: "insert" });
+  });
+
+  it("refuses a run that already holds a placement too deep, which the convert pushes further out", () => {
+    const limit = deepestChain();
+    // Already one level too deep before the convert: wrapping it moves the
+    // break one level out and the count of breaks stays the same.
+    const doc = page([node("before"), placement("p", "c1")]);
+
+    const plan = planConvertToComponent(
+      doc,
+      ["p"],
+      componentTarget,
+      "def-new",
+      {},
+      anyParent,
+      DEFAULT_LIMITS,
+      lookupOf(componentChain(limit + 1))
+    );
+
+    expect(plan.problem).toBe("composed-depth");
+  });
+
+  it("does not refuse a page for a break the convert did not make", () => {
+    const limit = deepestChain();
+    // One placement elsewhere is already too deep, and the run converted is a
+    // plain block: the page composes no worse than it did.
+    const doc = page([placement("too-deep", "c1"), node("plain")]);
+
+    const plan = planConvertToComponent(
+      doc,
+      ["plain"],
+      componentTarget,
+      "def-new",
+      {},
+      anyParent,
+      DEFAULT_LIMITS,
+      lookupOf(componentChain(limit + 1))
+    );
+
+    expect(plan.problem).toBeUndefined();
+  });
+
+  it("judges nothing it was given no definitions for", () => {
+    const limit = deepestChain();
+    const doc = page([placement("p", "c1")]);
+    expect(componentChain(limit).size).toBe(limit);
+
+    const plan = planConvertToComponent(
+      doc,
+      ["p"],
+      componentTarget,
+      "def-new",
+      {},
+      anyParent
+    );
+
+    expect(plan.problem).toBeUndefined();
   });
 });
 
@@ -2380,6 +2589,19 @@ describe("duplicating a component definition", () => {
     expect(planDuplicateComponent(broken, componentTarget).problem).toBe(
       "unusable-document"
     );
+  });
+
+  it("copies a variant that presets nothing, which the save only warns about", () => {
+    // Removing a field empties a variant whose only value it was. That is a
+    // warning at the definition's own save, so refusing to duplicate such a
+    // component would refuse a copy the original's gate accepts.
+    const source = definitionWith({
+      variants: { plain: { label: "Plain", overrides: {} } },
+    });
+
+    expect(definition(dup(source)).variants).toEqual({
+      plain: { label: "Plain", overrides: {} },
+    });
   });
 
   it("refuses a document that is not a component", () => {

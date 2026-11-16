@@ -4,6 +4,7 @@ import {
   Alert,
   AlertDescription,
   Button,
+  PageHeader,
   Skeleton,
   Spinner,
 } from "@nextlyhq/ui";
@@ -239,7 +240,7 @@ export default function CreateUserPage(): ReactElement {
   // Loading state: Fetching roles
   if (isLoadingRoles) {
     return (
-      <PageContainer width="form">
+      <PageContainer type="form">
         {/* Accessibility: Announce loading state to screen readers */}
         <div className="sr-only" role="status" aria-live="polite">
           Loading roles...
@@ -265,7 +266,7 @@ export default function CreateUserPage(): ReactElement {
   // Error state: Failed to fetch roles
   if (rolesError) {
     return (
-      <PageContainer width="form">
+      <PageContainer type="form">
         <Alert variant="destructive">
           <AlertDescription className="flex items-center justify-between">
             <span>
@@ -296,8 +297,8 @@ export default function CreateUserPage(): ReactElement {
   if (invite) {
     return (
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
-        <PageContainer width="form">
-          <div className="mb-6">
+        <PageContainer type="form">
+          <div className="mb-6 empty:hidden">
             <UserBreadcrumbs currentPage="create" />
           </div>
           <InviteLinkPanel
@@ -318,47 +319,43 @@ export default function CreateUserPage(): ReactElement {
   // Main render: Form loaded successfully
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer width="form">
-        <div className="mb-6">
+      <PageContainer type="form">
+        <div className="mb-6 empty:hidden">
           <UserBreadcrumbs currentPage="create" />
         </div>
 
         {/* Page Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight text-foreground">
-              Create New User
-            </h1>
-            {/* Muted foreground so this secondary subtitle meets contrast (a faint primary alpha did not). */}
-            <p className="text-sm font-normal text-muted-foreground mt-1">
-              Add a new user to the system with appropriate role and
-              permissions.
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <Link href={ROUTES.USERS}>
-              <Button type="button" variant="outline" disabled={isCreating}>
-                Cancel
-              </Button>
-            </Link>
-            <Button
-              type="submit"
-              form="create-user-form"
-              disabled={isCreating || !!rolesError}
-            >
-              {isCreating ? (
-                <>
-                  <Spinner size="md" className="mr-2" />
-                  Creating User...
-                </>
-              ) : rolesError ? (
-                "Cannot Create (Roles Failed)"
-              ) : (
-                "Create User"
-              )}
-            </Button>
-          </div>
-        </div>
+        <PageHeader
+          title="Create New User"
+          description="Add a new user to the system with appropriate role and permissions."
+          actions={
+            <>
+              <div className="flex items-center gap-3">
+                <Link href={ROUTES.USERS}>
+                  <Button type="button" variant="outline" disabled={isCreating}>
+                    Cancel
+                  </Button>
+                </Link>
+                <Button
+                  type="submit"
+                  form="create-user-form"
+                  disabled={isCreating || !!rolesError}
+                >
+                  {isCreating ? (
+                    <>
+                      <Spinner size="md" className="mr-2" />
+                      Creating User...
+                    </>
+                  ) : rolesError ? (
+                    "Cannot Create (Roles Failed)"
+                  ) : (
+                    "Create User"
+                  )}
+                </Button>
+              </div>
+            </>
+          }
+        />
 
         {/* Form Card */}
         <div className="bg-card  border border-border rounded-lg p-6 shadow-none">

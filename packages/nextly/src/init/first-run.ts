@@ -19,6 +19,12 @@
 // first query will surface real DB errors loudly, and `nextly db:sync`
 // remains the canonical recovery path.
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+
+import {
+  busyTableBounds,
+  type BusyTableBounds,
+} from "../domains/schema/busy-table/bounds";
 import {
   type ExtensionSchema,
   getActiveExtensionSchema,
@@ -29,6 +35,7 @@ import {
   emitDdl,
   tableConstraintOps,
 } from "../domains/schema/pipeline/ddl-emitter";
+import { tableExistsAtStart } from "../domains/schema/pipeline/diff/start-catalog-scope";
 import type {
   ForeignKeySpec,
   NextlySchemaSnapshot,
@@ -70,10 +77,22 @@ export interface EnsureFirstRunSetupDeps {
   getSchemaEventsDdl: (dialect: "postgresql" | "mysql" | "sqlite") => string[];
 }
 
+/** Run `work` holding the schema lock for the whole of it, and return what it returns. */
+export type HoldSchemaLock = <T>(work: () => Promise<T>) => Promise<T>;
+
 export interface EnsureFirstRunSetupArgs {
   adapter: AdapterLike;
   logger: LoggerLike;
   deps?: Partial<EnsureFirstRunSetupDeps>;
+  /**
+   * How a new database's setup is kept to one process at a time: {@link firstStartSchemaLock}
+   * for the adapter, or, for a test whose adapter is a stand-in, a pass-through.
+   *
+   * Required rather than defaulted, because the default would have to take the lock through an
+   * adapter this module only knows as {@link AdapterLike}; a caller that omitted it would get a
+   * setup that races every other process starting on the same new database.
+   */
+  holdSchemaLock: HoldSchemaLock;
   /**
    * The extension schema the caller just published, passed rather than read.
    *
@@ -96,6 +115,104 @@ export type EnsureFirstRunSetupResult =
   | { ranSetup: false; reason: "already_initialized" | "probe_failed" };
 
 const PROBE_TABLE = "nextly_schema_events";
+
+/**
+ * The refusal of a production start against a database `nextly migrate` has
+ * not set up, built in one place so its code and wording cannot drift.
+ *
+ * One message whatever the start found missing, the tables or the PostgreSQL
+ * schema they live in: either way the deploy skipped `nextly migrate`, and
+ * running it is what the operator does next.
+ */
+export function databaseNotSetUp(cause?: unknown): NextlyError {
+  return new NextlyError({
+    code: "NEXTLY_DATABASE_NOT_SET_UP",
+    publicMessage:
+      "The database has not been set up for Nextly, and a production start " +
+      "creates no table. Run `nextly migrate` against it, then start the app " +
+      "again.",
+    ...(cause instanceof Error ? { cause } : {}),
+  });
+}
+
+/**
+ * Refuse a production start against a database with no Nextly tables, the
+ * case `ensureFirstRunSetup` would otherwise set up.
+ *
+ * Asked of the table that start probes first, the migration ledger: every
+ * database `nextly migrate` or a start has set up holds it, and no other
+ * software creates it. Several cold starts against one empty database would
+ * race to create it without a lock, and a half-made schema serves nobody, so
+ * a production start that does not run the migrations itself creates nothing
+ * and says to run `nextly migrate`. Reading the probe is the only statement.
+ * In `next build`, `refuseUnmigratedDatabaseInBuild` answers instead, naming
+ * the build.
+ */
+export async function assertDatabaseSetUp(
+  adapter: Pick<AdapterLike, "tableExists"> &
+    Partial<Pick<AdapterLike, "getDrizzle">>
+): Promise<void> {
+  // At a production start, answered from its one reading of the catalog.
+  if (await tableExistsAtStart(adapter, PROBE_TABLE)) return;
+  throw databaseNotSetUp();
+}
+
+/**
+ * In `next build`, refuse a database with no Nextly tables.
+ *
+ * The build sets up nothing: it may point at a database other deployments
+ * share, and a database with no Nextly tables is one whose deploy skipped
+ * `nextly migrate`. Saying so names the fix, where creating the schema here
+ * would race every other worker of the build without the schema lock, and
+ * reading on would fail each page with a missing table instead. Asked of the
+ * table the first start probes for, so the two agree on what "set up" means.
+ */
+export async function refuseUnmigratedDatabaseInBuild(
+  adapter: Pick<DrizzleAdapter, "tableExists">
+): Promise<void> {
+  if (await adapter.tableExists(PROBE_TABLE)) return;
+  throw new NextlyError({
+    code: "NEXTLY_DATABASE_NOT_MIGRATED",
+    publicMessage:
+      "The database has no Nextly tables. Run `nextly migrate` before `next build`.",
+  });
+}
+
+/**
+ * The schema lock as a first start takes it: the one lock `migrate` and every schema change hold,
+ * waited for when another process holds it (about a minute, then the start reports the holder),
+ * and created when the database has no lock tables yet, which a new database never does.
+ *
+ * Not released on an interrupt: this runs inside a server, whose shutdown may let the work run on,
+ * and a lock left behind lapses within one lease.
+ */
+export function firstStartSchemaLock(
+  adapter: DrizzleAdapter,
+  logger: LoggerLike
+): HoldSchemaLock {
+  return async work => {
+    const { withSchemaLock } = await import(
+      "../domains/schema/pipeline/schema-lock"
+    );
+    const outcome = await withSchemaLock(
+      {
+        adapter,
+        command: "first start: core schema setup",
+        whenHeld: "wait",
+        releaseOnInterrupt: false,
+        logger: { warn: m => logger.warn(m), info: m => logger.info(m) },
+      },
+      () => work()
+    );
+    // `ran: false` is only ever a wait that `isSettled` ended, and none is passed here.
+    if (!outcome.ran) {
+      throw NextlyError.internal({
+        logContext: { reason: "first-start schema lock settled without work" },
+      });
+    }
+    return outcome.value;
+  };
+}
 
 /**
  * How long a startup diagnostic may take before boot proceeds without it.
@@ -441,22 +558,17 @@ function codeFirstKeysRefusal(
   });
 }
 
-/** The check itself; bounded by its caller. */
-async function runCoreSchemaChecks(
+/**
+ * Warns when the registry tables in `live` still hold rules in the retired
+ * `access_rules` column, which this release no longer enforces. The column's
+ * presence is what decides whether there is anything to count: asking a table
+ * that no longer has it would be the error this check exists to avoid causing.
+ */
+async function warnOfRetiredAccessRules(
   adapter: AdapterLike,
-  logger: LoggerLike
+  logger: LoggerLike,
+  live: NextlySchemaSnapshot
 ): Promise<void> {
-  const [{ introspectLiveSnapshot }, { getCoreSchema, getCoreTableNames }] =
-    await Promise.all([
-      import("../domains/schema/pipeline/diff/introspect-live"),
-      import("../schemas/index"),
-    ]);
-  const {
-    findCoreSchemaDrift,
-    findMissingCoreTables,
-    formatCoreSchemaDriftWarning,
-    formatMissingCoreTablesWarning,
-  } = await import("./core-schema-drift");
   const [
     {
       countRetiredAccessRules,
@@ -468,6 +580,64 @@ async function runCoreSchemaChecks(
     import("./retired-access-rules"),
     import("../domains/schema/pipeline/classifier/count-helpers"),
   ]);
+  const carrying = findRetiredAccessRulesColumns(live);
+  if (carrying.length === 0) return;
+  const found = await countRetiredAccessRules(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    carrying,
+    { countNulls, countRows }
+  );
+  if (found.length > 0) {
+    logger.warn(formatRetiredAccessRulesWarning(found));
+  }
+}
+
+/**
+ * The check itself; bounded by its caller.
+ *
+ * A production start compares nothing of the core schema with the database:
+ * `nextly migrate` brings the core tables up to date and names what it finds.
+ * It reads only the two registry tables, for the rules left in their retired
+ * `access_rules` column, which nothing else names and which look enforced
+ * while they are not. Every other report here is a development start's.
+ */
+async function runCoreSchemaChecks(
+  adapter: AdapterLike,
+  logger: LoggerLike
+): Promise<void> {
+  if (process.env.NODE_ENV !== "development") {
+    const [{ introspectLiveColumns }, { RETIRED_ACCESS_RULES_TABLES }] =
+      await Promise.all([
+        import("../domains/schema/pipeline/diff/introspect-live"),
+        import("./retired-access-rules"),
+      ]);
+    // Their columns alone: the warning asks only whether the column is there.
+    await warnOfRetiredAccessRules(
+      adapter,
+      logger,
+      await introspectLiveColumns(adapter.getDrizzle(), adapter.dialect, [
+        ...RETIRED_ACCESS_RULES_TABLES,
+      ])
+    );
+    return;
+  }
+  const [{ introspectLiveSnapshot }, { getCoreSchema, getCoreTableNames }] =
+    await Promise.all([
+      import("../domains/schema/pipeline/diff/introspect-live"),
+      // The core schema itself, not the public entry, which also loads
+      // PostgreSQL's tables for its re-exports.
+      import("../schemas/core-schema"),
+    ]);
+  const {
+    findCoreSchemaDrift,
+    findMissingCoreTables,
+    formatCoreSchemaDriftWarning,
+    formatMissingCoreTablesWarning,
+  } = await import("./core-schema-drift");
+  const { countRows } = await import(
+    "../domains/schema/pipeline/classifier/count-helpers"
+  );
 
   // 🔴 Both sides take the registry this database actually holds. Checking for
   // the legacy name on a migrated database misses the table that is really
@@ -501,21 +671,8 @@ async function runCoreSchemaChecks(
   }
 
   // The mirror case, read off the SAME snapshot: the two registry tables are
-  // core tables, so their columns are already in hand. The column's presence
-  // is what decides whether there is anything to count — asking a table that
-  // no longer has it would be the error this check exists to avoid causing.
-  const carrying = findRetiredAccessRulesColumns(live);
-  if (carrying.length > 0) {
-    const found = await countRetiredAccessRules(
-      adapter.getDrizzle(),
-      adapter.dialect,
-      carrying,
-      { countNulls, countRows }
-    );
-    if (found.length > 0) {
-      logger.warn(formatRetiredAccessRulesWarning(found));
-    }
-  }
+  // core tables, so their columns are already in hand.
+  await warnOfRetiredAccessRules(adapter, logger, live);
 
   // Asked of the database directly rather than read off the snapshot above:
   // these tables are no longer core, so `getCoreTableNames` does not name them
@@ -544,6 +701,27 @@ async function runCoreSchemaChecks(
       )
     );
   }
+
+  // The image sizes stored before Nextly stopped making them: the media
+  // table's `sizes` column and the `image_sizes` table, until the operator
+  // removes the size files and drops both with
+  // `nextly media remove-sizes --apply --drop`. Reporting only; a startup
+  // never removes a file or drops either. Presence only, with no count of the
+  // items: counting reads every row, which on a large library would outlast
+  // this check's bound and the notice would never be given. Each is named
+  // only where it is shown to be what image sizes left, as the drop decides.
+  const [{ readRetiredObjects }, { formatRetiredImageSizesNotice }] =
+    await Promise.all([
+      import("../domains/media/retired-image-sizes-store"),
+      import("../domains/media/retired-image-sizes"),
+    ]);
+  const retiredSizes = await readRetiredObjects(
+    adapter.getDrizzle(),
+    adapter.dialect
+  );
+  if (retiredSizes.column || retiredSizes.tableRows !== null) {
+    logger.warn(formatRetiredImageSizesNotice(retiredSizes));
+  }
 }
 
 export async function ensureFirstRunSetup(
@@ -557,7 +735,9 @@ export async function ensureFirstRunSetup(
   // will continue and downstream queries will surface the real issue.
   let probeExists: boolean;
   try {
-    probeExists = await adapter.tableExists(PROBE_TABLE);
+    // At a production start, answered from its one reading of the catalog, as
+    // the empty-database refusal before it was.
+    probeExists = await tableExistsAtStart(adapter, PROBE_TABLE);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn(
@@ -579,94 +759,19 @@ export async function ensureFirstRunSetup(
     return { ranSetup: false, reason: "already_initialized" };
   }
 
-  const start = Date.now();
-  logger.info("[nextly] Setting up database schema...");
-
+  // Under the schema lock, and asked again once it is held. Every process that starts on a new
+  // database finds the ledger missing — two instances deployed together, or an app starting beside
+  // `nextly migrate` — and the push `setUpNewDatabase` runs creates its tables with a plain `CREATE TABLE`. Without
+  // the lock the second process to reach a table fails on it, and two processes that each reached
+  // a different table first both stop part way, leaving the tables after that point to nobody. The
+  // lock is the one `migrate` holds, so a first start and a migrate run never build the core schema
+  // at the same time either; whichever waits finds it built.
   try {
-    const dialect = adapter.dialect;
-    // Extension tables join the FIRST-RUN push as well as the incremental one.
-    //
-    // This path does not go through `PushSchemaPipeline.apply`, which is where
-    // the extension merge otherwise happens — so on a fresh database a
-    // plugin's tables were compiled, validated, owned, and never created. The
-    // failure was `no such table` on the first query, with nothing between
-    // boot and that query reporting a problem.
-    //
-    // Merged here rather than taught to `getDialectTables`: that function
-    // answers "what are Nextly's own tables", which is a different question
-    // with a stable answer, and widening it would make every caller of it
-    // depend on plugin config.
-    const extensionSchema =
-      args.extensionSchema ?? getActiveExtensionSchema(dialect);
-    const staticTables = {
-      ...deps.getDialectTables(dialect),
-      ...(extensionSchema?.drizzle ?? {}),
-    };
-    const result = await deps.freshPushSchema(
-      dialect,
-      adapter.getDrizzle(),
-      staticTables
-    );
-
-    // Extension INDEXES, replayed from the spec.
-    //
-    // They cannot ride the push above: A3 keeps indexes off the Drizzle tables
-    // deliberately, because drizzle-kit would otherwise emit its own CREATE
-    // INDEX beside the replayed one and MySQL has no IF NOT EXISTS. That is
-    // right for the incremental path, where `add_index` is replayed
-    // separately — and it means a FRESH database got the tables and none of
-    // their indexes, so a declared unique index enforced nothing.
-    //
-    // Emitted through the pipeline's own emitter rather than by composing SQL
-    // here: the two would then disagree about quoting and about which indexes
-    // a dialect can build at all.
-    await createExtensionIndexes(
-      adapter,
-      dialect,
-      logger,
-      extensionSchema?.specs ?? []
-    );
-
-    // Extension CONSTRAINTS, replayed for the same reason as the indexes.
-    //
-    // `toDrizzleTable` leaves checks and foreign keys off on PostgreSQL and
-    // MySQL exactly as it leaves indexes off, so the push above created the
-    // tables and none of their integrity constraints — a declared check, a
-    // declared foreign key and the check that enforces `col.enum()` all
-    // enforced nothing on a fresh database. An installation that never runs
-    // dev push afterwards keeps that unconstrained schema forever.
-    //
-    // Not the keys to code-first tables: see `withoutKeysToCodeFirstTables`.
-    await createExtensionConstraints(
-      adapter,
-      dialect,
-      logger,
-      withoutKeysToCodeFirstTables(
-        extensionSchema?.specs ?? [],
-        extensionSchema?.codeFirstTables ?? new Set()
-      )
-    );
-
-    // `freshPushSchema` above already creates the ledger (it is in
-    // getDialectTables). Only bootstrap it out-of-band as a fallback if it is
-    // somehow still missing — re-running the raw DDL when it already exists
-    // would fail on MySQL, whose `CREATE INDEX` has no IF NOT EXISTS. Mirrors
-    // `migrate.ts`'s `ensureLedger` guard.
-    if (!(await adapter.tableExists(PROBE_TABLE))) {
-      for (const stmt of deps.getSchemaEventsDdl(dialect)) {
-        await adapter.executeQuery(stmt);
-      }
-    }
-
-    const durationMs = Date.now() - start;
-    logger.info(
-      `[nextly] Setup done in ${durationMs}ms (${result.statementsExecuted.length} statement(s)).`
-    );
-    return {
-      ranSetup: true,
-      statementsExecuted: result.statementsExecuted.length,
-      durationMs,
-    };
+    const setUp = await args.holdSchemaLock(async () => {
+      if (await adapter.tableExists(PROBE_TABLE)) return undefined;
+      return setUpNewDatabase(args, deps);
+    });
+    return setUp ?? { ranSetup: false, reason: "already_initialized" };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error(
@@ -674,6 +779,113 @@ export async function ensureFirstRunSetup(
     );
     return { ranSetup: false, reason: "probe_failed" };
   }
+}
+
+/**
+ * Create the core schema, and the extension tables beside it, on a database that has none. Run
+ * only while the schema lock is held; a failure is reported by the caller.
+ */
+async function setUpNewDatabase(
+  args: EnsureFirstRunSetupArgs,
+  deps: EnsureFirstRunSetupDeps
+): Promise<EnsureFirstRunSetupResult & { ranSetup: true }> {
+  const { adapter, logger } = args;
+  const start = Date.now();
+  logger.info("[nextly] Setting up database schema...");
+
+  const dialect = adapter.dialect;
+  // Extension tables join the FIRST-RUN push as well as the incremental one.
+  //
+  // This path does not go through `PushSchemaPipeline.apply`, which is where
+  // the extension merge otherwise happens — so on a fresh database a
+  // plugin's tables were compiled, validated, owned, and never created. The
+  // failure was `no such table` on the first query, with nothing between
+  // boot and that query reporting a problem.
+  //
+  // Merged here rather than taught to `getDialectTables`: that function
+  // answers "what are Nextly's own tables", which is a different question
+  // with a stable answer, and widening it would make every caller of it
+  // depend on plugin config.
+  const extensionSchema =
+    args.extensionSchema ?? getActiveExtensionSchema(dialect);
+  const staticTables = {
+    ...deps.getDialectTables(dialect),
+    ...(extensionSchema?.drizzle ?? {}),
+  };
+  const result = await deps.freshPushSchema(
+    dialect,
+    adapter.getDrizzle(),
+    staticTables
+  );
+
+  // Extension INDEXES, replayed from the spec.
+  //
+  // They cannot ride the push above: A3 keeps indexes off the Drizzle tables
+  // deliberately, because drizzle-kit would otherwise emit its own CREATE
+  // INDEX beside the replayed one and MySQL has no IF NOT EXISTS. That is
+  // right for the incremental path, where `add_index` is replayed
+  // separately — and it means a FRESH database got the tables and none of
+  // their indexes, so a declared unique index enforced nothing.
+  //
+  // Emitted through the pipeline's own emitter rather than by composing SQL
+  // here: the two would then disagree about quoting and about which indexes
+  // a dialect can build at all.
+  await createExtensionIndexes(
+    adapter,
+    dialect,
+    logger,
+    extensionSchema?.specs ?? []
+  );
+
+  // Extension CONSTRAINTS, replayed for the same reason as the indexes.
+  //
+  // `toDrizzleTable` leaves checks and foreign keys off on PostgreSQL and
+  // MySQL exactly as it leaves indexes off, so the push above created the
+  // tables and none of their integrity constraints — a declared check, a
+  // declared foreign key and the check that enforces `col.enum()` all
+  // enforced nothing on a fresh database. An installation that never runs
+  // dev push afterwards keeps that unconstrained schema forever.
+  //
+  // Not the keys to code-first tables: see `withoutKeysToCodeFirstTables`.
+  await createExtensionConstraints(
+    adapter,
+    dialect,
+    logger,
+    withoutKeysToCodeFirstTables(
+      extensionSchema?.specs ?? [],
+      extensionSchema?.codeFirstTables ?? new Set()
+    )
+  );
+
+  // `freshPushSchema` above already creates the ledger (it is in
+  // getDialectTables). Only bootstrap it out-of-band as a fallback if it is
+  // somehow still missing — re-running the raw DDL when it already exists
+  // would fail on MySQL, whose `CREATE INDEX` has no IF NOT EXISTS. Mirrors
+  // `migrate.ts`'s `ensureLedger` guard.
+  if (!(await adapter.tableExists(PROBE_TABLE))) {
+    for (const stmt of deps.getSchemaEventsDdl(dialect)) {
+      await adapter.executeQuery(stmt);
+    }
+  }
+
+  // A new database holds no content, so the record of where each media
+  // item is used is complete from the start; an existing site's becomes so
+  // once `nextly media reindex-usage` has read its content.
+  await markMediaUsageRecordedOnNewSite(
+    adapter,
+    staticTables.nextlyMeta,
+    logger
+  );
+
+  const durationMs = Date.now() - start;
+  logger.info(
+    `[nextly] Setup done in ${durationMs}ms (${result.statementsExecuted.length} statement(s)).`
+  );
+  return {
+    ranSetup: true,
+    statementsExecuted: result.statementsExecuted.length,
+    durationMs,
+  };
 }
 
 /**
@@ -701,15 +913,23 @@ export async function ensureFirstRunSetup(
  *
  * Failure-safe like first-run: a table that cannot be reconciled is reported,
  * and the plugin whose `init` needs it then fails with the query that names it.
+ * A busy-table bound out of range (`NEXTLY_LOCK_TIMEOUT`,
+ * `NEXTLY_LOCK_TIMEOUT_TOTAL`) is the exception: it throws `INVALID_INPUT`
+ * before any table is created, as every schema change refuses it.
  */
 export async function prepareExtensionTablesBeforeInit(args: {
-  adapter: AdapterLike;
+  /** The site's adapter: the additions run on one session of it (`runTableStatements`). */
+  adapter: DrizzleAdapter;
   logger: LoggerLike;
   extensionSchema: ExtensionSchema | null | undefined;
   deps?: Partial<Pick<EnsureFirstRunSetupDeps, "freshPushSchema">>;
 }): Promise<{ created: string[]; altered: string[] }> {
   const { adapter, logger, extensionSchema } = args;
   if (!extensionSchema) return { created: [], altered: [] };
+  // The bounds an existing table's additions wait for a busy table within, read before anything
+  // is created or changed: a value out of range refuses the pass here, with nothing changed,
+  // rather than becoming a warning once the missing tables have been made.
+  const bounds = busyTableBounds({ env: process.env });
 
   const missing: TableSpec[] = [];
   const existing: TableSpec[] = [];
@@ -734,7 +954,7 @@ export async function prepareExtensionTablesBeforeInit(args: {
     missing,
     args.deps?.freshPushSchema
   );
-  const altered = await addUndecidedChanges(adapter, logger, existing);
+  const altered = await addUndecidedChanges(adapter, logger, existing, bounds);
   return { created, altered };
 }
 
@@ -794,9 +1014,10 @@ const ADDITIVE_OP_TYPES = new Set<Operation["type"]>([
  * classification, so "needs no decision" has one answer.
  */
 async function addUndecidedChanges(
-  adapter: AdapterLike,
+  adapter: DrizzleAdapter,
   logger: LoggerLike,
-  existing: readonly TableSpec[]
+  existing: readonly TableSpec[],
+  bounds: BusyTableBounds
 ): Promise<string[]> {
   if (existing.length === 0) return [];
   const operations = await diffExistingTables(adapter, logger, existing);
@@ -813,7 +1034,9 @@ async function addUndecidedChanges(
       op => generateSQL(op, adapter.dialect)
     );
     if (statements.length === 0) continue;
-    if (await runTableStatements(adapter, logger, spec.name, statements)) {
+    if (
+      await runTableStatements(adapter, logger, spec.name, statements, bounds)
+    ) {
       altered.push(spec.name);
     }
   }
@@ -902,17 +1125,32 @@ function undecidedStatements(
   ];
 }
 
-/** Run one table's statements in order; reports and stops at a failure. */
+/**
+ * Run one table's statements in order; reports and stops at a failure. Each statement waits for
+ * a busy table in tries (`runStatementsInTries`), within `bounds` (`NEXTLY_LOCK_TIMEOUT` /
+ * `NEXTLY_LOCK_TIMEOUT_TOTAL`, read once by the caller before anything changed), each try's
+ * notice through the logger; one that stays busy is reported as any other failure is, naming the
+ * statements before it, which stay.
+ */
 async function runTableStatements(
-  adapter: AdapterLike,
+  adapter: DrizzleAdapter,
   logger: LoggerLike,
   table: string,
-  statements: readonly string[]
+  statements: readonly string[],
+  bounds: BusyTableBounds
 ): Promise<boolean> {
+  // Loaded here, not at the top: the tries' engine is needed only once a statement is sent, and
+  // every start imports this module whether or not it changes a table.
+  const { runStatementsInTries } = await import(
+    "../domains/schema/busy-table/run-on-session"
+  );
   try {
-    for (const statement of statements) {
-      await adapter.executeQuery(statement);
-    }
+    await runStatementsInTries(adapter, statements, {
+      change: `extension table ${table}`,
+      bounds,
+      notify: line => logger.warn(line),
+      appliedBefore: [],
+    });
     return true;
   } catch (error) {
     logger.warn(
@@ -945,4 +1183,39 @@ async function resolveDeps(
     getDialectTables: injected?.getDialectTables ?? getDialectTables,
     getSchemaEventsDdl: injected?.getSchemaEventsDdl ?? getSchemaEventsDdl,
   };
+}
+
+/**
+ * Mark the media usage record complete on a database setup has just created.
+ * Never fails the setup: a site whose mark is missing reads its record as
+ * still being built until `nextly media reindex-usage` runs, which marks it.
+ */
+async function markMediaUsageRecordedOnNewSite(
+  adapter: EnsureFirstRunSetupArgs["adapter"],
+  /** The `nextly_meta` table the push above created. */
+  metaTable: unknown,
+  logger: EnsureFirstRunSetupArgs["logger"]
+): Promise<void> {
+  if (metaTable === undefined) return;
+  try {
+    const { MEDIA_USAGE_RECORDED_KEY } = await import(
+      "../domains/media/usage/media-usage-store"
+    );
+    // Inserted, not upserted: the database was created just above, so no
+    // row for the key can be there yet.
+    const db = adapter.getDrizzle() as {
+      insert(table: unknown): {
+        values(row: Record<string, unknown>): Promise<unknown>;
+      };
+    };
+    await db.insert(metaTable).values({
+      key: MEDIA_USAGE_RECORDED_KEY,
+      value: JSON.stringify({ rebuiltAt: new Date().toISOString() }),
+      updatedAt: new Date(),
+    });
+  } catch (err) {
+    logger.warn(
+      `[nextly] Could not mark the media usage record complete (${err instanceof Error ? err.message : String(err)}). Run \`nextly media reindex-usage\` once.`
+    );
+  }
 }

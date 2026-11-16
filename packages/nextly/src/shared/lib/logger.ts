@@ -1,5 +1,5 @@
 // --- Transaction hooks registry ---
-import { maskEmailsWhenActive } from "../../observability/mask-emails";
+import { safeToLog } from "../../observability/mask-emails";
 import type { TransactionHooks } from "../../types/database";
 
 export type DbLogLevel = "debug" | "info" | "warn" | "error" | "silent";
@@ -74,13 +74,35 @@ function isEnabled(level: DbLogLevel): boolean {
   return req >= current;
 }
 
+/** The loggers `redacting` made. */
+const wrappers = new WeakSet<object>();
+
+/**
+ * `logger`, handed every event made safe first: an auth failure's message can
+ * name the address that was signing in, or quote the credential it refused.
+ * Applied to every auth logger, the default or an app's own, and to a
+ * database logger an app installs, so no caller can reach one without it.
+ */
+function redacting<Level, Event>(logger: {
+  log(level: Level, event: Event): void;
+}): { log(level: Level, event: Event): void } {
+  // A logger saved and put back is one already wrapped: wrapping it again
+  // would add one more copy of every event at each restore.
+  if (wrappers.has(logger)) return logger;
+  const wrapper = {
+    log: (level: Level, event: Event) => logger.log(level, safeToLog(event)),
+  };
+  wrappers.add(wrapper);
+  return wrapper;
+}
+
 class DefaultDbLogger implements DbLogger {
   log(level: DbLogLevel, event: DbLogEventBase): void {
     if (!isEnabled(level)) return;
     const timeIso = new Date().toISOString();
-    // Masked before it is written: a query error quotes the values it was
-    // given, an address among them.
-    const payload = maskEmailsWhenActive({ time: timeIso, level, ...event });
+    // Made safe before it is written: a query error quotes the values it was
+    // given, an address or a credential among them.
+    const payload = safeToLog({ time: timeIso, level, ...event });
 
     if (level === "error") console.error("[db]", JSON.stringify(payload));
     else if (level === "warn") console.warn("[db]", JSON.stringify(payload));
@@ -88,10 +110,14 @@ class DefaultDbLogger implements DbLogger {
   }
 }
 
-let activeLogger: DbLogger = new DefaultDbLogger();
+// The default redacts inside itself, after its enabled check, so a query
+// logged while database logging is off costs no walk; a logger an app
+// installs is handed every event made safe first (`redacting`).
+const defaultDbLogger: DbLogger = new DefaultDbLogger();
+let activeLogger: DbLogger = defaultDbLogger;
 
 export function setDbLogger(logger: DbLogger): void {
-  activeLogger = logger;
+  activeLogger = logger === defaultDbLogger ? logger : redacting(logger);
 }
 
 export function getDbLogger(): DbLogger {
@@ -188,19 +214,18 @@ export interface AuthLogger {
 class DefaultAuthLogger implements AuthLogger {
   log(level: AuthLogLevel, event: AuthLogEvent): void {
     const timeIso = new Date().toISOString();
-    // Masked before it is written: an auth failure's message can name the
-    // address that was signing in.
-    const payload = maskEmailsWhenActive({ time: timeIso, level, ...event });
+    // The event arrives already made safe (`redacting`).
+    const payload = { time: timeIso, level, ...event };
     if (level === "error") console.error("[auth]", JSON.stringify(payload));
     else if (level === "warn") console.warn("[auth]", JSON.stringify(payload));
     else console.log("[auth]", JSON.stringify(payload));
   }
 }
 
-let activeAuthLogger: AuthLogger = new DefaultAuthLogger();
+let activeAuthLogger: AuthLogger = redacting(new DefaultAuthLogger());
 
 export function setAuthLogger(logger: AuthLogger): void {
-  activeAuthLogger = logger;
+  activeAuthLogger = redacting(logger);
 }
 
 export function getAuthLogger(): AuthLogger {

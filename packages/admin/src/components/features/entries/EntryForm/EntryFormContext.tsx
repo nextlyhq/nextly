@@ -11,6 +11,7 @@
  * @since 1.0.0
  */
 
+import type { FieldConfig } from "nextly/config";
 import {
   createContext,
   useContext,
@@ -20,6 +21,8 @@ import {
 } from "react";
 
 import { useOptionalEntryLocale } from "../EntryLocaleContext";
+
+import type { EntryFieldsPresentation } from "./EntryFieldsPanel";
 
 // ============================================================================
 // Types
@@ -102,7 +105,47 @@ export interface EntryFormContextValue {
    * renderer, which passes four shared props to all fifteen input types and is
    * deliberately not where per-plugin wiring goes.
    */
-  renderEntryFields?: (excludePath: string) => ReactNode;
+  renderEntryFields?: (
+    excludePath: string,
+    presentation?: EntryFieldsPresentation
+  ) => ReactNode;
+
+  /**
+   * Opens the document's full-page preview, where the editor offers one.
+   *
+   * Read through {@link useDocumentPreview}. Absent wherever the editor's own
+   * Preview action is absent, for the same reasons.
+   */
+  preview?: DocumentPreview;
+
+  /**
+   * The document's own fields, as the form draws them.
+   *
+   * A field is rendered with its own declaration and its form path, and
+   * nothing about what holds it. Where it sits inside a repeater's row, its
+   * address — the row named by its saved id, never its position — is read
+   * from these (`useFieldAddress`). Absent where the surface does not say,
+   * and then no row's field has an address.
+   */
+  fields?: readonly FieldConfig[];
+
+  /**
+   * Whether the document keeps recovery points, as its editor read the
+   * autosave setting. Absent where the surface did not say.
+   */
+  keepsRecoveryPoints?: boolean;
+}
+
+/**
+ * The surrounding document's full-page preview, as the editor opens it.
+ *
+ * `open` is the editor's own handler, not a second way to build the address:
+ * the preview renders the saved row in the language being edited, and a copy
+ * resolving either of those itself would open a different page.
+ */
+export interface DocumentPreview {
+  /** Opens the preview; resolving its address may take a round trip. */
+  open: () => void | Promise<void>;
 }
 
 /**
@@ -216,7 +259,27 @@ export interface EntryFormContextProviderProps {
    * Renders the entry's other fields for a surface that covers the form,
    * excluding the field at the path it is given.
    */
-  renderEntryFields?: (excludePath: string) => ReactNode;
+  renderEntryFields?: (
+    excludePath: string,
+    presentation?: EntryFieldsPresentation
+  ) => ReactNode;
+
+  /**
+   * The editor's handler for its full-page preview. Pass it exactly where the
+   * editor offers its own Preview action, so a field offers one on the same
+   * terms.
+   */
+  openPreview?: () => void | Promise<void>;
+
+  /** The document's own fields, for a field's address inside a row. */
+  fields?: readonly FieldConfig[];
+
+  /**
+   * Whether the document keeps recovery points: its autosave setting, as the
+   * editor read it. Omitted where the surface does not know, and a recorder
+   * then records as it always has, leaving the server to refuse.
+   */
+  keepsRecoveryPoints?: boolean;
 
   /**
    * Child components.
@@ -258,6 +321,9 @@ export function EntryFormContextProvider({
   kind = "collection",
   documentStatus,
   renderEntryFields,
+  openPreview,
+  fields,
+  keepsRecoveryPoints,
   children,
 }: EntryFormContextProviderProps): JSX.Element {
   /*
@@ -287,6 +353,12 @@ export function EntryFormContextProvider({
        * to tell that from a renderer that draws nothing.
        */
       ...(renderEntryFields === undefined ? {} : { renderEntryFields }),
+      // Spread for the same reason: absent means the editor offers no preview.
+      ...(openPreview === undefined ? {} : { preview: { open: openPreview } }),
+      // Spread for the same reason: absent means the surface did not say.
+      ...(fields === undefined ? {} : { fields }),
+      // Spread for the same reason: absent means the editor did not say.
+      ...(keepsRecoveryPoints === undefined ? {} : { keepsRecoveryPoints }),
     }),
     [
       entryId,
@@ -296,6 +368,9 @@ export function EntryFormContextProvider({
       status,
       hasWorkingDraft,
       renderEntryFields,
+      openPreview,
+      fields,
+      keepsRecoveryPoints,
     ]
   );
 
@@ -401,6 +476,25 @@ export function useDocumentIdentity(): DocumentIdentity | null {
 }
 
 /**
+ * Whether a recorder inside the surrounding document may store recovery points.
+ *
+ * The editor reads the document's autosave setting once and hands the answer
+ * down, so a field that records its own state (the page builder's canvas)
+ * stays quiet exactly where the editor's own recording does. Without it, every
+ * editing session on a document with autosave off would send recordings the
+ * server refuses. Where nothing said, recording stays on: the server still
+ * enforces the setting.
+ *
+ * Kept off the plugin-facing {@link DocumentIdentity}, which names a document
+ * and nothing about how it is configured.
+ *
+ * @returns `false` only when the editor said the document keeps none
+ */
+export function useDocumentKeepsRecoveryPoints(): boolean {
+  return useContext(EntryFormContext)?.keepsRecoveryPoints !== false;
+}
+
+/**
  * How the surrounding document stands, or `null` when nothing knows.
  *
  * `null` rather than a throw, and `null` rather than a guessed default, for the
@@ -444,9 +538,34 @@ export function useDocumentIdentity(): DocumentIdentity | null {
  * rendered outside an entry form is a legitimate arrangement and gets null
  * rather than a thrown error.
  */
-export function useEntryFieldsPanel(excludePath: string): ReactNode | null {
+export function useEntryFieldsPanel(
+  excludePath: string,
+  options: {
+    /**
+     * How the fields are framed: the form's own sections (`"panel"`, the
+     * default), or flat for a dialog that frames them itself, where the slug
+     * reads as the page's address with the full address under it.
+     */
+    presentation?: EntryFieldsPresentation;
+  } = {}
+): ReactNode | null {
   const context = useOptionalEntryFormContext();
-  return context?.renderEntryFields?.(excludePath) ?? null;
+  return (
+    context?.renderEntryFields?.(excludePath, options.presentation) ?? null
+  );
+}
+
+/**
+ * The surrounding document's full-page preview, or `null` where the editor
+ * offers none.
+ *
+ * `null` covers every reason the editor's own Preview action is absent — no
+ * preview configured, an entry never saved, a reader who may not mint one —
+ * and outside a form. A field offering a preview of its own there would open
+ * nothing, or open a page the author may not see.
+ */
+export function useDocumentPreview(): DocumentPreview | null {
+  return useContext(EntryFormContext)?.preview ?? null;
 }
 
 export function useDocumentStatus(): DocumentStatus | null {

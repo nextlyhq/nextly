@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { act, render, screen, waitFor } from "@admin/__tests__/utils";
 import { Form } from "@admin/components/ui/form";
-import { RoleFormValuesType } from "@admin/hooks/useRoleForm";
+import type { RoleFormValuesType } from "@admin/hooks/useRoleForm";
 import { roleApi } from "@admin/services/roleApi";
 
 import { RoleInheritance } from "./RoleInheritance";
@@ -263,11 +263,12 @@ describe("RoleInheritance", () => {
       await userEvent.click(screen.getByRole("combobox"));
       await userEvent.click(screen.getByRole("option", { name: "Editor" }));
 
+      // The base's permissions are locked beside the role's own, not merged
+      // into them: saved as the role's own, they would outlast the base.
       await waitFor(() => {
-        expect(currentPermissions()).toEqual(
-          expect.arrayContaining(["extra1", "extra2", "extra3", "p1", "p2"])
-        );
+        expect(setLockedPermissionIds).toHaveBeenCalledWith(["p1", "p2"]);
       });
+      expect(currentPermissions()).toEqual(["extra1", "extra2", "extra3"]);
     });
 
     it("ignores a base whose request lands after a newer one", async () => {

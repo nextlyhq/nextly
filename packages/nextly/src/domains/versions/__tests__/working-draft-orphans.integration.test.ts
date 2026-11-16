@@ -119,6 +119,7 @@ describe("deleting a document removes every language's pending change", () => {
       entries.deleteEntryInTransaction(tx as never, {
         collectionName: COLLECTION,
         entryId: id,
+        overrideAccess: true,
       })
     );
 

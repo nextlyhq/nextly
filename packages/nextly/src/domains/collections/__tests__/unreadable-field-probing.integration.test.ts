@@ -16,6 +16,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
@@ -52,6 +53,9 @@ const AGENT = { id: "agent", email: "agent@example.com" };
 async function boot(dialect: TestDialect): Promise<Handler> {
   current = await createTestNextly({
     dialect,
+    // The anonymous caller is a visitor, judged by the Public role a real
+    // boot makes, which reads `vaults` by its `true` read rule.
+    seedPublic: true,
     collections: [
       defineCollection({
         slug: VAULTS,
@@ -86,6 +90,11 @@ async function boot(dialect: TestDialect): Promise<Handler> {
       } as never),
     ],
   });
+  // A code rule only narrows the permission, so both callers hold read on
+  // vaults; the field rules are what tell them apart.
+  for (const caller of [BOSS, AGENT]) {
+    await userWhoMay(current, caller.id, "read", [VAULTS]);
+  }
   const h = current.getService("collectionsHandler") as unknown as Handler;
   for (const [title, codename, owner, ownerNote] of [
     ["north", "alpha", "agent", "zebra"],

@@ -1,0 +1,24 @@
+---
+title: PLUGIN_EXTENDS_OUTSIDE_ITS_SCHEMA
+description: "A plugin's `schema.extend` hook extends an entity that is not in the schema its migration module is compiled from."
+---
+
+## Cause
+
+A plugin's `schema.extend` hook extends an entity that is not in the schema its migration module is compiled from.
+
+A plugin's migration module ships inside the plugin, so it is compiled from the plugin and its declared dependencies alone, never from an app's entities, which differ per installation. A `schema.extend` hook that extends anything else has nothing to extend there.
+
+## Fix
+
+- If the entity belongs to another plugin, add that plugin to `dependsOn`, and make sure it is in the configuration the command loads.
+- If it is one of the app's collections, Singles or field groups, the app's own `nextly migrate:create` migrates what the hook adds. Guard the hook with `schema.getTable("<slug>")` so it skips the table when compiled for the plugin's module.
+
+## Example
+
+```text
+✗ Plugin "@acme/seo" has a schema.extend hook that extends "posts", which is not in the schema this command compiles.
+  Why:  A plugin's migration module ships inside the plugin, so it is compiled from the plugin and its DECLARED DEPENDENCIES alone — never from the app's entity tables, which differ per installation.
+  Next: If "posts" belongs to a dependency, add that dependency to dependsOn and make sure it is present in the config this command loads. If it is one of the app's collections, Singles or field groups, what the hook adds to it is migrated by the APP: `nextly migrate:create` in the app writes it, whoever contributed it. Guard the hook with `schema.getTable("posts")` so it skips the table when compiled for this module.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-extends-outside-its-schema  (PLUGIN_EXTENDS_OUTSIDE_ITS_SCHEMA)
+```

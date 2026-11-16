@@ -1,0 +1,33 @@
+---
+title: PLUGIN_UNINSTALL_WOULD_DROP_OTHERS
+description: "A full uninstall would drop schema another owner built on the plugin's."
+---
+
+## Cause
+
+A full uninstall would drop schema another owner built on the plugin's.
+
+A full uninstall drops the plugin's tables and the columns it added to other owners' tables. Something the app or another plugin built would go with them:
+
+- a column, index, foreign key or check added to one of the plugin's tables;
+- a foreign key or a relationship field pointing into them;
+- an index or key using a column the plugin added to someone else's table.
+
+A relationship field the plugin itself added to another owner's collection, Single or field group, by `extend` or by a transform, does not count, even nested in that owner's group or repeater: it goes with the plugin. A field beside it that the owner declared still counts.
+
+Dropping it would delete data that belongs to someone else, so no consent to this uninstall covers it. An element whose owner is no longer configured counts too, because nothing can say which columns it uses. Each element is judged by the definition the database holds, so one whose declaration was changed in code but never migrated counts while the database's definition still uses the plugin's schema. Nothing was changed.
+
+## Fix
+
+- Remove each one the message names in its owner's code, then run `nextly migrate`.
+- Or uninstall with `--keep-data`, which keeps the plugin's tables and drops nothing.
+- Then run this uninstall again.
+
+## Example
+
+```text
+✗ "@acme/seo" cannot be fully uninstalled: dropping its schema would take 1 thing(s) other owners built on it: index "app_idx_on_notes" on notes__items (the app).
+  Why:  Dropping it would delete data that belongs to the app or another plugin, which no consent to this uninstall covers. Nothing was changed.
+  Next: Remove each from its owner's code (and migrate), or run the uninstall with --keep-data, which keeps the tables and drops nothing.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-uninstall-would-drop-others  (PLUGIN_UNINSTALL_WOULD_DROP_OTHERS)
+```

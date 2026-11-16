@@ -12,6 +12,8 @@ import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 import {
   DEFAULT_VALUES,
   formValuesToUpdatePayload,
+  templateSchemaFor,
+  templateToFormValues,
   type TemplateFormValues,
 } from "../schema";
 
@@ -95,5 +97,31 @@ describe("formValuesToUpdatePayload", () => {
     expect(
       formValuesToUpdatePayload(values, record({ owner: { kind: "site" } })).cc
     ).toEqual(["team@example.com"]);
+  });
+});
+
+describe("a save of a template's declared variables", () => {
+  const typed = [
+    {
+      name: "lines",
+      description: "The order's lines",
+      required: true,
+      type: "list" as const,
+      label: "Order lines",
+      example: [{ title: "Tea" }],
+      fields: [{ name: "title", type: "text" as const }],
+    },
+    { name: "note", description: "A note", required: false },
+  ];
+
+  it("sends each variable's type, label, example and fields back as they were read", () => {
+    const site = record({ owner: { kind: "site" }, variables: typed });
+    // Through the form's own validation, as a save goes.
+    const checked = templateSchemaFor(false).parse(templateToFormValues(site));
+    const payload = formValuesToUpdatePayload(
+      checked as TemplateFormValues,
+      site
+    );
+    expect(payload.variables).toEqual(typed);
   });
 });

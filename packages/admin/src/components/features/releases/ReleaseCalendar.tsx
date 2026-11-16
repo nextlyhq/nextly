@@ -703,12 +703,12 @@ function CompactCount({ day }: { day: ReleaseCalendarDay }) {
     <span
       className={cn(
         "inline-flex min-w-5 justify-center rounded-full px-1 text-[11px] font-medium leading-4 tabular-nums sm:hidden",
-        // The badges' own tokens: the neutral badge's, and the destructive
-        // badge's for a day holding a stopped release. Text in the primary or
-        // destructive colour on its own tenth-strength tint falls below AA
-        // (3.9:1 under the suite's indigo, 3.3:1 in destructive red).
+        // A day holding a stopped release counts in the danger status's text
+        // and surface colours swapped: a filled count, in the pair the
+        // contrast suite holds to AA in both modes. Other days use the
+        // neutral badge's.
         day.counts.blocked > 0
-          ? "bg-destructive-100 text-destructive-700 dark:bg-destructive-900 dark:text-destructive-100"
+          ? "bg-danger-text text-danger-surface"
           : "bg-muted text-foreground"
       )}
     >

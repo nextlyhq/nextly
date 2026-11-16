@@ -5,8 +5,9 @@
  *
  * What is only true here is the marker: which states it reports as carrying
  * values, and — the half a key test would miss — which it reports as empty.
- * The switching itself is a radio group, and the cases below drive it through
- * the keyboard as well as the pointer because selection follows focus.
+ * The switching itself is a compact menu named "State", as the editor mock
+ * draws it: its trigger names the state being edited, and its items are the
+ * four states.
  *
  * @module state-switcher.test
  */
@@ -14,7 +15,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 
-import type { NodeStyles } from "@nextlyhq/blocks-engine";
+import { BASE_BREAKPOINT, type NodeStyles } from "@nextlyhq/blocks-engine";
 
 import { StateSwitcher } from "./state-switcher";
 import { stateHasOwnValues } from "./style-values";
@@ -33,11 +34,22 @@ const SITE = {
   container: [],
 };
 
-const marked = (): string[] =>
-  screen
-    .getAllByRole("radio")
+/** Open the State menu, as a pointer does. */
+const open = (): void => {
+  if (screen.queryByRole("menu") !== null) return;
+  fireEvent.pointerDown(screen.getByRole("button", { name: /^State/ }), {
+    button: 0,
+    ctrlKey: false,
+  });
+};
+
+const marked = (): string[] => {
+  open();
+  return screen
+    .getAllByRole("menuitemradio")
     .filter(el => el.querySelector("[data-nx-state-marked]") !== null)
     .map(el => el.textContent ?? "");
+};
 
 describe("which states report that they carry values", () => {
   it("marks a state holding a declaration, and not one holding none", () => {
@@ -323,10 +335,10 @@ describe("which states report that they carry values", () => {
     expect(marked()).toEqual([]);
   });
 
-  it("says in the ACCESSIBLE NAME that a state has styles", () => {
+  it("says in words that a state has values", () => {
     // The one piece of information this control adds beyond its labels; a
-    // purely visual form withholds it from the people who can least afford to
-    // click through four states to find out.
+    // purely visual dot withholds it from the people who can least afford to
+    // open four states to find out.
     const styles = { hover: { base: { color: "#000001" } } } as NodeStyles;
 
     render(
@@ -338,21 +350,89 @@ describe("which states report that they carry values", () => {
       />
     );
 
+    // The trigger says so while the state with values is not the one shown.
     expect(
-      screen.getByRole("radio", { name: /Hover.*has styles/ })
+      screen.getByRole("button", { name: "State: Normal, Hover has values" })
     ).toBeTruthy();
-    expect(screen.queryByRole("radio", { name: /Focused.*has styles/ })).toBe(
-      null
+    open();
+    expect(
+      screen.getByRole("menuitemradio", { name: "Hover, has values" })
+    ).toBeTruthy();
+    expect(screen.getByRole("menuitemradio", { name: "Focus" })).toBeTruthy();
+  });
+
+  it("names the one other state with values beside the trigger", () => {
+    // One state: its name, which says where to look. A count of one sends
+    // the author through the menu to learn what the words could have said.
+    const styles = { hover: { base: { color: "#000001" } } } as NodeStyles;
+
+    const { container } = render(
+      <StateSwitcher
+        state="base"
+        onSelect={vi.fn()}
+        styles={styles}
+        breakpoints={SITE}
+      />
     );
+
+    expect(
+      container.querySelector(".nx-state-menu__elsewhere")?.textContent
+    ).toBe("· Hover set");
+  });
+
+  it("counts several other states with values beside the trigger", () => {
+    // Several: a count, since naming each would outgrow the bar's line.
+    const styles = {
+      hover: { base: { color: "#000001" } },
+      focus: { base: { color: "#000002" } },
+    } as NodeStyles;
+
+    const { container } = render(
+      <StateSwitcher
+        state="base"
+        onSelect={vi.fn()}
+        styles={styles}
+        breakpoints={SITE}
+      />
+    );
+
+    expect(
+      container.querySelector(".nx-state-menu__elsewhere")?.textContent
+    ).toBe("· 2 more set");
+  });
+
+  it("drops the trigger's dot once the state with values is the one shown", () => {
+    const styles = { hover: { base: { color: "#000001" } } } as NodeStyles;
+
+    render(
+      <StateSwitcher
+        state="hover"
+        onSelect={vi.fn()}
+        styles={styles}
+        breakpoints={SITE}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "State: Hover" })).toBeTruthy();
   });
 });
 
 describe("choosing a state", () => {
-  it("reports the state the author picked", () => {
+  it("marks the chosen state with a tick, not the dot that means values", () => {
+    render(<StateSwitcher state="hover" onSelect={vi.fn()} />);
+    open();
+    const chosen = screen.getByRole("menuitemradio", { checked: true });
+    expect(chosen.textContent).toBe("Hover");
+    expect(chosen.querySelector(".nx-state-menu__tick svg")).not.toBeNull();
+    expect(chosen.querySelector("[data-nx-state-marked]")).toBeNull();
+  });
+
+  it("switches to the state the author picks from the menu", () => {
     const onSelect = vi.fn();
     render(<StateSwitcher state="base" onSelect={onSelect} />);
 
-    fireEvent.click(screen.getByRole("radio", { name: /^Hover/ }));
+    open();
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Hover" }));
 
     expect(onSelect).toHaveBeenCalledWith("hover");
   });
@@ -365,48 +445,30 @@ describe("choosing a state", () => {
      */
     render(<StateSwitcher state="base" onSelect={vi.fn()} />);
 
-    expect(screen.getAllByRole("radio").map(el => el.textContent)).toEqual([
-      "None",
-      "Hover",
-      "Focused",
-      "Pressed",
-    ]);
+    open();
+    expect(
+      screen.getAllByRole("menuitemradio").map(el => el.textContent)
+    ).toEqual(["Normal", "Hover", "Focus", "Pressed"]);
   });
+});
 
-  it("moves through the states with the arrow keys, selection following focus", () => {
-    // The APG radio-group behaviour, and right here: choosing a state is free
-    // and reversible, and seeing the canvas change while arrowing is the point.
-    const onSelect = vi.fn();
-    render(<StateSwitcher state="hover" onSelect={onSelect} />);
+describe("the labels, over the stored state keys", () => {
+  it.each([
+    ["base", "Normal"],
+    ["hover", "Hover"],
+    ["focus", "Focus"],
+    ["active", "Pressed"],
+  ] as const)("shows a document stored with %s under %s", (state, label) => {
+    // The keys are what documents store, and they do not change: only the
+    // words over them do, so a page saved before the rename reads the same.
+    const styles = {
+      [state]: { [BASE_BREAKPOINT]: { opacity: 0.5 } },
+    } as NodeStyles;
+    render(<StateSwitcher state={state} onSelect={vi.fn()} styles={styles} />);
 
-    fireEvent.keyDown(screen.getByRole("radiogroup"), { key: "ArrowRight" });
-    expect(onSelect).toHaveBeenLastCalledWith("focus");
-
-    fireEvent.keyDown(screen.getByRole("radiogroup"), { key: "ArrowLeft" });
-    expect(onSelect).toHaveBeenLastCalledWith("base");
-  });
-
-  it("wraps at both ends rather than stopping", () => {
-    // A radio group is a ring; stopping at the end makes the fourth state cost
-    // three presses from the first and reads as the control being stuck.
-    const onSelect = vi.fn();
-    render(<StateSwitcher state="base" onSelect={onSelect} />);
-
-    fireEvent.keyDown(screen.getByRole("radiogroup"), { key: "ArrowLeft" });
-
-    expect(onSelect).toHaveBeenLastCalledWith("active");
-  });
-
-  it("keeps ONE tab stop, on the selected state", () => {
-    // A group that put every option in the tab order costs a keyboard user one
-    // Tab per state to cross a control they may not be using.
-    render(<StateSwitcher state="focus" onSelect={vi.fn()} />);
-
-    const stops = screen
-      .getAllByRole("radio")
-      .filter(el => el.getAttribute("tabindex") === "0");
-
-    expect(stops).toHaveLength(1);
-    expect(stops[0]?.textContent).toBe("Focused");
+    open();
+    const selected = screen.getByRole("menuitemradio", { checked: true });
+    // Exact, so "Focused" cannot pass for "Focus".
+    expect(selected.textContent).toBe(label);
   });
 });

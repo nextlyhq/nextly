@@ -100,6 +100,28 @@ export interface WriteCompanionMigrationOpts {
 }
 
 /**
+ * Where `writeCompanionMigrationFile` writes `spec`'s file, worked out from
+ * the same name and timestamp, so a dry run can name the file without
+ * writing it.
+ */
+export function companionMigrationPath(
+  migrationsDir: string,
+  spec: CompanionMigrationSpec,
+  opts: Pick<WriteCompanionMigrationOpts, "kind" | "now">
+): string {
+  return resolve(migrationsDir, `${companionBaseName(spec, opts)}.sql`);
+}
+
+/** The file's name without its extension: its timestamp, verb and entity. */
+function companionBaseName(
+  spec: CompanionMigrationSpec,
+  opts: Pick<WriteCompanionMigrationOpts, "kind" | "now">
+): string {
+  const verb = opts.kind === "create-only" ? "create" : opts.kind;
+  return `${formatTimestamp(opts.now)}_${verb}_localization_${spec.collection}`;
+}
+
+/**
  * Write a snapshot-less companion `.sql` migration from a pre-planned
  * `planCompanionMigration` result. Like {@link writeLocalizationMigrationFile}, it writes
  * **no** paired `meta/<name>.snapshot.json` so the file-migration runner executes it
@@ -115,9 +137,7 @@ export function writeCompanionMigrationFile(
   spec: CompanionMigrationSpec,
   opts: WriteCompanionMigrationOpts
 ): string {
-  const verb = opts.kind === "create-only" ? "create" : opts.kind;
-  const slug = `${verb}_localization_${spec.collection}`;
-  const baseName = `${formatTimestamp(opts.now)}_${slug}`;
+  const baseName = companionBaseName(spec, opts);
   // The statements below are one route to the goal — the right one for a database that has had
   // nothing done to it yet. Recording the goal itself lets the apply path choose a different route
   // when the target database has already come part of the way.
@@ -133,7 +153,7 @@ export function writeCompanionMigrationFile(
     `${formatLocalizationIntent({ kind: opts.kind, entity: opts.entity, spec })}\n`;
   const content = `${header}\n-- UP\n${opts.upSql}\n\n-- DOWN\n${opts.downSql}\n`;
 
-  const path = resolve(migrationsDir, `${baseName}.sql`);
+  const path = companionMigrationPath(migrationsDir, spec, opts);
   writeFileSync(path, content, "utf-8");
   return path;
 }

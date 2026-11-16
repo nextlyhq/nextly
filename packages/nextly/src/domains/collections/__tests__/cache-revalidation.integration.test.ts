@@ -10,6 +10,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
+import { grantPublic } from "../../../__tests__/helpers/public-role";
 import { defineCollection, defineSingle, text } from "../../../config";
 import { resolveBuilderRevalidate } from "../../../revalidation/builder-revalidate";
 import { createAdapter } from "../../../database/factory";
@@ -65,6 +67,17 @@ describe("cache revalidation — write path (sqlite)", () => {
     handle = undefined;
   });
 
+  /**
+   * Forget what the boot itself flushed, so a case sees only its own writes'
+   * flushes. Booting writes each collection's and Single's permissions, and
+   * granting the Public role writes more: each is a change to grants, which
+   * expires every content scope's cached reads, the collection and Single tags
+   * included.
+   */
+  function forgetBootFlushes(): void {
+    spy.flushed.length = 0;
+  }
+
   async function memoryAdapter() {
     process.env.DB_DIALECT = "sqlite";
     return createAdapter({
@@ -73,12 +86,26 @@ describe("cache revalidation — write path (sqlite)", () => {
     } as Parameters<typeof createAdapter>[0]);
   }
 
+  /**
+   * Boots the instance. A write with no user and no `overrideAccess` is a
+   * visitor's, judged by the Public role, so a test making one names the
+   * permissions Public holds for it (`publicMay`), as a site admin would
+   * grant them: the boot's seeding makes the role and they are granted on it.
+   */
   async function boot(
     collections: Parameters<typeof createTestNextly>[0]["collections"],
-    singles?: Parameters<typeof createTestNextly>[0]["singles"]
+    singles?: Parameters<typeof createTestNextly>[0]["singles"],
+    publicMay?: readonly string[]
   ): Promise<CollectionEntryService> {
     const adapter = await memoryAdapter();
-    handle = await createTestNextly({ adapter, collections, singles });
+    handle = await createTestNextly({
+      adapter,
+      collections,
+      singles,
+      seedPublic: publicMay !== undefined,
+    });
+    if (publicMay !== undefined) await grantPublic(handle, publicMay);
+    forgetBootFlushes();
     return handle
       .getService<CollectionsHandler>("collectionsHandler")
       .getEntryService() as CollectionEntryService;
@@ -122,7 +149,7 @@ describe("cache revalidation — write path (sqlite)", () => {
 
     await entries.updateEntry(
       { collectionName: "pages", entryId: id, overrideAccess: true },
-      { slug: "new" }
+      { slug: "new", _overwrite: true }
     );
 
     expect(spy.tags).toContain("nextly:pages:slug:new");
@@ -174,7 +201,7 @@ describe("cache revalidation — write path (sqlite)", () => {
 
     await entries.updateEntries(
       { collectionName: "batchren", overrideAccess: true },
-      [{ id, data: { slug: "after" } }]
+      [{ id, data: { slug: "after", _overwrite: true } }]
     );
 
     // The batch update worker carries the previous slug, so a batch rename busts
@@ -196,13 +223,17 @@ describe("cache revalidation — write path (sqlite)", () => {
       collectionName: "pub",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     expect(spy.tags).toContain(`nextly:pub:id:${id}`);
   });
 
   it("carries per-item intents on a caller-owned createEntriesInTransaction result", async () => {
-    const entries = await boot([openCollection("ownedtx")]);
+    // Written with no user, so as a visitor Public lets create.
+    const entries = await boot([openCollection("ownedtx")], undefined, [
+      "create-ownedtx",
+    ]);
     // The caller owns the transaction, so the method does not flush — it surfaces
     // the intents on the result for the caller to flush after IT commits.
     const result = await handle!.adapter.transaction(tx =>
@@ -234,6 +265,9 @@ describe("cache revalidation — write path (sqlite)", () => {
         ],
       }),
     ]);
+    // A code rule only narrows the permission, so the writer holds create on
+    // redact.
+    await userWhoMay(handle!, "u", "create", ["redact"]);
     await entries.createEntries(
       { collectionName: "redact", user: { id: "u" } },
       [{ title: "T", slug: "hidden-slug" }]
@@ -292,7 +326,8 @@ describe("cache revalidation — write path (sqlite)", () => {
     // so the intent has nowhere to ride on the result. withTransaction is the
     // seam that collects each wrapper's intent and flushes it once the
     // transaction commits — verify a committed write through it busts its tag.
-    await boot([openCollection("wtx")]);
+    // Written with no user, so as a visitor Public lets create.
+    await boot([openCollection("wtx")], undefined, ["create-wtx"]);
     const service = handle!.getService<CollectionService>("collectionService");
     await service.withTransaction(async tx => {
       await service.createEntryInTransaction(
@@ -309,7 +344,9 @@ describe("cache revalidation — write path (sqlite)", () => {
     // Tags may only bust after the transaction commits: if work throws, the
     // transaction rolls back, so the collected intent must never reach the
     // revalidator.
-    await boot([openCollection("wtxroll")]);
+    // Written with no user, so as a visitor Public lets create: the write
+    // succeeds, and only the throw after it rolls the transaction back.
+    await boot([openCollection("wtxroll")], undefined, ["create-wtxroll"]);
     const service = handle!.getService<CollectionService>("collectionService");
     await expect(
       service.withTransaction(async tx => {
@@ -330,7 +367,10 @@ describe("cache revalidation — write path (sqlite)", () => {
     // leaves it committed if the caller swallows the wrapper error. The wrapper
     // must have collected the intent before throwing, so the committed row's
     // tags still bust.
-    await boot([openCollection("hookcommit")]);
+    // Written with no user, so as a visitor Public lets create.
+    await boot([openCollection("hookcommit")], undefined, [
+      "create-hookcommit",
+    ]);
     const service = handle!.getService<CollectionService>("collectionService");
     const throwingHook: HookHandler = async () => {
       throw NextlyError.internal({ logContext: { reason: "test-hook-throw" } });
@@ -443,11 +483,11 @@ describe("cache revalidation — write path (sqlite)", () => {
     // Register a second revalidator AFTER the service was constructed; it must
     // win. With an eager capture, `spy` (registered pre-boot) would receive the
     // flush and `lateSpy` would get nothing — this fails there and passes here.
+    // Registered as `registerNextCacheRevalidator` registers the Next adapter.
+    // A second `registerSingleton` would not replace it: the boot has already
+    // resolved `spy`, and a singleton keeps the instance it built first.
     const lateSpy = new RecordingRevalidator();
-    container.registerSingleton<CacheRevalidator>(
-      "cacheRevalidator",
-      () => lateSpy
-    );
+    container.register<CacheRevalidator>("cacheRevalidator", () => lateSpy);
     await entries.createEntry(
       { collectionName: "late", overrideAccess: true },
       { title: "T", slug: "z" }
@@ -464,7 +504,7 @@ describe("cache revalidation — write path (sqlite)", () => {
         entryId: "does-not-exist",
         overrideAccess: true,
       },
-      { title: "x" }
+      { title: "x", _overwrite: true }
     );
     expect(result.success).toBe(false);
     expect(spy.flushed).toHaveLength(0);
@@ -482,11 +522,12 @@ describe("cache revalidation — write path (sqlite)", () => {
         }),
       ],
     });
+    forgetBootFlushes();
     const singleEntry =
       handle.getService<SingleEntryService>("singleEntryService");
     await singleEntry.update(
       "header",
-      { title: "Site" },
+      { title: "Site", _overwrite: true },
       { overrideAccess: true }
     );
     expect(spy.tags).toContain("nextly:single:header");
@@ -555,11 +596,12 @@ describe("cache revalidation — write path (sqlite)", () => {
         }),
       ],
     });
+    forgetBootFlushes();
     const singleEntry =
       handle.getService<SingleEntryService>("singleEntryService");
     await singleEntry.update(
       "footer",
-      { title: "Site" },
+      { title: "Site", _overwrite: true },
       { overrideAccess: true, disableRevalidate: true }
     );
     expect(spy.flushed).toHaveLength(0);
@@ -580,11 +622,12 @@ describe("cache revalidation — write path (sqlite)", () => {
         }),
       ],
     });
+    forgetBootFlushes();
     const singleEntry =
       handle.getService<SingleEntryService>("singleEntryService");
     await singleEntry.update(
       "footer",
-      { title: "Site" },
+      { title: "Site", _overwrite: true },
       { overrideAccess: true }
     );
     expect(spy.flushed).toHaveLength(0);

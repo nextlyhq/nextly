@@ -1,0 +1,316 @@
+/**
+ * How tall a dashboard card's body is, and how many list rows it holds, in
+ * pixels worked out from the card's height in grid rows.
+ *
+ * 🔴 The one copy of these numbers. The admin draws its frame and its list
+ * rows by them. How many rows a list card draws is no longer one of them: a
+ * card is as tall as its content, and its rows are its "Number of entries"
+ * (`listEntries`, `query-limits.ts`), which its `load` and the admin read
+ * alike. {@link rowsThatFit} is kept, with its meaning, for loads that call it.
+ *
+ * The same holds across: how many columns a card is drawn across at each
+ * dashboard width, and the size tier its drawn width reads as. The admin
+ * sizes a card's first query by {@link cardTierAt} before the card is drawn,
+ * and the layout read judges a card that hides while empty at the tier
+ * {@link cardTierAt} gives for the dashboard width the admin sent, so the
+ * card is judged on the answer its first query will get.
+ *
+ * Imports only `query-limits.ts`, `grid-size.ts` (which imports nothing) and a
+ * type, so a browser bundle and a server load both reach it without anything
+ * behind it; its own entry, `nextly/card-geometry`.
+ *
+ * The dashboard grid's geometry, shared by nextly and its admin. Not a public
+ * API; it may change in any release. Its one public piece is
+ * {@link rowsThatFit}, published from the `nextly` root and the plugin SDK.
+ *
+ * @module domains/widgets/card-geometry
+ * @internal
+ */
+
+import { GRID_COLUMNS, type CardTier, type GridSize } from "./grid-size";
+import type { ListDensity } from "./query-limits";
+
+/**
+ * One grid row's height, in pixels rather than rem so it does not follow the root font size.
+ *
+ * @internal
+ */
+export const ROW_HEIGHT_PX = 72;
+
+/**
+ * The gap down the grid, between rows, at every dashboard width.
+ *
+ * @internal
+ */
+export const ROW_GAP_PX = 16;
+
+/**
+ * What a card's frame draws around its body, in pixels, top to bottom: the
+ * card's border, the padding inside it on every side, the header, the gap
+ * under the header, and the footer's gap and its one line of `text-xs`.
+ *
+ * The admin names the class it draws each of these with beside the number
+ * (`frame/measures`), and its tests read the classes back off a drawn card.
+ *
+ * @internal
+ */
+export const CARD_FRAME_PX: Readonly<{
+  border: number;
+  padding: number;
+  header: number;
+  bodyGap: number;
+  footerGap: number;
+  footerLine: number;
+}> = Object.freeze({
+  border: 1,
+  padding: 16,
+  header: 40,
+  bodyGap: 12,
+  footerGap: 12,
+  footerLine: 16,
+});
+
+/**
+ * A list row's height at each density, in pixels: the line box every row is
+ * drawn in. The admin's row classes (`LIST_ROW_HEIGHT_CLASS`) draw these
+ * heights, and a test holds the two to the same number.
+ *
+ * @internal
+ */
+export const LIST_ROW_HEIGHT_PX: Readonly<Record<ListDensity, number>> =
+  Object.freeze({
+    default: 52,
+    compact: 36,
+  });
+
+/**
+ * A card's height in pixels at `h` rows: its rows and the gaps between them, at every width.
+ *
+ * @internal
+ */
+export function cardHeightPx(h: number): number {
+  return h * ROW_HEIGHT_PX + (h - 1) * ROW_GAP_PX;
+}
+
+/**
+ * What a card's frame draws around its body, in pixels, top to bottom together
+ * ({@link CARD_FRAME_PX}): its border and padding top and bottom, the header,
+ * the gap under it, and the footer's height. The footer is counted whether or
+ * not it shows a link, so the rows a list draws do not change when "View all"
+ * appears.
+ */
+function frameAroundBodyPx(): number {
+  const frame = CARD_FRAME_PX;
+  return (
+    2 * (frame.border + frame.padding) +
+    frame.header +
+    frame.bodyGap +
+    (frame.footerGap + frame.footerLine)
+  );
+}
+
+/**
+ * The height a card's body has, in pixels, when the card spans `h` rows.
+ *
+ * The card's height less what the frame draws around the body
+ * ({@link frameAroundBodyPx}). The same at every dashboard width: a card keeps
+ * its `h` in every band, and the gap down the grid does not widen as the gap
+ * across does.
+ *
+ * @internal
+ */
+export function cardBodyHeightPx(h: number): number {
+  return cardHeightPx(h) - frameAroundBodyPx();
+}
+
+/**
+ * How tall a card is, in pixels, whose body is `rows` list rows at `density`:
+ * the rows and the frame around them. What a list card's loading skeleton
+ * holds, so the height every card of the default dashboard is first drawn at,
+ * and the one the dashboard's outline draws its cards at.
+ *
+ * @internal
+ */
+export function listCardHeightPx(rows: number, density: ListDensity): number {
+  return frameAroundBodyPx() + rows * LIST_ROW_HEIGHT_PX[density];
+}
+
+/**
+ * The most rows {@link rowsInBody} and {@link rowsThatFit} answer: ten, as
+ * they always have. Not `MAX_WIDGET_ROWS`, the most a card's "Number of
+ * entries" offers, which may grow: a published answer keeps its meaning.
+ */
+const MOST_ROWS_THAT_FIT = 10;
+
+/**
+ * The whole list rows a body `bodyHeight` pixels tall holds at `density`:
+ * never part of a row, never more than ten, and none for a body
+ * with no room. A height that is not a finite number holds nothing rather
+ * than an unbounded list.
+ *
+ * @internal
+ */
+export function rowsInBody(bodyHeight: number, density: ListDensity): number {
+  if (!Number.isFinite(bodyHeight) || bodyHeight <= 0) return 0;
+  return Math.min(
+    Math.floor(bodyHeight / LIST_ROW_HEIGHT_PX[density]),
+    MOST_ROWS_THAT_FIT
+  );
+}
+
+/**
+ * How many list rows a card of `size` draws in its body at `density`: the
+ * card's body height (`cardBodyHeightPx(size.h)`) over one row's height at that
+ * density, in whole rows, at most ten.
+ *
+ * For a widget's `load`, handed its card's `size`, to read no more rows than
+ * the card will draw: `services.find(slug, { limit: rowsThatFit(size, { density
+ * }) })`. Core's own list cards count their rows by this formula. `density` is
+ * a list card's Density setting: `"default"`, or `"compact"`, whose shorter
+ * rows let the same card hold more.
+ *
+ * `0` for a card too short to hold one whole row, such as one two rows high at
+ * the default density; `find` asked a limit of `0` answers none.
+ *
+ * A dashboard card is now as tall as its content, so `h` no longer sets how
+ * many rows it draws: core's own list cards read their "Number of entries"
+ * setting instead (`listEntries` in `nextly/config`). This answer is kept, and
+ * keeps its meaning, for the loads that call it.
+ *
+ * @experimental
+ */
+export function rowsThatFit(
+  size: Pick<GridSize, "h">,
+  options: { density: ListDensity }
+): number {
+  return rowsInBody(cardBodyHeightPx(size.h), options.density);
+}
+
+/**
+ * The gap across the grid, between columns, below {@link WIDE_GAP_FROM_PX}.
+ *
+ * @internal
+ */
+export const COLUMN_GAP_PX = 16;
+
+/**
+ * The gap across the grid from {@link WIDE_GAP_FROM_PX}.
+ *
+ * @internal
+ */
+export const WIDE_COLUMN_GAP_PX = 24;
+
+/**
+ * From this dashboard width the gap across is the wide one.
+ *
+ * @internal
+ */
+export const WIDE_GAP_FROM_PX = 1280;
+
+/**
+ * From this dashboard width the cards of `w` 6 or less share a row two at a time.
+ *
+ * @internal
+ */
+export const TWO_UP_FROM_PX = 640;
+
+/**
+ * From this dashboard width every card is drawn at its own `w`.
+ *
+ * @internal
+ */
+export const AS_SIZED_FROM_PX = 1024;
+
+/** Below this drawn width a card is small: a full grouped figure may not fit. */
+const SMALL_TIER_BELOW_PX = 340;
+
+/** From this drawn width a card is large. */
+const LARGE_TIER_FROM_PX = 700;
+
+/** Half the grid: the span every card of this many columns or fewer takes in the middle band. */
+const HALF_GRID = GRID_COLUMNS / 2;
+
+/**
+ * A quarter of the grid: below {@link TWO_UP_FROM_PX}, a card of this many columns or fewer is
+ * drawn at half the grid, so two of them share a row; every wider card takes the whole row.
+ */
+const QUARTER_GRID = GRID_COLUMNS / 4;
+
+/**
+ * The gap across the grid, in pixels, on a dashboard `dashboardWidth` wide.
+ *
+ * @internal
+ */
+export function columnGapPx(dashboardWidth: number): number {
+  return dashboardWidth >= WIDE_GAP_FROM_PX
+    ? WIDE_COLUMN_GAP_PX
+    : COLUMN_GAP_PX;
+}
+
+/**
+ * Whether a dashboard `dashboardWidth` wide is in its narrowest band, below
+ * {@link TWO_UP_FROM_PX}: a phone's, where every card takes the whole row but
+ * a quarter-width one, two of which share it (`drawnSpan`), and cards are
+ * arranged from their menus.
+ *
+ * @internal
+ */
+export function isOneColumn(dashboardWidth: number): boolean {
+  return dashboardWidth < TWO_UP_FROM_PX;
+}
+
+/**
+ * How many of the twelve columns a card of `w` is drawn across on a dashboard
+ * `dashboardWidth` wide: below {@link TWO_UP_FROM_PX}, half the grid for a `w`
+ * of a quarter or less, so two such cards pair on a row, else all of it; half
+ * the grid for a `w` of half or less, else all of it, below
+ * {@link AS_SIZED_FROM_PX}; its own `w` from there.
+ *
+ * @internal
+ */
+export function drawnSpan(w: number, dashboardWidth: number): number {
+  if (isOneColumn(dashboardWidth)) {
+    return w <= QUARTER_GRID ? HALF_GRID : GRID_COLUMNS;
+  }
+  if (dashboardWidth < AS_SIZED_FROM_PX) {
+    return w <= HALF_GRID ? HALF_GRID : GRID_COLUMNS;
+  }
+  return w;
+}
+
+/**
+ * The outer width, in pixels, of a card of `w` columns on a dashboard
+ * `dashboardWidth` wide: the twelfths of the dashboard its drawn span takes
+ * ({@link drawnSpan}) and its share of the gaps, less the gap that follows it.
+ * The width the card measures once drawn.
+ *
+ * @internal
+ */
+export function cardOuterWidth(w: number, dashboardWidth: number): number {
+  const span = drawnSpan(w, dashboardWidth);
+  const gap = columnGapPx(dashboardWidth);
+  return ((dashboardWidth + gap) * span) / GRID_COLUMNS - gap;
+}
+
+/**
+ * The size tier a card drawn `width` pixels wide reads as.
+ *
+ * @internal
+ */
+export function tierOfWidth(width: number): CardTier {
+  if (width < SMALL_TIER_BELOW_PX) return "small";
+  return width >= LARGE_TIER_FROM_PX ? "large" : "medium";
+}
+
+/**
+ * The tier a card of `w` columns is drawn at on a dashboard `dashboardWidth`
+ * wide: the tier its outer width reads as. The one rule for it: the admin
+ * sizes a card's first query by it before the card can measure itself, and
+ * the layout read judges a card that hides while empty at it, so both ask a
+ * widget's `load` at the same tier.
+ *
+ * @internal
+ */
+export function cardTierAt(w: number, dashboardWidth: number): CardTier {
+  return tierOfWidth(cardOuterWidth(w, dashboardWidth));
+}

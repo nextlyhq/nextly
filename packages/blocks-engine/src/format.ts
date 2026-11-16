@@ -43,6 +43,10 @@ export {
   MAX_BLOCK_TYPE_LENGTH,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
+  // The bounds of a document's own metadata, for a schema publisher to state
+  // as `maxItems` and `maxLength`: the numbers a save refuses beyond.
+  MAX_SEO_SEGMENTS,
+  MAX_SEO_TEXT_LENGTH,
   type DocumentFormatVersion,
   type DocumentKind,
   STYLE_STATES,
@@ -81,3 +85,22 @@ export {
   isReservedOperationName,
   type ReservedOperationName,
 } from "./operations";
+
+// The binding vocabulary: which field types bind to which prop types. Plain
+// tables and pure functions with no imports, so it belongs behind this entry,
+// and the CMS's field catalog republishes it from here rather than keeping a
+// table of its own, without loading the root's parser.
+export {
+  BINDABLE_KINDS,
+  bindablePropTypeOf,
+  bindingKindOf,
+  canBindFieldToProp,
+  FIELD_TYPE_BINDING_KIND,
+  STORAGE_PRIMITIVE_AS_FIELD_TYPE,
+  type BindablePropType,
+  type BindingEndpoint,
+  type BindingFieldType,
+  type BindingValueKind,
+  type FieldStoragePrimitive,
+  type StorageFieldType,
+} from "./binding-vocabulary";

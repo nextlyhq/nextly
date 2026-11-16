@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { container } from "../../di/container";
+import { mintApiKeyId } from "../../domains/auth/lib/api-key-id";
 
 import { limitStoreUnavailable } from "../../domains/limits/limit-store";
 import {
@@ -51,6 +52,8 @@ function testReaders(): RestCallerReaders & {
             userId: "owner",
             tokenType: "full-access" as const,
             roleId: null,
+            standingAskedAt: 0,
+            expiresAt: null,
           }
         : null
     ),
@@ -280,6 +283,52 @@ describe("REST limit: API keys", () => {
     expect(
       await check({ key: "valid-k1", address: "198.51.100.1" })
     ).toBeNull();
+  });
+});
+
+describe("REST limit: keys that carry an id", () => {
+  /** A key in the current format, under an id this install made. */
+  const keyWithId = (id = mintApiKeyId(), secret = "v".repeat(43)) =>
+    `nx_live_${id}_${secret}`;
+
+  function readersResolving(valid: string) {
+    const readers = testReaders();
+    // The fake's own answer for a key it resolves, from a second instance so
+    // the first's call log stays this test's.
+    const base = testReaders();
+    readers.lookupKey.mockImplementation(async (rawKey: string) =>
+      rawKey === valid ? base.lookupKey("valid-with-id", () => {}) : null
+    );
+    return readers;
+  }
+
+  it("still looks up and admits a key with a verified id after a flood of invalid keys from unresolved sources", async () => {
+    const valid = keyWithId();
+    const readers = readersResolving(valid);
+    const check = limiter({}, readers);
+    const bound = 2 * UNRESOLVED_CEILING_MULTIPLE;
+    // Keys with no id and keys with an id this install did not make spend the
+    // ceiling those keys share, and are then refused before any lookup.
+    const forged = `nx_live_${"0".repeat(24)}_${"x".repeat(43)}`;
+    expect(await admitted(check, { key: "bogus" }, bound)).toBe(bound);
+    expect(await check({ key: forged })).not.toBeNull();
+    // The key with a verified id has a bound of its own, unspent.
+    expect(await check({ key: valid })).toBeNull();
+    expect(readers.lookupKey).toHaveBeenLastCalledWith(
+      valid,
+      expect.any(Function)
+    );
+  });
+
+  it("bounds a verified id's failed lookups by an address's budget, and no other id's", async () => {
+    const id = mintApiKeyId();
+    const valid = keyWithId();
+    const check = limiter({}, readersResolving(valid));
+    // The same id with a wrong secret: its own budget of failed lookups (2 reads).
+    expect(
+      await admitted(check, { key: keyWithId(id, "w".repeat(43)) }, 5)
+    ).toBe(2);
+    expect(await check({ key: valid })).toBeNull();
   });
 });
 
@@ -566,5 +615,60 @@ describe("REST limit: where it counts", () => {
     expect(await admitted(check, { address: "203.0.113.7" }, 3)).toBe(2);
     expect(startServices).toHaveBeenCalled();
     expect(counted.length).toBeGreaterThan(0);
+  });
+});
+
+describe("REST limit: a key that does not resolve", () => {
+  it("remembers why, so authentication's log can say it without a second lookup", async () => {
+    const readers = testReaders();
+    readers.lookupKey.mockImplementation(
+      async (_rawKey: string, onRefused?: (cause: "revoked") => void) => {
+        onRefused?.("revoked");
+        return null;
+      }
+    );
+    const limits = createRestLimits(
+      {
+        enabled: true,
+        readLimit: 2,
+        writeLimit: 1,
+        windowMs: 60_000,
+        trustProxy: true,
+        store: new InMemoryRateLimitStore(),
+      },
+      readers
+    );
+    const gate = openRestLimitGate(
+      limits,
+      request({ key: "revoked-k1", address: "203.0.113.7" })
+    );
+    await gate.settle("core");
+    expect(gate.knownKey("revoked-k1")).toMatchObject({
+      resolved: null,
+      cause: "revoked",
+    });
+  });
+});
+
+describe("REST limit: a refused request is recorded", () => {
+  afterEach(() => {
+    container.clear();
+  });
+
+  it("writes the refusal's line, as every answered refusal does", async () => {
+    const info = vi.fn();
+    container.register("logger", () => ({
+      debug: vi.fn(),
+      info,
+      warn: vi.fn(),
+      error: vi.fn(),
+    }));
+    const check = limiter();
+    // Two reads a window from one address, so the third is refused.
+    expect(await admitted(check, { address: "203.0.113.7" }, 3)).toBe(2);
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining("Refused"),
+      expect.objectContaining({ status: 429, code: "RATE_LIMITED" })
+    );
   });
 });

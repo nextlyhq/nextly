@@ -1,5 +1,5 @@
 /**
- * The workflow keys, `_pendingChange` and `_inRelease`, as a filter carries
+ * The workflow keys, `_pendingChange`, `_inRelease` and `_strandedStage`, as a filter carries
  * them: which values are accepted, which are refused and how, and what the
  * query is handed once they are taken out.
  *
@@ -200,6 +200,32 @@ describe("every reserved top-level key", () => {
   );
 });
 
+describe("_strandedStage", () => {
+  it("is read from JSON as true, and refuses false as an invalid operand", () => {
+    expect(parseWhereParam(JSON.stringify({ _strandedStage: true }))).toEqual({
+      _strandedStage: true,
+    });
+    expect(
+      refusal(fromJson({ _strandedStage: false })).map(p => [p.code, p.path])
+    ).toEqual([["FILTER_INVALID_OPERAND", "where._strandedStage"]]);
+  });
+
+  it("is taken out of the filter as its own condition, beside the others", () => {
+    const { filter, cleanedWhere, problems } = extractWorkflowFilter({
+      _strandedStage: true,
+      _pendingChange: true,
+      status: { equals: "draft" },
+    });
+    expect(problems).toEqual([]);
+    expect(filter).toEqual({
+      pendingChange: true,
+      inRelease: null,
+      strandedStage: true,
+    });
+    expect(cleanedWhere).toEqual({ status: { equals: "draft" } });
+  });
+});
+
 describe("extractWorkflowFilter", () => {
   it("takes both keys out and hands back the rest", () => {
     const { filter, cleanedWhere, problems } = extractWorkflowFilter({
@@ -252,7 +278,11 @@ describe("unknownFieldProblem", () => {
     // problem, so it must be word for word what an unknown field gets.
     const table = pgTable("posts", { id: uuid("id"), title: text("title") });
     const built = refusal(() =>
-      buildDrizzleCondition(buildWhereClause({ titel: { equals: "a" } }), table)
+      buildDrizzleCondition(
+        buildWhereClause({ titel: { equals: "a" } }),
+        table,
+        "postgresql"
+      )
     );
     expect(built).toEqual([unknownFieldProblem("where.titel", "titel")]);
   });

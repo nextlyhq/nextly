@@ -66,7 +66,7 @@ const CreateApiKeyContent: React.FC = () => {
 const CreateApiKeyPage: React.FC = () => {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer width="form">
+      <PageContainer type="form">
         <SettingsLayout
           title="API Keys"
           description="Manage secure access keys for API integrations"

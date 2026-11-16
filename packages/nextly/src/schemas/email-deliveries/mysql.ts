@@ -19,6 +19,11 @@ import {
   index,
 } from "drizzle-orm/mysql-core";
 
+import {
+  EMAIL_DELIVERY_PRINCIPAL_ID_LENGTH,
+  EMAIL_DELIVERY_PRINCIPAL_KIND_LENGTH,
+} from "./widths";
+
 export const emailDeliveriesMysql = mysqlTable(
   "email_deliveries",
   {
@@ -71,8 +76,12 @@ export const emailDeliveriesMysql = mysqlTable(
     /** Swept by `domains/email/prune.ts`. See the PostgreSQL definition. */
     retentionClass: varchar("retention_class", { length: 50 }).notNull(),
     // The person a plugin's email went to: see the PostgreSQL definition.
-    principalKind: varchar("principal_kind", { length: 191 }),
-    principalId: varchar("principal_id", { length: 191 }),
+    principalKind: varchar("principal_kind", {
+      length: EMAIL_DELIVERY_PRINCIPAL_KIND_LENGTH,
+    }),
+    principalId: varchar("principal_id", {
+      length: EMAIL_DELIVERY_PRINCIPAL_ID_LENGTH,
+    }),
     // The keyed digest of the idempotency key the send carried, on every
     // record of that send; cleared on all of them when any one is erased.
     keyDigest: varchar("key_digest", { length: 64 }),

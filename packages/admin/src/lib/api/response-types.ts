@@ -23,6 +23,13 @@ export type PaginationMeta = {
   totalPages: number;
   hasNext: boolean;
   hasPrev: boolean;
+  /**
+   * Set when the list counted no further than a cap because more entries
+   * match: `total` is then the cap, a lower bound shown as "1000+", and the
+   * paging fields still allow moving past it. Sent only to a list that asked
+   * for a capped count.
+   */
+  totalCapped?: true;
 };
 
 /** Paginated list response. Matches server's `respondList(items, meta)`. */

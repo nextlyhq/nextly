@@ -54,9 +54,10 @@
 
 import { Column, getColumns, is, SQL, sql } from "drizzle-orm";
 
-import { isJsonColumn } from "./column-kinds";
+import { isJsonColumn, valueForJsonColumn } from "./column-kinds";
 import { buildDrizzleWhere } from "./drizzle-where";
 import type { WhereClause } from "./types";
+import type { SupportedDialect } from "./types/core";
 
 /** What this builder reads off a Drizzle column. */
 interface BindableColumn {
@@ -85,6 +86,8 @@ export interface UpdateStatementInput {
    */
   data: Record<string, unknown>;
   where: WhereClause;
+  /** The dialect the statement runs on, which decides how the where clause folds case. */
+  dialect: SupportedDialect;
   /** How a value binds when the model declares no column for it. */
   bindUnmodeled: (value: unknown) => unknown;
   /**
@@ -103,20 +106,6 @@ function isBindableColumn(value: unknown): value is BindableColumn {
     typeof (value as { mapToDriverValue?: unknown }).mapToDriverValue ===
       "function"
   );
-}
-
-/**
- * A JSON column's encoder serializes whatever it is given, so a value that
- * arrives already serialized would be serialized twice. The query-builder path
- * parses such a string first; this keeps the same bytes on the wire.
- */
-function valueForJsonColumn(value: unknown): unknown {
-  if (typeof value !== "string") return value;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
 }
 
 /**
@@ -204,7 +193,11 @@ export function buildUpdateStatement(input: UpdateStatementInput): SQL | null {
   // in a schema renders as `"schema"."table"`, which is how the WHERE below
   // already refers to it, and how the query builder targeted it.
   const statement = sql`UPDATE ${input.tableObj} SET ${sql.join([...assignments.values()], sql`, `)}`;
-  const condition = buildDrizzleWhere(input.tableObj, input.where);
+  const condition = buildDrizzleWhere(
+    input.tableObj,
+    input.where,
+    input.dialect
+  );
   if (condition) statement.append(sql` WHERE ${condition}`);
   if (input.returning && input.returning.length > 0) {
     statement.append(sql` RETURNING ${sql.join(input.returning, sql`, `)}`);

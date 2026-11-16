@@ -88,12 +88,12 @@ export interface AfterCommitAdapter {
  * Run what a write does outside the database — an event, an after-hook, a
  * cache flush, a webhook drain — once that write is durable.
  *
- * Call it after the service's own transaction has resolved. On PostgreSQL and
- * MySQL that transaction had its own connection and has committed, so
- * `effect` runs now and its failure reaches the caller as before. On SQLite a
- * service called inside an enclosing transaction (a plugin's
- * `ctx.db.transaction`) wrote in a savepoint that the enclosing transaction
- * can still roll back: `effect` then waits for the outermost commit, never
+ * Call it after the service's own transaction has resolved. Outside any other
+ * transaction that one has committed, so `effect` runs now and its failure
+ * reaches the caller as before. Called inside an enclosing transaction (a
+ * plugin's `ctx.db.transaction`, another service's), on any dialect, the
+ * service's transaction joined it, and the enclosing transaction can still
+ * roll the change back: `effect` then waits for the outermost commit, never
  * runs for a change that was rolled back, and a failure after that commit is
  * logged rather than thrown, since the caller has long had its answer.
  */

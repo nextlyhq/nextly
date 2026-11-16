@@ -76,11 +76,29 @@ export function toTag(doc: Record<string, unknown>): Tag {
  * so they cannot leak into a payload the frontend serializes.
  */
 export function toAuthor(doc: Record<string, unknown>): Author {
+  const avatar = doc.avatar;
   return {
     id: readId(doc),
     name: readString(doc, "name"),
     slug: readString(doc, "slug"),
     bio: readNullableString(doc, "bio"),
-    avatarUrl: readNullableString(doc, "avatarUrl"),
+    avatarUrl: avatarAddress(
+      avatar !== null && typeof avatar === "object"
+        ? (avatar as Record<string, unknown>).url
+        : undefined
+    ),
   };
+}
+
+/**
+ * The address an avatar may be drawn from: absolute over http or https, or a
+ * path on this site. Anything else, such as a bare filename left by an import,
+ * is no address: it would resolve against whichever page draws it and show a
+ * broken image, so the author's initial is drawn instead.
+ */
+export function avatarAddress(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const address = value.trim();
+  if (/^https?:\/\/[^/\s]/i.test(address)) return address;
+  return address.startsWith("/") && !address.startsWith("//") ? address : null;
 }

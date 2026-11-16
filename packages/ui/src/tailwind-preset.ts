@@ -79,16 +79,36 @@ type UiPreset = {
         destructive: {
           DEFAULT: string;
           solid: string;
+          hover: string;
           foreground: string;
         };
         success: {
           DEFAULT: string;
           solid: string;
           foreground: string;
+          surface: string;
+          border: string;
+          text: string;
         };
         warning: {
           DEFAULT: string;
           foreground: string;
+          solid: string;
+          surface: string;
+          border: string;
+          text: string;
+        };
+        danger: {
+          surface: string;
+          border: string;
+          text: string;
+          solid: string;
+        };
+        info: {
+          surface: string;
+          border: string;
+          text: string;
+          solid: string;
         };
         muted: {
           DEFAULT: string;
@@ -208,6 +228,10 @@ const uiPreset: UiPreset = {
           DEFAULT: "var(--nx-destructive)",
           // Saturated fill for solid buttons, distinct from the text-tuned base.
           solid: "var(--nx-destructive-solid)",
+          // The solid button's hover, set per mode in the theme so its label
+          // keeps 4.5:1 with room to spare. Named, so no caller reaches for a
+          // shade.
+          hover: "var(--nx-destructive-hover)",
           foreground: "var(--nx-destructive-foreground)",
           ...tintScale("--nx-destructive"),
         },
@@ -215,12 +239,33 @@ const uiPreset: UiPreset = {
           DEFAULT: "var(--nx-success)",
           solid: "var(--nx-success-solid)",
           foreground: "var(--nx-success-foreground)",
+          surface: "var(--nx-success-surface)",
+          border: "var(--nx-success-border)",
+          text: "var(--nx-success-text)",
           ...tintScale("--nx-success"),
         },
         warning: {
           DEFAULT: "var(--nx-warning)",
           foreground: "var(--nx-warning-foreground)",
+          solid: "var(--nx-warning-solid)",
+          surface: "var(--nx-warning-surface)",
+          border: "var(--nx-warning-border)",
+          text: "var(--nx-warning-text)",
           ...tintScale("--nx-warning"),
+        },
+        // Status tokens with no base colour of their own: `danger` is a
+        // status, kept apart from `destructive`, the colour of an action.
+        danger: {
+          surface: "var(--nx-danger-surface)",
+          border: "var(--nx-danger-border)",
+          text: "var(--nx-danger-text)",
+          solid: "var(--nx-danger-solid)",
+        },
+        info: {
+          surface: "var(--nx-info-surface)",
+          border: "var(--nx-info-border)",
+          text: "var(--nx-info-text)",
+          solid: "var(--nx-info-solid)",
         },
         muted: {
           DEFAULT: "var(--nx-muted)",

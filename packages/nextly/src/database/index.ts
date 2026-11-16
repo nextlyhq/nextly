@@ -2,11 +2,10 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { buildFieldGroupRegistryTable } from "../domains/field-groups/storage/registry-schemas";
 import { env } from "../lib/env";
-import type { CoreSchemaOptions } from "../schemas";
-import * as schemasMy from "../schemas/_dialect-bundles/mysql";
-import * as schemasPg from "../schemas/_dialect-bundles/postgres";
-import * as schemasSl from "../schemas/_dialect-bundles/sqlite";
+import type { CoreSchemaOptions } from "../schemas/core-schema";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
+
+import { type DialectTables, loadedDialect } from "./dialect-tables";
 
 /**
  * Which registry the push bundle declares.
@@ -20,20 +19,6 @@ interface PushBundleOptions {
   fieldGroupRegistryTable?: CoreSchemaOptions["fieldGroupRegistryTable"] | null;
 }
 
-/**
- * Backwards-compatible `schema.postgres` / `schema.mysql` / `schema.sqlite`
- * namespaces. Replaces the old `database/schema/<dialect>.ts` stubs deleted
- * in Plan A Task 17. Each namespace is a flat re-export of every Drizzle
- * table + relations the framework manages for the given dialect, drawn
- * from the canonical `@nextly/schemas/<feature>/<dialect>` modules.
- */
-const schema = {
-  postgres: schemasPg,
-  mysql: schemasMy,
-  sqlite: schemasSl,
-};
-
-export { schema };
 export * from "./errors";
 export { env } from "../lib/env";
 
@@ -59,21 +44,22 @@ export { withDbErrors } from "./with-db-errors";
 // Use CLI commands (nextly db:sync, nextly migrate) or import directly from
 // 'nextly/database/init' or 'nextly/database/seeders' for server-side use.
 
+export { getStaticRelations } from "./static-relations";
+export { loadDialectTables } from "./dialect-tables";
+
 /**
- * Get the appropriate dialect-specific table schemas based on the configured database dialect.
- * Centralizes dialect selection logic that was previously duplicated across services.
+ * The framework's static tables for a dialect, keyed by their export names.
+ * Centralizes dialect selection logic that was previously duplicated across
+ * services.
+ *
+ * Synchronous, and answered from the dialect loaded when the adapter was
+ * created: only that dialect's tables are ever imported. Read before then, it
+ * throws naming the cause rather than returning another dialect's tables.
  *
  * @param dialect - Optional dialect override. If not provided, uses env.DB_DIALECT
- * @returns Schema object for the configured dialect (postgres, mysql, or sqlite)
  */
-export { getStaticRelations } from "./static-relations";
-
-export function getDialectTables(dialect?: string) {
-  const dbDialect = dialect || env.DB_DIALECT;
-  if (dbDialect === "postgresql") return schema.postgres;
-  if (dbDialect === "mysql") return schema.mysql;
-  if (dbDialect === "sqlite") return schema.sqlite;
-  throw new Error(`Unsupported dialect: ${dbDialect}`);
+export function getDialectTables(dialect?: string): DialectTables {
+  return loadedDialect(dialect || env.DB_DIALECT).tables;
 }
 
 /**

@@ -23,7 +23,7 @@ const { findById, listRoleSlugsForUserStrict, getService } = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../../di/register", () => ({ getService }));
+vi.mock("../../../di/service-access", () => ({ getService }));
 vi.mock("../../../services/lib/permissions", () => ({
   listRoleSlugsForUserStrict,
 }));

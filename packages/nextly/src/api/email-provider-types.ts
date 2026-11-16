@@ -16,6 +16,7 @@
  * @module api/email-provider-types
  */
 
+import { SYSTEM_READ_POLICY } from "../domains/auth/system-write-policy";
 import { toDescriptor } from "../domains/email/provider-definition";
 import { getEmailProviderRegistry } from "../domains/email/services/email-provider-registry";
 import { getCachedNextly } from "../init";
@@ -48,9 +49,7 @@ export const GET = withErrorHandler(async (request: Request) => {
   // leaving the grant unusable for exactly the providers this catalog exists
   // to describe. It exposes definitions, never stored provider records.
   await requireRouteAnyPermission(request, [
-    { action: "read", resource: "email-providers" },
-    { action: "create", resource: "email-providers" },
-    { action: "manage", resource: "email-providers" },
+    ...SYSTEM_READ_POLICY.emailProviders.readTypes.anyOf,
   ]);
 
   const types = getEmailProviderRegistry().list().map(toDescriptor);

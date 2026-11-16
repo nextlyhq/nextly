@@ -13,7 +13,38 @@
  * update decides, from the phase it fails in, whether to raise the error or record it against a
  * row, and both outcomes look like "the save did not work" from outside.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
+
+// A Builder save's statements run through the busy-table runner, which waits for a table another
+// session holds; those tries are judged against real databases
+// (`busy-table-parity.integration.test.ts`). Here the save runs as one try that never waits,
+// sending each statement through the double's `executeQuery`, so these stay on the statements
+// the save hands over and the outcome it records.
+vi.mock(
+  "../../../domains/schema/busy-table/run-unit",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("../../../domains/schema/busy-table/run-unit")
+    >()),
+    runUnitInTries: (
+      await import(
+        "../../../domains/schema/busy-table/__tests__/helpers/run-unit-once"
+      )
+    ).runUnitOnce,
+  })
+);
+
+// A registry write's transaction, and the schema version stored in it, are
+// the integration suite's subject (`schema-version-writers.integration.test.ts`):
+// here a registry write runs on the adapter itself, as it did before it had one.
+vi.mock("../../../domains/schema/schema-version", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../domains/schema/schema-version")
+  >()),
+  writeRegistryRows: (adapter: unknown, work: (tx: unknown) => unknown) =>
+    work(adapter),
+  writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
+}));
 
 vi.mock("../../helpers/di", () => ({
   getSingleRegistryFromDI: vi.fn(),
@@ -147,6 +178,14 @@ vi.mock("../../../domains/schema/pipeline/live-table-facts", () => ({
     holdingNull: new Set<string>(),
     absent: new Set<string>(),
   })),
+  // Columns with no comment, character set or collation of their own, received by a table that
+  // takes none either, so the translation-move precondition has nothing to refuse. What it does
+  // WITH the facts is pinned in `i18n/migration/move-keeps-definition.test.ts`.
+  readColumnExtras: vi.fn(async () => new Map()),
+  readReceivingDefaults: vi.fn(async () => ({
+    charset: null,
+    collation: null,
+  })),
 }));
 
 /**
@@ -216,6 +255,13 @@ import {
   getSingleRegistryFromDI,
 } from "../../helpers/di";
 import { dispatchSingles } from "../single-dispatcher";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 /** Silent: these tests read the statements, not the log. */
 const logger: Logger = {
@@ -246,6 +292,8 @@ function wireRegistry(existing: Record<string, unknown>) {
     listSingles: vi.fn(),
     getAllSingles: vi.fn().mockResolvedValue([]),
     getSingleBySlug: vi.fn(async () => existing),
+    // A schema save reads the Single as stored, past the registry row cache.
+    getSingleForWrite: vi.fn(async () => existing),
     registerSingle: vi.fn(async (row: unknown) => row),
     updateMigrationStatus: vi.fn(),
     updateSingle: vi.fn(
@@ -402,8 +450,8 @@ describe("updateSingleSchema — what the request forwards into the DDL", () => 
 
 describe("updateSingleSchema — where a failure is allowed to surface", () => {
   it("raises a refusal instead of saving the fields it refused", async () => {
-    // The generator is a validator as well as a renderer: a REQUIRED column has no value for the
-    // rows already there, so it refuses before any statement runs. At that point the table is
+    // The generator is a validator as well as a renderer: a decimal with no digits has no column
+    // it can write, so it refuses before any statement runs. At that point the table is
     // untouched and the caller's field list is unsaved — recording that as `failed` would persist a
     // schema the table does not have and report the single as having it.
     let threw: unknown;
@@ -414,10 +462,11 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
           fields: [
             { name: "heading", type: "text" },
             {
-              name: "author",
-              type: "relationship",
-              required: true,
-              relationTo: "users",
+              name: "price",
+              type: "number",
+              dbType: "decimal",
+              precision: 0,
+              scale: 0,
             },
           ],
         },
@@ -428,6 +477,13 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
     }
 
     expect(threw).toBeInstanceOf(NextlyError);
+    expect(threw).toMatchObject({
+      publicData: {
+        errors: [
+          expect.objectContaining({ code: "DECIMAL_PRECISION_INVALID" }),
+        ],
+      },
+    });
     expect(out, "the update did not reach its registry write").toBeUndefined();
     expect(executed, "nothing ran against the database").toEqual([]);
   });

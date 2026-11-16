@@ -8,6 +8,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, defineSingle, text } from "../../../config";
 import {
   createTestNextly,
@@ -74,6 +75,19 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
 const handlerOf = (t: TestNextly): CollectionsHandler =>
   t.getService("collectionsHandler") as CollectionsHandler;
 
+/**
+ * A plain author, who holds update, publish and unpublish on every document
+ * here. A code rule only narrows the permission, so the open rules admit the
+ * author only once they hold it.
+ */
+async function permittedAuthor(t: TestNextly): Promise<string> {
+  const author = await seedPlainAuthor(t);
+  for (const action of ["update", "publish", "unpublish"]) {
+    await grantTo(t, author, action, ["glossary", "pages", "notice"]);
+  }
+  return author;
+}
+
 /** A published page, with German work saved and not yet released. */
 async function pageHeldInGerman(t: TestNextly): Promise<string> {
   const created = await handlerOf(t).createEntry(
@@ -89,7 +103,7 @@ async function pageHeldInGerman(t: TestNextly): Promise<string> {
       overrideAccess: true,
       locale: "de",
     },
-    { title: "DE pending" }
+    { title: "DE pending", _overwrite: true }
   );
   return id;
 }
@@ -143,7 +157,7 @@ describe.each(getConfiguredTestDialects())(
   dialect => {
     it("reports a document whose translations have no per-language status, going live or coming down", async () => {
       const t = await boot(dialect);
-      const author = await seedPlainAuthor(t);
+      const author = await permittedAuthor(t);
       const created = await handlerOf(t).createEntry(
         { collectionName: "glossary", overrideAccess: true, locale: "en" },
         { term: "Live", status: "published" }
@@ -212,7 +226,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("reports a page held in another language, going live or coming down, and refuses to schedule", async () => {
       const t = await boot(dialect);
-      const author = await seedPlainAuthor(t);
+      const author = await permittedAuthor(t);
       const id = await pageHeldInGerman(t);
 
       // The write itself refuses: the fixture reaches the rule being asked.
@@ -223,7 +237,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "*",
         },
-        { status: "draft" }
+        { status: "draft", _overwrite: true }
       );
       expect(written).toMatchObject({ success: false, statusCode: 409 });
 
@@ -278,7 +292,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "de",
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
       expect(
         (await t.nextly.releases.readiness({ releaseId: comingDown.releaseId }))
@@ -288,22 +302,30 @@ describe.each(getConfiguredTestDialects())(
 
     it("reports a Single held in another language", async () => {
       const t = await boot(dialect);
-      const author = await seedPlainAuthor(t);
+      const author = await permittedAuthor(t);
       await t.nextly.updateSingle({
         slug: "notice" as never,
         locale: "en",
-        data: { headline: "EN live", status: "published" } as never,
+        data: {
+          headline: "EN live",
+          status: "published",
+          _overwrite: true,
+        } as never,
       });
       await t.nextly.updateSingle({
         slug: "notice" as never,
         locale: "de",
-        data: { headline: "DE live", status: "published" } as never,
+        data: {
+          headline: "DE live",
+          status: "published",
+          _overwrite: true,
+        } as never,
       });
       // German is live, so this edit is held as its pending work.
       await t.nextly.updateSingle({
         slug: "notice" as never,
         locale: "de",
-        data: { headline: "DE pending" } as never,
+        data: { headline: "DE pending", _overwrite: true } as never,
       });
       const row = await t.adapter.selectOne<{ id: string }>(
         "single_notice",
@@ -315,7 +337,7 @@ describe.each(getConfiguredTestDialects())(
         t.nextly.updateSingle({
           slug: "notice" as never,
           locale: "*",
-          data: { status: "draft" } as never,
+          data: { status: "draft", _overwrite: true } as never,
         })
       ).rejects.toMatchObject({ code: "CONFLICT" });
 

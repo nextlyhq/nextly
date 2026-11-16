@@ -24,7 +24,7 @@ import type { AccessRuleContext } from "../../../shared/types/access";
  * All supported field types in Nextly.
  *
  * Field types are categorized as:
- * - **Text types:** text, textarea, richText, email, password, code
+ * - **Text types:** text, textarea, richText, email, password, code, icon
  * - **Numeric types:** number
  * - **Selection types:** checkbox, date, select, radio
  * - **Media types:** upload
@@ -39,6 +39,8 @@ export type FieldType =
   | "email"
   | "password"
   | "code"
+  // An icon id "<set>:<name>", stored as text like email.
+  | "icon"
   // Numeric types
   | "number"
   // Selection types

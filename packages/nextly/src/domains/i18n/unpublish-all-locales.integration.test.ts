@@ -153,6 +153,7 @@ describe("unpublishAllLocales", () => {
       collectionName: "pages",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
     // Precondition: everything is live, so the assertions below cannot pass by
     // observing a document that was never published.
@@ -165,6 +166,7 @@ describe("unpublishAllLocales", () => {
       collectionName: "pages",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
     expect(res.success).toBe(true);
 
@@ -194,6 +196,7 @@ describe("unpublishAllLocales", () => {
       collectionName: "pages",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     expect((await readStatuses(t, id)).de).toBe("draft");
@@ -210,6 +213,7 @@ describe("unpublishAllLocales", () => {
       collectionName: "pages",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
     await seedCompanionWithoutStatus(t, id);
 
@@ -217,6 +221,7 @@ describe("unpublishAllLocales", () => {
       collectionName: "pages",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     expect(res.success).toBe(false);
@@ -244,6 +249,7 @@ describe("unpublishAllLocales", () => {
       collectionName: "pages",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     expect(res.success).toBe(true);

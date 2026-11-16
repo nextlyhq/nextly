@@ -17,10 +17,19 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import type { RuleFilter } from "../../../auth/access/rule-answer";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { RequestActor } from "../../../auth/request-actor";
-import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope";
+import {
+  errorFromServiceEnvelope,
+  type ServiceErrorEnvelope,
+} from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
+import type { StaleVersionPublicData } from "../../../errors/public-data";
+import {
+  isStatusOnlyWrite,
+  writeGateFor,
+} from "../../../lib/immutable-system-fields";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import type { WhereFilter } from "../../../services/collections/query-operators";
 import type { TrustBound } from "../../../services/collections/trust-grant";
@@ -29,10 +38,24 @@ import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { assertFilterableFields } from "../../../shared/lib/filterable-fields";
 import { PAGINATION_DEFAULTS } from "../../../types/pagination";
+import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
+import { DOCUMENT_VERSION_KEY } from "../../versions/document-revision";
+import {
+  sameValuesVersionRequirement,
+  versionRequiredFor,
+} from "../../versions/stale-version";
 
 import type { CollectionAccessService } from "./collection-access-service";
-import type { CollectionMutationService } from "./collection-mutation-service";
-import { isWriteIntegrityFailure } from "./collection-mutation-service";
+import type {
+  CollectionMutationService,
+  DeleteRowFilter,
+  DeleteRowLanguages,
+  RowVerdict,
+} from "./collection-mutation-service";
+import {
+  GoingLiveRelationsBatch,
+  isWriteIntegrityFailure,
+} from "./collection-mutation-service";
 import type { CollectionQueryService } from "./collection-query-service";
 import type {
   BatchOperationResult,
@@ -42,6 +65,7 @@ import type {
   CollectionServiceResult,
   UserContext,
 } from "./collection-types";
+import type { ReadReach } from "./write-filter-match";
 
 /**
  * Phase 4.5: decompose a legacy `{success, statusCode, message, data}`
@@ -61,14 +85,42 @@ function legacyEnvelopeToFailureFields(result: {
   statusCode?: number;
   code?: string;
   message?: string;
-}): { code: string; message: string } {
+}): ReturnType<typeof failureFieldsOf> {
   // Rebuilt through the shared converter so a per-item failure reports the same
   // code the single-item endpoint reports for the identical failure. This kept
   // its own status table, which sent anything outside 400/403/404/409 to
   // INTERNAL_ERROR -- so an item whose hook threw `rateLimited()` was a rate
   // limit on the single endpoint and an internal error in bulk.
-  const rebuilt = errorFromServiceEnvelope(result);
-  return { code: String(rebuilt.code), message: rebuilt.publicMessage };
+  return failureFieldsOf(errorFromServiceEnvelope(result));
+}
+
+/**
+ * The code and public message one failed item reports, from the error that
+ * answers for it. NextlyError keeps its code and publicMessage; anything else
+ * is INTERNAL_ERROR with a generic message, because an untyped error carries
+ * no public contract and its text may be raw driver output. Every per-item
+ * failure shape in this file derives from this, so a bulk item, a legacy
+ * batch item and the single-item endpoint agree on the code for one failure.
+ * A validation refusal appends its per-field issues.
+ */
+function failureFieldsOf(error: unknown): {
+  code: string;
+  message: string;
+  data?: StaleVersionPublicData;
+} {
+  if (NextlyError.is(error)) {
+    return {
+      code: String(error.code),
+      message: error.publicMessage + validationIssuesSuffix(error.publicData),
+      // An item refused as out of date says its current version (and, to a
+      // caller who may read it, who changed it and when), as the refusal of
+      // a single save does, so the caller can read it again and retry.
+      ...(error.code === "STALE_VERSION" && error.publicData
+        ? { data: error.publicData as StaleVersionPublicData }
+        : {}),
+    };
+  }
+  return { code: "INTERNAL_ERROR", message: "An unexpected error occurred." };
 }
 
 /**
@@ -96,7 +148,12 @@ type PerItemOutcome<T> =
     }
   | {
       kind: "failure";
-      failure: { id: string; code: string; message: string };
+      failure: {
+        id: string;
+        code: string;
+        message: string;
+        data?: StaleVersionPublicData;
+      };
       /**
        * Set when the item committed its row + outbox event but a post-commit
        * hook then threw, so it is reported as a failure yet still owes a
@@ -120,19 +177,8 @@ type PerItemOutcome<T> =
 function failureFromThrown(
   id: string,
   error: unknown
-): { id: string; code: string; message: string } {
-  if (NextlyError.is(error)) {
-    return {
-      id,
-      code: String(error.code),
-      message: error.publicMessage,
-    };
-  }
-  return {
-    id,
-    code: "INTERNAL_ERROR",
-    message: "An unexpected error occurred.",
-  };
+): { id: string } & ReturnType<typeof failureFieldsOf> {
+  return { id, ...failureFieldsOf(error) };
 }
 
 /**
@@ -157,36 +203,87 @@ function detailedErrorMessage(error: unknown): string {
 }
 
 /**
+ * The per-field issues a validation refusal carries, as one message suffix
+ * — " count must be a whole number." — or "" when the error has none.
+ *
+ * Every bulk accounting path appends these to the failure message: a batch
+ * result has no `publicData` of its own to carry them, and an accounting
+ * that says only "Validation failed." leaves the caller no field to fix —
+ * the one thing a validation error exists to name.
+ */
+function validationIssuesSuffix(publicData: unknown): string {
+  const issues = (
+    publicData as { errors?: Array<{ message: string }> } | undefined
+  )?.errors;
+  if (!issues?.length) return "";
+  return ` ${issues.map(issue => issue.message).join(" ")}`;
+}
+
+/**
  * The message returned accounting may carry. A typed NextlyError
  * contributes its public envelope message; anything untyped gets the
  * generic message, because a bare error carries no public contract — its
  * message or cause may be raw driver text with hostnames or credentials,
- * which belongs in the operator log alone.
+ * which belongs in the operator log alone. A validation refusal appends its
+ * per-field issues.
  */
 function batchErrorMessage(error: unknown): string {
-  if (NextlyError.is(error)) return error.publicMessage;
-  return "An unexpected error occurred.";
+  return failureFieldsOf(error).message;
+}
+
+/** The code, and any conflict's data, a failed batch item reports. */
+function batchFailureFields(
+  error: unknown
+): Omit<ReturnType<typeof failureFieldsOf>, "message"> {
+  const { message: _message, ...fields } = failureFieldsOf(error);
+  return fields;
 }
 
 /**
- * Rebuild a rolled-back delete's accounting as exactly one error per
- * requested id, in index order. The per-id invariant is asserted here
+ * The same accounting for a RETURNED failure: the workers hand back the
+ * mutation service's envelope, whose `message` alone says only "Validation
+ * failed." — the per-field issues ride the envelope's public data, so they
+ * are appended here.
+ */
+function batchVerdictMessage(result: {
+  message: string;
+  publicData?: unknown;
+}): string {
+  return result.message + validationIssuesSuffix(result.publicData);
+}
+
+/**
+ * Rebuild a rolled-back batch's accounting as exactly one error per
+ * requested item, in index order. The per-id invariant is asserted here
  * rather than assumed of the accounting: the rebuild is the last stop
  * before the result, and `errors` exceeding one entry per id would give
  * a client duplicate detail and disagree with `failed`.
  */
-function rebuildRolledBackDeleteErrors(
+function rebuildRolledBackErrors(
   state: LegacyBatchState,
-  ids: string[],
-  rollbackNote: string
+  ids: readonly unknown[],
+  rollbackNote: { error: string; code: string }
 ): void {
-  const byIndex = new Map<number, string>();
+  const byIndex = new Map<number, LegacyBatchError>();
   for (const e of state.errors) {
-    if (!byIndex.has(e.index)) byIndex.set(e.index, e.error);
+    if (!byIndex.has(e.index)) byIndex.set(e.index, e);
   }
   state.errors = [];
   for (let i = 0; i < ids.length; i += 1) {
-    state.errors.push({ index: i, error: byIndex.get(i) ?? rollbackNote });
+    // An item that recorded its own failure keeps its message, code and data
+    // (a conflict's current version); one the rollback undid reports the
+    // abort, with the abort's code.
+    const own = byIndex.get(i);
+    state.errors.push(
+      own
+        ? {
+            index: i,
+            error: own.error,
+            code: own.code,
+            ...(own.data ? { data: own.data } : {}),
+          }
+        : { index: i, ...rollbackNote }
+    );
   }
 }
 
@@ -266,9 +363,20 @@ type LegacyBatchVerdict =
   | {
       ok: false;
       message: string;
+      /**
+       * The item's own failed envelope. Rebuilt through the shared converter
+       * into the error that answers for the item: its code is what the item
+       * reports, and an aborting batch throws it.
+       */
+      envelope: ServiceErrorEnvelope;
       eventRecorded?: boolean;
       revalidationIntent?: RevalidationIntent;
     };
+
+/** One failed item in a legacy batch's accounting; every one carries a code. */
+type LegacyBatchError = BatchOperationResult["errors"][number] & {
+  code: string;
+};
 
 /**
  * The accounting one legacy batch accumulates while its items run. Carried as
@@ -279,7 +387,7 @@ interface LegacyBatchState {
   successful: number;
   failed: number;
   ids: string[];
-  errors: Array<{ index: number; error: string }>;
+  errors: LegacyBatchError[];
   /**
    * Tri-state like the public field: unset until an item records, true once
    * one has, false after a rollback clears it.
@@ -289,6 +397,11 @@ interface LegacyBatchState {
   intents: RevalidationIntent[];
   /** Set when the operation's abort policy fired on a thrown error. */
   integrityAbort: boolean;
+  /**
+   * Set when an item answered that the database is not migrated for the
+   * collection, which aborts the batch: see {@link notMigratedAnswer}.
+   */
+  notMigratedAbort?: { error: string; code: string };
 }
 
 function newLegacyBatchState(): LegacyBatchState {
@@ -301,6 +414,25 @@ function newLegacyBatchState(): LegacyBatchState {
     intents: [],
     integrityAbort: false,
   };
+}
+
+/**
+ * Whether an item's answer says the database is not migrated for the
+ * collection (its table or a declared column is missing). That is a fact
+ * about the collection, not the item, so no later item can succeed either,
+ * and on PostgreSQL the failed statement has already aborted the shared
+ * transaction: every statement a later item ran would fail with
+ * `current transaction is aborted` and be reported as an internal error.
+ */
+function notMigratedAnswer(error: unknown, collectionName: string): boolean {
+  if (!NextlyError.is(error) || error.code !== "ENTITY_NOT_MIGRATED") {
+    return false;
+  }
+  // Only an answer about this batch's own collection: one about another
+  // entity an item's write reached (through a hook, say) is that item's
+  // failure, and the rest of the batch goes on as `stopOnError` says.
+  const about = error.publicData as { kind?: unknown; slug?: unknown };
+  return about?.kind === "collection" && about.slug === collectionName;
 }
 
 /**
@@ -351,7 +483,7 @@ function batchOptions(options?: BulkOperationOptions): {
 async function runLegacyBatchItem<TItem>(
   index: number,
   item: TItem,
-  options: { stopOnError: boolean },
+  options: { stopOnError: boolean; collectionName: string },
   state: LegacyBatchState,
   worker: (item: TItem) => Promise<LegacyBatchVerdict>,
   abortOnError: (error: unknown) => boolean
@@ -364,13 +496,20 @@ async function runLegacyBatchItem<TItem>(
     // Returned accounting carries only what the error's public contract
     // allows: a typed NextlyError's envelope message, never the driver
     // detail riding its cause.
-    state.errors.push({
-      index,
+    const failure = {
       error:
         error instanceof Error
           ? batchErrorMessage(error)
           : "Unknown error occurred",
-    });
+      ...batchFailureFields(error),
+    };
+    state.errors.push({ index, ...failure });
+
+    // Aborts whatever the policies say; see notMigratedAnswer.
+    if (notMigratedAnswer(error, options.collectionName)) {
+      state.notMigratedAbort = failure;
+      throw error;
+    }
 
     if (abortOnError(error)) {
       state.integrityAbort = true;
@@ -395,18 +534,35 @@ async function runLegacyBatchItem<TItem>(
   }
 
   state.failed++;
-  state.errors.push({ index, error: verdict.message });
+  // The index and the item's own message ride the log context, so an
+  // operator reading an aborted batch learns which item stopped it.
+  const answer = errorFromServiceEnvelope(verdict.envelope, {
+    batchIndex: index,
+    itemMessage: verdict.message,
+  });
+  const failure = {
+    error: verdict.message,
+    ...batchFailureFields(answer),
+  };
+  state.errors.push({ index, ...failure });
+
+  // Aborts whatever stopOnError says, with the item's own answer; see
+  // notMigratedAnswer. A caller-owned transaction is answered the same
+  // ENTITY_NOT_MIGRATED 409 the single-entry write answers.
+  if (notMigratedAnswer(answer, options.collectionName)) {
+    state.notMigratedAbort = failure;
+    throw answer;
+  }
 
   if (options.stopOnError) {
-    // A typed internal failure: a returned worker failure may be a hook,
-    // access, or server problem rather than caller input, so the public
-    // message stays generic and the per-index detail rides the cause,
-    // which the wire never serializes. The item above is already recorded
-    // once — this throw is the transaction's abort signal, not a second
-    // failure of the same item, so nothing records it on the way out.
-    throw NextlyError.internal({
-      cause: new Error(`Entry at index ${index} failed: ${verdict.message}`),
-    });
+    // The item's own answer is the abort, so a caller-owned transaction is
+    // answered what the single-entry write answers for the same failure
+    // (ENTITY_NOT_MIGRATED 409, NOT_FOUND 404, ...), never a generic 500.
+    // It was rebuilt through the shared envelope converter, so its public
+    // message is the envelope's own and no driver detail rides it. The item
+    // above is already recorded once — this throw is the transaction's
+    // abort signal, not a second failure of the same item.
+    throw answer;
   }
 }
 
@@ -419,7 +575,7 @@ async function runLegacyBatchItem<TItem>(
 async function runLegacyBatch<TItem>(
   tx: TransactionContext,
   items: TItem[],
-  options: { batchSize: number; stopOnError: boolean },
+  options: { batchSize: number; stopOnError: boolean; collectionName: string },
   state: LegacyBatchState,
   worker: (item: TItem) => Promise<LegacyBatchVerdict>,
   abortOnError: (error: unknown) => boolean
@@ -460,6 +616,83 @@ function toBatchResult(state: LegacyBatchState): BatchOperationResult {
     result.revalidationIntents = state.intents;
   }
   return result;
+}
+
+/** An update batch's one gate, where its rule answered a filter. */
+interface UpdateRowFilter {
+  readonly filter?: RuleFilter;
+  readonly read?: ReadReach;
+}
+
+/**
+ * One row's verdict from an update batch's one gate whose rule answered a
+ * filter: the row is matched against it under its lock, and again after the
+ * write, as the single update matches its entry.
+ */
+function filteredUpdateVerdict(
+  params: {
+    collectionName: string;
+    user?: UserContext;
+    overrideAccess?: boolean;
+    authenticatedScope?: AuthenticatedScope;
+  },
+  entryId: string,
+  access: UpdateRowFilter
+): RowVerdict {
+  return {
+    gate: "update",
+    denied: null,
+    filter: {
+      params: {
+        collectionName: params.collectionName,
+        operation: "update",
+        entryId,
+        user: params.user,
+        overrideAccess: params.overrideAccess,
+        authenticatedScope: params.authenticatedScope,
+      },
+      access,
+    },
+  };
+}
+
+/**
+ * How each row of a delete batch is gated, from the batch's one gate: where
+ * its rule answered a filter, each row is matched against it under its lock;
+ * otherwise the gate decided for every row.
+ */
+function deleteRowGate(access: {
+  readonly filter?: RuleFilter;
+  readonly read?: ReadReach;
+}): "batch-hoisted" | DeleteRowFilter {
+  if (access.filter === undefined) return "batch-hoisted";
+  return {
+    denied: null,
+    filter: access.filter,
+    ...(access.read === undefined ? {} : { read: access.read }),
+  };
+}
+
+/**
+ * How each row of a delete batch is gated, from the batch's gate: the
+ * answers of each language its collection keeps, for each row to be judged
+ * by those it holds; otherwise as its one answer decides (see
+ * `deleteRowGate`), or every row refused.
+ */
+function batchDeleteRowGate(
+  gate: Awaited<ReturnType<CollectionMutationService["deleteBatchGate"]>>
+):
+  | "batch-hoisted"
+  | DeleteRowFilter
+  | DeleteRowLanguages
+  | { refused: CollectionServiceResult<BatchOperationResult> } {
+  if ("bySet" in gate) return gate;
+  if (gate.denied) {
+    return {
+      refused: gate.denied as CollectionServiceResult<BatchOperationResult>,
+    };
+  }
+  return deleteRowGate(gate);
 }
 
 export class CollectionBulkService extends BaseService {
@@ -510,6 +743,9 @@ export class CollectionBulkService extends BaseService {
      */
     authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult> {
+    // Refused whole, before any row is read, when the collection is removed
+    // from code, rather than once for each entry it names.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     try {
       // 1. Fetch the source entry with a REAL read check. Duplicating a row is
       // reading it plus creating a copy, and the route only authorized the
@@ -517,16 +753,21 @@ export class CollectionBulkService extends BaseService {
       // its own (key-scoped) access. `overrideAccess` stays as passed (false
       // for route/untrusted callers), so a create-only caller without read is
       // correctly denied rather than silently duplicating a row it can't see.
-      // Draft visibility is limited to trusted (overrideAccess) callers: route
-      // auth attested create, not the right to read unpublished rows, so a
-      // route/untrusted duplicate keeps the default published-only visibility.
-      // Scoped to the SOURCE ROW, not to what it points at. A bounded caller
-      // must not have this reach expansion: `expansionStatusScope` cannot tell
-      // a manufactured `"all"` from one the caller asked for, and would carry
-      // it into every rejected target — whose drafts would then be COPIED into
-      // the new row, outliving the refusal as data.
+      // The source is read as the editor's own read of it is (`status: "all"`),
+      // so a never-published draft the caller may read can be copied. Which
+      // lifecycle states that reaches is still the read path's decision: a
+      // visitor sees published rows only, and a draft the caller's read rule
+      // excludes answers 404 exactly as a missing id does. Route auth attested
+      // the create only, which is why the read is checked here and never
+      // marked route-authorized. The live row is copied, not a pending working
+      // draft of a published entry: no `includeWorkingDraft`.
+      // A bounded trusted caller keeps the status-less read it always had.
+      // `expansionStatusScope` cannot tell a manufactured `"all"` from one
+      // the caller asked for, and would carry it into every rejected target —
+      // whose drafts would then be COPIED into the new row, outliving the
+      // refusal as data.
       const sourceStatus =
-        params.overrideAccess && !narrows(params.trusted) ? "all" : undefined;
+        params.overrideAccess && narrows(params.trusted) ? undefined : "all";
       const sourceResult = await this.queryService.getEntry({
         collectionName: params.collectionName,
         entryId: params.entryId,
@@ -662,6 +903,9 @@ export class CollectionBulkService extends BaseService {
      */
     authenticatedScope?: AuthenticatedScope;
   }): Promise<BulkOperationResult<{ id: string }>> {
+    // Refused whole, before any row is read, when the collection is removed
+    // from code, rather than once for each entry it names.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Phase 4.5: result carries minimal `{id}` records for delete (the
     // entries are gone; no value in materializing more) and structured
     // per-item failures keyed by canonical NextlyErrorCode.
@@ -687,7 +931,9 @@ export class CollectionBulkService extends BaseService {
               routeAuthorized: params.routeAuthorized,
               context: params.context,
               request: params.request,
-              // Judge the key's own delete grant per row.
+              // Judge the key's own delete grant per row. A delete rule's
+              // filter is matched against each entry, as a single delete
+              // matches it: the matching ids are deleted and the rest fail.
               authenticatedScope: params.authenticatedScope,
             });
 
@@ -764,11 +1010,32 @@ export class CollectionBulkService extends BaseService {
      * gate for a key whose owner could publish but whose scope cannot.
      */
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * Each id's own version, `{ "<id>": "<_rev>" }`: the update is judged per
+     * document, as each document's own save would be. One for every id, or
+     * none (see `sameValuesVersionRequirement`).
+     */
+    revs?: unknown;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
+    // Refused whole, before any row is read, when the collection is removed
+    // from code, rather than once for each entry it names.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
+    // One set of values for every id names no one document's version, so it
+    // is judged per id only on the version given for each; decided, and a
+    // request that cannot be judged refused, before any row is read.
+    const requirement = sameValuesVersionRequirement(params.data, {
+      ids: params.ids,
+      revs: params.revs,
+    });
+    if (requirement.kind === "required") throw versionRequiredFor("ids");
+    const revs = requirement.kind === "per-document" ? requirement.revs : {};
     // Phase 4.5: successes carry full mutated records (caller needs the
     // post-update values); failures carry canonical NextlyErrorCode.
     // Per-id updates run concurrently via Promise.allSettled. See
     // bulkDeleteEntries for the rationale on concurrency + per-row hooks.
+    // Where they publish, the documents' components and relationships are
+    // read once for them all, not once for each.
+    const goingLiveBatch = new GoingLiveRelationsBatch(params.ids);
     const outcomes = await Promise.allSettled(
       params.ids.map(
         async (entryId): Promise<PerItemOutcome<Record<string, unknown>>> => {
@@ -788,8 +1055,12 @@ export class CollectionBulkService extends BaseService {
                 request: params.request,
                 // Judge the key's own publish/unpublish grant per row.
                 authenticatedScope: params.authenticatedScope,
+                goingLiveBatch,
               },
-              params.data
+              // Judged on this document's own version where one was given.
+              Object.hasOwn(revs, entryId)
+                ? { ...params.data, [DOCUMENT_VERSION_KEY]: revs[entryId] }
+                : params.data
             );
 
             if (updateResult.success && updateResult.data) {
@@ -802,11 +1073,12 @@ export class CollectionBulkService extends BaseService {
                 revalidationIntent: updateResult.revalidationIntent,
               };
             }
-            const { code, message } =
-              legacyEnvelopeToFailureFields(updateResult);
             return {
               kind: "failure",
-              failure: { id: entryId, code, message },
+              failure: {
+                id: entryId,
+                ...legacyEnvelopeToFailureFields(updateResult),
+              },
               // An update that committed its row + event but failed a post-commit
               // hook still owes a delivery.
               eventRecorded: updateResult.eventRecorded,
@@ -881,6 +1153,12 @@ export class CollectionBulkService extends BaseService {
        * each per-row transition on a scoped API key's OWN grants.
        */
       authenticatedScope?: AuthenticatedScope;
+      /**
+       * Versions by id, which an update by query cannot take: it names no
+       * ids. Accepted here only to be refused, so a caller sending them is
+       * told rather than having them ignored.
+       */
+      revs?: unknown;
     },
     options?: BulkOperationOptions & {
       /**
@@ -891,6 +1169,9 @@ export class CollectionBulkService extends BaseService {
       limit?: number;
     }
   ): Promise<BulkOperationResult<Record<string, unknown>>> {
+    // Refused first when the collection is removed from code, before the filter
+    // is checked or any row is matched, so a query matching nothing is refused too.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     const limit = options?.limit ?? 1000;
 
     const accessUser = params.overrideAccess ? undefined : params.user;
@@ -899,16 +1180,31 @@ export class CollectionBulkService extends BaseService {
     // access denial is a request-level authorization failure, not a per-item
     // partial failure. Throw NextlyError.forbidden so the dispatcher emits
     // a 403 error envelope instead of a 200 with a synthetic empty-id row.
-    const accessDenied = await this.accessService.checkCollectionAccess({
+    // A body that changes only the status of entries with a lifecycle is a
+    // publish or an unpublish alone, judged by the gate its status names in
+    // place of update; each row is judged again as it is written.
+    // Read once, as plain data: a caller's object may compute a key on each
+    // read, and the gate this asks and the rows written must read the same
+    // body.
+    const data = { ...params.data };
+    const gate = await writeGateFor(data, "collection", () =>
+      this.mutationService.hasLifecycle(params.collectionName)
+    );
+    // A rule answering a filter allows the write for the entries it matches:
+    // the list below is narrowed to them, and each is judged again as it is
+    // written.
+    const access = await this.accessService.checkCollectionWrite({
       collectionName: params.collectionName,
-      operation: "update",
+      operation: gate,
       user: accessUser,
       overrideAccess: params.overrideAccess,
-      routeAuthorized: params.routeAuthorized,
+      // The route attests only an update it ran itself.
+      routeAuthorized: gate === "update" && params.routeAuthorized,
       // A scoped API key is judged on its own grants here too, so the session
       // super-admin bypass does not apply to it on the collection-level gate.
       authenticatedScope: params.authenticatedScope,
     });
+    const accessDenied = access.denied;
     if (accessDenied) {
       const logContext = {
         op: "bulkUpdateByQuery",
@@ -922,6 +1218,15 @@ export class CollectionBulkService extends BaseService {
       }
       throw NextlyError.forbidden({ logContext });
     }
+    // One set of values for every match names no one document's version, and
+    // a query names no ids to give each one's. Decided after the access gate,
+    // so a caller who may not write here is refused for that whatever the body
+    // says, and before any row is found.
+    const requirement = sameValuesVersionRequirement(data, {
+      ids: undefined,
+      revs: params.revs,
+    });
+    if (requirement.kind === "required") throw versionRequiredFor("query");
     await assertCallerFilterReadable(params, this.queryService);
 
     // 2. Enumerate the target rows under the UPDATE rule. The collection-level
@@ -937,6 +1242,11 @@ export class CollectionBulkService extends BaseService {
       collectionName: params.collectionName,
       where: updateEnumerationWhere,
       overrideAccess: true,
+      // Only the entries the caller's write rule matches, in the default
+      // language the per-row write matches them in. The limit counts these.
+      ...(access.filter === undefined
+        ? {}
+        : { writeRuleFilter: access.filter }),
       status: "all",
       context: params.context,
       request: params.request,
@@ -1004,7 +1314,7 @@ export class CollectionBulkService extends BaseService {
     return this.bulkUpdateEntries({
       collectionName: params.collectionName,
       ids,
-      data: params.data,
+      data,
       user: params.user,
       actor: params.actor,
       overrideAccess: params.overrideAccess,
@@ -1078,6 +1388,8 @@ export class CollectionBulkService extends BaseService {
       limit?: number;
     }
   ): Promise<BulkOperationResult<{ id: string }>> {
+    // Refused first when the collection is removed from code; see bulkUpdateByQuery.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     const limit = options?.limit ?? 1000;
 
     const accessUser = params.overrideAccess ? undefined : params.user;
@@ -1085,7 +1397,10 @@ export class CollectionBulkService extends BaseService {
     // 1. Check collection-level access FIRST. Phase 4.5: collection-wide
     // access denial is a request-level error, not a per-item failure;
     // throw so the dispatcher emits a 403 error envelope.
-    const accessDenied = await this.accessService.checkCollectionAccess({
+    // A rule answering a filter allows the delete for the entries it matches:
+    // the list below is narrowed to them, and each is judged again as it is
+    // deleted.
+    const access = await this.accessService.checkCollectionWrite({
       collectionName: params.collectionName,
       operation: "delete",
       user: accessUser,
@@ -1095,6 +1410,7 @@ export class CollectionBulkService extends BaseService {
       // super-admin-owned key without delete fails fast rather than enumerating.
       authenticatedScope: params.authenticatedScope,
     });
+    const accessDenied = access.denied;
     if (accessDenied) {
       const logContext = {
         op: "bulkDeleteByQuery",
@@ -1122,6 +1438,11 @@ export class CollectionBulkService extends BaseService {
       collectionName: params.collectionName,
       where: deleteEnumerationWhere,
       overrideAccess: true,
+      // Only the entries the caller's delete rule matches, in the default
+      // language the per-row delete matches them in. The limit counts these.
+      ...(access.filter === undefined
+        ? {}
+        : { writeRuleFilter: access.filter }),
       status: "all",
       context: params.context,
       request: params.request,
@@ -1255,6 +1576,9 @@ export class CollectionBulkService extends BaseService {
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
+    // Refused whole, before any row is read, when the collection is removed
+    // from code, rather than once for each entry it names.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Early return for empty input before batch options validation
     if (entries.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };
@@ -1279,18 +1603,7 @@ export class CollectionBulkService extends BaseService {
         // below already carries the scope, but this gate ran without it).
         authenticatedScope: params.authenticatedScope,
       });
-    if (accessDenied) {
-      // All entries fail due to access denial
-      return {
-        successful: 0,
-        failed: entries.length,
-        errors: entries.map((_, index) => ({
-          index,
-          error: accessDenied.message || "Access denied",
-        })),
-        ids: [],
-      };
-    }
+    if (accessDenied) return everyItemRefused(accessDenied, entries.length);
 
     // Resolve the caller's publish authorization ONCE on the pooled connection
     // before the shared transaction, so each worker enforces the create-as-
@@ -1315,16 +1628,24 @@ export class CollectionBulkService extends BaseService {
     // behind.
     const state = newLegacyBatchState();
     try {
-      await this.adapter.transaction(async tx => {
-        await this.runCreateBatch(
-          tx,
-          params,
-          transitionAuth,
-          entries,
-          { batchSize, stopOnError, skipHooks },
-          state
-        );
-      });
+      // Read committed on every dialect, as updateEntries is, so an
+      // in-transaction handler that serializes an entry's write with a row
+      // lock then reads what committed before it took it. MySQL's default,
+      // REPEATABLE READ, would answer each later read from the snapshot the
+      // batch's first read took.
+      await this.adapter.transaction(
+        async tx => {
+          await this.runCreateBatch(
+            tx,
+            params,
+            transitionAuth,
+            entries,
+            { batchSize, stopOnError, skipHooks },
+            state
+          );
+        },
+        { isolationLevel: "read committed" }
+      );
     } catch (error: unknown) {
       // Transaction was rolled back (stopOnError case). Any outbox events an
       // item recorded before the abort were rolled back too, so clear the
@@ -1368,6 +1689,9 @@ export class CollectionBulkService extends BaseService {
    * @param entries - Array of entry data to create
    * @param options - Bulk operation options (batchSize, stopOnError, skipHooks)
    * @returns BulkOperationResult with success/failure counts, errors, and created IDs
+   * @throws The first item's ENTITY_NOT_MIGRATED answer when the database is not
+   *   migrated for this collection, whatever `stopOnError` says: no later item
+   *   can be written either. The caller's transaction decides what it keeps.
    *
    * @example
    * ```typescript
@@ -1403,6 +1727,11 @@ export class CollectionBulkService extends BaseService {
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
+    // Refused whole when the collection is removed from code, read on the
+    // caller's transaction; see deleteEntries.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
+      executor: tx.getDrizzle(),
+    });
     // Early return for empty input before batch options validation
     if (entries.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };
@@ -1423,17 +1752,7 @@ export class CollectionBulkService extends BaseService {
         authenticatedScope: params.authenticatedScope,
         executor: tx.getDrizzle(),
       });
-    if (accessDenied) {
-      return {
-        successful: 0,
-        failed: entries.length,
-        errors: entries.map((_, index) => ({
-          index,
-          error: accessDenied.message,
-        })),
-        ids: [],
-      };
-    }
+    if (accessDenied) return everyItemRefused(accessDenied, entries.length);
 
     // Resolve the caller's publish authorization ONCE before looping the workers,
     // so each create-as-published is enforced without a per-row permission read.
@@ -1520,41 +1839,55 @@ export class CollectionBulkService extends BaseService {
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
+    // Refused whole, before any row is read, when the collection is removed
+    // from code, rather than once for each entry it names.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Early return for empty input before batch options validation
     if (entries.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };
     }
 
     const { batchSize, stopOnError, skipHooks } = batchOptions(options);
+    // Each row's body read once, as plain data: a caller's object may compute
+    // a key on each read, and the strategy chosen here and each row's write
+    // must read the same body.
+    entries = entries.map(entry => ({ ...entry, data: { ...entry.data } }));
 
     // 1. Check collection-level access FIRST (once for all entries)
     // Note: For update, we check access without document since we don't have it yet
     // Owner-only checks will be done per-entry when we fetch the document
     const accessUser = params.overrideAccess ? undefined : params.user;
-    const accessDenied =
-      await this.accessService.checkCollectionAccess<BatchOperationResult>({
-        collectionName: params.collectionName,
-        operation: "update",
-        user: accessUser,
-        overrideAccess: params.overrideAccess,
-        // Judge a scoped API key on its OWN update grant, not the key owner's:
-        // otherwise a super-admin-owned key without update-<slug> could
-        // batch-update via this collection-level gate (the transition
-        // pre-resolve below already carries the scope, but this gate ran without
-        // it).
-        authenticatedScope: params.authenticatedScope,
-      });
-    if (accessDenied) {
-      // All entries fail due to access denial
-      return {
-        successful: 0,
-        failed: entries.length,
-        errors: entries.map((_, index) => ({
-          index,
-          error: accessDenied.message,
-        })),
-        ids: [],
-      };
+    // Where a row changes only an entry's status, each row is judged on its
+    // own: a status-only row by the gate its status names, whether or not the
+    // caller may update, and any other by update. So a caller refused update
+    // may still change only entries' status, and one allowed it is still
+    // asked publish of a status-only row. Otherwise one update gate, below,
+    // judges every row; it is asked only then, so no rule runs outside the
+    // gate that decides a write.
+    const rowGate =
+      (params.overrideAccess
+        ? undefined
+        : await this.statusRowsGate(params.collectionName, entries)) ??
+      "batch-hoisted";
+    let hoistedFilter: UpdateRowFilter | undefined;
+    if (rowGate === "batch-hoisted") {
+      const access =
+        await this.accessService.checkCollectionWrite<BatchOperationResult>({
+          collectionName: params.collectionName,
+          operation: "update",
+          user: accessUser,
+          overrideAccess: params.overrideAccess,
+          // Judge a scoped API key on its OWN update grant, not the key
+          // owner's: otherwise a super-admin-owned key without update-<slug>
+          // could batch-update via this collection-level gate (the transition
+          // pre-resolve below already carries the scope, but this gate ran
+          // without it).
+          authenticatedScope: params.authenticatedScope,
+        });
+      if (access.denied) {
+        return everyItemRefused(access.denied, entries.length);
+      }
+      if (access.filter) hoistedFilter = access;
     }
 
     // Resolve the caller's publish/unpublish authorization ONCE on the pooled
@@ -1576,22 +1909,39 @@ export class CollectionBulkService extends BaseService {
     // its outbound event would silently omit every localized component value.
     await this.mutationService.warmLocalizedReadiness(params.collectionName);
 
+    const rowVerdicts = await this.updateRowVerdicts(
+      { ...params, user: accessUser },
+      entries,
+      rowGate,
+      hoistedFilter
+    );
+
     // The shared batch loop accumulates into one mutable state so the rollback
     // rewrite below can read the partial accounting a mid-batch abort leaves
     // behind.
     const state = newLegacyBatchState();
     let committed = false;
     try {
-      await this.adapter.transaction(async tx => {
-        await this.runUpdateBatch(
-          tx,
-          params,
-          transitionAuth,
-          entries,
-          { batchSize, stopOnError, skipHooks },
-          state
-        );
-      });
+      // Read committed on every dialect, so each entry is read as committed
+      // once the batch locks it. MySQL's default, REPEATABLE READ, would give
+      // every plain read the snapshot the batch's first read took: a later
+      // entry's components, many-to-many ids, working draft and versions
+      // would be read as they stood before another writer's committed
+      // change, though the batch holds that entry's lock. PostgreSQL already
+      // reads committed, and SQLite runs one writer at a time.
+      await this.adapter.transaction(
+        async tx => {
+          await this.runUpdateBatch(
+            tx,
+            params,
+            transitionAuth,
+            entries,
+            { batchSize, stopOnError, skipHooks, rowGate, rowVerdicts },
+            state
+          );
+        },
+        { isolationLevel: "read committed" }
+      );
       committed = true;
     } catch (error: unknown) {
       // Transaction was rolled back (stopOnError case). Clear the aggregated
@@ -1636,16 +1986,72 @@ export class CollectionBulkService extends BaseService {
   }
 
   /**
+   * Each row's verdict where rows are judged one by one: asked of the gate its
+   * row names, or matched against the filter the batch's one gate answered.
+   * Asked before the shared transaction and off its connection: a rule is the
+   * app's own code and may read the database, which a transaction holding the
+   * pool's only connection would wait on. Keyed by the row itself, so two
+   * rows naming one entry keep their own answers. Empty where the batch's one
+   * gate decided every row.
+   */
+  private async updateRowVerdicts(
+    params: {
+      collectionName: string;
+      user?: UserContext;
+      overrideAccess?: boolean;
+      authenticatedScope?: AuthenticatedScope;
+    },
+    entries: BulkUpdateEntry[],
+    rowGate: "access-service" | "batch-hoisted",
+    hoistedFilter: UpdateRowFilter | undefined
+  ): Promise<Map<BulkUpdateEntry, RowVerdict>> {
+    const rowVerdicts = new Map<BulkUpdateEntry, RowVerdict>();
+    for (const entry of entries) {
+      if (rowGate === "access-service") {
+        rowVerdicts.set(
+          entry,
+          await this.mutationService.rowVerdict(
+            params,
+            entry.id,
+            entry.data,
+            () => true,
+            undefined,
+            // A rule answering a filter is matched against the row under its
+            // lock, as the single write matches it.
+            true
+          )
+        );
+      } else if (hoistedFilter) {
+        rowVerdicts.set(
+          entry,
+          filteredUpdateVerdict(params, entry.id, hoistedFilter)
+        );
+      }
+    }
+    return rowVerdicts;
+  }
+
+  /**
    * Update multiple entries within an existing transaction.
    *
    * Same as updateEntries but uses an externally managed transaction.
    * Useful when bulk updates need to be part of a larger transaction.
+   *
+   * The caller's transaction decides what each entry is read as once it is
+   * locked. On MySQL, opened at its default REPEATABLE READ, a later entry's
+   * components and relationships are read as they stood at the
+   * transaction's first read, not as committed when its lock is taken; open
+   * it with `{ isolationLevel: "read committed" }`, as updateEntries does,
+   * to judge each entry on what is stored.
    *
    * @param tx - Transaction context from adapter
    * @param params - Collection name and optional user context
    * @param entries - Array of { id, data } objects to update
    * @param options - Bulk operation options (batchSize, stopOnError, skipHooks)
    * @returns BulkOperationResult with success/failure counts, errors, and updated IDs
+   * @throws The first item's ENTITY_NOT_MIGRATED answer when the database is not
+   *   migrated for this collection, whatever `stopOnError` says: no later item
+   *   can be written either. The caller's transaction decides what it keeps.
    *
    * @example
    * ```typescript
@@ -1680,6 +2086,11 @@ export class CollectionBulkService extends BaseService {
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
+    // Refused whole when the collection is removed from code, read on the
+    // caller's transaction; see deleteEntries.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
+      executor: tx.getDrizzle(),
+    });
     // Early return for empty input before batch options validation
     if (entries.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };
@@ -1691,25 +2102,42 @@ export class CollectionBulkService extends BaseService {
     // inside the caller's transaction, so the RBAC/metadata reads are bound to
     // the transaction's connection (`tx.getDrizzle()`) rather than taking a
     // second pooled connection, which can stall against a small pool.
-    const accessDenied =
-      await this.accessService.checkCollectionAccess<BatchOperationResult>({
-        collectionName: params.collectionName,
-        operation: "update",
-        user: params.user,
-        // Judge a scoped API key on its OWN update grant, not the key owner's.
-        authenticatedScope: params.authenticatedScope,
-        executor: tx.getDrizzle(),
-      });
-    if (accessDenied) {
-      return {
-        successful: 0,
-        failed: entries.length,
-        errors: entries.map((_, index) => ({
-          index,
-          error: accessDenied.message,
-        })),
-        ids: [],
-      };
+    // Each row's body read once, as plain data: a caller's object may compute
+    // a key on each read, and the strategy chosen here and each row's write
+    // must read the same body.
+    entries = entries.map(entry => ({ ...entry, data: { ...entry.data } }));
+    // As above: where a row changes only an entry's status, each row is
+    // judged on its own, and the one update gate is asked only otherwise.
+    const rowGate =
+      (await this.statusRowsGate(
+        params.collectionName,
+        entries,
+        tx.getDrizzle()
+      )) ?? "batch-hoisted";
+    // A rule answering a filter gives each row its own verdict, matched
+    // against the row under its lock as the single write matches it.
+    const rowVerdicts = new Map<BulkUpdateEntry, RowVerdict>();
+    if (rowGate === "batch-hoisted") {
+      const access =
+        await this.accessService.checkCollectionWrite<BatchOperationResult>({
+          collectionName: params.collectionName,
+          operation: "update",
+          user: params.user,
+          // Judge a scoped API key on its OWN update grant, not the key owner's.
+          authenticatedScope: params.authenticatedScope,
+          executor: tx.getDrizzle(),
+        });
+      if (access.denied) {
+        return everyItemRefused(access.denied, entries.length);
+      }
+      if (access.filter) {
+        for (const entry of entries) {
+          rowVerdicts.set(
+            entry,
+            filteredUpdateVerdict(params, entry.id, access)
+          );
+        }
+      }
     }
 
     // Resolve the caller's publish/unpublish authorization ONCE before looping
@@ -1733,7 +2161,7 @@ export class CollectionBulkService extends BaseService {
       params,
       transitionAuth,
       entries,
-      { batchSize, stopOnError, skipHooks },
+      { batchSize, stopOnError, skipHooks, rowGate, rowVerdicts },
       state
     );
 
@@ -1788,6 +2216,9 @@ export class CollectionBulkService extends BaseService {
     ids: string[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
+    // Refused whole when the collection is removed from code: each entry's own
+    // refusal would otherwise be counted among the batch's failures, without its code.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Early return for empty input before batch options validation
     if (ids.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };
@@ -1795,26 +2226,21 @@ export class CollectionBulkService extends BaseService {
 
     const { batchSize, stopOnError, skipHooks } = batchOptions(options);
 
-    // 1. Check collection-level access FIRST (once for all entries)
-    // Note: For delete, we check access without document since we don't have it yet
-    // Owner-only checks will be done per-entry when we fetch the document
-    const accessDenied =
-      await this.accessService.checkCollectionAccess<BatchOperationResult>({
-        collectionName: params.collectionName,
-        operation: "delete",
-        user: params.user,
-      });
-    if (accessDenied) {
-      // All entries fail due to access denial
-      return {
-        successful: 0,
-        failed: ids.length,
-        errors: ids.map((_, index) => ({
-          index,
-          error: accessDenied.message,
-        })),
-        ids: [],
-      };
+    // 1. Check collection-level access FIRST (once for all entries), in each
+    // language the collection keeps. Each row is judged per entry when it is
+    // fetched, by the answers of the languages it holds.
+    const rowGate = batchDeleteRowGate(
+      await this.mutationService.deleteBatchGate(
+        {
+          collectionName: params.collectionName,
+          operation: "delete",
+          user: params.user,
+        },
+        ids
+      )
+    );
+    if (typeof rowGate === "object" && "refused" in rowGate) {
+      return everyItemRefused(rowGate.refused, ids.length);
     }
 
     // Every companion verdict the batch needs, resolved on the pool before the shared
@@ -1837,7 +2263,7 @@ export class CollectionBulkService extends BaseService {
             tx,
             params,
             ids,
-            { batchSize, stopOnError, skipHooks },
+            { batchSize, stopOnError, skipHooks, rowGate },
             state
           );
         } catch (innerError) {
@@ -1883,8 +2309,15 @@ export class CollectionBulkService extends BaseService {
         aborting !== undefined
           ? `Entry at index ${aborting.index} failed: ${aborting.error}`
           : batchErrorMessage(error);
-      const rollbackNote = `Batch rolled back; no entries were deleted: ${abortDetail}`;
-      rebuildRolledBackDeleteErrors(state, ids, rollbackNote);
+      // The note describes the abort, so an undone item carries its code. A
+      // collection the database is not migrated for reports that answer on
+      // every undone item, as a create or update batch does.
+      const rollbackNote = state.notMigratedAbort ?? {
+        error: `Batch rolled back; no entries were deleted: ${abortDetail}`,
+        code:
+          aborting !== undefined ? aborting.code : failureFieldsOf(error).code,
+      };
+      rebuildRolledBackErrors(state, ids, rollbackNote);
     }
     // Delete always reports the outbox signal, even when nothing recorded:
     // the previous shape read its own flag back after commit (true) or after
@@ -1922,6 +2355,9 @@ export class CollectionBulkService extends BaseService {
    * @param ids - Array of entry IDs to delete
    * @param options - Bulk operation options (batchSize, stopOnError, skipHooks)
    * @returns BulkOperationResult with success/failure counts, errors, and deleted IDs
+   * @throws The first item's ENTITY_NOT_MIGRATED answer when the database is not
+   *   migrated for this collection, whatever `stopOnError` says: no later item
+   *   can be written either. The caller's transaction decides what it keeps.
    *
    * @example
    * ```typescript
@@ -1968,23 +2404,20 @@ export class CollectionBulkService extends BaseService {
     // inside the caller's transaction, so the RBAC/metadata reads are bound to
     // the transaction's connection (`tx.getDrizzle()`) rather than taking a
     // second pooled connection, which can stall against a small pool.
-    const accessDenied =
-      await this.accessService.checkCollectionAccess<BatchOperationResult>({
-        collectionName: params.collectionName,
-        operation: "delete",
-        user: params.user,
-        executor: tx.getDrizzle(),
-      });
-    if (accessDenied) {
-      return {
-        successful: 0,
-        failed: ids.length,
-        errors: ids.map((_, index) => ({
-          index,
-          error: accessDenied.message,
-        })),
-        ids: [],
-      };
+    const rowGate = batchDeleteRowGate(
+      await this.mutationService.deleteBatchGate(
+        {
+          collectionName: params.collectionName,
+          operation: "delete",
+          user: params.user,
+          executor: tx.getDrizzle(),
+        },
+        ids,
+        tx
+      )
+    );
+    if (typeof rowGate === "object" && "refused" in rowGate) {
+      return everyItemRefused(rowGate.refused, ids.length);
     }
 
     // The shared batch loop. The intents and outbox signal it accumulates are
@@ -1995,7 +2428,7 @@ export class CollectionBulkService extends BaseService {
       tx,
       params,
       ids,
-      { batchSize, stopOnError, skipHooks },
+      { batchSize, stopOnError, skipHooks, rowGate },
       state
     );
     // Unlike the self-transaction twin, a caller-owned batch reports the
@@ -2030,7 +2463,21 @@ export class CollectionBulkService extends BaseService {
     // Log lines name WHAT aborted the batch, so read the abort's cause
     // chain: a typed NextlyError's own message is the wire-generic text.
     const errorText = detailedErrorMessage(error);
-    if (state.integrityAbort) {
+    const notMigrated = state.notMigratedAbort;
+    if (notMigrated) {
+      // The collection is not migrated, so no item could be written: an item
+      // that failed first keeps its own answer, and every other reports the
+      // answer that aborted the batch.
+      this.logger.warn(`${operationLabel} rolled back`, {
+        collectionName,
+        successfulBeforeRollback: state.successful,
+        error: errorText,
+      });
+      state.successful = 0;
+      state.ids = [];
+      state.failed = items.length;
+      rebuildRolledBackErrors(state, items, notMigrated);
+    } else if (state.integrityAbort) {
       this.logger.warn(`${operationLabel} rolled back`, {
         collectionName,
         successfulBeforeRollback: state.successful,
@@ -2040,7 +2487,10 @@ export class CollectionBulkService extends BaseService {
       state.ids = [];
       state.failed = items.length;
       const message = "The write could not be completed and was rolled back.";
-      state.errors = items.map((_, index) => ({ index, error: message }));
+      // The generic message describes the integrity abort, so every item
+      // carries the abort's code.
+      const { code } = failureFieldsOf(error);
+      state.errors = items.map((_, index) => ({ index, error: message, code }));
     } else if (stopOnError) {
       if (state.successful > 0) {
         this.logger.warn(`${operationLabel} rolled back due to stopOnError`, {
@@ -2064,8 +2514,8 @@ export class CollectionBulkService extends BaseService {
       state.successful = 0;
       state.ids = [];
       state.failed = items.length;
-      const message = batchErrorMessage(error);
-      state.errors = items.map((_, index) => ({ index, error: message }));
+      const { code, message } = failureFieldsOf(error);
+      state.errors = items.map((_, index) => ({ index, error: message, code }));
     }
   }
 
@@ -2095,7 +2545,7 @@ export class CollectionBulkService extends BaseService {
     await runLegacyBatch(
       tx,
       entries,
-      options,
+      { ...options, collectionName: params.collectionName },
       state,
       async entryData => {
         const createResult =
@@ -2114,13 +2564,34 @@ export class CollectionBulkService extends BaseService {
             }
           : {
               ok: false,
-              message: createResult.message,
+              message: batchVerdictMessage(createResult),
+              envelope: createResult,
               eventRecorded: createResult.eventRecorded,
               revalidationIntent: createResult.revalidationIntent,
             };
       },
       isWriteIntegrityFailure
     );
+  }
+
+  /**
+   * Whether a batch's rows are gated each on its own (`access-service`): where
+   * the collection has a lifecycle and some row changes only an entry's
+   * status, since such a row is judged by the gate its status names, whether
+   * or not the caller may update and whether or not its status moves.
+   * Otherwise `undefined`: the batch's one update gate judges every row.
+   */
+  private async statusRowsGate(
+    collectionName: string,
+    entries: BulkUpdateEntry[],
+    executor?: Parameters<CollectionMutationService["hasLifecycle"]>[1]
+  ): Promise<"access-service" | undefined> {
+    if (!entries.some(entry => isStatusOnlyWrite(entry.data, "collection"))) {
+      return undefined;
+    }
+    return (await this.mutationService.hasLifecycle(collectionName, executor))
+      ? "access-service"
+      : undefined;
   }
 
   /**
@@ -2143,22 +2614,38 @@ export class CollectionBulkService extends BaseService {
       ReturnType<CollectionMutationService["resolveTransitionAuthorization"]>
     >,
     entries: BulkUpdateEntry[],
-    options: { batchSize: number; stopOnError: boolean; skipHooks: boolean },
+    options: {
+      batchSize: number;
+      stopOnError: boolean;
+      skipHooks: boolean;
+      /** How each row is gated; see {@link statusRowsGate}. */
+      rowGate: "access-service" | "batch-hoisted";
+      /** Each row's own gate, asked before the transaction opened. */
+      rowVerdicts?: ReadonlyMap<BulkUpdateEntry, RowVerdict>;
+    },
     state: LegacyBatchState
   ): Promise<void> {
+    // Where an entry publishes, its components and relationships are read
+    // for it alone once its row is locked (`storedRelationsOf`): another
+    // writer may change a later entry's before the batch reaches it. The
+    // component definitions it is judged against are read once for all.
+    const goingLiveBatch = new GoingLiveRelationsBatch(
+      entries.map(entry => entry.id)
+    );
     await runLegacyBatch(
       tx,
       entries,
-      options,
+      { ...options, collectionName: params.collectionName },
       state,
-      async ({ id, data }) => {
+      async entry => {
         const updateResult =
           await this.mutationService.updateSingleEntryInTransaction(
             tx,
-            { ...params, transitionAuth },
-            id,
-            data,
-            options.skipHooks
+            { ...params, transitionAuth, goingLiveBatch },
+            entry.id,
+            entry.data,
+            options.skipHooks,
+            options.rowVerdicts?.get(entry) ?? options.rowGate
           );
         return updateResult.success && updateResult.data
           ? {
@@ -2169,7 +2656,8 @@ export class CollectionBulkService extends BaseService {
             }
           : {
               ok: false,
-              message: updateResult.message,
+              message: batchVerdictMessage(updateResult),
+              envelope: updateResult,
               eventRecorded: updateResult.eventRecorded,
               revalidationIntent: updateResult.revalidationIntent,
             };
@@ -2196,13 +2684,18 @@ export class CollectionBulkService extends BaseService {
       actor?: RequestActor;
     },
     ids: string[],
-    options: { batchSize: number; stopOnError: boolean; skipHooks: boolean },
+    options: {
+      batchSize: number;
+      stopOnError: boolean;
+      skipHooks: boolean;
+      rowGate: "batch-hoisted" | DeleteRowFilter | DeleteRowLanguages;
+    },
     state: LegacyBatchState
   ): Promise<void> {
     await runLegacyBatch(
       tx,
       ids,
-      options,
+      { ...options, collectionName: params.collectionName },
       state,
       async entryId => {
         const deleteResult =
@@ -2210,7 +2703,8 @@ export class CollectionBulkService extends BaseService {
             tx,
             params,
             entryId,
-            options.skipHooks
+            options.skipHooks,
+            options.rowGate
           );
         return deleteResult.success
           ? {
@@ -2221,7 +2715,8 @@ export class CollectionBulkService extends BaseService {
             }
           : {
               ok: false,
-              message: deleteResult.message,
+              message: batchVerdictMessage(deleteResult),
+              envelope: deleteResult,
               eventRecorded: deleteResult.eventRecorded,
               revalidationIntent: deleteResult.revalidationIntent,
             };
@@ -2269,7 +2764,34 @@ async function assertCallerFilterReadable(
       caller: {
         user: params.user as Record<string, unknown> | undefined,
         authenticatedScope: params.authenticatedScope,
+        // A visitor's Public grants, read where the write's gate reads them.
+        visitor: queryService.fieldRuleVisitor,
       },
     }
   );
+}
+
+/**
+ * The result of a batch the collection gate refused as a whole: every item
+ * failed, each with the refusal's words. The refusal reaches its caller here,
+ * folded into the batch, so it is recorded here, as one converted to an error
+ * is where it is converted.
+ */
+function everyItemRefused(
+  refused: CollectionServiceResult<BatchOperationResult>,
+  count: number
+): BatchOperationResult {
+  // Rebuilding the refusal through the shared converter records it, once,
+  // and names the code every refused item reports.
+  const { code } = legacyEnvelopeToFailureFields(refused);
+  return {
+    successful: 0,
+    failed: count,
+    errors: Array.from({ length: count }, (_, index) => ({
+      index,
+      error: refused.message,
+      code,
+    })),
+    ids: [],
+  };
 }

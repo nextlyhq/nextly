@@ -1,0 +1,24 @@
+---
+title: NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED
+description: "A Schema Builder save would convert a column of a table an earlier version made that the person saving did not confirm."
+---
+
+## Cause
+
+A Schema Builder save would convert a column of a table an earlier version made that the person saving did not confirm.
+
+The first save of a collection whose table an earlier Nextly version made describes that table as it stands. Where a column's type differs from what its field makes now, the save converts it in a `_convert.sql` file before the change. A save converts only the columns its review showed and the person confirmed, and this one names a column nobody confirmed.
+
+## Fix
+
+- Open the save in the Schema Builder, read the conversions its review lists, and confirm them.
+- A save through the API or a plugin passes the confirmed columns as `acknowledgedConversions`.
+
+## Example
+
+```text
+✗ This save also converts body from text to varchar(255), from an earlier Nextly version. Review the save and confirm the conversion to write it.
+  Why:  The column's type differs from what its field makes now, and a save converts only the columns its review showed.
+  Next: Review the save in the Schema Builder and confirm the conversion, or pass the column in `acknowledgedConversions`.
+  Docs: https://nextlyhq.com/docs/cli/errors/nextly-schema-conversion-unconfirmed  (NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED)
+```

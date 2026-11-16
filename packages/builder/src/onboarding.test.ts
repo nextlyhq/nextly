@@ -54,6 +54,26 @@ function register() {
       // A block with NOTHING an author can type into, so "write something"
       // cannot be satisfied by adding one.
       { ...base, name: "acme/divider", props: {} },
+      // A block placed with text of its own, which nobody here wrote.
+      {
+        ...base,
+        name: "acme/titled",
+        props: { text: { type: "text", inline: true } },
+        defaultProps: { text: "Heading" },
+      },
+      // Placed with its EXAMPLE's text over an empty default, as core/heading
+      // is: the inserter's starting props, not the default alone.
+      {
+        ...base,
+        name: "acme/exampled",
+        props: { text: { type: "text", inline: true } },
+        defaultProps: { text: "" },
+        example: { props: { text: "A section title" } },
+        // A variation placed with text of its own, as a plugin's may be.
+        editor: {
+          variations: [{ name: "hero", props: { text: "Hero title" } }],
+        },
+      },
     ] as never,
     { source: "onboarding-test" }
   );
@@ -86,6 +106,39 @@ describe("builderChecklist", () => {
     expect(step(empty, "build-page")?.done).toBe(false);
   });
 
+  it("points at the empty page's own Add section button first", () => {
+    // The start card's button is on the canvas beside this step, so the step
+    // names it before the rail.
+    expect(step(documentOf([]), "add-block")?.hint).toBe(
+      "Click Add section, or open Add in the left rail."
+    );
+  });
+
+  it("names the control an empty component offers, which adds blocks", () => {
+    // A component has no sections: its start card's button says Add block.
+    const component = { ...documentOf([]), kind: "component" } as never;
+    expect(step(component, "add-block")?.hint).toBe(
+      "Click Add block, or open Add in the left rail."
+    );
+  });
+
+  it.each(["pattern", "region", "template"])(
+    "names Add block for an empty %s, which has no sections",
+    kind => {
+      const document = { ...documentOf([]), kind } as never;
+      expect(step(document, "add-block")?.hint).toBe(
+        "Click Add block, or open Add in the left rail."
+      );
+    }
+  );
+
+  it("names Add block for a document of a kind it does not know", () => {
+    const document = { ...documentOf([]), kind: "a-future-kind" } as never;
+    expect(step(document, "add-block")?.hint).toBe(
+      "Click Add block, or open Add in the left rail."
+    );
+  });
+
   it("counts the first block as done once one is there", () => {
     expect(step(documentOf([heading("a")]), "add-block")?.done).toBe(true);
   });
@@ -108,6 +161,52 @@ describe("builderChecklist", () => {
     expect(step(documentOf([heading("a", "Hello")]), "write-text")?.done).toBe(
       true
     );
+  });
+
+  it("does not count a block's starting text as writing", () => {
+    // Placing a heading that reads "Heading" is adding a block, not writing.
+    const titled = (text: string) =>
+      ({
+        id: "t",
+        type: "acme/titled",
+        version: 1,
+        props: { text },
+      }) as BlockNode;
+    expect(step(documentOf([titled("Heading")]), "write-text")?.done).toBe(
+      false
+    );
+    expect(step(documentOf([titled("  Heading ")]), "write-text")?.done).toBe(
+      false
+    );
+    expect(step(documentOf([titled("Our story")]), "write-text")?.done).toBe(
+      true
+    );
+  });
+
+  it("does not count the text a block is placed with from its example", () => {
+    const exampled = (text: string) =>
+      ({
+        id: "e",
+        type: "acme/exampled",
+        version: 1,
+        props: { text },
+      }) as BlockNode;
+    expect(
+      step(documentOf([exampled("A section title")]), "write-text")?.done
+    ).toBe(false);
+    expect(step(documentOf([exampled("About us")]), "write-text")?.done).toBe(
+      true
+    );
+  });
+
+  it("does not count the text a block is placed with as one of its variations", () => {
+    const placed = {
+      id: "v",
+      type: "acme/exampled",
+      version: 1,
+      props: { text: "Hero title" },
+    } as BlockNode;
+    expect(step(documentOf([placed]), "write-text")?.done).toBe(false);
   });
 
   it("finds text on a NESTED block", () => {

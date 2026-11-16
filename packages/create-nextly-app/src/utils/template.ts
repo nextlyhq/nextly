@@ -2,7 +2,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 import { parse } from "@babel/parser";
-import type { Node, ObjectProperty } from "@babel/types";
+import type { Node, ObjectProperty, Program } from "@babel/types";
 import fs from "fs-extra";
 
 import { bundledSkillsVersionOrNull } from "../generators/agent-skills";
@@ -12,6 +12,8 @@ import { EXACT_VERSION } from "../lib/exact-version";
 import { nextlySource, type NextlySource } from "../lib/nextly-release";
 import { packageVersion } from "../lib/package-version";
 import { getAvailableTemplateNames } from "../lib/templates";
+// The one source of the Next.js and React versions a project declares.
+import { SUPPORTED_RANGES, scaffoldRange } from "../supported-versions";
 import type {
   DatabaseConfig,
   PackageManager,
@@ -151,9 +153,13 @@ export function configuredPlugins(
   configText: string,
   file = "nextly.config.ts"
 ): string[] {
-  let program: Node;
+  return readPluginLists(configText, file).packages;
+}
+
+/** Parses a config, naming the file when it does not parse. */
+function parseConfigProgram(configText: string, file: string): Program {
   try {
-    program = parse(configText, {
+    return parse(configText, {
       sourceType: "module",
       plugins: ["typescript", "jsx"],
     }).program;
@@ -162,26 +168,63 @@ export function configuredPlugins(
       `${file} cannot be parsed (${(error as Error).message}), so the plugins its build must install cannot be read.`
     );
   }
-  const fromPackage = new Map<string, string>();
+}
+
+/** Each binding imported from a module `matches` accepts, to that module's name. */
+function bindingsImportedFrom(
+  program: Program,
+  matches: (source: string) => boolean
+): Map<string, string> {
+  const bindings = new Map<string, string>();
   for (const statement of program.body) {
     if (statement.type !== "ImportDeclaration") continue;
-    const pkg = statement.source.value;
-    if (
-      !pkg.startsWith("@nextlyhq/plugin-") ||
-      pkg === "@nextlyhq/plugin-sdk"
-    ) {
-      continue;
-    }
+    if (!matches(statement.source.value)) continue;
     for (const specifier of statement.specifiers) {
-      fromPackage.set(specifier.local.name, pkg);
+      bindings.set(specifier.local.name, statement.source.value);
     }
   }
-  const found: string[] = [];
+  return bindings;
+}
+
+const isPluginPackage = (source: string): boolean =>
+  source.startsWith("@nextlyhq/plugin-") && source !== "@nextlyhq/plugin-sdk";
+
+/** What a config's `plugins` lists hold: the packages, and whether a binding from its own source is among them. */
+function readPluginLists(
+  configText: string,
+  file: string
+): { packages: string[]; ownPlugin: boolean } {
+  const program = parseConfigProgram(configText, file);
+  const fromPackage = bindingsImportedFrom(program, isPluginPackage);
+  const packages = new Set<string>();
   for (const name of identifiersInPluginLists(program, file)) {
     const pkg = fromPackage.get(name);
-    if (pkg !== undefined && !found.includes(pkg)) found.push(pkg);
+    if (pkg !== undefined) packages.add(pkg);
   }
-  return found;
+  // A plugin the site wrote itself is a binding imported from a path of its
+  // own. Only an entry counts: an identifier inside a package's options isn't one.
+  const local = bindingsImportedFrom(program, source => source.startsWith("."));
+  const ownPlugin = namesInPluginEntries(program, file).some(
+    name => local.has(name) && !fromPackage.has(name)
+  );
+  return { packages: [...packages], ownPlugin };
+}
+
+/**
+ * The `nextly plugins install` steps a project's build runs, read from its
+ * config. A plugin package is installed by name, and the build says which. A
+ * plugin the site wrote itself has no package name to give, and a production
+ * boot refuses it like any other when nothing has installed it, so a config
+ * that lists one installs with `--all`, which reads the names from the config.
+ * Exported for the test that holds every template's config to its build.
+ */
+export function pluginInstallSteps(
+  configText: string,
+  file = "nextly.config.ts"
+): string[] {
+  const { packages, ownPlugin } = readPluginLists(configText, file);
+  if (ownPlugin) return ["nextly plugins install --all"];
+  return packages.map(pkg => `nextly plugins install ${pkg}`);
 }
 
 /** Every identifier inside the value of each `plugins: [...]` property, in source order. */
@@ -192,6 +235,30 @@ function identifiersInPluginLists(program: Node, file: string): string[] {
     walkNodes(node.value, inner => {
       if (inner.type === "Identifier") names.push(inner.name);
     });
+  });
+  return names;
+}
+
+/**
+ * The binding each entry of a `plugins: [...]` list is, as written: `seo` for
+ * `seo` or `seo({ ... })`. Narrower than {@link identifiersInPluginLists},
+ * which also sees the identifiers inside an entry's options.
+ */
+function namesInPluginEntries(program: Node, file: string): string[] {
+  const names: string[] = [];
+  walkNodes(program, node => {
+    if (!isPluginList(node, file) || node.value.type !== "ArrayExpression") {
+      return;
+    }
+    for (const element of node.value.elements) {
+      if (element?.type === "Identifier") names.push(element.name);
+      else if (
+        element?.type === "CallExpression" &&
+        element.callee.type === "Identifier"
+      ) {
+        names.push(element.callee.name);
+      }
+    }
   });
   return names;
 }
@@ -245,17 +312,16 @@ function isNode(value: unknown): value is Node {
 }
 
 /**
- * The plugins the scaffolded PROJECT's config registers, read from the
- * finished project as {@link projectHasSearchIndexScript} is: a template
- * offers more than one config (the blog's visual one registers none), so
- * only the file the copy wrote can say. None when there is no config, or
- * no project on disk to ask.
+ * The plugin install steps the scaffolded PROJECT's build needs, read from
+ * the finished project as {@link projectHasSearchIndexScript} is: a template
+ * offers more than one config, so only the file the copy wrote can say. None
+ * when there is no config, or no project on disk to ask.
  */
-async function projectPlugins(targetDir?: string): Promise<string[]> {
+async function projectPluginInstalls(targetDir?: string): Promise<string[]> {
   if (targetDir === undefined) return [];
   const config = path.join(targetDir, "nextly.config.ts");
   return (await fs.pathExists(config))
-    ? configuredPlugins(await fs.readFile(config, "utf-8"), config)
+    ? pluginInstallSteps(await fs.readFile(config, "utf-8"), config)
     : [];
 }
 
@@ -1098,17 +1164,12 @@ async function replacePlaceholders(
 /**
  * Pinned dependency versions for generated projects.
  *
- * `next` and `eslint-config-next` are resolved at runtime from the npm
- * registry so that fresh projects always get the latest release without
- * needing to republish create-nextly-app.  The remaining versions use
- * wide semver ranges that rarely need updating.
+ * `next`, `eslint-config-next`, `react` and `react-dom` are not here: they
+ * come from `supported-versions`, the reviewed release of each, so a project
+ * never declares a Next.js or React no Nextly release was checked against.
+ * The remaining versions use wide semver ranges that rarely need updating.
  */
 const PINNED_VERSIONS: Record<string, string> = {
-  // Next.js ecosystem — resolved at runtime via fetchLatestVersion()
-  // (see generatePackageJson)
-  // The floor is the React the repository builds and tests with.
-  react: "^19.3.1",
-  "react-dom": "^19.3.1",
   // Dev dependencies
   typescript: "^5",
   // The oldest Node line in this package's `engines.node`, so a scaffolded
@@ -1137,12 +1198,6 @@ export const CONFIG_TOOLING_DEV_DEPENDENCIES: readonly [
 ] = [`esbuild@${PINNED_VERSIONS.esbuild}`] as const;
 
 /**
- * Packages whose latest version is fetched from the npm registry at
- * runtime so the CLI always scaffolds with the newest release.
- */
-const RUNTIME_RESOLVED_PACKAGES = ["next", "eslint-config-next"] as const;
-
-/**
  * @nextlyhq packages whose latest version is fetched from npm at runtime.
  * This avoids having to republish create-nextly-app every time a
  * dependency package is updated.
@@ -1168,11 +1223,12 @@ const resolvedNextlyVersions = new Map<NpmDistTag, Record<string, string>>();
  * On any failure (non-OK response, timeout, missing tag, thrown error) it
  * returns the requested dist-tag NAME itself (e.g. "alpha") — a valid npm
  * install spec — so a project on the alpha line never silently drops to
- * `latest`.
+ * `latest`. The channel has no default: only the Nextly packages are read
+ * from the registry, always on a tag their caller names.
  */
 async function fetchLatestVersion(
   pkg: string,
-  channel: NpmDistTag = "latest"
+  channel: NpmDistTag
 ): Promise<string> {
   try {
     const res = await fetch(
@@ -1227,36 +1283,6 @@ async function nextlyVersions(
   return resolveNextlyVersions("alpha");
 }
 
-/** Cache for runtime-resolved package versions (next, eslint-config-next). */
-let resolvedRuntimeVersions: Record<string, string> | null = null;
-
-/**
- * Resolve latest versions for Next.js ecosystem packages in parallel.
- * Falls back to a safe semver range if the registry is unreachable.
- */
-async function resolveRuntimeVersions(): Promise<Record<string, string>> {
-  if (resolvedRuntimeVersions) return resolvedRuntimeVersions;
-
-  // The lowest Next.js 16 release Nextly's own `next` peer accepts, the first
-  // without the advisories that peer excludes: an offline cache or a private
-  // mirror installs whatever this range admits.
-  const NEXT_FLOOR = "^16.4.1";
-  const FALLBACKS: Record<string, string> = {
-    next: NEXT_FLOOR,
-    "eslint-config-next": NEXT_FLOOR,
-  };
-
-  const entries = await Promise.all(
-    RUNTIME_RESOLVED_PACKAGES.map(async pkg => {
-      const version = await fetchLatestVersion(pkg);
-      return [pkg, version === "latest" ? FALLBACKS[pkg] : version] as const;
-    })
-  );
-
-  resolvedRuntimeVersions = Object.fromEntries(entries);
-  return resolvedRuntimeVersions;
-}
-
 /**
  * Generate a `package.json` string for a fresh Nextly project.
  *
@@ -1293,13 +1319,13 @@ export async function generatePackageJson(
     return generatePluginPackageJson(projectName, source);
   }
 
-  // Fetch latest Next.js (and eslint-config-next) version from npm
-  const runtimeVersions = await resolveRuntimeVersions();
-
+  // The reviewed Next.js and React, patch releases of that minor only, with
+  // no registry lookup: npm's `latest` can name a minor or a major no Nextly
+  // release was checked against.
   const dependencies: Record<string, string> = {
-    next: runtimeVersions.next,
-    react: PINNED_VERSIONS.react,
-    "react-dom": PINNED_VERSIONS["react-dom"],
+    next: scaffoldRange("next"),
+    react: scaffoldRange("react"),
+    "react-dom": scaffoldRange("react-dom"),
   };
 
   // @tanstack/react-query is externalized from admin bundle to avoid duplicate
@@ -1363,7 +1389,8 @@ export async function generatePackageJson(
     "@tailwindcss/postcss": PINNED_VERSIONS["@tailwindcss/postcss"],
     tailwindcss: PINNED_VERSIONS.tailwindcss,
     eslint: PINNED_VERSIONS.eslint,
-    "eslint-config-next": runtimeVersions["eslint-config-next"],
+    // Moves with `next`: the reviewed release of the same Next.js.
+    "eslint-config-next": scaffoldRange("eslint-config-next"),
     // Declared HERE rather than inherited: `nextly` takes esbuild as an
     // optional peer, so nothing installs it on a project's behalf. Without it
     // the dev server cannot read `nextly.config.ts`.
@@ -1379,7 +1406,7 @@ export async function generatePackageJson(
   // installed on its database, so the build installs each one the project's
   // config registers, against the database it migrates. The install is safe
   // to repeat, so every build can run it.
-  const plugins = await projectPlugins(targetDir);
+  const pluginInstalls = await projectPluginInstalls(targetDir);
 
   // Pagefind builds the static index behind /search. DECLARED only where the
   // builder ships, because the index script invokes it through `node`, which
@@ -1422,7 +1449,7 @@ export async function generatePackageJson(
       // which fails in the browser rather than in CI.
       build: [
         "nextly migrate",
-        ...plugins.map(plugin => `nextly plugins install ${plugin}`),
+        ...pluginInstalls,
         "next build",
         ...(shipsSearchIndex ? ["node scripts/build-search-index.mjs"] : []),
       ].join(" && "),
@@ -1512,7 +1539,6 @@ async function generatePluginPackageJson(
   source: NextlySource
 ): Promise<string> {
   const versions = await nextlyVersions(source);
-  const runtimeVersions = await resolveRuntimeVersions();
   /*
    * The fallback is the `alpha` tag, never `latest`.
    *
@@ -1541,8 +1567,10 @@ async function generatePluginPackageJson(
     // treats it as bundleable and inlines the whole kit into the published
     // plugin — first-party plugins declare it as a peer for this reason.
     "@nextlyhq/ui": peerRange("@nextlyhq/ui"),
-    react: PINNED_VERSIONS.react,
-    "react-dom": PINNED_VERSIONS["react-dom"],
+    // Every React Nextly supports, as the host app may run any of them; the
+    // plugin's own playground develops on the reviewed one below.
+    react: SUPPORTED_RANGES.react,
+    "react-dom": SUPPORTED_RANGES["react-dom"],
   };
 
   // devDeps cover: build (tsdown/tsc), test (vitest), lint (eslint), AND the
@@ -1554,9 +1582,10 @@ async function generatePluginPackageJson(
     "@nextlyhq/plugin-sdk": range("@nextlyhq/plugin-sdk"),
     "@nextlyhq/adapter-drizzle": range("@nextlyhq/adapter-drizzle"),
     "@nextlyhq/adapter-sqlite": range("@nextlyhq/adapter-sqlite"),
-    next: runtimeVersions.next,
-    react: PINNED_VERSIONS.react,
-    "react-dom": PINNED_VERSIONS["react-dom"],
+    // The playground runs on the reviewed Next.js and React, as a new app does.
+    next: scaffoldRange("next"),
+    react: scaffoldRange("react"),
+    "react-dom": scaffoldRange("react-dom"),
     "better-sqlite3": "^12.0.0",
     "@types/node": PINNED_VERSIONS["@types/node"],
     "@types/react": PINNED_VERSIONS["@types/react"],
@@ -1852,6 +1881,12 @@ export interface CopyTemplateOptions {
    */
   packageManager: PackageManager;
   /**
+   * The person named `packageManager` with `--package-manager`, so the
+   * project's `packageManager` field is pinned to that manager's own version
+   * rather than to the launcher's.
+   */
+  packageManagerSelected?: boolean;
+  /**
    * Suppress the internal "directory already exists" guard. Set by the
    * installer when it has already negotiated a directory conflict with
    * the user (cwd install, or the "remove"/"ignore" choices from the
@@ -1890,6 +1925,7 @@ export async function copyTemplate(
     approach,
     templateSource,
     packageManager,
+    packageManagerSelected = false,
     allowExistingTarget = false,
   } = options;
   const source =
@@ -1937,7 +1973,9 @@ export async function copyTemplate(
       source,
     });
     // As for an app below: before the first install.
-    await recordLaunchingPackageManager(targetDir, packageManager);
+    await recordLaunchingPackageManager(targetDir, packageManager, {
+      selected: packageManagerSelected,
+    });
     return;
   }
 
@@ -2033,8 +2071,16 @@ export async function copyTemplate(
   // dashboard's SeedDemoContentCard after running /admin/setup — the
   // CLI no longer asks about it.)
 
+  // The template's hand-written SQL describes the tables a visual project
+  // registers its schema from, in the folder its visual config reads. A
+  // code-first project's schema is its config: its first migration is written
+  // from that config once it is installed (`installers/initial-migration.ts`),
+  // so it receives none of this SQL.
   const templateMigrationsDir = path.join(typeDir, "migrations");
-  if (await fs.pathExists(templateMigrationsDir)) {
+  if (
+    approach !== "code-first" &&
+    (await fs.pathExists(templateMigrationsDir))
+  ) {
     await fs.copy(templateMigrationsDir, path.join(targetDir, "migrations"), {
       overwrite: false,
     });
@@ -2086,7 +2132,9 @@ export async function copyTemplate(
   // Before the first install, which runs once the files are in place: the
   // pnpm or Yarn version that launched the scaffold, so Corepack installs
   // with it rather than its own default.
-  await recordLaunchingPackageManager(targetDir, packageManager);
+  await recordLaunchingPackageManager(targetDir, packageManager, {
+    selected: packageManagerSelected,
+  });
 
   // Step 6b: Write pnpm-workspace.yaml carrying the native-dependency build
   // allowlist. pnpm 10+ blocks dependency build scripts by default and pnpm 11

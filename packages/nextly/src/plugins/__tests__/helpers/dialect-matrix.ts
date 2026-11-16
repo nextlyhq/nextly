@@ -38,3 +38,41 @@ export function describeEachDialect(
     }
   }
 }
+
+/** Where a suite's entities keep their translatable values. */
+export interface StorageMode {
+  /** How the mode reads in a suite's title. */
+  name: string;
+  /** Passed to `createTestNextly`: every translatable field kept per language from the start. */
+  perLanguageStorage: boolean;
+}
+
+/**
+ * The two storage layouts a suite whose behaviour must not depend on where translatable values
+ * live runs under: as each entity keeps them today, and with every translatable field kept per
+ * language (`experimental.perLanguageStorage`). For `describe.each` in a suite that already
+ * declares its dialects itself.
+ */
+export const STORAGE_MODES: readonly StorageMode[] = [
+  { name: "storage as declared", perLanguageStorage: false },
+  { name: "per-language storage", perLanguageStorage: true },
+];
+
+/**
+ * Declare `body` once per dialect and storage mode, suffixing the title with both.
+ *
+ * For a behaviour suite (entry and Single reads and writes, components, drafts, the Direct API and
+ * REST), which must answer alike whichever layout holds its translatable values. A suite that
+ * asserts the layout itself (columns, statement counts, migration files) declares one mode, and
+ * covers per-language storage with cases of its own.
+ */
+export function describeEachDialectAndStorage(
+  title: string,
+  body: (dialect: TestDialect, storage: StorageMode) => void
+): void {
+  for (const storage of STORAGE_MODES) {
+    describeEachDialect(`${title}, ${storage.name}`, dialect =>
+      body(dialect, storage)
+    );
+  }
+}

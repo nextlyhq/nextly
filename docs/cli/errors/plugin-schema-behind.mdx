@@ -1,0 +1,23 @@
+---
+title: PLUGIN_SCHEMA_BEHIND
+description: "In production, a plugin expects a schema version its applied migrations have not reached."
+---
+
+## Cause
+
+In production, a plugin expects a schema version its applied migrations have not reached.
+
+A plugin declares the `schemaVersion` its code expects. The database's version is the newest `schemaVersion` among the plugin's migrations recorded as applied, and in production a plugin does not start ahead of its tables. Development warns instead.
+
+## Fix
+
+- Run `nextly migrate` to apply the plugin's pending migrations, or `nextly plugins install <name>`.
+
+## Example
+
+```text
+✗ The plugin "@acme/seo" expects schema version 3, and the database has 2.
+  Why:  The applied version is the newest `schemaVersion` among the plugin's migrations recorded as applied, and production does not start a plugin ahead of its tables.
+  Next: Run "nextly migrate" or "nextly plugins install @acme/seo".
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-behind  (PLUGIN_SCHEMA_BEHIND)
+```

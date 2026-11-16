@@ -1,4 +1,5 @@
 import { arrayMove } from "@dnd-kit/sortable";
+import { neverTranslatable } from "nextly/config";
 // The shared readers preserve both reference spellings across the builder
 // round trip: a migrated definition loads with its references intact and
 // saves them back resolved, rather than losing them into pluginOptions.
@@ -12,6 +13,8 @@ import type {
   FieldCondition,
 } from "@admin/components/features/schema-builder/types";
 import type { FieldDefinition } from "@admin/types/collection";
+
+import { insertField } from "./insert-field";
 
 /**
  * Generate a unique ID for builder fields.
@@ -105,53 +108,32 @@ export function findParentContainerId(
 }
 
 /**
- * Add a field to a Repeater field's nested fields.
+ * Add a field at the end of a Repeater field's nested fields. Placed by
+ * `insertField`, the one rule for where a field goes in a container; the type
+ * check keeps this helper to repeaters, as its name says.
  */
 export function addFieldToArray(
   fields: BuilderField[],
   arrayFieldId: string,
   newField: BuilderField
 ): BuilderField[] {
-  return fields.map(field => {
-    if (field.id === arrayFieldId && field.type === "repeater") {
-      return {
-        ...field,
-        fields: [...(field.fields || []), newField],
-      };
-    }
-    if (field.fields && field.fields.length > 0) {
-      return {
-        ...field,
-        fields: addFieldToArray(field.fields, arrayFieldId, newField),
-      };
-    }
-    return field;
-  });
+  return findFieldById(fields, arrayFieldId)?.type === "repeater"
+    ? (insertField(fields, newField, { parentFieldId: arrayFieldId }) ?? fields)
+    : fields;
 }
 
 /**
- * Add a field to a Group field's nested fields.
+ * Add a field at the end of a Group field's nested fields, placed by
+ * `insertField` as `addFieldToArray` is.
  */
 export function addFieldToGroup(
   fields: BuilderField[],
   groupFieldId: string,
   newField: BuilderField
 ): BuilderField[] {
-  return fields.map(field => {
-    if (field.id === groupFieldId && field.type === "group") {
-      return {
-        ...field,
-        fields: [...(field.fields || []), newField],
-      };
-    }
-    if (field.fields && field.fields.length > 0) {
-      return {
-        ...field,
-        fields: addFieldToGroup(field.fields, groupFieldId, newField),
-      };
-    }
-    return field;
-  });
+  return findFieldById(fields, groupFieldId)?.type === "group"
+    ? (insertField(fields, newField, { parentFieldId: groupFieldId }) ?? fields)
+    : fields;
 }
 
 /**
@@ -222,28 +204,17 @@ export function reorderNestedFields(
 }
 
 /**
- * A field name the server accepts, verbatim: the pattern every field
- * identifier must match on the wire (`^[a-z][a-z0-9_]*$` — a leading letter,
- * then letters, digits or underscores, runs and trailing underscores
- * included). Mirrors the contract the server validates against rather than
- * inventing a local rule for what "stored" means.
- */
-const STORED_FIELD_NAME = /^[a-z][a-z0-9_]*$/;
-
-/**
  * Convert BuilderField (UI) to FieldDefinition (API payload).
  * Handles nested fields, blocks, and all field-type-specific properties.
  */
 export function convertToFieldDefinition(field: BuilderField): FieldDefinition {
   const definition: FieldDefinition = {
-    // A stored name is the field's identity, not a label: one already legal
-    // passes through untouched, because re-deriving it would collapse its
-    // legal `__` runs or trim a legal trailing `_` and silently rename the
-    // column and API key during an unrelated save. The derivation is only
-    // for a name the server would reject anyway.
-    name: STORED_FIELD_NAME.test(field.name)
-      ? field.name
-      : toSnakeName(field.name),
+    // A name is the field's identity, not a label, so it is sent as it is. Re-deriving one would
+    // rename the field's column and API key during an unrelated save: a plugin's camelCase
+    // `metaTitle`, which the save keeps, would arrive as a new `meta_title` beside a dropped
+    // `metaTitle`. A new name the save refuses is stopped where it is set, and the save names the
+    // field when it refuses one.
+    name: field.name,
     label: field.label || field.name,
     type: field.type,
     required: Boolean(field.validation?.required),
@@ -261,9 +232,13 @@ export function convertToFieldDefinition(field: BuilderField): FieldDefinition {
   // produces no column, so the flag is unbacked metadata — and a value saved
   // by the pre-gate editor must not keep riding every save now that the
   // switch no longer offers it.
+  //
+  // Nor does a password or virtual field, which is never translated: the server refuses
+  // `localized: true` on one, and a legacy definition may still carry it.
   if (
     typeof field.advanced?.localized === "boolean" &&
-    !isFieldGroupFieldType(field.type)
+    !isFieldGroupFieldType(field.type) &&
+    !neverTranslatable({ type: field.type })
   ) {
     definition.localized = field.advanced.localized;
   }
@@ -451,6 +426,19 @@ const BUILDER_MODELLED_FIELD_KEYS: ReadonlySet<string> = new Set([
   "pluginOptions",
 ]);
 
+/**
+ * Properties the server adds to a field-group field when it hands a
+ * definition out, that are not part of the definition: its resolved fields
+ * (`componentFields`, `componentSchemas`), read from the field groups it
+ * names. Carried as the field's own options they were written back on the
+ * next save, freezing a copy of another definition into this one; the Builder
+ * reads the field groups themselves instead.
+ */
+const SERVER_DERIVED_FIELD_KEYS: ReadonlySet<string> = new Set([
+  "componentFields",
+  "componentSchemas",
+]);
+
 /** Whether a value is a `{}` literal, matching what core accepts as a container. */
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -470,6 +458,9 @@ function collectUnmodelledOptions(
   field: object
 ): Record<string, unknown> | undefined {
   const carried: Record<string, unknown> = {};
+  const fieldGroupField = isFieldGroupFieldType(
+    (field as { type?: unknown }).type
+  );
 
   // Defined rather than assigned, for the same reason the write below defines:
   // a manifest deserialized from JSON can hold an own `__proto__` key, and
@@ -486,8 +477,13 @@ function collectUnmodelledOptions(
     });
   };
 
+  // Only a field-group field carries what the server resolves for it. Any
+  // other type may name its own option the same, and keeps it.
+  const derived = (key: string) =>
+    fieldGroupField && SERVER_DERIVED_FIELD_KEYS.has(key);
   for (const [key, value] of Object.entries(field)) {
     if (BUILDER_MODELLED_FIELD_KEYS.has(key)) continue;
+    if (derived(key)) continue;
     collect(key, value);
   }
 
@@ -500,7 +496,12 @@ function collectUnmodelledOptions(
   if (Object.prototype.hasOwnProperty.call(field, "pluginOptions")) {
     const container = (field as { pluginOptions?: unknown }).pluginOptions;
     if (isPlainRecord(container)) {
-      for (const [key, value] of Object.entries(container)) collect(key, value);
+      // A definition saved before these were left out may hold them in the
+      // container; they are dropped there too, so its next save is clean.
+      for (const [key, value] of Object.entries(container)) {
+        if (derived(key)) continue;
+        collect(key, value);
+      }
     }
   }
 
@@ -535,10 +536,16 @@ export function applyCarriedOptions(
 /**
  * Convert FieldDefinition (API) to BuilderField (UI).
  * Handles nested fields, blocks, and all field-type-specific properties.
+ *
+ * @param nested - The field sits inside another field (a group, repeating
+ *   rows) or a field group, rather than at the entity's top level. Only a
+ *   top-level `title` or `slug` is one of the entity's own built-in fields; a
+ *   field of that name anywhere else is an ordinary field of its container.
  */
 export function convertToBuilderField(
   field: FieldDefinition,
-  index: number | string
+  index: number | string,
+  nested = false
 ): BuilderField {
   const id = generateFieldId();
 
@@ -547,7 +554,7 @@ export function convertToBuilderField(
     name: field.name,
     label: field.label || field.name,
     type: field.type,
-    isSystem: field.name === "title" || field.name === "slug",
+    isSystem: !nested && (field.name === "title" || field.name === "slug"),
     // Provenance (P8): carry the plugin tag through so the Builder renders a
     // plugin-contributed field locked + badged instead of as an editable field.
     source: field.source,
@@ -607,7 +614,7 @@ export function convertToBuilderField(
   // Nested fields
   if (field.fields && field.fields.length > 0) {
     builderField.fields = field.fields.map((f, i) =>
-      convertToBuilderField(f, i)
+      convertToBuilderField(f, i, true)
     );
   }
 

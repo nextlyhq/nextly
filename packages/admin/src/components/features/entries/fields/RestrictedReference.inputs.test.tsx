@@ -176,7 +176,7 @@ describe("removing a restricted link", () => {
     expect(latest).toEqual([hiddenPair("files", "x"), "x"]);
   });
 
-  it("in a relationship, updates only the row edited, not a hidden link with its id", () => {
+  it("in a relationship, updates only the row edited, not a hidden link with its id", async () => {
     const readable = {
       relationTo: "pages",
       value: { id: "x", title: "Page X" },
@@ -185,7 +185,8 @@ describe("removing a restricted link", () => {
       <RelationshipHarness initial={[readable, hiddenPair("notes", "x")]} />
     );
     fireEvent.click(screen.getByRole("button", { name: "Edit Page X" }));
-    fireEvent.click(screen.getByRole("button", { name: "Finish edit" }));
+    // The edit modal's code is fetched when it first opens.
+    fireEvent.click(await screen.findByRole("button", { name: "Finish edit" }));
     const value = latest as unknown[];
     expect(value).toHaveLength(2);
     expect(value[0]).toMatchObject({

@@ -299,7 +299,7 @@ describe("a form submitted in the visitor's language", () => {
     await current.nextly.update({
       collection: "pages",
       id: pageId,
-      data: { slug: "merci" },
+      data: { slug: "merci", _overwrite: true },
       locale: "fr",
     });
     await current.nextly.create({
@@ -422,6 +422,9 @@ describe("a public visitor and a translation that is not published yet", () => {
     slug: "pages",
     localized: true,
     status: true,
+    // The target is read as the visitor, so it is public: boot grants the
+    // Public role its read.
+    access: { read: () => true },
     fields: [text({ name: "title" }), text({ name: "slug", localized: true })],
   });
 
@@ -433,6 +436,9 @@ describe("a public visitor and a translation that is not published yet", () => {
       plugins: [plugin],
       collections: [lifecyclePages],
       localization: { locales: ["en", "fr"], defaultLocale: "en" },
+      // The boot's seeding, so the Public role a visitor is judged by holds
+      // what a real boot grants it.
+      seedPublic: true,
     });
     const page = await current.nextly.create({
       collection: "pages",
@@ -443,7 +449,7 @@ describe("a public visitor and a translation that is not published yet", () => {
     await current.nextly.update({
       collection: "pages",
       id: pageId,
-      data: { slug: "merci", status: "draft" },
+      data: { slug: "merci", status: "draft", _overwrite: true },
       locale: "fr",
     });
     await current.nextly.create({
@@ -481,7 +487,7 @@ describe("a public visitor and a translation that is not published yet", () => {
       current!.nextly.update({
         collection: "pages",
         id: pageId,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
         locale: "fr",
       });
     return { submitAsVisitor, publishFrench };
@@ -832,7 +838,7 @@ describe("updating a form that already redirects to a page", () => {
     const renamed = await current!.nextly.update({
       collection: "forms",
       id,
-      data: { name: "Renamed" },
+      data: { name: "Renamed", _overwrite: true },
     });
     expect(renamed).toMatchObject({ item: { id } });
   });
@@ -846,7 +852,10 @@ describe("updating a form that already redirects to a page", () => {
       current!.nextly.update({
         collection: "forms",
         id,
-        data: { settings: { confirmationType: "relationship" } },
+        data: {
+          settings: { confirmationType: "relationship" },
+          _overwrite: true,
+        },
       })
     );
   });
@@ -962,7 +971,7 @@ describe("a target collection with the publish lifecycle", () => {
       current!.nextly.update({
         collection: "forms",
         id: created.item.id,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       })
     );
   });
@@ -989,6 +998,7 @@ describe("a target collection with the publish lifecycle", () => {
             confirmationType: "relationship",
             redirectPage: { relationTo: "pages", value: draftTarget },
           },
+          _overwrite: true,
         },
       })
     );
@@ -1009,13 +1019,13 @@ describe("a target collection with the publish lifecycle", () => {
     await current!.nextly.update({
       collection: "pages",
       id: live,
-      data: { status: "draft" },
+      data: { status: "draft", _overwrite: true },
     });
 
     const renamed = await current!.nextly.update({
       collection: "forms",
       id: created.item.id,
-      data: { name: "Renamed" },
+      data: { name: "Renamed", _overwrite: true },
     });
     expect(renamed).toMatchObject({ item: { id: created.item.id } });
   });
@@ -1033,13 +1043,13 @@ describe("a target collection with the publish lifecycle", () => {
     await current!.nextly.update({
       collection: "pages",
       id: live,
-      data: { status: "draft" },
+      data: { status: "draft", _overwrite: true },
     });
 
     const switched = await current!.nextly.update({
       collection: "forms",
       id: created.item.id,
-      data: { settings: { confirmationType: "message" } },
+      data: { settings: { confirmationType: "message" }, _overwrite: true },
     });
     expect(switched).toMatchObject({ item: { id: created.item.id } });
   });
@@ -1088,7 +1098,7 @@ describe("a target collection with the publish lifecycle", () => {
     await current.nextly.update({
       collection: "pages",
       id: target,
-      data: { status: "draft" },
+      data: { status: "draft", _overwrite: true },
     });
 
     const after = await submitForm(
@@ -1119,7 +1129,7 @@ describe("a target collection with the publish lifecycle", () => {
     await current!.nextly.update({
       collection: "pages",
       id: live,
-      data: { status: "draft" },
+      data: { status: "draft", _overwrite: true },
     });
 
     const saved = await current!.nextly.update({
@@ -1128,6 +1138,7 @@ describe("a target collection with the publish lifecycle", () => {
       data: {
         status: "published",
         settings: { confirmationType: "message" },
+        _overwrite: true,
       },
     });
     expect(saved).toMatchObject({ item: { id: created.item.id } });
@@ -1151,7 +1162,11 @@ describe("a target collection with the publish lifecycle", () => {
       current!.nextly.update({
         collection: "forms",
         id: created.item.id,
-        data: { status: "published", ...formData("published", target) },
+        data: {
+          status: "published",
+          ...formData("published", target),
+          _overwrite: true,
+        },
       })
     );
   });
@@ -1245,14 +1260,18 @@ describe("a target collection with the publish lifecycle", () => {
     await current!.nextly.update({
       collection: "pages",
       id: live,
-      data: { status: "draft" },
+      data: { status: "draft", _overwrite: true },
     });
 
     const renamed = await current!.nextly.update({
       collection: "forms",
       id: created.item.id,
       // Exactly what the admin sends: every field, settings included.
-      data: { ...formData("published", live), name: "Renamed" },
+      data: {
+        ...formData("published", live),
+        name: "Renamed",
+        _overwrite: true,
+      },
     });
     expect(renamed).toMatchObject({ item: { id: created.item.id } });
   });
@@ -1273,7 +1292,11 @@ describe("a target collection with the publish lifecycle", () => {
       current!.nextly.update({
         collection: "forms",
         id: created.item.id,
-        data: { ...formData("published", draftTarget), name: "Renamed" },
+        data: {
+          ...formData("published", draftTarget),
+          name: "Renamed",
+          _overwrite: true,
+        },
       })
     );
   });
@@ -1293,7 +1316,7 @@ describe("a target collection with the publish lifecycle", () => {
     const renamed = await current!.nextly.update({
       collection: "forms",
       id: created.item.id,
-      data: { ...formData("draft", target), name: "Renamed" },
+      data: { ...formData("draft", target), name: "Renamed", _overwrite: true },
     });
     expect(renamed).toMatchObject({ item: { id: created.item.id } });
   });
@@ -1316,7 +1339,7 @@ describe("a target collection with the publish lifecycle", () => {
       current!.nextly.update({
         collection: "forms",
         id: created.item.id,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
       })
     );
   });
@@ -1338,7 +1361,7 @@ describe("a target collection with the publish lifecycle", () => {
     const renamed = await current!.nextly.update({
       collection: "forms",
       id: created.item.id,
-      data: { name: "Renamed" },
+      data: { name: "Renamed", _overwrite: true },
     });
     expect(renamed).toMatchObject({ item: { id: created.item.id } });
   });
@@ -1357,7 +1380,7 @@ describe("a target collection with the publish lifecycle", () => {
     const renamed = await current!.nextly.update({
       collection: "forms",
       id: created.item.id,
-      data: { name: "Renamed" },
+      data: { name: "Renamed", _overwrite: true },
     });
     expect(renamed).toMatchObject({ item: { id: created.item.id } });
   });
@@ -1397,7 +1420,7 @@ describe("a target collection that publishes per locale", () => {
     await current.nextly.update({
       collection: "pages",
       id: made.item.id,
-      data: { title: "hola", status: "published" },
+      data: { title: "hola", status: "published", _overwrite: true },
       locale: "es",
     } as never);
 

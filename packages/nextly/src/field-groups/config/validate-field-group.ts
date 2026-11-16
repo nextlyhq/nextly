@@ -4,7 +4,7 @@
  * Validates a {@link FieldGroupConfig} using shared base-validator helpers
  * for slug/field-name/relationship/component rules. Components do not have
  * domain-specific access rules or index validation; cross-component
- * checks (circular references, nesting depth) run at `defineConfig()` time
+ * checks (a field group placed inside itself, directly or through others) run at `defineConfig()` time
  * when all component definitions are available.
  *
  * Duplicated validation logic was moved to `src/shared/base-validator.ts`
@@ -32,13 +32,15 @@ import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/fie
 import { toSnakeCase } from "../../domains/schema/services/field-column-descriptor";
 import { NextlyError } from "../../errors";
 import { isReservedSystemColumn } from "../../lib/system-columns";
+import { FIELD_GROUP_ROUTE_SLUGS } from "../../shared/address-rule";
 import {
   type BaseValidationError,
-  DEFAULT_SQL_KEYWORDS_SET,
   validateComponentFieldRefShared,
   validateContainerFieldsShared,
   validateFieldBasicsShared,
+  validateSiblingFieldsShared,
   validateFieldTypeShared,
+  validateIconDefaultShared,
   validateNumberDecimalDimensionsShared,
   validateRelationshipTargetShared,
   validatePluginFieldOptionsShared,
@@ -59,14 +61,11 @@ export {
 // ============================================================
 
 /**
- * Maximum nesting depth for component-within-component references.
+ * The nesting depth field groups were once limited to.
  *
- * A depth of 3 means:
- * - Level 1: Component A used in a Collection/Single
- * - Level 2: Component B nested inside Component A
- * - Level 3: Component C nested inside Component B
- *
- * Enforced at `defineConfig()` time when all component definitions are available.
+ * @deprecated Nothing enforces it: a field group may hold another at any depth, and only a field
+ * group placed inside itself, directly or through others, is refused. Kept exported, with its old
+ * value, so code that imports it still builds; nothing in Nextly reads it.
  */
 export const MAX_FIELD_GROUP_NESTING_DEPTH = 3;
 
@@ -93,6 +92,7 @@ export type FieldGroupValidationErrorCode =
   | "FIELD_NAME_REQUIRED"
   | "FIELD_NAME_INVALID_FORMAT"
   | "FIELD_NAME_SQL_KEYWORD"
+  | "FIELD_NEVER_TRANSLATABLE"
   | "FIELD_NAME_DUPLICATE"
   // A name that snake-cases onto a column this group's table already carries. The same code the
   // collection and single validators report, because it is the same mistake with the same fix.
@@ -113,6 +113,7 @@ export type FieldGroupValidationErrorCode =
   | "DECIMAL_PRECISION_INVALID"
   | "DECIMAL_SCALE_INVALID"
   | "DECIMAL_SCALE_EXCEEDS_PRECISION"
+  | "ICON_DEFAULT_INVALID"
   // Component field errors
   | "COMPONENT_REF_REQUIRED"
   | "COMPONENT_REF_CONFLICT"
@@ -163,15 +164,9 @@ export interface FieldGroupValidationResult {
  */
 export const RESERVED_FIELD_GROUP_SLUGS = [
   ...RESERVED_SLUGS,
-  // API namespace. A slug matching a live route segment would make the two
-  // indistinguishable in a URL.
-  "field-groups",
-  "field-group",
+  // API namespace, stated with the one address rule that judges a slug.
+  ...FIELD_GROUP_ROUTE_SLUGS,
 ] as const;
-
-const RESERVED_COMPONENT_SLUGS_SET: Set<string> = new Set<string>(
-  RESERVED_FIELD_GROUP_SLUGS
-);
 
 // ============================================================
 // Domain-Specific Field Validation
@@ -186,8 +181,7 @@ const RESERVED_COMPONENT_SLUGS_SET: Set<string> = new Set<string>(
 function validateField(
   field: unknown,
   path: string,
-  errors: FieldGroupValidationError[],
-  seenNames: Set<string>
+  errors: FieldGroupValidationError[]
 ): void {
   if (!field || typeof field !== "object") {
     return;
@@ -204,7 +198,7 @@ function validateField(
   // the deferral returns before this, and the boot gate asks only whether the
   // token was claimed. A duplicate or SQL-reserved name reached schema
   // generation as a colliding column.
-  validateFieldBasicsShared(f, path, errsBase, seenNames);
+  validateFieldBasicsShared(f, path, errsBase);
 
   if (
     !validateFieldTypeShared(f.type, path, errsBase, type =>
@@ -266,6 +260,10 @@ function validateField(
     case "number":
       validateNumberDecimalDimensionsShared(f, path, errsBase);
       break;
+
+    case "icon":
+      validateIconDefaultShared(f, path, errsBase);
+      break;
   }
 }
 
@@ -277,11 +275,9 @@ function validateFieldsArray(
   basePath: string,
   errors: FieldGroupValidationError[]
 ): void {
-  const seenNames = new Set<string>();
-
   fields.forEach((field, index) => {
     const fieldPath = `${basePath}[${index}]`;
-    validateField(field, fieldPath, errors, seenNames);
+    validateField(field, fieldPath, errors);
   });
 }
 
@@ -393,8 +389,8 @@ function validateFields(
  * SQL keyword blocking, recursive field validation, select options,
  * relationship targets, and component references.
  *
- * **Note:** Cross-component validation (circular references, nesting
- * depth, slug conflicts with Collections/Singles) is performed in
+ * **Note:** Cross-component validation (a field group placed inside itself,
+ * slug conflicts with Collections/Singles) is performed in
  * `defineConfig()`.
  *
  * @example
@@ -415,13 +411,15 @@ export function validateFieldGroupConfig(
   const errors: FieldGroupValidationError[] = [];
   const errsBase = errors as unknown as BaseValidationError[];
 
-  validateSlugShared(config.slug, errsBase, {
-    entityLabel: "Component",
-    reservedSlugsSet: RESERVED_COMPONENT_SLUGS_SET,
-    sqlKeywordsSet: DEFAULT_SQL_KEYWORDS_SET,
-  });
+  validateSlugShared(config.slug, errsBase, "fieldGroup");
 
   validateFields(config.fields, errors);
+  validateSiblingFieldsShared(
+    "fieldGroup",
+    config.slug,
+    config.fields,
+    errsBase
+  );
 
   return {
     valid: errors.length === 0,
@@ -435,24 +433,50 @@ export function validateFieldGroupConfig(
  * Convenience wrapper around {@link validateFieldGroupConfig}.
  */
 export function assertValidFieldGroupConfig(config: FieldGroupConfig): void {
-  const result = validateFieldGroupConfig(config);
+  throwIfInvalid(config, validateFieldGroupConfig(config).errors);
+}
 
-  if (!result.valid) {
-    const errorMessages = result.errors
-      .map(err => `  - [${err.code}] ${err.path}: ${err.message}`)
-      .join("\n");
+/**
+ * Throws if the configuration of a field group that already exists is
+ * invalid, judging everything but the rule's verdict on its address: the
+ * address is one the field group already has, and the one address rule judges
+ * only a new or changed one, so a field group created under an address the
+ * rule now refuses can still be updated. A missing or non-string address is
+ * still refused, since no field group can be named by one.
+ */
+export function assertValidExistingFieldGroupConfig(
+  config: FieldGroupConfig
+): void {
+  throwIfInvalid(
+    config,
+    validateFieldGroupConfig(config).errors.filter(
+      err =>
+        err.path !== "slug" ||
+        err.code === "SLUG_REQUIRED" ||
+        err.code === "SLUG_INVALID_TYPE"
+    )
+  );
+}
 
-    throw NextlyError.validation({
-      errors: result.errors.map(err => ({
-        path: err.path,
-        code: err.code,
-        message: err.message,
-      })),
-      logContext: {
-        reason: "component-config-invalid",
-        slug: config.slug,
-        details: errorMessages,
-      },
-    });
-  }
+function throwIfInvalid(
+  config: FieldGroupConfig,
+  errors: FieldGroupValidationError[]
+): void {
+  if (errors.length === 0) return;
+  const errorMessages = errors
+    .map(err => `  - [${err.code}] ${err.path}: ${err.message}`)
+    .join("\n");
+
+  throw NextlyError.validation({
+    errors: errors.map(err => ({
+      path: err.path,
+      code: err.code,
+      message: err.message,
+    })),
+    logContext: {
+      reason: "component-config-invalid",
+      slug: config.slug,
+      details: errorMessages,
+    },
+  });
 }

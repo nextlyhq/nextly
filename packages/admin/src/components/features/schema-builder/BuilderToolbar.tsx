@@ -1,36 +1,60 @@
-// Simplified toolbar: no icon tile, no Hooks button, no unsaved-count badge
-// (the Save button's enabled state is the only unsaved signal).
+// Simplified toolbar: no icon tile, no Hooks button. The number of unsaved
+// changes is shown at all times, beside the Undo, Redo and Discard all that
+// act on them.
 //
 // Code-first entities show a "Read-only" badge next to the name. Their Save
 // stays disabled, but Settings stays enabled so the config can be inspected
 // read-only.
-import { Badge, Button } from "@nextlyhq/ui";
+import { Badge, Button, buttonVariants } from "@nextlyhq/ui";
 import { ChevronLeft } from "lucide-react";
-import Link from "next/link";
 import type { JSX } from "react";
 
-import { Lock, Settings } from "@admin/components/icons";
+import { Lock, Plus, Settings } from "@admin/components/icons";
+import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
+import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
 
-import type { BuilderConfig } from "./builder-config";
+// Prose names the kind through the shared table, so the toolbar spells each
+// kind as every other builder message does.
+import { BUILDER_KIND_NOUN, type BuilderConfig } from "./builder-config";
+import { PendingChangesControls } from "./PendingChangesControls";
 
 type Props = {
   config: BuilderConfig;
   name: string;
-  /** Number of unsaved field changes. Drives Save-schema enable state only;
-   */
+  /** Number of unsaved changes: shown, and what enables Save. */
   unsavedCount: number;
+  /** The pending changes Undo, Redo and Discard all act on. */
+  pending: BuilderPendingChanges;
   /** True when the entity is code-first / locked from UI edits. */
   locked?: boolean;
+  /** A save is on its way, its preview included. */
+  saving?: boolean;
+  /** Opens the field picker for a field at the end of the list. */
+  onAddField: () => void;
   onOpenSettings: () => void;
   onSave: () => void;
+  /**
+   * Where the Page Builder opens for this entity, for one laid out from blocks
+   * and saved; absent, nothing is offered.
+   */
+  pageBuilderHref?: string;
 };
 
-const KIND_BREADCRUMB: Record<BuilderConfig["kind"], string> = {
-  collection: "Collections",
-  single: "Singles",
-  "field-group": "Field Groups",
-};
+/**
+ * The list a kind's entities are gathered in, as a sentence names it:
+ * "collections", "Singles", "field groups". Derived from the kind's noun so
+ * the crumb and its label spell the kind as every other message does.
+ */
+function kindListName(kind: BuilderConfig["kind"]): string {
+  return `${BUILDER_KIND_NOUN[kind]}s`;
+}
+
+/** The crumb starts a line, so its first letter is capitalised. */
+function kindBreadcrumb(kind: BuilderConfig["kind"]): string {
+  const name = kindListName(kind);
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
 
 /** Where the breadcrumb leads — the builder list this entity was opened from. */
 const KIND_LIST_ROUTE: Record<BuilderConfig["kind"], string> = {
@@ -39,57 +63,40 @@ const KIND_LIST_ROUTE: Record<BuilderConfig["kind"], string> = {
   "field-group": ROUTES.BUILDER_FIELD_GROUPS,
 };
 
-// Singular wording for prose. The kind is a slug, so interpolating it directly
-// into a sentence reads as "This field-group is managed in code".
-const KIND_NOUN: Record<BuilderConfig["kind"], string> = {
-  collection: "collection",
-  single: "single",
-  "field-group": "field group",
-};
-
 export function BuilderToolbar({
   config,
   name,
   unsavedCount,
+  pending,
   locked = false,
+  saving = false,
+  onAddField,
   onOpenSettings,
   onSave,
+  pageBuilderHref,
 }: Props): JSX.Element {
   const saveDisabled = unsavedCount === 0 || locked;
   const lockedSaveTitle = locked
-    ? `This ${KIND_NOUN[config.kind]} is managed in code. Update its definition in code to make changes.`
+    ? `This ${BUILDER_KIND_NOUN[config.kind]} is managed in code. Update its definition in code to make changes.`
     : undefined;
-
-  // The crumb is the page's only exit, and no builder page mounts a
-  // navigation guard — a click with unsaved fields would discard them
-  // silently. Blocked with a confirm while dirty, same pattern as the
-  // settings image-sizes removal.
-  const handleCrumbClick = (e: { preventDefault: () => void }) => {
-    if (
-      unsavedCount > 0 &&
-      !window.confirm(
-        `You have unsaved changes to this ${KIND_NOUN[config.kind]}. Leave and discard them?`
-      )
-    ) {
-      e.preventDefault();
-    }
-  };
 
   return (
     <div className="flex items-center gap-3 px-6 py-3 border-b border-border sticky top-0 z-30 bg-background">
       <div className="flex items-center gap-3 min-w-0">
         {/* The crumb is a LINK, not a label: builder pages render standalone
             (no dashboard sidebar), so on a phone this is the only way back to
-            the list — plain text left the reader stranded after saving. */}
+            the list — plain text left the reader stranded after saving.
+            The admin's own Link: it moves through the admin's history, which
+            the page's unsaved-changes guard watches, so leaving with changes
+            pending asks first here as it does everywhere else. */}
         <Link
           href={KIND_LIST_ROUTE[config.kind]}
-          onClick={handleCrumbClick}
           className="flex items-center gap-0.5 min-w-0 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-          aria-label={`Back to ${KIND_BREADCRUMB[config.kind]}`}
+          aria-label={`Back to ${kindListName(config.kind)}`}
         >
           <ChevronLeft className="h-4 w-4 shrink-0" aria-hidden="true" />
           <span className="text-xs truncate">
-            {KIND_BREADCRUMB[config.kind]} /
+            {kindBreadcrumb(config.kind)} /
           </span>
         </Link>
         <div className="min-w-0">
@@ -106,6 +113,36 @@ export function BuilderToolbar({
       </div>
 
       <div className="ml-auto flex items-center gap-2">
+        <PendingChangesControls
+          pending={pending}
+          count={unsavedCount}
+          locked={locked}
+          saving={saving}
+        />
+        {/* Adding is an edit, so a read-only entity has no add here. */}
+        {!locked && (
+          // Icon only on a phone, so the entity's name keeps its room; the
+          // label stays its accessible name at every width.
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label="Add field"
+            onClick={onAddField}
+          >
+            <Plus className="h-4 w-4" />
+            <span className="hidden sm:inline">Add field</span>
+          </Button>
+        )}
+        {/* The way from the schema to the pages it lays out: a link through the
+            admin's history, so leaving with changes pending asks first. */}
+        {pageBuilderHref !== undefined && (
+          <Link
+            href={pageBuilderHref}
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            Open the Page Builder
+          </Link>
+        )}
         {/* Settings stays enabled when locked so the config can be viewed
             read-only; only Save is gated. */}
         <Button

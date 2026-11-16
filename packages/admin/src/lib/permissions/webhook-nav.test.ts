@@ -16,7 +16,7 @@ import { filterNavigationItems } from "./authorization";
 // to be edited every time a capability is added, and — worse — it goes on
 // passing after `buildCapabilities` stops setting a flag the literal still sets
 // for itself, which is a test asserting against a shape nothing produces.
-const base: AdminCapabilities = buildCapabilities([], false);
+const base: AdminCapabilities = buildCapabilities([], false, undefined);
 
 const webhookItem: NavigationItem = {
   title: "Webhooks",
@@ -26,8 +26,9 @@ const webhookItem: NavigationItem = {
   requiredPermission: ["read-webhooks", "update-webhooks"],
 };
 
+// The webhook flag decides alone; no other permission is asked here.
 const isVisible = (caps: AdminCapabilities) =>
-  filterNavigationItems([webhookItem], caps).length === 1;
+  filterNavigationItems([webhookItem], caps, () => false).length === 1;
 
 describe("webhook navigation visibility", () => {
   it("shows the item to a user with webhook access", () => {

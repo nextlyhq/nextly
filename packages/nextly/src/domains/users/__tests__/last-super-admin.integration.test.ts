@@ -158,6 +158,7 @@ interface DirectRoles {
   create: (a: {
     data: Record<string, unknown>;
   }) => Promise<{ item: { id: string } }>;
+  delete: (a: { id: string }) => Promise<unknown>;
 }
 
 function direct(): { users: DirectUsers; roles: DirectRoles } {
@@ -701,12 +702,25 @@ describe.each(getConfiguredTestDialects())(
           target: Target,
           as: Caller
         ) => Promise<Response>;
+        /**
+         * The same change made by trusted server code with no caller, through
+         * the Direct API, where it offers one. Unassigning a role, removing
+         * inheritance and replacing `childRoleIds` it doesn't: trusted code
+         * reaches those only through the services, and the guard's unit test
+         * holds that a change with no caller is let through.
+         */
+        trusted?: (install: Install, target: Target) => Promise<unknown>;
       }> = [
         {
           name: "replacing their roles",
           target: holder,
           take: (i, t, as) =>
             rest(i, "PATCH", ["users", t.id], { roles: [i.editorRole] }, as),
+          trusted: (i, t) =>
+            direct().users.update({
+              id: t.id,
+              data: { roles: [i.editorRole] },
+            }),
         },
         {
           name: "replacing their roles while deactivating them",
@@ -719,6 +733,11 @@ describe.each(getConfiguredTestDialects())(
               { roles: [i.editorRole], isActive: false },
               as
             ),
+          trusted: (i, t) =>
+            direct().users.update({
+              id: t.id,
+              data: { roles: [i.editorRole], isActive: false },
+            }),
         },
         {
           name: "unassigning the role",
@@ -749,6 +768,21 @@ describe.each(getConfiguredTestDialects())(
           target: heir,
           take: (i, t, as) =>
             rest(i, "DELETE", ["roles", t.role], undefined, as),
+          trusted: (_, t) => direct().roles.delete({ id: t.role }),
+        },
+        {
+          name: "deleting their account",
+          target: holder,
+          take: (i, t, as) => rest(i, "DELETE", ["users", t.id], undefined, as),
+          trusted: (_, t) => direct().users.delete({ id: t.id }),
+        },
+        {
+          name: "deactivating their account",
+          target: holder,
+          take: (i, t, as) =>
+            rest(i, "PATCH", ["users", t.id], { isActive: false }, as),
+          trusted: (_, t) =>
+            direct().users.update({ id: t.id, data: { isActive: false } }),
         },
       ];
 
@@ -790,8 +824,123 @@ describe.each(getConfiguredTestDialects())(
           expect(await activeSuperAdmin(target.id)).toBe(false);
           expect(await activeSuperAdmin(install.first)).toBe(true);
         });
+
+        it.runIf(taking.trusted !== undefined)(
+          "is carried out for trusted code with no caller",
+          async () => {
+            const install = await boot(on);
+            const target = await taking.target(install);
+
+            await taking.trusted!(install, target);
+
+            expect(await activeSuperAdmin(target.id)).toBe(false);
+            expect(await activeSuperAdmin(install.first)).toBe(true);
+          }
+        );
       });
     });
+
+    it("lets an admin who isn't a super-admin edit a deactivated super-admin, resending their inactive state", async () => {
+      const install = await boot(on);
+      const second = await secondSuperAdmin(install, { active: false });
+      const { users, userRoles } = m.getDialectTables();
+
+      // As the admin's edit form sends it: the account's state as it stands,
+      // beside the field actually changed. Deactivating an account that is
+      // already inactive takes nothing from anyone.
+      const res = await rest(
+        install,
+        "PATCH",
+        ["users", second],
+        { name: "Renamed", isActive: false },
+        { session: install.operator }
+      );
+
+      expect(res.status, await res.text()).toBeLessThan(300);
+      const [row] = await raw()
+        .select({ name: users.name, isActive: users.isActive })
+        .from(users)
+        .where(eq(users.id, second));
+      expect(row).toMatchObject({ name: "Renamed" });
+      expect(Boolean(row.isActive)).toBe(false);
+      const held = await raw()
+        .select({ id: userRoles.id })
+        .from(userRoles)
+        .where(
+          and(
+            eq(userRoles.userId, second),
+            eq(userRoles.roleId, install.superAdminRole)
+          )
+        );
+      expect(held).toHaveLength(1);
+    });
+
+    // MySQL matches ids case-insensitively, so an id spelled in another case
+    // names the same row there, and must be judged as that row.
+    describe.runIf(on === "mysql")(
+      "an id spelled in another case, which MySQL matches",
+      () => {
+        it("refuses an admin who isn't a super-admin deleting a super-admin by it", async () => {
+          const install = await boot(on);
+          const second = await secondSuperAdmin(install);
+
+          const res = await rest(
+            install,
+            "DELETE",
+            ["users", second.toUpperCase()],
+            undefined,
+            { session: install.operator }
+          );
+
+          expect(res.status, await res.text()).toBe(403);
+          expect(await activeSuperAdmin(second)).toBe(true);
+        });
+
+        it("refuses deleting the last super-admin by it", async () => {
+          const install = await boot(on);
+          await expectDirectRefused(
+            direct().users.delete({ id: install.first.toUpperCase() })
+          );
+          expect(await activeSuperAdmin(install.first)).toBe(true);
+        });
+
+        /** The second super-admin, whose assignment row spells their id in upper case. */
+        async function secondSpelledUpper(install: Install): Promise<string> {
+          const second = await makeUser("second@example.com");
+          await grant(second.toUpperCase(), install.superAdminRole);
+          expect(await activeSuperAdmin(second)).toBe(true);
+          return second;
+        }
+
+        it("refuses deleting the last super-admin whose assignment spells their id in another case", async () => {
+          const install = await boot(on);
+          const second = await secondSpelledUpper(install);
+          const { userRoles } = m.getDialectTables();
+          await raw()
+            .delete(userRoles)
+            .where(eq(userRoles.userId, install.first));
+
+          await expectDirectRefused(direct().users.delete({ id: second }));
+          expect(await activeSuperAdmin(second)).toBe(true);
+        });
+
+        it("refuses an admin who isn't a super-admin deleting a super-admin whose assignment spells their id in another case", async () => {
+          const install = await boot(on);
+          const second = await secondSpelledUpper(install);
+
+          const res = await rest(
+            install,
+            "DELETE",
+            ["users", second],
+            undefined,
+            { session: install.operator }
+          );
+
+          expect(res.status, await res.text()).toBe(403);
+          expect(await activeSuperAdmin(second)).toBe(true);
+        });
+      }
+    );
 
     describe("a super-admin through a role that inherits the role", () => {
       /** A role built on `super-admin`, as creating a role with a base role writes it. */
@@ -841,6 +990,43 @@ describe.each(getConfiguredTestDialects())(
         expect(await activeSuperAdmin(h.heir)).toBe(true);
         return h;
       }
+
+      it.runIf(on === "mysql")(
+        "is refused deleting the last one's role when its inheritance spells the id in another case",
+        async () => {
+          const install = await boot(on);
+          const h = await heirOnly(install);
+          const { roleInherits } = m.getDialectTables();
+          await raw()
+            .delete(roleInherits)
+            .where(eq(roleInherits.parentRoleId, h.owner));
+          await raw().insert(roleInherits).values({
+            id: "owner-inherits-super-admin-upper",
+            parentRoleId: h.owner.toUpperCase(),
+            childRoleId: install.superAdminRole,
+          });
+          // MySQL reads the edge back for the role, so the heir still is one.
+          expect(await activeSuperAdmin(h.heir)).toBe(true);
+
+          await expectRestRefused(
+            await rest(install, "DELETE", ["roles", h.owner])
+          );
+          expect(await activeSuperAdmin(h.heir)).toBe(true);
+        }
+      );
+
+      it.runIf(on === "mysql")(
+        "is refused deleting the last one's role by its id spelled in another case",
+        async () => {
+          const install = await boot(on);
+          const h = await heirOnly(install);
+          // MySQL matches ids case-insensitively, so this names the same role.
+          await expectRestRefused(
+            await rest(install, "DELETE", ["roles", h.owner.toUpperCase()])
+          );
+          expect(await activeSuperAdmin(h.heir)).toBe(true);
+        }
+      );
 
       it("stands in for the last holder of the role itself", async () => {
         const install = await boot(on);

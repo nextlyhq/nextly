@@ -164,6 +164,27 @@ describe("the empty-container appender", () => {
     expect(screen.getByRole("button", { name: /Box/ })).toBeTruthy();
   });
 
+  it("says in words what it does, beside the +", () => {
+    // A "+" alone said nothing about dropping, and was too small to read at
+    // a zoomed-out canvas. The words are the button's, so the "+" and the
+    // words are one control; its name still says which container.
+    render(
+      <EmptyContainerAppenders
+        document={doc([emptyBox])}
+        slots={slots}
+        blocks={blocks}
+        onAppend={() => undefined}
+      />
+    );
+    const control = screen.getByRole("button", { name: /Box/ });
+    expect(control.textContent).toBe("Drop a block here, or click to add one");
+    // Its name starts with the words it shows, so speaking them reaches it
+    // (WCAG 2.5.3), and goes on to say which container.
+    expect(control.getAttribute("aria-label")).toBe(
+      "Drop a block here, or click to add one, in Box"
+    );
+  });
+
   it("offers nothing for a container that already has a child", () => {
     render(
       <EmptyContainerAppenders
@@ -312,19 +333,23 @@ describe("the accessible name it announces", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Add a block to Header slot" })
+      screen.getByRole("button", {
+        name: "Drop a block here, or click to add one, in Header slot",
+      })
     ).toBeTruthy();
     // The un-named sibling still falls back to the block's own label, proving
     // the precedence runs one way: a name wins when given, and its absence
     // does not disturb the existing fallback.
     expect(
-      screen.getByRole("button", { name: "Add a block to Box" })
+      screen.getByRole("button", {
+        name: "Drop a block here, or click to add one, in Box",
+      })
     ).toBeTruthy();
   });
 
   it("ignores a name of only whitespace, the same way the Layers panel does", () => {
     // `authoredName` trims and treats a blank result as absent; a control
-    // announcing "Add a block to    " would be no name at all.
+    // announcing "Drop a block here, or click to add one, in    " would be no name at all.
     const blankName = {
       id: "box-blank",
       type: "core/box",
@@ -342,7 +367,9 @@ describe("the accessible name it announces", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Add a block to Box" })
+      screen.getByRole("button", {
+        name: "Drop a block here, or click to add one, in Box",
+      })
     ).toBeTruthy();
   });
 });
@@ -380,6 +407,17 @@ class FakeResizeObserver {
   fire(): void {
     this.callback([], this);
   }
+}
+
+/**
+ * The canvas watch's observer: the newest one watching a rendered block. Found
+ * by what it watches, not by being the last made, since the canvas makes
+ * others of its own (one watching its root's size).
+ */
+function watchObserver(): FakeResizeObserver | undefined {
+  return FakeResizeObserver.instances.findLast(observer =>
+    observer.observed.some(element => element.hasAttribute("data-nx-node"))
+  );
 }
 
 function withFakeResizeObserver() {
@@ -472,7 +510,7 @@ describe("what it stays subscribed to", () => {
       />
     );
 
-    const observer = FakeResizeObserver.instances.at(-1);
+    const observer = watchObserver();
     expect(observer?.observed).toContain(
       container.querySelector(`[${NODE_ID_ATTRIBUTE}="empty-container"]`)
     );
@@ -494,8 +532,8 @@ describe("the rectangle the control is drawn at", () => {
    */
   it("centres the control in a container larger than it", () => {
     expect(
-      centeredControlRect({ x: 10, y: 20, width: 200, height: 100 }, 44)
-    ).toEqual({ x: 88, y: 48, width: 44, height: 44 });
+      centeredControlRect({ x: 10, y: 20, width: 400, height: 100 }, 320, 44)
+    ).toEqual({ x: 50, y: 48, width: 320, height: 44 });
   });
 
   it("never grows taller than the container it sits in", () => {
@@ -504,11 +542,11 @@ describe("the rectangle the control is drawn at", () => {
     // laid out before it, which is where a press meant for that neighbour then
     // lands.
     const container = { x: 0, y: 200, width: 400, height: 19 };
-    const control = centeredControlRect(container, 44);
+    const control = centeredControlRect(container, 320, 44);
 
-    // Full 44 on the axis with room for it: the clamp is per axis, so a short
-    // container loses no width.
-    expect(control).toEqual({ x: 178, y: 200, width: 44, height: 19 });
+    // Its full width on the axis with room for it: the clamp is per axis, so
+    // a short container loses no width.
+    expect(control).toEqual({ x: 40, y: 200, width: 320, height: 19 });
     expect(control.y).toBeGreaterThanOrEqual(container.y);
     expect(control.y + control.height).toBeLessThanOrEqual(
       container.y + container.height
@@ -520,7 +558,7 @@ describe("the rectangle the control is drawn at", () => {
     // `min-height` and no `min-width`, so a narrow empty column is a perfectly
     // ordinary container that is narrower than the control.
     const container = { x: 100, y: 0, width: 20, height: 300 };
-    const control = centeredControlRect(container, 44);
+    const control = centeredControlRect(container, 320, 44);
 
     expect(control).toEqual({ x: 100, y: 128, width: 20, height: 44 });
     expect(control.x).toBeGreaterThanOrEqual(container.x);
@@ -736,7 +774,9 @@ async function flushObservers(): Promise<void> {
 
 /** The inline rectangle a control was drawn at, in the order left/top/w/h. */
 function drawnAt(name: string): [string, string, string, string] {
-  const button = screen.getByRole("button", { name: `Add a block to ${name}` });
+  const button = screen.getByRole("button", {
+    name: `Drop a block here, or click to add one, in ${name}`,
+  });
   if (!(button instanceof HTMLElement)) throw new Error(`${name}: no element`);
   return [
     button.style.left,
@@ -1045,7 +1085,7 @@ describe("which containers it actually draws a control on", () => {
     );
 
     layout(container, boxes);
-    const observer = FakeResizeObserver.instances.at(-1);
+    const observer = watchObserver();
     if (observer === undefined) throw new Error("no observer subscribed");
     act(() => observer.fire());
     return container;
@@ -1070,9 +1110,11 @@ describe("which containers it actually draws a control on", () => {
       "summary-bearing": { x: 0, y: 400, width: 400, height: 19 },
     });
 
-    expect(drawnAt("Wide box")).toEqual(["178px", "78px", "44px", "44px"]);
+    expect(drawnAt("Wide box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(
-      screen.queryByRole("button", { name: "Add a block to Closed section" })
+      screen.queryByRole("button", {
+        name: "Drop a block here, or click to add one, in Closed section",
+      })
     ).toBeNull();
   });
 
@@ -1157,9 +1199,11 @@ describe("which containers it actually draws a control on", () => {
     expect(bareElement).not.toBeNull();
     expect(bareElement?.matches(`[${SLOTS_ATTRIBUTE}]:empty`)).toBe(true);
 
-    expect(drawnAt("Shelled box")).toEqual(["178px", "78px", "44px", "44px"]);
+    expect(drawnAt("Shelled box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(
-      screen.queryByRole("button", { name: "Add a block to Bare box" })
+      screen.queryByRole("button", {
+        name: "Drop a block here, or click to add one, in Bare box",
+      })
     ).toBeNull();
   });
 
@@ -1182,9 +1226,11 @@ describe("which containers it actually draws a control on", () => {
       clipped: { x: 0, y: 1000, width: 400, height: 200 },
     });
 
-    expect(drawnAt("Wide box")).toEqual(["178px", "78px", "44px", "44px"]);
+    expect(drawnAt("Wide box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(
-      screen.queryByRole("button", { name: "Add a block to Clipped box" })
+      screen.queryByRole("button", {
+        name: "Drop a block here, or click to add one, in Clipped box",
+      })
     ).toBeNull();
   });
 
@@ -1217,10 +1263,10 @@ describe("which containers it actually draws a control on", () => {
     });
 
     expect(computedStyleOf(container, "hidden-wrapper").display).toBe("none");
-    expect(drawnAt("Wide box")).toEqual(["178px", "78px", "44px", "44px"]);
+    expect(drawnAt("Wide box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(
       screen.queryByRole("button", {
-        name: "Add a block to Box in a hidden wrapper",
+        name: "Drop a block here, or click to add one, in Box in a hidden wrapper",
       })
     ).toBeNull();
   });
@@ -1269,14 +1315,14 @@ describe("which containers it actually draws a control on", () => {
     }
 
     expect(drawnAt("Box in an open section")).toEqual([
-      "178px",
+      "40px",
       "478px",
-      "44px",
+      "320px",
       "44px",
     ]);
     expect(
       screen.queryByRole("button", {
-        name: "Add a block to Box in a closed section",
+        name: "Drop a block here, or click to add one, in Box in a closed section",
       })
     ).toBeNull();
   });
@@ -1307,7 +1353,7 @@ describe("which containers it actually draws a control on", () => {
     });
     expect(
       screen.queryByRole("button", {
-        name: "Add a block to Box in a closed section",
+        name: "Drop a block here, or click to add one, in Box in a closed section",
       })
     ).toBeNull();
 
@@ -1318,9 +1364,9 @@ describe("which containers it actually draws a control on", () => {
     });
 
     expect(drawnAt("Box in a closed section")).toEqual([
-      "178px",
+      "40px",
       "78px",
-      "44px",
+      "320px",
       "44px",
     ]);
   });
@@ -1351,12 +1397,16 @@ describe("which containers it actually draws a control on", () => {
       SHAPES_PLUS_UNRENDERED
     );
 
-    expect(drawnAt("Wide box")).toEqual(["178px", "78px", "44px", "44px"]);
+    expect(drawnAt("Wide box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(
-      screen.queryByRole("button", { name: "Add a block to Ghost box" })
+      screen.queryByRole("button", {
+        name: "Drop a block here, or click to add one, in Ghost box",
+      })
     ).toBeNull();
     expect(
-      screen.queryByRole("button", { name: "Add a block to Closed section" })
+      screen.queryByRole("button", {
+        name: "Drop a block here, or click to add one, in Closed section",
+      })
     ).toBeNull();
   });
 
@@ -1444,9 +1494,11 @@ describe("which containers it actually draws a control on", () => {
     expect(computedStyleOf(container, "pinned-to-viewport").position).toBe(
       "fixed"
     );
-    expect(drawnAt("Anchored box")).toEqual(["178px", "78px", "44px", "44px"]);
+    expect(drawnAt("Anchored box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(
-      screen.queryByRole("button", { name: "Add a block to Fixed box" })
+      screen.queryByRole("button", {
+        name: "Drop a block here, or click to add one, in Fixed box",
+      })
     ).toBeNull();
   });
 
@@ -1467,9 +1519,11 @@ describe("which containers it actually draws a control on", () => {
     expect(computedStyleOf(container, "pinned-to-scrollport").position).toBe(
       "sticky"
     );
-    expect(drawnAt("Anchored box")).toEqual(["178px", "78px", "44px", "44px"]);
+    expect(drawnAt("Anchored box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(
-      screen.queryByRole("button", { name: "Add a block to Sticky box" })
+      screen.queryByRole("button", {
+        name: "Drop a block here, or click to add one, in Sticky box",
+      })
     ).toBeNull();
   });
 
@@ -1496,7 +1550,7 @@ describe("which containers it actually draws a control on", () => {
       wide: { x: 0, y: 0, width: 400, height: 200 },
       clipped: { x: 0, y: 0, width: 400, height: 200 },
     });
-    expect(drawnAt("Clipped box")).toEqual(["178px", "78px", "44px", "44px"]);
+    expect(drawnAt("Clipped box")).toEqual(["40px", "78px", "320px", "44px"]);
 
     // The same container, 100px further down its scroller, and nothing
     // resized: `clipper` still reports the canvas's own box.
@@ -1512,7 +1566,7 @@ describe("which containers it actually draws a control on", () => {
       scroller.dispatchEvent(new Event("scroll"));
     });
 
-    expect(drawnAt("Clipped box")).toEqual(["178px", "178px", "44px", "44px"]);
+    expect(drawnAt("Clipped box")).toEqual(["40px", "178px", "320px", "44px"]);
   });
 
   it("re-measures when a transition finishes inside the canvas", () => {
@@ -1528,7 +1582,7 @@ describe("which containers it actually draws a control on", () => {
       wide: { x: 0, y: 0, width: 400, height: 200 },
       clipped: { x: 0, y: 0, width: 400, height: 200 },
     });
-    expect(drawnAt("Clipped box")).toEqual(["178px", "78px", "44px", "44px"]);
+    expect(drawnAt("Clipped box")).toEqual(["40px", "78px", "320px", "44px"]);
 
     layout(container, {
       wide: { x: 0, y: 0, width: 400, height: 200 },
@@ -1542,7 +1596,7 @@ describe("which containers it actually draws a control on", () => {
       animated.dispatchEvent(new Event("transitionend", { bubbles: true }));
     });
 
-    expect(drawnAt("Clipped box")).toEqual(["178px", "178px", "44px", "44px"]);
+    expect(drawnAt("Clipped box")).toEqual(["40px", "178px", "320px", "44px"]);
   });
 
   it("re-measures when a site style recompiles inside the canvas", async () => {
@@ -1565,7 +1619,7 @@ describe("which containers it actually draws a control on", () => {
       wide: { x: 0, y: 0, width: 400, height: 200 },
       clipped: { x: 0, y: 0, width: 400, height: 200 },
     });
-    expect(drawnAt("Clipped box")).toEqual(["178px", "78px", "44px", "44px"]);
+    expect(drawnAt("Clipped box")).toEqual(["40px", "78px", "320px", "44px"]);
 
     const root = canvasRootIn(container);
     const sheet = document.createElement("style");
@@ -1586,7 +1640,7 @@ describe("which containers it actually draws a control on", () => {
       await flushObservers();
     });
 
-    expect(drawnAt("Clipped box")).toEqual(["178px", "178px", "44px", "44px"]);
+    expect(drawnAt("Clipped box")).toEqual(["40px", "178px", "320px", "44px"]);
   });
 
   it("does NOT re-measure for a mutation of its own output", async () => {
@@ -1614,21 +1668,21 @@ describe("which containers it actually draws a control on", () => {
       wide: { x: 0, y: 0, width: 400, height: 200 },
       clipped: { x: 0, y: 0, width: 400, height: 200 },
     });
-    expect(drawnAt("Clipped box")).toEqual(["178px", "78px", "44px", "44px"]);
+    expect(drawnAt("Clipped box")).toEqual(["40px", "78px", "320px", "44px"]);
 
     layout(container, {
       wide: { x: 0, y: 0, width: 400, height: 200 },
       clipped: { x: 0, y: 100, width: 400, height: 200 },
     });
     const drawn = screen.getByRole("button", {
-      name: "Add a block to Clipped box",
+      name: "Drop a block here, or click to add one, in Clipped box",
     });
     await act(async () => {
       drawn.setAttribute("style", drawn.getAttribute("style") ?? "");
       await flushObservers();
     });
 
-    expect(drawnAt("Clipped box")).toEqual(["178px", "78px", "44px", "44px"]);
+    expect(drawnAt("Clipped box")).toEqual(["40px", "78px", "320px", "44px"]);
   });
 
   it("keeps the control inside a container narrower than it", () => {
@@ -1644,7 +1698,7 @@ describe("which containers it actually draws a control on", () => {
       narrow: { x: 0, y: 200, width: 20, height: 200 },
     });
 
-    expect(drawnAt("Wide box")).toEqual(["178px", "78px", "44px", "44px"]);
+    expect(drawnAt("Wide box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(drawnAt("Narrow column")).toEqual(["0px", "278px", "20px", "44px"]);
   });
 });

@@ -44,10 +44,10 @@ import {
 } from "@tanstack/react-query";
 import type { UseFormSetError, FieldValues } from "react-hook-form";
 
-import { toast } from "@admin/components/ui";
+import { toast } from "@admin/components/ui/toaster";
 import {
-  createServerErrorHandler,
   parseServerErrorMessage,
+  placeServerRefusal,
 } from "@admin/lib/errors/error-mapping";
 import {
   toastMutationResult,
@@ -59,6 +59,9 @@ import {
   type CreateEntryPayload,
 } from "@admin/services/entryApi";
 import type { Entry } from "@admin/types/collection";
+
+import { drawnFieldPath } from "./drawn-field-path";
+import { refreshRemovedFromCodeSchema } from "./removed-from-code-refusal";
 
 /**
  * Options for useCreateEntry hook
@@ -80,6 +83,16 @@ export interface UseCreateEntryOptions<
    * When provided, field-level errors from the server will be set on corresponding form fields.
    */
   setError?: UseFormSetError<TFieldValues>;
+  /**
+   * The entry's fields: a refusal's reason is put on a field only where the
+   * form draws it, and said by the toast otherwise. Every path, if absent.
+   */
+  fields?: readonly { name?: string }[];
+  /**
+   * Reads the form's value at a path, for the conditions that decide whether
+   * a field is drawn when a refusal arrives.
+   */
+  valueAt?: (path: string) => unknown;
 }
 
 /**
@@ -185,6 +198,8 @@ export function useCreateEntry<
   onError,
   showToast = true,
   setError,
+  fields,
+  valueAt,
 }: UseCreateEntryOptions<T, TFieldValues>): UseMutationResult<
   MutationResult<T>,
   Error,
@@ -226,20 +241,24 @@ export function useCreateEntry<
     },
 
     onError: (error: Error) => {
-      // Try to map server errors to form fields
-      let handledByForm = false;
+      // A refusal because the collection was removed from code reads its
+      // schema again, so a screen opened before the removal turns read-only.
+      refreshRemovedFromCodeSchema(queryClient, error);
 
-      if (setError) {
-        const errorHandler = createServerErrorHandler(setError);
-        handledByForm = errorHandler(error);
-      }
+      // Each reason on the field it names, where the form draws that field;
+      // the form keeps the author's values. Reasons no field can show are
+      // said by the toast below instead.
+      const placed = placeServerRefusal(error, setError, {
+        isFormField: drawnFieldPath(fields, valueAt),
+      });
 
-      // Show generic toast only if errors weren't mapped to form
-      if (showToast && !handledByForm) {
+      // Show a toast only for what the form's fields do not already say.
+      if (showToast && !placed.handled) {
         const message =
-          parseServerErrorMessage(error) ||
-          error.message ||
-          "Failed to create entry";
+          placed.toastMessage ??
+          (parseServerErrorMessage(error) ||
+            error.message ||
+            "Failed to create entry");
         toast.error(message);
       }
 

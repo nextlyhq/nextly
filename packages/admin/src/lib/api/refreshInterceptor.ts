@@ -82,14 +82,40 @@ export const NO_REDIRECT_PUBLIC_PATHS: ReadonlySet<string> = new Set<string>(
 );
 
 /**
+ * How many places are drawing the sign-in form in place of a private screen
+ * (the route guard, for a browser that has not signed in here). While any is,
+ * the visitor is already on the sign-in form, as on a public route, and a 401
+ * from a background query must not move them to the sign-in page: that would
+ * draw the form afresh and throw away what they typed while the server
+ * started, and the sign-in they asked for with it.
+ */
+let signInFormsInPlace = 0;
+
+/**
+ * Holds the redirect to sign-in while the form is drawn in place; returns the
+ * release, for the effect that drew it to call when the form goes.
+ */
+export function holdLoginRedirect(): () => void {
+  signInFormsInPlace += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    signInFormsInPlace -= 1;
+  };
+}
+
+/**
  * Navigate the browser to the configured login path unless we're already
- * on a public-auth route. The guard prevents layout-level background
- * queries (admin-meta, general-settings, etc.) from triggering an
- * infinite reload loop while the user is mid auth-flow.
+ * on a public-auth route, or on the sign-in form drawn in place. The guard
+ * prevents layout-level background queries (admin-meta, general-settings,
+ * etc.) from triggering an infinite reload loop while the user is mid
+ * auth-flow.
  */
 export function redirectToLogin(): void {
   if (typeof window === "undefined") return;
   if (NO_REDIRECT_PUBLIC_PATHS.has(window.location.pathname)) return;
+  if (signInFormsInPlace > 0) return;
   window.location.href = loginRedirectPath;
 }
 

@@ -14,6 +14,7 @@ import {
   fieldsCarryingReadRules,
   nestedWithheldPaths,
 } from "../component-read-access";
+import { computeVersionDiff } from "../diff/compute-diff";
 
 afterEach(() => clearFieldFunctions());
 
@@ -230,6 +231,95 @@ describe("malformed and serialized values", () => {
     );
 
     expect([...paths]).toEqual(["meta.hero.secret"]);
+  });
+
+  it("names a list row by its index, and a single group or instance by none", () => {
+    // The second row lost the field, the first kept it; a value that is not
+    // a row still holds its place, so the row after it is index 2, as the
+    // stored list and the admin's form both count it. A list held as JSON
+    // text is counted the same way.
+    const rows = (secret: boolean) => [
+      { title: "a", secret: "S-1" },
+      secret ? { title: "b", secret: "S-2" } : { title: "b" },
+      "not a row",
+      secret ? { title: "c", secret: "S-3" } : { title: "c" },
+    ];
+    const before = {
+      items: rows(true),
+      text: JSON.stringify(rows(true)),
+      banner: { title: "a", secret: "S-4" },
+    };
+    const after = {
+      items: rows(false),
+      text: JSON.stringify(rows(false)),
+      banner: { title: "a" },
+    };
+    const inner = [{ name: "title" }, { name: "secret" }];
+
+    const paths = nestedWithheldPaths(
+      before,
+      after,
+      fields(
+        { name: "items", type: "repeater", fields: inner },
+        { name: "text", type: "repeater", fields: inner },
+        { name: "banner", type: "group", fields: inner }
+      ),
+      new Map()
+    );
+
+    expect([...paths].sort()).toEqual([
+      "banner.secret",
+      "items.1.secret",
+      "items.3.secret",
+      "text.1.secret",
+      "text.3.secret",
+    ]);
+  });
+
+  // A non-repeatable component populated from its own table arrives as a
+  // one-element array, and still holds one value.
+  const hero = { name: "hero", type: "component", component: "card" };
+  const heroFields = new Map([
+    [
+      "card",
+      fields({ name: "title", type: "text" }, { name: "secret", type: "text" }),
+    ],
+  ]);
+  const heroBefore = { hero: [{ title: "a", secret: "S-1" }] };
+  const heroAfter = { hero: [{ title: "a" }] };
+
+  it("names a single component by none, even when it arrives as a one-element array", () => {
+    expect([
+      ...nestedWithheldPaths(heroBefore, heroAfter, fields(hero), heroFields),
+    ]).toEqual(["hero.secret"]);
+  });
+
+  it("names a field where the comparison looks for it", () => {
+    // The two read one path: what the redaction names, the comparison finds,
+    // so the field is hidden in its place and the comparison says it is
+    // incomplete, rather than leaving it out as a field never held.
+    const withheld = nestedWithheldPaths(
+      heroBefore,
+      heroAfter,
+      fields(hero),
+      heroFields
+    );
+    const diff = computeVersionDiff(
+      heroAfter,
+      heroAfter,
+      fields({
+        ...hero,
+        componentFields: heroFields.get("card"),
+      }),
+      {
+        componentRulesApplied: true,
+        withheldFrom: withheld,
+        withheldTo: withheld,
+      }
+    );
+
+    expect(JSON.stringify(diff.fields)).toContain('"kind":"hidden"');
+    expect(diff.incomplete).toBe(true);
   });
 });
 

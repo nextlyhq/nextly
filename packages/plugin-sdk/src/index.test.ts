@@ -32,30 +32,79 @@ describe("@nextlyhq/plugin-sdk", () => {
   });
 });
 
-describe("the dashboard widget surface is reachable from the SDK", () => {
-  // AGENTS.md: a plugin imports only from `@nextlyhq/plugin-sdk` and
-  // `@nextlyhq/ui`, never from core. The widget registry and the source
-  // registry were exported from the `nextly` root alone, so an author
-  // following that rule could not register a widget at all. Asserted through
-  // the SDK's own entry point, for the same reason the `NextlyError` case
-  // above is: importing from core would pass while the stable surface stayed
-  // empty.
-  it("re-exports the registration functions as callable values", async () => {
-    const sdk = await import("./index");
-    expect(typeof sdk.registerWidget).toBe("function");
-    expect(typeof sdk.registerSource).toBe("function");
+describe("the dashboard widget surface the SDK publishes", () => {
+  // A plugin adds a widget one way: `defineWidget`, under
+  // `contributes.dashboard`. Asserted through the SDK's own entry point, for
+  // the same reason the `NextlyError` case above is: a plugin imports only
+  // from here.
+  it("publishes defineWidget and no call that adds, changes or removes a widget or a source", async () => {
+    const sdk = (await import("./index")) as Record<string, unknown>;
+    // The control, in the same read: the module loaded and holds the one door,
+    // so the absences below are not an entry point that exports nothing.
+    expect(typeof sdk.defineWidget).toBe("function");
+    const doors = [
+      "registerWidget",
+      "overrideWidget",
+      "extendWidget",
+      "deregisterWidget",
+      "registerSource",
+    ];
+    expect(doors.filter(name => name in sdk)).toEqual([]);
   });
 
-  it("re-exports the vocabularies a declaration is checked against", async () => {
-    // The runtime arrays, not just their types: a plugin picking a size or an
-    // op from a list needs the values, and a type-only re-export would compile
-    // and then be `undefined` at runtime.
+  it("re-exports the vocabularies a source and its query are checked against", async () => {
+    // The runtime arrays, not just their types: a plugin picking an op from a
+    // list needs the values, and a type-only re-export would compile and then
+    // be `undefined` at runtime.
     const sdk = await import("./index");
-    expect(sdk.WIDGET_SIZES).toContain("md");
-    expect(sdk.WIDGET_HEIGHTS).toContain("tall");
-    expect(sdk.WIDGET_ARCHETYPES).toContain("metric");
     expect(sdk.WIDGET_OPS).toContain("count");
     expect(sdk.WIDGET_SOURCE_KINDS).toContain("collection");
     expect(sdk.WIDGET_SOURCE_FIELD_TYPES).toContain("string");
+  });
+});
+
+describe("the content-type scope the SDK publishes", () => {
+  // Through the SDK's own entry point: a plugin imports only from here, and a
+  // type-only re-export would compile and then be `undefined` at runtime.
+  it("re-exports publicAddressOf and typesWithoutAddress, which a plugin reads addresses through", async () => {
+    const sdk = await import("./index");
+    expect(typeof sdk.publicAddressOf).toBe("function");
+    expect(typeof sdk.typesWithoutAddress).toBe("function");
+  });
+
+  it("re-exports typesReachedBy, which a plugin's extend scope is judged by", async () => {
+    const sdk = await import("./index");
+    const reached = sdk.typesReachedBy(
+      { every: ["collection", "single"], except: ["drafts"] },
+      [
+        { slug: "posts", kind: "collection" },
+        { slug: "drafts", kind: "collection" },
+        { slug: "home", kind: "single" },
+        { slug: "orders", kind: "collection", plugin: "@acme/shop" },
+      ]
+    );
+    expect(reached.map(type => type.slug)).toEqual(["posts", "home"]);
+    expect(sdk.isContentTypeScope({ every: ["single"] })).toBe(true);
+  });
+
+  it("re-exports typesExtendedBy, which answers what the start added", async () => {
+    const sdk = await import("./index");
+    // A value export, not a type alone: a plugin calls it at run time.
+    expect(typeof sdk.typesExtendedBy).toBe("function");
+    expect(sdk.typesExtendedBy("@acme/never-installed", "meta")).toEqual([]);
+  });
+
+  it("accepts a scope as an extend target", () => {
+    const def: PluginDefinition = definePlugin({
+      name: "@acme/meta",
+      version: "1.0.0",
+      nextly: "*",
+      contributes: {
+        extend: [{ target: { every: ["collection"] }, fields: [] }],
+      },
+    });
+    expect(def.contributes?.extend?.[0]?.target).toEqual({
+      every: ["collection"],
+    });
   });
 });

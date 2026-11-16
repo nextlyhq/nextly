@@ -19,6 +19,8 @@ import { migrateCore } from "../../../../cli/commands/migrate";
 import {
   createHostAccountsTable,
   createRetiredAuthTables,
+  createStoredPermissionAnswersTable,
+  storedAnswerRow,
   dropRetiredAuthTables,
   insertRow,
 } from "../../../../init/__tests__/retired-auth-tables-fixture";
@@ -70,7 +72,10 @@ describe.each(getConfiguredTestDialects())(
     });
 
     /** Run the migrate core as the command does, with the drop requested. */
-    async function migrate(options: { allowDropNonEmptyRetired?: boolean }) {
+    async function migrate(options: {
+      allowDropNonEmptyRetired?: boolean;
+      dropRetiredAuthTables?: boolean;
+    }) {
       const { logger, warnings } = recordingLogger();
       const adapter = handle.adapter;
       await migrateCore({
@@ -141,6 +146,59 @@ describe.each(getConfiguredTestDialects())(
       await migrate({ allowDropNonEmptyRetired: true });
 
       expect(await handle.adapter.tableExists("accounts")).toBe(false);
+    });
+
+    /** A sign-in table and the stored permission answers, each with a row. */
+    async function retiredTablesWithRows(): Promise<void> {
+      await createRetiredAuthTables(handle.adapter, dialect);
+      await createStoredPermissionAnswersTable(handle.adapter, dialect);
+      await insertRow(handle.adapter, dialect, "accounts", [
+        "a-1",
+        "someone",
+        "oauth",
+        "google",
+        "g-1",
+        "tok",
+      ]);
+      // A real user: the table keeps its foreign key to `users` on
+      // PostgreSQL and SQLite.
+      const made = await handle.nextly.users.create({
+        email: `stored-${Date.now()}@retired.test`,
+        password: "Password123!",
+        data: { name: "stored", isActive: true },
+      });
+      const userId = String((made.item as { id: string | number }).id);
+      await insertRow(
+        handle.adapter,
+        dialect,
+        "user_permission_cache",
+        storedAnswerRow(dialect, { id: `${userId}|read|notes`, userId })
+      );
+    }
+
+    it("drops the stored permission answers holding rows on the drop alone", async () => {
+      // Its rows are copies recomputed from roles. A sign-in table with rows,
+      // dropped under the same request, is still kept beside it.
+      await retiredTablesWithRows();
+
+      await migrate({});
+
+      expect(await handle.adapter.tableExists("user_permission_cache")).toBe(
+        false
+      );
+      expect(await handle.adapter.tableExists("accounts")).toBe(true);
+    });
+
+    it("leaves the stored permission answers when no drop was asked for", async () => {
+      // The control: the drop above is the operator's request, not a side
+      // effect of running migrate.
+      await retiredTablesWithRows();
+
+      await migrate({ dropRetiredAuthTables: false });
+
+      expect(await handle.adapter.tableExists("user_permission_cache")).toBe(
+        true
+      );
     });
 
     it("leaves a host app's table of the same name alone", async () => {

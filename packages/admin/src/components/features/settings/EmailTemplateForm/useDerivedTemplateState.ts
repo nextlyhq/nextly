@@ -5,9 +5,10 @@
  * can. Rendering is the server's — the fields go to
  * `POST /api/email-templates/preview`, which composes them through the same
  * function the transport uses, so the preview cannot disagree with what is
- * sent. Interpreting the sample-data JSON and spotting variables that resolve
- * to nothing is the browser's: both are properties of the text on screen, and
- * a round-trip would only make the feedback slower.
+ * sent. Interpreting the sample-data JSON is the browser's: it is a property
+ * of the text on screen, and a round-trip would only make the feedback slower.
+ * The variables the template reads are checked beside it, in
+ * `useTemplateVariables`.
  *
  * A client-side copy of the render lived here and had already drifted: it
  * omitted the preheader entirely, and it reported an empty plain-text part for
@@ -21,8 +22,7 @@ import type {
   EmailTemplateKind,
 } from "@admin/services/emailTemplateApi";
 
-import { collectVariableNames } from "./interpolate";
-import { BUILT_IN_VARIABLES, buildSampleData } from "./sample-data";
+import { buildSampleData } from "./sample-data";
 import type { TemplateFormVariable } from "./schema";
 import { useDraftPreview } from "./useDraftPreview";
 
@@ -31,11 +31,15 @@ export interface DerivedTemplateState {
   sampleText: string;
   sampleData: Record<string, unknown>;
   sampleError: string | null;
-  /** Referenced in the body or subject, but neither declared nor sampled. */
-  unknownVariables: string[];
   previewHtml: string;
   previewText: string;
   previewSubject: string;
+  /** The preview text, rendered as an inbox shows it. */
+  previewPreheader: string;
+  /** The From line with its name rendered, or null when the draft sets none. */
+  previewFrom: string | null;
+  /** Whether any render has arrived yet. */
+  hasPreview: boolean;
   /** A render is in flight and no earlier one is being shown in its place. */
   isPreviewPending: boolean;
   /** The render was refused or unreachable; the pane says so rather than lying. */
@@ -52,6 +56,8 @@ export function useDerivedTemplateState({
   useLayout,
   layoutId,
   kind,
+  fromOverride,
+  templateId,
 }: {
   variables: TemplateFormVariable[] | undefined;
   sampleOverride: string | null;
@@ -62,6 +68,9 @@ export function useDerivedTemplateState({
   useLayout: boolean;
   layoutId: string | undefined;
   kind: EmailTemplateKind;
+  fromOverride?: string;
+  /** The saved template these fields are a draft of, when editing one. */
+  templateId?: string;
 }): DerivedTemplateState {
   const isLayoutRow = kind === "layout";
 
@@ -94,21 +103,6 @@ export function useDerivedTemplateState({
     }
   }, [sampleText]);
 
-  const knownNames = useMemo(() => {
-    const set = new Set<string>(BUILT_IN_VARIABLES.map(v => v.name));
-    for (const v of variables ?? []) if (v.name) set.add(v.name);
-    for (const k of Object.keys(sampleData)) set.add(k);
-    return set;
-  }, [variables, sampleData]);
-
-  const unknownVariables = useMemo(() => {
-    const referenced = new Set<string>([
-      ...collectVariableNames(subject ?? ""),
-      ...collectVariableNames(htmlContent ?? ""),
-    ]);
-    return [...referenced].filter(n => !knownNames.has(n.split(".")[0]));
-  }, [subject, htmlContent, knownNames]);
-
   /*
    * Exactly the route's schema, and nothing beyond it. Assembled as one object
    * so the debounce and the query key both track the whole render input: a
@@ -123,6 +117,10 @@ export function useDerivedTemplateState({
       useLayout,
       kind,
       layoutId: layoutId ?? null,
+      fromOverride: fromOverride || null,
+      // The saved template's engine decides the preview's: one kept on the
+      // previous engine previews as it sends, not as Liquid.
+      ...(templateId ? { id: templateId } : {}),
     }),
     [
       subject,
@@ -132,6 +130,8 @@ export function useDerivedTemplateState({
       useLayout,
       kind,
       layoutId,
+      fromOverride,
+      templateId,
     ]
   );
 
@@ -139,6 +139,9 @@ export function useDerivedTemplateState({
     previewHtml,
     previewText,
     previewSubject,
+    previewPreheader,
+    previewFrom,
+    hasPreview,
     isPreviewPending,
     previewError,
   } = useDraftPreview(
@@ -155,10 +158,12 @@ export function useDerivedTemplateState({
     sampleText,
     sampleData,
     sampleError,
-    unknownVariables,
     previewHtml,
     previewText,
     previewSubject,
+    previewPreheader,
+    previewFrom,
+    hasPreview,
     isPreviewPending,
     previewError,
   };

@@ -19,6 +19,10 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection } from "../../../collections/config/define-collection";
 import { text } from "../../../collections/fields";
 import { defineSingle } from "../../../config";
@@ -168,7 +172,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
                   entryId: doc.id,
                   overrideAccess: true,
                 },
-                { status: "draft" }
+                { status: "draft", _overwrite: true }
               );
             },
           ],
@@ -216,6 +220,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     ],
     localization: { locales: ["en", "de"], defaultLocale: "en" },
   });
+  // A code rule only narrows the permission, so the releases' author holds
+  // read, update, publish and unpublish on every collection and the Single;
+  // the rules still decide, and refuse where they say nobody may.
+  const scopes = [POSTS, LOCKED, PAGES, HIDDEN, FLIPPED, STRIPPED, SHOWN];
+  await userWhoMay(current, "author", "read", [...scopes, SETTINGS]);
+  for (const action of ["update", "publish", "unpublish"]) {
+    await grantTo(current, "author", action, [...scopes, SETTINGS]);
+  }
   return current;
 }
 
@@ -699,7 +711,7 @@ describe.each(getConfiguredTestDialects())(
       for (const id of ids) {
         await handlerOf(t).updateEntry(
           { collectionName: POSTS, entryId: id, overrideAccess: true },
-          { title: "edited", status: "published" }
+          { title: "edited", status: "published", _overwrite: true }
         );
       }
 
@@ -793,7 +805,7 @@ describe.each(getConfiguredTestDialects())(
       // working draft and leaves the live row alone.
       await handlerOf(t).updateEntry(
         { collectionName: LOCKED, entryId: id, overrideAccess: true },
-        { title: "pending title" }
+        { title: "pending title", _overwrite: true }
       );
       const releaseId = await dueRelease(t, [id], {
         scopeKind: "collection",
@@ -822,7 +834,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "de",
         },
-        { title: "Seite", status: "draft" }
+        { title: "Seite", status: "draft", _overwrite: true }
       );
       const releaseId = await dueRelease(t, [id], {
         scopeKind: "collection",
@@ -914,7 +926,7 @@ describe.each(getConfiguredTestDialects())(
       const singles: SingleEntryService = t.getService("singleEntryService");
       await singles.update(
         SETTINGS,
-        { siteName: "Site", status: "draft" },
+        { siteName: "Site", status: "draft", _overwrite: true },
         { overrideAccess: true }
       );
       const rows = await t.adapter.select<{ id: string }>(

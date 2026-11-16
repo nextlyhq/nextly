@@ -424,7 +424,7 @@ describe("webhook outbox capture (integration)", () => {
 
     await handler.updateEntry(
       { collectionName: "posts", entryId: id, overrideAccess: true },
-      { title: "after" }
+      { title: "after", _overwrite: true }
     );
 
     const rows = await events(current);
@@ -502,7 +502,8 @@ describe("webhook outbox capture (integration)", () => {
     await handler.bulkUpdateEntries({
       collectionName: "posts",
       ids: [id],
-      data: { title: "bulk-updated" },
+      // The acting identity is under test, not versions.
+      data: { title: "bulk-updated", _overwrite: true },
       overrideAccess: true,
       actor,
     });
@@ -738,7 +739,9 @@ describe("webhook outbox capture (integration)", () => {
         tx,
         "posts",
         id,
-        {},
+        // Trusted server work: the delete under test is the event it
+        // records, not whether an anonymous caller may make it.
+        { overrideAccess: true },
         {
           type: "apiKey",
           id: "key_tx",

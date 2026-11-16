@@ -102,12 +102,30 @@ export interface ListQueryFilterContext {
   limit?: number;
 }
 
+/**
+ * @experimental Context passed to `publicAddress.template` filter handlers: the
+ * content type, made in the Schema Builder, whose public address is asked for,
+ * and the language it is asked in.
+ */
+export interface PublicAddressTemplateContext {
+  kind: "collection" | "single";
+  slug: string;
+  locale?: string;
+}
+
 /** @experimental Named seam constants for all built-in Nextly filter/action extension points (D63). */
 export const FilterSeams = {
   EmailBeforeSend: "email.beforeSend",
   EmailAfterSend: "email.afterSend",
   AdminNav: "admin.nav",
   CollectionsListQuery: "collections.listQuery",
+  /**
+   * The public address template of a type made in the Schema Builder, such as
+   * `"/recipes/{handle}"`, or undefined for none. Asked only for those types:
+   * a type declared in code states its own. An answer that breaks the rule a
+   * declared address is judged by, or a handler that throws, gives none.
+   */
+  PublicAddressTemplate: "publicAddress.template",
 } as const;
 
 /** @experimental Union of all built-in Nextly filter/action seam names (D63). */

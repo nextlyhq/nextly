@@ -1,369 +1,312 @@
 /**
- * What the add panel lists: its rows, what each one's button does, and what a search keeps.
+ * What the add panel lists from the server's read and the reader's draft: what each row's control
+ * does, what a search keeps, and the collection a new card starts on.
  */
+import { sizeBounds } from "nextly/config";
 import { describe, expect, it } from "vitest";
 
 import type {
   DashboardWidget,
   WidgetPlacement,
-  WidgetWidthFacts,
 } from "@admin/types/dashboard/widgets";
 
 import {
-  addPanelCount,
-  addPanelGroups,
-  addPanelRows,
-  REMOVED_ROW_DESCRIPTION,
-  searchAddPanel,
+  canAdd,
+  collectionsFor,
+  galleryRows,
+  newCardSettings,
+  pluginShownName,
+  rowsCount,
+  searchRows,
+  startingCollection,
+  usersOffer,
+  type CanAsk,
+  type GalleryRead,
+  type GalleryTile,
 } from "../add-panel-model";
 
-const ALL = ["quarter", "third", "half", "twoThirds", "full"] as const;
+const tile = (over: Partial<GalleryTile> & { id: string }): GalleryTile => ({
+  name: over.id,
+  size: sizeBounds({ default: { w: 4, h: 3 } }),
+  allowsSeveral: false,
+  ...over,
+});
 
-function facts(over: Partial<WidgetWidthFacts>): WidgetWidthFacts {
-  return {
-    allowedWidths: [...ALL],
-    defaultWidth: "full",
-    allowsSeveral: false,
-    group: "overview",
-    sketch: "metric",
-    rank: 0,
-    ...over,
-  } as WidgetWidthFacts;
-}
+const COUNT = tile({
+  id: "core/count",
+  name: "Count",
+  description: "How many entries a collection holds.",
+  collectionSetting: "collection",
+  allowsSeveral: true,
+});
+const TEAM = tile({ id: "core/team", name: "Team", description: "People." });
+const SEO = tile({
+  id: "seo/score",
+  name: "SEO score",
+  plugin: "@acme/plugin-seo",
+});
 
-const declared = (id: string, title: string): DashboardWidget =>
-  ({ id, title, archetype: "metric" }) as unknown as DashboardWidget;
-
-const placement = (
-  id: string,
-  widgetId: string,
-  removed = false
-): WidgetPlacement => ({ id, widgetId, width: "full", removed });
-
-const byId = new Map(
-  [
-    declared("core/collections", "Collections"),
-    declared("core/team", "Team"),
-    declared("site/notes", "Notes"),
-    declared("forms/latest", "Latest submissions"),
-  ].map(widget => [widget.id, widget])
-);
-
-const WIDGETS = {
-  "core/collections": facts({
-    rank: 0,
-    description: "Entry counts per collection.",
-  }),
-  "site/notes": facts({
-    rank: 1,
-    allowsSeveral: true,
-    sketch: "text",
-    allowedWidths: ["half", "full"],
-  }),
-  "core/team": facts({ rank: 2, group: "team" }),
-  "forms/latest": facts({
-    rank: 3,
-    group: "plugins",
-    subgroup: "@acme/forms",
-    category: "Forms",
-    description: "The newest submissions.",
-  }),
+const READ: GalleryRead = {
+  tiles: [COUNT, TEAM, SEO],
+  collections: [
+    { slug: "posts", label: "Posts", lifecycle: true },
+    { slug: "pages", label: "Pages", lifecycle: false },
+  ],
 };
 
-describe("the add panel's rows", () => {
-  it("lists the reader's removed cards first, each to be put back as it was", () => {
-    const rows = addPanelRows({
-      placements: [placement("p1", "core/team", true)],
-      offered: [],
-      widgets: WIDGETS,
-      byId,
-    });
-    expect(rows[0]).toMatchObject({
-      key: "removed:p1",
-      section: "removed",
-      name: "Team",
-      description: REMOVED_ROW_DESCRIPTION,
-      action: { kind: "add-back", placementId: "p1" },
-    });
-  });
+/** The widgets this admin can draw, each titled as the dashboard titles its card. */
+const drawn = (id: string, title: string): [string, DashboardWidget] => [
+  id,
+  {
+    id,
+    title,
+    archetype: "custom",
+    size: sizeBounds({ default: { w: 4, h: 3 } }),
+  },
+];
+const BY_ID = new Map<string, DashboardWidget>([
+  drawn("core/count", "Count"),
+  drawn("core/team", "Team"),
+  drawn("seo/score", "SEO score"),
+]);
 
-  it("shows a one-card widget that is placed as on the dashboard, never as Add", () => {
-    // 🔴 The plausible slip: offering Add because the widget exists, for a card the server
-    // refuses as a duplicate.
-    const rows = addPanelRows({
-      placements: [placement("p1", "core/collections")],
-      offered: ["core/collections"],
-      widgets: WIDGETS,
-      byId,
-    });
-    expect(rows.find(row => row.key === "core/collections")?.action).toEqual({
-      kind: "on-dashboard",
-    });
-  });
+const every: CanAsk = () => true;
 
-  it("lists a removed one-card widget once, under Removed, never as a fresh card", () => {
-    // 🔴 Offered too, as a server that counts only drawn cards would: the slip is a second row
-    // for the same card, or an Add the server refuses as a duplicate.
-    const rows = addPanelRows({
-      placements: [placement("p9", "core/team", true)],
-      offered: ["core/team"],
-      widgets: WIDGETS,
-      byId,
-    });
-    expect(rows.filter(row => row.name === "Team")).toEqual([
-      expect.objectContaining({
-        key: "removed:p9",
-        section: "removed",
-        action: { kind: "add-back", placementId: "p9" },
-      }),
+const card = (over: Partial<WidgetPlacement>): WidgetPlacement => ({
+  id: "p1",
+  widgetId: "core/team",
+  w: 4,
+  h: 3,
+  removed: false,
+  ...over,
+});
+
+const actions = (placements: WidgetPlacement[], canAsk: CanAsk = every) =>
+  galleryRows(READ, placements, BY_ID, canAsk).map(row => [
+    row.tile.id,
+    row.action,
+  ]);
+
+describe("galleryRows", () => {
+  it("lists each widget once, in the read's order, with Add", () => {
+    expect(actions([])).toEqual([
+      ["core/count", { kind: "add" }],
+      ["core/team", { kind: "add" }],
+      ["seo/score", { kind: "add" }],
     ]);
   });
 
-  it("offers another card of a widget that allows several, and counts those placed", () => {
-    const rows = addPanelRows({
-      placements: [placement("a", "site/notes"), placement("b", "site/notes")],
-      offered: ["site/notes"],
-      widgets: WIDGETS,
-      byId,
-    });
-    expect(rows.find(row => row.key === "site/notes")).toMatchObject({
-      placed: 2,
-      action: { kind: "add-another", widgetId: "site/notes" },
-      widths: "½ to Full wide",
-    });
+  it("says a one-card widget the draft holds is on the dashboard; one that allows several is offered again", () => {
+    const placed = [
+      card({ id: "t", widgetId: "core/team" }),
+      card({ id: "c", widgetId: "core/count" }),
+    ];
+    expect(actions(placed)).toEqual([
+      ["core/count", { kind: "add" }],
+      ["core/team", { kind: "on-dashboard" }],
+      ["seo/score", { kind: "add" }],
+    ]);
   });
 
-  it("lists a widget the server does not offer and the reader never placed nowhere", () => {
-    const rows = addPanelRows({
-      placements: [],
-      offered: ["core/collections"],
-      widgets: WIDGETS,
-      byId,
-    });
-    expect(rows.map(row => row.key)).toEqual(["core/collections"]);
-  });
-
-  it("orders rows by core's rank, a placed one included", () => {
-    // 🔴 The server's `available` leaves a placed one-card widget out; ordered by it, the
-    // on-dashboard row would fall to the end or vanish.
-    const rows = addPanelRows({
-      placements: [placement("p", "core/collections")],
-      offered: ["site/notes", "core/team", "forms/latest"],
-      widgets: WIDGETS,
-      byId,
-    });
-    expect(rows.map(row => row.key)).toEqual([
-      "core/collections",
-      "site/notes",
+  it("puts a one-card widget removed this session back, rather than adding a second", () => {
+    expect(actions([card({ id: "t-1", removed: true })])[1]).toEqual([
       "core/team",
-      "forms/latest",
+      { kind: "add-back", placementId: "t-1" },
     ]);
   });
 
-  it("leaves out a widget this admin cannot draw, and the Content group while it is hidden", () => {
-    const rows = addPanelRows({
-      placements: [],
-      offered: ["ghost/widget", "content/posts"],
-      widgets: {
-        "ghost/widget": facts({ rank: 0 }),
-        "content/posts": facts({
-          rank: 1,
-          group: "content",
-          subgroup: "posts",
-        }),
-      },
-      byId: new Map([["content/posts", declared("content/posts", "Posts")]]),
-      showContent: false,
-    });
-    expect(rows).toEqual([]);
-  });
-});
-
-describe("searching the add panel", () => {
-  const rows = addPanelRows({
-    placements: [],
-    offered: Object.keys(WIDGETS),
-    widgets: WIDGETS,
-    byId,
-  });
-
-  it.each([
-    ["the name", "notes", ["site/notes"]],
-    ["the description, ignoring case", "ENTRY COUNTS", ["core/collections"]],
-    ["the category", "forms", ["forms/latest"]],
-    ["the group's heading", "team", ["core/team"]],
-    ["the sub-group", "@acme", ["forms/latest"]],
-  ])("finds a widget by %s", (_how, query, expected) => {
-    expect(searchAddPanel(rows, query).map(row => row.key)).toEqual(expected);
-  });
-
-  describe("a removed one-card plugin widget, listed only under Removed", () => {
-    const removedRows = addPanelRows({
-      placements: [placement("p4", "forms/latest", true)],
-      offered: ["forms/latest"],
-      widgets: WIDGETS,
-      byId,
-    });
-
-    // 🔴 Its Removed row is the only way back, so a search by what the widget's own row would
-    // have been found by must still find it. The plausible slip searches the put-back line alone.
-    it.each([
-      ["its description", "newest submissions"],
-      ["its category", "forms"],
-      ["its group's heading", "plugins"],
-      ["its plugin", "@acme"],
-    ])("is found by %s", (_how, query) => {
-      expect(searchAddPanel(removedRows, query).map(row => row.key)).toEqual([
-        "removed:p4",
-      ]);
-    });
-
-    it("still says how it comes back, and stays out of any sub-group", () => {
-      const [row] = removedRows;
-      expect(row).toMatchObject({
-        section: "removed",
-        description: REMOVED_ROW_DESCRIPTION,
-      });
-      expect(row.subgroup).toBeUndefined();
-      expect(addPanelGroups(removedRows)[0].subgroups).toEqual([]);
-    });
-
-    it("is not found by text the widget does not carry", () => {
-      expect(searchAddPanel(removedRows, "invoices")).toEqual([]);
-    });
-  });
-
-  it("keeps every row for an empty or blank query", () => {
-    expect(searchAddPanel(rows, "   ")).toHaveLength(rows.length);
-  });
-
-  it("says how many it found, and for what", () => {
-    expect(addPanelCount(4, "")).toBe("4 widgets");
-    expect(addPanelCount(1, " team ")).toBe("1 result for “team”");
-    expect(addPanelCount(0, "zzz")).toBe("0 results for “zzz”");
-  });
-});
-
-describe("the add panel's groups", () => {
-  it("draws the groups in order, with a plugin's widgets under its sub-group", () => {
-    const groups = addPanelGroups(
-      addPanelRows({
-        // A placed team card fills Team; a removed one-card widget is listed under Removed only.
-        placements: [
-          placement("r", "core/collections", true),
-          placement("t", "core/team"),
-        ],
-        offered: ["site/notes", "forms/latest"],
-        widgets: WIDGETS,
-        byId,
-      })
-    );
-    expect(groups.map(group => group.section.id)).toEqual([
-      "removed",
-      "overview",
-      "team",
-      "plugins",
+  it("offers nothing to add for a widget no readable collection suits, and leaves the others", () => {
+    const rows = galleryRows(READ, [], BY_ID, () => false);
+    expect(rows.map(row => [row.tile.id, canAdd(row)])).toEqual([
+      ["core/count", false],
+      ["core/team", true],
+      ["seo/score", true],
     ]);
-    const plugins = groups.find(group => group.section.id === "plugins");
-    expect(plugins?.rows).toEqual([]);
-    expect(plugins?.subgroups.map(sub => [sub.name, sub.rows.length])).toEqual([
-      ["@acme/forms", 1],
-    ]);
-  });
-});
-
-describe("a widget offered per collection", () => {
-  const count = {
-    id: "core/count",
-    title: "Count",
-    archetype: "metric",
-    settings: [{ name: "collection", type: "collection" }],
-  } as unknown as DashboardWidget;
-  const rowsFor = (placements: WidgetPlacement[]) =>
-    addPanelRows({
-      placements,
-      offered: ["core/count"],
-      widgets: {
-        "core/count": facts({
-          group: "content",
-          perCollection: true,
-          allowsSeveral: true,
-        }),
-      },
-      byId: new Map([["core/count", count]]),
-      // No showContent: these rows are what the panel lists as it ships.
-      collections: [
-        { collection: "posts", label: "Posts" },
-        { collection: "pages", label: "Pages" },
-      ],
-    });
-
-  it("is one row per collection the reader may read, each adding a card set to it", () => {
-    const rows = rowsFor([]);
-    expect(rows.map(row => [row.key, row.subgroup, row.action])).toEqual([
-      [
-        "core/count:posts",
-        "Posts",
-        {
-          kind: "add",
-          widgetId: "core/count",
-          settings: { collection: "posts" },
-        },
-      ],
-      [
-        "core/count:pages",
-        "Pages",
-        {
-          kind: "add",
-          widgetId: "core/count",
-          settings: { collection: "pages" },
-        },
-      ],
-    ]);
-  });
-
-  it("counts only that collection's cards, offering another beside them", () => {
-    const rows = rowsFor([
-      { ...placement("a", "core/count"), config: { collection: "posts" } },
-    ]);
-    expect(rows.map(row => [row.key, row.placed, row.action.kind])).toEqual([
-      ["core/count:posts", 1, "add-another"],
-      ["core/count:pages", 0, "add"],
-    ]);
-  });
-
-  it("carries the widget's category, so a search by it finds each collection's row", () => {
-    const rows = addPanelRows({
-      placements: [],
-      offered: ["core/count"],
-      widgets: {
-        "core/count": facts({
-          group: "content",
-          perCollection: true,
-          category: "Totals",
-        }),
-      },
-      byId: new Map([["core/count", count]]),
-      collections: [{ collection: "posts", label: "Posts" }],
-    });
-    expect(rows[0]?.category).toBe("Totals");
-    expect(searchAddPanel(rows, "totals").map(row => row.key)).toEqual([
-      "core/count:posts",
-    ]);
-  });
-
-  it("stays out of the panel while the Content group is not shown", () => {
+    expect(rows[0]?.action).toEqual({ kind: "needs-collection" });
+    // With no collection at all, the same.
     expect(
-      addPanelRows({
-        placements: [],
-        offered: ["core/count"],
-        widgets: {
-          "core/count": facts({ group: "content", perCollection: true }),
-        },
-        byId: new Map([["core/count", count]]),
-        collections: [{ collection: "posts", label: "Posts" }],
-        showContent: false,
-      })
-    ).toEqual([]);
+      galleryRows({ ...READ, collections: [] }, [], BY_ID, every)[0]?.action
+    ).toEqual({ kind: "needs-collection" });
+  });
+
+  it("offers Count on Users to a reader who may read users and no collection, starting it there", () => {
+    // As the server tells a reader who may read users: Count's setting offers them.
+    const offering = new Map(BY_ID).set("core/count", {
+      ...BY_ID.get("core/count")!,
+      settings: [{ name: "collection", type: "collection", users: true }],
+    });
+    const offersUsers = usersOffer(offering);
+    const none = { ...READ, collections: [] };
+    const rows = galleryRows(none, [], offering, every, undefined, offersUsers);
+    expect(rows[0]?.action).toEqual({ kind: "add" });
+    const own = collectionsFor("core/count", [], every, offersUsers);
+    expect(own.map(collection => collection.slug)).toEqual(["users"]);
+    const start = startingCollection(COUNT, own, []);
+    expect(newCardSettings(COUNT, start?.slug)).toEqual({
+      collection: "users",
+    });
+    // A reader with a collection starts on it, never on Users.
+    expect(
+      collectionsFor("core/count", READ.collections, every, offersUsers).map(
+        collection => collection.slug
+      )
+    ).toEqual(["posts", "pages"]);
+    // The must-differ half: told without the offer, Count still needs a collection.
+    expect(
+      galleryRows(none, [], BY_ID, every, undefined, usersOffer(BY_ID))[0]
+        ?.action
+    ).toEqual({ kind: "needs-collection" });
+  });
+
+  it("names each row as the dashboard titles its card, and lists none this admin cannot draw", () => {
+    const rows = galleryRows(
+      { ...READ, tiles: [{ ...TEAM, name: "core/team" }, tile({ id: "x/y" })] },
+      [],
+      BY_ID,
+      every
+    );
+    expect(rows.map(row => row.tile.name)).toEqual(["Team"]);
+  });
+
+  it("names a plugin's widget by its plugin, as the admin names the plugin", () => {
+    const rows = galleryRows(READ, [], BY_ID, every, plugin =>
+      plugin === "@acme/plugin-seo" ? "SEO" : plugin
+    );
+    expect(rows.map(row => row.pluginName)).toEqual([
+      undefined,
+      undefined,
+      "SEO",
+    ]);
+  });
+});
+
+describe("searchRows", () => {
+  const rows = galleryRows(READ, [], BY_ID, every, () => "SEO");
+
+  it("keeps every row for an empty query", () => {
+    expect(searchRows(rows, "  ")).toHaveLength(3);
+  });
+
+  it("matches a name, a one line and a plugin's name, ignoring case", () => {
+    const ids = (query: string) =>
+      searchRows(rows, query).map(row => row.tile.id);
+    expect(ids("TEAM")).toEqual(["core/team"]);
+    expect(ids("entries a collection")).toEqual(["core/count"]);
+    expect(ids("seo")).toEqual(["seo/score"]);
+    expect(ids("nothing like it")).toEqual([]);
+  });
+});
+
+describe("rowsCount", () => {
+  it("counts widgets, one in the singular", () => {
+    expect(rowsCount(0)).toBe("0 widgets");
+    expect(rowsCount(1)).toBe("1 widget");
+    expect(rowsCount(12)).toBe("12 widgets");
+  });
+});
+
+describe("startingCollection", () => {
+  it("starts on the first collection no card of the widget is set to", () => {
+    expect(startingCollection(COUNT, READ.collections, [])).toEqual({
+      slug: "posts",
+      taken: false,
+    });
+    expect(
+      startingCollection(COUNT, READ.collections, [
+        card({ widgetId: "core/count", config: { collection: "posts" } }),
+        // Another widget's card, and a removed one, hold no collection of Count's.
+        card({ id: "p2", config: { collection: "pages" } }),
+        card({
+          id: "p3",
+          widgetId: "core/count",
+          removed: true,
+          config: { collection: "pages" },
+        }),
+      ])
+    ).toEqual({ slug: "pages", taken: false });
+  });
+
+  it("gives the first, taken, when every collection has its card", () => {
+    expect(
+      startingCollection(COUNT, READ.collections, [
+        card({ widgetId: "core/count", config: { collection: "pages" } }),
+        card({
+          id: "p2",
+          widgetId: "core/count",
+          config: { collection: "posts" },
+        }),
+      ])
+    ).toEqual({ slug: "posts", taken: true });
+  });
+
+  it("reads a card's collection as it is asked, its declared default where it stores none", () => {
+    // A card storing no collection reads its widget's default, Posts.
+    const asked = (placement: WidgetPlacement, setting: string) =>
+      placement.config?.[setting] ?? "posts";
+    expect(
+      startingCollection(
+        COUNT,
+        READ.collections,
+        [card({ widgetId: "core/count" })],
+        asked
+      )
+    ).toEqual({ slug: "pages", taken: false });
+  });
+
+  it("starts on none for a widget that reads none, or with none to start on", () => {
+    expect(startingCollection(TEAM, READ.collections, [])).toBeUndefined();
+    expect(startingCollection(COUNT, [], [])).toBeUndefined();
+  });
+
+  it("starts only on a collection the widget can ask", () => {
+    // Count can ask Pages alone.
+    const canAsk: CanAsk = (_, slug) => slug === "pages";
+    const own = collectionsFor("core/count", READ.collections, canAsk);
+    expect(own.map(c => c.slug)).toEqual(["pages"]);
+    expect(startingCollection(COUNT, own, [])).toEqual({
+      slug: "pages",
+      taken: false,
+    });
+  });
+});
+
+describe("newCardSettings", () => {
+  it("stores the collection under the widget's own setting", () => {
+    expect(
+      newCardSettings({ ...COUNT, collectionSetting: "source" }, "posts")
+    ).toEqual({ source: "posts" });
+  });
+
+  it("starts a card that reads no collection, or has none to start on, with no settings", () => {
+    expect(newCardSettings(TEAM, "posts")).toBeUndefined();
+    expect(newCardSettings(COUNT, undefined)).toBeUndefined();
+  });
+});
+
+describe("pluginShownName", () => {
+  const catalogue = [{ id: "@nextlyhq/plugin-seo", name: "SEO" }];
+
+  it("names a plugin by its own label, else the catalogue's name, else its package name", () => {
+    expect(
+      pluginShownName(
+        "@nextlyhq/plugin-seo",
+        { appearance: { label: "Search" } },
+        catalogue
+      )
+    ).toBe("Search");
+    // An empty label counts as none.
+    expect(
+      pluginShownName(
+        "@nextlyhq/plugin-seo",
+        { appearance: { label: "" } },
+        catalogue
+      )
+    ).toBe("SEO");
+    expect(pluginShownName("@acme/plugin-reviews", undefined, catalogue)).toBe(
+      "reviews"
+    );
+    expect(pluginShownName("widget-kit-fixture", undefined, catalogue)).toBe(
+      "widget-kit-fixture"
+    );
   });
 });

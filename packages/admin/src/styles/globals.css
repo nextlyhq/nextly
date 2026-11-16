@@ -8,8 +8,18 @@
  * 1. Import Tailwind normally
  * 2. Use CSS @layer to control cascade order
  * 3. Wrap utilities with .nextly-admin scope in build-css.mjs post-processing
+ *
+ * The other direction, the host's CSS reaching the admin, is closed for the
+ * host's element rules (`h2 { ... }`, `p { ... }`) by one unlayered rule the
+ * build appends after this file compiles: `isolateAdminStylesheet` in
+ * @nextlyhq/admin-css explains it. A host's unlayered rule beats every rule
+ * in this file's layers, so a rule here cannot do that job.
  */
-@import "tailwindcss";
+/* No automatic detection: every source is named below. Tailwind reads
+ * class-shaped words from any file it scans, prose included, so scanning the
+ * whole package let a Markdown note quoting `[var(...)]` become invalid CSS
+ * and take down every admin route. */
+@import "tailwindcss" source(none);
 
 /* Design-system source of truth: tokens, @theme mappings, dark variant, base reset. */
 @import "../../../ui/src/styles/theme.css";
@@ -18,6 +28,9 @@
  * compiled sheet so third-party plugin components can use them with no build
  * step (they cannot add themselves to the @source scans below). */
 @import "./plugin-safelist.css";
+
+/* The admin's own source code. */
+@source "..";
 
 /* Scan @nextlyhq/ui source so Tailwind includes utility classes used by extracted components */
 @source "../../../ui/src";
@@ -28,6 +41,7 @@
  * dropped from the build and becomes a no-op at runtime. */
 @source "../../../plugin-form-builder/src/admin";
 @source "../../../plugin-page-builder/src/admin";
+@source "../../../plugin-seo/src/admin";
 
 /*
  * Native controls (scrollbars, inputs, date pickers) follow the admin's own
@@ -45,6 +59,14 @@
 .nextly-admin {
   overflow-x: hidden;
   --sidebar-width-safe: var(--sidebar-width, 20.5rem);
+  /*
+   * The height of the admin's one top bar, at every width. Declared here, as
+   * plain CSS, so whatever measures against the bar (the editors' sticky
+   * panels, a page that fills the window below it, an outline drawn before
+   * the admin's scripts run) reads the same number the bar is drawn at. A
+   * layout knob rather than a palette token, so it sits outside `--nx-*`.
+   */
+  --admin-bar-height: 3.5rem;
 }
 
 /*

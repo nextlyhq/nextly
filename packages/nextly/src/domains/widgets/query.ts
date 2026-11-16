@@ -23,6 +23,8 @@ import {
   isValidOperator,
 } from "../collections/query/query-operators";
 import {
+  bucketStartUtc,
+  intervalAfter,
   intervalWindow,
   isTimeseriesInterval,
   TIMESERIES_INTERVALS,
@@ -38,9 +40,12 @@ import { effectiveWidgetLimit } from "./query-limits";
 import {
   failUnavailableSourceOrOp,
   getSource,
+  isWidgetTab,
   sourceKindFromId,
+  WIDGET_TABS,
   type WidgetOp,
   type WidgetSource,
+  type WidgetSourceFilter,
 } from "./sources";
 
 // The row limits and their one rule live in the import-free
@@ -81,6 +86,15 @@ export interface WidgetQuery {
    * @experimental While the content widgets are being built.
    */
   until?: RelativeSpan;
+  /**
+   * The range a `timeseries` draws, from the instant that far before the query
+   * runs: it sets the interval and how many are drawn, and bounds the rows to
+   * the range. Sent instead of `interval`, `since` and `until`. See
+   * {@link TimeseriesRange}.
+   *
+   * @experimental While the content widgets are being built.
+   */
+  range?: TimeseriesRange;
 }
 
 /**
@@ -127,6 +141,142 @@ export function relativeSpanStart(span: RelativeSpan, now: Date): Date {
 }
 
 /**
+ * The window keys a source answering a fixed question refuses: it has no rows
+ * placed in time for a window to bound. One spelling for every such source's
+ * table of query keys, so a window key added here reaches each of them.
+ */
+export const WINDOW_KEYS_REFUSED = {
+  since: "refused",
+  until: "refused",
+  range: "refused",
+} as const satisfies Partial<Record<keyof WidgetQuery, "refused">>;
+
+/**
+ * The ranges a chart over time may draw, as one CLOSED list.
+ *
+ * Unlike a span ({@link RELATIVE_SPANS}), a range starts at the exact instant
+ * that far before the query runs, and the chart draws every interval the range
+ * overlaps, the first one partial, each starting at midnight UTC:
+ *
+ * - `7d` and `30d`: one point per day, 7 or 8, or 30 or 31;
+ * - `90d`: one point per ISO week, from Monday, 13 or 14;
+ * - `12m`: one point per calendar month, 12 or 13.
+ *
+ * Only rows inside the range are counted, so the first interval counts only
+ * the part of it the range covers. The window is half-open, `[start, now)`.
+ *
+ * @experimental While the content widgets are being built.
+ */
+export const TIMESERIES_RANGES = ["7d", "30d", "90d", "12m"] as const;
+
+/** @experimental */
+export type TimeseriesRange = (typeof TIMESERIES_RANGES)[number];
+
+/**
+ * The interval each range is drawn in. Kept literal (`as const`), so the
+ * intervals a range can be drawn in are a type of their own
+ * ({@link RangeInterval}), read from this one table.
+ */
+const RANGE_INTERVAL = {
+  "7d": "day",
+  "30d": "day",
+  "90d": "week",
+  "12m": "month",
+} as const satisfies Readonly<Record<TimeseriesRange, TimeseriesInterval>>;
+
+/** The intervals a range is drawn in: a day, a week or a month. @experimental */
+export type RangeInterval = (typeof RANGE_INTERVAL)[TimeseriesRange];
+
+/** Whether an interval is one a range is drawn in ({@link RangeInterval}). @experimental */
+export function isRangeInterval(value: unknown): value is RangeInterval {
+  return (Object.values(RANGE_INTERVAL) as readonly unknown[]).includes(value);
+}
+
+/** Whether a value is one of {@link TIMESERIES_RANGES}. @experimental */
+export function isTimeseriesRange(value: unknown): value is TimeseriesRange {
+  return (TIMESERIES_RANGES as readonly unknown[]).includes(value);
+}
+
+/**
+ * What a range draws, measured from `now`: its interval, the instant it
+ * starts, the instant its last interval is placed by, and how many intervals
+ * it overlaps.
+ *
+ * @experimental
+ */
+export interface RangeWindow {
+  interval: RangeInterval;
+  /** The range's first instant: rows from here on are counted. */
+  start: Date;
+  /**
+   * The window's last instant, a millisecond before `now`: the window is
+   * half-open, so at an interval's exact start the interval opening then
+   * holds nothing yet and is not drawn.
+   */
+  anchor: Date;
+  /** The intervals the range overlaps, the first and the current one partial. */
+  intervals: number;
+}
+
+/**
+ * The window a range draws at `now`, by the rules {@link TIMESERIES_RANGES}
+ * states. One answer for the rows a range counts and the points it draws.
+ *
+ * @experimental
+ */
+export function rangeWindow(range: TimeseriesRange, now: Date): RangeWindow {
+  const interval = RANGE_INTERVAL[range];
+  const start = new Date(now.getTime());
+  if (range === "12m") start.setTime(yearBefore(now).getTime());
+  else start.setUTCDate(start.getUTCDate() - Number(range.slice(0, -1)));
+  const anchor = new Date(now.getTime() - 1);
+  // Counted by stepping the calendar, as the chart's own window is built: a
+  // month is not a constant width.
+  const last = bucketStartUtc(anchor, interval).getTime();
+  let intervals = 1;
+  for (
+    let at = bucketStartUtc(start, interval);
+    at.getTime() < last;
+    at = intervalAfter(at, interval)
+  ) {
+    intervals += 1;
+  }
+  return { interval, start, anchor, intervals };
+}
+
+/**
+ * The exclusive upper bound of a window that ends at `now`: one millisecond
+ * past the whole second at or after it, so the window keeps that second.
+ *
+ * 🔴 MySQL stores a DATETIME to the second, rounding to the nearest, so a row
+ * written just before `now` can be stored up to half a second after it, and a
+ * window ending at `now` would miss it until the clock passes the stored
+ * value. Every stored value of a row written by `now` is at most that whole
+ * second. On a dialect that keeps milliseconds, the most this admits is a row
+ * written later in the same second. Only the open end moves: interval edges,
+ * and a window's start, are where they were.
+ *
+ * @experimental
+ */
+export function openWindowEnd(now: Date): Date {
+  return new Date(Math.ceil(now.getTime() / 1000) * 1000 + 1);
+}
+
+/**
+ * The same instant a calendar year before `now`, its day clamped to the
+ * month's last: February 29 steps back to February 28, where `setUTCMonth`
+ * would roll over into March 1 and drop the window's first day.
+ */
+function yearBefore(now: Date): Date {
+  const year = now.getUTCFullYear() - 1;
+  const month = now.getUTCMonth();
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const at = new Date(now.getTime());
+  at.setUTCFullYear(year, month, Math.min(now.getUTCDate(), lastDay));
+  return at;
+}
+
+/**
  * A query as an AUTHOR declares it, with the op/key dependency enforced.
  *
  * `WidgetQuery` stays flat, and this narrows it at the position a person
@@ -149,12 +299,14 @@ export type WidgetQuerySpec =
       groupBy?: never;
       dateField?: never;
       interval?: never;
+      range?: never;
     })
   | (WidgetQuery & {
       op: "groupBy";
       groupBy: string;
       dateField?: never;
       interval?: never;
+      range?: never;
       // `select` and `sort` describe ROWS, and this op returns buckets. The
       // validator refuses them, so admitting them here would compile a
       // declaration whose every request fails -- an author learning at runtime
@@ -166,8 +318,23 @@ export type WidgetQuerySpec =
       op: "timeseries";
       dateField: string;
       interval: TimeseriesInterval;
+      range?: never;
       // A timeline groups by a bucketing expression over its date field, so a
       // second group key would be a different question asked at the same time.
+      groupBy?: never;
+      select?: never;
+      sort?: never;
+    })
+  | (WidgetQuery & {
+      // A chart over a range: the range sets the interval, the window and so
+      // the number of points, so none of them is stated beside it.
+      op: "timeseries";
+      dateField: string;
+      range: TimeseriesRange;
+      interval?: never;
+      since?: never;
+      until?: never;
+      limit?: never;
       groupBy?: never;
       select?: never;
       sort?: never;
@@ -193,11 +360,21 @@ export type SourcelessWidgetQuery = Omit<WidgetQuery, "source"> & {
  * collection each card reads. A card whose Collection setting is empty asks
  * nothing.
  *
+ * A grouped one may leave its group key to the card's Group by setting as
+ * well: which field a collection divides by depends on the collection, so a
+ * widget offered per collection cannot always name it. Registration requires
+ * that setting where the key is left out.
+ *
  * @experimental While the content widgets are being built.
  */
 export type SettingSourcedQuerySpec = WidgetQuerySpec extends infer Spec
   ? Spec extends WidgetQuerySpec
-    ? Omit<Spec, "source"> & { source?: undefined }
+    ? Spec extends { op: "groupBy" }
+      ? Omit<Spec, "source" | "groupBy"> & {
+          source?: undefined;
+          groupBy?: string;
+        }
+      : Omit<Spec, "source"> & { source?: undefined }
     : never
   : never;
 
@@ -241,6 +418,7 @@ export interface RawWidgetQuery {
   limit: unknown;
   since: unknown;
   until: unknown;
+  range: unknown;
 }
 
 /**
@@ -269,6 +447,7 @@ export function readWidgetQuery(query: unknown): RawWidgetQuery {
     limit: q.limit,
     since: q.since,
     until: q.until,
+    range: q.range,
   };
 }
 
@@ -683,25 +862,49 @@ function heldAsSourceFilter(
   depth: number,
   scope: WhereScope
 ): boolean {
-  const filters: readonly string[] = scope.source.filters ?? [];
-  if (depth !== 0 || !filters.includes(key)) return false;
-  assertFilterValue(key, value, scope.source.id);
+  // The declared filter `key` names, found by its own type.
+  const filter = (scope.source.filters ?? []).find(each => each === key);
+  if (depth !== 0 || filter === undefined) return false;
+  assertFilterValue(filter, value, scope.source.id);
   return true;
 }
 
+/** A non-empty string: a collection's or a role's slug. */
+const isSlug = (value: unknown): boolean =>
+  typeof value === "string" && value !== "";
+
 /**
- * Confirms a source filter's value is the one it takes: a collection by its
- * slug, Only mine as true or false. Who "mine" is, is never in the query: the
- * source reads it from the caller.
+ * What each source filter's value must be, and what a refusal says it must
+ * be: a collection by its slug, Only mine as true or false, a Tab as one of
+ * its values, a Role by its slug.
  */
-function assertFilterValue(key: string, value: unknown, source: string): void {
-  if (key === "collection" && (typeof value !== "string" || value === "")) {
-    fail(
-      `where filter "collection" on "${source}" must be a collection's slug`
-    );
-  }
-  if (key === "onlyMine" && typeof value !== "boolean") {
-    fail(`where filter "onlyMine" on "${source}" must be true or false`);
+const FILTER_VALUE_RULES: Readonly<
+  Record<
+    WidgetSourceFilter,
+    { holds: (value: unknown) => boolean; must: string }
+  >
+> = {
+  collection: { holds: isSlug, must: "be a collection's slug" },
+  onlyMine: {
+    holds: value => typeof value === "boolean",
+    must: "be true or false",
+  },
+  tab: { holds: isWidgetTab, must: `be one of: ${WIDGET_TABS.join(", ")}` },
+  role: { holds: isSlug, must: "be a role's slug" },
+};
+
+/**
+ * Confirms a source filter's value is the one it takes (`FILTER_VALUE_RULES`).
+ * Who "mine" is, is never in the query: the source reads it from the caller.
+ */
+function assertFilterValue(
+  key: WidgetSourceFilter,
+  value: unknown,
+  source: string
+): void {
+  const rule = FILTER_VALUE_RULES[key];
+  if (!rule.holds(value)) {
+    fail(`where filter "${key}" on "${source}" must ${rule.must}`);
   }
 }
 
@@ -1010,13 +1213,12 @@ function assertTimeseriesAgreesWithOp(
  * target carries no status column, so both selectors reach the same rows and
  * two mutually exclusive questions come back with one answer. A card asking for
  * drafts would report the published count and say nothing about having been
- * ignored, which is the failure `statsWidget` already refuses to GENERATE --
- * this is the same refusal at the door, where a hand-written or plugin query
- * arrives.
+ * ignored, so it is refused at the door, wherever the query comes from: a
+ * core widget's card, a site's own widget or a plugin's.
  *
  * `all` stays legal for every source. It is not a claim that a lifecycle
  * exists, it is a statement that this read is not bounded by one, and it is
- * what the generated count, recent and timeline cards already send.
+ * what a card counting or listing every entry sends.
  */
 function assertValidStatus(
   source: WidgetSource,
@@ -1100,10 +1302,13 @@ export function validateReadWidgetQuery(
     select,
     sort
   );
+  // A range sets the interval, so the timeline is checked with the one it
+  // sets, and the query carries the range alone.
+  const range = assertRangeAgreesWithOp(raw, op);
   const timeline = assertTimeseriesAgreesWithOp(
     source,
     raw.dateField,
-    raw.interval,
+    range === undefined ? raw.interval : RANGE_INTERVAL[range],
     declared,
     op,
     select,
@@ -1119,10 +1324,52 @@ export function validateReadWidgetQuery(
     ...(select ? { select } : {}),
     ...(sort ? { sort } : {}),
     ...(groupBy ? { groupBy } : {}),
-    ...(timeline ?? {}),
+    ...timelineAsAsked(timeline, range),
     ...window,
-    limit: effectiveWidgetLimit(raw.limit),
+    // A range sets how many points are drawn, so a ranged query carries no
+    // limit, and what this returns validates again unchanged.
+    ...(range === undefined ? { limit: effectiveWidgetLimit(raw.limit) } : {}),
   };
+}
+
+/** A timeline's keys as the query carries them: its interval, or the range that sets it. */
+function timelineAsAsked(
+  timeline: { dateField: string; interval: TimeseriesInterval } | undefined,
+  range: TimeseriesRange | undefined
+): Pick<WidgetQuery, "dateField" | "interval" | "range"> {
+  if (timeline === undefined) return {};
+  return range === undefined
+    ? timeline
+    : { dateField: timeline.dateField, range };
+}
+
+/**
+ * A timeseries' range, checked: from the closed list, on a `timeseries` alone,
+ * and the only window and interval the query names. A range beside `since`,
+ * `until` or an interval is two answers to one question, so it is refused
+ * rather than settled by which one wins.
+ */
+function assertRangeAgreesWithOp(
+  raw: Pick<RawWidgetQuery, "range" | "since" | "until" | "interval" | "limit">,
+  op: WidgetOp
+): TimeseriesRange | undefined {
+  if (raw.range === undefined) return undefined;
+  if (op !== "timeseries") fail(`range draws a timeseries, not a ${op}`);
+  if (raw.since !== undefined || raw.until !== undefined) {
+    fail("range and since or until each name a window; send one");
+  }
+  if (raw.interval !== undefined) {
+    fail("range sets the interval; a query with a range names none");
+  }
+  if (raw.limit !== undefined) {
+    fail(
+      "range sets how many points are drawn; a query with a range names no limit"
+    );
+  }
+  if (!isTimeseriesRange(raw.range)) {
+    fail(`range must be one of ${TIMESERIES_RANGES.join(", ")}`);
+  }
+  return raw.range;
 }
 
 /**

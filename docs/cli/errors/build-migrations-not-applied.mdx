@@ -1,0 +1,25 @@
+---
+title: BUILD_MIGRATIONS_NOT_APPLIED
+description: "`nextly build --strict` found migrations the database has not applied, or that failed."
+---
+
+## Cause
+
+`nextly build --strict` found migrations the database has not applied, or that failed.
+
+`nextly build` checks the migrations folder against the database's migration records. Without `--strict` pending migrations are a warning; with it, a pending or failed migration fails the build, so nothing deploys ahead of its schema.
+
+## Fix
+
+- Run `nextly migrate` to apply the pending migrations the Why line names.
+- For a failed migration, run `nextly migrate:status` to see it, fix its cause, then run `nextly migrate` again.
+- For a build with no database to check, pass `--skip-migrations-check`.
+
+## Example
+
+```text
+✗ Migration issues: 1 pending migration(s).
+  Why:  Pending: 20261029_100000_add_posts
+  Next: Run `nextly migrate` to apply pending migrations.
+  Docs: https://nextlyhq.com/docs/cli/errors/build-migrations-not-applied  (BUILD_MIGRATIONS_NOT_APPLIED)
+```

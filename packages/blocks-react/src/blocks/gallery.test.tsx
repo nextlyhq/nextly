@@ -79,14 +79,8 @@ describe("core/gallery", () => {
   });
 
   it("spaces its tiles with a value that actually resolves", () => {
-    // This asserted a LENGTH for as long as nothing declared `--site-*` on
-    // every path a reference reaches: a `{ $token }` compiled to
-    // `var(--site-space-4)`, nothing defined it, the declaration was invalid at
-    // computed-value time, and `gap` fell back to `normal` — zero for a grid,
-    // and the tiles touched.
-    //
-    // The declaration now arrives on that path, so the gutter is a token again
-    // and follows a site that redefines `space.4`. That the reference RESOLVES
+    // The gutter is the `space.columns` token, the same one `core/columns`
+    // reads, so it follows a site that redefines it. That the reference RESOLVES
     // is proved against a rendered page in `columns.test.tsx`, on the stored
     // artifact that used to fail; this asserts what this block declares.
     //
@@ -94,7 +88,7 @@ describe("core/gallery", () => {
     // `base-styles.test.tsx`.
     const declared = JSON.stringify(GALLERY_BASE_STYLES);
 
-    expect(declared).toContain('"$token":"space.4"');
+    expect(declared).toContain('"$token":"space.columns"');
     // Must-differ: a raw length here would pass the check above if the object
     // carried both, and would stop following the site's own spacing.
     expect(declared).not.toContain("1rem");

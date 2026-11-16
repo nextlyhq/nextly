@@ -1,63 +1,70 @@
 /**
- * Which of the five shared chart colours a category takes, and the order a
- * chart of groups draws them in.
+ * What colour a chart's groups take, and the order a chart of groups draws them in.
  *
- * By the category's STORED value, never its position in a result or its
- * label: the same value is the same colour on every card, whatever order the
- * groups arrive in and whatever language their labels are in. Status values
- * sit on fixed slots, so Published looks the same everywhere; any other value
- * takes a slot by a stable hash, over slots 1 to 4 only. Slot 5 is red, the
- * hue the theme uses for errors and destructive actions, so a value that
- * means nothing alarming never lands on it; it stays for archived. Four
- * colours cannot name fifty groups, so colours repeat, and the name beside
- * each bar is what identifies it.
- *
- * The hash is part of the contract: changing it would recolour every
- * category on every site, so a test pins it.
+ * A chart of statuses draws each bar in its status's own colour, the solid of
+ * the admin's status tokens, so Published is the same green on every card and
+ * beside every status chip: done in the success colour, scheduled in the info
+ * colour, changes waiting to be published in the warning colour, and a draft or
+ * an archived entry, which mark nothing to act on, in the muted ink. Any other
+ * chart of groups, an arbitrary select or a column of text, draws every bar in
+ * shared chart slot 1: five colours cannot name arbitrary values, and a card of
+ * them would be colour that says nothing. So is a chart that mixes a
+ * status-like value with others, since the status's colour would claim a
+ * meaning the field does not have. Either way the name and count beside each
+ * bar are what identify it, never the colour alone.
  *
  * @module components/features/widgets/charts/chart-colour
  */
 
-/** One of the five shared chart colours, `--nx-chart-1` to `--nx-chart-5`. */
-export type ChartSlot = 1 | 2 | 3 | 4 | 5;
+import { chartColour, type ChartSlot } from "@nextlyhq/ui/format";
 
-/** How many slots a hashed value may take: 1 to 4, never the alarm-red 5. */
-const HASHED_SLOTS = 4;
-
-/** The status values' fixed slots. */
-const STATUS_SLOTS: Readonly<Record<string, ChartSlot>> = {
-  scheduled: 1,
-  draft: 2,
-  published: 3,
-  changes: 4,
-  archived: 5,
-};
+// The slots and their tokens are the theme's, so a server names them as the admin does.
+export { chartColour, type ChartSlot };
 
 /**
- * A 32-bit FNV-1a hash of the value's code points: deterministic on every
- * engine, cheap, and spread well enough over five slots.
+ * A status's mark: the solid of its status token, or `neutral`, the muted ink, for a status that
+ * marks nothing to act on.
  */
-function hashOf(value: string): number {
-  let hash = 0x811c9dc5;
-  for (const character of value) {
-    hash ^= character.codePointAt(0) ?? 0;
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash;
+export type StatusMark = "success" | "warning" | "info" | "neutral";
+
+/** What a chart's mark is drawn in: a shared chart slot, or a status's own mark. */
+export type ChartMark = ChartSlot | StatusMark;
+
+/** The status values' marks. */
+const STATUS_MARKS: Readonly<Record<string, StatusMark>> = {
+  scheduled: "info",
+  draft: "neutral",
+  published: "success",
+  changes: "warning",
+  archived: "neutral",
+};
+
+/** A status's mark, or `undefined` for a value that is no status. */
+function statusMark(value: string | null): StatusMark | undefined {
+  return value !== null &&
+    Object.prototype.hasOwnProperty.call(STATUS_MARKS, value)
+    ? STATUS_MARKS[value]
+    : undefined;
 }
 
-/** The slot a stored value takes. `null`, the group with no value, hashes as "". */
-export function chartSlotFor(value: string | null): ChartSlot {
-  const key = value ?? "";
-  if (Object.prototype.hasOwnProperty.call(STATUS_SLOTS, key)) {
-    return STATUS_SLOTS[key];
-  }
-  return ((hashOf(key) % HASHED_SLOTS) + 1) as ChartSlot;
+/**
+ * The mark of each of one chart's groups, by their stored values, in order:
+ * every status's own mark where all of them are statuses, and slot 1 for all
+ * of them otherwise. `null`, the group with no value, is no status.
+ */
+export function chartMarksFor(values: readonly (string | null)[]): ChartMark[] {
+  const marks = values.map(statusMark);
+  return marks.every((mark): mark is StatusMark => mark !== undefined)
+    ? marks
+    : values.map((): ChartMark => 1);
 }
 
-/** The token a slot is drawn in. A chart never sets a colour of its own. */
-export function chartColour(slot: ChartSlot): string {
-  return `var(--nx-chart-${slot})`;
+/** The token a mark is drawn in: its slot's, its status's solid, or the muted ink. */
+export function markColour(mark: ChartMark): string {
+  if (typeof mark === "number") return chartColour(mark);
+  return mark === "neutral"
+    ? "var(--nx-muted-foreground)"
+    : `var(--nx-${mark}-solid)`;
 }
 
 /** A group of a grouped result, as a chart of groups reads it. */

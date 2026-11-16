@@ -215,15 +215,23 @@ function creationInProgress(
 async function discardWhenNotNeeded(
   meta: SetupTokenMeta,
   hasAdministrator: () => Promise<boolean>,
+  tokenStored: () => Promise<boolean>,
   env: Readonly<Record<string, string | undefined>>
 ): Promise<BootTokenOutcome | null> {
-  if (await hasAdministrator()) {
-    await meta.delete(SETUP_TOKEN_META_KEY);
+  // Asked together. The delete runs only when a token is stored, so a start
+  // that has nothing to discard, which is every start of a set-up install,
+  // writes nothing.
+  const [administrator, stored] = await Promise.all([
+    hasAdministrator(),
+    tokenStored(),
+  ]);
+  if (administrator) {
+    if (stored) await meta.delete(SETUP_TOKEN_META_KEY);
     return { kind: "administrator-exists" };
   }
   const operator = operatorSetupToken(env);
   if (operator.kind === "absent") return null;
-  await meta.delete(SETUP_TOKEN_META_KEY);
+  if (stored) await meta.delete(SETUP_TOKEN_META_KEY);
   return {
     kind: operator.kind === "weak" ? "operator-token-weak" : "operator-token",
   };
@@ -243,6 +251,11 @@ async function discardWhenNotNeeded(
 export async function ensureSetupTokenAtBoot(input: {
   meta: SetupTokenMeta;
   hasAdministrator: () => Promise<boolean>;
+  /**
+   * Whether a generated token is stored, for a caller that already read the
+   * meta rows; asked of the token's own row otherwise.
+   */
+  tokenStored?: () => Promise<boolean>;
   env?: Readonly<Record<string, string | undefined>>;
   now?: () => number;
 }): Promise<BootTokenOutcome> {
@@ -250,7 +263,15 @@ export async function ensureSetupTokenAtBoot(input: {
   const env = input.env ?? process.env;
   const now = input.now ?? Date.now;
 
-  const notNeeded = await discardWhenNotNeeded(meta, hasAdministrator, env);
+  const tokenStored =
+    input.tokenStored ??
+    (async () => (await meta.getEntry<unknown>(SETUP_TOKEN_META_KEY)).present);
+  const notNeeded = await discardWhenNotNeeded(
+    meta,
+    hasAdministrator,
+    tokenStored,
+    env
+  );
   if (notNeeded) return notNeeded;
 
   const current = await readSetupTokenRecord(meta);

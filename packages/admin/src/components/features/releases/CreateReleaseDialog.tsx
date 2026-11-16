@@ -23,14 +23,13 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  Input,
-  Label,
-  Textarea,
 } from "@admin/components/ui";
 import { useCreateRelease } from "@admin/hooks/queries/useReleases";
 import type { Release } from "@admin/types/releases";
 
+import { useReturnFocusOnClose } from "./dialog-opener";
 import { releaseErrorMessage } from "./release-error";
+import { ReleaseNameFields } from "./ReleaseNameFields";
 
 export interface CreateReleaseDialogProps {
   open: boolean;
@@ -44,6 +43,8 @@ export function CreateReleaseDialog({
   onOpenChange,
   onCreated,
 }: CreateReleaseDialogProps): JSX.Element {
+  // Focus goes back to what opened the dialog when it closes.
+  const returnFocus = useReturnFocusOnClose(open);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const create = useCreateRelease();
@@ -98,7 +99,7 @@ export function CreateReleaseDialog({
         else onOpenChange(true);
       }}
     >
-      <DialogContent>
+      <DialogContent onCloseAutoFocus={returnFocus}>
         <form onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>New release</DialogTitle>
@@ -109,32 +110,13 @@ export function CreateReleaseDialog({
           </DialogHeader>
 
           <div className="flex flex-col gap-4 py-4">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="release-title">Name</Label>
-              <Input
-                id="release-title"
-                value={title}
-                autoFocus
-                onChange={event => setTitle(event.target.value)}
-                placeholder="Spring launch"
-              />
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="release-description">
-                Description{" "}
-                <span className="font-normal text-muted-foreground">
-                  (optional)
-                </span>
-              </Label>
-              <Textarea
-                id="release-description"
-                value={description}
-                onChange={event => setDescription(event.target.value)}
-                placeholder="What is going live, and why it goes together."
-                rows={3}
-              />
-            </div>
+            <ReleaseNameFields
+              title={title}
+              onTitleChange={setTitle}
+              description={description}
+              onDescriptionChange={setDescription}
+              autoFocus
+            />
 
             {create.isError ? (
               // The server refuses generically, so this says what it can say

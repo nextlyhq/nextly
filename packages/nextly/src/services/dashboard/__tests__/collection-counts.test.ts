@@ -75,10 +75,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   containerGet.mockImplementation((name: string) => {
     if (name === "collectionRegistryService") {
-      return { getAllCollections: vi.fn().mockResolvedValue(COLLECTIONS) };
+      return {
+        getAllCollectionsForRead: vi.fn().mockResolvedValue(COLLECTIONS),
+      };
     }
     if (name === "singleRegistryService") {
-      return { getAllSingles: vi.fn().mockResolvedValue([]) };
+      return { getAllSinglesForRead: vi.fn().mockResolvedValue([]) };
     }
     throw new Error(`unexpected container.get("${name}")`);
   });
@@ -105,7 +107,7 @@ describe("a collection or Single kept off the dashboard is never counted", () =>
     containerGet.mockImplementation((name: string) => {
       if (name === "collectionRegistryService") {
         return {
-          getAllCollections: vi.fn().mockResolvedValue([
+          getAllCollectionsForRead: vi.fn().mockResolvedValue([
             ...COLLECTIONS,
             {
               slug: "nx_pb_class_usage",
@@ -119,7 +121,7 @@ describe("a collection or Single kept off the dashboard is never counted", () =>
       }
       if (name === "singleRegistryService") {
         return {
-          getAllSingles: vi
+          getAllSinglesForRead: vi
             .fn()
             .mockResolvedValue([
               { slug: "site-settings" },
@@ -156,11 +158,13 @@ describe("a collection or Single kept off the dashboard is never counted", () =>
   it("keeps a visible collection's activity when a hidden Single shares its slug", async () => {
     containerGet.mockImplementation((name: string) => {
       if (name === "collectionRegistryService") {
-        return { getAllCollections: vi.fn().mockResolvedValue(COLLECTIONS) };
+        return {
+          getAllCollectionsForRead: vi.fn().mockResolvedValue(COLLECTIONS),
+        };
       }
       if (name === "singleRegistryService") {
         return {
-          getAllSingles: vi
+          getAllSinglesForRead: vi
             .fn()
             .mockResolvedValue([{ slug: "posts", admin: { hidden: true } }]),
         };
@@ -194,13 +198,13 @@ describe("the recent-changes figure fails closed", () => {
     containerGet.mockImplementation((name: string) => {
       if (name === "collectionRegistryService") {
         return {
-          getAllCollections: vi
+          getAllCollectionsForRead: vi
             .fn()
             .mockRejectedValue(new Error("registry unreachable")),
         };
       }
       if (name === "singleRegistryService") {
-        return { getAllSingles: vi.fn().mockResolvedValue([]) };
+        return { getAllSinglesForRead: vi.fn().mockResolvedValue([]) };
       }
       if (name === "activityLogService") return { countRecentActivity };
       throw new Error(`unexpected container.get("${name}")`);

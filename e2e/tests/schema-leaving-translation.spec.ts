@@ -10,12 +10,29 @@
  * Each test seeds its own translated collection through the admin API, as the Builder would have
  * saved it. Safe to write against: the suite owns its database and empties it before every run.
  */
-import { expect, type Page } from "@playwright/test";
+import { expect, type Page, type TestInfo } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { LOCK } from "./support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.dashboard, LOCK.schema] });
 
 const API = "/admin/api";
+
+/**
+ * The collection slug for this attempt of a test. A retry, or a repeat under --repeat-each, runs
+ * against the database the first attempt wrote, where a collection of the same slug already
+ * exists, so each attempt has its own.
+ */
+function slugFor(base: string, testInfo: TestInfo): string {
+  const repeat =
+    testInfo.repeatEachIndex === 0 ? "" : `_x${testInfo.repeatEachIndex}`;
+  return testInfo.retry === 0
+    ? `${base}${repeat}`
+    : `${base}${repeat}_r${testInfo.retry}`;
+}
 
 /** A translated collection with one entry, its `headline` in English and Spanish. */
 async function seedTranslated(
@@ -41,7 +58,7 @@ async function seedTranslated(
   const { item } = (await entry.json()) as { item: { id: string } };
   const spanish = await page.request.patch(
     `${API}/collections/${slug}/entries/${item.id}?locale=es`,
-    { data: { headline: "Hola" } }
+    { data: { headline: "Hola", _overwrite: true } }
   );
   expect(spanish.ok(), await spanish.text()).toBe(true);
 }
@@ -50,22 +67,21 @@ async function seedTranslated(
 async function makeHeadlineShared(page: Page, slug: string): Promise<void> {
   await gotoAdmin(page, `/builder/collections/${slug}`);
   // Exact: the field row's own button names its actions too ("… Edit headline …").
-  await page
-    .getByRole("button", { name: "Edit headline", exact: true })
-    .click();
+  await page.getByTestId("field-row-headline").click();
   await page.getByRole("tab", { name: "Advanced" }).click();
   await page.getByRole("switch", { name: "Localized" }).click();
-  await page.getByRole("button", { name: "Apply" }).click();
+  // No Apply: the settings panel keeps each change as it is made.
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("alertdialog")).toBeVisible();
 }
 
 test("says what moves to the archive and how to bring it back", async ({
   page,
-}) => {
-  await seedTranslated(page, "e2e_stories", {});
+}, testInfo) => {
+  const slug = slugFor("e2e_stories", testInfo);
+  await seedTranslated(page, slug, {});
 
-  await makeHeadlineShared(page, "e2e_stories");
+  await makeHeadlineShared(page, slug);
 
   const dialog = page.getByRole("alertdialog");
   await expect(
@@ -75,7 +91,7 @@ test("says what moves to the archive and how to bring it back", async ({
   ).toBeVisible();
   await expect(
     dialog.getByText(
-      "nextly i18n:restore --collection e2e_stories --field headline"
+      `nextly i18n:restore --collection ${slug} --field headline`
     )
   ).toBeVisible();
   await expect(
@@ -86,28 +102,69 @@ test("says what moves to the archive and how to bring it back", async ({
   ).toBeEnabled();
 });
 
-test("refuses a required field with the steps that work, and offers no Save", async ({
+test("lets a required field whose entries have an English value stop being translated in one change", async ({
   page,
-}) => {
-  await seedTranslated(page, "e2e_required_stories", { required: true });
+}, testInfo) => {
+  const slug = slugFor("e2e_required_stories", testInfo);
+  await seedTranslated(page, slug, { required: true });
 
-  await makeHeadlineShared(page, "e2e_required_stories");
+  await makeHeadlineShared(page, slug);
 
   const dialog = page.getByRole("alertdialog");
   await expect(
-    dialog.getByRole("heading", { name: "Schema Change Needs Another Step" })
+    dialog.getByText(
+      "1 Spanish value moves to the archive. English becomes the shared value."
+    )
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole("button", { name: /save changes|apply changes/i })
+  ).toBeEnabled();
+});
+
+test("refuses a required field while an entry would keep no value, with the step that works, and offers no Save", async ({
+  page,
+}, testInfo) => {
+  const slug = slugFor("e2e_required_gaps", testInfo);
+  // Seeded optional, so an entry can be written with no headline in any language; the field
+  // becomes Required below, as a site that made it required later would have it.
+  await seedTranslated(page, slug, {});
+  // An entry written in Spanish only, with no headline: shared, the value it keeps is empty. An
+  // entry with no English value but a Spanish one keeps the Spanish value, which readers saw, and
+  // so leaves translation in one change (the test above).
+  const empty = await page.request.post(
+    `${API}/collections/${slug}/entries?locale=es`,
+    { data: {} }
+  );
+  expect(empty.ok(), await empty.text()).toBe(true);
+  const required = await page.request.patch(`${API}/collections/${slug}`, {
+    data: {
+      fields: [
+        {
+          name: "headline",
+          type: "text",
+          label: "Headline",
+          required: true,
+        },
+      ],
+    },
+  });
+  expect(required.ok(), await required.text()).toBe(true);
+
+  await makeHeadlineShared(page, slug);
+
+  const dialog = page.getByRole("alertdialog");
+  await expect(
+    dialog.getByRole("heading", { name: "Schema change needs another step" })
   ).toBeVisible();
   await expect(dialog.getByText("no longer localized")).toBeVisible();
-  await expect(dialog.getByText("Needs three steps")).toBeVisible();
+  await expect(dialog.getByText("Needs one step")).toBeVisible();
   await expect(
     dialog.getByText(
-      "A required field can't stop being translated in the same change."
+      "1 entry would have no headline once it is shared: the value it keeps is empty."
     )
   ).toBeVisible();
   await expect(dialog.getByRole("listitem")).toHaveText([
-    "Turn off Required and save.",
-    "Turn off Localized and save.",
-    "Turn Required back on and save.",
+    "Give that entry a headline, or turn off Required, and save again.",
   ]);
   // Nothing in the change can be saved, so no Save can be pressed: either it is absent, or,
   // where another change rides along, disabled.

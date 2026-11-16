@@ -14,6 +14,8 @@
  */
 import { expect, type Locator, type Page } from "@playwright/test";
 
+import { dayKeyIn } from "../../packages/admin/src/components/features/releases/release-timezone";
+
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import {
@@ -22,9 +24,24 @@ import {
   expectShortTextReadable,
 } from "./support/axe";
 import { leaveReleasesAsTheRunnerWould } from "./support/release-states";
-import { post, publishNow, release, schedule } from "./support/releases-api";
+import {
+  cancel,
+  post,
+  publishNow,
+  release,
+  releasesPerDay,
+  schedule,
+} from "./support/releases-api";
+import { LOCK } from "./support/locks";
+import { waitForShellAnswers } from "./support/shell-geometry";
 
-test.use({ timezoneId: "America/New_York" });
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.releases] });
+
+/** The zone the browser reads in, and so the zone the calendar opens in. */
+const READER_ZONE = "America/New_York";
+
+test.use({ timezoneId: READER_ZONE });
 
 /** The most months a test pages through before it gives up. */
 const MONTH_LIMIT = 30;
@@ -37,9 +54,20 @@ async function openCalendar(page: Page): Promise<void> {
   await expect(page.getByRole("grid")).toBeVisible();
 }
 
-/** The month heading above the grid. */
-function monthHeading(page: Page): Locator {
-  return page.getByRole("heading", { level: 2 });
+/**
+ * The month heading above the grid: the heading the grid is named by. Not
+ * every level-two heading: the page also heads its strip of stopped and
+ * overdue releases with one, drawn whenever the database holds such a
+ * release, which other specs' releases leave in it. Found by its id only
+ * where it is visible: a hidden copy of the page that Next.js keeps mounted
+ * can hold an element under the same id.
+ */
+async function monthHeading(page: Page): Promise<Locator> {
+  const named = await page.getByRole("grid").getAttribute("aria-labelledby");
+  expect(named, "the grid is named by its month heading").toBeTruthy();
+  return page
+    .getByRole("heading", { level: 2 })
+    .and(page.locator(`[id="${named}"]:visible`));
 }
 
 const DAY_MS = 86_400_000;
@@ -65,6 +93,44 @@ function shiftDay(day: string, offset: number): string {
 function at(day: string, hour: number, minute = 0): Date {
   return new Date(
     Date.parse(`${day}T00:00:00.000Z`) + (hour * 60 + minute) * 60_000
+  );
+}
+
+/**
+ * The first of the days `first` to `last` of the month `months` ahead that
+ * holds no release in the reader's zone, so that what the test counts there
+ * is its own releases alone.
+ *
+ * The suite shares one database, and a test run again in it, as a retry or
+ * under --repeat-each, finds its earlier run's releases on whichever fixed day
+ * that run used: the day then counts them all. Asked of the calendar read the
+ * grid draws from, which places each release on its day in the zone asked.
+ */
+async function freeDay(
+  page: Page,
+  months: number,
+  first: number,
+  last: number
+): Promise<string> {
+  const from = dayAhead(months, first);
+  const to = dayAhead(months, last);
+  const perDay = await releasesPerDay(page, from, to, READER_ZONE);
+  for (let day = from; day <= to; day = shiftDay(day, 1)) {
+    if (perDay.get(day) === 0) return day;
+  }
+  throw new Error(
+    `Every day from ${from} to ${to} already holds a release in this database.`
+  );
+}
+
+/**
+ * Hold that `instants` all fall on `day` in the reader's zone, by the rule
+ * the calendar places a release with: the test counts them on that day, and
+ * a free day says nothing about a release that lands on its neighbour.
+ */
+function expectOnDay(instants: readonly Date[], day: string): void {
+  expect(instants.map(instant => dayKeyIn(instant, READER_ZONE))).toEqual(
+    instants.map(() => day)
   );
 }
 
@@ -109,7 +175,7 @@ async function showMonth(page: Page, day: string): Promise<void> {
       })
       .click();
   }
-  await expect(monthHeading(page)).toHaveText(monthLabel(day));
+  await expect(await monthHeading(page)).toHaveText(monthLabel(day));
 }
 
 /** The grid cell of one day. */
@@ -120,6 +186,47 @@ function dayCell(page: Page, date: string): Locator {
 /** A chip for the release titled `title`, in `scope`. */
 function chip(scope: Locator, title: string): Locator {
   return scope.getByRole("link").filter({ hasText: title });
+}
+
+/** The most pages of one day's list a test reads before it gives up. */
+const DAY_PAGE_LIMIT = 10;
+
+/**
+ * Open `day`'s full list from the day itself, which must be in the month on
+ * screen, and answer the row of the release titled `title` in it; the caller
+ * closes the list. By keyboard: at a desk's width the day's chips cover the
+ * middle of its button, where a pointer click would land on a chip.
+ *
+ * Read page by page from the first. The list draws one page of the day at a
+ * time, and a day the suite's other specs have filled can put the release
+ * past the first page. A page is read once its rows have replaced the
+ * previous page's, which a new first row says.
+ */
+async function dayListRow(
+  page: Page,
+  day: string,
+  title: string
+): Promise<Locator> {
+  await page.locator(`[data-day="${day}"]`).focus();
+  await page.keyboard.press("Enter");
+  const sheet = page.getByRole("dialog", { name: longDay(day) });
+  const list = sheet.getByRole("list", { name: "Releases on this day" });
+  const row = list.getByRole("listitem").filter({ hasText: title });
+  const first = list.getByRole("link").first();
+  const pager = sheet.getByRole("navigation", {
+    name: "Pages of this day's releases",
+  });
+  const next = pager.getByRole("button", { name: "Go to next page" });
+  await expect(first).toBeVisible();
+  if (await pager.isVisible()) await expect(pager).toContainText("Page 1 of");
+  for (let i = 0; i < DAY_PAGE_LIMIT; i += 1) {
+    if ((await row.count()) > 0) break;
+    if (!(await next.isVisible()) || (await next.isDisabled())) break;
+    const shown = (await first.getAttribute("href")) ?? "";
+    await next.click();
+    await expect(first).not.toHaveAttribute("href", shown);
+  }
+  return row;
 }
 
 /** The date of the day button holding focus. */
@@ -173,7 +280,7 @@ test.describe("the Releases calendar", () => {
     await expect(
       page.getByRole("button", { name: /Times in Asia\/Karachi/ })
     ).toBeVisible();
-    await expect(monthHeading(page)).toHaveText(monthLabel(day));
+    await expect(await monthHeading(page)).toHaveText(monthLabel(day));
     const inKarachi = chip(dayCell(page, day), title);
     await expect(inKarachi).toBeVisible();
     await expect(inKarachi).toContainText(new RegExp(`8:30${SPACE}AM`));
@@ -187,17 +294,15 @@ test.describe("the Releases calendar", () => {
     const stamp = `${Date.now()}`;
     const postId = await post(page, `cal-dense-${stamp}`);
     // Seven on one day, more than its three rows hold, an hour apart from
-    // 09:00 UTC, which is the morning of the same day in New York.
-    const day = dayAhead(3, 14);
+    // 09:00 UTC, which is the morning of the same day in New York. The day
+    // holds nothing else, so the counts below are these seven alone.
+    const day = await freeDay(page, 3, 1, 28);
+    const instants = Array.from({ length: 7 }, (_, i) => at(day, 9 + i));
+    expectOnDay(instants, day);
     const titles: string[] = [];
-    for (let i = 0; i < 7; i += 1) {
+    for (const [i, instant] of instants.entries()) {
       const title = `Dense ${String(i + 1).padStart(2, "0")} ${stamp}`;
-      await schedule(
-        page,
-        await release(page, title, postId),
-        at(day, 9 + i),
-        "UTC"
-      );
+      await schedule(page, await release(page, title, postId), instant, "UTC");
       titles.push(title);
     }
 
@@ -256,22 +361,49 @@ test.describe("the Releases calendar", () => {
     }
     // Last, since Publish now runs a pass of the runner, which would run an
     // overdue release it found.
-    await leaveReleasesAsTheRunnerWould(page, attention);
+    const due = await leaveReleasesAsTheRunnerWould(page, attention);
+    try {
+      // Read from each day's full list rather than its chips. The suite shares
+      // one database, and other specs leave releases on today and the hour
+      // before it, so a day here may hold more than its chips draw: the rest
+      // are counted in "+N more", and only the day's list names every one.
+      await openCalendar(page);
+      const today =
+        (await page
+          .getByRole("grid")
+          .locator('[aria-current="date"]')
+          .getAttribute("data-day")) ?? "";
+      expect(today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      await expect(await dayListRow(page, today, published)).toContainText(
+        "Published"
+      );
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("dialog")).toBeHidden();
 
-    await openCalendar(page);
-    const grid = page.getByRole("grid");
-    const today = grid.locator("td", {
-      has: page.locator('[aria-current="date"]'),
-    });
-    await expect(chip(today, published)).toContainText("Published");
-    // Overdue and stopped were due an hour ago, which near midnight is
-    // yesterday, so they are found on the grid rather than on today.
-    await expect(chip(grid, overdue)).toContainText("Overdue");
-    await expect(chip(grid, overdue)).not.toContainText("Scheduled");
-    await expect(chip(grid, stopped)).toContainText("Stopped");
+      // Overdue and stopped were due an hour ago, which near midnight is
+      // yesterday, and on the first of a month is in the month before. Their
+      // day is the one the calendar's own rule places them on.
+      const dueDay = dayKeyIn(due, READER_ZONE);
+      await showMonth(page, dueDay);
+      const overdueRow = await dayListRow(page, dueDay, overdue);
+      await expect(overdueRow).toContainText("Overdue");
+      await expect(overdueRow).not.toContainText("Scheduled");
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("dialog")).toBeHidden();
+      await expect(await dayListRow(page, dueDay, stopped)).toContainText(
+        "Stopped"
+      );
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("dialog")).toBeHidden();
 
-    await showMonth(page, scheduledFor);
-    await expect(chip(dayCell(page, scheduledFor), published)).toHaveCount(0);
+      await showMonth(page, scheduledFor);
+      await expect(chip(dayCell(page, scheduledFor), published)).toHaveCount(0);
+    } finally {
+      // Cancelled, as `release-attention.spec.ts` leaves its own: a stopped
+      // or overdue release left behind is listed in every later spec's
+      // attention strip and card.
+      for (const { id } of attention) await cancel(page, id);
+    }
   });
 
   test("works by keyboard alone, announces today, and passes axe", async ({
@@ -280,21 +412,43 @@ test.describe("the Releases calendar", () => {
     test.setTimeout(120_000);
     const stamp = `${Date.now()}`;
     const postId = await post(page, `cal-keys-${stamp}`);
-    const day = dayAhead(4, 9);
+    // A day holding nothing else, so its list is these four alone, whatever
+    // an earlier run in this database left. From the 8th to the 21st, so the
+    // day's week and the week below it stay inside its month, where the
+    // arrows below move. No other test uses this month.
+    const day = await freeDay(page, 4, 8, 21);
+    const instants = Array.from({ length: 4 }, (_, i) => at(day, 14 + i));
+    expectOnDay(instants, day);
     const titles: string[] = [];
-    for (let i = 0; i < 4; i += 1) {
+    for (const [i, instant] of instants.entries()) {
       const title = `Keys ${i + 1} ${stamp}`;
-      await schedule(
-        page,
-        await release(page, title, postId),
-        at(day, 14 + i),
-        "UTC"
-      );
+      await schedule(page, await release(page, title, postId), instant, "UTC");
       titles.push(title);
     }
 
     await page.setViewportSize({ width: 1440, height: 1000 });
     await gotoAdmin(page, "/releases");
+    // Drawn in full before the first key, as a reader waits to see the page.
+    // A page still drawing replaces what holds focus: the skip link's target
+    // loses it to the document, and Tab starts over from the top. The fuller
+    // the list, the longer it draws, so a database the suite has filled
+    // showed it where a fresh one did not.
+    await waitForShellAnswers(page);
+    await expect(page.getByRole("button", { name: "calendar" })).toBeVisible();
+    await expect(
+      page.getByRole("table", { name: "Upcoming releases" })
+    ).toBeVisible();
+
+    // Skip the admin's navigation first, as a keyboard user would: the sidebar
+    // lists every collection and Single, so tabbing through it takes as many
+    // stops as the schema has entries. The skip link is the first stop, and
+    // it moves focus into the page.
+    await page.keyboard.press("Tab");
+    await expect(page.locator(":focus")).toHaveAccessibleName(
+      "Skip to content"
+    );
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("main")).toBeFocused();
 
     // Tab to the view switch, and into the grid, as a keyboard user would.
     const reach = async (found: () => Promise<boolean>) => {
@@ -324,7 +478,7 @@ test.describe("the Releases calendar", () => {
       if ((await shownMonth(page)) === day.slice(0, 7)) break;
       await page.keyboard.press("PageDown");
     }
-    await expect(monthHeading(page)).toHaveText(monthLabel(day));
+    await expect(await monthHeading(page)).toHaveText(monthLabel(day));
     const from = (await focusedDay(page)) ?? "";
     expect(from.slice(0, 7)).toBe(day.slice(0, 7));
     const steps = Number(from.slice(8, 10)) - Number(day.slice(8, 10));
@@ -396,22 +550,29 @@ test.describe("the Releases calendar", () => {
         { id: stoppedId, outcome: "stopped" },
       ]);
 
-      for (const viewport of [
-        { width: 1440, height: 1000 },
-        { width: 390, height: 844 },
-      ]) {
-        await page.setViewportSize(viewport);
-        await gotoAdmin(page, "/releases", theme);
-        await expectBrandColourApplied(page);
-        await page.getByRole("button", { name: "calendar" }).click();
-        await expect(page.getByRole("grid")).toBeVisible();
-        const today = page.locator('[aria-current="date"]');
-        await scanCalendar(page);
-        await scanDayList(page, today);
+      try {
+        for (const viewport of [
+          { width: 1440, height: 1000 },
+          { width: 390, height: 844 },
+        ]) {
+          await page.setViewportSize(viewport);
+          await gotoAdmin(page, "/releases", theme);
+          await expectBrandColourApplied(page);
+          await page.getByRole("button", { name: "calendar" }).click();
+          await expect(page.getByRole("grid")).toBeVisible();
+          const today = page.locator('[aria-current="date"]');
+          await scanCalendar(page, today);
+          await scanDayList(page, today);
 
-        await showMonth(page, future);
-        await scanCalendar(page);
-        await scanDayList(page, page.locator(`[data-day="${future}"]`));
+          await showMonth(page, future);
+          const futureDay = page.locator(`[data-day="${future}"]`);
+          await scanCalendar(page, futureDay);
+          await scanDayList(page, futureDay);
+        }
+      } finally {
+        // Cancelled, so no later spec finds it among the releases that
+        // need attention.
+        await cancel(page, stoppedId);
       }
     });
   }
@@ -427,10 +588,27 @@ async function settle(page: Page): Promise<void> {
   await page.waitForFunction(() => document.getAnimations().length === 0);
 }
 
-/** The month on screen, and each day's date and count, held to AA. */
-async function scanCalendar(page: Page): Promise<void> {
-  // Each day's data has arrived: a day with releases names their count.
-  await expect(page.locator("[data-day]").first()).toBeVisible();
+/**
+ * The month on screen, and each day's date and count, held to AA, once the
+ * month's read has answered and `seeded`, a day this test put releases on,
+ * draws what it holds.
+ *
+ * The day buttons are drawn before the read answers, and at a phone's width
+ * the grid shows no loading placeholder, so a scan started on the buttons
+ * alone could judge a month whose counts have not arrived. Waited for twice:
+ * the grid no longer busy, and the seeded day's own releases on screen, as
+ * chips at a desk's width and as its count at a phone's.
+ */
+async function scanCalendar(page: Page, seeded: Locator): Promise<void> {
+  await expect(page.getByRole("grid")).not.toHaveAttribute("aria-busy", "true");
+  await expect(seeded).toHaveAttribute("aria-label", /\b[1-9]\d* releases?\b/);
+  await expect(
+    page
+      .locator("td", { has: seeded })
+      .locator("li, [data-day] > span:nth-child(2)")
+      .filter({ visible: true })
+      .first()
+  ).toBeVisible();
   await settle(page);
   await expectNoAxeViolations(page);
   // The dates and counts are a character or two, which axe will not fail on

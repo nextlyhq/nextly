@@ -29,15 +29,21 @@ import {
   readableDefinition,
   type BlockDocument,
   type BlockNode,
+  type ComponentDocument,
   type ComponentLookup,
   type ExposedPropertyType,
   type ExposedValueSource,
   type OverrideValue,
+  type ResolvedBlockNode,
 } from "@nextlyhq/blocks-engine";
 
+import { composedHolds, composedHoldWording } from "./component-holds";
+import type { RefusalWording } from "./drag-refusal";
 import type { SavedComponent } from "./inserter";
-import type { BlockIdentity } from "./inspector";
-import type { BuilderOp, NodePatch } from "./ops";
+import { lockSourceOf, type BlockIdentity, type LockView } from "./inspector";
+import { refusalAnnouncement } from "./move-refusal";
+import type { BuilderOp, NodePatch } from "./op-vocabulary";
+import { instanceProps, storedComponentId } from "./placement-props";
 
 /**
  * The exposed types this inspector can draw a control for.
@@ -45,18 +51,20 @@ import type { BuilderOp, NodePatch } from "./ops";
  * Named as a set rather than inferred from what the switch happens to handle,
  * for the reason `SUPPORTED_PROP_TYPES` is: an exposed type with no control is
  * a KNOWN gap the row states, never a silent fallthrough. A link is edited as
- * the address its prop holds and visibility as shown-or-hidden; rich text and
- * images have no control here yet — a passage is edited on the canvas, and an
- * image needs a picker this package cannot reach — and a row of either still
- * shows its value and its source, and still offers a reset, because
- * withholding the row would present a component as exposing less than it
- * does.
+ * the address its prop holds, visibility as shown-or-hidden, and an image as
+ * a file chosen from the host's media library, which the inspector hands the
+ * panel. Rich text has no control here yet — a passage is edited on the
+ * canvas — and its row still shows its value and its source, and still
+ * offers a reset, because withholding the row would present a component as
+ * exposing less than it does.
  */
 export const EDITABLE_EXPOSED_TYPES = [
   "text",
   "select",
   "link",
   "visibility",
+  "image",
+  "richText",
 ] as const;
 
 /** One exposed property, with everything a row needs to draw itself. */
@@ -103,6 +111,13 @@ export interface ExposedRow {
    * than pointing at an id an author has never seen.
    */
   readonly shadowedBy?: { readonly id: string; readonly label: string };
+  /**
+   * Why this row is read-only, when a `contentOnly` lock holds what it drives:
+   * a value that is not content, inside an area locked to its content. The
+   * same rule a save applies to the composed page, so the panel holds exactly
+   * what the store would refuse. Absent where the row may change.
+   */
+  readonly heldBy?: RefusalWording;
 }
 
 /**
@@ -134,6 +149,12 @@ export interface InstanceInspection {
   /** How many pages place this component, when the library can say. */
   readonly usedOn?: number;
   /**
+   * The variant this placement chose, by its stored key, with the label the
+   * definition gives it; `label` is absent when the definition no longer
+   * offers that variant. Absent when the placement chose none.
+   */
+  readonly variant?: { readonly key: string; readonly label?: string };
+  /**
    * Whether the lookup holds a definition for this instance.
    *
    * `false` is a state the panel has to draw rather than an error: the
@@ -163,7 +184,12 @@ export function inspectInstance(
   document: BlockDocument,
   selectedId: string | null,
   definitions: ComponentLookup,
-  components: readonly SavedComponent[]
+  components: readonly SavedComponent[],
+  /**
+   * The editor's lock source and composed page, for the rows a `contentOnly`
+   * lock holds. Absent, no row is held by one.
+   */
+  view?: LockView
 ): InstanceInspection | null {
   if (selectedId === null) return null;
   const node = findNode(document.nodes, selectedId);
@@ -178,15 +204,25 @@ export function inspectInstance(
   const definition = readableDefinition(definitions.get(componentId));
   const found = definition !== undefined;
   const exposure = found ? instanceExposure(definition, node) : undefined;
+  const variant = variantOf(node, definition);
+  const label = row?.title ?? componentId;
+  const held = heldRows(node.id, view, label);
 
   return {
     nodeId: node.id,
     componentId,
     identity: { name: node.name ?? "", locked: node.locked === true },
-    label: row?.title ?? componentId,
+    label,
     ...(row?.usedOn === undefined ? {} : { usedOn: row.usedOn }),
+    ...(variant === undefined ? {} : { variant }),
     definitionFound: found,
-    rows: exposure === undefined ? [] : rowsOf(exposure.properties, node),
+    rows:
+      exposure === undefined
+        ? []
+        : rowsOf(exposure.properties, node).map(entry => {
+            const reason = held(entry);
+            return reason === undefined ? entry : { ...entry, heldBy: reason };
+          }),
     orphaned:
       exposure === undefined
         ? []
@@ -195,33 +231,139 @@ export function inspectInstance(
 }
 
 /**
- * The component id the node stores, or an empty string for a node that names
- * none.
- *
- * Read defensively: a stored document can hold anything the database
- * returned, and a `componentId` that is not a string must not reach a lookup
- * typed for one. An empty id resolves to no definition, which the panel then
- * says.
+ * The component a placement places, or `undefined` for a node that is not a
+ * placement or names no component: what "Edit component" opens.
  */
-function storedComponentId(node: BlockNode): string {
-  const id = instanceProps(node).componentId;
-  return typeof id === "string" ? id : "";
+export function placedComponentId(
+  document: BlockDocument,
+  nodeId: string
+): string | undefined {
+  const node = findNode(document.nodes, nodeId);
+  if (node === undefined || !isComponentInstance(node)) return undefined;
+  const id = storedComponentId(node);
+  return id === "" ? undefined : id;
 }
 
 /**
- * The instance's props as a record, or an empty one.
- *
- * A stored document can hold an instance whose `props` is missing or is not a
- * record — an import, a hook, a hand edit — and the canvas draws it as a
- * malformed placeholder rather than failing. Selecting that placeholder must
- * not throw either, so every read of an instance's props here goes through
- * this one guard, which is how the resolver reads them too.
+ * What an author is told after double-clicking text a component does not
+ * expose: whose it is, with the variant the placement uses, and where its
+ * editable fields are. The placement is selected, so the panel beside it is
+ * the one this points to.
  */
-function instanceProps(node: BlockNode): Record<string, unknown> {
-  const props: unknown = node.props;
-  return typeof props === "object" && props !== null && !Array.isArray(props)
-    ? (props as Record<string, unknown>)
-    : {};
+export function partOfComponentSentence(
+  inspection: Pick<InstanceInspection, "label" | "variant" | "rows">,
+  /**
+   * The exposure feeding the text, when a lock the component sets holds it:
+   * the sentence is then that row's reason, the one the panel shows.
+   */
+  heldExposureId?: string
+): string {
+  const held =
+    heldExposureId === undefined
+      ? undefined
+      : inspection.rows.find(row => row.id === heldExposureId)?.heldBy;
+  if (held !== undefined) return refusalAnnouncement(held);
+  const variant =
+    inspection.variant?.label === undefined
+      ? ""
+      : `, ${inspection.variant.label} variant`;
+  const where =
+    inspection.rows.length === 0
+      ? "Its content is edited on the component itself."
+      : "Its fields are in the panel; the rest is edited on the component itself.";
+  return `Part of ${inspection.label}${variant}. ${where}`;
+}
+
+/**
+ * The variant the placement chose, with the definition's label for it.
+ *
+ * Read off the definition's own record by the stored key, own keys only, as
+ * the resolver reads it: a key the definition no longer offers is still the
+ * placement's choice, and the panel says it is gone rather than hiding it.
+ */
+function variantOf(
+  node: BlockNode,
+  definition: ComponentDocument | undefined
+): InstanceInspection["variant"] {
+  const key = instanceProps(node).variant;
+  if (typeof key !== "string" || key === "") return undefined;
+  const variants: unknown = definition?.variants;
+  const chosen =
+    typeof variants === "object" &&
+    variants !== null &&
+    Object.hasOwn(variants, key)
+      ? (variants as Record<string, unknown>)[key]
+      : undefined;
+  const label =
+    typeof chosen === "object" && chosen !== null
+      ? (chosen as { label?: unknown }).label
+      : undefined;
+  return typeof label === "string" && label.trim() !== ""
+    ? { key, label }
+    : chosen === undefined
+      ? { key }
+      : { key, label: key };
+}
+
+/**
+ * Which rows of this placement are held, and why: a value landing on a block
+ * the component locks in Layers, or one that is not content inside an area
+ * locked to its content (`composedHolds`, the judgement the canvas's inline
+ * text asks too).
+ *
+ * Asked of the COMPOSED page, where the placement's values land inside its
+ * component's nodes: the resolver's exposure map names the node and prop each
+ * exposure drives there. A visibility row is mapped to the node it shows or
+ * hides, and showing a node is its design, never its content; a node it
+ * currently hides is not composed, so its row is not held.
+ */
+function heldRows(
+  placementId: string,
+  view: LockView | undefined,
+  componentName: string
+): (row: ExposedRow) => RefusalWording | undefined {
+  const composed = view?.composed;
+  if (composed === undefined) return () => undefined;
+  const holds = composedHolds(composed, lockSourceOf(view));
+  const targets = new Map<string, { node: ResolvedBlockNode; path: string }>();
+  for (const composedNode of composedNodesOf(composed.nodes, placementId)) {
+    const fed = composedNode.exposedProps;
+    if (fed === undefined) continue;
+    for (const path of Object.keys(fed)) {
+      const id = fed[path]?.id;
+      if (typeof id === "string") targets.set(id, { node: composedNode, path });
+    }
+  }
+  return row => {
+    const target = targets.get(row.id);
+    if (target === undefined) return undefined;
+    const prop = target.path.split(".")[0] ?? target.path;
+    const hold = holds(target.node, prop, row.type === "visibility");
+    return hold === undefined
+      ? undefined
+      : composedHoldWording(hold, componentName, target.node.type);
+  };
+}
+
+/** The composed nodes a placement contributed, in document order. */
+function composedNodesOf(
+  nodes: readonly ResolvedBlockNode[],
+  placementId: string
+): ResolvedBlockNode[] {
+  const found: ResolvedBlockNode[] = [];
+  const queue = [...nodes];
+  for (let head = 0; head < queue.length; head += 1) {
+    const entry = queue[head];
+    if (typeof entry !== "object" || entry === null) continue;
+    if (entry.instanceOf === placementId) found.push(entry);
+    const slots: unknown = entry.slots;
+    if (typeof slots !== "object" || slots === null) continue;
+    for (const children of Object.values(slots as Record<string, unknown>)) {
+      if (Array.isArray(children))
+        queue.push(...(children as ResolvedBlockNode[]));
+    }
+  }
+  return found;
 }
 
 /** The resolver's rows, as the panel draws them. */

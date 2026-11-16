@@ -12,7 +12,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { type BlockDocument, type BlockNode } from "@nextlyhq/blocks-engine";
+import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
 
 import { applyOp } from "./ops";
 import { isRefusal, selectionMove } from "./selection-ops";

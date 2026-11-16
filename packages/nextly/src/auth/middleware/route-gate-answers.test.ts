@@ -27,6 +27,12 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import type { CollectionAccessControl } from "../../shared/types/access";
+import {
+  rememberRouteVerdict,
+  routeVerdictFor,
+  runWithAccessMemo,
+} from "../access/request-memo";
+import { currentRuleLanguage } from "../access/rule-language";
 import type { GrantedPermission } from "../authenticated-scope";
 
 import { authorizeCaller, authorizeCallerForAny, type AuthContext } from ".";
@@ -126,11 +132,19 @@ const registered: { rbac: RBACAccessControlService | undefined } = {
   rbac: undefined,
 };
 
+/** The site's collections as a booted instance registers them. */
+const config = {
+  collections: [
+    { slug: "posts", labels: { singular: "Post", plural: "Posts" } },
+  ],
+};
+
 vi.mock("../../di/container", () => ({
   container: {
     has: (key: string) =>
-      key === "rbacAccessControlService" && registered.rbac !== undefined,
-    get: () => registered.rbac,
+      key === "config" ||
+      (key === "rbacAccessControlService" && registered.rbac !== undefined),
+    get: (key: string) => (key === "config" ? config : registered.rbac),
   },
 }));
 
@@ -197,6 +211,8 @@ const RULES: Record<string, Rule | undefined> = {
     throw new Error("rule failed");
   },
   "role-name": ({ roles }) => roles.includes("editor"),
+  // The spelling rules were once handed, `<resource>:<operation>`. No rule
+  // is handed it any more, so this one never allows.
   "permission-spelling": ({ permissions, operation }) =>
     permissions.includes(`${POSTS}:${operation}`),
 };
@@ -311,5 +327,67 @@ describe("a session whose access cannot be read", () => {
     await expect(
       authorizeCaller(session("unreadable"), "read", POSTS)
     ).rejects.toThrow("roles unreadable");
+  });
+});
+
+describe("a read whose rule answers a filter, at a route that applies it", () => {
+  const OWN = { author: { equals: "editor" } };
+  /** The question a route keeps the editor's read of posts under, now. */
+  const editorsRead = () => ({
+    userId: "editor",
+    slug: POSTS,
+    action: "read",
+    language: currentRuleLanguage(),
+  });
+
+  it("lets the caller through and keeps the filter for the read it authorized", async () => {
+    registered.rbac = serviceFor("service", () => OWN as unknown as boolean);
+    const { result, kept } = await runWithAccessMemo(async () => ({
+      result: await authorizeCaller(
+        session("editor"),
+        "read",
+        POSTS,
+        "all",
+        true
+      ),
+      kept: routeVerdictFor({
+        userId: "editor",
+        slug: POSTS,
+        action: "read",
+        language: currentRuleLanguage(),
+      }),
+    }));
+    expect(said(result)).toBe("A");
+    expect(kept).toEqual({ filter: OWN });
+  });
+
+  it("keeps every entry at a route that applies a filter, where the rule allows", async () => {
+    registered.rbac = serviceFor("service", () => true);
+    const kept = await runWithAccessMemo(async () => {
+      await authorizeCaller(session("editor"), "read", POSTS, "all", true);
+      return routeVerdictFor(editorsRead());
+    });
+    expect(kept).toEqual({ all: true });
+  });
+
+  it("keeps nothing at a route that applies no filter, so it leaves another route's filter as it was", async () => {
+    // A list kept the filter; a route reading through no filter, whose rule
+    // answers `true` when asked afresh, must not replace it with every entry.
+    registered.rbac = serviceFor("service", () => true);
+    const kept = await runWithAccessMemo(async () => {
+      rememberRouteVerdict(editorsRead(), { filter: OWN });
+      const result = await authorizeCaller(session("editor"), "read", POSTS);
+      expect(said(result)).toBe("A");
+      return routeVerdictFor(editorsRead());
+    });
+    expect(kept).toEqual({ filter: OWN });
+  });
+
+  it("refuses the caller where no request can carry the filter to the read", async () => {
+    // Letting it through would run the read with no filter at all.
+    registered.rbac = serviceFor("service", () => OWN as unknown as boolean);
+    expect(
+      said(await authorizeCaller(session("editor"), "read", POSTS, "all", true))
+    ).toMatch(/^403 /);
   });
 });

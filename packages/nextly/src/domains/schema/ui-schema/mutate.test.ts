@@ -124,3 +124,90 @@ describe("mutateManifest", () => {
     expect(off.collections[0].status).toBe(false);
   });
 });
+
+describe("mutateManifest and sibling fields", () => {
+  const withPair = uiSchemaManifest.parse({
+    collections: [
+      {
+        slug: "events",
+        fields: [
+          { name: "title", type: "text" },
+          { name: "title", type: "textarea" },
+        ],
+      },
+    ],
+  });
+
+  it("refuses a write that creates a pair of sibling fields, naming both", () => {
+    expect(() =>
+      mutateManifest(base, {
+        type: "upsert",
+        kind: "collections",
+        entity: {
+          slug: "events",
+          fields: [
+            { name: "title", type: "text" },
+            { name: "note", type: "text" },
+            { name: "note", type: "textarea" },
+          ],
+        },
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            {
+              path: "fields",
+              code: "FIELD_NAME_DUPLICATE",
+              message:
+                "Collection 'events': fields 'note' and 'note' at the top level have the same name. Rename one of them.",
+            },
+          ],
+        },
+      })
+    );
+    expect(() =>
+      mutateManifest(base, {
+        type: "upsert",
+        kind: "components",
+        entity: {
+          slug: "hero",
+          fields: [
+            { name: "cta", type: "text" },
+            { name: "cta", type: "text" },
+          ],
+        },
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              message: expect.stringContaining("Field group 'hero'"),
+            }),
+          ],
+        },
+      })
+    );
+  });
+
+  it("keeps a pair the stored entry already holds", () => {
+    const next = mutateManifest(withPair, {
+      type: "upsert",
+      kind: "collections",
+      entity: {
+        slug: "events",
+        fields: [
+          { name: "title", type: "text" },
+          { name: "title", type: "textarea" },
+          { name: "venue", type: "text" },
+        ],
+      },
+    });
+    expect(next.collections[0].fields.map(f => f.name)).toEqual([
+      "title",
+      "title",
+      "venue",
+    ]);
+  });
+});

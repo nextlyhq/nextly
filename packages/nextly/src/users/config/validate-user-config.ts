@@ -126,6 +126,9 @@ export const RESERVED_USER_FIELD_NAMES = [
   "roles",
   "accounts",
   "password",
+  // Each person's own interface language: a custom field of this name would
+  // answer to the same name on the merged user.
+  "interfaceLanguage",
 ] as const;
 
 /**
@@ -293,7 +296,7 @@ export function checkUserFieldName(
   if (isReservedUserFieldName(name)) {
     return {
       code: "USER_FIELD_NAME_RESERVED",
-      message: `Field name '${name}' conflicts with a built-in user field. Reserved names: ${RESERVED_USER_FIELD_NAMES.join(", ")}`,
+      message: `Field name '${name}' conflicts with a built-in user field. Rename the app's field. Reserved names: ${RESERVED_USER_FIELD_NAMES.join(", ")}`,
     };
   }
 

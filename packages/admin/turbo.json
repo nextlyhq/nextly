@@ -8,18 +8,29 @@
       // this hash keeps them: a class used only in a test still lands in the
       // compiled sheet, and leaving it out would replay a stale sheet.
       //
-      // The sheet also scans two plugins' admin components, which this
+      // The sheet also scans three plugins' admin components, which this
       // package does not depend on, so their directories are named here.
       "inputs": [
         "$TURBO_DEFAULT$",
         ".env*",
         "$TURBO_ROOT$/packages/plugin-form-builder/src/admin/**",
-        "$TURBO_ROOT$/packages/plugin-page-builder/src/admin/**"
+        "$TURBO_ROOT$/packages/plugin-page-builder/src/admin/**",
+        "$TURBO_ROOT$/packages/plugin-seo/src/admin/**"
       ],
       // ANALYZE only turns on the size report the build prints; the files it
       // writes are the same either way, so it reaches the build without
       // keying the cache.
       "passThroughEnv": ["ANALYZE"]
+    },
+    "check-types": {
+      // The token test composes the builder's chrome stylesheet through the
+      // builder's own reader (`chrome-stylesheet.ts`), so this program compiles
+      // that module. This package does not depend on the builder, so no
+      // dependency edge folds it into the hash; it is named here instead.
+      "inputs": [
+        "$TURBO_EXTENDS$",
+        "$TURBO_ROOT$/packages/builder/src/styles/chrome-stylesheet.ts"
+      ]
     },
     "test": {
       // `build` because the bundle-report suite reads this package's OWN
@@ -32,7 +43,13 @@
       //
       // `$TURBO_EXTENDS$` first, so the root task's `^build` edge and inputs
       // are inherited rather than replaced.
-      "dependsOn": ["$TURBO_EXTENDS$", "build"]
+      "dependsOn": ["$TURBO_EXTENDS$", "build"],
+      // The token test reads the builder's chrome stylesheet, its partials and
+      // the reader that composes them, none of which this package depends on.
+      "inputs": [
+        "$TURBO_EXTENDS$",
+        "$TURBO_ROOT$/packages/builder/src/styles/**"
+      ]
     },
     "test:coverage": {
       // The same ordering as `test`, for the same reason: the coverage task

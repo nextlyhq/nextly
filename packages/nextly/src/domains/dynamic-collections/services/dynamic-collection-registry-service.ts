@@ -1,5 +1,8 @@
+import { createHash } from "node:crypto";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq, and, or, like, asc, desc, count, inArray } from "drizzle-orm";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import { eq, and, sql } from "drizzle-orm";
 
 import { resolveRelations } from "../../../database/resolve-relations";
 import { NextlyError } from "../../../errors";
@@ -12,14 +15,28 @@ import type {
   StoredWebhookRecording,
 } from "../../../schemas/dynamic-collections/types";
 import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
+import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
+import { listStoredRegistry } from "../../../shared/base-registry-service";
 import { BaseService } from "../../../shared/base-service";
 import { affectedRowCount } from "../../../shared/lib/affected-row-count";
+import {
+  registryPage,
+  warnIfRegistryListingLarge,
+} from "../../../shared/lib/registry-listing-page";
 import type { Logger } from "../../../shared/types";
 import type { DatabaseAdapter } from "../../../shared/types/database-adapter";
 import {
   moveWebhookRecording,
   renameEntity,
 } from "../../entity-rename/rename-entity";
+import {
+  deletedEntityIntent,
+  flushContentChange,
+} from "../../flush-content-change";
+import {
+  countRegistryWriteOn,
+  writeRegistryRows,
+} from "../../schema/schema-version";
 import {
   clearWebhookRecording,
   setWebhookRecording,
@@ -28,7 +45,10 @@ import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
 
 import {
   cachedCollectionRow,
-  clearCollectionRowCache,
+  clearRegistryRowCache,
+  forgetRegistryRowsOnTransaction,
+  registryReadTransaction,
+  registryRowOnTransaction,
 } from "./collection-row-cache";
 
 export interface CollectionMetadata {
@@ -78,6 +98,7 @@ export interface CollectionMetadata {
     sidebarGroup?: string;
     isPlugin?: boolean;
     disableCreate?: boolean;
+    disableDelete?: boolean;
     pagination?: { defaultLimit?: number; limits?: number[] };
   };
   source?: "code" | "ui" | "built-in";
@@ -109,18 +130,24 @@ export interface ListCollectionsOptions {
   /**
    * Restrict results to collections whose `slug` is in this list.
    *
-   * 🔴 Applied in the WHERE clause, so the COUNT and the page see the same
-   * rows. A caller that filters the returned page in application code instead
+   * 🔴 Applied to the rows before they are counted, so the total and the
+   * page see the same rows. A caller that filters the returned page instead
    * gets a `total` describing rows the reader may not see -- which both leaks
    * how many exist and collapses `totalPages` to 1, because the recomputed
    * total is at most one page. The consumer then reads "there is no next page"
    * and stops, with the rest of what it may see unreachable.
    *
    * `undefined` means no allowlist. `[]` means nothing is visible and
-   * short-circuits, rather than emitting `WHERE slug IN ()`, whose meaning
-   * differs by dialect.
+   * short-circuits to no rows and a zero total.
    */
   slugAllowlist?: string[];
+  /**
+   * Leave out collections whose `slug` is in this list: the plugins'
+   * collections, on the list of the site's own. Applied before the count, so
+   * the count and the page agree; with an allowlist both apply, so it only
+   * ever removes rows. `undefined` or `[]` denies nothing.
+   */
+  slugDenylist?: string[];
 }
 
 export interface ListCollectionsResponse<
@@ -164,6 +191,12 @@ function normalizeCollectionBooleans(
     status: row.status === 1 || row.status === true,
     localized: row.localized === 1 || row.localized === true,
   };
+}
+
+/** What removing a collection's registry row found: how many rows went, and the cache setting the row held. */
+export interface UnregisteredCollectionRow {
+  removed: number;
+  stored: unknown;
 }
 
 export class DynamicCollectionRegistryService extends BaseService {
@@ -245,41 +278,45 @@ export class DynamicCollectionRegistryService extends BaseService {
     // The cached rows are cleared once the insert has run, landed or not, so a
     // row read while it ran is not served after it.
     try {
-      await this.db.insert(this.dynamicCollections).values({
-        id: metadata.id,
-        slug: metadata.slug,
-        tableName: metadata.tableName,
-        description: metadata.description,
-        labels: metadata.labels,
-        fields: metadata.fields,
-        timestamps: metadata.timestamps ?? true,
-        admin: metadata.admin,
-        source: metadata.source ?? "ui",
-        locked: metadata.locked ?? false,
-        // Draft/Published flag — Drizzle's mode:'boolean' on sqlite + native
-        // bool on postgres/mysql both accept a JS boolean here.
-        status: metadata.status === true,
-        // i18n: persist the localized flag so the read/write path routes translatable
-        // fields to the companion table and the admin shows per-language editing. Without
-        // it, a UI-created localized collection is stored as non-localized (shared).
-        localized: metadata.localized === true,
-        // Resolved versioning config (or null when unversioned). Stored as JSON
-        // the same way `admin` is; Drizzle serializes the object per dialect.
-        versions: metadata.versions ?? null,
-        // Cache-revalidation config (or null). Stored as JSON like `versions`.
-        revalidate: metadata.revalidate ?? null,
-        // Webhook recording policy (or null). Stored as JSON like `revalidate`.
-        webhooks: metadata.webhooks ?? null,
-        configPath: metadata.configPath,
-        schemaHash: metadata.schemaHash,
-        schemaVersion: metadata.schemaVersion ?? 1,
-        migrationStatus: metadata.migrationStatus ?? "pending",
-        lastMigrationId: metadata.lastMigrationId,
-        hooks: metadata.hooks,
-        createdBy: metadata.createdBy,
-      });
+      // With the stored schema version's count (`writeRegistryRows`), on the
+      // write's transaction, where `this.db` then writes.
+      await writeRegistryRows(this.adapter, () =>
+        this.db.insert(this.dynamicCollections).values({
+          id: metadata.id,
+          slug: metadata.slug,
+          tableName: metadata.tableName,
+          description: metadata.description,
+          labels: metadata.labels,
+          fields: metadata.fields,
+          timestamps: metadata.timestamps ?? true,
+          admin: metadata.admin,
+          source: metadata.source ?? "ui",
+          locked: metadata.locked ?? false,
+          // Draft/Published flag — Drizzle's mode:'boolean' on sqlite + native
+          // bool on postgres/mysql both accept a JS boolean here.
+          status: metadata.status === true,
+          // i18n: persist the localized flag so the read/write path routes translatable
+          // fields to the companion table and the admin shows per-language editing. Without
+          // it, a UI-created localized collection is stored as non-localized (shared).
+          localized: metadata.localized === true,
+          // Resolved versioning config (or null when unversioned). Stored as JSON
+          // the same way `admin` is; Drizzle serializes the object per dialect.
+          versions: metadata.versions ?? null,
+          // Cache-revalidation config (or null). Stored as JSON like `versions`.
+          revalidate: metadata.revalidate ?? null,
+          // Webhook recording policy (or null). Stored as JSON like `revalidate`.
+          webhooks: metadata.webhooks ?? null,
+          configPath: metadata.configPath,
+          schemaHash: metadata.schemaHash,
+          schemaVersion: metadata.schemaVersion ?? 1,
+          migrationStatus: metadata.migrationStatus ?? "pending",
+          lastMigrationId: metadata.lastMigrationId,
+          hooks: metadata.hooks,
+          createdBy: metadata.createdBy,
+        })
+      );
     } finally {
-      clearCollectionRowCache();
+      clearRegistryRowCache();
     }
 
     // Publish the decision into the live policy as well as the column. The
@@ -336,9 +373,13 @@ export class DynamicCollectionRegistryService extends BaseService {
     }
 
     const targetSlug = updates.slug ?? existing[0].slug;
-    await this.ensureGlobalSlugUniqueness(targetSlug, {
-      currentCollectionId: existing[0].id,
-    });
+    // A rename's new address is judged by the one address rule, inside the schema lock, in the
+    // rename branch below. Any other update keeps the slug it has and is checked as before.
+    if (targetSlug === existing[0].slug) {
+      await this.ensureGlobalSlugUniqueness(targetSlug, {
+        currentCollectionId: existing[0].id,
+      });
+    }
 
     const updateData: Record<string, unknown> = { ...updates };
 
@@ -371,7 +412,9 @@ export class DynamicCollectionRegistryService extends BaseService {
     // rename too: the row then lives under the new slug.
     try {
       if (targetSlug === existing[0].slug) {
-        await writeRow(this.db);
+        // With the stored schema version's count (`writeRegistryRows`); a
+        // rename moves it in its own transaction (`renameEntity`).
+        await writeRegistryRows(this.adapter, () => writeRow(this.db));
       } else {
         // A changed slug is a rename. Everything keyed by the old slug (history,
         // markers, events, release members, permissions, webhook filters) moves
@@ -379,9 +422,20 @@ export class DynamicCollectionRegistryService extends BaseService {
         // together or neither does; otherwise the renamed collection would lose
         // them and the next collection created under the old slug would inherit
         // them.
+        //
+        // The new address is judged inside the schema lock `renameEntity` holds for the rename,
+        // so a collection or Single that takes the same snake_case form while this waits is seen,
+        // and one that tries while the rename holds the lock is refused. The rule is the one
+        // every road applies (reserved names, routes, a taken slug, and a same snake_case form
+        // among collections and Singles).
         const renamed = await renameEntity(this.adapter, {
           dialect: this.dialect,
           move,
+          judgeTarget: () =>
+            assertGlobalResourceSlugAvailable(this.adapter, targetSlug, {
+              currentResourceType: "collection",
+              currentResourceId: existing[0].id,
+            }),
           writeRegistry: async tx => {
             const written = await writeRow(
               tx.drizzleWithRelations<DatabaseAdapter["db"]>(
@@ -394,6 +448,7 @@ export class DynamicCollectionRegistryService extends BaseService {
             // that did not move.
             return affectedRowCount(written, this.dialect) === 0 ? null : move;
           },
+          logger: this.logger,
         });
         if (renamed === null) {
           throw NextlyError.notFound({
@@ -403,7 +458,7 @@ export class DynamicCollectionRegistryService extends BaseService {
         }
       }
     } finally {
-      clearCollectionRowCache();
+      clearRegistryRowCache();
     }
 
     // A rename carries the live recording decision to the new slug and drops
@@ -458,6 +513,7 @@ export class DynamicCollectionRegistryService extends BaseService {
       includeSchema = true as TIncludeSchema,
       source,
       slugAllowlist,
+      slugDenylist,
     } = options || {};
 
     // An empty allowlist means the caller may see nothing. Answered here
@@ -473,109 +529,70 @@ export class DynamicCollectionRegistryService extends BaseService {
       };
     }
 
-    const conditions = [];
+    // 🔴 CONDITIONS, not a filter over the result. The allowlist and the
+    // denylist (the plugins' collections, on the site's own list) decide
+    // which rows are counted, before the total is taken and the page cut, so
+    // the total describes exactly the rows this caller may see and
+    // `totalPages` counts pages of those.
+    //
+    // In memory, from the registry listing this process holds: the registry
+    // is the documented exception to paging in the database
+    // (`shared/lib/registry-listing-page` says why). Page and total come
+    // from one snapshot of it, and an unchanged registry costs no statement.
+    const allowed = slugAllowlist ? new Set(slugAllowlist) : undefined;
+    const denied = new Set(slugDenylist ?? []);
+    const table = "dynamic_collections";
+    const listed = await listStoredRegistry(
+      this.adapter,
+      this.dialect,
+      table,
+      rows => {
+        warnIfRegistryListingLarge("Collection", rows.length, message =>
+          this.logger.warn(message)
+        );
+        const found = registryPage(rows, {
+          include: row => {
+            const slug = String(row.slug);
+            return (
+              (allowed === undefined || allowed.has(slug)) &&
+              !denied.has(slug) &&
+              (!source || row.source === source)
+            );
+          },
+          ...(search
+            ? { search: { text: search, columns: ["slug", "description"] } }
+            : {}),
+          // "name" is the admin/API alias for "slug": both sort on the slug.
+          orderBy:
+            sortBy === "name" || sortBy === "slug"
+              ? "slug"
+              : sortBy === "updatedAt"
+                ? "updatedAt"
+                : "createdAt",
+          direction: sortOrder === "asc" ? "asc" : "desc",
+          offset: (page - 1) * limit,
+          limit,
+        });
+        return {
+          total: found.total,
+          rows: found.rows.map(row => {
+            const copy = structuredClone(row) as Record<string, unknown>;
+            // `fields` is the only column the schema-less shape drops, and
+            // the return type says so: `Omit<CollectionMetadata, "fields">`.
+            if (!includeSchema) delete copy.fields;
+            return copy;
+          }),
+        };
+      }
+    );
 
-    // 🔴 A CONDITION, not a filter over the result. Both the count below and
-    // the page query read `whereClause`, so the total describes exactly the
-    // rows this caller may see and `totalPages` counts pages of those.
-    if (slugAllowlist) {
-      conditions.push(inArray(this.dynamicCollections.slug, slugAllowlist));
-    }
-
-    if (search) {
-      const searchPattern = `%${search}%`;
-      conditions.push(
-        or(
-          like(this.dynamicCollections.slug, searchPattern),
-          like(this.dynamicCollections.description, searchPattern)
-        )
-      );
-    }
-
-    if (source) {
-      conditions.push(eq(this.dynamicCollections.source, source));
-    }
-
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
-
-    const orderFn = sortOrder === "asc" ? asc : desc;
-    let orderByClause;
-    switch (sortBy) {
-      // "name" is the admin/API alias for "slug" — both sort on the slug column.
-      case "name":
-      case "slug":
-        orderByClause = orderFn(this.dynamicCollections.slug);
-        break;
-      case "updatedAt":
-        orderByClause = orderFn(this.dynamicCollections.updatedAt);
-        break;
-      case "createdAt":
-      default:
-        orderByClause = orderFn(this.dynamicCollections.createdAt);
-    }
-
-    const offset = (page - 1) * limit;
-
-    const countResult = await this.db
-      .select({ value: count() })
-      .from(this.dynamicCollections)
-      .where(whereClause);
-
-    const total = Number(countResult[0]?.value ?? 0);
+    const total = listed.total;
     const totalPages = Math.ceil(total / limit);
-
-    const collections = includeSchema
-      ? await this.db
-          .select()
-          .from(this.dynamicCollections)
-          .where(whereClause)
-          .orderBy(orderByClause)
-          .limit(limit)
-          .offset(offset)
-      : await this.db
-          // `fields` is the only column this shape drops, and the return type
-          // says so: `Omit<CollectionMetadata, "fields">`. Every other column
-          // has to be named here, because an omission is invisible — the row
-          // still satisfies the declared type while the value arrives
-          // `undefined`, so a caller reading `status` or `versions` off a list
-          // gets nothing and no error. Dropping the schema blob is what makes
-          // the shape cheap; dropping metadata alongside it only makes it wrong.
-          .select({
-            id: this.dynamicCollections.id,
-            slug: this.dynamicCollections.slug,
-            tableName: this.dynamicCollections.tableName,
-            description: this.dynamicCollections.description,
-            labels: this.dynamicCollections.labels,
-            timestamps: this.dynamicCollections.timestamps,
-            status: this.dynamicCollections.status,
-            localized: this.dynamicCollections.localized,
-            versions: this.dynamicCollections.versions,
-            revalidate: this.dynamicCollections.revalidate,
-            webhooks: this.dynamicCollections.webhooks,
-            admin: this.dynamicCollections.admin,
-            hooks: this.dynamicCollections.hooks,
-            source: this.dynamicCollections.source,
-            locked: this.dynamicCollections.locked,
-            configPath: this.dynamicCollections.configPath,
-            schemaHash: this.dynamicCollections.schemaHash,
-            schemaVersion: this.dynamicCollections.schemaVersion,
-            migrationStatus: this.dynamicCollections.migrationStatus,
-            lastMigrationId: this.dynamicCollections.lastMigrationId,
-            createdBy: this.dynamicCollections.createdBy,
-            createdAt: this.dynamicCollections.createdAt,
-            updatedAt: this.dynamicCollections.updatedAt,
-            // `fields` intentionally excluded — the reason this shape exists.
-          })
-          .from(this.dynamicCollections)
-          .where(whereClause)
-          .orderBy(orderByClause)
-          .limit(limit)
-          .offset(offset);
 
     return {
       // Both shapes carry `status` and `localized`, so both need the same
       // coercion `getCollection` applies — see `normalizeCollectionBooleans`.
-      collections: (collections as Record<string, unknown>[]).map(
+      collections: listed.rows.map(
         normalizeCollectionBooleans
       ) as ListCollectionsResponse<TIncludeSchema>["collections"],
       total,
@@ -587,12 +604,28 @@ export class DynamicCollectionRegistryService extends BaseService {
 
   /**
    * One collection's registry row, by slug. Outside a transaction it comes
-   * from the row cache (`collection-row-cache`): a copy, at most a second old
-   * for a change made elsewhere, and current for one made here. Inside one it
-   * is read on the transaction, uncached, so the transaction sees its own
-   * writes.
+   * from the row cache (`collection-row-cache`): a copy, kept until the
+   * stored count of registry writes moves, so a change made elsewhere is seen
+   * within `REGISTRY_ROW_STALENESS_MS`, and current for one made here. Read on a
+   * transaction, it comes from that transaction's memo
+   * (`registryRowOnTransaction`): read there once, uncached by any other, so
+   * the transaction sees its own writes and no other transaction does. Inside
+   * a transaction but read through the pool, it is read every time, as
+   * before.
    */
   async getCollection(slug: string, executor?: unknown): Promise<unknown> {
+    const transaction = registryReadTransaction(this.adapter, executor);
+    if (transaction !== undefined) {
+      // The row as stored, under the key the registry services' own lookup
+      // (`getRecordBySlug`) holds it by: one read of it serves both.
+      const stored = await registryRowOnTransaction(
+        transaction,
+        "record:dynamic_collections",
+        slug,
+        () => this.readStoredCollection(slug, executor)
+      );
+      return this.normalizedOrMissing(slug, stored);
+    }
     if (executor !== undefined || this.adapter.transactionOpenInFlow()) {
       return this.readCollection(slug, executor);
     }
@@ -606,6 +639,17 @@ export class DynamicCollectionRegistryService extends BaseService {
     slug: string,
     executor?: unknown
   ): Promise<Record<string, unknown>> {
+    return this.normalizedOrMissing(
+      slug,
+      await this.readStoredCollection(slug, executor)
+    );
+  }
+
+  /** One collection's registry row as stored, or null when there is none. */
+  private async readStoredCollection(
+    slug: string,
+    executor?: unknown
+  ): Promise<Record<string, unknown> | null> {
     // Run on the caller's transaction executor when supplied so this metadata
     // read does not take a second pooled connection from inside the caller's
     // transaction (which can stall against a small pool); falls back to the
@@ -617,16 +661,21 @@ export class DynamicCollectionRegistryService extends BaseService {
       .from(this.dynamicCollections)
       .where(eq(this.dynamicCollections.slug, slug))
       .limit(1);
+    return (result[0] as Record<string, unknown> | undefined) ?? null;
+  }
 
-    if (result.length === 0) {
+  /** A stored row with its booleans normalized; a missing one is not found. */
+  private normalizedOrMissing(
+    slug: string,
+    row: Record<string, unknown> | null
+  ): Record<string, unknown> {
+    if (row === null) {
       // Typed for the same reason as above, with the wording preserved.
       throw NextlyError.notFound({
         message: `Collection "${slug}" not found`,
         logContext: { collection: slug },
       });
     }
-
-    const row = result[0] as Record<string, unknown>;
     return normalizeCollectionBooleans(row);
   }
 
@@ -641,19 +690,248 @@ export class DynamicCollectionRegistryService extends BaseService {
   }
 
   async unregisterCollection(slug: string): Promise<void> {
+    let unregistered: UnregisteredCollectionRow;
     // Cleared once the delete has run, as after an insert.
     try {
-      await this.db
-        .delete(this.dynamicCollections)
-        .where(eq(this.dynamicCollections.slug, slug));
+      unregistered = await this.adapter.transaction(tx =>
+        this.unregisterCollectionIn(tx, slug)
+      );
     } finally {
-      clearCollectionRowCache();
+      clearRegistryRowCache();
     }
-
-    // Drop the in-process recording decision with the row: this is the path the
-    // Builder's delete takes, and a later collection created under the same slug
-    // must start from the recording default rather than inherit a suppression
-    // whose row no longer exists.
-    clearWebhookRecording("collection", slug);
+    await this.forgetUnregisteredCollection(slug, unregistered);
   }
+
+  /**
+   * Lock the registry rows of `slugs` inside `tx`, and answer the slugs whose
+   * row is there, the id of each row held (`ids`, by slug), and how to end the
+   * hold early (`release`). The ids tell a caller that loaded the rows before
+   * taking the hold whether the row it now holds is the one it loaded: a slug
+   * deleted and created again between the two holds a new row.
+   *
+   * `"update"` is a collection delete's: taken before it removes anything, so
+   * a write holding a row for `"share"` (one that must not outlive the
+   * collection, such as a plugin's row naming it) and the delete take turns.
+   * The write either commits before the delete reads what it removes, or
+   * waits and finds the row gone. SQLite has one writer at a time, so there
+   * the rows are only read.
+   *
+   * MySQL ends a transaction at its first table drop, which releases row
+   * locks while the delete still has the registry rows to remove. So there
+   * each side also takes the collection's named lock on the transaction's
+   * connection (`GET_LOCK`), which a commit does not release: the delete
+   * holds it until `release`, which it calls once its last statement has
+   * run, and a write holds it only across its read of the row. A write that
+   * waited for a delete therefore reads the row after the delete removed it.
+   * The lock belongs to the connection, so `release` must run before the
+   * transaction hands the connection back, and a hold for `"share"` releases
+   * its own before it returns.
+   */
+  async holdCollectionsIn(
+    tx: TransactionContext,
+    slugs: readonly string[],
+    strength: "share" | "update"
+  ): Promise<{
+    existing: string[];
+    ids: ReadonlyMap<string, string>;
+    release: () => Promise<void>;
+  }> {
+    const none = (): Promise<void> => Promise.resolve();
+    if (slugs.length === 0) {
+      return { existing: [], ids: new Map(), release: none };
+    }
+    const named =
+      this.dialect === "mysql"
+        ? await takeNamedCollectionLocks(tx, slugs)
+        : { release: none };
+    let rows: { slug: string; id: unknown }[];
+    try {
+      rows = await tx.select<{ slug: string; id: unknown }>(
+        "dynamic_collections",
+        {
+          columns: ["slug", "id"],
+          where: { and: [{ column: "slug", op: "IN", value: [...slugs] }] },
+          ...(strength === "update" ? { forUpdate: true } : { forShare: true }),
+        }
+      );
+    } catch (error) {
+      await named.release();
+      throw error;
+    }
+    // Held now, the rows are the latest committed: a row the transaction
+    // read before the hold may predate a commit the hold waited for.
+    forgetRegistryRowsOnTransaction(this.adapter);
+    const existing = rows.map(row => row.slug);
+    const ids = new Map(rows.map(row => [row.slug, String(row.id)]));
+    if (strength === "share") {
+      await named.release();
+      return { existing, ids, release: none };
+    }
+    return { existing, ids, release: named.release };
+  }
+
+  /**
+   * Remove a collection's registry row inside `tx`, so it goes with whatever
+   * else that transaction removes or not at all. The setting and the delete
+   * run with the row locked between them: the expiry after the commit uses
+   * the setting the deleted row held, and a second delete racing this one
+   * waits, then finds nothing to remove. What the process remembers about the
+   * collection is the caller's to forget once `tx` has committed
+   * (`forgetUnregisteredCollection`, given what this returns): forgotten
+   * earlier, a rollback would leave the row and lose what was known about it.
+   */
+  async unregisterCollectionIn(
+    tx: TransactionContext,
+    slug: string
+  ): Promise<UnregisteredCollectionRow> {
+    const where = {
+      and: [{ column: "slug", op: "=" as const, value: slug }],
+    };
+    const [row] = await tx.select<{ revalidate: unknown }>(
+      "dynamic_collections",
+      { columns: ["revalidate"], where, forUpdate: true }
+    );
+    const removed = await tx.delete("dynamic_collections", where);
+    // The stored schema version's count moves in the same transaction.
+    if (removed > 0) await countRegistryWriteOn(tx, this.dialect);
+    // Cleared as it is removed, so a read later in `tx` does not find the row
+    // the transaction read before; the recording decision stays the caller's
+    // to forget once `tx` commits.
+    clearRegistryRowCache();
+    return { removed, stored: row?.revalidate };
+  }
+
+  /**
+   * Forget, in this process, a collection whose registry row is gone: its
+   * cached rows, cleared as after any registry write, and its recording
+   * decision, since a later collection created under the same slug must start
+   * from the recording default rather than inherit a suppression whose row no
+   * longer exists.
+   */
+  async forgetUnregisteredCollection(
+    slug: string,
+    unregistered: UnregisteredCollectionRow
+  ): Promise<void> {
+    clearRegistryRowCache();
+    clearWebhookRecording("collection", slug);
+
+    // Every cached read of it now describes rows that are gone. Only when this
+    // delete removed the row, with the setting it held: a repeated delete finds
+    // nothing and expires nothing. Once the delete is durable: after an
+    // enclosing transaction commits, and never for one that rolls back.
+    if (unregistered.removed > 0) {
+      await this.afterCommit(() =>
+        flushContentChange(
+          deletedEntityIntent("collection", slug, unregistered.stored),
+          this.logger,
+          "a collection was deleted"
+        )
+      );
+    }
+  }
+}
+
+/** How long a hold waits for another's named lock on a collection, in seconds. */
+const NAMED_LOCK_WAIT_SECONDS = 30;
+
+/**
+ * The name of collection `slug`'s named lock on MySQL, in the database named
+ * `database` (`DATABASE()` on the connection, null where none is selected).
+ *
+ * MySQL's named locks belong to the server, not to a database, so a name
+ * built from the slug alone would be shared by every Nextly database on one
+ * server: a delete in one would hold up a write or a delete of the same slug
+ * in another. The name is a hash of both, as the migration lock's is, since
+ * MySQL caps a lock name at 64 characters. The two are kept apart by a NUL,
+ * which neither holds, so no database and slug run together into another.
+ */
+export function namedCollectionLockName(
+  database: string | null,
+  slug: string
+): string {
+  const hash = createHash("sha256")
+    .update(`${database ?? ""}\u0000${slug}`)
+    .digest("hex");
+  return `nextly:collection:${hash.slice(0, 40)}`;
+}
+
+/**
+ * The name collection `slug`'s named lock had before it was named for the
+ * database: a hash of the slug alone. Still taken beside the new name: see
+ * {@link namedCollectionLockNames}.
+ */
+export function legacyCollectionLockName(slug: string): string {
+  const hash = createHash("sha256").update(slug).digest("hex");
+  return `nextly:collection:${hash.slice(0, 40)}`;
+}
+
+/**
+ * The named locks a hold of `slugs` takes on MySQL, in the order it takes
+ * them, in the database named `database`.
+ *
+ * Each slug's lock under its old name comes first, then under its name for
+ * the database ({@link namedCollectionLockName}). While a rolling deployment
+ * runs, instances still on the old release take only the old name, and a
+ * hold that took only the new one would not wait for theirs: a write could
+ * name a collection one of them is deleting. Taking both keeps every
+ * instance in step until none on the old release is left; the old name may
+ * then be dropped. Until then two databases on one server still share the
+ * old name, as they did before.
+ *
+ * The old names are taken in the order the old release takes them, by slug,
+ * and before any new name, which the old release never takes. So a hold on
+ * either release takes the names it shares with another in the same order,
+ * and two holds of overlapping sets cannot each hold a name the other waits
+ * for.
+ */
+export function namedCollectionLockNames(
+  database: string | null,
+  slugs: readonly string[]
+): string[] {
+  const sorted = [...new Set(slugs)].sort();
+  return [
+    ...sorted.map(legacyCollectionLockName),
+    ...sorted.map(slug => namedCollectionLockName(database, slug)),
+  ];
+}
+
+/**
+ * The named locks of `slugs` on MySQL ({@link namedCollectionLockNames}),
+ * taken on `tx`'s connection, for the database the connection is in.
+ */
+async function takeNamedCollectionLocks(
+  tx: TransactionContext,
+  slugs: readonly string[]
+): Promise<{ release: () => Promise<void> }> {
+  const [selected] = await tx.queryStatement<{ name: unknown }>(
+    sql`SELECT DATABASE() AS ${sql.identifier("name")}`
+  );
+  const database = typeof selected?.name === "string" ? selected.name : null;
+  const names = namedCollectionLockNames(database, slugs);
+  const taken: string[] = [];
+  // In the reverse of the order taken, each once.
+  const release = async (): Promise<void> => {
+    for (const name of taken.splice(0).reverse()) {
+      await tx.queryStatement(sql`SELECT RELEASE_LOCK(${name})`);
+    }
+  };
+  try {
+    for (const name of names) {
+      const [row] = await tx.queryStatement<{ locked: unknown }>(
+        sql`SELECT GET_LOCK(${name}, ${NAMED_LOCK_WAIT_SECONDS}) AS ${sql.identifier("locked")}`
+      );
+      if (Number(row?.locked) !== 1) {
+        throw NextlyError.conflict({
+          message:
+            "This collection is being changed elsewhere. Try again in a moment.",
+          logContext: { reason: "collection-named-lock-timeout", lock: name },
+        });
+      }
+      taken.push(name);
+    }
+  } catch (error) {
+    await release();
+    throw error;
+  }
+  return { release };
 }

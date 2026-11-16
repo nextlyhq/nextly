@@ -1,30 +1,31 @@
 /**
  * Dashboard REST Handler Functions
  *
- * Three read-only endpoints for the admin dashboard:
+ * Read-only endpoints for the admin dashboard and the Content overview:
  *
  *   GET /api/dashboard/stats          to aggregated content stats
  *   GET /api/dashboard/recent-entries to last edited entries across collections
  *   GET /api/dashboard/activity       to recent activity log entries
+ *   GET /api/dashboard/content        to every collection's and Single's row
  *
  * All endpoints require authentication (any logged-in user can view the
  * dashboard). No specific permission is needed to call them, because the
  * dashboard is the landing page for all authenticated admin users; what each
  * one answers is scoped to what the caller may read.
  *
- * All three endpoints expose object-shaped reads with named fields, so they
+ * All of them expose object-shaped reads with named fields, so they
  * use `respondData` (bare body, no envelope).
  *
  * @module api/dashboard
  * @since 1.0.0
  */
 
+import { z } from "zod";
+
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import { refreshContentSources } from "../domains/widgets/collection-widgets";
-import { conditionProbe } from "../domains/widgets/condition-probe";
-import { onboardingProgress } from "../domains/widgets/onboarding";
+import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { ActivityLogService } from "../services/dashboard/activity-log-service";
 import { readActivitySubjects } from "../services/dashboard/activity-subjects";
@@ -93,44 +94,6 @@ export const getDashboardStats = withErrorHandler(async (req: Request) => {
   // bound is satisfied without leaning on a typecast (named interfaces lack
   // an implicit index signature).
   return respondData({ ...stats }, { headers: PRIVATE_NO_STORE_HEADERS });
-});
-
-/**
- * GET /api/dashboard/onboarding
- *
- * Which setup steps this reader has finished, and whether setup could be
- * checked at all. The same answer the
- * `onboarding:incomplete` widget condition is derived from, so the card and the
- * rule that decides whether to offer it cannot disagree.
- *
- * The source registry is REFRESHED first -- both kinds, through the one
- * refresh the layout and query endpoints call before resolving anything. Boot
- * does not publish it, and the steps read it to learn which collections exist
- * -- without this an install with content would report every step
- * outstanding, which is the answer that keeps the card on screen forever.
- *
- * Caching: `private, no-store`. The answer is per reader, and a shared cache
- * serving one reader's progress to another would leak which collections exist.
- *
- * @deprecated The Get started steps travel in the layout read
- * (`GET /api/dashboard/layout`, `getStarted`), from the computation that
- * decides whether the card is drawn. Kept for one release for a client still
- * reading this one; it answers from the same step answer.
- */
-export const getDashboardOnboarding = withErrorHandler(async (req: Request) => {
-  const auth = await requireAuthentication(req);
-  if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
-
-  await refreshContentSources();
-  const caller = await readCaller(auth);
-  // The same probe the layout read builds, so this endpoint and the condition
-  // that decides whether the card is offered resolve the reader's collections
-  // by one path rather than two. `unknown` travels with the steps, because the
-  // condition holds the card while setup cannot be checked and the rows alone
-  // would then read as finished.
-  const { steps, unknown } = await onboardingProgress(conditionProbe(caller));
-
-  return respondData({ steps, unknown }, { headers: PRIVATE_NO_STORE_HEADERS });
 });
 
 /**
@@ -234,4 +197,54 @@ export const getDashboardActivity = withErrorHandler(async (req: Request) => {
     { activities: result.activities, hasMore: result.hasMore },
     { headers: PRIVATE_NO_STORE_HEADERS }
   );
+});
+
+/**
+ * The Content overview's address takes no query parameters: one it does not
+ * know is refused rather than ignored, so a caller relying on a filter that
+ * does nothing is told so.
+ */
+const CONTENT_OVERVIEW_QUERY = z.object({}).strict();
+
+/**
+ * GET /api/dashboard/content
+ *
+ * Every collection and Single the caller may read on the dashboard, one row
+ * each, in one answer: a collection's entries, its drafts (the list's Draft
+ * filter, `null` without the Draft / Published lifecycle), whether the caller
+ * may create in it, and its last edit; a Single's last edit and whether the
+ * caller may update it; both with who made the last change where the activity
+ * trail names them. The admin's Content overview draws its tables from it, so
+ * it asks once rather than once per row.
+ *
+ * Every figure is the caller's own, built as the dashboard's Content card
+ * builds a row (`DashboardService.getContentOverview`): the counts through the
+ * access-enforced count, in the database.
+ *
+ * Body shape: `{ rows }`, unpaged: the overview lists every collection and
+ * Single, which the registries bound, so there is no page to ask for.
+ */
+export const getDashboardContent = withErrorHandler(async (req: Request) => {
+  const auth = await requireAuthentication(req);
+  if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
+
+  const params = Object.fromEntries(new URL(req.url).searchParams);
+  if (!CONTENT_OVERVIEW_QUERY.safeParse(params).success) {
+    throw NextlyError.validation({
+      errors: Object.keys(params).map(name => ({
+        path: name,
+        code: "UNKNOWN_FIELD",
+        message: "This address takes no query parameters.",
+      })),
+    });
+  }
+
+  const service = await getDashboardService();
+  // The caller WHOLE, resolved once, as the other reads here take it: the
+  // scope decides which collections and Singles are in reach, and each row's
+  // counts are then read AS this caller.
+  const caller = await readCaller(auth);
+  const scope = await resolveReadableResources(caller);
+  const rows = await service.getContentOverview({ scope, caller });
+  return respondData({ rows }, { headers: PRIVATE_NO_STORE_HEADERS });
 });

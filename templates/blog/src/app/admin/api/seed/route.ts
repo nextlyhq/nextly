@@ -1,18 +1,21 @@
 /**
  * HEAD/POST /admin/api/seed — Auth-gated demo content seeder.
  *
- * HEAD is used by the admin dashboard SeedDemoContentCard to probe
- * whether seeding is available for the current project (which template
- * is shipped). Returns 200 + X-Nextly-Seed-Template* headers when an
- * authenticated super-admin asks. 401/403 still indicate the endpoint
- * exists; the dashboard treats those as "auth issue" rather than
- * "feature missing." 404 (route not present) means the template
- * doesn't ship a seed at all (e.g., blank template).
+ * HEAD is how the admin dashboard's setup card asks whether THIS person may
+ * load sample content: 200 with X-Nextly-Seed-Template* headers for a
+ * signed-in super-admin, 401/403 for anyone the POST would refuse, 404 where
+ * the project ships no seed (the blank template), 503 while Nextly is still
+ * starting. The card offers the load on a 200 only.
  *
- * POST runs the content seed (see src/endpoints/seed/index.ts) and
- * writes seed.completedAt to nextly_meta on success so the dashboard
- * card hides on next probe. Returns the full SeedResult so the card
- * can render success summary / partial-success warnings.
+ * POST runs the content seed (src/endpoints/seed/index.ts) through Nextly's
+ * sample-content runner (`sampleContentPost` from `nextly/database/seeders`),
+ * which loads it at most once at a time for the whole site, whoever starts
+ * it: a start while another load is unfinished, after somebody loaded or
+ * declined, or after a failed load without `{ "confirm": true }` is refused
+ * with 409 and loads nothing. The runner records the outcome in nextly_meta,
+ * so every tab and every person sees the same one. A body of
+ * `{ "confirm": true }` loads again after a failure, once the person has been
+ * told some of the content may already be there.
  *
  * Schema is created via SQL migrations (boot-time auto-apply).
  * This route only populates demo content.
@@ -28,6 +31,7 @@
 
 import { getNextly } from "nextly";
 import { getSession, isSuperAdmin } from "nextly/auth";
+import { sampleContentPost } from "nextly/database/seeders";
 import config from "@nextly-config";
 
 import { seed } from "@/endpoints/seed";
@@ -130,20 +134,13 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
 
-    const result = await seed({ nextly });
-
-    // Persist completedAt so the dashboard card hides on next probe.
-    // Best-effort: a meta-write failure should NOT mask a successful
-    // seed. We surface it as a warning and let the card auto-hide via
-    // its in-memory state instead.
-    try {
-      await nextly.meta.set("seed.completedAt", new Date().toISOString());
-    } catch (metaErr) {
-      const m = metaErr instanceof Error ? metaErr.message : String(metaErr);
-      result.warnings.push(`could not record seed.completedAt: ${m}`);
-    }
-
-    return Response.json(result);
+    // Claims the site's one load, loads, and records the outcome; refused
+    // with nothing loaded when another load or an answer got there first.
+    return await sampleContentPost(request, {
+      store: nextly.meta,
+      by: session.user.id,
+      load: () => seed({ nextly, config }),
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[seed] route handler failed:", err);

@@ -13,7 +13,8 @@ interface FeedItem {
   title: string;
   link: string;
   description?: string;
-  pubDate: string;
+  /** Omitted for a post with no publish date: RSS makes it optional. */
+  pubDate?: string;
   author?: string;
   categories?: string[];
 }
@@ -54,7 +55,7 @@ export function buildRss({
       <title>${escapeXml(item.title)}</title>
       <link>${escapeXml(item.link)}</link>
       <guid isPermaLink="true">${escapeXml(item.link)}</guid>
-      <pubDate>${new Date(item.pubDate).toUTCString()}</pubDate>
+      ${item.pubDate ? `<pubDate>${new Date(item.pubDate).toUTCString()}</pubDate>` : ""}
       ${item.author ? `<author>${escapeXml(item.author)}</author>` : ""}
       ${item.description ? `<description>${cdata(item.description)}</description>` : ""}
       ${cats}
@@ -62,14 +63,17 @@ export function buildRss({
     })
     .join("");
 
+  // No `lastBuildDate`: RSS makes it optional, and it means when the channel
+  // last changed, which the posts do not record. The clock cannot stand in
+  // under Cache Components, and the newest post's date moves backward when
+  // that post is unpublished or deleted. Each item keeps its `pubDate`.
   return `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
   <channel>
     <title>${escapeXml(title)}</title>
     <link>${escapeXml(link)}</link>
     <description>${escapeXml(description)}</description>
-    <language>en-us</language>
-    <lastBuildDate>${new Date().toUTCString()}</lastBuildDate>${itemsXml}
+    <language>en-us</language>${itemsXml}
   </channel>
 </rss>`;
 }
@@ -83,7 +87,7 @@ export function postsToFeedItems(posts: Post[]): FeedItem[] {
     title: post.title,
     link: absoluteUrl(`/blog/${post.slug}`),
     description: post.excerpt ?? undefined,
-    pubDate: post.publishedAt ?? new Date().toISOString(),
+    ...(post.publishedAt ? { pubDate: post.publishedAt } : {}),
     author: post.author?.name,
     categories: [
       ...(post.categories?.map(c => c.name) ?? []),

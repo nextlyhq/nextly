@@ -8,11 +8,18 @@
 // config that references the NEW table object.
 
 import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 
 import { NextlyError } from "../../errors/nextly-error";
 import { getDialectTables } from "../index";
 import { SchemaRegistry } from "../schema-registry";
+import { loadDialectTables } from "../dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 function makeRegistry() {
   const registry = new SchemaRegistry("sqlite");

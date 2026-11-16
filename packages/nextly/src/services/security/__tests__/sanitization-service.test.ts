@@ -28,6 +28,71 @@ describe("sanitizeEntryData — nested-document descent", () => {
     expect(data.title).toBe("Hello");
   });
 
+  it("sanitizes text inside a group with no name as it does the same text outside one", () => {
+    // A group with no name only lays fields out: its children are stored at the level it sits in.
+    const data = {
+      outsideText: "<b>a</b>",
+      outsideArea: "<b>b</b>",
+      insideText: "<b>c</b>",
+      insideArea: "<b>d</b>",
+    };
+    sanitizeEntryData(data, [
+      field({ name: "outsideText", type: "text" }),
+      field({ name: "outsideArea", type: "textarea" }),
+      field({
+        type: "group",
+        label: "Layout",
+        fields: [
+          field({ name: "insideText", type: "text" }),
+          field({ name: "insideArea", type: "textarea" }),
+        ],
+      }),
+    ]);
+    expect(data).toEqual({
+      outsideText: "a",
+      outsideArea: "b",
+      insideText: "c",
+      insideArea: "d",
+    });
+  });
+
+  it("sanitizes text in a group with no name inside a named group", () => {
+    const data = { box: { title: "<b>a</b>", note: "<b>b</b>" } };
+    sanitizeEntryData(data, [
+      field({
+        name: "box",
+        type: "group",
+        fields: [
+          field({
+            type: "group",
+            label: "Layout",
+            fields: [
+              field({ name: "title", type: "text" }),
+              field({ name: "note", type: "textarea" }),
+            ],
+          }),
+        ],
+      }),
+    ]);
+    expect(data.box).toEqual({ title: "a", note: "b" });
+  });
+
+  it("sanitizes text in a group with no name inside a field group", async () => {
+    const fields = await attachFieldGroupChildren(
+      [field({ name: "seo", type: "component", component: "seo" })],
+      async () => [
+        field({
+          type: "group",
+          label: "Layout",
+          fields: [field({ name: "title", type: "text" })],
+        }),
+      ]
+    );
+    const data = { seo: { title: "<b>a</b>" } };
+    sanitizeEntryData(data, fields);
+    expect(data.seo.title).toBe("a");
+  });
+
   it("leaves rich text and json alone", () => {
     const data = {
       body: "<p>kept</p>",
@@ -244,6 +309,80 @@ describe("attachFieldGroupChildren", () => {
       deepest = deepest.fields[0] as FieldDefinition;
     }
     expect(childrenOf(deepest)).toHaveLength(1);
+  });
+
+  it("sanitizes text in field groups nested five deep", async () => {
+    // l1 holds l2 holds ... l5, each directly; every level has its own text.
+    const definitions: Record<string, FieldDefinition[]> = {};
+    for (let level = 1; level <= 5; level++) {
+      definitions[`l${level}`] = [
+        field({ name: "title", type: "text" }),
+        ...(level < 5
+          ? [
+              field({
+                name: "next",
+                type: "component",
+                component: `l${level + 1}`,
+              }),
+            ]
+          : []),
+      ];
+    }
+    const fields = await attachFieldGroupChildren(
+      [field({ name: "top", type: "component", component: "l1" })],
+      async slug => definitions[slug]
+    );
+    type Level = { title: string; next?: Level };
+    const data: { top: Level } = { top: { title: "<b>1</b>" } };
+    let at = data.top;
+    for (let level = 2; level <= 5; level++) {
+      at.next = { title: `<b>${level}</b>` };
+      at = at.next;
+    }
+    sanitizeEntryData(data as unknown as Record<string, unknown>, fields);
+    expect(at.title).toBe("5");
+  });
+
+  it("sanitizes every level a value holds under a field group placed inside itself", async () => {
+    // Saved before such a cycle was refused: `node` holds a repeater of `node`.
+    const node = [
+      field({ name: "title", type: "text" }),
+      field({
+        name: "children",
+        type: "repeater",
+        fields: [
+          field({ name: "child", type: "component", component: "node" }),
+        ],
+      }),
+    ];
+    // A fresh copy per lookup, as a resolver without a cache gives: a walk that only reached
+    // deeper levels by changing a definition it was handed would stop short here.
+    const fields = await attachFieldGroupChildren(
+      [field({ name: "tree", type: "component", component: "node" })],
+      async slug => (slug === "node" ? structuredClone(node) : undefined)
+    );
+    type Tree = { title: string; children?: { child: Tree }[] };
+    const data: { tree: Tree } = { tree: { title: "<b>0</b>" } };
+    let at = data.tree;
+    for (let level = 1; level <= 8; level++) {
+      const next: Tree = { title: `<b>${level}</b>` };
+      at.children = [{ child: next }];
+      at = next;
+    }
+    sanitizeEntryData(data as unknown as Record<string, unknown>, fields);
+    expect(at.title).toBe("8");
+  });
+
+  it("leaves the definitions it is given and resolves unchanged", async () => {
+    const given = field({ name: "seo", type: "component", component: "seo" });
+    const resolved = [field({ name: "title", type: "text" })];
+    const fields = await attachFieldGroupChildren(
+      [given],
+      async () => resolved
+    );
+    expect(childrenOf(fields[0])).toHaveLength(1);
+    expect(childrenOf(given)).toBeUndefined();
+    expect(resolved).toEqual([field({ name: "title", type: "text" })]);
   });
 
   it("leaves a field untouched when its reference resolves to nothing", async () => {

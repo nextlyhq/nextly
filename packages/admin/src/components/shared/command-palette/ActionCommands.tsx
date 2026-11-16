@@ -3,12 +3,10 @@
 import { CommandGroup, CommandItem, CommandShortcut } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
-import {
-  FileText,
-  Settings,
-  ShieldPlus,
-  UserPlus,
-} from "@admin/components/icons";
+import { Plus, Settings, ShieldPlus, UserPlus } from "@admin/components/icons";
+import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { useCreatableCollections } from "@admin/hooks/useCreatableCollections";
+import { collectionSingularLabel } from "@admin/lib/collection-label";
 import { navigateTo } from "@admin/lib/navigation";
 import type { ActionCommand } from "@admin/types/ui/command-palette";
 
@@ -51,11 +49,8 @@ import type { ActionCommand } from "@admin/types/ui/command-palette";
  * This follows industry best practices (GitHub, Linear, Vercel) where
  * command palettes are for navigation, not data mutation.
  *
- * @future-enhancements
- * - Create Content (when content management is added)
- * - Create Collection (when collections are added)
- * - Import Users (bulk operations)
- * - Export Data (reporting)
+ * Creating an entry is one command per collection, `CreateEntryCommands`
+ * below, drawn from what the reader may create in.
  */
 const actionCommands: ActionCommand[] = [
   {
@@ -71,14 +66,6 @@ const actionCommands: ActionCommand[] = [
     icon: ShieldPlus,
     href: "/admin/roles/create",
     keywords: ["new", "add", "role", "permission", "access", "security"],
-  },
-  {
-    id: "action-create-content",
-    label: "Create Content",
-    icon: FileText,
-    href: "/admin/content/create",
-    keywords: ["new", "add", "post", "article", "page", "content"],
-    disabled: true, // Route not yet implemented
   },
   {
     id: "action-settings",
@@ -110,6 +97,7 @@ export interface ActionCommandsProps {
 export function ActionCommands({ onSelect }: ActionCommandsProps): JSX.Element {
   return (
     <CommandGroup heading="Actions">
+      <CreateEntryCommands onSelect={onSelect} />
       {actionCommands.map(command => {
         const Icon = command.icon;
         return (
@@ -131,5 +119,53 @@ export function ActionCommands({ onSelect }: ActionCommandsProps): JSX.Element {
         );
       })}
     </CommandGroup>
+  );
+}
+
+/**
+ * "Create <type>" for each collection the reader may create in, matched on its
+ * labels and its slug. Running one opens a new entry of that type; the type
+ * becomes recent for the dashboard's New button only once the entry is created
+ * (`useCreateEntry`).
+ */
+function CreateEntryCommands({ onSelect }: ActionCommandsProps): JSX.Element {
+  const { collections } = useCreatableCollections();
+  return (
+    <>
+      {collections.map(collection => {
+        const label = `Create ${collectionSingularLabel(collection)}`;
+        return (
+          <CommandItem
+            key={collection.name}
+            // The list's identity for the command: two types may share a
+            // label, so the slug, which is unique, ends it. The label leads,
+            // and is a keyword too, so a search still finds it by name.
+            value={`${label} ${collection.name}`}
+            keywords={[
+              label,
+              collection.name,
+              collection.label ?? "",
+              collection.labels?.plural ?? "",
+              "new",
+              "add",
+              "entry",
+            ].filter(Boolean)}
+            onSelect={() =>
+              onSelect(() => {
+                navigateTo(
+                  buildRoute(ROUTES.COLLECTION_ENTRY_CREATE, {
+                    slug: collection.name,
+                  })
+                );
+              })
+            }
+            data-testid={`command-create-${collection.name}`}
+          >
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            <span>{label}</span>
+          </CommandItem>
+        );
+      })}
+    </>
   );
 }

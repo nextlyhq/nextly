@@ -1,198 +1,249 @@
 "use client";
 
-import type { WidgetComponentProps } from "nextly/widget-result";
+import type { DeclaredComponentProps } from "nextly/widget-result";
 import type React from "react";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { Link } from "@admin/components/ui/link";
-
-import { CountValue, countLabel } from "../widgets/archetypes/count-value";
-import { CardFigure } from "../widgets/frame/figure";
-import {
-  CardEmpty,
-  CardError,
-  CardSkeleton,
-  CardUnavailable,
-} from "../widgets/frame/states";
-import { useCardTier } from "../widgets/frame/tier";
+import { AlertCircle, AlertTriangle } from "@admin/components/icons";
+import { cn } from "@admin/lib/utils";
 
 import {
-  attentionTotal,
-  attentionView,
-  type AttentionKindRow,
+  EntityRow,
+  ENTITY_LEADING_CLASS,
+  type EntityRowProps,
+} from "../widgets/frame/entity-row";
+import { LIST_ROW_HEIGHT_CLASS } from "../widgets/frame/geometry";
+import { useCardTitleCount } from "../widgets/frame/title-count";
+import { useRevealedWhileViewed } from "../widgets/hidden-while-empty";
+
+import { AttentionReleaseNames } from "./AttentionReleaseNames";
+import {
+  attentionRows,
+  type AttentionRow,
+  type AttentionSeverity,
 } from "./needs-attention-model";
 
 /**
- * Needs attention: what is waiting for this reader, one row per kind, each
- * linking to exactly what it counts.
+ * Needs your attention: the open work waiting for this reader, one row per
+ * item of the attention digest, most urgent first.
  *
- * Drawn from the card's own slot, which the dashboard batch fills. Only kinds
- * with something waiting are shown, a kind whose lists were not all read says
- * so, and "All clear" only when nothing is waiting in any list read; a reader
- * who may read none of the kinds is told the card is not available to them
- * rather than that all is clear. Floors read "N+", and "N or more" aloud.
+ * A declared widget's view: the frame draws loading, error and the empty card
+ * (which leaves the dashboard, so the card never says "All clear"), and this
+ * draws the items `load` answered. Each row leads with its severity, by shape
+ * as well as colour, then the item's label and count, why it is waiting, and
+ * one Review. An item whose count failed says "Not all checked" with a Retry
+ * that asks the card again, so a reader is never told all is well while
+ * something went unread. Nothing here dismisses an item: it leaves when the
+ * work it counts is done.
  *
- * By the card's own width: small draws the total and a short link per kind,
- * medium a row per kind, and large breaks each kind down per collection.
+ * The card draws every item, as tall as they are: an item is one kind of
+ * waiting work, not a document, so there are few of them and no list page to
+ * send the rest to, and nothing is folded behind "Show N more". The title
+ * carries how many items there are ("Needs your attention 2"). Its rows are
+ * drawn at the default density.
+ *
+ * A card that joins the dashboard while the reader is on it (hidden at first,
+ * then found with something waiting) says how many items arrived, politely,
+ * so a reader looking elsewhere on the page learns of them.
  */
-export const NeedsAttention: React.FC<WidgetComponentProps> = ({ slot }) => {
-  const tier = useCardTier() ?? "medium";
-  // Built once per answer, so a "this week" link keeps the week it was drawn
-  // with rather than moving on every render.
-  const view = useMemo(() => attentionView(slot, Date.now()), [slot]);
-
-  if (view.state === "loading") return <CardSkeleton shape="rows" />;
-  if (view.state === "unavailable") return <CardUnavailable />;
-  if (view.state === "error") {
-    return <CardError title="Needs attention" message={view.message} />;
-  }
-  if (view.state === "clear") {
-    return <CardEmpty title="All clear" detail="Nothing is waiting for you." />;
-  }
-  if (tier === "small") return <SmallAttention kinds={view.kinds} />;
-  return (
-    <ul className="grid gap-1" data-testid="needs-attention">
-      {view.kinds.map(kind => (
-        <KindRow key={kind.kind} kind={kind} breakdown={tier === "large"} />
-      ))}
-    </ul>
+export const NeedsAttention: React.FC<DeclaredComponentProps> = ({
+  data,
+  refreshing,
+  retry,
+  placementId,
+}) => {
+  const rows = useMemo(() => attentionRows(data), [data]);
+  useCardTitleCount(rows.length);
+  const arrival = useArrivalAnnouncement(
+    useRevealedWhileViewed(placementId),
+    rows.length
   );
-};
-
-/** The total, then each kind as a short link with its count. */
-function SmallAttention({ kinds }: { kinds: AttentionKindRow[] }) {
-  const total = attentionTotal(kinds);
   return (
-    <div className="grid gap-2" data-testid="needs-attention">
-      <span
-        className="text-2xl font-semibold tabular-nums tracking-tight text-foreground leading-none"
-        data-testid="needs-attention-total"
-      >
-        <CardFigure value={total.count} floor={total.atLeast} tier="small" />
-      </span>
-      <ul className="grid gap-1">
-        {kinds.map(kind => (
-          <li key={kind.kind}>
-            <KindLink kind={kind} tier="small" />
-            {kind.href === undefined && kind.parts.length > 0 && (
-              <SmallParts kind={kind} />
+    <div className="grid min-w-0 gap-2" data-testid="needs-attention">
+      {/* min-w-0 down the grid: a grid item is otherwise as wide as its unwrapped text, which
+          pushed the Review button out of a narrow card instead of cutting the reason line. */}
+      <ul className="grid min-w-0 divide-y divide-border">
+        {rows.map(row => (
+          <li
+            key={row.id}
+            className="min-w-0"
+            data-testid="needs-attention-item"
+          >
+            <AttentionItem row={row} refreshing={refreshing} retry={retry} />
+            {/* A stopped or overdue release row names those releases, so the
+                card says which as well as how many. */}
+            {row.releases !== undefined && (
+              <AttentionReleaseNames reason={row.releases} />
             )}
           </li>
         ))}
       </ul>
+      <p className="sr-only" aria-live="polite">
+        {arrival}
+      </p>
     </div>
   );
-}
+};
 
-/** How many of a kind's lists the small card links inline before "+N more". */
-const SMALL_PARTS = 2;
+NeedsAttention.displayName = "NeedsAttention";
 
 /**
- * A kind spread over several lists, at the small tier: its largest lists as
- * short inline links, then how many more there are, so the kind still leads
- * somewhere and the line cannot wrap.
+ * One item's row: its severity, label and count, why it is waiting and its Review, or, for an
+ * item whose count failed, "Not all checked" with a Retry.
  */
-function SmallParts({ kind }: { kind: AttentionKindRow }) {
-  const shown = kind.parts.slice(0, SMALL_PARTS);
-  const more = kind.parts.length - shown.length;
-  return (
-    <p
-      className="flex items-center gap-1.5 truncate px-2 text-xs text-muted-foreground"
-      data-testid={`needs-attention-${kind.kind}-parts`}
-    >
-      {shown.map((part, index) => (
-        <span key={part.key} className="flex items-center gap-1.5">
-          {index > 0 && <span aria-hidden="true">·</span>}
-          <Link
-            href={part.href}
-            className="hover:text-foreground hover:underline"
-            aria-label={`${part.label}: ${countLabel(part.count, part.atLeast)}`}
-          >
-            {part.label}{" "}
-            <CountValue
-              total={part.count}
-              atLeast={part.atLeast}
-              tier="small"
-            />
-          </Link>
-        </span>
-      ))}
-      {more > 0 && <span>+{more} more</span>}
-    </p>
-  );
-}
-
-/** A kind's name and count, linking to its one list when it has one. */
-function KindLink({ kind, tier }: { kind: AttentionKindRow; tier?: "small" }) {
-  const className =
-    "flex items-center justify-between gap-3 rounded-md px-2 py-1.5 text-sm text-muted-foreground";
-  if (kind.unchecked) {
-    // Nothing found, but some lists went unread: no number to show, and no
-    // list holds what was not read. Said in words, and in full aloud.
-    return (
-      <div
-        className={className}
-        data-testid={`needs-attention-${kind.kind}-unchecked`}
-      >
-        <span className="truncate">{kind.label}</span>
-        <span aria-hidden="true">Not all checked</span>
-        <span className="sr-only">Not all lists were checked</span>
-      </div>
-    );
-  }
-  const body = (
-    <>
-      <span className="truncate">{kind.label}</span>
-      <span className="tabular-nums text-foreground">
-        <CountValue total={kind.count} atLeast={kind.atLeast} tier={tier} />
-      </span>
-    </>
-  );
-  if (kind.href === undefined) return <div className={className}>{body}</div>;
-  return (
-    <Link
-      href={kind.href}
-      className={`${className} hover-subtle-row hover:text-foreground`}
-      aria-label={`${kind.label}: ${countLabel(kind.count, kind.atLeast)}`}
-    >
-      {body}
-    </Link>
-  );
-}
-
-/** One kind, and at the large tier each collection's or Single's share of it. */
-function KindRow({
-  kind,
-  breakdown,
+function AttentionItem({
+  row,
+  refreshing,
+  retry,
 }: {
-  kind: AttentionKindRow;
-  breakdown: boolean;
+  row: AttentionRow;
+  refreshing: boolean;
+  retry: () => void;
 }) {
-  // A kind spread over several lists has no one link, so at the medium tier its
-  // parts are still offered, or the row would lead nowhere.
-  const showParts =
-    kind.parts.length > 0 && (breakdown || kind.href === undefined);
+  if (row.failed) {
+    return <UncheckedItem row={row} refreshing={refreshing} retry={retry} />;
+  }
   return (
-    <li data-testid={`needs-attention-${kind.kind}`}>
-      <KindLink kind={kind} />
-      {showParts && (
-        <ul className="ml-3 grid gap-0.5 border-l border-border pl-2">
-          {kind.parts.map(part => (
-            <li key={part.key}>
-              <Link
-                href={part.href}
-                className="flex items-center justify-between gap-3 rounded-md px-2 py-1 text-xs text-muted-foreground hover-subtle-row hover:text-foreground"
-                aria-label={`${part.label}: ${countLabel(part.count, part.atLeast)}`}
-              >
-                <span className="truncate">{part.label}</span>
-                <span className="tabular-nums">
-                  <CountValue total={part.count} atLeast={part.atLeast} />
-                </span>
-              </Link>
-            </li>
-          ))}
-        </ul>
+    <EntityRow
+      density="default"
+      leading={<SeverityMark severity={row.severity} />}
+      title={row.title}
+      spoken={`${severityName(row.severity)}: ${row.spoken}`}
+      meta={row.reason === undefined ? [] : [row.reason]}
+      {...rowAction(row)}
+    />
+  );
+}
+
+/**
+ * A row's one action: "How to fix", the documentation in a new tab, where the item names one;
+ * else Review, to the admin page its link names; else none.
+ */
+function rowAction(row: AttentionRow): Pick<EntityRowProps, "action"> {
+  if (row.help !== undefined) {
+    return {
+      action: {
+        label: "How to fix",
+        href: row.help,
+        spoken: `How to fix: ${lowerFirst(row.label)}`,
+        external: true,
+      },
+    };
+  }
+  if (row.href === undefined) return {};
+  return {
+    action: {
+      label: "Review",
+      href: row.href,
+      spoken: `Review ${lowerFirst(row.label)}`,
+    },
+  };
+}
+
+/**
+ * What the card says once, after it is drawn, when it joined the dashboard while the reader was
+ * on it: how many items need them. Set after the first paint, into a live region already on the
+ * page, which is what makes assistive technology read it; empty for a card drawn from the start.
+ */
+function useArrivalAnnouncement(revealed: boolean, count: number): string {
+  const [said, setSaid] = useState("");
+  const announced = useRef(false);
+  useEffect(() => {
+    if (!revealed || count === 0 || announced.current) return;
+    announced.current = true;
+    setSaid(
+      `${count} ${count === 1 ? "item needs" : "items need"} your attention`
+    );
+  }, [revealed, count]);
+  return said;
+}
+
+/** A severity's name, as assistive technology hears it before the row. */
+function severityName(severity: AttentionSeverity): string {
+  return severity === "critical" ? "Critical" : "Warning";
+}
+
+/** A label as it reads inside a sentence: "Review overdue releases". */
+function lowerFirst(label: string): string {
+  return label.charAt(0).toLowerCase() + label.slice(1);
+}
+
+/**
+ * An item's severity, told apart by shape as well as colour, so a reader who
+ * cannot tell red from amber still can: critical is "!" in a circle, warning
+ * "!" in a triangle, each in its status's text colour. Its name is said in
+ * words to assistive technology.
+ */
+function SeverityMark({ severity }: { severity: AttentionSeverity }) {
+  const Icon = severity === "critical" ? AlertCircle : AlertTriangle;
+  return (
+    <span
+      data-testid={`needs-attention-${severity}`}
+      className={cn(
+        "flex items-center justify-center",
+        ENTITY_LEADING_CLASS.default
       )}
-    </li>
+    >
+      <Icon
+        aria-hidden="true"
+        data-testid="needs-attention-mark"
+        className={cn(
+          "size-5",
+          severity === "critical" ? "text-danger-text" : "text-warning-text"
+        )}
+      />
+      <span className="sr-only">{severityName(severity)}</span>
+    </span>
+  );
+}
+
+/**
+ * An item whose count could not be read: its label, then "Not all checked"
+ * and Retry, which asks the card again. Drawn in a list row's shape, with
+ * Retry outside any link, so it is a button of its own to a keyboard and to
+ * assistive technology. While the card is asked again Retry keeps its place
+ * and its focus, and does nothing more until the answer comes.
+ */
+function UncheckedItem({
+  row,
+  refreshing,
+  retry,
+}: {
+  row: AttentionRow;
+  refreshing: boolean;
+  retry: () => void;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex min-w-0 items-center gap-2.5",
+        LIST_ROW_HEIGHT_CLASS.default
+      )}
+    >
+      <SeverityMark severity={row.severity} />
+      <span className="flex min-w-0 flex-1 flex-col justify-center">
+        <span className="truncate text-sm font-medium text-foreground">
+          {row.label}
+        </span>
+        <span
+          className="flex items-center gap-1 text-xs text-muted-foreground"
+          data-testid="needs-attention-unchecked"
+        >
+          Not all checked
+          <span aria-hidden="true">·</span>
+          <button
+            type="button"
+            className="font-medium text-foreground underline decoration-primary/40 underline-offset-4 hover:decoration-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
+            aria-label={`Retry ${lowerFirst(row.label)}`}
+            aria-disabled={refreshing}
+            onClick={() => {
+              if (!refreshing) retry();
+            }}
+          >
+            Retry
+          </button>
+        </span>
+      </span>
+    </div>
   );
 }

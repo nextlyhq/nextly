@@ -1,5 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 
+import { canvasFrame } from "../support/canvas-frame";
 import { test } from "../support/test";
 
 /**
@@ -27,6 +28,8 @@ const HOST = '[data-testid="canvas-harness"]';
 async function openCanvas(page: Page): Promise<void> {
   await page.goto(ROUTE);
   await page.locator(HOST).waitFor();
+  // The page is drawn in the canvas's frame once its own page has loaded.
+  await canvasFrame(page).locator(".nx-canvas").waitFor();
 }
 
 /** The middle of a rendered word, which is the ambiguous place to press. */
@@ -34,7 +37,7 @@ async function wordPoint(
   page: Page,
   nodeId: string
 ): Promise<{ x: number; y: number }> {
-  const point = await page
+  const point = await canvasFrame(page)
     .locator(`[data-nx-node="${nodeId}"]`)
     .evaluate(element => {
       const text = element.ownerDocument.evaluate(
@@ -67,9 +70,13 @@ test.describe("pressing a block's text", () => {
     await page.mouse.move(from.x, from.y + 120, { steps: 16 });
 
     const dragging = await page.locator(HOST).getAttribute("data-nx-dragging");
-    const selected = await page.evaluate(() =>
-      (globalThis.getSelection()?.toString() ?? "").trim()
-    );
+    // The selection the words would land in is the FRAME's: the page is
+    // drawn in its document.
+    const selected = await canvasFrame(page)
+      .locator("html")
+      .evaluate(root =>
+        (root.ownerDocument.getSelection()?.toString() ?? "").trim()
+      );
 
     await page.mouse.up();
 
@@ -90,17 +97,29 @@ test.describe("pressing a block's text", () => {
     // is the half that keeps the rule from breaking inline editing, and it is
     // asserted on a real element rather than by reading the stylesheet.
     await openCanvas(page);
-    const editable = await page.evaluate(() => {
-      const canvas = document.querySelector(".nx-canvas");
-      if (canvas === null) return null;
-      const probe = document.createElement("p");
-      probe.setAttribute("contenteditable", "true");
-      probe.textContent = "editable text";
-      canvas.appendChild(probe);
-      const style = getComputedStyle(probe).userSelect;
-      probe.remove();
-      return style;
-    });
+    const editable = await canvasFrame(page)
+      .locator(".nx-canvas")
+      .evaluate(canvas => {
+        const probe = canvas.ownerDocument.createElement("p");
+        probe.setAttribute("contenteditable", "true");
+        probe.textContent = "editable text";
+        canvas.appendChild(probe);
+        const style =
+          canvas.ownerDocument.defaultView?.getComputedStyle(probe).userSelect;
+        probe.remove();
+        return style;
+      });
     expect(editable).toBe("text");
+    // The control: the canvas itself turns selection off, so "text" above is
+    // the editable subtree's own answer rather than the default.
+    expect(
+      await canvasFrame(page)
+        .locator(".nx-canvas")
+        .evaluate(
+          canvas =>
+            canvas.ownerDocument.defaultView?.getComputedStyle(canvas)
+              .userSelect
+        )
+    ).toBe("none");
   });
 });

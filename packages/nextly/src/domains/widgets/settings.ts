@@ -29,6 +29,11 @@
  * - a declared key that is absent takes the setting's default;
  * - a value the declaration no longer accepts takes the default too.
  *
+ * The one exception on write is a declared value the CALLER CHANGED: the
+ * layout write holds it to the same rule (`settingValueProblem`) and refuses
+ * it, since a value set aside on read would otherwise save as if kept. A value
+ * stored before its declaration narrowed still saves unchanged.
+ *
  * 🔴 Rejecting unknown keys at write time would make a saved layout unwritable
  * the moment a plugin renames a setting or is uninstalled, and plugins version
  * independently of core — so the strict reading punishes exactly the upgrade it
@@ -43,12 +48,33 @@ import { NextlyError } from "../../errors/nextly-error";
 import { SLUG_PATTERN } from "../../shared/slug-pattern";
 import { textLength } from "../../shared/text-length";
 
-import { RELATIVE_SPANS, whereFieldNames, type RelativeSpan } from "./query";
+import { quote } from "./declaration/quote";
+import type { PublishedContentSource } from "./published-content-source";
+import {
+  whereFieldNames,
+  type RelativeSpan,
+  type TimeseriesRange,
+} from "./query";
 import {
   getSource,
   sourceKindFromId,
   type WidgetSourceFilter,
 } from "./sources";
+
+/**
+ * Where a card's settings drawer draws a setting: under Content, with what the
+ * card reads (`data`), or under Display, with how it shows it (`display`).
+ * `advanced` is still accepted, from declarations written when the drawer
+ * folded some settings away, and is drawn under Display: nothing is folded.
+ */
+export type SettingSection = "data" | "display" | "advanced";
+
+/** Every section, in the order the settings panel draws them. */
+const SETTING_SECTIONS: readonly SettingSection[] = [
+  "data",
+  "display",
+  "advanced",
+];
 
 /** What every setting carries, whatever kind it is. */
 export interface WidgetSettingBase {
@@ -69,20 +95,46 @@ export interface WidgetSettingBase {
   admin?: { description?: string };
   /**
    * Whether the setting sits on the card itself, changeable without opening
-   * the settings sheet, as Over time's date range does. At most one per widget.
+   * the settings drawer, as Continue's Mine and Team do. At most three per
+   * widget; the card's header draws the first it can.
    *
    * A top-level key the field configs do not have, deliberately: it is read by
    * the card's header, never by `FieldRenderer`, which ignores it.
    *
-   * Drawn by the card's header at the medium and large tiers, and offered in
-   * the card's menu at every size, when the setting is a `select` or a
-   * `checkbox`; a change there is saved at once for the reader. A quick
-   * setting of any other type stays in the settings sheet.
+   * Drawn by the card's header at the medium and large tiers when the setting
+   * is a `select` or a `checkbox`; a change there is saved at once for the
+   * reader. Every setting, marked or not, is also in the card's settings
+   * drawer.
    *
    * @experimental The shape may still change while the quick setting's
    * controls settle.
    */
   quick?: boolean;
+  /**
+   * The component the settings sheet draws in place of this setting's own
+   * field, as `"<module>#<Export>"`, handed the setting's value, a way to
+   * change it, and the card's other settings. A top-level key the field
+   * configs do not have, like `quick`: read by the sheet, never by
+   * `FieldRenderer`.
+   *
+   * Taken from a `defineWidget` declaration alone: `registerWidget` and
+   * `contributes.admin.widgets` refuse it at startup, since only a
+   * declaration's editors reach the generated component map the sheet loads
+   * them from.
+   *
+   * @experimental
+   */
+  editor?: { component: string };
+  /**
+   * The section of the card's settings drawer the setting is drawn in. Absent,
+   * a setting over the card's content (its Collection, Filter, Sort, Group by
+   * and Field) and a date range are drawn under Content (`data`), and every
+   * other setting under Display; `advanced` is drawn under Display too.
+   *
+   * A top-level key the field configs do not have, like `quick`: read by the
+   * panel, never by `FieldRenderer`.
+   */
+  section?: SettingSection;
 }
 
 /**
@@ -130,7 +182,14 @@ export type WidgetSetting =
       type: "textarea";
       defaultValue?: string;
       maxLength?: number;
-    });
+    })
+  /**
+   * A date, drawn as the field system's own date picker, held as the ISO 8601
+   * string that picker writes.
+   *
+   * @experimental While the dashboard widget SDK is being built.
+   */
+  | (WidgetSettingBase & { type: "date"; defaultValue?: string });
 
 /**
  * A setting over the site's content: the collection a card reads, and the
@@ -156,17 +215,68 @@ export type WidgetSetting =
  * content controls are built.
  */
 export type ContentSetting =
-  | (WidgetSettingBase & { type: "collection"; defaultValue?: string })
+  | (WidgetSettingBase & {
+      type: "collection";
+      defaultValue?: string;
+      /**
+       * `"titled"`: on a list, each row is asked by the collection's title
+       * field, its status where it has a draft and published lifecycle, and
+       * when it was updated, read from the collection the setting names. A
+       * collection naming no title, or with no `updatedAt`, gives the card no
+       * source, so it asks nothing there rather than whole rows.
+       *
+       * @experimental
+       */
+      rows?: "titled";
+      /**
+       * `true`: also offers Users, the people with an account, stored as
+       * `"users"` (a slug no collection can take), to a reader who may read
+       * users. A card set to it is withheld from, and refused for, any other
+       * reader, as a card set to a collection they may not read is.
+       *
+       * @experimental
+       */
+      users?: true;
+    })
   | (WidgetSettingBase & {
       type: "filter";
       of: string;
       defaultValue?: Record<string, unknown>;
     })
   | (WidgetSettingBase & { type: "sort"; of: string; defaultValue?: string })
+  /**
+   * One field of the collection the setting it names chooses, for a card's own
+   * `load` to read: offered from the fields that collection offers the reader.
+   *
+   * @experimental While the dashboard widget SDK is being built.
+   */
+  | (WidgetSettingBase & { type: "field"; of: string; defaultValue?: string })
+  | (WidgetSettingBase & {
+      type: "fields";
+      of: string;
+      /**
+       * The fields each row shows after its title, in order, from the
+       * collection the setting works over. Unset, a titled list shows its
+       * status and when it was updated.
+       *
+       * @experimental
+       */
+      defaultValue?: string[];
+    })
   | (WidgetSettingBase & {
       type: "groupBy";
       of: string;
       defaultValue?: string;
+      /**
+       * `"collection"`: when the card states no grouping, or one this reader
+       * may not use, group by what the collection most naturally divides by
+       * ({@link naturalGroupBy}): status where it has a lifecycle, else its
+       * first groupable choice field. For a widget offered per collection,
+       * whose collections need not share a field a static default could name.
+       *
+       * @experimental While the content widgets are being built.
+       */
+      defaultFrom?: "collection";
     });
 
 /**
@@ -183,6 +293,8 @@ export type AnyWidgetSetting = WidgetSetting | ContentSetting;
 const DEPENDENT_TYPES: ReadonlySet<AnyWidgetSetting["type"]> = new Set([
   "filter",
   "sort",
+  "field",
+  "fields",
   "groupBy",
 ]);
 
@@ -207,6 +319,7 @@ const FIELD_DRAWN: Record<WidgetSetting["type"], true> = {
   checkbox: true,
   select: true,
   textarea: true,
+  date: true,
 };
 
 /** Whether a setting is one a registered widget's query cannot apply yet. */
@@ -264,6 +377,7 @@ const USABLE_AS: Record<
     Number.isFinite(value) &&
     withinBounds(value, limits),
   checkbox: value => typeof value === "boolean",
+  date: value => isIsoDate(value),
   select: (value, limits) =>
     typeof value === "string" &&
     limits.options !== undefined &&
@@ -272,11 +386,52 @@ const USABLE_AS: Record<
   // names nothing, so it is no more usable than an absent one.
   collection: value => isName(value),
   sort: value => isName(value),
+  field: value => isName(value),
   groupBy: value => isName(value),
+  // The fields a list's rows show: one or more names, each once, and no more
+  // than a row has places for.
+  fields: value =>
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= MAX_CHOSEN_FIELDS &&
+    value.every(isName) &&
+    new Set(value).size === value.length,
   // The list view's conditions: a plain object of them.
   filter: value =>
     typeof value === "object" && value !== null && !Array.isArray(value),
 };
+
+/** A textarea setting's declared bound, with the label a reader knows it by. */
+export interface TextBound {
+  name: string;
+  label: string;
+  maxLength: number;
+}
+
+/**
+ * The bounds a widget's textarea settings declare, which the layout write holds
+ * a placement's text to.
+ *
+ * `undefined` when the declaration states no settings at all, and an empty
+ * list when it states settings none of which is a bounded textarea: a merge of
+ * two declarations takes the registration's settings wherever it states any,
+ * so it has to tell the two apart.
+ */
+export function textBoundsOf(
+  settings: readonly AnyWidgetSetting[] | undefined
+): readonly TextBound[] | undefined {
+  return settings?.flatMap(setting =>
+    setting.type === "textarea" && setting.maxLength !== undefined
+      ? [
+          {
+            name: setting.name,
+            label: setting.label ?? setting.name,
+            maxLength: setting.maxLength,
+          },
+        ]
+      : []
+  );
+}
 
 /** Whether a value names something: a string with more than blanks in it. */
 function isName(value: unknown): value is string {
@@ -284,6 +439,27 @@ function isName(value: unknown): value is string {
 }
 
 /** Whether a finite number sits inside the range its setting declares. */
+const ISO_DATE =
+  /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))?$/;
+
+/**
+ * Whether a value is a date as the date picker writes one: an ISO 8601 date,
+ * with or without its time, that names a real day. `Date.parse` alone would
+ * take "March 3" and a bare year, which no picker writes, and rolls February
+ * 30 over into March, so the day is read back and compared with what was
+ * written.
+ */
+function isIsoDate(value: unknown): value is string {
+  if (typeof value !== "string" || !ISO_DATE.test(value)) return false;
+  const day = value.slice(0, 10);
+  const midnight = Date.parse(`${day}T00:00:00Z`);
+  return (
+    !Number.isNaN(midnight) &&
+    new Date(midnight).toISOString().startsWith(day) &&
+    !Number.isNaN(Date.parse(value))
+  );
+}
+
 function withinBounds(value: number, limits: SettingLimits): boolean {
   // An absent bound is not a bound. Written as two independent tests rather
   // than one range check so a setting may declare either end alone, which is
@@ -348,29 +524,6 @@ function isSelectOptions(
  */
 export const MAX_WIDGET_SETTINGS = 24;
 
-/**
- * A value named in a diagnostic, without the formatter itself throwing.
- *
- * 🔴 `JSON.stringify` is not total. A BigInt throws `TypeError`, and so does a
- * circular object — so a declaration carrying `defaultValue: 1n` produced a
- * native `TypeError` from inside the message-building, BEFORE the refusal it
- * was describing could be raised as a `NextlyError`. The author saw the wrong
- * error, naming neither the widget nor the setting.
- *
- * `String()` is the fallback rather than a fixed placeholder, because it
- * survives everything `JSON.stringify` does not and still names the value: a
- * BigInt reads `1`, a symbol reads `Symbol(x)`.
- */
-function describeValue(value: unknown): string {
-  try {
-    // `undefined` and a function both stringify to `undefined` rather than to
-    // text, so the fallback covers them too.
-    return JSON.stringify(value) ?? String(value);
-  } catch {
-    return String(value);
-  }
-}
-
 /*
  * `invalidInput` rather than `validation`, matching the widget definition's own
  * refusal: this is a developer's declaration rather than a reader's input, so
@@ -385,16 +538,9 @@ function fail(message: string): never {
 /**
  * Why this declaration cannot be used, or `undefined` when it can.
  *
- * 🔴 Returns the problem rather than throwing it, because the two channels into
- * the registry need the same rules in different shapes: `registerWidget` throws
- * on a bad definition, while `validatedAdminWidgets` walks a list of rules that
- * each return a sentence and names the plugin that shipped the widget. Written
- * as a throwing validator, only the registry could call it — which is exactly
- * what happened: a contributed `settings` reached the admin having passed no
- * settings rule at all, and `settings: {}` from an untyped declaration got as
- * far as the grid before failing, taking the dashboard down instead of the
- * install. One rule set answering both channels is the thing
- * `plugins/__tests__/channel-divergence` exists to protect.
+ * Returns the problem rather than throwing it, so each caller reports it in its
+ * own shape: `registerWidget` throws on a bad definition, and a declaration's
+ * startup check names the owner and the widget beside every other fault.
  */
 export function widgetSettingsProblem(
   settings: unknown,
@@ -407,6 +553,16 @@ export function widgetSettingsProblem(
   // A widget whose query core builds from its declaration reads its content
   // settings there, so they reach the data it shows: nothing to refuse.
   if (queryBuiltByCore) return undefined;
+  // Every other widget came through `registerWidget` or
+  // `contributes.admin.widgets`, whose settings' editors the generated
+  // component map never collects: the sheet would draw "unavailable" in the
+  // setting's place for every reader, so startup says so instead.
+  const edited = (settings as readonly AnyWidgetSetting[] | undefined)?.find(
+    setting => setting.editor !== undefined
+  );
+  if (edited !== undefined) {
+    return `setting "${edited.name}" declares an editor: custom setting editors need a defineWidget declaration`;
+  }
   // One Collection setting decides the source: a second would be drawn and
   // saved and always lose to the other.
   const collections = (settings as readonly AnyWidgetSetting[] | undefined)
@@ -415,6 +571,11 @@ export function widgetSettingsProblem(
   if (collections !== undefined && collections.length > 1) {
     return `declares ${collections.length} Collection settings (${collections.map(name => `"${name}"`).join(", ")}), and one decides the source its query reads`;
   }
+  const filtered = cellFilterProblem(
+    (settings as readonly AnyWidgetSetting[] | undefined) ?? [],
+    source
+  );
+  if (filtered !== undefined) return filtered;
   // Every setting is now known to be well formed, so each has a type. Any
   // other widget's content setting is admitted exactly when a knob drives it
   // on the widget's own source, so a setting that would change nothing the
@@ -440,7 +601,7 @@ function contentSettingRefusal({ name, type }: ContentSetting): string {
 }
 
 /**
- * Every problem with a set of settings, of any of the eight types, in the
+ * Every problem with a set of settings, of any type, in the
  * order they were declared; empty when there is none.
  *
  * The declaration's channel reads all of them, naming every fault at once; the
@@ -472,17 +633,23 @@ export function widgetSettingsProblems(settings: unknown): string[] {
 }
 
 /**
+ * The most settings one widget may mark quick. The card's header draws the first it can; the
+ * bound stays so a declaration accepted before keeps being accepted, and no more.
+ */
+export const MAX_QUICK_SETTINGS = 3;
+
+/**
  * Why a widget's settings mark too many as quick, or nothing when they do not.
  *
- * A card's header holds one quick setting: two would each take the
- * header's one place, and which one a person saw would depend on the order
- * they were declared in.
+ * At most three: more would make "on the card itself" mean most of the card's
+ * settings, and which of them a person saw would depend on the order they were
+ * declared in.
  */
 function quickProblems(settings: readonly AnyWidgetSetting[]): string[] {
   const quick = settings.filter(setting => setting.quick === true);
-  if (quick.length <= 1) return [];
+  if (quick.length <= MAX_QUICK_SETTINGS) return [];
   return [
-    `settings ${quick.map(setting => `"${setting.name}"`).join(", ")} are all marked quick; a widget may mark at most one`,
+    `settings ${quick.map(setting => `"${setting.name}"`).join(", ")} are all marked quick; a widget may mark at most three`,
   ];
 }
 
@@ -510,13 +677,34 @@ function dependencyProblems(
       )
       .map(setting => setting.name)
   );
-  return dependents
-    .filter(isDependent)
-    .filter(setting => !collections.has(setting.of))
-    .map(
-      setting =>
-        `setting "${setting.name}" depends on ${describeValue(setting.of)}, which is not a Collection setting of this widget`
-    );
+  const titled = new Set(
+    all
+      .filter(
+        (setting): setting is { name: string } =>
+          typeof setting === "object" &&
+          setting !== null &&
+          (setting as { type?: unknown }).type === "collection" &&
+          (setting as { rows?: unknown }).rows === "titled" &&
+          typeof (setting as { name?: unknown }).name === "string"
+      )
+      .map(setting => setting.name)
+  );
+  return dependents.filter(isDependent).flatMap(setting => {
+    if (!collections.has(setting.of)) {
+      return [
+        `setting "${setting.name}" depends on ${quote(setting.of)}, which is not a Collection setting of this widget`,
+      ];
+    }
+    // A Fields setting keeps the list's title first and replaces the rest,
+    // which only a titled list has: on any other, its first field is not a
+    // title, and keeping it would ask a field the reader never chose.
+    if (setting.type === "fields" && !titled.has(setting.of)) {
+      return [
+        `setting "${setting.name}" is a Fields setting over ${quote(setting.of)}, which must be a Collection setting with rows "titled"`,
+      ];
+    }
+    return [];
+  });
 }
 
 /**
@@ -544,14 +732,18 @@ function settingProblem(
   if (typeof setting !== "object" || setting === null) {
     return SETTING_NOT_AN_OBJECT;
   }
-  const { name, type, defaultValue, quick, ...rest } = setting as {
+  const { name, type, defaultValue, quick, defaultFrom, ...rest } = setting as {
     name?: unknown;
     type?: unknown;
     defaultValue?: unknown;
     quick?: unknown;
+    defaultFrom?: unknown;
     options?: unknown;
     min?: unknown;
     max?: unknown;
+    rows?: unknown;
+    section?: unknown;
+    users?: unknown;
   };
 
   if (typeof name !== "string" || name === "") {
@@ -565,13 +757,106 @@ function settingProblem(
   seen.add(name);
 
   if (!isSettingType(type)) {
-    return `setting "${name}" has type ${describeValue(type)}; expected one of ${Object.keys(USABLE_AS).join(", ")}`;
+    return `setting "${name}" has type ${quote(type)}; expected one of ${Object.keys(USABLE_AS).join(", ")}`;
   }
-  if (quick !== undefined && typeof quick !== "boolean") {
-    return `setting "${name}" has quick ${describeValue(quick)}; expected true or false`;
-  }
+  const flags = flagsProblem(type, quick, rest, defaultFrom);
+  if (flags !== undefined) return `setting "${name}" ${flags}`;
+  const editor = editorProblem((rest as { editor?: unknown }).editor);
+  if (editor !== undefined) return `setting "${name}" ${editor}`;
 
   return problemForType(type, rest, defaultValue, name);
+}
+
+/**
+ * Why a setting's own editor is unusable, or `undefined`: it names the
+ * component the settings sheet draws in place of the setting's field, where
+ * the admin loads it from, as a view's component does. Absent is a setting
+ * drawn by its own field. Judged here, where every channel's settings pass,
+ * because the sheet reads `editor.component` as soon as an editor is stated.
+ */
+function editorProblem(editor: unknown): string | undefined {
+  if (editor === undefined) return undefined;
+  const component =
+    typeof editor === "object" && editor !== null
+      ? (editor as { component?: unknown }).component
+      : undefined;
+  return isName(component)
+    ? undefined
+    : 'editor must be { component: "<module>#<Export>" }, naming where the admin loads its editor from';
+}
+
+/**
+ * Why a setting's `section` is unusable, or `undefined`. Refused rather than
+ * ignored: a misspelt section would otherwise draw the setting somewhere the
+ * author did not ask for, with no fault pointing at the declaration.
+ */
+function sectionProblem(section: unknown): string | undefined {
+  if (section === undefined) return undefined;
+  return SETTING_SECTIONS.some(known => known === section)
+    ? undefined
+    : `has section ${quote(section)}; expected one of ${SETTING_SECTIONS.map(known => `"${known}"`).join(", ")}`;
+}
+
+/**
+ * Why a setting's `quick`, `rows`, `users`, `section` or `defaultFrom` is
+ * unusable, or `undefined`.
+ */
+function flagsProblem(
+  type: AnyWidgetSetting["type"],
+  quick: unknown,
+  rest: { rows?: unknown; section?: unknown; users?: unknown },
+  defaultFrom: unknown
+): string | undefined {
+  if (quick !== undefined && typeof quick !== "boolean") {
+    return `has quick ${quote(quick)}; expected true or false`;
+  }
+  // Refused rather than ignored: a misspelt value, or the flag on a setting
+  // it means nothing to, would otherwise leave a card grouped by nothing with
+  // no fault anywhere pointing at the declaration.
+  if (
+    defaultFrom !== undefined &&
+    (type !== "groupBy" || defaultFrom !== "collection")
+  ) {
+    return `has defaultFrom ${quote(defaultFrom)}; only a Group by setting takes it, as "collection"`;
+  }
+  return (
+    rowsProblem(type, rest.rows) ??
+    usersProblem(type, rest.users) ??
+    sectionProblem(rest.section)
+  );
+}
+
+/**
+ * Why a setting's `users` is unusable, or `undefined`: only a Collection
+ * setting offers Users beside its collections, and only as `true`.
+ */
+function usersProblem(
+  type: AnyWidgetSetting["type"],
+  users: unknown
+): string | undefined {
+  if (users === undefined) return undefined;
+  if (type !== "collection") {
+    return "declares users, which only a Collection setting takes";
+  }
+  return users === true
+    ? undefined
+    : `has users ${quote(users)}; expected true`;
+}
+
+/**
+ * Why a setting's `rows` is unusable, or `undefined`: only a Collection setting
+ * says how a list asks its rows, and only one way, `"titled"`.
+ */
+function rowsProblem(
+  type: AnyWidgetSetting["type"],
+  rows: unknown
+): string | undefined {
+  if (rows === undefined) return undefined;
+  if (type !== "collection")
+    return "declares rows, which only a Collection setting takes";
+  return rows === "titled"
+    ? undefined
+    : `has rows ${quote(rows)}; expected "titled"`;
 }
 
 /**
@@ -706,7 +991,7 @@ function defaultMismatch(
   name: string
 ): string {
   if (type === "select") {
-    return `setting "${name}" defaults to ${describeValue(defaultValue)}, which is not one of its options`;
+    return `setting "${name}" defaults to ${quote(defaultValue)}, which is not one of its options`;
   }
   if (type === "textarea" && typeof defaultValue === "string") {
     return `setting "${name}" defaults to text longer than its maxLength of ${limits.maxLength} characters`;
@@ -714,7 +999,7 @@ function defaultMismatch(
   const bounded = limits.min !== undefined || limits.max !== undefined;
   return bounded && typeof defaultValue === "number"
     ? `setting "${name}" defaults to ${defaultValue}, outside the range it declares`
-    : `setting "${name}" is typed "${type}" but defaults to ${describeValue(defaultValue)}`;
+    : `setting "${name}" is typed "${type}" but defaults to ${quote(defaultValue)}`;
 }
 
 /**
@@ -736,9 +1021,76 @@ export function validateWidgetSettings(
   if (problem !== undefined) fail(`${widgetId}: ${problem}`);
 }
 
+/**
+ * Why `value` cannot be a starting value of `setting`, or `undefined`. Judged
+ * as a declared default is, since a card falls back to it the same way: the
+ * site config's starting values replace the declaration's.
+ */
+export function startingValueProblem(
+  setting: AnyWidgetSetting,
+  value: unknown
+): string | undefined {
+  return defaultProblem(setting.type, limitsOf(setting), value, setting.name);
+}
+
 /** Whether a stored value is usable as this setting's type. */
 function matchesType(setting: AnyWidgetSetting, value: unknown): boolean {
   return USABLE_AS[setting.type](value, limitsOf(setting));
+}
+
+/**
+ * Whether a value names no choice at all: absent, `null` (a cleared number),
+ * blank, or an empty list. Each reads back as the setting's default, so
+ * writing one chooses nothing rather than choosing something unusable.
+ */
+function isNoChoice(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    value === "" ||
+    (Array.isArray(value) && value.length === 0)
+  );
+}
+
+/**
+ * Why `value` cannot be kept as `setting`, in the reader's words, or
+ * `undefined` when it can: a value of the wrong kind, outside the setting's
+ * range or options, or longer than it allows.
+ *
+ * The rule a stored value is read back by (`resolveWidgetSettings`), asked
+ * before it is written, so a value a card would set aside never saves as if
+ * it had been kept: the layout write refuses a card holding one, and the
+ * settings sheet holds a setting's own editor to it on Done. A value that
+ * names no choice ({@link isNoChoice}) is kept, as the default it reads as.
+ *
+ * @experimental While a setting's own editor is.
+ */
+export function settingValueProblem(
+  setting: AnyWidgetSetting,
+  value: unknown
+): string | undefined {
+  if (isNoChoice(value) || matchesType(setting, value)) return undefined;
+  const label = setting.label ?? setting.name;
+  const limits = limitsOf(setting);
+  if (setting.type === "select") return `"${label}" is not one of its choices.`;
+  if (setting.type === "textarea" && typeof value === "string") {
+    return `"${label}" is at most ${limits.maxLength} characters.`;
+  }
+  // Only a finite number can fail by its range alone; one with no range
+  // failed by its kind, and is said so below.
+  const ranged = limits.min !== undefined || limits.max !== undefined;
+  if (typeof value === "number" && Number.isFinite(value) && ranged) {
+    return `"${label}" is ${rangeWords(limits)}.`;
+  }
+  return `"${label}" is not a value this setting takes.`;
+}
+
+/** A number setting's declared range, as a reader reads it. */
+function rangeWords({ min, max }: SettingLimits): string {
+  if (min !== undefined && max !== undefined) {
+    return `between ${min} and ${max}`;
+  }
+  return min === undefined ? `at most ${max}` : `at least ${min}`;
 }
 
 /** The default a setting declares, or `undefined` when it declares none. */
@@ -799,6 +1151,31 @@ export function resolveWidgetSettings(
 }
 
 /**
+ * The field a collection's entries most naturally divide by, or `undefined`
+ * when it has none: what a Group by setting stands for when the card leaves it
+ * to the collection.
+ *
+ * `status` on a collection with a draft and published lifecycle, since it is
+ * the one column every such collection shares and means the same thing on
+ * each. Otherwise the first field with choices that can be grouped by: a
+ * choice field's buckets are few and named, where a free-text column's are
+ * neither. Read from what the source publishes to this reader, which already
+ * leaves out every field a read rule could refuse, so no ruled field is ever
+ * the answer.
+ *
+ * @experimental While the content widgets are being built.
+ */
+export function naturalGroupBy(source: {
+  lifecycle: boolean;
+  fields: readonly (KnobField & { choices?: readonly unknown[] })[];
+}): string | undefined {
+  if (source.lifecycle) return "status";
+  return source.fields.find(
+    field => field.choices !== undefined && field.groupable !== false
+  )?.name;
+}
+
+/**
  * A field a collection offers this reader for a card's settings, as its
  * source publishes it.
  *
@@ -810,6 +1187,8 @@ export interface KnobField {
   offered?: boolean;
   /** False when the field cannot be grouped by. */
   groupable?: boolean;
+  /** False when a row cannot print the field's value. */
+  presentable?: boolean;
 }
 
 /**
@@ -839,7 +1218,7 @@ export interface KnobSource {
  *
  * @experimental The shape may grow while the content widgets are built.
  */
-export function knobSourceFor(id: string): KnobSource {
+function knobSourceFor(id: string): KnobSource {
   const filters = getSource(id)?.filters;
   return filters === undefined ? { id } : { id, filters: [...filters] };
 }
@@ -876,6 +1255,42 @@ export function settingsSourceOf(widget: {
         : undefined
     ),
   };
+}
+
+/**
+ * The first setting a cells card's knobs would drive only through a cell
+ * source's filters (Only mine, or a Collection setting over a source reading
+ * across collections), or `undefined`. The admin asks each cell with no
+ * filter metadata, so such a setting would be drawn, saved and left out of
+ * every cell's query: refused until the cells are asked with their filters.
+ */
+function cellFilterProblem(
+  settings: readonly AnyWidgetSetting[],
+  source: SettingsSource
+): string | undefined {
+  // A cells card cannot yet ask its cells with their sources' filters, so a
+  // setting only a filter would apply is refused, whatever its type.
+  if (source === null || source === undefined || !("cells" in source)) {
+    return undefined;
+  }
+  const filtered = filterOnlyCellSetting(settings, source.cells);
+  return filtered === undefined
+    ? undefined
+    : `setting "${filtered.name}" is applied through its source's filters, which a widget's cells are not asked with yet`;
+}
+
+function filterOnlyCellSetting(
+  settings: readonly AnyWidgetSetting[],
+  cells: readonly (KnobSource | undefined)[]
+): AnyWidgetSetting | undefined {
+  return settings.find(setting =>
+    cells.some(
+      cell =>
+        cell?.filters !== undefined &&
+        knobFor(setting, cell) !== undefined &&
+        knobFor(setting, { id: cell.id }) === undefined
+    )
+  );
 }
 
 /** The knob source a query declares, or `undefined` when it names none. */
@@ -922,18 +1337,44 @@ export interface KnobContext {
    * judges the query, as it judges every query.
    */
   fieldsOf?: (collection: string) => readonly KnobField[] | undefined;
+  /**
+   * The collection a slug names, as the server published it to this reader,
+   * or `undefined` when it is not known: what a setting whose default depends
+   * on the collection reads (`defaultFrom`).
+   *
+   * @experimental
+   */
+  sourceOf?: (collection: string) => PublishedContentSource | undefined;
 }
 
 /** The parts of a widget query a setting may drive. */
 interface KnobQuery {
   source?: string;
   op?: string;
+  select?: string[];
   limit?: number;
   since?: RelativeSpan;
+  range?: TimeseriesRange;
   where?: Record<string, unknown>;
   sort?: string;
   groupBy?: string;
 }
+
+/**
+ * A query as settings may leave it: as declared with each knob applied, or,
+ * for a titled list set to a collection it cannot title, the same with no
+ * source and no fields, which asks nothing.
+ *
+ * @experimental While the content widgets are being built.
+ */
+export type AppliedQuery<T> =
+  | T
+  | (T extends unknown
+      ? Omit<T, "source" | "select"> & {
+          source?: undefined;
+          select?: undefined;
+        }
+      : never);
 
 /** How one kind of setting becomes part of a card's query. */
 interface QueryKnob {
@@ -944,12 +1385,64 @@ interface QueryKnob {
    * them. Absent, every value fits: the knob names no field.
    */
   fits?(value: unknown, fields: readonly KnobField[]): boolean;
-  /** `query` with `value` applied on `source`: a copy, never the query itself. */
+  /**
+   * `query` with `value` applied on `source`: a copy, never the query itself.
+   * Handed the setting and the context too, for a knob whose setting says
+   * more about the query than its value.
+   */
   apply<T extends KnobQuery>(
     query: T,
     value: unknown,
-    source: KnobSource | undefined
+    source: KnobSource | undefined,
+    setting: AnyWidgetSetting,
+    ctx: KnobContext
   ): T;
+}
+
+/**
+ * `query` reading the collection `slug` names. A titled list asks its rows'
+ * named fields too, or, where the collection publishes none, keeps no source
+ * and asks nothing at all.
+ */
+function readingCollection<T extends KnobQuery>(
+  query: T,
+  slug: string,
+  setting: AnyWidgetSetting,
+  ctx: KnobContext
+): T {
+  const titled =
+    setting.type === "collection" &&
+    setting.rows === "titled" &&
+    query.op === "list";
+  if (!titled) return { ...query, source: `collection:${slug}` };
+  const select = titledRows(ctx.sourceOf?.(slug));
+  if (select !== undefined) {
+    return { ...query, source: `collection:${slug}`, select };
+  }
+  // Nor the source the widget was declared with: a card set to a collection
+  // it cannot title reads nothing, never another collection's rows. Typed as
+  // `T` for the knobs that follow; `applyWidgetSettings` says it may be this.
+  if (query.source === undefined && query.select === undefined) return query;
+  const sourceless: T = { ...query };
+  delete sourceless.source;
+  delete sourceless.select;
+  return sourceless;
+}
+
+/**
+ * What a titled list asks of each row in `collection`: its title, its status
+ * where it has a lifecycle, and when it was updated. `undefined` where the
+ * collection is not known, names no title, or has no `updatedAt`.
+ */
+function titledRows(
+  collection: PublishedContentSource | undefined
+): string[] | undefined {
+  const title = collection?.titleField;
+  if (title === undefined) return undefined;
+  if (!collection?.fields.some(field => field.name === "updatedAt")) {
+    return undefined;
+  }
+  return [title, ...(collection.lifecycle ? ["status"] : []), "updatedAt"];
 }
 
 /** The source a query names, as its knobs see it. */
@@ -981,13 +1474,28 @@ function withReaderFilter(
   return { ...declared, and: [...joined, filter] };
 }
 
-/** Whether a value is one of the query's window spans. */
-function isRelativeSpan(value: unknown): value is RelativeSpan {
-  return (RELATIVE_SPANS as readonly unknown[]).includes(value);
-}
+/**
+ * The most fields a list's rows may be set to show after their title: as many
+ * as a row's meta line holds, so every field chosen shows at every size, the
+ * stacked row as well as the table. The settings sheet stops at it and says so.
+ *
+ * @experimental
+ */
+export const MAX_CHOSEN_FIELDS = 3;
 
-/** The ops a window bounds: a count, and a timeseries. */
-const WINDOWED_OPS: ReadonlySet<string> = new Set(["count", "timeseries"]);
+/**
+ * `query` asking `chosen` after its title. A titled list keeps the title it
+ * was given first and replaces the rest; any other list asks exactly the
+ * fields chosen. The title is never asked twice.
+ */
+function withChosenFields<T extends KnobQuery>(query: T, chosen: string[]): T {
+  const title = query.select?.[0];
+  if (title === undefined) return { ...query, select: [...chosen] };
+  return {
+    ...query,
+    select: [title, ...chosen.filter(name => name !== title)],
+  };
+}
 
 /** The field a sort names, without its direction. */
 function sortField(sort: string): string {
@@ -1005,6 +1513,21 @@ function allOffered(
 }
 
 /**
+ * The collection a Collection setting's value names, if any: only a value
+ * shaped like a collection slug names one, so a special default such as "*"
+ * names none and the card reads the source its widget declared.
+ *
+ * One rule for every reader of the value: the query a card asks, and whether
+ * the card is withheld from a reader (`collection-cards.ts`). Judged apart, a
+ * card could be withheld for a collection its query never reads.
+ */
+export function namedCollection(value: unknown): string | undefined {
+  return typeof value === "string" && SLUG_PATTERN.test(value)
+    ? value
+    : undefined;
+}
+
+/**
  * Query knobs a setting may drive: ONE closed map from a kind of setting to
  * how it becomes part of the card's query.
  *
@@ -1012,16 +1535,12 @@ function allOffered(
  * drives changes nothing the card asks, so registration refuses it rather than
  * drawing a control that does nothing (`CONTENT_SETTING_NOT_DRAWN`).
  *
- * `limit` is matched by NAME as well as type, as it always was: a number
- * setting called `limit` sets how many rows the card asks for, and a number
- * setting of any other name drives nothing. The content kinds are matched by
- * type alone, since each type has one meaning for a query.
+ * Each is matched by the setting's TYPE alone, since each content type has one
+ * meaning for a query. No setting drives a query because of its name: a
+ * declared widget's settings reach its `load`, which reads them as it chooses
+ * (a list card's "Number of entries" sizes the rows its load asks for).
  */
 const QUERY_KNOBS: readonly QueryKnob[] = [
-  {
-    drives: setting => setting.type === "number" && setting.name === "limit",
-    apply: (query, value) => ({ ...query, limit: value as number }),
-  },
   {
     // The collection a card reads becomes its source, replacing the one the
     // widget declared, which is how a widget offered per collection reads the
@@ -1032,48 +1551,68 @@ const QUERY_KNOBS: readonly QueryKnob[] = [
     drives: (setting, source) =>
       setting.type === "collection" &&
       (readsACollection(source) || narrowsBy(source, "collection")),
-    apply: (query, value, source) => {
-      // Only a value shaped like a collection slug names one, read before any
-      // use of it: a special default such as "*" leaves the query as it is.
-      if (typeof value !== "string" || !SLUG_PATTERN.test(value)) return query;
+    apply: (query, value, source, setting, ctx) => {
+      // Read before any use of the value: a special default such as "*"
+      // names no collection and leaves the query as it is.
+      const collection = namedCollection(value);
+      if (collection === undefined) return query;
       if (!readsACollection(source) && narrowsBy(source, "collection")) {
-        return { ...query, where: { ...query.where, collection: value } };
+        return { ...query, where: { ...query.where, collection } };
       }
-      return { ...query, source: `collection:${value}` };
+      return readingCollection(query, collection, setting, ctx);
     },
-  },
-  {
-    // A card's Date range is how far back its read reaches, for a select that
-    // offers only the query's own spans: its value becomes `since` as is, on an
-    // op a window bounds. A select of the same name offering anything else is
-    // the widget's own, and leaves the query as it was declared.
-    drives: (setting, source) =>
-      setting.type === "select" &&
-      setting.name === "dateRange" &&
-      setting.options.every(option => isRelativeSpan(option.value)) &&
-      readsACollection(source),
-    apply: (query, value) =>
-      isRelativeSpan(value) &&
-      query.op !== undefined &&
-      WINDOWED_OPS.has(query.op)
-        ? { ...query, since: value }
-        : query,
   },
   {
     drives: (setting, source) =>
       setting.type === "filter" && readsACollection(source),
     fits: (value, fields) =>
       allOffered(whereFieldNames(value as Record<string, unknown>), fields),
-    apply: (query, value) => ({
-      ...query,
-      where: withReaderFilter(query.where, value as Record<string, unknown>),
-    }),
+    // A Filter of no conditions narrows nothing, so it adds nothing: the query
+    // asks as it was declared, never with an empty clause beside it.
+    apply: (query, value) =>
+      Object.keys(value as Record<string, unknown>).length === 0
+        ? { ...query }
+        : {
+            ...query,
+            where: withReaderFilter(
+              query.where,
+              value as Record<string, unknown>
+            ),
+          },
   },
   {
     drives: (setting, source) =>
       setting.type === "sort" && readsACollection(source),
     fits: (value, fields) => allOffered([sortField(value as string)], fields),
     apply: (query, value) => ({ ...query, sort: value as string }),
+  },
+  {
+    // The fields a list's rows show after their title. Each must be one the
+    // reader is offered, the same rule a sort or a filter is held to, so a
+    // field a read rule keeps from this reader is never asked for, whatever
+    // the stored setting names; a value that does not fit leaves the list's
+    // own fields.
+    drives: (setting, source) =>
+      setting.type === "fields" && readsACollection(source),
+    // And each one a row can print: a structured or multi-value field would
+    // be asked for and drawn as an empty place.
+    fits: (value, fields) => {
+      if (!Array.isArray(value)) return false;
+      const names = value.filter(
+        (name): name is string => typeof name === "string"
+      );
+      return (
+        allOffered(names, fields) &&
+        names.every(name =>
+          fields.some(
+            field => field.name === name && field.presentable !== false
+          )
+        )
+      );
+    },
+    // Only a list asks rows; any other op is left as it was asked.
+    apply: (query, value) =>
+      query.op === "list" ? withChosenFields(query, value as string[]) : query,
   },
   {
     drives: (setting, source) =>
@@ -1086,20 +1625,6 @@ const QUERY_KNOBS: readonly QueryKnob[] = [
           field.groupable !== false
       ),
     apply: (query, value) => ({ ...query, groupBy: value as string }),
-  },
-  {
-    // Only mine: the reader's own rows, on a source that narrows by it. The
-    // query says only that it is on; who "mine" is, the source reads from the
-    // caller, so no id travels in it. Matched by NAME as well as type, as
-    // `limit` is, since a checkbox has no meaning of its own for a query.
-    drives: (setting, source) =>
-      setting.type === "checkbox" &&
-      setting.name === "onlyMine" &&
-      narrowsBy(source, "onlyMine"),
-    apply: (query, value) =>
-      value === true
-        ? { ...query, where: { ...query.where, onlyMine: true } }
-        : { ...query },
   },
 ];
 
@@ -1133,14 +1658,41 @@ function fittingValue(
 ): unknown {
   const value = resolved[setting.name];
   const fields = readerFieldsFor(setting, resolved, ctx);
-  if (value === undefined || knob.fits === undefined || fields === undefined) {
-    return value;
+  // Unknown fields, or a knob naming none: every value fits, and the server
+  // judges the query.
+  const fits = (candidate: unknown) =>
+    knob.fits === undefined ||
+    fields === undefined ||
+    knob.fits(candidate, fields);
+  if (value !== undefined && fits(value)) return value;
+  // Unset (a static default would already be the resolved value) or not
+  // fitting: the default, held to the same test. A default taken from the
+  // collection is how an unset Group by gets a value at all, and a card
+  // converted from an older one stores only its collection.
+  const fallback = defaultFor(setting, resolved, ctx);
+  return fallback !== undefined && fits(fallback) ? fallback : undefined;
+}
+
+/**
+ * The value a setting falls back to: its declared default, or, for a Group by
+ * setting that takes its default from the collection, what that collection
+ * most naturally divides by. One reading, so the unset card and the card whose
+ * stored grouping a read rule withholds fall back to the same field.
+ */
+function defaultFor(
+  setting: AnyWidgetSetting,
+  resolved: Record<string, unknown>,
+  ctx: KnobContext | undefined
+): unknown {
+  const declared = declaredDefault(setting);
+  if (declared !== undefined) return declared;
+  if (setting.type !== "groupBy" || setting.defaultFrom !== "collection") {
+    return undefined;
   }
-  if (knob.fits(value, fields)) return value;
-  const fallback = declaredDefault(setting);
-  return fallback !== undefined && knob.fits(fallback, fields)
-    ? fallback
-    : undefined;
+  const collection = resolved[setting.of];
+  const source =
+    typeof collection === "string" ? ctx?.sourceOf?.(collection) : undefined;
+  return source === undefined ? undefined : naturalGroupBy(source);
 }
 
 /**
@@ -1210,7 +1762,7 @@ export function applyWidgetSettings<T extends KnobQuery>(
   settings: readonly AnyWidgetSetting[] | undefined,
   stored: Record<string, unknown> | undefined,
   ctx: KnobContext = {}
-): T {
+): AppliedQuery<T> {
   if (!settings || settings.length === 0) return query;
   // Judged on the DECLARED source, read once before any knob may replace it.
   const source = ctx.source ?? knobSourceOf(query);
@@ -1221,7 +1773,15 @@ export function applyWidgetSettings<T extends KnobQuery>(
   });
   let next = query;
 
-  for (const setting of settings) {
+  // Every Collection setting first, whatever order the widget declared them
+  // in, as dependency resolution reads them: a titled Collection setting sets
+  // the list's whole `select`, and applied after Fields it would replace the
+  // fields the reader chose with its own.
+  const ordered = [
+    ...settings.filter(setting => setting.type === "collection"),
+    ...settings.filter(setting => setting.type !== "collection"),
+  ];
+  for (const setting of ordered) {
     const knob = knobFor(setting, source);
     if (knob === undefined) continue;
     const value = effective[setting.name];
@@ -1230,7 +1790,7 @@ export function applyWidgetSettings<T extends KnobQuery>(
     // keeps the query it was given, which is what lets a caller apply this to
     // every card without a branch. Every knob sees the DECLARED source, not
     // one an earlier knob put in its place.
-    next = knob.apply(next, value, source);
+    next = knob.apply(next, value, source, setting, ctx);
   }
 
   return next;

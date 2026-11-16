@@ -19,6 +19,7 @@ import {
   DropdownMenuSeparator,
 } from "@nextlyhq/ui";
 import {
+  Fragment,
   useState,
   useMemo,
   useEffect,
@@ -29,11 +30,18 @@ import {
 } from "react";
 
 import { Pencil, Trash2 } from "@admin/components/icons";
+import { useHoldForDecidingColumns } from "@admin/components/shared/loading-frame/delayed-reveal";
 import { RangeField } from "@admin/components/shared/range-field";
 import type {
-  DataTableSelection,
+  NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import {
+  HeldPluginColumnsPass,
+  useDataTablePluginRegistrations,
+  usePluginColumnsPass,
+} from "@admin/components/ui/table/data-table/DataTableView";
+import { pluginColumnsDeciding } from "@admin/components/ui/table/data-table/plugin-registry";
 import {
   ListView,
   type ListColumnsControl,
@@ -42,13 +50,22 @@ import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useLocalization } from "@admin/hooks/useLocalization";
 
 import { BulkActionBar } from "./BulkActionBar";
-import { type TranslationListFilter } from "./entryFilters";
+import type { TranslationListFilter } from "./entryFilters";
 import {
   buildEntryColumns,
   getEntryTitleField,
   type CollectionForColumns,
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
+import type { OfferedListFilter } from "./plugin-filters";
+import type { DeclaredBulkAction } from "./useDeclaredBulkActions";
+import { useEntryBulkActions } from "./useEntryBulkActions";
+import {
+  rowId,
+  useEntrySelection,
+  type EntryRow,
+  type EntryVersions,
+} from "./useEntrySelection";
 
 // ============================================================================
 // Types
@@ -68,11 +85,11 @@ export interface TablePaginationState {
   total: number;
   /** Total number of pages */
   totalPages: number;
+  /** The total is a lower bound: more entries match than were counted. */
+  totalCapped?: boolean;
+  /** How many entries the current page holds. */
+  pageItemCount?: number;
 }
-
-type EntryRow = Record<string, unknown>;
-
-const rowId = (row: EntryRow): string => String(row.id);
 
 /**
  * Props for the EntryTable component.
@@ -104,15 +121,19 @@ export interface EntryTableProps {
   /** Callback for bulk delete operation */
   onBulkDelete: (entryIds: string[]) => void;
   /** Callback for bulk update operation */
-  onBulkUpdate?: (entryIds: string[], data: Record<string, unknown>) => void;
+  onBulkUpdate?: (
+    entryIds: string[],
+    data: Record<string, unknown>,
+    versions: EntryVersions
+  ) => void;
   /**
    * Callback for bulk publish (sets `status: "published"` on every selected
    * entry). The bar gates the button on `collection.status === true`, so
    * passing this for non-status collections is harmless but unused.
    */
-  onBulkPublish?: (entryIds: string[]) => void;
+  onBulkPublish?: (entryIds: string[], versions: EntryVersions) => void;
   /** Callback for bulk unpublish (sets `status: "draft"`). Same gating. */
-  onBulkUnpublish?: (entryIds: string[]) => void;
+  onBulkUnpublish?: (entryIds: string[], versions: EntryVersions) => void;
   /** Whether a bulk publish/unpublish request is in flight. */
   isBulkPublishing?: boolean;
   /**
@@ -134,6 +155,27 @@ export interface EntryTableProps {
   translationFilter?: TranslationListFilter | null;
   /** Callback when the language filter changes. */
   onTranslationFilterChange?: (filter: TranslationListFilter | null) => void;
+  /** The filters plugins offer this list (`contributes.admin.filters`). */
+  pluginFilters?: readonly OfferedListFilter[];
+  /** The option each plugin filter has chosen, by filter name. */
+  chosenPluginFilters?: ReadonlyMap<string, string>;
+  /** Choose a plugin filter's option, or `null` to clear it. */
+  onPluginFilterChange?: (name: string, value: string | null) => void;
+  /**
+   * Plugins' declared row actions, offered after the list's own, each on the
+   * rows its rule holds for.
+   */
+  declaredRowActions?: readonly RowAction<EntryRow>[];
+  /**
+   * Plugins' declared bulk actions, offered in the bulk bar on the rows
+   * selected, after the built-in ones.
+   */
+  declaredBulkActions?: readonly DeclaredBulkAction[];
+  /**
+   * Plugins' declared columns, in the order delivered, drawn after the
+   * collection's own columns.
+   */
+  declaredColumns?: readonly NextlyColumn<Record<string, unknown>>[];
   /** Created date lower bound (YYYY-MM-DD) */
   createdFrom?: string;
   /** Created date upper bound (YYYY-MM-DD) */
@@ -172,6 +214,79 @@ export interface EntryTableRef {
 /**
  * Entry data table with server-side pagination, sorting, and bulk operations.
  */
+/**
+ * The Filter menu's sections for plugins' filters: one per filter, its label
+ * then its options, the chosen one checked. Choosing the checked option again
+ * clears it, as the language filter does.
+ */
+function PluginFilterMenuSections({
+  filters,
+  chosen,
+  onChange,
+  separateFirst,
+}: {
+  filters: readonly OfferedListFilter[];
+  chosen: ReadonlyMap<string, string> | undefined;
+  onChange: ((name: string, value: string | null) => void) | undefined;
+  /** Whether a section of the list's own comes before the first. */
+  separateFirst: boolean;
+}) {
+  return filters.map((filter, index) => (
+    <Fragment key={filter.name}>
+      {(index > 0 || separateFirst) && <DropdownMenuSeparator />}
+      <DropdownMenuLabel>{filter.label}</DropdownMenuLabel>
+      <DropdownMenuSeparator />
+      {filter.options.map(option => {
+        const active = chosen?.get(filter.name) === option.value;
+        return (
+          <DropdownMenuCheckboxItem
+            key={option.value}
+            checked={active}
+            onCheckedChange={() =>
+              onChange?.(filter.name, active ? null : option.value)
+            }
+          >
+            {option.label}
+          </DropdownMenuCheckboxItem>
+        );
+      })}
+    </Fragment>
+  ));
+}
+
+/**
+ * The table's row selection, and the bulk actions it is offered for. Rows are
+ * selectable only when some bulk action is offered on them, and a row's
+ * Delete only with the delete permission. A plugin's declared bulk action
+ * counts as one: the server sends it only to a reader who may run it, and a
+ * reader holding none of the built-in ones still needs the checkboxes to
+ * reach it.
+ */
+function useEntryTableSelection(
+  collection: EntryTableProps["collection"],
+  declaredBulkActions: readonly DeclaredBulkAction[] = []
+) {
+  const offered = useEntryBulkActions(collection);
+  return {
+    offered,
+    ...useEntrySelection(offered.any || declaredBulkActions.length > 0),
+  };
+}
+
+/** Plugins' declared bulk actions as the bulk bar draws them, judged on `selected`. */
+function declaredBarActions(
+  declaredBulkActions: readonly DeclaredBulkAction[] = [],
+  selected: readonly string[]
+) {
+  return declaredBulkActions.map(action => ({
+    id: action.id,
+    label: action.label,
+    disabled: action.isDisabled(selected),
+    note: action.heldBackNote(selected),
+    onSelect: () => action.onSelect(selected),
+  }));
+}
+
 export const EntryTable: ForwardRefExoticComponent<
   EntryTableProps & RefAttributes<EntryTableRef>
 > = forwardRef<EntryTableRef, EntryTableProps>(function EntryTable(
@@ -198,6 +313,12 @@ export const EntryTable: ForwardRefExoticComponent<
     onStatusChange,
     translationFilter = null,
     onTranslationFilterChange,
+    pluginFilters = [],
+    chosenPluginFilters,
+    onPluginFilterChange,
+    declaredRowActions,
+    declaredBulkActions,
+    declaredColumns,
     createdFrom = "",
     createdTo = "",
     updatedFrom = "",
@@ -214,23 +335,52 @@ export const EntryTable: ForwardRefExoticComponent<
   // -------------------------------------------------------------------------
 
   const [globalFilter, setGlobalFilter] = useState("");
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const { offered, selection, selected, versions, selectAll, clear } =
+    useEntryTableSelection(collection, declaredBulkActions);
 
   // -------------------------------------------------------------------------
   // Columns
   // -------------------------------------------------------------------------
 
-  const columns = useMemo(
+  // The collection's own columns, which the column chooser offers and hides.
+  const ownColumns = useMemo(
     () =>
       buildEntryColumns(collection, columnsControl?.isColumnVisible, {
         openInLocale: (entryId, locale) => onEdit(entryId, locale),
       }),
     [collection, columnsControl, onEdit]
   );
+  // Plugins' declared columns are drawn after them and always shown: they
+  // arrive only once the reader is known, and the chooser's stored choice is
+  // kept against a fixed set of columns, so they are not offered there.
+  const columns = useMemo(
+    () => [...ownColumns, ...(declaredColumns ?? [])],
+    [ownColumns, declaredColumns]
+  );
 
   const titleField = useMemo(
     () => getEntryTitleField(collection),
     [collection]
+  );
+
+  // A plugin's column decided by a read of its own (whether the collection
+  // has what the column shows) is registered once that read answers. Asked
+  // here from the list's first draw, outline included, so the read leaves
+  // with the rows' own; and once the rows are in, the outline stays a moment
+  // longer while a provider is still deciding, so the column is drawn with
+  // the rows instead of moving every cell beside it when it lands.
+  const registered = useDataTablePluginRegistrations();
+  // One ask of the providers for this list, which the table below draws its
+  // columns from too.
+  const pass = usePluginColumnsPass();
+  const columnsDeciding = useMemo(
+    () => pluginColumnsDeciding(collection.slug, registered, pass),
+    [collection.slug, registered, pass]
+  );
+  const holdForColumns = useHoldForDecidingColumns(
+    !isLoading,
+    columnsDeciding,
+    collection.slug
   );
 
   // -------------------------------------------------------------------------
@@ -252,40 +402,21 @@ export const EntryTable: ForwardRefExoticComponent<
   // Selection
   // -------------------------------------------------------------------------
 
-  const selection = useMemo<DataTableSelection<EntryRow>>(
-    () => ({
-      selectedIds,
-      onToggle: row => {
-        const id = rowId(row);
-        setSelectedIds(prev =>
-          prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-        );
-      },
-      onToggleAll: (rows, allSelected) => {
-        const ids = rows.map(rowId);
-        setSelectedIds(prev =>
-          allSelected
-            ? prev.filter(id => !ids.includes(id))
-            : Array.from(new Set([...prev, ...ids]))
-        );
-      },
-    }),
-    [selectedIds]
-  );
-
   // Notify parent when selection changes.
   useEffect(() => {
-    onSelectionChange?.(selectedIds);
-  }, [selectedIds, onSelectionChange]);
+    onSelectionChange?.(selected);
+  }, [selected, onSelectionChange]);
 
+  // The list's select-all shortcut reaches rows through here, so it selects
+  // nothing where the checkboxes are not offered.
   useImperativeHandle(
     ref,
     () => ({
-      selectAll: () => setSelectedIds(entries.map(rowId)),
-      clearSelection: () => setSelectedIds([]),
-      getSelectedIds: () => selectedIds,
+      selectAll: () => selectAll(entries),
+      clearSelection: clear,
+      getSelectedIds: () => selected,
     }),
-    [entries, selectedIds]
+    [entries, selectAll, clear, selected]
   );
 
   // -------------------------------------------------------------------------
@@ -303,16 +434,21 @@ export const EntryTable: ForwardRefExoticComponent<
             icon: <Pencil className="h-4 w-4" />,
             onSelect: () => onEdit(id),
           },
-          {
-            id: "delete",
-            label: "Delete",
-            icon: <Trash2 className="h-4 w-4" />,
-            destructive: true,
-            onSelect: () => onDelete(id),
-          },
+          ...(offered.delete
+            ? [
+                {
+                  id: "delete",
+                  label: "Delete",
+                  icon: <Trash2 className="h-4 w-4" />,
+                  destructive: true,
+                  onSelect: () => onDelete(id),
+                },
+              ]
+            : []),
+          ...(declaredRowActions ?? []),
         ];
       },
-    [onEdit, onDelete]
+    [onEdit, onDelete, offered.delete, declaredRowActions]
   );
 
   // -------------------------------------------------------------------------
@@ -358,10 +494,14 @@ export const EntryTable: ForwardRefExoticComponent<
     !!createdTo ||
     !!updatedFrom ||
     !!updatedTo ||
-    !!translationFilter;
+    !!translationFilter ||
+    (chosenPluginFilters?.size ?? 0) > 0;
+
+  // Offered only where a choice can be acted on.
+  const hasPluginFilters = pluginFilters.length > 0 && !!onPluginFilterChange;
 
   const showFilterDropdown =
-    hasStatusField || hasDateFilters || hasLanguageFilter;
+    hasStatusField || hasDateFilters || hasLanguageFilter || hasPluginFilters;
 
   const clearDateFilters = () => {
     onCreatedFromChange?.("");
@@ -375,180 +515,222 @@ export const EntryTable: ForwardRefExoticComponent<
   // -------------------------------------------------------------------------
 
   return (
-    <ListView<EntryRow>
-      search={{
-        value: globalFilter,
-        onChange: handleGlobalFilterChange,
-        placeholder: `Search ${collection.label}...`,
-        inputProps: { "data-entry-search-input": true },
-      }}
-      columnsControl={columnsControl && { ...columnsControl, columns }}
-      hasActiveFilters={hasAnyActiveFilters}
-      filters={
-        showFilterDropdown ? (
-          <>
-            {hasStatusField && onStatusChange && (
-              <>
-                <DropdownMenuLabel>Filter by Status</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuCheckboxItem
-                  checked={status === "all"}
-                  onCheckedChange={() => onStatusChange("all")}
-                >
-                  All Status
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuCheckboxItem
-                  checked={status === "published"}
-                  onCheckedChange={() => onStatusChange("published")}
-                >
-                  Published
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuCheckboxItem
-                  checked={status === "draft"}
-                  onCheckedChange={() => onStatusChange("draft")}
-                >
-                  Draft
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuCheckboxItem
-                  checked={status === "archived"}
-                  onCheckedChange={() => onStatusChange("archived")}
-                >
-                  Archived
-                </DropdownMenuCheckboxItem>
-              </>
-            )}
-
-            {hasLanguageFilter && (
-              <>
-                {hasStatusField && onStatusChange && <DropdownMenuSeparator />}
-                <DropdownMenuLabel>Filter by Language</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {locales
-                  .filter(l => l.code !== defaultLocale)
-                  .flatMap(l =>
-                    (["missing", "translated"] as const).map(state => {
-                      const active =
-                        translationFilter?.locale === l.code &&
-                        translationFilter?.state === state;
-                      return (
-                        <DropdownMenuCheckboxItem
-                          key={`${l.code}-${state}`}
-                          checked={active}
-                          onCheckedChange={() =>
-                            onTranslationFilterChange?.(
-                              active ? null : { locale: l.code, state }
-                            )
-                          }
-                        >
-                          {state === "missing" ? "Missing in" : "Translated in"}{" "}
-                          {l.label}
-                        </DropdownMenuCheckboxItem>
-                      );
-                    })
-                  )}
-              </>
-            )}
-
-            {hasDateFilters && (
-              <>
-                <DropdownMenuSeparator />
-                <div className="space-y-3 px-2 py-1.5">
-                  <p className="text-xs font-medium text-muted-foreground">
-                    Created Date
-                  </p>
-                  <RangeField
-                    label="Created date"
-                    type="date"
-                    orientation="column"
-                    from={createdFrom}
-                    to={createdTo}
-                    onFromChange={value => onCreatedFromChange?.(value)}
-                    onToChange={value => onCreatedToChange?.(value)}
-                  />
-
-                  <p className="pt-1 text-xs font-medium text-muted-foreground">
-                    Updated Date
-                  </p>
-                  <RangeField
-                    label="Updated date"
-                    type="date"
-                    orientation="column"
-                    from={updatedFrom}
-                    to={updatedTo}
-                    onFromChange={value => onUpdatedFromChange?.(value)}
-                    onToChange={value => onUpdatedToChange?.(value)}
-                  />
-
-                  <button
-                    type="button"
-                    className="w-full text-left text-xs text-primary hover:underline"
-                    onClick={clearDateFilters}
+    // The table draws its columns from the ask the hold above was decided by.
+    <HeldPluginColumnsPass.Provider value={pass}>
+      <ListView<EntryRow>
+        search={{
+          value: globalFilter,
+          onChange: handleGlobalFilterChange,
+          placeholder: `Search ${collection.label}...`,
+          inputProps: { "data-entry-search-input": true },
+        }}
+        columnsControl={
+          columnsControl && { ...columnsControl, columns: ownColumns }
+        }
+        hasActiveFilters={hasAnyActiveFilters}
+        filters={
+          showFilterDropdown ? (
+            <>
+              {hasStatusField && onStatusChange && (
+                <>
+                  <DropdownMenuLabel>Filter by Status</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuCheckboxItem
+                    checked={status === "all"}
+                    onCheckedChange={() => onStatusChange("all")}
                   >
-                    Clear date filters
-                  </button>
-                </div>
-              </>
-            )}
-          </>
-        ) : null
-      }
-      bulkBar={
-        selectedIds.length > 0 ? (
-          <BulkActionBar
-            selectedCount={selectedIds.length}
-            collection={collection}
-            onDelete={() => onBulkDelete(selectedIds)}
-            onUpdate={
-              onBulkUpdate ? data => onBulkUpdate(selectedIds, data) : undefined
-            }
-            onPublish={
-              onBulkPublish ? () => onBulkPublish(selectedIds) : undefined
-            }
-            onUnpublish={
-              onBulkUnpublish ? () => onBulkUnpublish(selectedIds) : undefined
-            }
-            isPublishing={isBulkPublishing}
-            onClear={() => setSelectedIds([])}
+                    All Status
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={status === "published"}
+                    onCheckedChange={() => onStatusChange("published")}
+                  >
+                    Published
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={status === "draft"}
+                    onCheckedChange={() => onStatusChange("draft")}
+                  >
+                    Draft
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={status === "archived"}
+                    onCheckedChange={() => onStatusChange("archived")}
+                  >
+                    Archived
+                  </DropdownMenuCheckboxItem>
+                </>
+              )}
+
+              {hasLanguageFilter && (
+                <>
+                  {hasStatusField && onStatusChange && (
+                    <DropdownMenuSeparator />
+                  )}
+                  <DropdownMenuLabel>Filter by Language</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  {locales
+                    .filter(l => l.code !== defaultLocale)
+                    .flatMap(l =>
+                      (["missing", "translated"] as const).map(state => {
+                        const active =
+                          translationFilter?.locale === l.code &&
+                          translationFilter?.state === state;
+                        return (
+                          <DropdownMenuCheckboxItem
+                            key={`${l.code}-${state}`}
+                            checked={active}
+                            onCheckedChange={() =>
+                              onTranslationFilterChange?.(
+                                active ? null : { locale: l.code, state }
+                              )
+                            }
+                          >
+                            {state === "missing"
+                              ? "Missing in"
+                              : "Translated in"}{" "}
+                            {l.label}
+                          </DropdownMenuCheckboxItem>
+                        );
+                      })
+                    )}
+                </>
+              )}
+
+              {hasPluginFilters && (
+                <PluginFilterMenuSections
+                  filters={pluginFilters}
+                  chosen={chosenPluginFilters}
+                  onChange={onPluginFilterChange}
+                  separateFirst={
+                    !!(hasStatusField && onStatusChange) || hasLanguageFilter
+                  }
+                />
+              )}
+
+              {hasDateFilters && (
+                <>
+                  <DropdownMenuSeparator />
+                  <div className="space-y-3 px-2 py-1.5">
+                    <p className="text-xs font-medium text-muted-foreground">
+                      Created Date
+                    </p>
+                    <RangeField
+                      label="Created date"
+                      type="date"
+                      orientation="column"
+                      from={createdFrom}
+                      to={createdTo}
+                      onFromChange={value => onCreatedFromChange?.(value)}
+                      onToChange={value => onCreatedToChange?.(value)}
+                    />
+
+                    <p className="pt-1 text-xs font-medium text-muted-foreground">
+                      Updated Date
+                    </p>
+                    <RangeField
+                      label="Updated date"
+                      type="date"
+                      orientation="column"
+                      from={updatedFrom}
+                      to={updatedTo}
+                      onFromChange={value => onUpdatedFromChange?.(value)}
+                      onToChange={value => onUpdatedToChange?.(value)}
+                    />
+
+                    <button
+                      type="button"
+                      className="w-full text-left text-xs text-primary hover:underline"
+                      onClick={clearDateFilters}
+                    >
+                      Clear date filters
+                    </button>
+                  </div>
+                </>
+              )}
+            </>
+          ) : null
+        }
+        bulkBar={
+          selected.length > 0 ? (
+            <BulkActionBar
+              selectedCount={selected.length}
+              collection={collection}
+              onDelete={() => onBulkDelete(selected)}
+              onUpdate={
+                onBulkUpdate
+                  ? data => onBulkUpdate(selected, data, versions)
+                  : undefined
+              }
+              onPublish={
+                onBulkPublish
+                  ? () => onBulkPublish(selected, versions)
+                  : undefined
+              }
+              onUnpublish={
+                onBulkUnpublish
+                  ? () => onBulkUnpublish(selected, versions)
+                  : undefined
+              }
+              isPublishing={isBulkPublishing}
+              onClear={clear}
+              declaredActions={declaredBarActions(
+                declaredBulkActions,
+                selected
+              )}
+            />
+          ) : undefined
+        }
+        // The real heads over the outline rows: the columns are known before
+        // the rows are.
+        skeleton={
+          <EntryTableSkeleton
+            list={collection.slug}
+            headers={columns
+              .filter(column => !column.hidden)
+              .map(column => column.header)}
           />
-        ) : undefined
-      }
-      skeleton={<EntryTableSkeleton />}
-      loading={isLoading}
-      columns={columns}
-      rows={entries}
-      getRowId={rowId}
-      selection={selection}
-      rowActions={rowActions}
-      sort={sort}
-      onSortChange={onSortChange}
-      rowHref={row =>
-        buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
-          slug: collection.slug,
-          id: rowId(row),
-        })
-      }
-      primaryColumn={titleField}
-      registryKey={collection.slug}
-      ariaLabel="Entries table"
-      emptyMessage={
-        globalFilter
-          ? "No entries found. Try adjusting your search or filters."
-          : "No entries found."
-      }
-      // Inside the table rather than beside it, so the component that knows
-      // whether the row table or the mobile card view is showing is the one
-      // that places the pager.
-      pagination={{
-        currentPage: pagination.page,
-        totalPages: pagination.totalPages,
-        totalItems: pagination.total,
-        pageSize: pagination.limit,
-        onPageChange,
-        onPageSizeChange: onLimitChange,
-        isLoading,
-        itemLabel: "entries",
-        ariaLabel: "Entry table pagination",
-      }}
-    />
+        }
+        loading={isLoading || holdForColumns}
+        columns={columns}
+        rows={entries}
+        getRowId={rowId}
+        // No selection removes the checkbox column, on every width.
+        selection={selection}
+        rowActions={rowActions}
+        sort={sort}
+        onSortChange={onSortChange}
+        rowHref={row =>
+          buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
+            slug: collection.slug,
+            id: rowId(row),
+          })
+        }
+        primaryColumn={titleField}
+        registryKey={collection.slug}
+        ariaLabel="Entries table"
+        emptyMessage={
+          globalFilter
+            ? "No entries found. Try adjusting your search or filters."
+            : "No entries found."
+        }
+        // Inside the table rather than beside it, so the component that knows
+        // whether the row table or the mobile card view is showing is the one
+        // that places the pager.
+        pagination={{
+          currentPage: pagination.page,
+          totalPages: pagination.totalPages,
+          totalItems: pagination.total,
+          totalCapped: pagination.totalCapped,
+          pageItemCount: pagination.pageItemCount,
+          pageSize: pagination.limit,
+          onPageChange,
+          onPageSizeChange: onLimitChange,
+          isLoading,
+          itemLabel: "entries",
+          ariaLabel: "Entry table pagination",
+        }}
+      />
+    </HeldPluginColumnsPass.Provider>
   );
 });

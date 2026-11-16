@@ -24,29 +24,52 @@
  * ```
  */
 
-import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import {
+  isPluginLedgerRow,
   pluginOfLedgerRow,
   scopeLedgerRows,
 } from "../../domains/schema/events/ledger-scope";
+import {
+  attemptUnfinished,
+  removedOnPurpose,
+  standingsByFilename,
+} from "../../domains/schema/events/migration-state";
 import { newestEventsByFilename } from "../../domains/schema/events/newest-event";
 import {
   SchemaEventsRepository,
   type SchemaEventRow,
 } from "../../domains/schema/events/schema-events-repository";
-import { attemptUnfinished } from "../../domains/schema/migrate/drift-reconcile";
+import {
+  checksumOf,
+  isRecordedChecksum,
+} from "../../domains/schema/migrate/applied-checksums";
+import {
+  markedFileChange,
+  readOldBuilderLedger,
+  withOldBuilderMarks,
+  type ChangedOldBuilderFile,
+} from "../../domains/schema/migrate/old-builder-ledger";
 import {
   migrationChecksum,
   compareModuleNames,
   orderedMigrations,
   qualifiedFilename,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
+import {
+  findRegistryDisagreements,
+  migrationsToCompare,
+  registryDisagreementLines,
+  type RegistryDisagreements,
+} from "../../domains/schema/migrate/registry-consistency";
+import {
+  declaredNamesOf,
+  resolveDeclaredSchema,
+} from "../../domains/schema/migrate/resolved-schema";
 import { marksNoTransaction } from "../../domains/schema/migrate/split-sql";
 import { describeError } from "../../errors/index";
 import type { PluginDefinition } from "../../plugins/plugin-context";
@@ -54,7 +77,8 @@ import type {
   MigrationErrorJson,
   MigrationRecordStatus,
 } from "../../schemas/dynamic-collections/types";
-import { createContext, type CommandContext } from "../program";
+import { databaseEnvError, exitWithError, exitWithJsonError } from "../errors";
+import type { CommandContext } from "../program";
 import {
   createCliAdapter,
   validateDatabaseEnv,
@@ -65,11 +89,14 @@ import {
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatCount } from "../utils/logger";
 import {
-  discoverMigrationGroups,
-  selectVariant,
-  getSortedBaseNames,
+  oldBuilderFileLine,
+  readableMigrationFiles,
+  readMigrationFolder,
+  type DeclaredNames,
 } from "../utils/migration-discovery";
+import { installRegistryResolver } from "../utils/registry-resolver";
 
+import { commandRun } from "./command-run";
 import {
   NO_TRANSACTION_ROLLBACK_NOTE,
   PARTIAL_ROLLBACK_NOTE,
@@ -148,6 +175,8 @@ interface MigrationRecord {
   durationMs: number | null;
   errorJson: MigrationErrorJson | null;
   appliedAt: Date;
+  /** An applied migration whose file's removal `migrate:resolve --removed` recorded. */
+  removed?: boolean;
 }
 
 /**
@@ -156,6 +185,8 @@ interface MigrationRecord {
  * F11 adds two new states:
  * - `applied (modified)`: hash mismatch — file edited after apply.
  * - `applied (file missing)`: DB row exists but `.sql` file is gone.
+ * - `applied (file removed)`: the same, but its removal was recorded on
+ *   purpose (`migrate:resolve --removed`): information, not a problem.
  */
 interface MigrationStatus {
   filename: string;
@@ -163,6 +194,7 @@ interface MigrationStatus {
     | "applied"
     | "applied (modified)"
     | "applied (file missing)"
+    | "applied (file removed)"
     | "pending"
     | "failed"
     | "unfinished";
@@ -195,6 +227,18 @@ interface MigrateStatusResult {
   /** Applied migrations whose latest rollback attempt failed. */
   failedRollbacks: FailedRollback[];
   collections: CollectionPendingChange[];
+  /**
+   * Where the registry and the tables disagree; null when the database has
+   * no registry yet.
+   */
+  registry: RegistryDisagreements | null;
+  /**
+   * Why the registry could not be compared with the tables, when it could
+   * not; `registry` is then null.
+   */
+  registryError?: string;
+  /** The old Schema Builder files in the folder, which every reader ignores. */
+  ignoredOldBuilderFiles: string[];
   summary: {
     applied: number;
     pending: number;
@@ -202,6 +246,20 @@ interface MigrateStatusResult {
     unfinished: number;
     collectionsWithPendingChanges: number;
   };
+}
+
+/**
+ * Ends the run on `error`. Under `--json`, with the one document it has always printed, which
+ * names the error, and nothing else; otherwise in the error shape.
+ */
+function endWithError(
+  options: { json?: boolean },
+  logger: CommandContext["logger"],
+  jsonError: string,
+  error: unknown
+): never {
+  if (!options.json) exitWithError(logger, error);
+  exitWithJsonError({ error: jsonError });
 }
 
 /**
@@ -224,20 +282,12 @@ export async function runMigrateStatus(
   const dbValidation = validateDatabaseEnv();
 
   if (!dbValidation.valid) {
-    if (options.json) {
-      console.log(
-        JSON.stringify({ error: dbValidation.errors.join(", ") }, null, 2)
-      );
-      process.exit(1);
-    }
-    for (const error of dbValidation.errors) {
-      logger.error(error);
-    }
-    logger.newline();
-    logger.info(
-      "Set DATABASE_URL and optionally DB_DIALECT environment variables."
+    endWithError(
+      options,
+      logger,
+      dbValidation.errors.join(", "),
+      databaseEnvError(dbValidation)
     );
-    process.exit(1);
   }
 
   const dialect = dbValidation.dialect!;
@@ -253,13 +303,12 @@ export async function runMigrateStatus(
       debug: options.verbose,
     });
   } catch (error) {
-    const errorMsg = `Failed to load config: ${describeError(error)}`;
-    if (options.json) {
-      console.log(JSON.stringify({ error: errorMsg }, null, 2));
-      process.exit(1);
-    }
-    logger.error(errorMsg);
-    process.exit(1);
+    endWithError(
+      options,
+      logger,
+      `Failed to load config: ${describeError(error)}`,
+      error
+    );
   }
 
   if (!options.json) {
@@ -282,13 +331,12 @@ export async function runMigrateStatus(
     });
     logger.debug("Database connected");
   } catch (error) {
-    const errorMsg = `Failed to connect to database: ${describeError(error)}`;
-    if (options.json) {
-      console.log(JSON.stringify({ error: errorMsg }, null, 2));
-      process.exit(1);
-    }
-    logger.error(errorMsg);
-    process.exit(1);
+    endWithError(
+      options,
+      logger,
+      `Failed to connect to database: ${describeError(error)}`,
+      error
+    );
   }
 
   try {
@@ -297,19 +345,44 @@ export async function runMigrateStatus(
 
     logger.debug(`Scanning migrations in ${migrationsDir}...`);
 
+    // Read as `nextly migrate` reads the folder, under the ledger's old
+    // Builder marks. A manifest that cannot be read is the registry check's
+    // to report; until then none is declared.
+    const { declared } = await withOldBuilderMarks({
+      adapter,
+      db: (adapter as unknown as DrizzleAdapter).getDrizzle(),
+      dialect,
+      declared: await declaredNamesOf(
+        { ...configResult, projectRoot: cwd },
+        { orNone: true }
+      ),
+    });
+
     const migrationFiles = await migrationEntries({
       plugin: options.plugin,
       plugins: configResult.config.plugins ?? [],
       migrationsDir,
       dialect,
+      declared,
     });
     logger.debug(`Found ${migrationFiles.length} migration file(s)`);
 
     const ledger = await readStatusLedger(
       adapter as unknown as DrizzleAdapter,
       dialect,
-      options.plugin
+      options.plugin,
+      migrationsDir,
+      declared
     );
+    const ignoredOldBuilderFiles = await nameOldBuilderFiles({
+      plugin: options.plugin,
+      migrationsDir,
+      dialect,
+      declared,
+      changed: ledger.changedOldBuilderFiles,
+      json: options.json,
+      logger,
+    });
     const appliedMigrations = ledger.applied;
     logger.debug(`${appliedMigrations.length} migration(s) in database`);
 
@@ -328,6 +401,15 @@ export async function runMigrateStatus(
       dialect
     );
 
+    const { registry, registryError } = await compareRegistry(
+      adapter as unknown as DrizzleAdapter,
+      dialect,
+      cwd,
+      configResult,
+      logger,
+      migrationsDir
+    );
+
     // F11: include the new status variants in the applied bucket so the
     // summary count reflects "actually-applied rows" regardless of whether
     // the file was modified or missing post-apply.
@@ -336,7 +418,8 @@ export async function runMigrateStatus(
         m =>
           m.status === "applied" ||
           m.status === "applied (modified)" ||
-          m.status === "applied (file missing)"
+          m.status === "applied (file missing)" ||
+          m.status === "applied (file removed)"
       ).length,
       pending: migrationStatuses.filter(m => m.status === "pending").length,
       failed: migrationStatuses.filter(m => m.status === "failed").length,
@@ -350,12 +433,16 @@ export async function runMigrateStatus(
         migrations: migrationStatuses,
         failedRollbacks,
         collections: pendingCollections,
+        registry,
+        ...(registryError !== undefined ? { registryError } : {}),
+        ignoredOldBuilderFiles,
         summary,
       };
       console.log(JSON.stringify(result, null, 2));
     } else {
       displayStatus(migrationStatuses, pendingCollections, summary, context);
       displayFailedRollbacks(failedRollbacks, context);
+      displayRegistryDisagreements(registry, registryError, context);
     }
   } finally {
     await adapter.disconnect();
@@ -370,44 +457,70 @@ export async function runMigrateStatus(
  * app's directory, so they are read from there; a module no run has applied
  * yet then reads as pending, as an app file without a ledger row does.
  */
+/**
+ * Names the old Schema Builder files every reader ignores, and the marked
+ * ones that changed since, each with a line: on standard error under
+ * `--json`, so standard output holds only the document. Returns the ignored
+ * files, for the document's `ignoredOldBuilderFiles`; none for a plugin's
+ * modules, which are no files of the folder.
+ */
+async function nameOldBuilderFiles(args: {
+  plugin: string | undefined;
+  migrationsDir: string;
+  dialect: SupportedDialect;
+  declared: DeclaredNames | undefined;
+  changed: readonly ChangedOldBuilderFile[] | undefined;
+  json: boolean | undefined;
+  logger: CommandContext["logger"];
+}): Promise<string[]> {
+  if (args.plugin !== undefined) return [];
+  const folder = await readMigrationFolder(
+    args.migrationsDir,
+    args.dialect,
+    args.declared
+  );
+  const lines = [
+    ...folder.oldBuilderFiles.map(oldBuilderFileLine),
+    ...(args.changed ?? []).map(changedOldBuilderFileLine),
+  ];
+  for (const line of lines) {
+    if (args.json === true) process.stderr.write(`${line}\n`);
+    else args.logger.info(line);
+  }
+  return folder.oldBuilderFiles.map(f => f.file);
+}
+
+/**
+ * The line naming a marked old Builder file that no longer carries the
+ * signature, and the part it lacks: every history check refuses it.
+ */
+function changedOldBuilderFileLine(file: ChangedOldBuilderFile): string {
+  return `${file.file} ${markedFileChange(file)} since it was recognised as a file an earlier Schema Builder wrote, and lacks: ${file.lacks.join(", ")}. \`nextly migrate\` refuses it until it is restored, deleted or accepted with \`nextly migrate:resolve --applied ${file.file}\`.`;
+}
+
 export async function migrationEntries(args: {
   plugin?: string;
   plugins: readonly PluginDefinition[];
   migrationsDir: string;
   dialect: SupportedDialect;
+  /** What the run's declared schema names, which old Builder files are judged against. */
+  declared?: DeclaredNames;
 }): Promise<MigrationEntry[]> {
   return args.plugin
     ? pluginModuleEntries(args.plugins, args.plugin)
-    : discoverMigrations(args.migrationsDir, args.dialect);
+    : discoverMigrations(args.migrationsDir, args.dialect, args.declared);
 }
 
 async function discoverMigrations(
   migrationsDir: string,
-  dialect?: SupportedDialect
+  dialect: SupportedDialect,
+  declared: DeclaredNames | undefined
 ): Promise<ParsedMigration[]> {
-  // Use shared migration discovery to group dialect variants
-  const groups = await discoverMigrationGroups(migrationsDir);
-  const migrations: ParsedMigration[] = [];
-
-  // Process each migration group in sorted order
-  for (const baseName of getSortedBaseNames(groups)) {
-    const group = groups.get(baseName)!;
-    const selectedFile = selectVariant(group.variants, dialect);
-
-    if (!selectedFile) {
-      continue;
-    }
-
-    const filePath = resolve(migrationsDir, selectedFile);
-
-    try {
-      const content = await readFile(filePath, "utf-8");
-      const parsed = parseMigrationFile(baseName, filePath, content);
-      migrations.push(parsed);
-    } catch {
-      // Skip files that can't be read
-    }
-  }
+  const migrations = (
+    await readableMigrationFiles(migrationsDir, dialect, declared)
+  ).map(({ baseName, filePath, content }) =>
+    parseMigrationFile(baseName, filePath, content)
+  );
 
   return migrations;
 }
@@ -417,7 +530,7 @@ function parseMigrationFile(
   filePath: string,
   content: string
 ): ParsedMigration {
-  const checksum = createHash("sha256").update(content).digest("hex");
+  const checksum = checksumOf(content);
 
   const collectionsMatch = content.match(/^-- Collections?:\s*(.+)$/m);
   const collections = collectionsMatch
@@ -449,19 +562,48 @@ function parseMigrationFile(
 export async function readStatusLedger(
   adapter: Pick<DrizzleAdapter, "getDrizzle" | "tableExists">,
   dialect: SupportedDialect,
-  plugin?: string
-): Promise<{ applied: MigrationRecord[]; rollbacks: SchemaEventRow[] }> {
+  plugin?: string,
+  /**
+   * The app's migrations folder. Given, the rows of its old Schema Builder
+   * files are left out, as every reader leaves them out, and the marked files
+   * that changed since are named in `changedOldBuilderFiles`.
+   */
+  migrationsDir?: string,
+  /** What the run's declared schema names, which old Builder files are judged against. */
+  declared?: DeclaredNames
+): Promise<{
+  applied: MigrationRecord[];
+  rollbacks: SchemaEventRow[];
+  changedOldBuilderFiles?: ChangedOldBuilderFile[];
+}> {
   if (!(await adapter.tableExists("nextly_schema_events"))) {
     return { applied: [], rollbacks: [] };
   }
   const repo = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
+  const fileApplies = await repo.listFileApplies();
+  const rollbacks = await repo.listFailedRollbacks();
+  // Each applied file removed on purpose (`migrate:resolve --removed`).
+  const removals = await repo.listFileRemovals();
+  if (plugin !== undefined || migrationsDir === undefined) {
+    return { applied: ledgerRecords(fileApplies, plugin, removals), rollbacks };
+  }
+  const oldBuilder = await readOldBuilderLedger(
+    { migrationsDir, dialect, declared },
+    repo,
+    [...fileApplies, ...rollbacks]
+  );
+  const kept = (rows: SchemaEventRow[]) =>
+    rows.filter(
+      row => row.filename === null || !oldBuilder.ignoredRows.has(row.filename)
+    );
   return {
-    applied: ledgerRecords(await repo.listFileApplies(), plugin),
-    rollbacks: await repo.listFailedRollbacks(),
+    applied: ledgerRecords(kept(fileApplies), undefined, removals),
+    rollbacks: kept(rollbacks),
+    changedOldBuilderFiles: oldBuilder.changed,
   };
 }
 
-/** An applied migration whose latest rollback attempt failed. */
+/** An applied migration whose latest rollback attempt failed or stopped. */
 export interface FailedRollback {
   filename: string;
   failedAt: Date;
@@ -473,11 +615,17 @@ export interface FailedRollback {
   possiblyPartial: boolean;
   /** The DOWN ran outside a transaction, as its migration is marked to. */
   outsideTransaction: boolean;
+  /**
+   * The attempt recorded no outcome: its process stopped, or is still
+   * running. Its start is recorded only where part of a DOWN can commit
+   * before it ends, so it is `possiblyPartial` too.
+   */
+  stopped: boolean;
 }
 
 /**
- * The applied migrations whose most recent rollback failed after they were
- * applied. The failure does not change the migration's applied state — on
+ * The applied migrations whose most recent rollback failed, or stopped with
+ * no outcome, after they were applied. The failure does not change the migration's applied state — on
  * PostgreSQL and SQLite the DOWN was rolled back whole — but on MySQL part
  * of it may have committed, and the operator needs to know either way that
  * the schema was touched since.
@@ -491,18 +639,27 @@ export function failedRollbacksSinceApply(
   for (const record of applied) {
     if (record.status !== "applied") continue;
     const failure = newestFailure.get(record.filename);
-    if (failure === undefined || failure.startedAt <= record.appliedAt) {
+    // Only a newest rollback that failed or stopped is one: an attempt that
+    // ended with nothing applied resolved it, and the failures before it.
+    if (
+      failure === undefined ||
+      !attemptUnfinished(failure) ||
+      failure.startedAt <= record.appliedAt
+    ) {
       continue;
     }
+    const stopped = failure.status === "in_progress";
     failures.push({
       filename: record.filename,
       failedAt: failure.startedAt,
       note: failure.note,
       possiblyPartial:
+        stopped ||
         failure.note?.startsWith(PARTIAL_ROLLBACK_NOTE) === true ||
         failure.note?.startsWith(NO_TRANSACTION_ROLLBACK_NOTE) === true,
       outsideTransaction:
         failure.note?.startsWith(NO_TRANSACTION_ROLLBACK_NOTE) === true,
+      stopped,
     });
   }
   return failures;
@@ -518,25 +675,25 @@ function displayFailedRollbacks(
     const compare =
       "It is still recorded as applied; compare the schema with the migration before running migrate or migrate:down again.";
     context.logger.warn(
-      failure.outsideTransaction
-        ? `${failed}. Its DOWN ran outside a transaction, so the statements before the failing one stayed applied. ${compare}`
-        : failure.possiblyPartial
-          ? `${failed}, and MySQL may have committed part of its DOWN. ${compare}`
-          : `${failed} and was undone; it is still applied.`
+      failure.stopped
+        ? `${failure.filename}: a rollback started at ${formatDate(failure.failedAt)} recorded no outcome: the process running it stopped, or is still running, and part of its DOWN may have committed. ${compare}`
+        : failure.outsideTransaction
+          ? `${failed}. Its DOWN ran outside a transaction, so the statements before the failing one stayed applied. ${compare}`
+          : failure.possiblyPartial
+            ? `${failed}, and MySQL may have committed part of its DOWN. ${compare}`
+            : `${failed} and was undone; it is still applied.`
     );
   }
 }
 
 /**
- * Each migration's current state in the ledger: the NEWEST `file_apply`
- * event per filename, kept when it is `applied`, or an attempt that did not
- * finish (`attemptUnfinished`: `failed`, or still `in_progress`).
+ * Each migration's current standing in the ledger (`standingsByFilename`, the
+ * rule `migrate` and `migrate:down` read it by): the outcome that records it
+ * applied, or else its unresolved attempt (`failed`, or still `in_progress`).
+ * A migration with neither is not listed here, and reads as pending.
  *
- * Newest per filename by `newestEventsByFilename`, the rule `migrate`,
- * `migrate:down` and `plugins uninstall` read the ledger by. A rollback is
- * recorded as a `rolled_back` event after the `applied` one, and the older
- * `applied` row stays in the ledger, so only the newest event says whether a
- * migration is applied now.
+ * An app migration's state is its latest outcome, so an attempt that failed
+ * or stopped after it never makes an applied migration read as pending.
  *
  * Plugin rows belong to their own migration stream: excluded unless
  * `plugin` names one, so the app's listing never reports them as
@@ -544,32 +701,54 @@ function displayFailedRollbacks(
  */
 export function ledgerRecords(
   rows: SchemaEventRow[],
-  plugin?: string
+  plugin?: string,
+  /** The recorded removals (`listFileRemovals`): an applied migration among them is marked `removed`. */
+  removals: readonly SchemaEventRow[] = []
 ): MigrationRecord[] {
+  // A removal stands for the applied outcome it was recorded after.
+  const removed = removedOnPurpose(scopeLedgerRows(rows, plugin), [
+    ...removals,
+  ]);
   const records: MigrationRecord[] = [];
-  for (const r of newestEventsByFilename(
+  for (const standing of standingsByFilename(
     scopeLedgerRows(rows, plugin)
   ).values()) {
-    // An attempt that never finished is listed as one, not as pending:
-    // `nextly migrate` may refuse it until it is finished or cleared.
-    if (r.status !== "applied" && !attemptUnfinished(r)) continue;
-    records.push({
-      id: r.id,
-      filename: r.filename ?? "",
-      sha256: r.sha256 ?? "",
-      status:
-        r.status === "applied"
-          ? "applied"
-          : r.status === "failed"
-            ? "failed"
-            : "unfinished",
-      appliedBy: null,
-      durationMs: r.durationMs ?? null,
-      errorJson: null,
-      appliedAt: r.startedAt,
-    });
+    // An applied migration is listed as applied, as `nextly migrate` reads
+    // it. Otherwise an attempt that never finished is listed as one, not as
+    // pending: `nextly migrate` may refuse it until it is finished or cleared.
+    const r =
+      standing.state === "applied"
+        ? standing.outcome
+        : standing.unresolvedAttempt;
+    if (r === undefined) continue;
+    // A filename only a file's own ledger rows have can be listed as removed.
+    const fileRemoved =
+      standing.state === "applied" &&
+      r.filename !== null &&
+      removed.has(r.filename);
+    records.push(recordOf(r, fileRemoved));
   }
   return records;
+}
+
+/** A ledger row as the listing records it; `removed` for an applied migration whose removal was recorded. */
+function recordOf(r: SchemaEventRow, removed: boolean): MigrationRecord {
+  return {
+    id: r.id,
+    filename: r.filename ?? "",
+    sha256: r.sha256 ?? "",
+    status:
+      r.status === "applied"
+        ? "applied"
+        : r.status === "failed"
+          ? "failed"
+          : "unfinished",
+    appliedBy: null,
+    durationMs: r.durationMs ?? null,
+    errorJson: null,
+    appliedAt: r.startedAt,
+    ...(removed ? { removed: true } : {}),
+  };
 }
 
 // F11: small coercion helpers for adapter-returned `Record<string, unknown>`.
@@ -670,6 +849,14 @@ export function pluginModuleEntries(
   }));
 }
 
+/** An applied record whose file the folder lacks: removed on purpose when recorded so, else missing. */
+function missingFileStatus(record: MigrationRecord): MigrationStatus["status"] {
+  if (record.status !== "applied") return record.status;
+  return record.removed === true
+    ? "applied (file removed)"
+    : "applied (file missing)";
+}
+
 export function buildMigrationStatuses(
   files: readonly MigrationEntry[],
   applied: MigrationRecord[]
@@ -684,7 +871,13 @@ export function buildMigrationStatuses(
       file.transaction === false ? { outsideTransaction: true as const } : {};
 
     if (record) {
-      const checksumMismatch = record.sha256 !== file.checksum;
+      // An app file is modified only against a checksum the ledger records:
+      // a row an earlier version wrote without one reads as matching, as
+      // `nextly migrate` takes it, and its next run records one. A plugin's
+      // module keeps its own rule, the recorded value compared as it is.
+      const checksumMismatch = isPluginLedgerRow(record.filename)
+        ? record.sha256 !== file.checksum
+        : isRecordedChecksum(record.sha256) && record.sha256 !== file.checksum;
       let status: MigrationStatus["status"];
       if (record.status !== "applied") {
         status = record.status;
@@ -721,8 +914,7 @@ export function buildMigrationStatuses(
   for (const [filename, record] of appliedMap) {
     statuses.push({
       filename,
-      status:
-        record.status === "applied" ? "applied (file missing)" : record.status,
+      status: missingFileStatus(record),
       appliedAt: record.appliedAt,
       durationMs: record.durationMs,
       errorJson: record.errorJson,
@@ -903,6 +1095,8 @@ function formatStatusForDisplay(status: MigrationStatus["status"]): string {
       return "Applied (modified)";
     case "applied (file missing)":
       return "Applied (file missing)";
+    case "applied (file removed)":
+      return "Applied (file removed)";
     case "pending":
       return "Pending";
     case "failed":
@@ -924,37 +1118,83 @@ function formatDate(date: Date): string {
 }
 
 /**
- * Register the migrate:status command with the program
+ * The registry rows against the tables they name, and the declared entities
+ * against the rows: the comparison `nextly migrate` makes when it finishes.
  *
- * @param program - Commander program instance
+ * A comparison that cannot run is reported, not raised, so the migration
+ * listing above it still prints: it is the part of this command a deploy
+ * script reads first. The registry services read their tables by name, so the
+ * resolver a CLI run has no boot to install is installed here.
  */
-export function registerMigrateStatusCommand(program: Command): void {
-  program
-    .command("migrate:status")
-    .description("Show current migration status")
-    .option("--json", "Output as JSON for scripting/CI", false)
-    .option("--plugin <name>", "List <name>'s migrations instead of the app's")
-    .action(async (cmdOptions: MigrateStatusCommandOptions, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
-
-      const resolvedOptions: ResolvedMigrateStatusOptions = {
-        ...cmdOptions,
-        config: globalOpts.config,
-        verbose: globalOpts.verbose,
-        quiet: globalOpts.quiet,
-        cwd: globalOpts.cwd,
-      };
-
-      try {
-        await runMigrateStatus(resolvedOptions, context);
-      } catch (error) {
-        if (resolvedOptions.json) {
-          console.log(JSON.stringify({ error: describeError(error) }, null, 2));
-        } else {
-          context.logger.error(describeError(error));
-        }
-        process.exit(1);
-      }
+async function compareRegistry(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect,
+  cwd: string,
+  configResult: LoadConfigResult,
+  logger: CommandContext["logger"],
+  /** The app's migrations, whose newest applied record the rows are compared with. */
+  migrationsDir: string
+): Promise<{
+  registry: RegistryDisagreements | null;
+  registryError?: string;
+}> {
+  try {
+    installRegistryResolver(adapter);
+    const { entities } = await resolveDeclaredSchema({
+      projectRoot: cwd,
+      config: configResult.config,
+      deferredExtends: configResult.deferredExtends,
     });
+    return {
+      registry: await findRegistryDisagreements({
+        adapter,
+        dialect,
+        declared: entities,
+        logger,
+        migrations: migrationsToCompare(adapter, dialect, migrationsDir),
+      }),
+    };
+  } catch (error) {
+    return { registry: null, registryError: describeError(error) };
+  }
+}
+
+/** Warns about each place the registry and the tables disagree. */
+function displayRegistryDisagreements(
+  registry: RegistryDisagreements | null,
+  registryError: string | undefined,
+  context: CommandContext
+): void {
+  if (registryError !== undefined) {
+    context.logger.warn(
+      `Could not compare the registry with the tables: ${registryError}`
+    );
+    return;
+  }
+  const lines = registryDisagreementLines(registry);
+  if (lines.length === 0) return;
+  const { logger } = context;
+  logger.newline();
+  logger.divider();
+  logger.newline();
+  logger.info("Registry and Tables");
+  logger.newline();
+  for (const line of lines) logger.warn(line);
+}
+
+/**
+ * The action of `nextly migrate:status`, loaded when it runs.
+ */
+export async function migrateStatusAction(
+  cmdOptions: MigrateStatusCommandOptions,
+  cmd: Command
+): Promise<void> {
+  const { context, options } = commandRun(cmdOptions, cmd);
+  const resolvedOptions: ResolvedMigrateStatusOptions = options;
+
+  try {
+    await runMigrateStatus(resolvedOptions, context);
+  } catch (error) {
+    endWithError(resolvedOptions, context.logger, describeError(error), error);
+  }
 }

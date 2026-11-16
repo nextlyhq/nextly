@@ -7,6 +7,12 @@ import { readFileSync } from "node:fs";
 
 import { defineConfig } from "oxlint";
 
+import {
+  IMPORT_CYCLES,
+  NEXTLY_SOURCE,
+  NO_CYCLE,
+} from "./lint/import-cycles.mjs";
+
 /** Prefixes each path of a package-relative allowlist with the package. */
 const inPackage = (pkg, paths) => paths.map(path => `packages/${pkg}/${path}`);
 
@@ -65,6 +71,29 @@ const REQUEST_PATH_RESTRICTED = [
     ],
     message:
       "F11: deployed runtime must not import migrate-* CLI modules. Migrations are a CLI-only concern. See docs/guides/production-migrations.mdx.",
+  },
+];
+
+/**
+ * One dialect's table definitions, which nextly's product code reads through
+ * the loaded dialect (`loadedDialect`, `getDialectTables`) so that a process
+ * imports only its own dialect's tables. A value import of a dialect file, or
+ * of a feature barrel that re-exports all three, puts every dialect into every
+ * process that loads the importer. Type-only imports load nothing.
+ */
+const DIALECT_TABLE_RESTRICTED = [
+  {
+    group: [
+      "**/schemas/*/postgres",
+      "**/schemas/*/mysql",
+      "**/schemas/*/sqlite",
+      // The feature barrels that re-export all three dialects' files.
+      "**/schemas/{dynamic-collections,dynamic-field-groups,email-providers,email-templates,user-field-definitions}",
+      "**/schemas/{dynamic-collections,dynamic-field-groups,email-providers,email-templates,user-field-definitions}/index",
+    ],
+    allowTypeImports: true,
+    message:
+      "Read a dialect's tables through the loaded dialect (loadedDialect or getDialectTables from database/), not by importing a dialect's file: that loads every dialect in every process.",
   },
 ];
 
@@ -291,6 +320,11 @@ export default defineConfig({
     "typescript/no-floating-promises": "error",
     "typescript/no-for-in-array": "error",
     "typescript/no-implied-eval": "error",
+    // Under `verbatimModuleSyntax` an import whose names are all marked `type`
+    // inline (`import { type A } from "./x"`) is kept as `import "./x"`, so the
+    // bundler keeps a module the code never uses. `import type { A }` is
+    // dropped whole.
+    "typescript/no-import-type-side-effects": "error",
     "typescript/no-misused-new": "error",
     "typescript/no-misused-promises": "error",
     "typescript/no-namespace": "error",
@@ -426,6 +460,27 @@ export default defineConfig({
       rules: { "nextly/api-key-scope": "error" },
     },
     {
+      // No file newly on an import cycle in nextly's source. The files already
+      // on one are exempt, and scripts/lint-config.test.mjs holds those cycles
+      // to the groups lint/import-cycles.mjs lists, so the exemption only
+      // shrinks. A new import between two files already in one group is not
+      // caught: see lint/import-cycles.mjs.
+      files: [`${NEXTLY_SOURCE}/**/*.{ts,tsx}`],
+      excludeFiles: IMPORT_CYCLES.flat().map(
+        file => `${NEXTLY_SOURCE}/${file}`
+      ),
+      rules: { "import/no-cycle": NO_CYCLE },
+    },
+    {
+      // No top-level await in nextly's source: the deadlock a cycle through a
+      // dynamic import could cause, which import/no-cycle cannot see. Every
+      // file, the cycle-exempt ones included; tests load modules at their top
+      // level on purpose. What it covers and what it does not: lint/guards.mjs.
+      files: [`${NEXTLY_SOURCE}/**/*.{ts,tsx}`],
+      excludeFiles: TESTS,
+      rules: { "nextly/no-top-level-await": "error" },
+    },
+    {
       // nextly writes through a masked logger, not the console.
       files: ["packages/nextly/src/**/*.{ts,tsx}"],
       excludeFiles: [...CONSOLE_ALLOWED, ...TESTS],
@@ -438,6 +493,24 @@ export default defineConfig({
             message:
               "Write through a masked logger (a service's logger or consoleLogger), not the console.",
           },
+        ],
+      },
+    },
+    {
+      // Product code reads a dialect's tables through the loaded dialect. The
+      // schema files themselves, the loader and tests are exempt. Before the
+      // request-path override, which repeats these patterns: a later override
+      // replaces this rule's options for the files both match.
+      files: ["packages/nextly/src/**/*.{ts,tsx}"],
+      excludeFiles: [
+        "packages/nextly/src/schemas/**",
+        "packages/nextly/src/database/dialect-tables.ts",
+        ...TESTS,
+      ],
+      rules: {
+        "no-restricted-imports": [
+          "error",
+          { patterns: DIALECT_TABLE_RESTRICTED },
         ],
       },
     },
@@ -460,7 +533,7 @@ export default defineConfig({
         "no-restricted-imports": [
           "error",
           {
-            patterns: REQUEST_PATH_RESTRICTED,
+            patterns: [...REQUEST_PATH_RESTRICTED, ...DIALECT_TABLE_RESTRICTED],
           },
         ],
       },
@@ -476,7 +549,9 @@ export default defineConfig({
       rules: {
         "nextly/no-static-restricted-import": [
           "error",
-          { patterns: REQUEST_PATH_RESTRICTED },
+          {
+            patterns: [...REQUEST_PATH_RESTRICTED, ...DIALECT_TABLE_RESTRICTED],
+          },
         ],
       },
     },
@@ -500,6 +575,57 @@ export default defineConfig({
         "turbo/no-undeclared-env-vars": "off",
         "typescript/require-await": "off",
         "import-order/order": "off",
+      },
+    },
+    {
+      // The two-instance suite and its fixture app read runtime harness flags
+      // no turbo task builds against, as the playground does: the driver sets
+      // them for the processes it starts, Next.js sets NEXT_RUNTIME, and the
+      // suite runs through pnpm rather than turbo. The admin speed check is
+      // the same: `node e2e/admin-speed/measure.mjs` sets its port and its
+      // preload's statement log and delay for the server it starts, and no
+      // turbo task runs it. The SEO site and its driver are the same: the
+      // driver sets the fixture's flags for the processes it starts.
+      files: ["e2e/multi-instance/**", "e2e/admin-speed/**", "e2e/seo-site/**"],
+      rules: { "turbo/no-undeclared-env-vars": "off" },
+    },
+    {
+      // Where the plugin SDK re-exports a core entry, a plugin imports the
+      // SDK's. `@nextlyhq/plugin-sdk/schema`, `/db` and `/testing` are the
+      // published surface for declaring tables, building their queries and
+      // booting a test instance; the core subpaths behind them are not a
+      // plugin's contract, and a plugin written against them reads as an
+      // example of doing so. Other core entries (`nextly/config` and the like)
+      // have no SDK counterpart yet, so they stay open. The SDK is the one
+      // package that re-exports these, so it is outside the rule.
+      files: [
+        "packages/plugin-*/src/**/*.{ts,tsx}",
+        "apps/playground/src/plugins/**/*.{ts,tsx}",
+      ],
+      excludeFiles: ["packages/plugin-sdk/**"],
+      rules: {
+        "no-restricted-imports": [
+          "error",
+          {
+            paths: [
+              {
+                name: "nextly/schema-extension",
+                message:
+                  "Import from @nextlyhq/plugin-sdk/schema, the plugin surface that re-exports it.",
+              },
+              {
+                name: "nextly/db-operators",
+                message:
+                  "Import from @nextlyhq/plugin-sdk/db, the plugin surface that re-exports it.",
+              },
+              {
+                name: "nextly/testing",
+                message:
+                  "Import from @nextlyhq/plugin-sdk/testing, the plugin surface that re-exports it.",
+              },
+            ],
+          },
+        ],
       },
     },
     {

@@ -525,3 +525,89 @@ describe("validateEntryData", () => {
     });
   });
 });
+
+describe("validateEntryData: icon fields", () => {
+  const ICON_FIELDS: ValidatableField[] = [{ name: "badge", type: "icon" }];
+  const iconIssues = (badge: unknown) =>
+    validateEntryData({ badge }, ICON_FIELDS, { mode: "create" });
+
+  it("accepts an icon id, including one from a set nobody registered", async () => {
+    expect(await iconIssues("lucide:star")).toEqual([]);
+    expect(await iconIssues("lucide:arrow-up-right")).toEqual([]);
+    // Sets are registered at runtime, so an unknown set or name is stored
+    // as given and reported elsewhere, never refused here.
+    expect(await iconIssues("acme:not-a-real-icon")).toEqual([]);
+  });
+
+  it("refuses a value that is not an icon id's shape", async () => {
+    for (const bad of ["Star", "lucide:", ":star", "lucide:Star", "a:b:c"]) {
+      expect(await iconIssues(bad), bad).toEqual([
+        {
+          path: "badge",
+          code: "INVALID_FORMAT",
+          message: 'badge must be an icon id such as "lucide:star".',
+        },
+      ]);
+    }
+  });
+
+  it("accepts a 255-character id and refuses a 256-character one, which its column cannot hold", async () => {
+    const longest = `lucide:${"a".repeat(255 - "lucide:".length)}`;
+    expect(await iconIssues(longest)).toEqual([]);
+    expect(await iconIssues(`${longest}a`)).toEqual([
+      {
+        path: "badge",
+        code: "INVALID_FORMAT",
+        message: 'badge must be an icon id such as "lucide:star".',
+      },
+    ]);
+  });
+
+  it("refuses a value that is not a string", async () => {
+    expect(await iconIssues(42)).toEqual([
+      {
+        path: "badge",
+        code: "INVALID_TYPE",
+        message: "badge must be an icon id.",
+      },
+    ]);
+  });
+
+  // A group with no name only lays fields out: its fields are stored, and judged, at the level it
+  // sits in. A group with a name holds its own value, and a repeater with no name holds rows.
+  describe("a group with no name", () => {
+    const laidOut: ValidatableField[] = [
+      { name: "title", type: "text" },
+      {
+        type: "group",
+        fields: [
+          { name: "subtitle", type: "text", required: true, maxLength: 5 },
+        ],
+      },
+    ];
+
+    it("judges the fields it lays out at its own level", async () => {
+      expect(await validateEntryData({}, laidOut, { mode: "create" })).toEqual([
+        {
+          path: "subtitle",
+          code: "REQUIRED",
+          message: "subtitle is required.",
+        },
+      ]);
+      expect(
+        await validateEntryData({ subtitle: "far too long" }, laidOut, {
+          mode: "create",
+        })
+      ).toEqual([expect.objectContaining({ path: "subtitle" })]);
+      expect(
+        await validateEntryData({ subtitle: "ok" }, laidOut, { mode: "create" })
+      ).toEqual([]);
+    });
+
+    it("leaves an absent key alone on update, as at any level", async () => {
+      expect(
+        await validateEntryData({ title: "t" }, laidOut, { mode: "update" })
+      ).toEqual([]);
+    });
+  });
+});

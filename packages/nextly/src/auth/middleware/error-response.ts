@@ -17,6 +17,7 @@ import {
   statusToErrorCode,
 } from "../../errors/error-codes";
 import { NextlyError } from "../../errors/nextly-error";
+import { recordRefusalReason } from "../access/refusal-message";
 
 /**
  * Standardized error response structure.
@@ -40,6 +41,18 @@ export interface ErrorResponse {
   code?: string;
   /** Optional HTTP response headers (e.g. Retry-After, X-RateLimit-*). Excluded from JSON body. */
   headers?: Record<string, string>;
+  /**
+   * Which check refused, and why: logged on the server when the refusal is
+   * answered, and never part of the answer.
+   */
+  reason?: string;
+  /**
+   * Authentication refused a request that carried no credential at all: no
+   * session cookie and no key. Only such a request is a visitor; one whose
+   * credential is not valid is asked to sign in again. Never part of the
+   * answer, which says the same to both.
+   */
+  noCredential?: true;
 }
 
 /**
@@ -84,7 +97,25 @@ export function refusalError(refusal: ErrorResponse): NextlyError {
     ...(Number.isFinite(retryAfter)
       ? { publicData: { retryAfterSeconds: retryAfter } }
       : {}),
-    logContext: { refusal: refusal.message },
+    logContext: { refusal: refusal.message, reason: refusal.reason },
+  });
+}
+
+/**
+ * Records which check refused, and why, on the server alone. Called where a
+ * refusal is answered: by {@link createJsonErrorResponse} for a request, and
+ * by `toNextlyAuthError` for a refusal thrown to its caller, which a standalone
+ * route and a Direct API check do with no boundary of their own to log it.
+ */
+export function recordRefusal(
+  refusal: ErrorResponse,
+  requestId?: string
+): void {
+  recordRefusalReason({
+    status: refusal.statusCode,
+    code: refusal.code,
+    reason: refusal.reason ?? refusal.message,
+    ...(requestId === undefined ? {} : { requestId }),
   });
 }
 
@@ -98,8 +129,14 @@ export function createJsonErrorResponse(
   error: ErrorResponse,
   request?: Request
 ): Response {
+  // One id for the answer and the log line, so a caller's report of the
+  // answer finds the reason it was refused for.
+  const requestId = request
+    ? readOrGenerateRequestId(request)
+    : generateRequestId();
+  recordRefusal(error, requestId);
   return buildErrorResponse(refusalError(error), {
-    requestId: request ? readOrGenerateRequestId(request) : generateRequestId(),
+    requestId,
     headers: error.headers,
   });
 }

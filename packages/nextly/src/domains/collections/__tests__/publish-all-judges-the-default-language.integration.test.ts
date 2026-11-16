@@ -42,6 +42,7 @@ interface Entries {
     collectionName: string;
     entryId: string;
     overrideAccess?: boolean;
+    data?: Record<string, unknown>;
   }): Promise<{ success: boolean }>;
 }
 
@@ -84,7 +85,7 @@ describe("publishing every language of an entry", () => {
         locale: "de",
         overrideAccess: true,
       },
-      { heading: "Hinweis", status: "draft" }
+      { heading: "Hinweis", status: "draft", _overwrite: true }
     );
     expect(german.success, JSON.stringify(german)).toBe(true);
     // The default language's row removed, as a document whose default
@@ -97,6 +98,7 @@ describe("publishing every language of an entry", () => {
       collectionName: "notices",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     expect(result.success).toBe(false);
@@ -121,7 +123,7 @@ describe("publishing every language of an entry, with a language since removed",
         locale: "de",
         overrideAccess: true,
       },
-      { tag: "general", status: "draft" }
+      { tag: "general", status: "draft", _overwrite: true }
     );
     expect(german.success, JSON.stringify(german)).toBe(true);
     // The row relabelled to a language the app no longer configures, as one
@@ -136,6 +138,7 @@ describe("publishing every language of an entry, with a language since removed",
       collectionName: "notices",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     expect(result.success, JSON.stringify(result)).toBe(true);

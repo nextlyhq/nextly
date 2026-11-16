@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
+
 /**
  * The breakpoint actions have styles, which nothing else here can check.
  *
@@ -20,9 +22,8 @@ import { describe, expect, it } from "vitest";
  *
  * @module breakpoint-action-styles.test
  */
-const CHROME = readFileSync(
-  fileURLToPath(new URL("./styles/builder-chrome.css", import.meta.url)),
-  "utf8"
+const CHROME = chromeStylesheetSource(url =>
+  readFileSync(fileURLToPath(url), "utf8")
 );
 
 describe("the breakpoint actions are styled, not merely marked", () => {
@@ -40,10 +41,6 @@ describe("the breakpoint actions are styled, not merely marked", () => {
     expect(CHROME).toContain(
       ".nx-style-inspector__breakpoint-action:focus-visible"
     );
-  });
-
-  it("styles the visible reset fallback beside it", () => {
-    expect(CHROME).toContain(".nx-style-inspector__breakpoint-reveals");
   });
 
   it("finds nothing for a class that was never written", () => {

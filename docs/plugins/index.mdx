@@ -14,7 +14,7 @@ Plugins extend Nextly with new functionality without modifying core code. A plug
 | Plugin                                     | Package                         | Description                                                                                                                                                                                         |
 | ------------------------------------------ | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [Form Builder](/docs/plugins/form-builder) | `@nextlyhq/plugin-form-builder` | Visual drag-and-drop form builder with submission management, email notifications, spam protection, and export                                                                                      |
-| [Page Builder](/docs/page-builder)         | `@nextlyhq/plugin-page-builder` | Blocks your team arranges on a page, rendered on the server with no client JavaScript by default                                                                                                    |
+| [Page Builder](/docs/page-builder)         | `@nextlyhq/plugin-page-builder` | Blocks your team arranges on a page, rendered on the server; the core blocks add no JavaScript of their own (see [What reaches the browser](/docs/page-builder#what-reaches-the-browser))           |
 | [SEO](/docs/plugins/seo)                   | `@nextlyhq/plugin-seo`          | An SEO field group on the collections you name, and a sitemap of published content over plain HTTP. Turning those fields into `<meta>` tags is `buildMetadata` from `nextly/runtime`, which is core |
 
 ## Community Plugins
@@ -24,6 +24,42 @@ Community plugins are distributed on npm — search the [`nextly-plugin`](https:
 _No community plugins listed yet — be the first._
 
 ## Adding a Plugin
+
+One command adds a plugin to your site:
+
+```bash
+npx nextly plugins add @nextlyhq/plugin-form-builder
+```
+
+It installs the package with your project's package manager, registers the plugin in
+`nextly.config.ts`, adds `nextly plugins install <name>` to your build after
+`nextly migrate` (a production start refuses a plugin that was never installed), runs
+`nextly generate:types`, and applies the plugin's schema to your database. The same
+command also runs as `nextly add <package>`.
+
+- **Options the plugin asks for.** A plugin can ask for values at install, such as your
+  site's production address. Give each as `--option <name>=<value>`; in a terminal, the
+  command asks for any you leave out. They are written into your config as the plugin's
+  options.
+- **Nextly's own plugins** named without a version are installed at the version of
+  `nextly` your site has, since Nextly's packages are released together.
+- **Already installed.** `--skip-install` registers a package you installed yourself,
+  such as one from a folder or a git address.
+- **See it first.** `--dry-run` names every change the command would make, and makes
+  none.
+- **Run it again.** A plugin already in your config, and a build that already installs
+  it, are left as they are.
+- **A new database.** On a database `nextly migrate` has not prepared yet, the schema is
+  left to your build, which migrates and then installs the plugin.
+
+The command registers a plugin the way its package declares (see
+[Declaring how a plugin is added](/docs/plugins/distribution#declaring-how-a-plugin-is-added)),
+or, for a package that declares nothing, the one plugin definition it exports. When it
+cannot tell, or your config is written in a way it will not edit safely (a `plugins` list
+held in a variable, for one), it says so and prints the lines to add, and the steps
+below are yours.
+
+### Adding a plugin by hand
 
 Install the plugin package, then add it to your `defineConfig` call.
 
@@ -57,7 +93,7 @@ export default defineConfig({
 
 ## How Plugins Work
 
-Every plugin implements the `PluginDefinition` interface from `@nextlyhq/plugin-sdk`, the stable import surface for plugin authors. The lifecycle has two phases:
+Every plugin implements the `PluginDefinition` interface from `@nextlyhq/plugin-sdk`, the import surface for plugin authors. It is alpha: its `@public` surface becomes semver-protected at 1.0, parts of it are `@experimental`, and it may change before then (see [API stability](/docs/plugins/stability)). The lifecycle has two phases:
 
 ### 1. Declarative + setup phase
 

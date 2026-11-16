@@ -26,6 +26,16 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
   BrandingProvider: ({ children }: { children: React.ReactNode }) => (
     <>{children}</>
   ),
+  // The layout's translations read the plugins' catalogs from branding.
+  useBranding: () => ({}),
+}));
+
+// The tab title's provider reads branding and the open collection; neither is
+// under test here, and RootLayout.document-title.test.tsx covers its wiring.
+vi.mock("@admin/context/providers/DocumentTitleProvider", () => ({
+  DocumentTitleProvider: ({ children }: { children: React.ReactNode }) => (
+    <>{children}</>
+  ),
 }));
 
 // The private-route chrome; not under test, and the real one reads branding
@@ -64,9 +74,12 @@ vi.mock("@admin/components/guards/PublicRoute", () => ({
 }));
 
 vi.mock("@admin/components/guards/PrivateRoute", () => ({
-  PrivateRoute: ({ children }: { children: React.ReactNode }) => (
-    <>{children}</>
-  ),
+  // A confirmed session: the guard hands its frame `true`.
+  PrivateRoute: ({
+    children,
+  }: {
+    children: (confirmed: boolean) => React.ReactNode;
+  }) => <>{children(true)}</>,
 }));
 
 vi.mock("@admin/components/guards/PermissionGuard", () => ({

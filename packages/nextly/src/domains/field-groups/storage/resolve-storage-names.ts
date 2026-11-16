@@ -38,7 +38,11 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
-import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
+import {
+  introspectLiveColumns,
+  introspectLiveSnapshot,
+} from "../../schema/pipeline/diff/introspect-live";
+import { listTablesAtStart } from "../../schema/pipeline/diff/start-catalog-scope";
 import { readIdentifierCaseRules } from "../../schema/utils/read-identifier-case";
 import {
   indexCatalog,
@@ -154,6 +158,36 @@ export function chooseTypeColumns(
   tables: readonly string[],
   rules: IdentifierCaseRules
 ): Map<string, string> {
+  // Derived from the fuller answer, so the discriminator is chosen in one place.
+  return new Map(
+    [...chooseTableColumns(catalog, tables, rules)].map(([table, held]) => [
+      table,
+      held.typeColumn,
+    ])
+  );
+}
+
+/** What one field-group data table holds, as the catalog describes it. */
+export interface FieldGroupTableColumns {
+  /** The discriminator, chosen as `chooseTypeColumns` describes. */
+  typeColumn: string;
+  /**
+   * Every column the table holds, or `undefined` where the catalog did not describe the table, as
+   * for one that does not exist yet. A runtime table built from it leaves out the column of a field
+   * inside a group with no name that the table does not hold yet (`generateRuntimeSchema`).
+   */
+  columns: readonly string[] | undefined;
+}
+
+/**
+ * The discriminator and the columns of each requested table, read from one catalog listing.
+ * `chooseTypeColumns` is this answer narrowed to the discriminator.
+ */
+function chooseTableColumns(
+  catalog: readonly TableColumns[],
+  tables: readonly string[],
+  rules: IdentifierCaseRules
+): Map<string, FieldGroupTableColumns> {
   // Indexed under the server's own table rules, because MySQL with
   // `lower_case_table_names=1` reports a lowercased name for a table asked for
   // under another case, and an exact comparison would discard the entry
@@ -163,16 +197,17 @@ export function chooseTypeColumns(
     rules.tables
   );
 
-  const resolved = new Map<string, string>();
+  const resolved = new Map<string, FieldGroupTableColumns>();
   for (const table of tables) {
     const catalogName = resolveCatalogName(byTable, table);
     const entry = catalog.find(candidate => candidate.table === catalogName);
-    resolved.set(
-      table,
-      entry === undefined
-        ? STORAGE_FORMAT.columns.type
-        : chooseTypeColumn(entry.columns, rules)
-    );
+    resolved.set(table, {
+      typeColumn:
+        entry === undefined
+          ? STORAGE_FORMAT.columns.type
+          : chooseTypeColumn(entry.columns, rules),
+      columns: entry?.columns,
+    });
   }
   return resolved;
 }
@@ -274,7 +309,7 @@ export function forgetFieldGroupStorageNames(
 /**
  * The discriminator column each named data table actually carries.
  *
- * One `introspectLiveSnapshot` covers every table, so the cost is a single
+ * One `introspectLiveColumns` covers every table, so the cost is a single
  * catalog read at the point runtime schemas are registered — boot, or a schema
  * mutation — and nothing on a read path. Not memoized for the same reason:
  * every caller already holds the full list it cares about.
@@ -283,15 +318,34 @@ export async function resolveTypeColumns(
   adapter: CatalogReadAdapter,
   tables: readonly string[]
 ): Promise<Map<string, string>> {
+  // Derived from the fuller answer, read by the same one catalog listing.
+  return new Map(
+    [...(await resolveTableColumns(adapter, tables))].map(([table, held]) => [
+      table,
+      held.typeColumn,
+    ])
+  );
+}
+
+/**
+ * The discriminator and the columns each named data table actually carries, from one catalog
+ * read: `resolveTypeColumns` with the columns kept, for a caller building runtime tables.
+ */
+export async function resolveTableColumns(
+  adapter: CatalogReadAdapter,
+  tables: readonly string[]
+): Promise<Map<string, FieldGroupTableColumns>> {
   if (tables.length === 0) return new Map();
 
   const rules = await readIdentifierCaseRules(adapter);
-  const snapshot = await introspectLiveSnapshot(
+  // The columns alone: the discriminator is a column, and nothing else of the
+  // tables is asked.
+  const snapshot = await introspectLiveColumns(
     adapter.getDrizzle(),
     adapter.dialect,
     [...tables]
   );
-  return chooseTypeColumns(
+  return chooseTableColumns(
     snapshot.tables.map(entry => ({
       table: entry.name,
       columns: entry.columns.map(column => column.name),
@@ -322,14 +376,27 @@ export async function resolveKnownTypeColumns(
   adapter: CatalogReadAdapter,
   tables: readonly string[]
 ): Promise<Map<string, string>> {
+  // Derived from the fuller answer, so a table it cannot speak for is left out the same way.
+  return new Map(
+    [...(await resolveKnownTableColumns(adapter, tables))].map(
+      ([table, held]) => [table, held.typeColumn]
+    )
+  );
+}
+
+/** {@link resolveKnownTypeColumns} with each table's columns kept. */
+export async function resolveKnownTableColumns(
+  adapter: CatalogReadAdapter,
+  tables: readonly string[]
+): Promise<Map<string, FieldGroupTableColumns>> {
   try {
-    return await resolveTypeColumns(adapter, tables);
+    return await resolveTableColumns(adapter, tables);
   } catch {
-    const resolved = new Map<string, string>();
+    const resolved = new Map<string, FieldGroupTableColumns>();
     await Promise.all(
       tables.map(async table => {
         try {
-          const column = (await resolveTypeColumns(adapter, [table])).get(
+          const column = (await resolveTableColumns(adapter, [table])).get(
             table
           );
           if (column !== undefined) resolved.set(table, column);
@@ -375,5 +442,5 @@ async function readRegistryTable(
   adapter: StorageNameAdapter
 ): Promise<FieldGroupRegistryTable> {
   const rules = await readIdentifierCaseRules(adapter);
-  return chooseRegistryTable(await adapter.listTables(), rules);
+  return chooseRegistryTable(await listTablesAtStart(adapter), rules);
 }

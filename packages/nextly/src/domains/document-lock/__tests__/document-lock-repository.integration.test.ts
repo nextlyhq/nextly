@@ -48,6 +48,7 @@ import {
   releaseDocumentLock,
   renewDocumentLock,
   sweepExpiredDocumentLocks,
+  type DocumentLockClaimant,
 } from "../document-lock-repository";
 import { documentLockKey } from "../lock-key";
 
@@ -77,8 +78,16 @@ const DOC = {
   slug: "posts",
   entryId: "entry-1",
 } as const;
-const ADA = { ownerId: "user-ada", ownerLabel: "Ada" };
-const GRACE = { ownerId: "user-grace", ownerLabel: "Grace" };
+const ADA: DocumentLockClaimant = {
+  ownerId: "user-ada",
+  ownerLabel: "Ada",
+  actor: { type: "user", id: "user-ada" },
+};
+const GRACE: DocumentLockClaimant = {
+  ownerId: "user-grace",
+  ownerLabel: "Grace",
+  actor: { type: "user", id: "user-grace" },
+};
 
 /**
  * Push a claim's expiry into the past.

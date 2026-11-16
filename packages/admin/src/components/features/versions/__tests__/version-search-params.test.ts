@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  readFromParam,
   readLocaleParam,
   readVersionParam,
   resolvePair,
@@ -35,6 +36,20 @@ describe("readVersionParam", () => {
   it("is undefined when the parameter is absent", () => {
     expect(readVersionParam(undefined)).toBeUndefined();
     expect(readVersionParam([])).toBeUndefined();
+  });
+});
+
+describe("readFromParam", () => {
+  it("reads a version number, or the named baseline of the one before", () => {
+    expect(readFromParam("7")).toBe(7);
+    expect(readFromParam("previous")).toBe("previous");
+    expect(readFromParam(["previous", "3"])).toBe("previous");
+  });
+
+  it("rejects anything else", () => {
+    expect(readFromParam("prev")).toBeUndefined();
+    expect(readFromParam("0")).toBeUndefined();
+    expect(readFromParam(undefined)).toBeUndefined();
   });
 });
 
@@ -82,6 +97,28 @@ describe("resolvePair", () => {
       kind: "pair",
       from: 8,
       to: 9,
+    });
+  });
+
+  it("compares a named version with the one before it in its own language, when the address asks for the previous", () => {
+    const interleaved = [
+      { versionNo: 6, locale: "fr" },
+      { versionNo: 5, locale: "en" },
+      { versionNo: 4, locale: "fr" },
+      { versionNo: 3, locale: "en" },
+    ];
+    expect(resolvePair(interleaved, "previous", 5, false)).toEqual({
+      kind: "pair",
+      from: 3,
+      to: 5,
+    });
+    // The first version of its language has nothing before it.
+    expect(resolvePair(interleaved, "previous", 4, false)).toEqual({
+      kind: "only-in-locale",
+    });
+    // One beyond the loaded page: Load more would find what precedes it.
+    expect(resolvePair(interleaved, "previous", 2, true)).toEqual({
+      kind: "not-loaded",
     });
   });
 

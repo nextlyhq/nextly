@@ -24,34 +24,53 @@
  */
 
 import type { FieldConfig } from "nextly/config";
-import type { JSX } from "react";
-import { useEffect, useMemo, useState } from "react";
-import { FormProvider, type UseFormReturn } from "react-hook-form";
+import type { JSX, ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
 
 import type { ViewedVersion } from "@admin/components/features/versions/document-history-context";
 import { useSuppressAdminChrome } from "@admin/components/layout/ChromeSuppression";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { useRoutedPathname } from "@admin/context/RoutedPathnameContext";
 import type { UseAutosaveRecoveryResult } from "@admin/hooks/useAutosaveRecovery";
 import { useSearchParams } from "@admin/hooks/useSearchParams";
 import { setSearchParam } from "@admin/lib/navigation";
 import type { DocumentViewProps } from "@admin/lib/plugins/component-registry";
 import {
   resolveViewField,
+  rowContainerRoots,
   viewFieldCandidates,
+  viewFieldPathIn,
   type ViewFieldResolution,
+  type ViewFieldValues,
 } from "@admin/lib/plugins/document-view-registry";
 
-import { LiveDocumentRecoveryOffer } from "./AutosaveRecoveryBanner";
 import {
-  useConditionValues,
+  liveRecoveryOffer,
+  LiveDocumentRecoveryOffer,
+} from "./AutosaveRecoveryBanner";
+import { useConditionValues } from "./document-view-field-gate";
+import {
   viewFieldRefusal,
   type ViewFieldRefusal,
-} from "./document-view-field-gate";
+} from "./document-view-field-refusal";
+import { useOfferPendingRecovery } from "./DocumentActionsContext";
 import { DocumentLockBanner } from "./DocumentLockBanner";
+import {
+  DocumentRestoreProvider,
+  type DocumentRestoreHandler,
+  type DocumentRestoreRegistry,
+} from "./DocumentRestoreContext";
 import { DocumentViewFieldChooser } from "./DocumentViewFieldChooser";
 import { DocumentViewFieldRefused } from "./DocumentViewFieldRefused";
 import { FormErrorSummary } from "./FormErrorSummary";
 import { MissingDocumentViewComponent } from "./MissingDocumentViewComponent";
+import {
+  RecoveryOfferProvider,
+  useRecoveryOfferHost,
+  type HostedRecoveryOffer,
+} from "./RecoveryOfferContext";
+import type { KeepOutcome, PendingRecovery } from "./useDocumentActionBindings";
 import type { DocumentLockSurface } from "./useDocumentLockSurface";
 
 /** The view the route names, as the page hands it to the editor. */
@@ -83,6 +102,18 @@ export interface DocumentViewBodyProps {
   viewingVersion: ViewedVersion | null;
   /** The document's top-level fields, from which a field-type view's is chosen. */
   fields?: readonly FieldConfig[];
+  /**
+   * Whether a refused publish's recovery is taking the live values: the view
+   * is read-only through the lock meanwhile, and marked busy for assistive
+   * technology. The recovery's own toast says so to everyone.
+   */
+  recovering?: boolean;
+  /**
+   * A strip about the whole document, such as its scheduled release, drawn
+   * first among the view's banners: inside the frame that shares the screen
+   * between them and the view, so the view keeps the rest of the height.
+   */
+  banner?: ReactNode;
 }
 
 /**
@@ -92,17 +123,27 @@ export interface DocumentViewBodyProps {
  * `?field=` still opens it — the author's intent is unambiguous — and the
  * address is corrected IN PLACE, so a reload or a shared link then reaches
  * exactly what is on screen, and Back does not return to the stale address.
+ *
+ * Only the view's own address is corrected: the one the admin's router drew
+ * this view for, which moves with the router when one view of the document
+ * gives way to another. Under Cache Components a visited page stays mounted
+ * but hidden, and Back shows it again with its effects before its router has
+ * read the address Back went to; the bar then holds that page's address, and
+ * writing the view's field onto it put the reader back on an address that
+ * names the view's field (`?field=`) but not the view.
  */
 function useFieldInAddress(
   editing: ReturnType<typeof resolveViewField>,
   requested: string | string[] | undefined
 ): void {
   const named = editing.kind === "field" ? editing.name : undefined;
+  const routed = useRoutedPathname();
   useEffect(() => {
+    if (routed !== undefined && window.location.pathname !== routed) return;
     if (named !== undefined && named !== requested) {
       setSearchParam("field", named, { replace: true });
     }
-  }, [named, requested]);
+  }, [named, requested, routed]);
 }
 
 /**
@@ -123,26 +164,203 @@ function useFieldInAddress(
  * one. Gone first, its hand-over lands before the restore and is replaced by
  * it.
  */
-function useRestoreRemount(recovery: UseAutosaveRecoveryResult): {
+function useRestoreRemount(
+  recovery: UseAutosaveRecoveryResult,
+  restoreInView: () => boolean
+): {
   recovery: UseAutosaveRecoveryResult;
+  /** The checked restore as Save keeps an offer with it; see `PendingRecovery`. */
+  keep: PendingRecovery["restoreChecked"];
   generation: number;
   /** True for the one commit between the view leaving and the restore. */
   withdrawn: boolean;
 } {
   const [generation, setGeneration] = useState(0);
   const [withdrawn, setWithdrawn] = useState(false);
-  const { restore } = recovery;
+  const { take, restoreChecked } = recovery;
+  // Told once a fresh view is drawn over the restored values, so a checked
+  // restore answers only when the restore has reached the view.
+  const redrawn = useRef<(() => void) | null>(null);
+  // Whether this body is still drawn: the editor can leave the view while a
+  // restore is being checked, and nothing here is drawn afresh after that.
+  const drawn = useRef(true);
+  useEffect(() => {
+    drawn.current = true;
+    return () => {
+      drawn.current = false;
+      redrawn.current?.();
+      redrawn.current = null;
+    };
+  }, []);
   useEffect(() => {
     if (!withdrawn) return;
-    restore();
+    take();
     setGeneration(count => count + 1);
     setWithdrawn(false);
-  }, [withdrawn, restore]);
-  const offered = useMemo(
-    () => ({ ...recovery, restore: () => setWithdrawn(true) }),
-    [recovery]
+    redrawn.current?.();
+    redrawn.current = null;
+  }, [withdrawn, take]);
+  // Once the offer is confirmed (see `restore`), the view's own restore
+  // first, as an edit it can undo; drawn afresh only when it has none or
+  // declines, and then `redrawn` (if given) is told once it is. Nothing
+  // changes before then. Both restores below take these steps.
+  const applyHere = useCallback(
+    (redrawnThen?: () => void) => {
+      if (restoreInView()) {
+        redrawnThen?.();
+        return;
+      }
+      redrawn.current = redrawnThen ?? null;
+      setWithdrawn(true);
+    },
+    [restoreInView]
   );
-  return { recovery: offered, generation, withdrawn };
+  // The checked restore answers once the restore has reached the view. It
+  // writes nothing where `stillWanted` says no (answering `edited`), and
+  // answers `unchecked` where the view went away before it could land.
+  const keep = useCallback(
+    async (stillWanted: () => boolean): Promise<KeepOutcome> => {
+      let reached: Promise<void> = Promise.resolve();
+      // Where the restore went, set by the steps below once it is confirmed.
+      const landing: { at: "here" | "edited" | "gone" } = { at: "here" };
+      const outcome = await restoreChecked(() => {
+        if (!stillWanted()) {
+          landing.at = "edited";
+          return;
+        }
+        if (!drawn.current) {
+          landing.at = "gone";
+          return;
+        }
+        reached = new Promise(resolve => applyHere(resolve));
+      });
+      await reached;
+      if (outcome !== "restored") return outcome;
+      if (landing.at === "edited") return "edited";
+      // Gone before the restore could reach it, or while it was drawn afresh.
+      return landing.at === "gone" || !drawn.current ? "unchecked" : "restored";
+    },
+    [restoreChecked, applyHere]
+  );
+  const offered = useMemo(
+    () => ({
+      ...recovery,
+      restore: () => recovery.restore(() => applyHere()),
+    }),
+    [recovery, applyHere]
+  );
+  return { recovery: offered, keep, generation, withdrawn };
+}
+
+/**
+ * How Restore reaches the view: through the handler the view registers, as an
+ * edit it can undo, and otherwise by drawing it afresh over the restored
+ * values. Returns the offer with that restore, and where the view registers.
+ */
+function useViewRestore(
+  recovery: UseAutosaveRecoveryResult,
+  form: UseFormReturn<Record<string, unknown>>,
+  fieldPath: FieldPathIn | undefined
+): ReturnType<typeof useRestoreRemount> & {
+  restoreRegistry: DocumentRestoreRegistry;
+} {
+  const restoreRegistry = useRef<DocumentRestoreHandler | null>(null);
+  const remount = useRestoreRemount(
+    recovery,
+    useRestoreInView(recovery, form, fieldPath, restoreRegistry)
+  );
+  return { ...remount, restoreRegistry };
+}
+
+/**
+ * Where the view's field sits in a copy of the document's values — the form's
+ * own as they are at that moment when none is given: its form path, except in
+ * a repeater's row, which is found by its id in each copy, so a recovery point
+ * holding the rows in another order still gives this row's value. `undefined`
+ * where the row is not in that copy.
+ */
+type FieldPathIn = (values?: Record<string, unknown>) => string | undefined;
+
+/**
+ * Restore through the view's own handler: the view applies its field's
+ * recovered value as an edit it can undo, and every OTHER field is reset to
+ * the recovery point here. False when the view has no handler, there is no
+ * field or no offer, the field's row is missing from the recovery point or
+ * the form, or the view declines; nothing has changed then.
+ */
+function useRestoreInView(
+  recovery: UseAutosaveRecoveryResult,
+  form: UseFormReturn<Record<string, unknown>>,
+  fieldPath: FieldPathIn | undefined,
+  registry: DocumentRestoreRegistry
+): () => boolean {
+  const { offer, take } = recovery;
+  return useCallback(() => {
+    const handler = registry.current;
+    if (handler === null || offer === null || fieldPath === undefined) {
+      return false;
+    }
+    const snapshot = offer.snapshot as Record<string, unknown>;
+    const inSnapshot = fieldPath(snapshot);
+    const inForm = fieldPath();
+    if (inSnapshot === undefined || inForm === undefined) return false;
+    const held = form.getValues(inForm);
+    if (!handler(valueAtPath(snapshot, inSnapshot))) return false;
+    // The recovery's own take, so a view and the form accept an offer the
+    // same way; then the view's field takes back what the view holds, since
+    // the view writes the restored value through its own edit. Its place is
+    // read again after the take, which replaced the values: a row stands
+    // where the recovery point holds it now.
+    take();
+    const after = fieldPath();
+    if (after !== undefined) {
+      form.setValue(after, held, { shouldDirty: true });
+    }
+    return true;
+  }, [registry, offer, fieldPath, form, take]);
+}
+
+/** The value at a dotted form path (`hero.body`, `sections.0.body`), if any. */
+function valueAtPath(record: Record<string, unknown>, path: string): unknown {
+  let at: unknown = record;
+  for (const part of path.split(".")) {
+    if (typeof at !== "object" || at === null) return undefined;
+    at = (at as Record<string, unknown>)[part];
+  }
+  return at;
+}
+
+/** The offer as Save can keep it, while it is `offered`; else null. */
+function useKeepableOffer(
+  keep: PendingRecovery["restoreChecked"],
+  dismiss: () => void,
+  offered: boolean
+): PendingRecovery | null {
+  return useMemo(
+    () => (offered ? { restoreChecked: keep, dismiss } : null),
+    [offered, keep, dismiss]
+  );
+}
+
+/** The offer the save chip may make, as the banner would make it. */
+function useChipRecoveryOffer(
+  recovery: UseAutosaveRecoveryResult,
+  viewingVersion: ViewedVersion | null
+): HostedRecoveryOffer | null {
+  const offer = liveRecoveryOffer(recovery, viewingVersion);
+  const { restore, dismiss } = recovery;
+  return useMemo(
+    () =>
+      offer === null
+        ? null
+        : {
+            savedAt: offer.savedAt,
+            olderVersion: offer.olderVersion,
+            restore,
+            dismiss,
+          },
+    [offer, restore, dismiss]
+  );
 }
 
 /**
@@ -160,34 +378,83 @@ function useViewField(
   form: UseFormReturn<Record<string, unknown>>
 ) {
   const requested = useSearchParams().field;
+  const values = useRowValues(fieldType, fields, form);
   // Every field the view could edit has its condition watched, not only the
   // one open: which fields the question offers depends on them all.
   const valueAt = useConditionValues(
-    fieldType === undefined ? [] : viewFieldCandidates(fieldType, fields),
+    fieldType === undefined
+      ? []
+      : viewFieldCandidates(fieldType, fields, values),
     form.control
   );
   const editing = resolveViewField(
     fieldType,
     fields,
     typeof requested === "string" ? requested : undefined,
-    candidate => viewFieldRefusal(candidate, valueAt) === null
+    candidate => viewFieldRefusal(candidate, valueAt) === null,
+    values
   );
   useFieldInAddress(editing, requested);
   const refusal =
     editing.kind === "field" ? viewFieldRefusal(editing, valueAt) : null;
-  return { editing, refusal };
+  // For a field in a row, where it sits in any copy of the values, found by
+  // its row's id each time it is asked; the one resolution its address was
+  // read by.
+  const address = editing.kind === "field" ? editing.name : undefined;
+  const inRow = editing.kind === "field" && editing.formPath !== undefined;
+  const pathIn = useMemo<FieldPathIn | undefined>(() => {
+    if (address === undefined || fieldType === undefined) return undefined;
+    if (!inRow) return () => address;
+    return snapshot =>
+      viewFieldPathIn(fieldType, fields, address, snapshot ?? form.getValues());
+  }, [address, inRow, fieldType, fields, form]);
+  return { editing, refusal, pathIn };
+}
+
+/**
+ * The values a row's address is read in: the top-level fields holding a row
+ * of the view's field type, watched so a row is found again wherever it
+ * moves, and the values as last loaded or stored, where a row's id is saved.
+ * The rest of the document is not watched: nothing else moves a row.
+ */
+function useRowValues(
+  fieldType: string | undefined,
+  fields: readonly FieldConfig[] | undefined,
+  form: UseFormReturn<Record<string, unknown>>
+): ViewFieldValues {
+  const roots = useMemo(
+    () => rowContainerRoots(fieldType, fields),
+    [fieldType, fields]
+  );
+  const watched: unknown[] = useWatch({
+    control: form.control,
+    name: roots,
+    disabled: roots.length === 0,
+  });
+  const saved = form.formState.defaultValues;
+  return useMemo(
+    () => ({
+      current: Object.fromEntries(
+        roots.map((root, index) => [root, watched?.[index]])
+      ),
+      saved,
+    }),
+    [roots, watched, saved]
+  );
 }
 
 /**
  * What fills the view's area: the question of which field, the reason a field
  * may not be edited, or the view itself — absent for the one commit a restore
- * withdraws it, and keyed by the restore count so it reads restored values.
+ * withdraws it, and keyed by the restore count so it reads restored values, and
+ * by the loads of a gained document's latest version so it reads those.
  */
 function ViewArea({
   editing,
   refusal,
   withdrawn,
   generation,
+  reloads,
   component,
   viewProps,
 }: {
@@ -195,11 +462,22 @@ function ViewArea({
   refusal: ViewFieldRefusal | null;
   withdrawn: boolean;
   generation: number;
+  reloads: number;
   component: string;
   viewProps: DocumentViewProps;
 }): React.JSX.Element | null {
   if (editing.kind === "choose") {
     return <DocumentViewFieldChooser candidates={editing.candidates} />;
+  }
+  // An address through a repeater's row that opens no row: said, with the
+  // way back, rather than opening whichever row now stands where it stood.
+  if (editing.kind === "refused") {
+    return (
+      <DocumentViewFieldRefused
+        reason={editing.reason}
+        onExit={viewProps.exit}
+      />
+    );
   }
   if (refusal !== null) {
     return (
@@ -209,12 +487,34 @@ function ViewArea({
   if (withdrawn) return null;
   return (
     <PluginSlot
-      key={generation}
+      key={`${generation}:${reloads}`}
       path={component}
       props={viewProps}
       fallback={<MissingDocumentViewComponent path={component} />}
     />
   );
+}
+
+/**
+ * What a view is told about the field it edits: its declaration, where it sits
+ * in the form now, its address, where it sits in words, and for a field in a
+ * repeater's row, how to find that row again in any copy of the values.
+ */
+function fieldViewProps(
+  editing: Extract<ViewFieldResolution<FieldConfig>, { kind: "field" }>,
+  pathIn: FieldPathIn | undefined
+): Partial<DocumentViewProps> {
+  return {
+    field: editing.declaration,
+    fieldPath: editing.formPath ?? editing.name,
+    fieldAddress: editing.name,
+    ...(editing.location === undefined
+      ? {}
+      : { fieldLocation: editing.location }),
+    ...(editing.formPath === undefined || pathIn === undefined
+      ? {}
+      : { fieldPathIn: pathIn }),
+  };
 }
 
 export function DocumentViewBody({
@@ -225,6 +525,8 @@ export function DocumentViewBody({
   recovery,
   viewingVersion,
   fields,
+  recovering = false,
+  banner,
 }: DocumentViewBodyProps): JSX.Element {
   /*
    * The view takes the window, less the primary rail. `canExit` is false
@@ -246,9 +548,32 @@ export function DocumentViewBody({
    * through whatever navigation came next, with the work still unsaved.
    */
   const exit = view.onExit;
-  const offered = useRestoreRemount(recovery);
-
-  const { editing, refusal } = useViewField(view.fieldType, fields, form);
+  const { editing, refusal, pathIn } = useViewField(
+    view.fieldType,
+    fields,
+    form
+  );
+  const { restoreRegistry, ...offered } = useViewRestore(
+    recovery,
+    form,
+    pathIn
+  );
+  // Handed to the save chip the view draws, which makes the offer there; the
+  // banner below is for a view that draws no chip.
+  const recoveryOffer = useRecoveryOfferHost(
+    useChipRecoveryOffer(offered.recovery, viewingVersion)
+  );
+  // And to the document's Save, which keeps the changes on offer while the
+  // view draws the save chip that makes the offer (the host applies it only
+  // then). A view that leaves the offer to the banner has its Save wait for
+  // an edit, as the entry page's does.
+  useOfferPendingRecovery(
+    useKeepableOffer(
+      offered.keep,
+      offered.recovery.dismiss,
+      recoveryOffer.value.offer !== null
+    )
+  );
 
   const { errors, submitCount } = form.formState;
   const viewProps: DocumentViewProps = {
@@ -256,14 +581,18 @@ export function DocumentViewBody({
     control: form.control,
     readOnly: lock.readOnly,
     exit,
-    ...(editing.kind === "field" ? { field: editing.declaration } : {}),
+    ...(editing.kind === "field" ? fieldViewProps(editing, pathIn) : {}),
   };
 
   return (
     <FormProvider {...form}>
       <div
         data-testid="document-view-frame"
-        className="flex h-dvh min-h-0 flex-col bg-background"
+        // The content area's height, handed down by the split around the
+        // form, rather than the window's: below the desktop breakpoint the
+        // admin keeps a header above that area, and a frame the window's
+        // height was that header taller than the area, which then scrolled.
+        className="flex h-full min-h-0 flex-col bg-background"
       >
         {/* Above the view, in the editor's order: a document somebody else is
             in changes what the view's edits mean, so it is read before the
@@ -271,16 +600,21 @@ export function DocumentViewBody({
             validation refused is said here too, since none of the fields it
             names are on screen to say it themselves. */}
         <div className="shrink-0">
+          {banner}
           <DocumentLockBanner
             notice={lock.notice}
             onTakeOver={lock.takeOver}
             onRequestAccess={lock.requestAccess}
+            onRetry={lock.retryLoad}
+            onChoose={lock.answerChange}
           />
-          <LiveDocumentRecoveryOffer
-            recovery={offered.recovery}
-            viewingVersion={viewingVersion}
-            className="mx-6 mt-3"
-          />
+          {recoveryOffer.claimed ? null : (
+            <LiveDocumentRecoveryOffer
+              recovery={offered.recovery}
+              viewingVersion={viewingVersion}
+              className="mx-6 mt-3"
+            />
+          )}
           <FormErrorSummary
             errors={errors}
             submitCount={submitCount}
@@ -289,15 +623,20 @@ export function DocumentViewBody({
         </div>
         {/* The view fills what is left. Boxed so a view rooted in bare text
             or `display: contents` still has an element taking the height. */}
-        <div className="min-h-0 flex-1">
-          <ViewArea
-            editing={editing}
-            refusal={refusal}
-            withdrawn={offered.withdrawn}
-            generation={offered.generation}
-            component={view.component}
-            viewProps={viewProps}
-          />
+        <div className="min-h-0 flex-1" aria-busy={recovering || undefined}>
+          <RecoveryOfferProvider value={recoveryOffer.value}>
+            <DocumentRestoreProvider registry={restoreRegistry}>
+              <ViewArea
+                editing={editing}
+                refusal={refusal}
+                withdrawn={offered.withdrawn}
+                generation={offered.generation}
+                reloads={lock.reloads}
+                component={view.component}
+                viewProps={viewProps}
+              />
+            </DocumentRestoreProvider>
+          </RecoveryOfferProvider>
         </div>
       </div>
     </FormProvider>

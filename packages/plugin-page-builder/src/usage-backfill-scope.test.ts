@@ -58,6 +58,7 @@ describe("which scopes a collection contributes", () => {
 
     expect(scopes).toEqual(
       subjects.map(s => ({
+        scope: s.scope,
         entity: s.entity,
         field: s.field,
         locale: s.locale,
@@ -75,7 +76,28 @@ describe("which scopes a collection contributes", () => {
     });
 
     expect(scopes).toEqual([
-      { entity: "pages", field: "content", locale: "", variant: "published" },
+      {
+        scope: "collection",
+        entity: "pages",
+        field: "content",
+        locale: "",
+        variant: "published",
+      },
+    ]);
+  });
+
+  it("enumerates a Single's scopes under its own scope", async () => {
+    const scopes = backfillScopesFor({
+      scope: "single",
+      collection: "home",
+      fields: [{ name: "content", localized: false }],
+      locales: [],
+      hasDrafts: true,
+    });
+
+    expect(scopes.map(s => `${s.scope}:${s.entity}:${s.variant}`)).toEqual([
+      "single:home:published",
+      "single:home:draft",
     ]);
   });
 });
@@ -88,12 +110,14 @@ describe("the key a completed scope is recorded under", () => {
     // was never walked. A dash or a colon would fail this; a unit separator
     // cannot, because no slug, field name or locale may contain one.
     const a = backfillScopeKey({
+      scope: "collection",
       entity: "pages",
       field: "content-aside",
       locale: "en",
       variant: "published",
     });
     const b = backfillScopeKey({
+      scope: "collection",
       entity: "pages-content",
       field: "aside",
       locale: "en",
@@ -103,10 +127,24 @@ describe("the key a completed scope is recorded under", () => {
     expect(a).not.toBe(b);
   });
 
+  it("separates a Single from a collection of the same slug", async () => {
+    const at = {
+      entity: "home",
+      field: "content",
+      locale: "",
+      variant: "published",
+    } as const;
+
+    expect(backfillScopeKey({ ...at, scope: "single" })).not.toBe(
+      backfillScopeKey({ ...at, scope: "collection" })
+    );
+  });
+
   it("gives one key per scope, whatever order the fields were built in", async () => {
     // Total in the scope: equal scopes have equal keys, so a re-derived list
     // recognises work an earlier pass recorded rather than repeating it.
     const scope = {
+      scope: "collection",
       entity: "pages",
       field: "content",
       locale: "fr",
@@ -121,6 +159,7 @@ describe("which derivation a recorded scope belongs to", () => {
   const INDEXES = {
     classIndex: "nx_pb_class_usage",
     componentIndex: "nx_pb_component_usage",
+    tokenIndex: "nx_pb_token_usage",
   } as const;
   const LIMITS = { maxDepth: 10, maxNodes: 500, maxBytes: 1000 };
   const base = { limits: LIMITS, ...INDEXES };
@@ -155,6 +194,9 @@ describe("which derivation a recorded scope belongs to", () => {
     expect(
       backfillGeneration({ ...base, componentIndex: "site_component_usage" })
     ).not.toBe(backfillGeneration(base));
+    expect(
+      backfillGeneration({ ...base, tokenIndex: "site_token_usage" })
+    ).not.toBe(backfillGeneration(base));
   });
 
   it("cannot be forged by a slug that looks like another derivation", async () => {
@@ -185,6 +227,7 @@ describe("which derivation a recorded scope belongs to", () => {
     // unequal — "this is different work" rather than "redo this work" — and the
     // old row would have nothing that ever reconciles it.
     const scope = {
+      scope: "collection",
       entity: "pages",
       field: "content",
       locale: "",

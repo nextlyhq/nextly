@@ -54,12 +54,17 @@ import {
 import { useCallback } from "react";
 import type { UseFormSetError, FieldValues } from "react-hook-form";
 
-import { toast } from "@admin/components/ui";
+import { toast } from "@admin/components/ui/toaster";
 import { useLocalization } from "@admin/hooks/useLocalization";
-import { useSharedFieldsRecovery } from "@admin/hooks/useSharedFieldsRecovery";
 import {
-  createServerErrorHandler,
+  type RefusedForm,
+  reloadDocument,
+  useSharedFieldsRecovery,
+} from "@admin/hooks/useSharedFieldsRecovery";
+import { staleVersionOf } from "@admin/lib/document-version";
+import {
   parseServerErrorMessage,
+  placeServerRefusal,
 } from "@admin/lib/errors/error-mapping";
 import {
   toastMutationResult,
@@ -71,6 +76,10 @@ import {
   type UpdateEntryPayload,
 } from "@admin/services/entryApi";
 import type { Entry } from "@admin/types/collection";
+
+import { drawnFieldPath } from "./drawn-field-path";
+import { refreshAfterEntryChange } from "./entry-cache";
+import { refreshRemovedFromCodeSchema } from "./removed-from-code-refusal";
 
 /**
  * Options for useUpdateEntry hook
@@ -107,10 +116,27 @@ export interface UseUpdateEntryOptions<
    */
   draft?: boolean;
   /**
+   * Whether the editor's read asks every language's translation state, as
+   * the editor decides it (`useAsksTranslationStatus`). Part of the cache
+   * identity for the same reason `draft` is. Defaults to false.
+   */
+  translationStatus?: boolean;
+  /**
    * The entry's fields, for the labels a refusal over out-of-date shared
    * fields names them by; their names are used without them.
    */
   fields?: readonly { name?: string; label?: unknown }[];
+  /**
+   * Reads the form's value at a path, for the conditions that decide whether
+   * a field is drawn when a refusal arrives.
+   */
+  valueAt?: (path: string) => unknown;
+  /**
+   * The editor's form. A publish refused over out-of-date shared fields
+   * offers to take the live values only with it: the action saves the form as
+   * it is when taken, and has it show the values taken.
+   */
+  refusedForm?: RefusedForm;
 }
 
 /**
@@ -243,7 +269,10 @@ export function useUpdateEntry<
   locale,
   fallbackLocale,
   draft,
+  translationStatus = false,
   fields,
+  valueAt,
+  refusedForm,
 }: UseUpdateEntryOptions<T, TFieldValues>): UseMutationResult<
   MutationResult<T>,
   Error,
@@ -259,11 +288,17 @@ export function useUpdateEntry<
       : null,
     locale,
     fields: fields ?? NO_FIELDS,
-    onTaken: useCallback(() => {
-      void queryClient.invalidateQueries({
-        queryKey: entryKeys.detail(collectionSlug, entryId),
-      });
-    }, [queryClient, collectionSlug, entryId]),
+    // Answers once the reloaded document is back, which the recovery waits
+    // for before letting the editor save again.
+    onTaken: useCallback(
+      () =>
+        reloadDocument(
+          queryClient,
+          entryKeys.detail(collectionSlug, entryId),
+          locale
+        ),
+      [queryClient, collectionSlug, entryId, locale]
+    ),
   });
   const { enabled: localizationEnabled } = useLocalization();
 
@@ -271,12 +306,13 @@ export function useUpdateEntry<
   // with, built through the shared `detailScoped` helper so the two can never
   // drift (React Query hashes the object; any mismatch silently no-ops the
   // optimistic write, rollback, and cancellation). A localized editor reads with
-  // `translationStatus` on and `fallbackLocale: "none"`, and draft mode follows
-  // the collection's working-draft split.
+  // `fallbackLocale: "none"` and, where the user may read every language's
+  // state, `translationStatus` on; draft mode follows the collection's
+  // working-draft split.
   const localeKey = entryKeys.detailScoped(collectionSlug, entryId, {
     locale,
     fallbackLocale: localizationEnabled ? "none" : fallbackLocale,
-    translationStatus: localizationEnabled,
+    translationStatus,
     draft,
   });
 
@@ -326,41 +362,50 @@ export function useUpdateEntry<
     },
 
     // Rollback on error
-    onError: (error: Error, variables, context) => {
+    onError: (error: Error, _variables, context) => {
+      // A refusal because the collection was removed from code reads its
+      // schema again, so a screen opened before the removal turns read-only.
+      refreshRemovedFromCodeSchema(queryClient, error);
+
       // Rollback to previous value
       if (optimistic && context?.previousEntry) {
         queryClient.setQueryData(localeKey, context.previousEntry);
       }
 
-      // Try to map server errors to form fields
-      let handledByForm = false;
-
-      if (setError) {
-        const errorHandler = createServerErrorHandler(setError);
-        handledByForm = errorHandler(error);
+      // A save made from an older version: the editor's conflict tells the
+      // author who changed it and offers what to do, so no toast says it
+      // twice. The entry is read again, so the current version reaches the
+      // editor, whose form keeps the refused edits until the author chooses.
+      if (staleVersionOf(error)) {
+        void queryClient.invalidateQueries({
+          queryKey: entryKeys.detail(collectionSlug, entryId),
+        });
+        onError?.(error);
+        return;
       }
 
+      // Each reason on the field it names, where the form draws that field;
+      // the form keeps the author's values. Reasons no field can show are
+      // said by the toast below instead.
+      const placed = placeServerRefusal(error, setError, {
+        isFormField: drawnFieldPath(fields, valueAt),
+      });
+      let handledByForm = placed.handled;
+
       // The out-of-date refusal reports itself, with the action that
-      // resolves it; saving the refused values without their status keeps
-      // them as the pending change.
-      if (!handledByForm) {
-        handledByForm = recoverSharedFields(error, () => {
-          const { status: _status, ...values } = variables;
-          return entryApi.update(
-            collectionSlug,
-            entryId,
-            values,
-            locale ? { locale, fallbackLocale } : undefined
-          );
-        });
+      // resolves it, which works on the editor's form, wherever that form
+      // may write now.
+      if (!handledByForm && refusedForm) {
+        handledByForm = recoverSharedFields(error, refusedForm);
       }
 
       // Show generic toast only if errors weren't mapped to form
       if (showToast && !handledByForm) {
         const message =
-          parseServerErrorMessage(error) ||
-          error.message ||
-          "Failed to update entry";
+          placed.toastMessage ??
+          (parseServerErrorMessage(error) ||
+            error.message ||
+            "Failed to update entry");
         toast.error(message);
       }
 
@@ -395,18 +440,9 @@ export function useUpdateEntry<
         });
       }
 
-      // Invalidate entry list queries for this collection
-      void queryClient.invalidateQueries({
-        queryKey: entryKeys.listsByCollection(collectionSlug),
-      });
-
-      // Invalidate this specific entry detail
-      void queryClient.invalidateQueries({
-        queryKey: entryKeys.detail(collectionSlug, entryId),
-      });
-
-      // Invalidate dashboard caches so recent-entries refresh immediately
-      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      // Its lists, its own read and the dashboard refetch, as after every
+      // change to an entry.
+      void refreshAfterEntryChange(queryClient, collectionSlug, entryId);
 
       if (showToast) {
         // The row IS saved even when a post-commit hook failed, so this stays a

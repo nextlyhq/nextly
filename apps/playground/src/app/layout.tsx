@@ -1,6 +1,15 @@
+import { SiteCode } from "@nextlyhq/plugin-page-builder/site";
+
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import "./globals.css";
+// Registers the app's "use cache" read function, and how Nextly starts when a
+// read finds it not started, for every route before any of them reads,
+// `/_not-found` during `next build` included: `<SiteCode>` below refuses to
+// read under Cache Components without the function, and its read needs
+// Nextly started. With Cache Components off, `next.config.ts` resolves this
+// to a variant that registers only how Nextly starts.
+import "@/nextly/cached-read";
 
 /**
  * The document shell, and nothing else.
@@ -36,6 +45,15 @@ import "./globals.css";
  * reader fetches is not, and a page in Cyrillic now gets its face instead of a
  * fallback.
  *
+ * ## Site code
+ *
+ * `<SiteCode>` is mounted here, in the root layout the admin shares, which the
+ * page builder's docs tell a site not to do: this harness carries it in the
+ * worst place on purpose, so the browser tests prove its own guard keeps the
+ * code out of the admin, the canvas and the preview wherever it is mounted.
+ * Its read goes through the `"use cache"` function imported above, as the
+ * page builder's docs tell a site under Cache Components to do.
+ *
  * @module app/layout
  */
 export default function RootLayout({
@@ -69,8 +87,12 @@ export default function RootLayout({
        *
        * @see https://react.dev/link/hydration-mismatch
        */}
+      <head>
+        <SiteCode slot="head" />
+      </head>
       <body className="antialiased" suppressHydrationWarning>
         {children}
+        <SiteCode slot="body" />
       </body>
     </html>
   );

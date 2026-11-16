@@ -13,11 +13,13 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { copiesEveryValue } from "../../schema/pipeline/classifier/type-widening";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 
+import { ddlType } from "./ddl-types";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import type { CompanionFieldLike } from "./reconcile-companion";
-import type { LocalizedColumnSpec } from "./types";
+import type { LocalizedColumnKind, LocalizedColumnSpec } from "./types";
 
 /** A field as a schema change describes it, with the flags the rules read. */
 export type LeavingFieldLike = CompanionFieldLike & {
@@ -30,12 +32,14 @@ export interface LeavingTranslationRefusal {
   path: string;
   code:
     | "RESHAPED_FIELD_LEAVES_TRANSLATION"
-    | "CONSTRAINED_FIELD_LEAVES_TRANSLATION"
+    | "REQUIRED_FIELD_LEAVES_WITHOUT_VALUES"
+    | "UNIQUE_FIELD_LEAVES_OVER_DUPLICATES"
     | "RESHAPED_FIELD_JOINS_TRANSLATION"
     | "RESHAPED_TRANSLATED_FIELD_RENAMED"
     | "TRANSLATED_FIELD_RENAMED_AS_TRANSLATION_ENDS"
     | "TRANSLATED_FIELD_RENAME_UNANSWERED"
-    | "TRANSLATED_FIELD_REMOVED_BESIDE_ADDED";
+    | "TRANSLATED_FIELD_REMOVED_BESIDE_ADDED"
+    | "TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION";
   /** Why the field cannot leave or join translation in this change, as one sentence. */
   reason: string;
   /** The changes that get there instead, in order, each one sentence. */
@@ -48,7 +52,7 @@ export interface LeavingTranslationRefusal {
  * A refusal whose message is derived from its reason and steps, so a surface that lists the
  * steps and one that prints the message cannot say different things.
  */
-function refusal(
+export function refusal(
   path: string,
   code: LeavingTranslationRefusal["code"],
   reason: string,
@@ -57,8 +61,26 @@ function refusal(
   return { path, code, reason, steps, message: [reason, ...steps].join(" ") };
 }
 
-type Surface = "builder" | "code";
+/** Whose steps a refusal names: the Schema Builder's settings, or the config and its CLI. */
+export type TranslationSurface = "builder" | "code";
+type Surface = TranslationSurface;
 type Constraint = "required" | "unique";
+
+/**
+ * Whether the database holds a field's values in a different column type under two descriptions
+ * of it, as this dialect renders each (`ddlType`). Two kinds can name one type: a translated
+ * unique field that states no width is unbounded text and its shared column a bounded string,
+ * which is `TEXT` against `VARCHAR(255)` on MySQL but `TEXT` both ways on PostgreSQL and SQLite.
+ * No description of either side is no difference, since there is nothing to judge.
+ */
+function rendersDifferently(
+  before: LocalizedColumnSpec | null | undefined,
+  after: LocalizedColumnSpec | null | undefined,
+  dialect: SupportedDialect
+): boolean {
+  if (!before || !after) return false;
+  return ddlType(before, dialect) !== ddlType(after, dialect);
+}
 
 /**
  * Whether a field's storage differs between two descriptions of its column: its kind, or its
@@ -76,11 +98,101 @@ export function storageDiffers(
   return before !== undefined && shape(before) !== shape(after);
 }
 
+/** The kinds a field may move between as it joins translation, each family's: text, or number. */
+const STORAGE_FAMILY: Partial<Record<LocalizedColumnKind, string>> = {
+  text: "text",
+  shortText: "text",
+  longText: "text",
+  integer: "number",
+  double: "number",
+  decimal: "number",
+};
+
+/** A field's column as a judge of a move into the translations table has it. */
+export interface MovedColumn {
+  /** The declared type, with any length or precision spelled inside it. */
+  type: string;
+  /** The field's column kind, known to a judge that has the field; a judge with only types has none. */
+  kind?: LocalizedColumnKind;
+  /** The column's length, given with the kind. */
+  length?: number;
+}
+
 /**
- * The settings a field cannot carry while it stops being translated: its own flags, and
- * `unique` when a unique index covers it without the flag.
+ * Whether every value of a field stored in `from` survives a move into a column stored as `to`:
+ * the one answer every judge of a field joining translation, or of a retry of that move, asks.
+ * Where both kinds are known, they are one kind or kinds of one family, since a field changing
+ * family (a number made text, a checkbox made a number) changes what it is, whatever the database
+ * would keep of its values. Then the copy keeps each value as it is, within what the new type
+ * allows (`copiesEveryValue`): a widening, never a narrowing.
+ *
+ * A judge with only the database's types has no kinds, and on one dialect two kinds or two bounds
+ * can share a declared type (SQLite stores a checkbox and a number both as `integer`, and keeps no
+ * text's length or decimal's precision); such a judge sees no change there, where the database
+ * holds each value as it was.
  */
-function constraintsOf(
+export function moveKeepsEveryValue(
+  from: MovedColumn,
+  to: MovedColumn,
+  dialect: SupportedDialect
+): boolean {
+  if (from.kind !== undefined && to.kind !== undefined) {
+    const family = STORAGE_FAMILY[from.kind];
+    const sameFamily =
+      from.kind === to.kind ||
+      (family !== undefined && family === STORAGE_FAMILY[to.kind]);
+    if (!sameFamily) return false;
+    // SQLite's TEXT keeps no length, so a short text's declared maximum is the only bound there:
+    // its values must already be within it, as PostgreSQL and MySQL require of the column.
+    if (
+      dialect === "sqlite" &&
+      to.kind === "shortText" &&
+      to.length !== undefined &&
+      (from.kind !== "shortText" ||
+        from.length === undefined ||
+        from.length > to.length)
+    ) {
+      return false;
+    }
+  }
+  return copiesEveryValue(from.type, to.type, dialect);
+}
+
+/**
+ * The refusals for fields joining translation whose values an earlier apply of the change already
+ * moved into the translations table, when the change also narrows how the field is stored. The
+ * values are kept as they are, so some would stand against the field's narrower rules; and the
+ * order the joining refusal gives (shared first) would add an empty shared column while the values
+ * sit in the translations table. So the way on finishes the earlier change first.
+ */
+export function refusalsForMovedJoinsNarrowed(args: {
+  narrowed: readonly string[];
+  surface: Surface;
+}): LeavingTranslationRefusal[] {
+  return args.narrowed.map(name =>
+    refusal(
+      `fields.${name}`,
+      "RESHAPED_FIELD_JOINS_TRANSLATION",
+      `An earlier change that made "${name}" translated did not finish, and its values are ` +
+        "already in the translations table; this change narrows its type, length or precision.",
+      args.surface === "builder"
+        ? [
+            "Save it with its earlier type, length or precision, to finish that change.",
+            "Then narrow it and save.",
+          ]
+        : [
+            `Declare "${name}" with its earlier type, length or precision, and sync.`,
+            "Then narrow it and sync again.",
+          ]
+    )
+  );
+}
+
+/**
+ * The settings a field leaving translation has to take on after its values are shared: its own
+ * flags, and `unique` when a unique index covers it without the flag.
+ */
+export function leavingFieldConstraints(
   field: LeavingFieldLike,
   uniqueIndexed: ReadonlySet<string> | undefined
 ): Constraint[] {
@@ -94,8 +206,27 @@ function constraintsOf(
 
 function reshapedRefusal(
   name: string,
-  surface: Surface
+  surface: Surface,
+  /** Its shared column is bounded where its translated one is not: a unique field with no width. */
+  boundedOnceShared = false
 ): LeavingTranslationRefusal {
+  if (boundedOnceShared) {
+    return refusal(
+      `fields.${name}`,
+      "RESHAPED_FIELD_LEAVES_TRANSLATION",
+      `"${name}" is unique and states no width, so stored shared its column is bounded to be ` +
+        "keyed whole, where translated it is not: its values cannot leave translation as they are.",
+      surface === "builder"
+        ? [
+            "Give the field a maximum length and save.",
+            "Or turn off Unique and save, before it stops being translated.",
+          ]
+        : [
+            "Give the field a `maxLength` and run `nextly migrate:create`.",
+            "Or set `unique: false` and run it, before it stops being translated.",
+          ]
+    );
+  }
   return refusal(
     `fields.${name}`,
     "RESHAPED_FIELD_LEAVES_TRANSLATION",
@@ -112,26 +243,6 @@ function reshapedRefusal(
   );
 }
 
-function constrainedRefusal(
-  name: string,
-  constraints: readonly Constraint[],
-  surface: Surface
-): LeavingTranslationRefusal {
-  const builder = surface === "builder";
-  return refusal(
-    `fields.${name}`,
-    "CONSTRAINED_FIELD_LEAVES_TRANSLATION",
-    // The Builder shows the reason beside the field it is about, so it does not name it again; a
-    // migration's refusal is read on its own and does.
-    builder
-      ? `A ${constraints.join(" and ")} field can't stop being translated in the same change.`
-      : `"${name}" is ${constraints.join(" and ")}, so it cannot stop being translated in the same migration.`,
-    builder
-      ? builderConstraintSteps(constraints)
-      : codeConstraintSteps(constraints)
-  );
-}
-
 /**
  * The refusals for the fields in `leaving`.
  *
@@ -140,9 +251,13 @@ function constrainedRefusal(
  *   without the conversion and confirmation such a change goes through on its own. Judged against
  *   the column the values sit in now, described by `oldFields` or, where the caller has no old
  *   definition, by `previousColumns`; a field neither describes is not judged.
- * - A required or unique field, or one a unique index covers (`uniqueIndexed`). Its shared column
- *   is created, and its constraints checked, before the default language's values are copied into
- *   it, so at that moment every existing row holds the same placeholder or none.
+ *
+ * - A field whose shared column is shaped otherwise than its translated one: a unique text field
+ *   that states no width is bounded on MySQL to be keyed whole, where translated it is not.
+ *
+ * A Required or Unique field is not refused here: every surface creates its shared column without
+ * the setting and applies it after the copy (`withoutLeavingConstraints`), and whether the values
+ * can take it is asked of the database (`refusalsForConstrainedFieldsLeaving`).
  *
  * @param surface - Whose steps the message names: the Schema Builder's settings and saves, or
  *   the config's flags and `nextly migrate:create`
@@ -153,8 +268,6 @@ export function refusalsForFieldsLeavingTranslation(args: {
   oldFields?: readonly LeavingFieldLike[];
   /** The companion columns as they are now, by column name, for a caller with no old fields. */
   previousColumns?: ReadonlyMap<string, LocalizedColumnSpec>;
-  /** Fields a unique index covers, beside their own `unique` flag. */
-  uniqueIndexed?: ReadonlySet<string>;
   dialect: SupportedDialect;
   /** Which builder made the entity's table, which decides a column's bounds. */
   builtBy: ColumnOrigin;
@@ -176,35 +289,35 @@ export function refusalsForFieldsLeavingTranslation(args: {
     if (!args.leaving.has(field.name)) continue;
     if (storageDiffers(previousColumnOf(field), columnOf(field))) {
       refusals.push(reshapedRefusal(field.name, args.surface));
-      continue;
-    }
-    const constraints = constraintsOf(field, args.uniqueIndexed);
-    if (constraints.length > 0) {
-      refusals.push(constrainedRefusal(field.name, constraints, args.surface));
+    } else if (
+      rendersDifferently(
+        columnOf(field),
+        fieldToLocalizedColumnSpec(field, args.dialect, args.builtBy, "shared"),
+        args.dialect
+      )
+    ) {
+      // The same field shaped differently once shared: a unique field that states no width is a
+      // bounded column on MySQL, which its translated values may not fit.
+      refusals.push(reshapedRefusal(field.name, args.surface, true));
     }
   }
   return refusals;
 }
 
-function builderConstraintSteps(constraints: readonly Constraint[]): string[] {
-  const settings = constraints
-    .map(c => (c === "required" ? "Required" : "Unique"))
-    .join(" and ");
-  // Each step names the Builder control it uses, and ends where the author saves.
-  return [
-    `Turn off ${settings} and save.`,
-    "Turn off Localized and save.",
-    `Turn ${settings} back on and save.`,
-  ];
-}
-
-function codeConstraintSteps(constraints: readonly Constraint[]): string[] {
-  const flags = constraints.map(c => `\`${c}\``).join(" and ");
-  return [
-    `Remove ${flags} from the field and run \`nextly migrate:create\`.`,
-    "Set `localized: false` and run it again.",
-    `Put ${flags} back and run it once more.`,
-  ];
+/**
+ * `fields` with each field in `leaving` that carries a leaving field's settings made optional and
+ * not unique: the shape its shared column is created in, before the default language's values are
+ * copied into it. Every other field is returned as it is.
+ */
+export function withoutLeavingConstraints<F extends LeavingFieldLike>(
+  fields: readonly F[],
+  leaving: ReadonlySet<string>
+): F[] {
+  return fields.map(f =>
+    leaving.has(f.name) && leavingFieldConstraints(f, undefined).length > 0
+      ? { ...f, required: false, unique: false }
+      : f
+  );
 }
 
 function reshapedJoiningRefusal(

@@ -14,6 +14,7 @@
  *
  * @module domains/schema/migrate-create/config-entities
  */
+import { settingsOf } from "./entity-settings";
 import type { MinimalConfigEntity, MinimalConfigField } from "./generate";
 
 /** The shape of a config entry before it is reduced. */
@@ -38,7 +39,9 @@ interface RawConfigEntity {
  *
  * The entity-level attributes are the ones that change a table: `status` adds
  * the lifecycle column, `localized` moves columns to the companion table and
- * `indexes` declares compound indexes.
+ * `indexes` declares compound indexes. The rest of the declaration travels as
+ * its `settings`, taken from the entry whole, so a setting that changes no
+ * column still reaches the snapshot (`entity-settings.ts`).
  */
 export function toMinimalEntities(
   entities: unknown[],
@@ -63,6 +66,7 @@ export function toMinimalEntities(
       // was validated and then discarded since it was introduced, so an app
       // that declared one has been running without it.
       ...(e.indexes !== undefined ? { indexes: e.indexes } : {}),
+      settings: { source: "code", settings: settingsOf(raw, "code") },
     };
   });
 }

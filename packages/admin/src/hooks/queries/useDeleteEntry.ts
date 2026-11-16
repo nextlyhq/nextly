@@ -31,13 +31,17 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 
-import { toast } from "@admin/components/ui";
+import { toast } from "@admin/components/ui/toaster";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import {
   toastMutationResult,
   type MutationResult,
 } from "@admin/lib/mutation-warnings";
-import { entryApi, entryKeys } from "@admin/services/entryApi";
+import { entryApi } from "@admin/services/entryApi";
 import type { Entry } from "@admin/types/collection";
+
+import { refreshAfterEntryDelete } from "./entry-cache";
+import { refreshRemovedFromCodeSchema } from "./removed-from-code-refusal";
 
 /**
  * Options for useDeleteEntry hook
@@ -173,23 +177,9 @@ export function useDeleteEntry<T = Entry>({
 
     onSuccess: (result, entryId) => {
       const data = result.item;
-      // Invalidate entry list queries for this collection
-      void queryClient.invalidateQueries({
-        queryKey: entryKeys.listsByCollection(collectionSlug),
-      });
-
-      // Invalidate count queries
-      void queryClient.invalidateQueries({
-        queryKey: entryKeys.counts(),
-      });
-
-      // Remove the specific entry from cache
-      queryClient.removeQueries({
-        queryKey: entryKeys.detail(collectionSlug, entryId),
-      });
-
-      // Invalidate dashboard caches so stats/recent-entries refresh immediately
-      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      // Its lists, counts and dashboard refetch and its own read is dropped,
+      // as after every deletion of an entry.
+      refreshAfterEntryDelete(queryClient, collectionSlug, entryId);
 
       if (showToast) {
         // The row IS written even when a post-commit hook failed, so this stays
@@ -201,8 +191,13 @@ export function useDeleteEntry<T = Entry>({
     },
 
     onError: (error: Error) => {
+      // A refusal because the collection was removed from code reads its
+      // schema again, so a screen opened before the removal turns read-only.
+      refreshRemovedFromCodeSchema(queryClient, error);
       if (showToast) {
-        toast.error(`Failed to delete entry: ${error.message}`);
+        // The server's message already says what was refused ("You can't
+        // delete this post."), so it is shown as it is, with nothing in front.
+        toast.error(apiErrorMessage(error, "The entry couldn't be deleted."));
       }
 
       onError?.(error);

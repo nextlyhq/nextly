@@ -389,6 +389,7 @@ describe("MediaService — Folder Operations", () => {
           subfolders: [subfolder],
           mediaFiles: [mediaFile],
           breadcrumbs: [{ id: "folder-001", name: "Test Folder" }],
+          meta: { total: 1, page: 1, limit: 24, totalPages: 1 },
         },
       });
 
@@ -405,6 +406,39 @@ describe("MediaService — Folder Operations", () => {
       expect(result.breadcrumbs).toEqual([
         { id: "folder-001", name: "Test Folder" },
       ]);
+    });
+
+    it("asks for the page it is given, and says which page it holds", async () => {
+      mockLegacyFolder.getFolderContents.mockResolvedValue({
+        success: true,
+        statusCode: 200,
+        message: "OK",
+        data: {
+          folder: createMockFolder(),
+          subfolders: [],
+          mediaFiles: [],
+          breadcrumbs: [],
+          meta: { total: 30, page: 2, limit: 10, totalPages: 3 },
+        },
+      });
+
+      const result = await service.getFolderContents("folder-001", context, {
+        page: 2,
+        limit: 10,
+        sortBy: "filename",
+        sortOrder: "asc",
+      });
+
+      expect(mockLegacyFolder.getFolderContents).toHaveBeenCalledWith(
+        "folder-001",
+        { page: 2, limit: 10, sortBy: "filename", sortOrder: "asc" }
+      );
+      expect(result.meta).toEqual({
+        total: 30,
+        page: 2,
+        limit: 10,
+        totalPages: 3,
+      });
     });
 
     it("should throw NOT_FOUND for non-existent folder", async () => {

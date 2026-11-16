@@ -4,12 +4,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { useState, type JSX } from "react";
 
-import {
-  QUERY_GC_TIME,
-  QUERY_RETRY_COUNT,
-  QUERY_STALE_TIME,
-} from "@admin/constants/query";
+import { QUERY_GC_TIME, QUERY_STALE_TIME } from "@admin/constants/query";
 import { shouldRetryMutation } from "@admin/lib/api/mutation-retry";
+import { shouldRetryQuery } from "@admin/lib/api/query-retry";
+
+import { beginAdminStartup } from "./admin-startup";
+
+/** Whether the query devtools are drawn: unless a development build opts out of them. */
+const SHOW_QUERY_DEVTOOLS =
+  process.env.NEXT_PUBLIC_NEXTLY_QUERY_DEVTOOLS !== "off";
 
 /**
  * QueryProvider - Provides TanStack Query context to the application
@@ -28,9 +31,10 @@ import { shouldRetryMutation } from "@admin/lib/api/mutation-retry";
  *   - Keeps recently viewed data in memory for faster navigation
  *   - Set higher than staleTime for memory efficiency
  *
- * - **retry: 1** - Failed queries retry once before showing error
- *   - Conservative retry for faster error feedback in admin UI
- *   - Prevents long waits on persistent failures
+ * - **retry: shouldRetryQuery** - A failed read is retried once, unless the
+ *   server refused it with a 4xx other than 408 or 429: a refusal (signed out,
+ *   not allowed, not found) answers the same again, and retrying it only
+ *   delays the screen that shows it.
  *
  * - **refetchOnWindowFocus: false** - Prevents refetch when tab regains focus
  *   - Admin users frequently switch tabs (documentation, email, etc.)
@@ -54,7 +58,10 @@ import { shouldRetryMutation } from "@admin/lib/api/mutation-retry";
  * ## Development Tools
  *
  * Includes ReactQueryDevtools for development (auto-excluded in production builds).
- * Access devtools via the floating icon in the bottom-right corner.
+ * Access devtools via the floating icon in the bottom-right corner. Set
+ * `NEXT_PUBLIC_NEXTLY_QUERY_DEVTOOLS=off` to leave them out of a development
+ * build too, as the browser suite does: its floating icon sits over the
+ * bottom-right corner, where toasts and their Undo are drawn.
  *
  * @example
  * ```tsx
@@ -82,28 +89,30 @@ export function QueryProvider({
 }): JSX.Element {
   // Use useState with lazy initializer to ensure stable QueryClient instance
   // This prevents QueryClient recreation on re-renders (TanStack Query best practice)
-  const [queryClient] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: {
-          queries: {
-            staleTime: QUERY_STALE_TIME,
-            gcTime: QUERY_GC_TIME,
-            retry: QUERY_RETRY_COUNT,
-            refetchOnWindowFocus: false, // Prevent refetch on tab switch (admin CMS UX)
-          },
-          mutations: {
-            retry: shouldRetryMutation,
-            // throwOnError: Not enabled globally - use per-mutation opt-in
-          },
+  const [queryClient] = useState(() => {
+    // The first thing the admin does in the browser: its startup request, so
+    // what every screen asks for first is on its way before any screen asks.
+    beginAdminStartup();
+    return new QueryClient({
+      defaultOptions: {
+        queries: {
+          staleTime: QUERY_STALE_TIME,
+          gcTime: QUERY_GC_TIME,
+          retry: shouldRetryQuery,
+          refetchOnWindowFocus: false, // Prevent refetch on tab switch (admin CMS UX)
         },
-      })
-  );
+        mutations: {
+          retry: shouldRetryMutation,
+          // throwOnError: Not enabled globally - use per-mutation opt-in
+        },
+      },
+    });
+  });
 
   return (
     <QueryClientProvider client={queryClient}>
       {children}
-      <ReactQueryDevtools initialIsOpen={false} />
+      {SHOW_QUERY_DEVTOOLS && <ReactQueryDevtools initialIsOpen={false} />}
     </QueryClientProvider>
   );
 }

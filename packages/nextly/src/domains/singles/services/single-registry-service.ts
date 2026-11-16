@@ -49,15 +49,24 @@ import {
 import type { Logger } from "../../../shared/types";
 import type { SingleConfig } from "../../../singles/config/types";
 import {
+  fieldSettingsChanged,
+  withUnsaidKept,
+  type RecordedWriteOptions,
+} from "../../collections/services/collection-registry-service";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import {
   moveWebhookRecording,
   renameEntity,
 } from "../../entity-rename/rename-entity";
+import { flushContentChange } from "../../flush-content-change";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
-import { deleteEntityRegistryRow } from "../../versions/entity-teardown";
+import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
+import { resolveVersionsConfig } from "../../versions/resolve-config";
+import { storedWebhookRecording } from "../../webhooks/builder-webhooks";
 import {
   clearWebhookRecording,
   setWebhookRecording,
@@ -134,6 +143,173 @@ export interface CodeFirstSingleConfig {
 }
 
 /**
+ * What {@link toCodeFirstSingleConfig} reads of a Single's config entry, typed
+ * as the minimal shape rather than `SingleConfig` so a caller holding a
+ * recorded declaration (not a live config) can project it the same way.
+ */
+export interface CodeFirstSingleSource {
+  slug: string;
+  label?: { singular?: string };
+  fields: CodeFirstSingleConfig["fields"];
+  description?: string;
+  dbName?: string;
+  admin?: CodeFirstSingleConfig["admin"];
+  status?: boolean;
+  localized?: boolean;
+  versions?: Parameters<typeof resolveVersionsConfig>[0];
+  revalidate?: CodeFirstSingleConfig["revalidate"];
+  webhooks?: Parameters<typeof storedWebhookRecording>[0];
+}
+
+/**
+ * The registry-sync payload for one code-first Single.
+ *
+ * The one projection from a config entry to the sync payload, so the start's
+ * sync and `nextly migrate` derive a Single's row from its declaration the same
+ * way and cannot rewrite each other's rows. Carries no config path: that is
+ * where a row came from, which each caller states for itself.
+ */
+export function toCodeFirstSingleConfig(
+  single: CodeFirstSingleSource
+): CodeFirstSingleConfig {
+  return {
+    slug: single.slug,
+    // The declared label, else the slug title-cased word by word on `-`.
+    label:
+      single.label?.singular ??
+      single.slug
+        .split("-")
+        .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(" "),
+    fields: single.fields,
+    description: single.description,
+    // The authored name as written: the registry resolves it to the physical
+    // table through `resolveSingleTableName`.
+    tableName: single.dbName,
+    admin: single.admin,
+    // Forward Draft/Published flag from code-first config so the sync
+    // persists it to dynamic_singles.status.
+    status: single.status === true,
+    // Forward the i18n flag so a code-first single with localized:true
+    // persists it to dynamic_singles.localized.
+    localized: single.localized === true,
+    // Resolve + forward the versioning config so it persists to
+    // dynamic_singles.versions (status:true aliases to a versioned config).
+    versions: resolveVersionsConfig(single.versions, single.status),
+    // Forward the cache-revalidation config verbatim so it persists to
+    // dynamic_singles.revalidate; the write path reads it to honor `disable`
+    // and merge extra `tags`.
+    revalidate: single.revalidate,
+    // Mirror the recording opt-out onto the registry row (same reason as
+    // collections).
+    webhooks: storedWebhookRecording(single.webhooks),
+  };
+}
+
+/**
+ * The columns a Single's declaration gives a row it registers, before where
+ * the row came from (source, lock, config path), which each caller adds. One
+ * projection for the start's sync and `nextly migrate`'s writer.
+ */
+function declaredSingleRegistration(
+  config: CodeFirstSingleConfig,
+  schemaHash: string
+): Omit<DynamicSingleInsert, "source" | "locked" | "configPath"> {
+  return {
+    slug: config.slug,
+    label: config.label,
+    // Route through the canonical resolver so registry and DDL paths
+    // never disagree on the single's physical table name, even when
+    // an explicit dbName/tableName is provided without the prefix.
+    tableName: declaredSingleTable(config),
+    description: config.description,
+    fields: config.fields,
+    admin: config.admin,
+    // Forward Draft/Published flag so code-first Singles that opt
+    // in actually write the column on first sync.
+    status: config.status === true,
+    // Forward the resolved versioning config on first sync.
+    versions: config.versions,
+    // Forward the cache-revalidation config on first sync.
+    revalidate: config.revalidate,
+    // Forward the webhook recording policy on first sync.
+    webhooks: config.webhooks,
+    localized: config.localized === true,
+    schemaHash,
+  };
+}
+
+/**
+ * The columns a Single's declaration rewrites on a schema change: its fields,
+ * the switches that change how its document is read, and its metadata. Where
+ * the row came from is the caller's to add, or to leave.
+ */
+function declaredSingleRow(
+  config: CodeFirstSingleConfig,
+  schemaHash: string
+): Partial<DynamicSingleInsert> {
+  return {
+    // Explicit null where the config no longer declares a description or an
+    // admin block (see `declaredSingleMetadata`): `updateSingle` reads
+    // `undefined` as "leave unchanged", so a config that dropped either while
+    // ALSO changing a field selects this write and would strand the old value.
+    ...declaredSingleMetadata(config),
+    fields: config.fields,
+    schemaHash,
+    status: config.status === true,
+    versions: config.versions,
+    // Send explicit null (not undefined) when the config removed
+    // `revalidate`, so updateSingle actually clears the column instead
+    // of leaving the stale config persisted.
+    revalidate: config.revalidate ?? null,
+    // Send explicit null (not undefined) when the config removed
+    // `webhooks`, so updateSingle actually clears the column instead
+    // of leaving a stale opt-out suppressing the outbox.
+    webhooks: config.webhooks ?? null,
+    localized: config.localized === true,
+    tableName: declaredSingleTable(config),
+  };
+}
+
+/**
+ * The physical table a Single's declaration names, through the canonical
+ * resolver, so the registry and the DDL never disagree on it, even where an
+ * explicit `dbName` is given without its prefix.
+ */
+function declaredSingleTable(config: CodeFirstSingleConfig): string {
+  return resolveSingleTableName({
+    slug: config.slug,
+    dbName: config.tableName,
+  });
+}
+
+/** The columns a metadata-only change rewrites: label, description and admin options. */
+function declaredSingleMetadata(
+  config: CodeFirstSingleConfig
+): Partial<DynamicSingleInsert> {
+  return {
+    label: config.label,
+    // Explicit null where the config no longer declares one, so
+    // `updateSingle` clears the column instead of reading `undefined`
+    // as "leave unchanged" and stranding a value the config has dropped.
+    description: config.description ?? null,
+    admin: config.admin ?? null,
+  };
+}
+
+/**
+ * What a code-first sync does with one Single (`codeFirstSyncStep`), with the
+ * record it acts on when the registry holds one and the schema hash it records.
+ */
+type CodeFirstSingleStep = { schemaHash: string } & (
+  | { step: "create" }
+  | {
+      step: "update" | "metadata" | "unchanged";
+      existing: DynamicSingleRecord;
+    }
+);
+
+/**
  * Result of syncing code-first Singles.
  */
 export interface SyncSingleResult {
@@ -203,6 +379,9 @@ export class SingleRegistryService extends BaseRegistryService<
   DynamicSingleRecord,
   SingleMigrationStatus
 > {
+  // Every read of one looks its registry row up, so it comes from the registry row cache.
+  protected override readonly readsRowsFromCache = true;
+
   protected readonly registryTableName = "dynamic_singles";
   protected readonly resourceType = "Single";
   protected readonly tableNamePrefix = "single_";
@@ -308,10 +487,54 @@ export class SingleRegistryService extends BaseRegistryService<
     return this.getRecordOrThrow(slug);
   }
 
+  /**
+   * The Single's registry row as stored, past the registry row cache; null if it is missing. For
+   * a schema save, which checks the stored schema version and advances it.
+   */
+  async getSingleForWrite(slug: string): Promise<DynamicSingleRecord | null> {
+    return this.findRecordForWrite(slug);
+  }
+
+  /**
+   * Every Single's slug and label, read without the rest of its record: what
+   * a screen naming every Single needs.
+   */
+  async getAllLabels(
+    options: { forWrite?: boolean } = {}
+  ): Promise<Array<Pick<DynamicSingleRecord, "slug" | "label">>> {
+    const records = await this.getAllRecordsWithColumns(["label"], options);
+    return records.map(({ slug, label }) => ({ slug, label }));
+  }
+
+  /**
+   * Every Single's slug and `revalidate` setting, read without the rest of its record: what a
+   * change that busts every Single's cached reads at once needs.
+   */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async getAllRevalidateConfigs(): Promise<
+    Array<Pick<DynamicSingleRecord, "slug" | "revalidate">>
+  > {
+    const records = await this.getAllRecordsWithColumns(["revalidate"]);
+    return records.map(({ slug, revalidate }) => ({ slug, revalidate }));
+  }
+
   async getAllSingles(
     options?: ListSinglesOptions
   ): Promise<DynamicSingleRecord[]> {
     return this.getAllRecords(options);
+  }
+
+  /**
+   * Every Single, oldest first, from the registry cache outside a transaction
+   * (`getAllRecordsForRead`): for a read that decides no write, such as a
+   * screen or a widget listing the Singles. A write decides from
+   * `getAllSingles`, which reads them as stored.
+   */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async getAllSinglesForRead(): Promise<DynamicSingleRecord[]> {
+    return this.getAllRecordsForRead();
   }
 
   async listSingles(options?: ListSinglesOptions): Promise<ListSinglesResult> {
@@ -352,13 +575,47 @@ export class SingleRegistryService extends BaseRegistryService<
    * @throws NextlyError(DATABASE_ERROR) on insert failure.
    */
   async registerSingle(
+    data: DynamicSingleInsert,
+    options: {
+      /**
+       * `false` leaves the Single's permissions to a seeding the caller knows
+       * follows, as a start's does (`syncCodeFirstSingles`).
+       */
+      seedPermissions?: boolean;
+      /**
+       * Runs the row's write, for a caller that writes it in a transaction of
+       * its own (a Builder save, with the stored schema version beside it).
+       * The permissions are seeded after it returns, outside that
+       * transaction: their writes take connections of their own.
+       */
+      writeRow?: (
+        write: () => Promise<DynamicSingleRecord>
+      ) => Promise<DynamicSingleRecord>;
+    } = {}
+  ): Promise<DynamicSingleRecord> {
+    const write = () => this.insertSingle(data);
+    const record = await (options.writeRow ? options.writeRow(write) : write());
+    // Seeded after the row is written; `seedPermissionsForSingle` logs and
+    // swallows its own failures, so a seeding error never fails registration.
+    if (options.seedPermissions !== false) {
+      await this.seedPermissionsForSingle(data.slug);
+    }
+    return record;
+  }
+
+  /**
+   * Write a new Single's registry row, and nothing else: `registerSingle`
+   * without its permission seeding, for a writer whose job is the row alone
+   * (`writeRecordedSingle`), permissions being another writer's.
+   */
+  private async insertSingle(
     data: DynamicSingleInsert
   ): Promise<DynamicSingleRecord> {
     this.logger.debug("Registering Single", { slug: data.slug });
 
     await assertGlobalResourceSlugAvailable(this.adapter, data.slug);
 
-    const existing = await this.getSingleBySlug(data.slug);
+    const existing = await this.findRecordForWrite(data.slug);
     if (existing) {
       // §13.8: generic "Resource already exists." — slug stays in logContext
       // for operator visibility but never on the wire.
@@ -372,11 +629,16 @@ export class SingleRegistryService extends BaseRegistryService<
     const record = this.buildInsertRecord(data, fieldsJson, schemaHash);
 
     try {
-      const result = await this.adapter.insert<DynamicSingleRecord>(
-        this.registryTableName,
-        record,
-        { returning: "*" }
+      // With the stored schema version's count (`writeRegistry`).
+      const result = await this.writeRegistry(() =>
+        this.adapter.insert<DynamicSingleRecord>(
+          this.registryTableName,
+          record,
+          { returning: "*" }
+        )
       );
+      // The cached registry row is now out of date.
+      clearRegistryRowCache();
 
       this.publishRegisteredRecording(data);
 
@@ -384,8 +646,6 @@ export class SingleRegistryService extends BaseRegistryService<
         slug: data.slug,
         source: data.source,
       });
-
-      await this.seedPermissionsForSingle(data.slug);
 
       return this.deserializeRecord(result);
     } catch (error) {
@@ -431,6 +691,10 @@ export class SingleRegistryService extends BaseRegistryService<
       record,
       { returning: "*" }
     );
+    // The stored schema version's count moves in the caller's transaction.
+    await this.countWriteOn(tx);
+    // The cached registry row is now out of date.
+    clearRegistryRowCache();
 
     this.publishRegisteredRecording(data);
 
@@ -481,7 +745,20 @@ export class SingleRegistryService extends BaseRegistryService<
   ): Promise<DynamicSingleRecord> {
     this.logger.debug("Updating Single", { slug });
 
-    const existing = await this.getSingle(slug);
+    const existing = await this.getRecordForWrite(slug);
+    // Every road that rewrites a Single's fields reaches this write, the schema endpoint's among
+    // them, so the sibling rule is asked here too, before the row changes: only a pair of sibling
+    // fields this update creates is refused, and one the Single already holds keeps working.
+    if (data.fields !== undefined) {
+      assertNoNewSiblingClashes(
+        { kind: "single", slug },
+        data.fields,
+        existing.fields ?? [],
+        // The configuration's sync writes `define*` output, with its added system fields;
+        // every other caller writes fields as it was sent.
+        options?.source === "code" ? { definedInCode: "single" } : {}
+      );
+    }
 
     const targetSlug = data.slug ?? slug;
     await assertGlobalResourceSlugAvailable(this.adapter, targetSlug, {
@@ -490,8 +767,11 @@ export class SingleRegistryService extends BaseRegistryService<
     });
 
     if (existing.locked && options?.source !== "code") {
-      // Generic FORBIDDEN — slug + source go to logContext only.
-      throw NextlyError.forbidden({
+      // Defined in code: the caller is told so, which is a fact about the
+      // thing and not about their permissions; slug and source go to the log.
+      throw NextlyError.definedInCode({
+        thing: "Single",
+        change: "change",
         logContext: {
           reason: "single-locked",
           slug,
@@ -584,6 +864,14 @@ export class SingleRegistryService extends BaseRegistryService<
     if (data.status !== undefined) {
       updateData.status = data.status === true ? 1 : 0;
     }
+    // The pointer to the Single's table, resolved as a registration resolves
+    // it; written when a changed `dbName` moved the table.
+    if (data.tableName !== undefined) {
+      updateData.table_name = resolveSingleTableName({
+        slug,
+        dbName: data.tableName,
+      });
+    }
     if (data.localized !== undefined) {
       updateData.localized = data.localized === true ? 1 : 0;
     }
@@ -610,20 +898,26 @@ export class SingleRegistryService extends BaseRegistryService<
 
     try {
       // A slug different from the stored one is a rename, written with
-      // everything keyed by the old slug in one transaction.
+      // everything keyed by the old slug in one transaction. Either moves the
+      // stored schema version's count with it (`writeRegistry`, and
+      // `renameEntity`'s own).
       const results =
         targetSlug === slug
-          ? await this.adapter.update<DynamicSingleRecord>(
-              this.registryTableName,
-              updateData,
-              this.whereEq("slug", slug),
-              { returning: "*" }
+          ? await this.writeRegistry(() =>
+              this.adapter.update<DynamicSingleRecord>(
+                this.registryTableName,
+                updateData,
+                this.whereEq("slug", slug),
+                { returning: "*" }
+              )
             )
           : await this.renameSingleRow(
               { id: existing.id, slug, tableName: existing.tableName },
               targetSlug,
               updateData
             );
+      // The cached registry row is now out of date.
+      clearRegistryRowCache();
 
       if (results.length === 0) {
         // §13.8: generic "Not found." — slug in logContext only.
@@ -710,9 +1004,18 @@ export class SingleRegistryService extends BaseRegistryService<
     const documentTable = (await this.adapter.listTables()).includes(
       fetched.tableName
     );
+    // The new address is judged again inside the schema lock `renameEntity` holds for the rename.
+    // `updateSingle` judged it before, which refuses early without work but cannot see a collection
+    // or Single that takes the same snake_case form in between; judged here, it does, and one that
+    // tries while the rename holds the lock is refused.
     const row = await renameEntity(this.adapter, {
       dialect: this.dialect,
       move: { kind: "single", from, to },
+      judgeTarget: () =>
+        assertGlobalResourceSlugAvailable(this.adapter, to, {
+          currentResourceType: "single",
+          currentResourceId: fetched.id,
+        }),
       writeRegistry: async tx => {
         const written = await tx.updateCount(
           this.registryTableName,
@@ -736,6 +1039,7 @@ export class SingleRegistryService extends BaseRegistryService<
           where: this.whereEq("slug", to),
         });
       },
+      logger: this.logger,
     });
     return row ? [row] : [];
   }
@@ -757,6 +1061,74 @@ export class SingleRegistryService extends BaseRegistryService<
   // ============================================================
 
   /**
+   * Refuse, before anything is removed, to delete a Single another owner
+   * depends on: a foreign key a plugin or the app declares into one of its
+   * tables, or another owner's column, index, foreign key or check on one of
+   * them. Also refused when either cannot be read (`collection-dependents`,
+   * the one check every entity delete asks). No field names a Single, so no
+   * field is asked about.
+   *
+   * Asked by both ways a Single is deleted, before the first thing either
+   * removes: the Builder's, which drops its storage and then this row, and
+   * the schema route's, which removes the row.
+   *
+   * @param single the Single, as its registry row records it: its table and
+   *   its fields, whose many-to-many fields name its junction tables
+   */
+  async assertNothingDependsOn(single: {
+    slug: string;
+    tableName: string;
+    /** As stored: a damaged row may hold something that is not a list. */
+    fields?: unknown;
+  }): Promise<void> {
+    // Loaded when a delete asks, not with the registry: every caller of the
+    // registry would otherwise load the dependents readers it never uses.
+    const [
+      {
+        assertNothingDependsOn,
+        databaseDependentsSources,
+        unreadableFieldsRefusal,
+      },
+      { collectionOwnTables },
+      { getActiveExtensionSchema },
+    ] = await Promise.all([
+      import("../../collections/services/collection-dependents"),
+      import("../../schema/services/field-column-descriptor"),
+      import("../../schema/extension/active-schema"),
+    ]);
+    // A stored field list that is not a list names no junction tables, so
+    // what depends on them would go unasked: refused as unreadable fields,
+    // as a collection's delete refuses it, before anything else is read.
+    const fields = single.fields ?? [];
+    if (!Array.isArray(fields)) {
+      throw unreadableFieldsRefusal([single.slug], single.slug, "single");
+    }
+    await assertNothingDependsOn(
+      [
+        {
+          kind: "single",
+          slug: single.slug,
+          tables: collectionOwnTables(
+            single.tableName,
+            fields as readonly {
+              name?: string;
+              type?: unknown;
+              options?: unknown;
+            }[]
+          ),
+        },
+      ],
+      databaseDependentsSources(
+        this.adapter,
+        // The extension schema this process published at boot or on its last
+        // reload, read when the delete asks, so a failure to read it refuses.
+        () =>
+          Promise.resolve().then(() => getActiveExtensionSchema(this.dialect))
+      )
+    );
+  }
+
+  /**
    * Delete a Single from the registry.
    *
    * Singles represent persistent site-wide config, so deletion requires
@@ -768,12 +1140,13 @@ export class SingleRegistryService extends BaseRegistryService<
   ): Promise<void> {
     this.logger.debug("Deleting Single", { slug, force: options?.force });
 
-    const existing = await this.getSingle(slug);
+    const existing = await this.getRecordForWrite(slug);
 
     if (!options?.force) {
-      // Generic FORBIDDEN per §13.8 — the policy explanation is operator-only.
-      // Public clients see "You don't have permission to perform this action."
-      throw NextlyError.forbidden({
+      // Refused in words that say a Single is not deleted from here, a fact
+      // about Singles and not about the caller's permissions (which §13.8
+      // keeps generic). The `force` hint stays operator-only, in logContext.
+      throw NextlyError.singleNotDeletable({
         logContext: {
           reason: "single-requires-force-delete",
           slug,
@@ -802,9 +1175,12 @@ export class SingleRegistryService extends BaseRegistryService<
       //
       // What is swept, and what is deliberately kept, is for
       // `deleteEntityRegistryRow` to say.
-      const count = await this.adapter.transaction(async tx => {
-        return deleteEntityRegistryRow(tx, "single", slug);
-      });
+      // The row, its sweep and the stored schema version's count in one
+      // transaction (`deleteEntityRow`).
+      const { deleted: count, expire } = await this.deleteEntityRow(
+        "single",
+        slug
+      );
 
       if (count === 0) {
         // §13.8: generic "Not found." — slug in logContext only.
@@ -822,28 +1198,26 @@ export class SingleRegistryService extends BaseRegistryService<
       // cannot run: stopped now rather than at its instant.
       await this.recheckReleasesHolding(slug);
 
-      if (this.permissionSeedService) {
-        try {
-          const permissionResult =
-            await this.permissionSeedService.deletePermissionsForResource(slug);
+      // Every cached read of it now describes content that is gone: expired
+      // here, the method every deletion path reaches, with the setting the
+      // deleted row held. A delete that found the row already gone has thrown
+      // above, so a retry never flushes a Single that opted out. Once the
+      // delete is durable, as for collections: after an enclosing
+      // transaction commits, and never for one that rolls back.
+      await this.afterCommit(() =>
+        flushContentChange(expire, this.logger, "a Single was deleted")
+      );
 
-          if (permissionResult.created > 0) {
-            this.logger.info(
-              `Deleted ${permissionResult.created} permission(s) for single "${slug}"`
-            );
-          }
-
-          if (permissionResult.skipped > 0) {
-            this.logger.warn(
-              `${permissionResult.skipped} permission(s) for "${slug}" could not be deleted (may be assigned to roles)`
-            );
-          }
-        } catch (error) {
-          this.logger.warn(
-            `Failed to cleanup permissions for single "${slug}": ${error instanceof Error ? error.message : String(error)}`
-          );
-        }
-      }
+      // Loaded when a delete runs, not with the registry.
+      const { deleteResourcePermissions } = await import(
+        "../../collections/services/delete-resource-permissions"
+      );
+      await deleteResourcePermissions({
+        service: this.permissionSeedService,
+        slug,
+        kind: "single",
+        logger: this.logger,
+      });
     } catch (error) {
       // Preserve already-mapped NextlyErrors (the notFound above, forbidden
       // above). Raw DB errors map via fromDatabaseError per spec §8.2.
@@ -860,17 +1234,124 @@ export class SingleRegistryService extends BaseRegistryService<
   // ============================================================
 
   /**
+   * What a code-first sync does with `config`, given the record the registry
+   * holds for its slug (null for none): register it (`create`), write a schema
+   * change through (`update`: fields by hash, or a switch `schemaSyncNeeded`
+   * compares), write only its metadata (`metadata`: admin options, label or
+   * description changed), or leave it (`unchanged`).
+   *
+   * The one decision of it: `syncCodeFirstSingles` and `writeRecordedSingle`
+   * both act on it, so a start and `nextly migrate` agree on what matching
+   * means.
+   */
+  private codeFirstSyncStep(
+    config: CodeFirstSingleConfig,
+    existing: DynamicSingleRecord | null
+  ): CodeFirstSingleStep {
+    const schemaHash = calculateSchemaHash(config.fields);
+    if (!existing) return { step: "create", schemaHash };
+    const decided = (
+      step: "update" | "metadata" | "unchanged"
+    ): CodeFirstSingleStep => ({ step, existing, schemaHash });
+    if (
+      this.schemaSyncNeeded(
+        config,
+        existing,
+        !schemaHashesMatch(schemaHash, existing.schemaHash)
+      ) ||
+      // Field settings the hash omits (help text, placeholder, hidden): the
+      // stored field list carries them, so a change to one alone rewrites it.
+      fieldSettingsChanged(config.fields, existing.fields) ||
+      // A Single's physical table, which a changed `dbName` moves: the row
+      // follows it, or reads address a table that is gone.
+      declaredSingleTable(config) !== existing.tableName
+    ) {
+      return decided("update");
+    }
+    if (
+      this.adminConfigChanged(config.admin, existing.admin) ||
+      metadataSyncNeeded(config, existing)
+    ) {
+      return decided("metadata");
+    }
+    return decided("unchanged");
+  }
+
+  /**
+   * Brings the registry row of a Single the registry source records to that
+   * record, as `nextly migrate` does after its migrations apply, and writes
+   * nothing where the row already matches. The decision is the code-first
+   * sync's (`codeFirstSyncStep`) and the columns are the ones it writes
+   * (`declaredSingleRow`, `declaredSingleMetadata`), so migrate and a start
+   * agree on what matching means.
+   *
+   * Unlike the sync it changes only what the declaration says: never where the
+   * row came from (its source, lock, config path or creator), and no
+   * permission, which is another writer's. `origin` is used only for a row it
+   * creates.
+   */
+  async writeRecordedSingle(
+    recorded: CodeFirstSingleConfig,
+    origin: { source: SingleSource; locked: boolean },
+    options: RecordedWriteOptions<DynamicSingleRecord> = {}
+  ): Promise<"created" | "updated" | "unchanged"> {
+    const existing =
+      options.existing === undefined
+        ? await this.findRecordForWrite(recorded.slug)
+        : options.existing;
+    const config =
+      options.leavesUnsaid === true
+        ? withUnsaidKept(recorded, existing, options.cleared)
+        : recorded;
+    const decision = this.codeFirstSyncStep(config, existing);
+    const { schemaHash } = decision;
+    if (decision.step === "unchanged") return "unchanged";
+    // Judged, not written (`RecordedWriteOptions.judgeOnly`).
+    if (options.judgeOnly === true) {
+      return decision.step === "create" ? "created" : "updated";
+    }
+    if (decision.step === "create") {
+      // The row alone: `insertSingle` is `registerSingle` without its
+      // permission seeding.
+      await this.insertSingle({
+        ...declaredSingleRegistration(config, schemaHash),
+        ...origin,
+      });
+      return "created";
+    }
+    await this.updateSingle(
+      config.slug,
+      decision.step === "update"
+        ? declaredSingleRow(config, schemaHash)
+        : declaredSingleMetadata(config),
+      // The row's own source, so a row defined in code is written as the
+      // pipeline writes it, past its lock, and its source is left as it is.
+      { source: decision.existing.source }
+    );
+    return "updated";
+  }
+
+  /**
    * Sync code-first Singles with the registry.
    *
    * Compares schema hashes to detect changes and creates/updates
    * Singles as needed. Typically called during application startup.
    */
   async syncCodeFirstSingles(
-    configs: CodeFirstSingleConfig[]
+    configs: CodeFirstSingleConfig[],
+    /**
+     * `seedPermissions: false` when a seeding of every entity's permissions
+     * follows, as at a start: the sync then leaves them to it, so each is
+     * ensured once. Every other caller has its Singles' permissions seeded
+     * here, as before.
+     */
+    options: { seedPermissions?: boolean } = {}
   ): Promise<SyncSingleResult> {
     this.logger.info("Syncing code-first Singles", {
       count: configs.length,
     });
+    const seedPermissions = options.seedPermissions !== false;
+    const recordOf = await this.storedRecordsBySlug();
 
     const result: SyncSingleResult = {
       created: [],
@@ -881,88 +1362,44 @@ export class SingleRegistryService extends BaseRegistryService<
 
     for (const config of configs) {
       try {
-        const existing = await this.getSingleBySlug(config.slug);
-        const schemaHash = calculateSchemaHash(config.fields);
+        // The decision `writeRecordedSingle` shares; the columns come from the
+        // same helpers, with the code origin added on top. The stored record
+        // comes from one read of the registry (`storedRecordsBySlug`).
+        const decision = this.codeFirstSyncStep(
+          config,
+          await recordOf(config.slug)
+        );
+        const { schemaHash } = decision;
 
-        if (!existing) {
-          await this.registerSingle({
-            slug: config.slug,
-            label: config.label,
-            // Route through the canonical resolver so registry and DDL paths
-            // never disagree on the single's physical table name, even when
-            // an explicit dbName/tableName is provided without the prefix.
-            tableName: resolveSingleTableName({
-              slug: config.slug,
-              dbName: config.tableName,
-            }),
-            description: config.description,
-            fields: config.fields,
-            admin: config.admin,
-            source: "code",
-            locked: true,
-            // Forward Draft/Published flag so code-first Singles that opt
-            // in actually write the column on first sync.
-            status: config.status === true,
-            // Forward the resolved versioning config on first sync.
-            versions: config.versions,
-            // Forward the cache-revalidation config on first sync.
-            revalidate: config.revalidate,
-            // Forward the webhook recording policy on first sync.
-            webhooks: config.webhooks,
-            localized: config.localized === true,
-            configPath: config.configPath,
-            schemaHash,
-          });
+        if (decision.step === "create") {
+          await this.registerSingle(
+            {
+              ...declaredSingleRegistration(config, schemaHash),
+              source: "code",
+              locked: true,
+              configPath: config.configPath,
+            },
+            // Registering seeds the Single's permissions, unless a later
+            // seeding of every entity's is left to.
+            { seedPermissions }
+          );
           result.created.push(config.slug);
-          await this.seedPermissionsForSingle(config.slug);
-        } else if (
-          this.schemaSyncNeeded(
-            config,
-            existing,
-            !schemaHashesMatch(schemaHash, existing.schemaHash)
-          )
-        ) {
+        } else if (decision.step === "update") {
           // Either fields changed or the status toggle flipped — both warrant
           // a write so dynamic_singles.status stays in sync with the
           // code-first config.
           await this.updateSingle(
             config.slug,
             {
-              label: config.label,
-              // Explicit null where the config no longer declares one, for the
-              // reason `revalidate` and `webhooks` below already do it:
-              // `updateSingle` reads `undefined` as "leave unchanged", so a
-              // config that dropped its description or its admin block while
-              // ALSO changing a field selects this branch and would strand the
-              // old value — the editor keeps showing a preview label nothing
-              // declares any more. The metadata branch cannot catch that case,
-              // because this one was selected instead.
-              description: config.description ?? null,
-              fields: config.fields,
-              admin: config.admin ?? null,
+              ...declaredSingleRow(config, schemaHash),
               configPath: config.configPath,
-              schemaHash,
               locked: true,
-              status: config.status === true,
-              versions: config.versions,
-              // Send explicit null (not undefined) when the config removed
-              // `revalidate`, so updateSingle actually clears the column instead
-              // of leaving the stale config persisted.
-              revalidate: config.revalidate ?? null,
-              // Send explicit null (not undefined) when the config removed
-              // `webhooks`, so updateSingle actually clears the column instead
-              // of leaving a stale opt-out suppressing the outbox.
-              webhooks: config.webhooks ?? null,
-              localized: config.localized === true,
             },
             { source: "code" }
           );
           result.updated.push(config.slug);
-          await this.seedPermissionsForSingle(config.slug);
-        } else if (
-          this.adminConfigChanged(config.admin, existing.admin) ||
-          metadataSyncNeeded(config, existing)
-        ) {
+          if (seedPermissions) await this.seedPermissionsForSingle(config.slug);
+        } else if (decision.step === "metadata") {
           /*
            * Metadata only: no field changed, so nothing physical has to move.
            *
@@ -984,23 +1421,15 @@ export class SingleRegistryService extends BaseRegistryService<
            */
           await this.updateSingle(
             config.slug,
-            {
-              label: config.label,
-              // Explicit null where the config no longer declares one, so
-              // `updateSingle` clears the column instead of reading `undefined`
-              // as "leave unchanged" and stranding a description the config has
-              // dropped. Same reasoning as `revalidate` and `webhooks` above.
-              description: config.description ?? null,
-              admin: config.admin ?? null,
-              locked: true,
-            },
+            { ...declaredSingleMetadata(config), locked: true },
             { source: "code" }
           );
           result.updated.push(config.slug);
-          await this.seedPermissionsForSingle(config.slug);
+          if (seedPermissions) await this.seedPermissionsForSingle(config.slug);
         } else {
-          // No changes — still ensure permissions exist (idempotent)
-          await this.seedPermissionsForSingle(config.slug);
+          // No changes — still ensure permissions exist (idempotent), unless a
+          // seeding of every entity's follows.
+          if (seedPermissions) await this.seedPermissionsForSingle(config.slug);
           result.unchanged.push(config.slug);
         }
       } catch (error) {
@@ -1116,6 +1545,27 @@ export class SingleRegistryService extends BaseRegistryService<
   // ============================================================
 
   /**
+   * The record as stored for a slug, from one read of every record rather than
+   * a read per slug, so a sync costs the same number of reads for five Singles
+   * as for fifty. Read past the registry row cache, as `findRecordForWrite`
+   * reads, since a sync decides from it. Where that read fails (a registry a
+   * migration has not created yet), each slug is read on its own, as before, so
+   * each failure lands on the Single it belongs to.
+   */
+  private async storedRecordsBySlug(): Promise<
+    (slug: string) => Promise<DynamicSingleRecord | null>
+  > {
+    try {
+      const records = new Map(
+        (await this.getAllSingles()).map(record => [record.slug, record])
+      );
+      return slug => Promise.resolve(records.get(slug) ?? null);
+    } catch {
+      return slug => this.findRecordForWrite(slug);
+    }
+  }
+
+  /**
    * Seed read/update permissions for a single and assign to super_admin.
    * Non-blocking — errors are logged but do not fail the parent operation.
    */
@@ -1215,7 +1665,9 @@ export class SingleRegistryService extends BaseRegistryService<
       return { status: "error", error: message };
     }
 
-    const refetched = await this.getSingleBySlug(config.slug).catch(() => null);
+    const refetched = await this.findRecordForWrite(config.slug).catch(
+      () => null
+    );
     if (refetched) {
       this.logger.warn(
         `Code-first sync: "${config.slug}" already in DB — treating as unchanged`,

@@ -89,7 +89,7 @@ describe("draft/published split on every write path (integration)", () => {
 
     await entries.updateEntry(
       { collectionName: COLLECTION, entryId: id, overrideAccess: true },
-      { body: "edited body" }
+      { body: "edited body", _overwrite: true }
     );
 
     expect(await workingDrafts(id)).toHaveLength(1);
@@ -104,7 +104,7 @@ describe("draft/published split on every write path (integration)", () => {
       entries.updateEntryInTransaction(
         tx as never,
         { collectionName: COLLECTION, entryId: id, overrideAccess: true },
-        { body: "edited body" }
+        { body: "edited body", _overwrite: true }
       )
     );
 
@@ -118,10 +118,13 @@ describe("draft/published split on every write path (integration)", () => {
     const second = await publish(entries);
 
     // More than one entry, so the batch shape is real rather than a batch of one.
-    await entries.updateEntries({ collectionName: COLLECTION }, [
-      { id: first, data: { body: "edited body" } },
-      { id: second, data: { body: "edited body" } },
-    ]);
+    await entries.updateEntries(
+      { collectionName: COLLECTION, overrideAccess: true },
+      [
+        { id: first, data: { body: "edited body", _overwrite: true } },
+        { id: second, data: { body: "edited body", _overwrite: true } },
+      ]
+    );
 
     for (const id of [first, second]) {
       expect(await workingDrafts(id)).toHaveLength(1);

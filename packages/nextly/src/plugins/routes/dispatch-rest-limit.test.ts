@@ -14,7 +14,7 @@ vi.mock("../../auth/middleware", () => ({
     !!x && typeof x === "object" && "statusCode" in x,
 }));
 
-vi.mock("../../di/register", () => ({ getService: () => ({}) }));
+vi.mock("../../di/service-access", () => ({ getService: () => ({}) }));
 
 import {
   createPluginAuthApi,

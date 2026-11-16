@@ -20,20 +20,27 @@
  * What holds other blocks and shapes the page.
  *
  * Structure with no content of its own: removing one changes where things sit,
- * never what they say.
+ * never what they say. Includes `core/divider` beside `core/spacer`, where the
+ * agreed editor design puts it and where an author looks for a line between
+ * sections; it still draws a semantic thematic break.
  */
 export const LAYOUT = "layout";
 
 /**
  * What the page says.
  *
- * Includes `core/divider`, which is a semantic thematic break rather than
- * spacing — `core/spacer` is the layout counterpart, pure space with no
- * meaning. And `core/collection-loop`, which lives here until there are enough
+ * Includes `core/collection-loop`, which lives here until there are enough
  * data-driven blocks to earn a heading of their own: one item under a heading
  * of its own reads as a mistake rather than as a category.
  */
 export const CONTENT = "content";
+
+/**
+ * What a collection's template draws of the entry itself: its own blocks
+ * content. A heading of its own, offered only while a template is open, so
+ * an author meets it where it means something and nowhere else.
+ */
+export const ENTRY = "entry";
 
 /** Pictures, video and embedded external content. */
 export const MEDIA = "media";
@@ -58,8 +65,48 @@ export const INTERACTIVE = "interactive";
 export const CORE_CATEGORIES: readonly [
   typeof LAYOUT,
   typeof CONTENT,
+  typeof ENTRY,
   typeof MEDIA,
   typeof INTERACTIVE,
-] = [LAYOUT, CONTENT, MEDIA, INTERACTIVE] as const;
+] = [LAYOUT, CONTENT, ENTRY, MEDIA, INTERACTIVE] as const;
 
 export type CoreCategory = (typeof CORE_CATEGORIES)[number];
+
+/**
+ * The core blocks in the order the Add panel offers them within a category:
+ * the agreed editor design's order, most used first, rather than the
+ * alphabet. Every core block is listed once; a test holds the two together.
+ *
+ * Separate from `coreBlocks`, whose order is load-bearing for another reason
+ * (a container before its child), so neither has to bend to the other.
+ */
+export const CORE_PALETTE_ORDER: readonly string[] = [
+  // Layout
+  "core/section",
+  "core/box",
+  "core/columns",
+  "core/column",
+  "core/card",
+  "core/spacer",
+  "core/divider",
+  // Text
+  "core/heading",
+  "core/text",
+  "core/list",
+  "core/quote",
+  "core/rich-text",
+  "core/table-of-contents",
+  "core/collection-loop",
+  // Entry
+  "core/entry-content",
+  // Media
+  "core/image",
+  "core/gallery",
+  "core/embed",
+  "core/icon",
+  // Interactive
+  "core/button",
+  "core/accordion",
+  "core/accordion-item",
+  "core/form",
+];

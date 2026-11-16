@@ -21,122 +21,60 @@
  * unanswered. Everything after the answer -- the probe, the offer, the card and
  * the page -- is the real admin.
  *
- * The offer is made inside the Get started card's first-entry step, which is
- * open only while the reader's site holds no entries, and other specs in this
- * run create entries. So the layout read is passed through with the card
- * placed first and that step open: these tests are about what the admin draws
- * for a given answer, not about when the server offers the card.
+ * The offer is made on the setup card's first line, "Start with sample
+ * content", which the server offers only while the site holds no entries and
+ * nobody has answered, and other specs in this run create entries; the card
+ * itself retires once a site's steps are done. So the layout read is passed
+ * through with the setup card placed first, and the card's own answer in the
+ * dashboard's batch (`POST /dashboard/query`) is replaced with that step open:
+ * these tests are about what the admin draws for a given answer, not about
+ * when the server offers the card.
  *
  * @module tests/dashboard-heading.spec
  */
-import { expect, type Page, type Request, type Route } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
+import { LOCK } from "./support/locks";
+import { answerProbe, placeSetupCard } from "./support/setup-card";
 
-/** The Get started card's widget id, as core registers it. */
-const GET_STARTED_WIDGET_ID = "core/get-started";
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.dashboard] });
 
 /** The offer's own action: present only when sample content is offered. */
-const OFFER_ACTION = { name: "Load sample content" } as const;
+const OFFER_ACTION = { name: "Add samples", exact: true } as const;
 
 /**
- * Answer the sample-content probe with `status`, as the route would for this
- * person. Resolves `release` lets a test hold the answer, to look at the page
- * while the offer is still unanswered. Returns the probes seen, so a test can
- * show the probe was asked: an offer that is absent because nothing asked is
- * not an offer refused.
+ * The setup card's answer: sample content open, then a first entry to add. The
+ * shape the card's `load` answers (`SetupCardData`), as the batch carries a
+ * declared widget's own data.
  */
-async function answerProbe(
-  page: Page,
-  status: 200 | 403,
-  hold?: Promise<void>
-): Promise<Request[]> {
-  const probes: Request[] = [];
-  await page.route("**/admin/api/seed", async (route: Route) => {
-    if (route.request().method() !== "HEAD") return route.fallback();
-    probes.push(route.request());
-    if (hold) await hold;
-    await route.fulfill({
-      status,
-      headers:
-        status === 200
-          ? {
-              "x-nextly-seed-template": "blog",
-              "x-nextly-seed-template-label": "Blog",
-            }
-          : {},
-      body: "",
-    });
-  });
-  await page.route("**/admin/api/meta/seed-status", (route: Route) =>
-    route.request().method() === "GET"
-      ? route.fulfill({ json: { completedAt: null, skippedAt: null } })
-      : route.fallback()
-  );
-  return probes;
-}
+const SETUP_ANSWER = {
+  setup: {
+    known: true,
+    steps: [
+      { kind: "sample", status: "open" },
+      { kind: "entry", status: "open", collection: "posts" },
+    ],
+    done: 0,
+    total: 2,
+  },
+  collapsed: false,
+  allSet: false,
+} as const;
 
-/**
- * The reads of the site's answer to the offer. The admin asks for it only once
- * the probe has said yes, so it is the observable trace of a yes.
- */
-function trackStatusReads(page: Page): string[] {
-  const reads: string[] = [];
-  page.on("request", request => {
-    if (request.url().endsWith("/admin/api/meta/seed-status")) {
-      reads.push(request.method());
-    }
-  });
-  return reads;
-}
-
-/**
- * Pass the layout read through, with the Get started card placed first and its
- * first-entry step open: the step the sample-content offer is made in.
- */
-async function placeGetStartedCard(page: Page): Promise<void> {
-  await page.route("**/dashboard/layout", async (route: Route) => {
-    if (route.request().method() !== "GET") return route.fallback();
-    const response = await route.fetch();
-    const body = (await response.json()) as Record<string, unknown>;
-    // The read may come bare or in a `data` envelope; place the card in
-    // whichever holds the placements.
-    const layout = (Array.isArray(body.placements) ? body : body.data) as {
-      placements: Array<Record<string, unknown>>;
-      getStarted?: unknown;
-    };
-    // The array order IS the dashboard's order, so the card goes first by
-    // being first in the list; it is drawn full width, as Get started is.
-    layout.placements = [
-      {
-        id: "e2e-get-started",
-        widgetId: GET_STARTED_WIDGET_ID,
-        width: "full",
-        removed: false,
-      },
-      ...layout.placements.filter(p => p.widgetId !== GET_STARTED_WIDGET_ID),
-    ];
-    layout.getStarted = {
-      drawn: true,
-      answer: {
-        unknown: false,
-        steps: [{ key: "entry", kind: "entry", status: "open" }],
-        done: 0,
-        total: 1,
-      },
-    };
-    await route.fulfill({ response, json: body });
-  });
-}
-
-/** The page's level-one headings: exactly one, visible, with a name. */
+/** The page's level-one headings: exactly one, visible, named for the project. */
 async function expectOneMainHeading(page: Page): Promise<void> {
   const mains = page.getByRole("heading", { level: 1 });
   await expect(mains).toHaveCount(1);
   await expect(mains).toBeVisible();
-  await expect(mains).toHaveAccessibleName(/^Welcome/);
+  // The greeting, by the reader's hour and first name, or "Welcome" for a
+  // reader with none; "Dashboard" while the reader is still being read.
+  await expect(mains).toHaveAccessibleName(
+    /^(Good (morning|afternoon|evening), \S+|Welcome|Dashboard)$/
+  );
 }
 
 test.describe("the dashboard's main heading", () => {
@@ -146,7 +84,7 @@ test.describe("the dashboard's main heading", () => {
     let release!: () => void;
     const held = new Promise<void>(resolve => (release = resolve));
     const probes = await answerProbe(page, 200, held);
-    await placeGetStartedCard(page);
+    await placeSetupCard(page, SETUP_ANSWER);
 
     await gotoAdmin(page, "/");
     await expect.poll(() => probes.length).toBeGreaterThan(0);
@@ -162,7 +100,7 @@ test.describe("the dashboard's main heading", () => {
   for (const theme of ["light", "dark"] as Theme[]) {
     test(`passes axe with the offer standing (${theme})`, async ({ page }) => {
       await answerProbe(page, 200);
-      await placeGetStartedCard(page);
+      await placeSetupCard(page, SETUP_ANSWER);
       await gotoAdmin(page, "/", theme);
       await expect(page.getByRole("button", OFFER_ACTION)).toBeVisible();
       await expectOneMainHeading(page);
@@ -171,7 +109,7 @@ test.describe("the dashboard's main heading", () => {
 
     test(`passes axe with no offer (${theme})`, async ({ page }) => {
       const probes = await answerProbe(page, 403);
-      await placeGetStartedCard(page);
+      await placeSetupCard(page, SETUP_ANSWER);
       await gotoAdmin(page, "/", theme);
       await expect.poll(() => probes.length).toBeGreaterThan(0);
       await expectOneMainHeading(page);
@@ -185,19 +123,16 @@ test.describe("the sample-content offer", () => {
     page,
   }) => {
     await answerProbe(page, 200);
-    const statusReads = trackStatusReads(page);
-    await placeGetStartedCard(page);
+    await placeSetupCard(page, SETUP_ANSWER);
     await gotoAdmin(page, "/");
+    // The site's answer comes with the card's own data, so a yes from the
+    // probe is all that stands between the card and the offer.
     await expect(page.getByRole("button", OFFER_ACTION)).toBeVisible();
-    // The trace the refusal test looks for in vain is there for a yes, so
-    // its absence there is a measurement and not a listener that never fires.
-    expect(statusReads).toContain("GET");
   });
 
   test("is not made to a person the route refuses", async ({ page }) => {
     const probes = await answerProbe(page, 403);
-    const statusReads = trackStatusReads(page);
-    await placeGetStartedCard(page);
+    await placeSetupCard(page, SETUP_ANSWER);
     await gotoAdmin(page, "/");
     // The probe was asked and answered before the verdict, so "no offer" is
     // the answer's doing, not a page that never asked.
@@ -208,17 +143,12 @@ test.describe("the sample-content offer", () => {
     // same before the probe's answer is read as after, and nothing else on
     // the page is ordered after it (the cards come from their own reads, in
     // no fixed order with this one). A probe that took the refusal for a yes
-    // goes on to read the site's answer and draws the card within
-    // milliseconds, so give it a second to, then check it did neither. The
-    // wait cannot fail a correct build, which never reads the site's answer;
-    // a slow machine can only let a broken one through, and the probe's unit
-    // tests are the proof of each answer. (Not `networkidle`: the dev server
-    // holds a long poll open, so the page never goes idle.)
+    // draws the offer within milliseconds of its answer, so give it a second
+    // to, then check it did not. The wait cannot fail a correct build; a slow
+    // machine can only let a broken one through, and the probe's unit and
+    // component tests are the proof of each answer. (Not `networkidle`: the
+    // dev server holds a long poll open, so the page never goes idle.)
     await page.waitForTimeout(1_000);
-    expect(
-      statusReads,
-      "the site's answer was read, so the probe said yes"
-    ).toEqual([]);
     await expectOneMainHeading(page);
     await expect(page.getByRole("button", OFFER_ACTION)).toHaveCount(0);
     await expect(

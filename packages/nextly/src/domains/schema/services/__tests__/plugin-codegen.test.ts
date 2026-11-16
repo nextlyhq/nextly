@@ -259,6 +259,31 @@ describe("plugin field types in the TypeScript generator", () => {
   });
 });
 
+describe("repeater row ids in generated types", () => {
+  it("gives each row an optional saved id, unless the rows declare their own", () => {
+    const file = new TypeGenerator().generateTypesFile([
+      collection([
+        {
+          name: "lines",
+          type: "repeater",
+          fields: [{ name: "label", type: "text" }],
+        },
+        {
+          name: "codes",
+          type: "repeater",
+          fields: [{ name: "id", type: "number" }],
+        },
+      ]),
+    ]);
+    // Sent back, the id keeps the row's identity across saves.
+    expect(file.code).toMatch(
+      /lines\??:[^;]*Array<\{[^}]*id\?: string;[^}]*label/s
+    );
+    // The author's own `id` stays the only one.
+    expect(file.code).not.toMatch(/codes\??:[^;]*Array<\{[^}]*id\?: string;/s);
+  });
+});
+
 describe("standalone interface generation", () => {
   it("returns the imports its plugin fields rely on", () => {
     registerFieldType(RATING);

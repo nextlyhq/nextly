@@ -104,6 +104,26 @@ describe("authorizing a read of a Single's draft", () => {
       singleDocumentReadable("homepage", { user: USER, routeAuthorized: false })
     ).rejects.toThrow();
   });
+
+  // A read whose rule could not run never answered, so the probe ends with
+  // that answer, naming the rule, rather than with an internal error or a no.
+  it("ends with the read's own answer when a rule it asked could not run", async () => {
+    get.mockResolvedValue({
+      success: false,
+      statusCode: 503,
+      code: "RULE_COULD_NOT_RUN",
+      message: "A rule could not run.",
+      publicData: { subject: "homepage", field: "guarded" },
+    });
+
+    await expect(
+      singleDocumentReadable("homepage", { user: USER, routeAuthorized: false })
+    ).rejects.toMatchObject({
+      statusCode: 503,
+      code: "RULE_COULD_NOT_RUN",
+      publicData: { subject: "homepage", field: "guarded" },
+    });
+  });
 });
 
 describe("authorizing an edit of a Single", () => {

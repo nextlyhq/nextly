@@ -15,18 +15,51 @@
  */
 import { describe, expect, it } from "vitest";
 
+import type {
+  CapabilitiesResponse,
+  EntityCapabilitiesAnswer,
+} from "../../types/permissions";
 import { buildCapabilities } from "../useCurrentUserPermissions";
 
-/** The real deriver, never a hand-built literal. */
+/** The real deriver, never a hand-built literal, before the server answers. */
 const from = (...permissions: string[]) =>
-  buildCapabilities(permissions, false);
+  buildCapabilities(permissions, false, undefined);
+
+/** An answer from the server naming one collection and one Single. */
+const answer = (
+  posts: Partial<EntityCapabilitiesAnswer>,
+  home: Partial<EntityCapabilitiesAnswer> = {}
+): CapabilitiesResponse => ({
+  isSuperAdmin: false,
+  validUntil: null,
+  entities: {
+    posts: {
+      kind: "collection",
+      read: false,
+      create: false,
+      update: false,
+      delete: false,
+      publish: false,
+      unpublish: false,
+      ...posts,
+    },
+    home: {
+      kind: "single",
+      read: false,
+      update: false,
+      publish: false,
+      unpublish: false,
+      ...home,
+    },
+  },
+});
 
 describe("a grant reveals the section it belongs to", () => {
   it.each([
     ["read-users", "canViewUsers"],
     ["read-roles", "canViewRoles"],
     ["read-media", "canViewMedia"],
-    ["manage-settings", "canViewSettings"],
+    ["read-settings", "canViewSettings"],
     ["read-webhooks", "canViewWebhooks"],
     ["read-content-releases", "canViewReleases"],
   ] as const)("%s reveals %s", (slug, flag) => {
@@ -37,8 +70,11 @@ describe("a grant reveals the section it belongs to", () => {
 describe("an UMBRELLA grant reveals what it covers", () => {
   // The half with no coverage before, and the half a table makes easy to get
   // wrong: these slugs reveal a section without being its `read-` slug.
-  it("manage-media reveals the media section", () => {
-    expect(from("manage-media").canViewMedia).toBe(true);
+  it("a retired manage- grant reveals nothing, as the server counts it for nothing", () => {
+    // A role not yet converted by `nextly upgrade` is refused every plain
+    // action there, so no section it would open is offered.
+    expect(from("manage-media").canViewMedia).toBe(false);
+    expect(from("manage-settings").canViewSettings).toBe(false);
   });
 
   it("an api-key grant that opens a screen reveals settings", () => {
@@ -47,11 +83,11 @@ describe("an UMBRELLA grant reveals what it covers", () => {
     }
   });
 
-  // Email is its own area now, with its own rail entry, so an email grant
-  // opens nothing in the Settings panel and must not reveal it.
-  it("an email grant does not reveal settings", () => {
-    for (const slug of ["manage-email-providers", "manage-email-templates"]) {
-      expect(from(slug).canViewSettings, slug).toBe(false);
+  // Email is a destination in the Settings panel, so a grant that opens one
+  // of its tabs reveals the panel, which then lands on Email.
+  it("an email grant reveals settings", () => {
+    for (const slug of ["read-email-providers", "read-email-templates"]) {
+      expect(from(slug).canViewSettings, slug).toBe(true);
     }
   });
 
@@ -59,7 +95,7 @@ describe("an UMBRELLA grant reveals what it covers", () => {
    * The other half, and the reason this list is not simply every slug naming
    * the resource. `canViewSettings` shows the rail entry AND opens
    * `/admin/settings`, whose page is General Settings — which answers to
-   * `manage-settings` and returns 403 without it. So a grant belongs here only
+   * `read-settings` and returns 403 without it. So a grant belongs here only
    * if it opens a destination IN the panel.
    *
    * `create-` and `delete-api-keys` do not: the panel's only api-key entry is
@@ -127,23 +163,74 @@ describe("a grant reveals ONLY its own section", () => {
   });
 });
 
-describe("collections, which are the other half of the derivation", () => {
-  it("builds per-collection capabilities from action-resource slugs", () => {
-    const caps = from("read-posts", "update-posts");
+describe("collections and Singles, which the server answers", () => {
+  it("takes each one's capabilities from the server's answer", () => {
+    const caps = buildCapabilities(
+      [],
+      false,
+      answer({ read: true, update: true, publish: true }, { read: true })
+    );
     expect(caps.collections.posts).toEqual({
       canRead: true,
       canCreate: false,
       canUpdate: true,
       canDelete: false,
+      canPublish: true,
+      canUnpublish: false,
+      // An answer naming no request judged in other languages refuses each:
+      // its action's own cell is judged in one language only.
+      canReadTranslations: false,
+      canReadHistory: false,
+      canPublishEveryLanguage: false,
+      canUpdateInDefaultLanguage: false,
+      canDuplicate: false,
     });
     expect(caps.canViewCollections).toBe(true);
+  });
+
+  it("follows the server where a code rule refuses what a held slug names", () => {
+    // `read-posts` is held, and the collection's rule refuses the read: the
+    // server says no, and so must the admin, or it offers a section the
+    // server will refuse.
+    const caps = buildCapabilities(
+      ["read-posts", "update-posts"],
+      false,
+      answer({ read: false, update: false })
+    );
+    expect(caps.collections.posts?.canRead).toBe(false);
+    expect(caps.collections.posts?.canUpdate).toBe(false);
+    expect(caps.canViewCollections).toBe(false);
+  });
+
+  it("offers nothing until the server has answered, whatever slugs are held", () => {
+    const caps = from("read-posts", "update-posts");
+    expect(caps.collections).toEqual({});
+    expect(caps.canViewCollections).toBe(false);
+  });
+
+  it("gives a Single no create or delete, which it does not have", () => {
+    const caps = buildCapabilities(
+      [],
+      false,
+      answer({}, { read: true, update: true })
+    );
+    expect(caps.collections.home).toMatchObject({
+      canRead: true,
+      canUpdate: true,
+      canCreate: false,
+      canDelete: false,
+    });
   });
 
   it("keeps SYSTEM resources out of the collection map", () => {
     // Otherwise `content-releases` would look like a collection called
     // "content-releases", and the section would be gated by a lookup that
     // happens to work rather than by the flag that is meant to answer.
-    const caps = from("read-content-releases", "read-media");
+    const caps = buildCapabilities(
+      ["read-content-releases", "read-media"],
+      false,
+      answer({})
+    );
     expect(caps.collections["content-releases"]).toBeUndefined();
     expect(caps.collections.media).toBeUndefined();
     expect(caps.canViewCollections).toBe(false);

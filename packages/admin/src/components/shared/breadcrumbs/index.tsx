@@ -3,6 +3,11 @@
 import type React from "react";
 
 import { ChevronRight, LayoutDashboard } from "@admin/components/icons";
+import { BarTrail } from "@admin/components/layout/header/HeaderTrail";
+import {
+  TopBarPlace,
+  useInTopBar,
+} from "@admin/components/layout/header/TopBarPlaces";
 import { Link } from "@admin/components/ui/link";
 import { cn } from "@admin/lib/utils";
 
@@ -24,13 +29,22 @@ export interface BreadcrumbItem {
 export interface BreadcrumbsProps {
   items: BreadcrumbItem[];
   className?: string;
+  /**
+   * `bar` (the default): the page's own place, drawn in the admin's top bar.
+   * `inline`: navigation inside the page's content, such as a folder path in
+   * the media library or its picker dialog, drawn where it stands.
+   */
+  placement?: "bar" | "inline";
 }
 
 /**
  * Reusable Breadcrumbs Component
  *
- * Provides a standardized navigation trail with consistent icons,
- * spacing, and interactivity.
+ * Where the page sits. Inside the admin shell it is drawn in the top bar's
+ * left part, as the trail every page shows there (the last item is the page
+ * itself, the one before it the way back); the page draws nothing of it in
+ * its own body. Outside the shell (a page rendered on its own) it is drawn
+ * where it stands, with its icons.
  *
  * @example
  * <Breadcrumbs
@@ -44,7 +58,24 @@ export interface BreadcrumbsProps {
 export function Breadcrumbs({
   items,
   className,
+  placement = "bar",
 }: BreadcrumbsProps): React.JSX.Element {
+  const inBar = useInTopBar();
+  if (inBar && placement === "bar") {
+    const current = items.at(-1);
+    return (
+      <TopBarPlace name="start">
+        <BarTrail
+          steps={items.slice(0, -1).map(({ label, href, onClick }) => ({
+            label,
+            ...(href === undefined ? {} : { href }),
+            ...(onClick === undefined ? {} : { onClick }),
+          }))}
+          current={current?.label ?? null}
+        />
+      </TopBarPlace>
+    );
+  }
   return (
     <nav aria-label="Breadcrumb" className={cn("mb-2", className)}>
       <ol className="flex items-center gap-2 text-sm text-muted-foreground">

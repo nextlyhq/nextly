@@ -9,7 +9,7 @@
  */
 
 import { isLocaleSelector } from "@nextlyhq/plugin-sdk";
-import { formAvailability, NextlyError, NO_SUCH_FORM } from "nextly";
+import { NextlyError, NO_SUCH_FORM } from "nextly";
 import type { PluginContext } from "nextly";
 
 import { asFormDocument, asSubmissionDocument } from "../document-shapes";
@@ -18,6 +18,7 @@ import type {
   SubmissionDocument,
   ResolvedFormBuilderConfig,
 } from "../types";
+import { closedMessageOf, formAvailabilityNow } from "../utils/form-closing";
 import { normalizeFormSettings } from "../utils/form-settings";
 import type { ValidationIssue } from "../utils/generate-schema";
 import {
@@ -28,9 +29,13 @@ import {
   type RedirectTargetDocument,
   type RedirectUrlPattern,
 } from "../utils/redirect-target";
+import { pageFromReferer } from "../utils/sent-from";
 
+import { botCheckReady, botTokensOf, judgeBotCheck } from "./bot-check";
+import { heldRefusal, SETTINGS_CHANGED } from "./form-closing-hold";
+import { ALREADY_RESPONDED, browserTokenOf } from "./one-response";
 import { asPluginSubmission, prepareSubmission } from "./prepare-submission";
-import { checkSpam } from "./spam-detection";
+import { checkSpam, type SpamCheckResult } from "./spam-detection";
 
 // ============================================================
 // Types
@@ -52,6 +57,12 @@ export interface SubmitFormOptions {
     ipAddress?: string;
     /** Submitter's user agent string */
     userAgent?: string;
+    /**
+     * The page it was sent from, such as the request's `Referer`. Kept as
+     * its origin and path only, and only when it is a web page
+     * (`pageFromReferer`).
+     */
+    page?: string;
   };
 
   /**
@@ -192,6 +203,156 @@ export interface SubmitFormResult {
 }
 
 /**
+ * A submission's spam verdict and its prepared data: the honeypot first,
+ * BEFORE validation, so a bot that trips the trap while also failing
+ * validation still receives the same fake success as any other bot; then the
+ * form's bot check for one that would otherwise be refused as invalid.
+ */
+async function judgeAndPrepare(input: {
+  data: Record<string, unknown>;
+  form: FormDocument;
+  settings: ReturnType<typeof normalizeFormSettings>;
+  pluginConfig: ResolvedFormBuilderConfig;
+  pluginContext: PluginContext;
+  ipAddress: string | undefined;
+  formSlug: string;
+  /** A request produced the submission, as the write seam judges. */
+  requested: boolean;
+}): Promise<{
+  spamResult: SpamCheckResult;
+  prepared: ReturnType<typeof prepareSubmission>;
+  throttled: boolean;
+  rateCounted: boolean;
+}> {
+  const { data, form, settings, pluginConfig, pluginContext, formSlug } = input;
+  const { logger } = pluginContext;
+  // 3. Spam detection — BEFORE validation, so a bot that trips the trap
+  // while also failing validation still receives the same fake success as
+  // any other bot instead of a distinguishable validation error.
+  // Honeypot fields are by definition NOT declared form fields, so the
+  // probe is the raw payload minus the declared schema — a declared field
+  // (e.g. a real "website" input) must never trip the trap.
+  const declaredFieldNames = new Set(form.fields.map(field => field.name));
+  const undeclaredData = Object.fromEntries(
+    Object.entries(data).filter(([key]) => !declaredFieldNames.has(key))
+  );
+
+  // The honeypot only, and only to decide whether to validate. It is a pure
+  // read of the payload, so running it here and again at the write seam
+  // costs nothing and cannot disagree. The RATE LIMIT is not asked here: it
+  // counts, and a check with a side effect run twice counts one submission
+  // twice. The seam owns that one, and owns the verdict written to the row.
+  let spamResult: SpamCheckResult = await checkSpam({
+    data: undeclaredData,
+    formSlug,
+    config: {
+      // Per-form overrides win where set; blank inherits the plugin config.
+      honeypot:
+        settings.honeypotEnabled ?? pluginConfig.spamProtection.honeypot,
+    },
+  });
+
+  const isContentSpam = spamResult.isSpam;
+
+  // 4. Transform + validate. Content spam skips validation entirely — it
+  // is stored for review exactly as the bot shaped it (declared fields
+  // only, sanitized), and requiring validity would drop the evidence.
+  if (isContentSpam) {
+    logger.info?.("Spam submission detected — storing flagged", {
+      formSlug,
+      reason: spamResult.reason,
+      ipAddress: input.ipAddress,
+    });
+  }
+
+  let prepared = prepareSubmission({
+    data,
+    fields: form.fields,
+    validate: !isContentSpam,
+  });
+
+  // An invalid submission meets its form's bot check here, before it is
+  // refused, so it is judged as one written any other way: a failing or
+  // missing token keeps it as spam evidence rather than answering the bot
+  // with validation errors. Checked once: kept as evidence, the seam does
+  // not check it again, and a passing token is spent on a refusal.
+  let early: EarlyBotCheck = { rateCounted: false };
+  if (prepared.validationErrors && !isContentSpam) {
+    early = await botCheckBeforeRefusal(input);
+    if (early.spam) {
+      spamResult = early.spam;
+      prepared = prepareSubmission({
+        data,
+        fields: form.fields,
+        validate: false,
+      });
+    }
+  }
+
+  return {
+    spamResult,
+    prepared,
+    throttled: early.throttled === true,
+    rateCounted: early.rateCounted,
+  };
+}
+
+/** What the bot check made of an invalid submission, before its refusal. */
+interface EarlyBotCheck {
+  /** The submission's network is over the form's rate limit. */
+  throttled?: true;
+  /** The token failed or was missing: keep it as spam evidence. */
+  spam?: SpamCheckResult;
+  /** The rate limit has counted this submission, so the seam must not. */
+  rateCounted: boolean;
+}
+
+/**
+ * An invalid submission meets its form's bot check here, before it is
+ * refused, so it is judged as one written any other way: a failing or
+ * missing token keeps it as spam evidence rather than answering the bot with
+ * validation errors. Only for a request-made submission to a form whose
+ * check is ready, as the write seam judges. The rate limit is asked first,
+ * so a throttled network cannot make the provider be called, and is counted
+ * once: the seam is told it has been.
+ */
+async function botCheckBeforeRefusal(input: {
+  data: Record<string, unknown>;
+  form: FormDocument;
+  settings: ReturnType<typeof normalizeFormSettings>;
+  pluginConfig: ResolvedFormBuilderConfig;
+  pluginContext: PluginContext;
+  ipAddress: string | undefined;
+  requested: boolean;
+}): Promise<EarlyBotCheck> {
+  const spam = input.pluginConfig.spamProtection;
+  if (!input.requested || !botCheckReady(input.settings, spam)) {
+    return { rateCounted: false };
+  }
+  const rateCounted = Boolean(spam.rateLimit && input.ipAddress);
+  if (rateCounted) {
+    const limited = await checkSpam({
+      data: {},
+      ipAddress: input.ipAddress,
+      // The key the write seam counts the same form under.
+      formSlug: input.form.id,
+      config: { rateLimit: spam.rateLimit },
+    });
+    if (limited.isSpam) return { throttled: true, rateCounted };
+  }
+  const { logger } = input.pluginContext;
+  const bot = await judgeBotCheck({
+    settings: input.settings,
+    spam,
+    tokens: botTokensOf(input.data),
+    ip: input.ipAddress,
+    fetch: input.pluginContext.fetch,
+    warn: (message, warnContext) => logger.warn?.(message, warnContext),
+  });
+  return bot ? { spam: bot, rateCounted } : { rateCounted };
+}
+
+/**
  * Context for the submission handler.
  */
 export interface SubmitFormContext {
@@ -205,6 +366,22 @@ export interface SubmitFormContext {
 // ============================================================
 // Main Submission Handler
 // ============================================================
+
+/**
+ * Whether a failed store was refused because the person has responded
+ * already: the database refused a second one-response key, or the hold found
+ * an earlier submission with the same value (`heldRefusal`).
+ */
+function isRepeatResponse(
+  error: unknown,
+  held: ReturnType<typeof heldRefusal>
+): boolean {
+  return (
+    held === "responded" ||
+    (error instanceof NextlyError &&
+      (error as { code?: unknown }).code === "DUPLICATE")
+  );
+}
 
 /**
  * Process a form submission.
@@ -282,10 +459,33 @@ export async function submitForm(
     const redirectFor = () =>
       resolveRedirectUrl(form, pluginConfig, pluginContext, targetRead);
 
+    // A throttled submission is answered as an accepted one, so a bot told
+    // it was limited does not learn the rate to sit under. Nothing is kept.
+    const throttledAnswer = async (): Promise<SubmitFormResult> => {
+      logger.info?.("Form submission refused (rate limit)", { formSlug });
+      return {
+        success: true,
+        outcome: "accepted",
+        successMessage: settings.successMessage,
+        // The same destination an accepted submission gets. Returning early
+        // without it left a throttled visitor on the form instead of the page
+        // its author sends people to, and made the one response this exists to
+        // disguise the only accepted one carrying no redirect.
+        redirect: await redirectFor(),
+      };
+    };
+
+    // Settings come through the one canonical reader: stored settings may
+    // carry legacy keys from earlier builder versions.
+    const settings = normalizeFormSettings(form.settings);
+
     // 2. Check form status. The same reading the HTTP and Direct API paths do,
     // so what a visitor is told does not depend on which entry point their
-    // client used.
-    const availability = formAvailability(form);
+    // client used, then the form's closing time. Its limit is judged where
+    // the submission is stored, under the lock that makes it exact.
+    const availability = formAvailabilityNow(form, settings, {
+      now: new Date(),
+    });
     if (availability.kind !== "open") {
       logger.info?.("Form submission rejected - form not accepting", {
         formSlug,
@@ -305,10 +505,6 @@ export async function submitForm(
       };
     }
 
-    // 2b. Settings come through the one canonical reader — stored settings
-    // may carry legacy keys from earlier builder versions.
-    const settings = normalizeFormSettings(form.settings);
-
     // 2c. Single-submission forms: the same visitor (by IP) submits once.
     // Checked before spam so a repeat visitor gets the honest message
     // instead of an inexplicable success that stored nothing new. This is a
@@ -316,7 +512,10 @@ export async function submitForm(
     // and the check-then-create pair is not atomic, so two truly concurrent
     // submissions can both pass — an airtight version needs a partial
     // unique index the portable field config cannot express yet.
-    if (settings.allowMultipleSubmissions === false && !metadata?.ipAddress) {
+    // One per network address is the one-response check this path makes; the
+    // other modes are not checked here.
+    const onePerAddress = settings.oneResponse === "ip";
+    if (onePerAddress && !metadata?.ipAddress) {
       // Without an identifier there is nothing to deduplicate on. Failing
       // closed would block every server-to-server integration, so the gate
       // stays open — loudly.
@@ -325,7 +524,7 @@ export async function submitForm(
         { formSlug }
       );
     }
-    if (settings.allowMultipleSubmissions === false && metadata?.ipAddress) {
+    if (onePerAddress && metadata?.ipAddress) {
       const existing = await collections.count(
         pluginConfig.formSubmissionOverrides.slug,
         {
@@ -349,55 +548,25 @@ export async function submitForm(
         return {
           success: false,
           outcome: "duplicate",
-          error: "You have already submitted this form.",
+          error: ALREADY_RESPONDED,
         };
       }
     }
 
-    // 3. Spam detection — BEFORE validation, so a bot that trips the trap
-    // while also failing validation still receives the same fake success as
-    // any other bot instead of a distinguishable validation error.
-    // Honeypot fields are by definition NOT declared form fields, so the
-    // probe is the raw payload minus the declared schema — a declared field
-    // (e.g. a real "website" input) must never trip the trap.
-    const declaredFieldNames = new Set(form.fields.map(field => field.name));
-    const undeclaredData = Object.fromEntries(
-      Object.entries(data).filter(([key]) => !declaredFieldNames.has(key))
-    );
-
-    // The honeypot only, and only to decide whether to validate. It is a pure
-    // read of the payload, so running it here and again at the write seam
-    // costs nothing and cannot disagree. The RATE LIMIT is not asked here: it
-    // counts, and a check with a side effect run twice counts one submission
-    // twice. The seam owns that one, and owns the verdict written to the row.
-    const spamResult = await checkSpam({
-      data: undeclaredData,
-      formSlug,
-      config: {
-        // Per-form overrides win where set; blank inherits the plugin config.
-        honeypot:
-          settings.honeypotEnabled ?? pluginConfig.spamProtection.honeypot,
-      },
-    });
-
-    const isContentSpam = spamResult.isSpam;
-
-    // 4. Transform + validate. Content spam skips validation entirely — it
-    // is stored for review exactly as the bot shaped it (declared fields
-    // only, sanitized), and requiring validity would drop the evidence.
-    if (isContentSpam) {
-      logger.info?.("Spam submission detected — storing flagged", {
-        formSlug,
-        reason: spamResult.reason,
+    // 3. Spam detection, then 4. transform and validate (`judgeAndPrepare`).
+    const { spamResult, prepared, throttled, rateCounted } =
+      await judgeAndPrepare({
+        data,
+        form,
+        settings,
+        pluginConfig,
+        pluginContext,
         ipAddress: metadata?.ipAddress,
+        formSlug,
+        requested: request !== undefined,
       });
-    }
-
-    const prepared = prepareSubmission({
-      data,
-      fields: form.fields,
-      validate: !isContentSpam,
-    });
+    if (throttled) return throttledAnswer();
+    let isContentSpam = spamResult.isSpam;
 
     if (prepared.validationErrors) {
       logger.debug?.("Form validation failed", {
@@ -425,6 +594,7 @@ export async function submitForm(
       spamReason: isContentSpam ? (spamResult.reason ?? null) : null,
       ipAddress: metadata?.ipAddress || null,
       userAgent: metadata?.userAgent || null,
+      page: pageFromReferer(metadata?.page) ?? null,
       submittedAt: new Date(),
     };
 
@@ -435,13 +605,28 @@ export async function submitForm(
     // is evidence this handler chose to keep rather than a caller asking for
     // validation to be skipped. The form goes with it so the seam does not read
     // it a second time.
+    const browserToken = browserTokenOf(data);
     let submission: Awaited<ReturnType<typeof collections.createEntry>>;
     try {
       submission = await collections.createEntry(
         pluginConfig.formSubmissionOverrides.slug,
         asPluginSubmission(submissionData, {
           keepAsEvidence: isContentSpam,
-          form: { id: form.id, fields: form.fields },
+          // Its settings too: the seam makes the row's one-response key from
+          // them. Its slug names it in a warning the seam may log.
+          form: {
+            id: form.id,
+            slug: form.slug,
+            fields: form.fields,
+            settings: form.settings,
+          },
+          // The bot-check tokens the visitor's form sent, read before the
+          // row keeps only the form's fields: the seam verifies them.
+          botTokens: botTokensOf(data),
+          // And the browser's token, for one response per browser.
+          ...(browserToken === undefined ? {} : { browserToken }),
+          // Counted already on the way here; the seam does not count it again.
+          ...(rateCounted ? { rateCounted } : {}),
         }),
         // Public form submission — create as system. No ambient user; an
         // empty context already resolves to system, but be explicit.
@@ -459,6 +644,39 @@ export async function submitForm(
         { ...access, ...(request ? { request } : {}) }
       );
     } catch (error) {
+      // The form's closing is held again where the submission is stored, the
+      // limit under a lock that makes it exact (`form-closing-hold`): the last place
+      // went to a submission stored first, or the closing time passed since
+      // the check above, and this one is told what a visitor to a closed
+      // form is told.
+      const held = heldRefusal(error);
+      if (held === "closed") {
+        logger.info?.("Form submission refused (form closed)", { formSlug });
+        return {
+          success: false,
+          outcome: "closed",
+          error: closedMessageOf(form),
+        };
+      }
+      if (held === "changed") {
+        logger.info?.("Form submission refused (settings changed)", {
+          formSlug,
+        });
+        return { success: false, outcome: "failed", error: SETTINGS_CHANGED };
+      }
+      // The database refused a second submission with the same one-response
+      // key, or the hold found an earlier one with its value: one with the
+      // same email or network was stored first, even if only a moment before.
+      if (isRepeatResponse(error, held)) {
+        logger.info?.("Repeat submission rejected (one response per person)", {
+          formSlug,
+        });
+        return {
+          success: false,
+          outcome: "duplicate",
+          error: ALREADY_RESPONDED,
+        };
+      }
       // The seam refuses a submission over the limit, and refuses it the same
       // way at every door. This answers its own caller with a success anyway: a
       // browser is on the other end of it, and a bot told it was limited learns
@@ -472,21 +690,15 @@ export async function submitForm(
       // Nothing is stored. A limiter that wrote a row per refusal would hand an
       // attacker a way to fill the database with the very volume it exists to
       // refuse.
-      if (NextlyError.isRateLimited(error)) {
-        logger.info?.("Form submission refused (rate limit)", { formSlug });
-        return {
-          success: true,
-          outcome: "accepted",
-          successMessage: settings.successMessage,
-          // The same destination an accepted submission gets. Returning early
-          // without it left a throttled visitor on the form instead of the
-          // page its author sends people to, and made the one response this
-          // whole branch exists to disguise the only accepted one carrying no
-          // redirect.
-          redirect: await redirectFor(),
-        };
-      }
+      if (NextlyError.isRateLimited(error)) return throttledAnswer();
       throw error;
+    }
+
+    // The stored row decides: the write seam may have flagged it (a failing
+    // bot token) after the handler's own checks passed, and a flagged row is
+    // answered as spam, its id never handed back.
+    if ((submission.item as { status?: unknown }).status === "spam") {
+      isContentSpam = true;
     }
 
     logger.info?.("Form submission created successfully", {

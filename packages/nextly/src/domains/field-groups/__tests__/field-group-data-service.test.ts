@@ -1,6 +1,12 @@
+import { tableNotRegisteredError } from "@nextlyhq/adapter-drizzle/types";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
+import { missingSchemaObject } from "../../../database/missing-column";
 import { NextlyError } from "../../../errors/nextly-error";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../i18n/per-language-storage";
 import {
   clearFieldFunctions,
   registerFieldFunctions,
@@ -60,6 +66,30 @@ function createCtx(
   return { service, adapter, registry, relationship };
 }
 
+type WhereCondition = { column: string; value?: unknown };
+
+/**
+ * A select that answers each table's stored rows to a read of the instances under the entry's own
+ * table, and nothing to a read beneath them: none of these field groups holds another, so a row
+ * names the entry as its parent and never an instance.
+ */
+function storedUnderEntry(
+  rowsOf: (table: string) => Record<string, unknown>[]
+): (
+  table: string,
+  options?: { where?: { and?: WhereCondition[] } }
+) => Promise<Record<string, unknown>[]> {
+  return (table, options) =>
+    Promise.resolve(
+      options?.where?.and?.some(
+        condition =>
+          condition.column === "_parent_table" && condition.value === "dc_pages"
+      )
+        ? rowsOf(table)
+        : []
+    );
+}
+
 describe("FieldGroupDataService", () => {
   let ctx: ComponentDataTestCtx;
 
@@ -90,6 +120,20 @@ describe("FieldGroupDataService", () => {
       await expect(
         ctx.service.getComponentTableName("ghost")
       ).resolves.toBeNull();
+    });
+  });
+
+  describe("isComponentLocalized", () => {
+    afterEach(() => _resetPerLanguageStorage());
+
+    it("answers whether the component's translatable values are stored per language", async () => {
+      // Not marked translatable, so its values are shared, unless the site keeps every
+      // translatable value per language.
+      await expect(ctx.service.isComponentLocalized("seo")).resolves.toBe(
+        false
+      );
+      setPerLanguageStorage(true);
+      await expect(ctx.service.isComponentLocalized("seo")).resolves.toBe(true);
     });
   });
 
@@ -288,7 +332,7 @@ describe("FieldGroupDataService", () => {
     });
 
     it("deletes existing instances that are not present in incoming data", async () => {
-      ctx.adapter.select.mockResolvedValue([
+      const stored = [
         {
           id: "feat-a",
           _parent_id: "entry-1",
@@ -305,7 +349,8 @@ describe("FieldGroupDataService", () => {
           _order: 1,
           title: "B",
         },
-      ]);
+      ];
+      ctx.adapter.select.mockImplementation(storedUnderEntry(() => stored));
 
       await ctx.service.saveComponentData({
         parentId: "entry-1",
@@ -321,10 +366,12 @@ describe("FieldGroupDataService", () => {
     });
 
     it("handles mixed create/update/delete correctly", async () => {
-      ctx.adapter.select.mockResolvedValue([
-        { id: "feat-a", _parent_id: "entry-1", _order: 0, title: "A" },
-        { id: "feat-b", _parent_id: "entry-1", _order: 1, title: "B" },
-      ]);
+      ctx.adapter.select.mockImplementation(
+        storedUnderEntry(() => [
+          { id: "feat-a", _parent_id: "entry-1", _order: 0, title: "A" },
+          { id: "feat-b", _parent_id: "entry-1", _order: 1, title: "B" },
+        ])
+      );
 
       await ctx.service.saveComponentData({
         parentId: "entry-1",
@@ -426,31 +473,33 @@ describe("FieldGroupDataService", () => {
 
     it("deletes removed instances across all component tables", async () => {
       // Existing in comp_hero
-      ctx.adapter.select.mockImplementation(async (table: string) => {
-        if (table === "comp_hero") {
-          return [
-            {
-              id: "hero-1",
-              _parent_id: "entry-1",
-              _order: 0,
-              _component_type: "hero",
-              heading: "Old",
-            },
-          ];
-        }
-        if (table === "comp_cta") {
-          return [
-            {
-              id: "cta-1",
-              _parent_id: "entry-1",
-              _order: 1,
-              _component_type: "cta",
-              label: "Old",
-            },
-          ];
-        }
-        return [];
-      });
+      ctx.adapter.select.mockImplementation(
+        storedUnderEntry(table => {
+          if (table === "comp_hero") {
+            return [
+              {
+                id: "hero-1",
+                _parent_id: "entry-1",
+                _order: 0,
+                _component_type: "hero",
+                heading: "Old",
+              },
+            ];
+          }
+          if (table === "comp_cta") {
+            return [
+              {
+                id: "cta-1",
+                _parent_id: "entry-1",
+                _order: 1,
+                _component_type: "cta",
+                label: "Old",
+              },
+            ];
+          }
+          return [];
+        })
+      );
 
       await ctx.service.saveComponentData({
         parentId: "entry-1",
@@ -490,6 +539,96 @@ describe("FieldGroupDataService", () => {
 
       expect(tx.insert).toHaveBeenCalledTimes(1);
       expect(ctx.adapter.insert).not.toHaveBeenCalled();
+    });
+
+    // A field group's table this running instance has not registered: the
+    // instances already stored cannot be read, so the save cannot tell an
+    // update from a create. Taking it for a create wrote a second instance
+    // beside the one it never saw.
+    describe("when the instance table is not registered", () => {
+      const txSave = (
+        tx: ReturnType<typeof createMockTxContext>,
+        fields: unknown[],
+        data: Record<string, unknown>,
+        validateOnly = false
+      ) => {
+        const params = {
+          parentId: "entry-1",
+          parentTable: "dc_pages",
+          access: TRUSTED,
+          fields,
+          data,
+        } as unknown as Parameters<
+          typeof ctx.service.saveComponentDataInTransaction
+        >[1];
+        const handle = tx as unknown as Parameters<
+          typeof ctx.service.saveComponentDataInTransaction
+        >[0];
+        return (
+          validateOnly
+            ? ctx.service.validateComponentDataInTransaction(handle, params)
+            : ctx.service.saveComponentDataInTransaction(handle, params)
+        ).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+      };
+
+      it.each([
+        [
+          "a single instance",
+          [seoComponentField()],
+          { seo: { metaTitle: "About" } },
+        ],
+        [
+          "repeatable instances",
+          [repeatableComponentField()],
+          { features: [{ title: "One" }] },
+        ],
+        [
+          "multi-component instances",
+          [multiComponentField()],
+          { layout: [{ _componentType: "hero", heading: "Welcome" }] },
+        ],
+      ])("refuses %s and writes nothing", async (_shape, fields, data) => {
+        const tx = createMockTxContext({
+          select: vi
+            .fn()
+            .mockImplementation((table: string) =>
+              Promise.reject(tableNotRegisteredError(table))
+            ),
+        });
+        const error = await txSave(tx, fields, data);
+        expect(missingSchemaObject(error)?.object).toBe("unregistered");
+        expect(tx.insert).not.toHaveBeenCalled();
+        expect(tx.update).not.toHaveBeenCalled();
+        expect(tx.delete).not.toHaveBeenCalled();
+      });
+
+      it("refuses a validation-only pass for the same reason", async () => {
+        const tx = createMockTxContext({
+          select: vi
+            .fn()
+            .mockRejectedValue(tableNotRegisteredError("comp_seo")),
+        });
+        const error = await txSave(
+          tx,
+          [seoComponentField()],
+          { seo: { metaTitle: "About" } },
+          true
+        );
+        expect(missingSchemaObject(error)?.object).toBe("unregistered");
+      });
+
+      it("still treats any other failed read of the instances as none stored", async () => {
+        const tx = createMockTxContext({
+          select: vi.fn().mockRejectedValue(new Error("connection reset")),
+        });
+        await expect(
+          txSave(tx, [seoComponentField()], { seo: { metaTitle: "About" } })
+        ).resolves.toBeUndefined();
+        expect(tx.insert).toHaveBeenCalledTimes(1);
+      });
     });
   });
 
@@ -978,6 +1117,55 @@ describe("FieldGroupDataService", () => {
     });
   });
 
+  // A caller judging documents by what they hold (a publish) reads strictly:
+  // a field it failed to read must not stand in as an empty one, which an
+  // optional field or a permissive validator would then accept.
+  describe("populateComponentDataMany (batch), strict", () => {
+    const strictRead = (fields: Record<string, unknown>[]) =>
+      ctx.service.populateComponentDataMany({
+        entries: [{ id: "entry-1" }, { id: "entry-2" }],
+        parentTable: "dc_pages",
+        fields: fields as never,
+        strict: true,
+      });
+
+    it("refuses a component field whose instances could not be read", async () => {
+      ctx.adapter.select.mockRejectedValue(new Error("connection reset"));
+
+      await expect(strictRead([seoComponentField()])).rejects.toThrow(
+        "connection reset"
+      );
+    });
+
+    it("refuses a zone whose instances could not be read", async () => {
+      ctx.adapter.select.mockRejectedValue(new Error("connection reset"));
+
+      await expect(strictRead([multiComponentField()])).rejects.toThrow(
+        "connection reset"
+      );
+    });
+
+    it("refuses a zone whose component cannot be looked up, even when the error names a missing relation", async () => {
+      ctx.registry.getComponent.mockRejectedValueOnce(
+        new Error('relation "dynamic_components" does not exist')
+      );
+
+      await expect(strictRead([multiComponentField()])).rejects.toThrow(
+        "dynamic_components"
+      );
+    });
+
+    it("reads a zone whose component table is not there yet as holding nothing", async () => {
+      ctx.adapter.select.mockRejectedValue(
+        new Error("no such table: comp_hero")
+      );
+
+      const result = await strictRead([multiComponentField()]);
+
+      expect(result.map(entry => entry.layout)).toEqual([[], []]);
+    });
+  });
+
   describe("populateComponentDataMany (batch)", () => {
     it("populates multiple entries with one query per component field (N+1 prevention)", async () => {
       ctx.adapter.select.mockResolvedValue([
@@ -1020,6 +1208,33 @@ describe("FieldGroupDataService", () => {
 
       expect(result).toEqual([]);
       expect(ctx.adapter.select).not.toHaveBeenCalled();
+    });
+
+    // A field group placed directly in another is read a level down, after the outer instances.
+    it("defaults a field whose nested level could not be read, as a one-entry read does", async () => {
+      ctx.registry.registerComponent("seo", {
+        ...seoComponentMeta(),
+        fields: [
+          { name: "metaTitle", type: "text" },
+          { name: "badge", type: "component", component: "badge" },
+        ],
+      });
+      ctx.adapter.select.mockResolvedValue([
+        { id: "seo-1", _parent_id: "entry-1", _order: 0, meta_title: "One" },
+      ]);
+      // The outer instances read; the lookup a level down then fails.
+      const lookUp = ctx.registry.getComponent.getMockImplementation();
+      ctx.registry.getComponent
+        .mockImplementationOnce(lookUp)
+        .mockRejectedValueOnce(new Error("lookup failed"));
+
+      const result = await ctx.service.populateComponentDataMany({
+        entries: [{ id: "entry-1", title: "Page 1" }],
+        parentTable: "dc_pages",
+        fields: [seoComponentField()],
+      });
+
+      expect(result[0].seo).toBeNull();
     });
 
     it("applies default values to entries without matching component data", async () => {

@@ -70,7 +70,11 @@ describe.each(getConfiguredTestDialects())(
 
       await handle.nextly.updateSingle({
         slug: "announcement",
-        data: { campaign: "spring", headline: "Closed on Friday" },
+        data: {
+          campaign: "spring",
+          headline: "Closed on Friday",
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       // The registry as a production boot leaves it.

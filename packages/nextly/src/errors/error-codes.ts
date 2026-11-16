@@ -31,11 +31,44 @@ export const NEXTLY_ERROR_STATUS = {
   // receives, so the key form can say which: choose a smaller role, or ask
   // for access. The sentence stays FORBIDDEN's and names no permission.
   API_KEY_ROLE_ABOVE_CREATOR: 403,
+  // A plugin's declared action asked of a row its visibility rule hides,
+  // judged on the row as the caller reads it. Separate from FORBIDDEN, which
+  // the action's permission refuses with: the caller may hold every
+  // permission, and the row is what is wrong. Generic: it never says which
+  // rule, or which field.
+  ACTION_NOT_AVAILABLE: 403,
   NOT_FOUND: 404,
+  // A write to a collection or Single removed from code: its registry row
+  // says the app's code defines it, and the running configuration no longer
+  // declares it. 409 like the other states the database and the configuration
+  // disagree about: the caller's permissions are not the problem, retrying
+  // cannot change it, and declaring it again or retiring it does.
+  ENTITY_REMOVED_FROM_CODE: 409,
+  // A read or write of a collection or Single the database has not been
+  // migrated for: a declared field's column or the entity's table is missing,
+  // or this running instance never registered the entity. 409 for the reason
+  // ENTITY_REMOVED_FROM_CODE gives: retrying cannot change it, and
+  // `nextly migrate` does.
+  ENTITY_NOT_MIGRATED: 409,
   // The path exists and this verb is not one it serves. Distinct from NOT_FOUND, which would
   // tell the caller the address is wrong when only the method is; the response carries `Allow`.
   METHOD_NOT_ALLOWED: 405,
+  // A `Range` naming bytes past the end of the file asked for. Distinct from
+  // NOT_FOUND: the file is there, and the response's `Content-Range` gives its
+  // size so the client can ask again for a span that exists.
+  RANGE_NOT_SATISFIABLE: 416,
   CONFLICT: 409,
+  // An update made from a version of the document that is no longer its
+  // current one: someone else's save came in between. Its own code rather
+  // than CONFLICT, which the edit lock's claim and content history's version
+  // allocation already answer and which a retry keys on: this one must never
+  // be retried, since the same version stays out of date.
+  STALE_VERSION: 409,
+  // An update that must say which version of a document it was made from, or
+  // that it overwrites whatever is stored, and said neither: 428, Precondition
+  // Required. Its own code beside STALE_VERSION: nothing is out of date, the
+  // request is missing the condition it is judged by.
+  VERSION_REQUIRED: 428,
   DUPLICATE: 409,
   RATE_LIMITED: 429,
   PAYLOAD_TOO_LARGE: 413,
@@ -52,8 +85,16 @@ export const NEXTLY_ERROR_STATUS = {
   // wrong with the request, and retrying shortly is the remedy, which
   // `retryAfterSeconds` and Retry-After say.
   DATABASE_BUSY: 503,
+  // An access or field rule the request needs could not run: its own database
+  // query waited out `pool.connectionTimeoutMs`. 503, not 403: the rule never
+  // answered, so nothing was refused, and retrying shortly is the remedy.
+  RULE_COULD_NOT_RUN: 503,
   EXTERNAL_SERVICE_ERROR: 502,
   SERVICE_UNAVAILABLE: 503,
+  // The app nextly runs in is set up so nextly cannot work: its config, or the
+  // Next.js and React it installs. 500: nothing about the request is wrong,
+  // and only the operator can change it.
+  CONFIGURATION_ERROR: 500,
   // Outbound-fetch safety (utils/validate-external-url): a URL refused for SSRF
   // safety, and a fetch that timed out / exceeded the size cap / failed to decode.
   EXTERNAL_URL_BLOCKED: 400,
@@ -87,6 +128,15 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_UPGRADE_IN_PROGRESS: 409,
   // Plan C2 — nextly migrate phases.
   NEXTLY_MIGRATE_LOCK_BUSY: 409,
+  // A schema change waited for a table another database session holds, past
+  // its bounds, and stopped. 409 like the schema lock's refusal: another
+  // session holds what the change needs, and it can run once that ends.
+  NEXTLY_TABLE_BUSY: 409,
+  // A write made inside a schema change's own SQLite transaction, on another
+  // connection to the same database, waited for the write lock that
+  // transaction holds. 500, not 409: this process holds the lock, no other
+  // session does, so nothing can end that a retry would wait for.
+  NEXTLY_LOCK_HELD_BY_THIS_PROCESS: 500,
   NEXTLY_BASELINE_LOCK_NOT_HELD: 409,
   NEXTLY_RESOLVE_LOCK_NOT_HELD: 409,
   // Boot refused to serve: the migrate lock stayed held past the wait deadline,
@@ -96,7 +146,21 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_BOOT_MIGRATIONS_NOT_RUN: 503,
   // Still running rather than refused. 503 for the same reason: retry shortly.
   NEXTLY_BOOT_MIGRATIONS_PENDING: 503,
+  // A production start refused a database `nextly migrate` has not set up: it
+  // holds none of Nextly's tables, and the start creates none. 503 for the
+  // same reason as the two above: the instance serves once the deploy migrates.
+  NEXTLY_DATABASE_NOT_SET_UP: 503,
+  // A database with no Nextly tables, where the step that refuses sets up
+  // nothing. 503 like the two above: the instance cannot serve until the
+  // database is migrated, and running `nextly migrate` is the recovery.
+  NEXTLY_DATABASE_NOT_MIGRATED: 503,
   NEXTLY_CORE_DESTRUCTIVE_REFUSED: 409,
+  // A core upgrade drizzle-kit cannot plan from this database, refused
+  // before any statement: the database is as it was, and an earlier release
+  // takes it the first step.
+  NEXTLY_CORE_UPGRADE_UNSUPPORTED: 409,
+  // A core upgrade that ran and still left a declared column or table out.
+  NEXTLY_CORE_UPGRADE_INCOMPLETE: 500,
   NEXTLY_MIGRATION_DRIFT: 409,
   NEXTLY_MIGRATION_APPLY_FAILED: 500,
   // A SQLite migration unit would leave a row referencing a row that does
@@ -114,6 +178,14 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_MIGRATION_SNAPSHOT_MISSING: 404,
   NEXTLY_MIGRATION_RESOLVE_DRIFT: 409,
   NEXTLY_MIGRATION_RESOLVE_PRECONDITION: 409,
+  // A Schema Builder save refused by the migration history checks `nextly
+  // migrate` runs first (an applied file edited or missing, an unfinished
+  // attempt): nothing is written until the history is settled.
+  NEXTLY_MIGRATION_HISTORY_REFUSED: 409,
+  // A Schema Builder save that would also convert a column an earlier version
+  // made to the one field-to-column mapping, which the person did not confirm
+  // in the save's review: the Builder changes only what it said it would.
+  NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED: 409,
   // The Builder's UI schema.
   NEXTLY_UI_SCHEMA_INVALID: 400,
   NEXTLY_SCHEMA_SLUG_COLLISION: 409,
@@ -135,13 +207,18 @@ export const NEXTLY_ERROR_STATUS = {
   // `/api/admin-meta/workspace` payload: a value `JSON.stringify` throws on
   // fails that request for every admin, not just the widget's own card.
   NEXTLY_PLUGIN_ADMIN_WIDGET_INVALID: 500,
-  // The admin is not served because a dashboard widget draws with a component
-  // the app's generated component map does not include. Refused when the
-  // admin's server layout renders, so the public site keeps serving.
-  NEXTLY_ADMIN_COMPONENT_MAP_STALE: 500,
+  // Plugin platform — a plugin that adds widgets or widget data sources through
+  // `contributes.admin.widgets` or `contributes.widgetSources`, keys Nextly no
+  // longer reads: a plugin declares its widgets with `defineWidget` under
+  // `contributes.dashboard`. Refused at boot, naming the plugin and the key.
+  NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL: 500,
   // A plugin's document view cannot be routed: a malformed or reserved path,
   // or one two declarations claim on the same document. Refused at boot.
   NEXTLY_PLUGIN_DOCUMENT_VIEW_INVALID: 500,
+  // A plugin's override of a document action, or a section it adds to the
+  // document panel, cannot be drawn: an unknown action, nothing to draw, or
+  // one action two plugins override on one collection. Refused at boot.
+  NEXTLY_PLUGIN_DOCUMENT_SURFACE_INVALID: 500,
   // Plugin platform (P0) — boot-time plugin dependency/version resolution.
   PLUGIN_RESOLUTION_ERROR: 500,
   // Plugin schema lifecycle. All 409: each is a state
@@ -149,6 +226,7 @@ export const NEXTLY_ERROR_STATUS = {
   // and an operator command resolves.
   PLUGIN_DEPENDENCY_NOT_INSTALLED: 409,
   PLUGIN_HAS_DEPENDENTS: 409,
+  PLUGIN_UNINSTALL_WOULD_DROP_OTHERS: 409,
   PLUGIN_UNINSTALL_IRREVERSIBLE: 409,
   // A full uninstall that would drop tables, run without `--yes`.
   PLUGIN_UNINSTALL_UNCONFIRMED: 409,
@@ -209,10 +287,21 @@ export const NEXTLY_ERROR_STATUS = {
   // refusals: no request caused it, and the fix is a change to the server's
   // own configuration.
   NEXTLY_POSTGRES_SCHEMA_MISMATCH: 500,
-  // `db.postgres.schema` names a schema other than `public`, which the schema
-  // push cannot yet create tables in. 500 for the same reason as the mismatch
-  // above: a boot-time refusal of the server's own configuration.
-  NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED: 500,
+  // A reloaded config turns `experimental.perLanguageStorage` on or off while the site runs. 500
+  // like the refusals beside it: no request caused it, and the remedy is restarting the site.
+  NEXTLY_PER_LANGUAGE_STORAGE_CHANGED: 500,
+  // `experimental.perLanguageStorage` is on over a database whose main tables still hold
+  // translatable values. 500 for the same reason: the remedy is the server's configuration or data.
+  NEXTLY_PER_LANGUAGE_STORAGE_MIXED: 500,
+  // `experimental.perLanguageStorage` is on, the site declares no languages, so it would serve the
+  // implicit English alone, and its translations in other languages would read as gone. 500 for the
+  // same reason: the remedy is the server's configuration.
+  NEXTLY_PER_LANGUAGE_STORAGE_LANGUAGES_UNDECLARED: 500,
+  // `db.postgres.schema` names a schema holding no installation while another
+  // schema of the database holds one: the setting moved on an existing site.
+  // 500 for the same reason as the mismatch above: a boot-time refusal of the
+  // server's own configuration.
+  NEXTLY_POSTGRES_SCHEMA_MOVED: 500,
 } as const;
 
 export type NextlyErrorCode = keyof typeof NEXTLY_ERROR_STATUS;
@@ -244,6 +333,7 @@ const CANONICAL_CODE_FOR_STATUS = [
   "FORBIDDEN",
   "NOT_FOUND",
   "CONFLICT",
+  "VERSION_REQUIRED",
   "PAYLOAD_TOO_LARGE",
   "UNSUPPORTED_MEDIA_TYPE",
   "RATE_LIMITED",
@@ -299,8 +389,10 @@ const GENERIC_PUBLIC_MESSAGE: Readonly<
   INVALID_INPUT: "The request could not be processed.",
   AUTH_REQUIRED: "Authentication required.",
   FORBIDDEN: "You don't have permission to perform this action.",
+  ACTION_NOT_AVAILABLE: "This action isn't available for this entry.",
   NOT_FOUND: "Not found.",
   METHOD_NOT_ALLOWED: "That method is not allowed on this address.",
+  RANGE_NOT_SATISFIABLE: "The requested range is outside the file.",
   CONFLICT:
     "The resource has changed since you last loaded it. Please refresh and try again.",
   DUPLICATE: "Resource already exists.",
@@ -310,6 +402,8 @@ const GENERIC_PUBLIC_MESSAGE: Readonly<
   EXTERNAL_SERVICE_ERROR: "An upstream service failed.",
   SERVICE_UNAVAILABLE: "The service is temporarily unavailable.",
   DATABASE_BUSY: "The database is busy. Please try again shortly.",
+  RULE_COULD_NOT_RUN:
+    "A check this request needs could not run. Please try again shortly.",
   INTERNAL_ERROR: "An unexpected error occurred.",
 };
 

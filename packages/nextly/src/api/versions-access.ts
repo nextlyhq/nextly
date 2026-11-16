@@ -28,6 +28,7 @@ import {
   appLocalization,
   configuredLocales,
 } from "../domains/i18n/configured-locales";
+import { storesPerLanguage } from "../domains/i18n/per-language-storage";
 import {
   resolveSingleDocumentId,
   singleDocumentEditable,
@@ -40,7 +41,6 @@ import {
   fieldsCarryingReadRules,
   nestedWithheldPaths,
 } from "../domains/versions/component-read-access";
-import { computeVersionDiff } from "../domains/versions/diff";
 import type { VersionDiff } from "../domains/versions/diff";
 import { hydrateDiffReferences } from "../domains/versions/diff-references";
 import { HistoryDividers } from "../domains/versions/history-dividers";
@@ -55,10 +55,17 @@ import {
   lastLookedAtByPart,
   markLastViewed,
 } from "../domains/versions/version-views";
-import type { VersionRef } from "../domains/versions/versions-repository";
+import {
+  VersionsRepository,
+  type VersionRef,
+} from "../domains/versions/versions-repository";
 import type { VersionListOptions } from "../domains/versions/versions-service";
+import {
+  errorFromServiceEnvelope,
+  type ServiceErrorEnvelope,
+} from "../errors/from-service-envelope";
 import { NextlyError } from "../errors/nextly-error";
-import { getCachedNextly } from "../init";
+import { rethrowIfRuleCouldNotRun } from "../errors/rule-could-not-run";
 import type {
   ResolvedVersionsConfig,
   VersionScopeKind,
@@ -68,7 +75,6 @@ import {
   applyFieldReadAccess,
   callerAccessGrants,
 } from "../shared/lib/field-level-registry";
-import { stripPasswordFieldValues } from "../shared/lib/password-fields";
 
 import { requireRouteCollectionAccess } from "./route-auth";
 
@@ -89,9 +95,18 @@ export async function requireRouteVersionReadAccess(
   slug: string,
   entryId: string
 ): Promise<{ user: UserContext; authenticatedScope?: AuthenticatedScope }> {
+  // The boot entry is loaded when a history is asked for, so the dispatchers
+  // that import this module's helpers do not load the whole boot with them.
+  const { getCachedNextly } = await import("../init");
   await getCachedNextly();
 
-  const auth = await requireRouteCollectionAccess(request, "read", slug);
+  // A history names one document: a caller who may not read it is answered
+  // as if it were missing, as the dispatcher's history routes answer.
+  const auth = await requireRouteCollectionAccess(request, "read", slug, {
+    method: "readDocumentHistory",
+    params: {},
+    namesOne: true,
+  });
 
   // Resolved role slugs so field-level `access.read` evaluates against the
   // caller's roles (session auth carries role ids; API-key auth carries slugs).
@@ -291,7 +306,9 @@ export async function historyLanguagesOf(
 ): Promise<ReadonlySet<string>> {
   const configured = configuredLocales() ?? new Set<string>();
   const entity = await registryEntityOf(scopeKind, slug);
-  if ((entity as { localized?: boolean } | null)?.localized === true) {
+  // A save of an entity kept per language is recorded in its language: a translated one, or any
+  // under `experimental.perLanguageStorage`.
+  if (entity !== null && storesPerLanguage(entity)) {
     return configured;
   }
   const defaultLocale = appLocalization()?.defaultLocale ?? null;
@@ -423,7 +440,10 @@ export async function assertDocumentUpdatable(
   // The caller's authenticated scope. A version-label edit is a route-authorized
   // `update`, so a scoped API key is judged on its OWN update grant here and a
   // super-admin-owned key does not skip stored owner/role update rules.
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope?: AuthenticatedScope,
+  // The language the write acts in, which a collection rule's filter is
+  // matched in; the default where it names none.
+  locale?: string
 ): Promise<void> {
   const allowed =
     scopeKind === "single"
@@ -437,6 +457,7 @@ export async function assertDocumentUpdatable(
           // this gate exists for still run.
           routeAuthorized: true,
           authenticatedScope,
+          locale,
         });
 
   if (!allowed) {
@@ -487,9 +508,11 @@ async function canUpdateLiveSingle(
  * normal read path uses so the collection's own gate applies identically.
  *
  * A denial (403) and a missing document (404) both mean "no history for you".
- * Any other failure is a real server-side fault — a component/relationship load
- * error, a throwing afterRead hook — and is re-thrown so the route reports it
- * as a 5xx instead of disguising an outage as missing content.
+ * Any other failure is the read failing rather than refusing — a database not
+ * migrated for the collection, a component/relationship load error, a throwing
+ * afterRead hook — and is re-thrown with the read's own error, so the route
+ * answers what the document read would instead of disguising it as missing
+ * content.
  */
 async function canReadLiveDocument(
   scopeKind: VersionScopeKind,
@@ -535,7 +558,7 @@ async function canReadLiveDocument(
     // The read rules and hooks are handed this language's values.
     ...(locale === undefined ? {} : { locale }),
   });
-  if (!interpretReadResult(result.success, result.statusCode)) return false;
+  if (!interpretReadResult(result)) return false;
   // The read must be of the document asked about. A `beforeOperation` hook may
   // rewrite the id a read resolves, and a read that passed on another document
   // would authorize this one's history by that document's rules. The id is the
@@ -596,16 +619,53 @@ export { resolveSingleDocumentId };
 /**
  * Collapse a live-read result into "may the caller see this document".
  * Only 403/404 mean no; anything else non-successful is a genuine fault.
+ *
+ * The fault keeps the code and status the read gave it, rebuilt through the
+ * shared converter: a database not migrated for the collection answers
+ * ENTITY_NOT_MIGRATED, as the caller's own read of the document does, rather
+ * than an opaque 500, and a rule that could not run answers RULE_COULD_NOT_RUN
+ * rather than an internal error. The read ran as the caller, so its answer
+ * names only what the caller may be told.
  */
-function interpretReadResult(success: boolean, statusCode: number): boolean {
-  if (success) return true;
-  if (statusCode === 403 || statusCode === 404) return false;
-  throw NextlyError.internal({
-    logContext: {
-      reason: "version-live-read-failed",
-      statusCode,
-    },
+function interpretReadResult(
+  read: ServiceErrorEnvelope & { success: boolean; statusCode: number }
+): boolean {
+  if (read.success) return true;
+  if (read.statusCode === 403 || read.statusCode === 404) return false;
+  throw errorFromServiceEnvelope(read, {
+    reason: "version-live-read-failed",
+    statusCode: read.statusCode,
   });
+}
+
+/** An entity's current schema, as redaction reads it. */
+export interface RedactionSchema {
+  fields: FieldConfig[];
+  componentFields: Awaited<ReturnType<typeof currentComponentFields>>;
+}
+
+/**
+ * The entity's current fields and the components they reach, as redaction
+ * judges a snapshot against them. The STRICT resolver: `null` means the
+ * lookup failed, which is refused rather than read as an entity with no
+ * fields, since skipping redaction then would hand back what a live read
+ * hides.
+ */
+export async function currentRedactionSchema(
+  scopeKind: "collection" | "single",
+  slug: string
+): Promise<RedactionSchema> {
+  const fields = await tryResolveCurrentFields(scopeKind, slug);
+  if (fields === null) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "version-redaction-field-resolution-failed",
+        scopeKind,
+        scopeSlug: slug,
+      },
+    });
+  }
+  return { fields, componentFields: await currentComponentFields(fields) };
 }
 
 /**
@@ -623,8 +683,9 @@ function interpretReadResult(success: boolean, statusCode: number): boolean {
  * read judges it.
  *
  * Returns what the read rules removed: top-level keys, and dotted paths below
- * them (`banner.secret`), so a comparison can say a field is hidden from this
- * reader rather than leave it out unexplained. Password values are stripped
+ * them (`banner.secret`), with a list row named by its index in this version
+ * (`items.1.secret`), so a comparison can say a field is hidden from this
+ * reader, in the row it was hidden in, rather than leave it out unexplained. Password values are stripped
  * too, but are not reported: a comparison never shows a password field at all.
  *
  * Fails closed: if the rules cannot be evaluated, every field carrying a read
@@ -635,7 +696,13 @@ export async function redactSnapshotForUser(
   scopeKind: VersionScopeKind,
   slug: string,
   user: UserContext,
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope?: AuthenticatedScope,
+  /**
+   * The entity's current schema, already resolved (`currentRedactionSchema`):
+   * a caller judging many snapshots of one document reads it once rather than
+   * once per snapshot. Resolved here when absent.
+   */
+  schema?: RedactionSchema
 ): Promise<ReadonlySet<string>> {
   const withheld = new Set<string>();
   if (typeof snapshot !== "object" || snapshot === null) return withheld;
@@ -652,30 +719,10 @@ export async function redactSnapshotForUser(
   // two would skip redaction entirely on a transient failure and hand back a
   // value the live read hides -- an assertion satisfied by absence, in the one
   // place where absence must stop the read.
-  const fields = await tryResolveCurrentFields(scopeKind, slug);
-  if (fields === null) {
-    throw NextlyError.internal({
-      logContext: {
-        reason: "version-redaction-field-resolution-failed",
-        scopeKind,
-        scopeSlug: slug,
-      },
-    });
-  }
-  // Through component REFERENCES as well. A `component` field carries only a
-  // slug, so a walker given the top-level list alone sees a leaf: a password
-  // declared inside a referenced component would be handed back even though
-  // the live read hides it. Same reasoning as the field converted to
-  // `password` after the fact -- the CURRENT schema decides, wherever the
-  // field is declared. The same map takes the read rules into components.
-  const componentFields = await currentComponentFields(fields);
+  const { fields, componentFields } =
+    schema ?? (await currentRedactionSchema(scopeKind, slug));
   if (fields.length > 0) {
-    stripPasswordsThroughComponents(
-      entry,
-      fields,
-      componentFields,
-      stripPasswordFieldValues
-    );
+    stripPasswordsThroughComponents(entry, fields, componentFields);
   }
 
   const before = structuredClone(entry);
@@ -697,6 +744,9 @@ export async function redactSnapshotForUser(
     });
     await applyComponentReadAccess(entry, fields, componentFields, caller);
   } catch (error) {
+    // A rule that could not run never answered: the request ends with that,
+    // not with every field carrying a read rule withheld.
+    rethrowIfRuleCouldNotRun(error);
     // Rules that could not be evaluated decide nothing, so nothing they guard
     // is shown: every field carrying a read rule is withheld, and named.
     for (const key of fieldsCarryingReadRules(
@@ -851,8 +901,7 @@ export async function stripAutosavePasswords(
   stripPasswordsThroughComponents(
     snapshot,
     fields,
-    await autosaveComponentFields(fields, scopeKind, slug),
-    stripPasswordFieldValues
+    await autosaveComponentFields(fields, scopeKind, slug)
   );
 }
 
@@ -990,6 +1039,88 @@ async function resolveEnrichedFields(
     rawFields as unknown as Record<string, unknown>[]
   );
   return enriched as unknown as FieldConfig[];
+}
+
+/**
+ * History rows with the restored fields each names (`fieldSources`) narrowed
+ * to the ones this reader may read.
+ *
+ * A source says a field was restored, and from which version, so naming one
+ * the reader's field rules withhold would disclose the field and its history.
+ * Each named field is judged the way a version read judges it: the row's own
+ * snapshot goes through `redactSnapshotForUser`, and a field it withholds
+ * loses its source. A field the snapshot does not hold is still judged, as an
+ * empty value, rather than passed unexamined. The rows that name no source
+ * are returned as they are; the others' snapshots are read in one query.
+ */
+export async function readableFieldSources<
+  Row extends {
+    // Null on an autosave row, which records no sources.
+    versionNo: number | null;
+    fieldSources?: Readonly<Record<string, number>> | null;
+  },
+>(
+  rows: readonly Row[],
+  args: {
+    ref: VersionRef;
+    user: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  }
+): Promise<Row[]> {
+  const naming = rows.filter(
+    (row): row is Row & { versionNo: number } =>
+      row.versionNo !== null &&
+      !!row.fieldSources &&
+      Object.keys(row.fieldSources).length > 0
+  );
+  if (naming.length === 0) return [...rows];
+  // The schema read once for the page, not once per row. Only a collection or
+  // a Single has one; another scope is left to `redactSnapshotForUser`, which
+  // withholds every field of it.
+  const { scopeKind, scopeSlug } = args.ref;
+  const schema =
+    scopeKind === "collection" || scopeKind === "single"
+      ? await currentRedactionSchema(scopeKind, scopeSlug)
+      : undefined;
+  const snapshots = await new VersionsRepository(
+    getService("adapter")
+  ).snapshotsByVersionNo(
+    args.ref,
+    naming.map(row => row.versionNo)
+  );
+  return Promise.all(
+    rows.map(async row => {
+      const sources = row.fieldSources;
+      if (!sources || Object.keys(sources).length === 0) return row;
+      // A row naming sources with no version number of its own was never
+      // read above, so its snapshot is judged as empty: every source is still
+      // judged, never passed unexamined.
+      const entry = structuredClone(
+        snapshotObject(
+          row.versionNo === null ? undefined : snapshots.get(row.versionNo)
+        )
+      );
+      for (const name of Object.keys(sources)) {
+        if (!(name in entry)) entry[name] = null;
+      }
+      const withheld = await redactSnapshotForUser(
+        entry,
+        args.ref.scopeKind,
+        args.ref.scopeSlug,
+        args.user,
+        args.authenticatedScope,
+        schema
+      );
+      const readable = Object.entries(sources).filter(
+        ([name]) => !withheld.has(name)
+      );
+      // The row as given, with only its readable sources: the same shape.
+      return {
+        ...row,
+        fieldSources: readable.length > 0 ? Object.fromEntries(readable) : null,
+      };
+    })
+  );
 }
 
 /** A stored snapshot as a plain object, or an empty object if it is not one. */
@@ -1207,7 +1338,11 @@ export async function compareDocumentVersions(args: {
   scopeKind: VersionScopeKind;
   slug: string;
   entryId: string;
-  user: UserContext;
+  /**
+   * The person comparing, judged and redacted for. Absent for trusted server
+   * code, which reads every language and field, as its other reads do.
+   */
+  user?: UserContext;
   authenticatedScope?: AuthenticatedScope;
   query: ComparisonQuery;
 }): Promise<VersionDiff> {
@@ -1217,15 +1352,17 @@ export async function compareDocumentVersions(args: {
   // since the baseline is found in its part, and otherwise the `locale` the
   // server pairs in. An explicit pair names no language here; its two rows are
   // asked about below.
-  await assertHistoryLocalesReadable(
-    args.scopeKind,
-    args.slug,
-    args.entryId,
-    args.user,
-    args.authenticatedScope,
-    {},
-    [await pairingPart(args, query)]
-  );
+  if (args.user) {
+    await assertHistoryLocalesReadable(
+      args.scopeKind,
+      args.slug,
+      args.entryId,
+      args.user,
+      args.authenticatedScope,
+      {},
+      [await pairingPart(args, query)]
+    );
+  }
   let pair: { from: number; to: number };
   let baseline: VersionDiff["baseline"];
   if (query.from !== undefined && query.to !== undefined) {
@@ -1364,7 +1501,8 @@ export async function diffDocumentVersions(args: {
   scopeKind: VersionScopeKind;
   slug: string;
   entryId: string;
-  user: UserContext;
+  /** The person comparing; absent for trusted server code (see above). */
+  user?: UserContext;
   from: number;
   to: number;
   modifiedOnly?: boolean;
@@ -1382,15 +1520,17 @@ export async function diffDocumentVersions(args: {
   ]);
   // Each version is of the language it records, asked about before either is
   // compared, or a mismatch reported.
-  await assertHistoryLocalesReadable(
-    args.scopeKind,
-    args.slug,
-    args.entryId,
-    args.user,
-    args.authenticatedScope,
-    {},
-    [fromRow.locale, toRow.locale]
-  );
+  if (args.user) {
+    await assertHistoryLocalesReadable(
+      args.scopeKind,
+      args.slug,
+      args.entryId,
+      args.user,
+      args.authenticatedScope,
+      {},
+      [fromRow.locale, toRow.locale]
+    );
+  }
 
   if (
     !(await onePart(args.scopeKind, args.slug, fromRow.locale, toRow.locale))
@@ -1419,33 +1559,45 @@ export async function diffDocumentVersions(args: {
   // Redact each snapshot for the caller BEFORE diffing, so the diff can never
   // surface a field the caller may not read. What either side withheld is
   // named to the engine, which reports it as hidden in its place.
-  const withheldFrom = await redactSnapshotForUser(
-    fromRow.snapshot,
-    args.scopeKind,
-    args.slug,
-    args.user,
-    args.authenticatedScope
-  );
-  const withheldTo = await redactSnapshotForUser(
-    toRow.snapshot,
-    args.scopeKind,
-    args.slug,
-    args.user,
-    args.authenticatedScope
-  );
+  // Trusted server code reads every field, so nothing is withheld from it.
+  const user = args.user;
+  const withheldFrom = user
+    ? await redactSnapshotForUser(
+        fromRow.snapshot,
+        args.scopeKind,
+        args.slug,
+        user,
+        args.authenticatedScope
+      )
+    : new Set<string>();
+  const withheldTo = user
+    ? await redactSnapshotForUser(
+        toRow.snapshot,
+        args.scopeKind,
+        args.slug,
+        user,
+        args.authenticatedScope
+      )
+    : new Set<string>();
 
   // Page scope has no HTTP diff surface; collection and single are the only
   // callers, so anything else resolves as a collection for field lookup.
   const lookupKind = args.scopeKind === "single" ? "single" : "collection";
   const fields = await resolveEnrichedFields(lookupKind, args.slug);
 
+  // Loaded here, by the one request that compares two versions: no other
+  // route needs the diff engine.
+  const { computeVersionDiff } = await import("../domains/versions/diff");
   const body = computeVersionDiff(
     snapshotObject(fromRow.snapshot),
     snapshotObject(toRow.snapshot),
     fields,
     {
       modifiedOnly: args.modifiedOnly,
-      withheld: new Set([...withheldFrom, ...withheldTo]),
+      // Each version's own: a list row is named by its index in that
+      // version, so merging the two would hide a field in the wrong row.
+      withheldFrom,
+      withheldTo,
       // `redactSnapshotForUser` ran each component's own read rules.
       componentRulesApplied: true,
       entity: lookupKind,
@@ -1458,12 +1610,16 @@ export async function diffDocumentVersions(args: {
   // wire stays id-stable for any non-admin consumer of this surface. Both
   // versions share a locale (asserted above), so the target reads resolve in
   // that language.
-  await hydrateDiffReferences(
-    body.fields,
-    args.user,
-    args.authenticatedScope,
-    pairLocale
-  );
+  // Labels are read as the person comparing may read them; trusted server
+  // code, which names no person, gets the ids alone.
+  if (args.user) {
+    await hydrateDiffReferences(
+      body.fields,
+      args.user,
+      args.authenticatedScope,
+      pairLocale
+    );
+  }
 
   return {
     from: args.from,

@@ -23,11 +23,6 @@
  * declaration that always hides the widget, which reads to the author as a
  * broken card rather than as a missing feature.
  *
- * `dismissible` is here because the code that honours it is: a dismissal is
- * recorded as the reader HIDING that placement, which the layout row already
- * carries per reader, so the field reads an existing mechanism rather than
- * asking for a new one.
- *
  * `pin` is deliberately NOT here yet. Nothing reads it — pinning is a property
  * of how the grid materialises an arrangement, and accepting it now would
  * publish an option that looks like it works: an author would declare

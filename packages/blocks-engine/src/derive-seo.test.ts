@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { BlockSeoContribution } from "./block";
+import type { BlockSeoContribution, BlockSeoRead } from "./block";
 import { deriveSeoFromDocument, type SeoDefinitionSource } from "./derive-seo";
 import type { BlockDocument, BlockNode } from "./document";
 import { DOCUMENT_FORMAT_VERSION } from "./document";
@@ -79,6 +79,33 @@ describe("deriveSeoFromDocument", () => {
       description: "Plans for every team.",
       image: [{ kind: "media", value: "m1" }],
     });
+  });
+
+  it("tells each block what its bound props hold, by its node id", () => {
+    const told: (BlockSeoRead | undefined)[] = [];
+    const listening: SeoDefinitionSource = type =>
+      type === "core/image"
+        ? {
+            seo: (_props: never, read?: BlockSeoRead) => {
+              told.push(read);
+              return undefined;
+            },
+          }
+        : undefined;
+    const bound = {
+      mediaId: { kind: "image", holds: "address", from: "value" },
+    } as const;
+    deriveSeoFromDocument(
+      doc([
+        node("bound", "core/image", { mediaId: "https://cdn.example/a.png" }),
+        node("plain", "core/image", { mediaId: "m1" }),
+      ]),
+      listening,
+      visible,
+      id => (id === "bound" ? bound : undefined)
+    );
+    // The bound one is told; the other, CONTROL, is told nothing.
+    expect(told).toEqual([{ bound }, {}]);
   });
 
   it("fills each field independently, whatever the document order", () => {

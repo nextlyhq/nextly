@@ -14,7 +14,7 @@ afterEach(async () => {
 });
 
 describe("form-builder on the reshaped PluginContext", () => {
-  it("boots via contributes.collections — registers its collections + afterCreate hook", async () => {
+  it("boots via contributes.collections — registers its collections + in-transaction handlers", async () => {
     const { plugin, collections } = formBuilder();
 
     // Booting with ONLY the plugin (no opts.collections) proves the P2 fold
@@ -28,8 +28,13 @@ describe("form-builder on the reshaped PluginContext", () => {
       expect(await registry.getCollectionBySlug(col.slug)).not.toBeNull();
     }
 
-    expect(current.hooks.hasHooks("afterCreate", "form-submissions")).toBe(
-      true
+    // Its notifications, closing hold and forgetting run inside each
+    // submission's write: more handlers there than on a collection nobody
+    // registered for, which has only the '*' ones.
+    expect(
+      current.hooks.inTransactionRunners("form-submissions").length
+    ).toBeGreaterThan(
+      current.hooks.inTransactionRunners("not-a-collection").length
     );
   });
 });

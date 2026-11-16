@@ -1,351 +1,483 @@
 /**
- * The add panel as a reader meets it: where focus starts, how its groups read, what a search
- * keeps and says, and what each row's button does.
+ * The add panel as a reader meets it: focus in the search, then one list of every widget with its
+ * icon, name, plugin, one line and Add, and nothing else; what a row says when there is nothing to
+ * add; what a search keeps and says; what Add hands the dashboard, the collection a new card
+ * starts on included; and where focus stays after an add.
  */
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MAX_PLACEMENTS } from "nextly/config";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_PLACEMENTS, sizeBounds } from "nextly/config";
+import { useState, type ReactNode } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AddPanelRow } from "../add-panel-model";
+import type { PluginMetadata } from "@admin/types/branding";
+import type {
+  DashboardWidget,
+  WidgetPlacement,
+} from "@admin/types/dashboard/widgets";
+
+import type { GalleryRead, GalleryTile } from "../add-panel-model";
 import { AddWidgetPanel, type AddWidgetPanelProps } from "../AddWidgetPanel";
 
-const ROWS: AddPanelRow[] = [
+/** The plugins the workspace payload names, for the plugin line beside a widget's name. */
+const PLUGINS: PluginMetadata[] = [
+  { name: "@acme/plugin-seo", appearance: { label: "SEO" }, collections: [] },
+];
+vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("@admin/context/providers/BrandingProvider")
+  >()),
+  useBranding: () => ({ widgetSources: undefined, plugins: PLUGINS }),
+}));
+
+const COLLECTION_SETTING = {
+  name: "collection",
+  type: "collection",
+  label: "Collection",
+} as const;
+
+/** The widgets as this admin draws them. */
+const WIDGETS: DashboardWidget[] = [
   {
-    key: "removed:p9",
-    section: "removed",
-    name: "Old notes",
-    description: "Comes back where it was, with its width and settings.",
-    placed: 0,
-    action: { kind: "add-back", placementId: "p9" },
+    id: "core/count",
+    title: "Count",
+    icon: "Hash",
+    archetype: "metric",
+    size: sizeBounds({ default: { w: 3, h: 2 } }),
+    settings: [COLLECTION_SETTING],
   },
   {
-    key: "core/entries",
-    section: "overview",
-    name: "Entries",
-    description: "How many entries there are.",
-    category: "Content",
-    widths: "¼ to Full wide",
-    placed: 0,
-    action: { kind: "add", widgetId: "core/entries" },
+    id: "core/note",
+    title: "Note",
+    archetype: "custom",
+    component: "core#Note",
+    size: sizeBounds({ default: { w: 4, h: 3 } }),
   },
   {
-    key: "core/recent",
-    section: "overview",
-    name: "Recent activity",
-    widths: "½ to Full wide",
-    placed: 2,
-    action: { kind: "add-another", widgetId: "core/recent" },
+    id: "core/team-activity",
+    title: "Team activity",
+    archetype: "list",
+    size: sizeBounds({ default: { w: 6, h: 5 } }),
   },
   {
-    key: "core/team",
-    section: "team",
-    name: "Team members",
-    placed: 1,
-    action: { kind: "on-dashboard" },
+    id: "seo/score",
+    title: "SEO score",
+    archetype: "metric",
+    size: sizeBounds({ default: { w: 3, h: 2 } }),
+  },
+];
+const BY_ID = new Map(WIDGETS.map(widget => [widget.id, widget]));
+
+const TILES: GalleryTile[] = [
+  {
+    id: "core/count",
+    name: "Count",
+    description: "How many entries a collection holds.",
+    size: sizeBounds({ default: { w: 3, h: 2 } }),
+    collectionSetting: "collection",
+    allowsSeveral: true,
   },
   {
-    key: "seo/score",
-    section: "plugins",
-    subgroup: "SEO",
+    id: "core/note",
+    name: "Note",
+    description: "A private note, written in Markdown.",
+    size: sizeBounds({ default: { w: 4, h: 3 } }),
+    allowsSeveral: true,
+  },
+  {
+    id: "core/team-activity",
+    name: "Team activity",
+    description: "Who changed what.",
+    size: sizeBounds({ default: { w: 6, h: 5 } }),
+    allowsSeveral: false,
+  },
+  {
+    id: "seo/score",
     name: "SEO score",
-    placed: 0,
-    action: { kind: "add", widgetId: "seo/score" },
+    description: "Pages missing a title.",
+    plugin: "@acme/plugin-seo",
+    size: sizeBounds({ default: { w: 3, h: 2 } }),
+    allowsSeveral: false,
   },
 ];
 
-function renderPanel(props: Partial<AddWidgetPanelProps> = {}) {
-  const all: AddWidgetPanelProps = {
+const READ: GalleryRead = {
+  tiles: TILES,
+  collections: [
+    { slug: "posts", label: "Posts", lifecycle: true },
+    { slug: "pages", label: "Pages", lifecycle: true },
+  ],
+};
+
+function wrapper({ children }: { children: ReactNode }) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+}
+
+function props(over: Partial<AddWidgetPanelProps> = {}): AddWidgetPanelProps {
+  return {
     open: true,
     onOpenChange: vi.fn(),
-    rows: ROWS,
+    gallery: { read: READ, isError: false, retry: vi.fn() },
+    placements: [],
+    byId: BY_ID,
     atCapacity: false,
-    onAdd: vi.fn(() => ({ title: "Entries", position: 4, count: 4 })),
-    onAddBack: vi.fn(() => ({ title: "Old notes", position: 2, count: 4 })),
+    onAdd: vi.fn((widgetId: string) => ({
+      title: BY_ID.get(widgetId)?.title ?? widgetId,
+    })),
+    onAddBack: vi.fn(() => ({ title: "Team activity" })),
     onClosed: vi.fn(),
-    ...props,
+    ...over,
   };
-  render(<AddWidgetPanel {...all} />);
-  return all;
 }
 
-function panel(): HTMLElement {
-  return screen.getByRole("dialog", { name: "Add widget" });
+function renderPanel(over: Partial<AddWidgetPanelProps> = {}) {
+  const all = props(over);
+  const view = render(<AddWidgetPanel {...all} />, { wrapper });
+  return { ...all, rerender: view.rerender };
 }
 
-function live(): HTMLElement {
-  return screen.getByTestId("add-panel-live");
+const panel = () => screen.getByRole("dialog", { name: "Add widget" });
+const live = () => screen.getByTestId("add-panel-live");
+const search = () => screen.getByRole("searchbox", { name: "Search widgets" });
+const row = (id: string) => screen.getByTestId(`add-panel-row-${id}`);
+const rowIds = () => {
+  const list = screen.queryByRole("list", { name: "Widgets" });
+  return list === null
+    ? []
+    : within(list)
+        .getAllByRole("listitem")
+        .map(item => item.getAttribute("data-testid"));
+};
+
+/** A card on the dashboard, as the draft holds it. */
+function card(
+  id: string,
+  widgetId: string,
+  over: Partial<WidgetPlacement> = {}
+): WidgetPlacement {
+  return { id, widgetId, w: 3, h: 2, removed: false, ...over };
 }
 
-afterEach(() => {
-  vi.useRealTimers();
+beforeEach(() => {
+  vi.clearAllMocks();
 });
 
 describe("opening", () => {
-  it("is a dialog named Add widget, with focus in an empty search", () => {
+  it("opens with focus in the search, then one list of every widget, and nothing else", () => {
     renderPanel();
-    expect(panel()).toHaveAccessibleDescription(
-      "New cards go to the end of your dashboard. Move them from their menu."
-    );
-    const search = screen.getByRole("searchbox", { name: "Search widgets" });
-    expect(search).toHaveFocus();
-    expect(search).toHaveValue("");
-    expect(search).toHaveAccessibleDescription("5 widgets");
+    expect(search()).toHaveFocus();
+    expect(search()).toHaveValue("");
+    expect(search()).toHaveAccessibleDescription("4 widgets");
+    expect(rowIds()).toEqual([
+      "add-panel-row-core/count",
+      "add-panel-row-core/note",
+      "add-panel-row-core/team-activity",
+      "add-panel-row-seo/score",
+    ]);
+    // No chips, no Suggested or Removed group, no second step.
+    expect(within(panel()).queryAllByRole("heading", { level: 3 })).toEqual([]);
+    expect(within(panel()).queryByRole("group")).toBeNull();
+    expect(within(panel()).queryByRole("combobox")).toBeNull();
+    expect(within(panel()).queryByText(/Suggested|Removed/)).toBeNull();
   });
 
-  it("lists the groups in order, the removed cards first with their count", () => {
+  it("gives each row its icon, name, plugin, one line and Add", () => {
     renderPanel();
+    const count = row("core/count");
+    expect(count).toHaveTextContent("Count");
+    expect(count).toHaveTextContent("How many entries a collection holds.");
+    // Its own icon, by the name its declaration gives.
+    expect(count.querySelector(".lucide-hash")).not.toBeNull();
     expect(
-      within(panel())
-        .getAllByRole("heading", { level: 3 })
-        .map(heading => heading.textContent)
-    ).toEqual(["Removed from your dashboard 1", "Overview", "Team", "Plugins"]);
-    expect(within(panel()).getByText("By plugin.")).toBeInTheDocument();
+      within(count).getByRole("button", { name: "Add Count" })
+    ).toBeEnabled();
+    // A plugin's widget names its plugin as the admin names it, and is drawn with a glyph.
+    const seo = row("seo/score");
+    expect(seo).toHaveTextContent("SEO plugin");
+    expect(seo.querySelector("svg")).not.toBeNull();
+    expect(row("core/note")).not.toHaveTextContent("plugin");
   });
 
-  it("folds a plugin's widgets under a button until it is opened", async () => {
+  it("names a row as the dashboard titles its card, and lists none this admin cannot draw", () => {
+    renderPanel({
+      gallery: {
+        read: {
+          ...READ,
+          tiles: [
+            // Sent under its id: a widget the server has no declared title for.
+            { ...TILES[1]!, name: "core/note" },
+            { ...TILES[0]!, id: "acme/unknown", name: "acme/unknown" },
+          ],
+        },
+        isError: false,
+        retry: vi.fn(),
+      },
+    });
+    expect(screen.getByRole("button", { name: "Add Note" })).toBeVisible();
+    expect(screen.queryByText("core/note")).toBeNull();
+    expect(screen.queryByTestId("add-panel-row-acme/unknown")).toBeNull();
+  });
+
+  it("shows a loading state, then an error with Try again, before the read answers", async () => {
     const user = userEvent.setup();
-    renderPanel();
-    const toggle = within(panel()).getByRole("button", { name: /SEO/ });
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByRole("button", { name: "Add SEO score" })).toBeNull();
-
-    await user.click(toggle);
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
-    expect(
-      screen.getByRole("button", { name: "Add SEO score" })
-    ).toBeInTheDocument();
+    const retry = vi.fn();
+    const { rerender } = renderPanel({
+      gallery: { read: undefined, isError: false, retry },
+    });
+    expect(screen.getByTestId("add-panel-loading")).toBeVisible();
+    // The count line says nothing before there is anything to count.
+    expect(screen.getByTestId("add-panel-count")).toHaveTextContent("");
+    rerender(
+      <AddWidgetPanel
+        {...props({ gallery: { read: undefined, isError: true, retry } })}
+      />
+    );
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 });
 
-describe("each row's control", () => {
-  it("names the widget it adds, and says what is already on the dashboard", () => {
-    renderPanel();
-    expect(
-      screen.getByRole("button", { name: "Add Entries" })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Add another Recent activity" })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Add back Old notes" })
-    ).toBeInTheDocument();
-    expect(screen.getByTestId("add-panel-row-core/recent")).toHaveTextContent(
-      "½ to Full wide · 2 on your dashboard"
-    );
-    const team = screen.getByTestId("add-panel-row-core/team");
+describe("what a row offers", () => {
+  it("says a one-card widget the dashboard holds is on it, with nothing to add", () => {
+    renderPanel({
+      placements: [card("t", "core/team-activity"), card("c", "core/count")],
+    });
+    const team = row("core/team-activity");
     expect(team).toHaveTextContent("On dashboard");
     expect(within(team).queryByRole("button")).toBeNull();
+    // A widget that allows several is offered again.
+    expect(
+      within(row("core/count")).getByRole("button", { name: "Add Count" })
+    ).toBeEnabled();
   });
 
-  it("says where an added card went, and keeps the pressed button focused", async () => {
+  it("puts a one-card widget removed this session back as it was, rather than adding a second", async () => {
     const user = userEvent.setup();
-    const props = renderPanel();
-    const add = screen.getByRole("button", {
-      name: "Add another Recent activity",
+    const { onAdd, onAddBack } = renderPanel({
+      placements: [card("t-1", "core/team-activity", { removed: true })],
     });
-    await user.click(add);
-
-    // A row with no starting settings hands none: the card starts from its own defaults.
-    expect(props.onAdd).toHaveBeenCalledWith("core/recent", undefined);
-    expect(live()).toHaveTextContent("Added Entries at position 4 of 4.");
-    expect(add).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "Add Team activity" }));
+    expect(onAddBack).toHaveBeenCalledWith("t-1");
+    expect(onAdd).not.toHaveBeenCalled();
   });
 
-  it("says a removed card came back, and where", async () => {
+  it("offers no Add for a widget that reads a collection when the reader may read none", () => {
+    renderPanel({
+      gallery: {
+        read: { ...READ, collections: [] },
+        isError: false,
+        retry: vi.fn(),
+      },
+    });
+    const count = row("core/count");
+    expect(count).toHaveTextContent("Needs a collection you can read");
+    expect(within(count).queryByRole("button")).toBeNull();
+    // The control: a widget that reads none is still offered.
+    expect(
+      within(row("core/note")).getByRole("button", { name: "Add Note" })
+    ).toBeEnabled();
+  });
+
+  it("adds Count set to Users for a reader who may read users and no collection", async () => {
     const user = userEvent.setup();
-    const props = renderPanel();
-    await user.click(
-      screen.getByRole("button", { name: "Add back Old notes" })
-    );
-
-    expect(props.onAddBack).toHaveBeenCalledWith("p9");
-    expect(live()).toHaveTextContent(
-      "Added back Old notes at position 2 of 4."
+    // As the server tells a reader who may read users: Count's setting offers them.
+    const offering = new Map(BY_ID).set("core/count", {
+      ...BY_ID.get("core/count")!,
+      settings: [{ ...COLLECTION_SETTING, users: true }],
+    });
+    const { onAdd } = renderPanel({
+      byId: offering,
+      gallery: {
+        read: { ...READ, collections: [] },
+        isError: false,
+        retry: vi.fn(),
+      },
+    });
+    const count = row("core/count");
+    expect(count).not.toHaveTextContent("Needs a collection you can read");
+    await user.click(within(count).getByRole("button", { name: "Add Count" }));
+    expect(onAdd).toHaveBeenCalledWith(
+      "core/count",
+      { collection: "users" },
+      false
     );
   });
 
-  it("says nothing was added when the dashboard refused it", async () => {
+  it("offers no new card at the limit, but still puts a removed one back", () => {
+    renderPanel({
+      atCapacity: true,
+      placements: [card("t-1", "core/team-activity", { removed: true })],
+    });
+    expect(screen.getByTestId("add-panel-at-capacity")).toHaveTextContent(
+      String(MAX_PLACEMENTS)
+    );
+    expect(screen.getByRole("button", { name: "Add Note" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Add Team activity" })
+    ).toBeEnabled();
+  });
+});
+
+describe("adding", () => {
+  it("adds a widget that reads no collection with its defaults, says so and keeps the panel open", async () => {
+    const user = userEvent.setup();
+    const { onAdd, onOpenChange } = renderPanel();
+    const add = screen.getByRole("button", { name: "Add Note" });
+    await user.click(add);
+    expect(onAdd).toHaveBeenCalledWith("core/note", undefined, false);
+    expect(live()).toHaveTextContent("Added Note.");
+    expect(onOpenChange).not.toHaveBeenCalled();
+    // Focus stays on the Add pressed, for the next card.
+    await waitFor(() => expect(add).toHaveFocus());
+  });
+
+  it("starts a collection card on the first collection no card of it uses yet", async () => {
+    const user = userEvent.setup();
+    const first = renderPanel();
+    await user.click(screen.getByRole("button", { name: "Add Count" }));
+    expect(first.onAdd).toHaveBeenLastCalledWith(
+      "core/count",
+      { collection: "posts" },
+      false
+    );
+    first.rerender(
+      <AddWidgetPanel
+        {...first}
+        placements={[
+          card("c-1", "core/count", { config: { collection: "posts" } }),
+          // A removed card holds no collection.
+          card("c-2", "core/count", {
+            config: { collection: "pages" },
+            removed: true,
+          }),
+        ]}
+      />
+    );
+    await user.click(screen.getByRole("button", { name: "Add Count" }));
+    expect(first.onAdd).toHaveBeenLastCalledWith(
+      "core/count",
+      { collection: "pages" },
+      false
+    );
+  });
+
+  it("adds a collection card as one the reader has when every collection has its card", async () => {
+    const user = userEvent.setup();
+    const { onAdd } = renderPanel({
+      placements: [
+        card("c-1", "core/count", { config: { collection: "posts" } }),
+        card("c-2", "core/count", { config: { collection: "pages" } }),
+      ],
+    });
+    await user.click(screen.getByRole("button", { name: "Add Count" }));
+    expect(onAdd).toHaveBeenCalledWith(
+      "core/count",
+      { collection: "posts" },
+      true
+    );
+  });
+
+  it("sends focus back to the search when the row it was on no longer offers Add", async () => {
+    const user = userEvent.setup();
+    // The dashboard's side: the draft gains the card in the same click, as the editor's does.
+    function Dashboard() {
+      const [placements, setPlacements] = useState<WidgetPlacement[]>([]);
+      return (
+        <AddWidgetPanel
+          {...props({
+            placements,
+            onAdd: widgetId => {
+              setPlacements(current => [...current, card("t", widgetId)]);
+              return { title: BY_ID.get(widgetId)?.title ?? widgetId };
+            },
+          })}
+        />
+      );
+    }
+    render(<Dashboard />, { wrapper });
+    await user.click(screen.getByRole("button", { name: "Add Team activity" }));
+    expect(row("core/team-activity")).toHaveTextContent("On dashboard");
+    await waitFor(() => expect(search()).toHaveFocus());
+    expect(live()).toHaveTextContent("Added Team activity.");
+  });
+
+  it("says when the dashboard is full and nothing was added", async () => {
     const user = userEvent.setup();
     renderPanel({ onAdd: vi.fn(() => null) });
-    await user.click(screen.getByRole("button", { name: "Add Entries" }));
+    await user.click(screen.getByRole("button", { name: "Add Note" }));
     expect(live()).toHaveTextContent(
       `Your dashboard holds the most cards it can (${MAX_PLACEMENTS}, counting removed ones). Nothing was added.`
     );
   });
-
-  it("at the limit, disables adding but not adding back, and says why", () => {
-    renderPanel({ atCapacity: true });
-    expect(screen.getByRole("button", { name: "Add Entries" })).toBeDisabled();
-    expect(
-      screen.getByRole("button", { name: "Add another Recent activity" })
-    ).toBeDisabled();
-    expect(
-      screen.getByRole("button", { name: "Add back Old notes" })
-    ).toBeEnabled();
-    const notice = screen.getByTestId("add-panel-at-capacity");
-    expect(notice).toHaveTextContent(
-      `Your dashboard holds the most cards it can (${MAX_PLACEMENTS}, counting removed ones), so no new card can be added. A removed card can still be put back.`
-    );
-    // Removing a card frees nothing, since removed cards are counted, so the notice never
-    // sends the reader to do that.
-    expect(notice).not.toHaveTextContent(/Remove a card/);
-  });
 });
 
 describe("searching", () => {
-  it("keeps what matches by name, description, category, group or plugin, and opens folded groups", () => {
-    renderPanel();
-    const search = screen.getByRole("searchbox", { name: "Search widgets" });
-
-    fireEvent.change(search, { target: { value: "seo" } });
-    expect(screen.getByTestId("add-panel-count")).toHaveTextContent(
-      "1 result for “seo”"
-    );
-    expect(
-      screen.getByRole("button", { name: "Add SEO score" })
-    ).toBeInTheDocument();
-    expect(screen.queryByTestId("add-panel-row-core/entries")).toBeNull();
-
-    fireEvent.change(search, { target: { value: "CONTENT" } });
-    expect(
-      screen.getByTestId("add-panel-row-core/entries")
-    ).toBeInTheDocument();
-    expect(screen.queryByTestId("add-panel-row-seo/score")).toBeNull();
-  });
-
-  it("announces the count once typing pauses, not on every key", () => {
-    vi.useFakeTimers();
-    renderPanel();
-    const search = screen.getByRole("searchbox", { name: "Search widgets" });
-
-    fireEvent.change(search, { target: { value: "en" } });
-    act(() => vi.advanceTimersByTime(300));
-    fireEvent.change(search, { target: { value: "entr" } });
-    act(() => vi.advanceTimersByTime(300));
-    expect(live().textContent).toBe("");
-
-    act(() => vi.advanceTimersByTime(200));
-    expect(live()).toHaveTextContent("1 result for “entr”.");
-  });
-
-  it("never lets a count still waiting on a pause speak over an add made before it", () => {
-    // 🔴 The add keeps the query and its count, so nothing else clears the waiting count, and
-    // it landed half a second later on top of "Added".
-    vi.useFakeTimers();
-    renderPanel();
-    fireEvent.change(
-      screen.getByRole("searchbox", { name: "Search widgets" }),
-      {
-        target: { value: "entr" },
-      }
-    );
-    act(() => vi.advanceTimersByTime(200));
-    fireEvent.click(screen.getByRole("button", { name: "Add Entries" }));
-    expect(live()).toHaveTextContent("Added Entries at position 4 of 4.");
-
-    act(() => vi.advanceTimersByTime(1000));
-    expect(live()).toHaveTextContent("Added Entries at position 4 of 4.");
-  });
-
-  it("says when nothing matches, and Clear search brings every widget back", async () => {
+  it("keeps the rows whose name, one line or plugin holds the words, ignoring case", async () => {
     const user = userEvent.setup();
     renderPanel();
-    const search = screen.getByRole("searchbox", { name: "Search widgets" });
-    await user.type(search, "zzz");
+    await user.type(search(), "MARKDOWN");
+    expect(rowIds()).toEqual(["add-panel-row-core/note"]);
+    await user.clear(search());
+    await user.type(search(), "who changed");
+    expect(rowIds()).toEqual(["add-panel-row-core/team-activity"]);
+    await user.clear(search());
+    await user.type(search(), "seo");
+    expect(rowIds()).toEqual(["add-panel-row-seo/score"]);
+    expect(search()).toHaveAccessibleDescription("1 widget");
+  });
 
+  it("says when nothing matches", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await user.type(search(), "zzz");
     expect(screen.getByTestId("add-panel-none")).toHaveTextContent(
-      "No widgets match “zzz”"
+      "No widget matches. Try another word."
     );
-    await user.click(screen.getByRole("button", { name: "Clear search" }));
-    expect(search).toHaveValue("");
-    expect(search).toHaveFocus();
-    expect(screen.getByTestId("add-panel-count")).toHaveTextContent(
-      "5 widgets"
-    );
-    expect(live()).toHaveTextContent("5 widgets.");
+    expect(search()).toHaveAccessibleDescription("0 widgets");
   });
-});
 
-describe("closing", () => {
-  it("closes from its button", async () => {
+  it("announces the count once typing pauses, and never for the list it opens on", async () => {
     const user = userEvent.setup();
-    const props = renderPanel();
-    await user.click(within(panel()).getByRole("button", { name: "Close" }));
-    expect(props.onOpenChange).toHaveBeenCalledWith(false);
+    renderPanel();
+    await new Promise(resolve => setTimeout(resolve, 700));
+    expect(live()).toHaveTextContent("");
+    await user.type(search(), "note");
+    // Not at once: each keystroke would interrupt the last.
+    expect(live()).toHaveTextContent("");
+    await waitFor(() => expect(live()).toHaveTextContent("1 widget."), {
+      timeout: 2000,
+    });
   });
 
-  it("starts with an empty search each time it opens", async () => {
-    const props = {
-      open: true,
-      onOpenChange: vi.fn(),
-      rows: ROWS,
-      atCapacity: false,
-      onAdd: vi.fn(() => null),
-      onAddBack: vi.fn(() => null),
-      onClosed: vi.fn(),
-    };
-    const { rerender } = render(<AddWidgetPanel {...props} />);
-    fireEvent.change(screen.getByRole("searchbox"), {
-      target: { value: "seo" },
+  it("says nothing while the list loads, then the count of a search typed before it landed", async () => {
+    const user = userEvent.setup();
+    const all = renderPanel({
+      gallery: { read: undefined, isError: false, retry: vi.fn() },
     });
-    rerender(<AddWidgetPanel {...props} open={false} />);
-    // The dialog hands focus back once it has unmounted, a tick after it closes.
-    await waitFor(() => expect(props.onClosed).toHaveBeenCalledTimes(1));
-    rerender(<AddWidgetPanel {...props} open />);
-    expect(screen.getByRole("searchbox")).toHaveValue("");
+    await user.type(search(), "note");
+    await new Promise(resolve => setTimeout(resolve, 700));
+    // Not "0 widgets": nothing has been counted yet.
+    expect(live()).toHaveTextContent("");
+    all.rerender(
+      <AddWidgetPanel {...all} gallery={{ ...all.gallery, read: READ }} />
+    );
+    await waitFor(() => expect(live()).toHaveTextContent("1 widget."), {
+      timeout: 2000,
+    });
   });
 
-  describe("each visit starts silent", () => {
-    const props: AddWidgetPanelProps = {
-      open: true,
-      onOpenChange: vi.fn(),
-      rows: ROWS,
-      atCapacity: false,
-      onAdd: vi.fn(() => ({ title: "Entries", position: 4, count: 4 })),
-      onAddBack: vi.fn(() => null),
-      onClosed: vi.fn(),
-    };
-
-    it("never says the last visit's add again on opening", () => {
-      // 🔴 The panel stays mounted while closed, so the sentence it last said was still in its
-      // live region when the sheet drew it again.
-      vi.useFakeTimers();
-      const { rerender } = render(<AddWidgetPanel {...props} />);
-      fireEvent.click(screen.getByRole("button", { name: "Add Entries" }));
-      expect(live()).toHaveTextContent("Added Entries at position 4 of 4.");
-
-      rerender(<AddWidgetPanel {...props} open={false} />);
-      act(() => vi.advanceTimersByTime(100));
-      rerender(<AddWidgetPanel {...props} open />);
-      expect(live().textContent).toBe("");
-    });
-
-    it("never lets a count still waiting when it closed speak on the next visit", () => {
-      // 🔴 The count's pause kept running while the sheet was closed, and its sentence was
-      // waiting in the live region when the next visit opened on an empty search.
-      vi.useFakeTimers();
-      const { rerender } = render(<AddWidgetPanel {...props} />);
-      fireEvent.change(
-        screen.getByRole("searchbox", { name: "Search widgets" }),
-        { target: { value: "entr" } }
-      );
-      act(() => vi.advanceTimersByTime(200));
-
-      rerender(<AddWidgetPanel {...props} open={false} />);
-      act(() => vi.advanceTimersByTime(1000));
-      rerender(<AddWidgetPanel {...props} open />);
-      expect(live().textContent).toBe("");
-
-      act(() => vi.advanceTimersByTime(1000));
-      expect(live().textContent).toBe("");
-    });
+  it("opens afresh: an earlier search is gone, and nothing is said", async () => {
+    const user = userEvent.setup();
+    const all = renderPanel();
+    await user.type(search(), "note");
+    all.rerender(<AddWidgetPanel {...all} open={false} />);
+    all.rerender(<AddWidgetPanel {...all} open />);
+    expect(search()).toHaveValue("");
+    expect(rowIds()).toHaveLength(4);
+    expect(live()).toHaveTextContent("");
   });
 });

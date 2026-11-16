@@ -1,15 +1,15 @@
 /**
- * What a Count card draws, read from its cells: the number, its published and
- * draft split, what scheduled releases will publish, and the last 30 days
- * against the 30 before.
+ * What a Count card draws, read from the data its `load` answers: what the
+ * number counts and where it links, then the one line under it (the change
+ * this week, the trend, the split by status, or nothing), each part of the
+ * split linking to the list that holds exactly it under the card's Filter.
  *
  * Kept apart from the component so the reading is tested without rendering:
- * which cell the number comes from, where each part links, and what the change
- * is.
+ * what each line says, and where each part links.
  */
 
+import type { CountWidgetData } from "nextly/core-widget-data";
 import { IN_RELEASE_KEY } from "nextly/reserved-filter-keys";
-import type { WidgetSlot } from "nextly/widget-result";
 
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 
@@ -21,38 +21,45 @@ export interface CountPart {
   href: string;
 }
 
-/** One day of the trend. */
-export interface CountTrendPoint {
-  start: string;
-  count: number;
-}
+/** The line under the number, as the card draws it. */
+export type CountLineView =
+  | { kind: "none" }
+  /** How many of what the number counts were made in the last 7 days. */
+  | { kind: "change"; change: number }
+  /** The number at the end of each of the last 8 weeks, then now. */
+  | { kind: "trend"; values: readonly number[] }
+  | {
+      kind: "split";
+      published: CountPart;
+      draft: CountPart;
+      /** Absent for a reader with no release to read. */
+      scheduled?: CountPart;
+    };
 
-/** What the card shows. */
+/**
+ * What the card shows: the frame draws loading, no permission and error before
+ * the card is handed its data, so a card is only ever ready, or set to no
+ * collection.
+ */
 export type CountView =
-  | { state: "loading" }
   | { state: "unavailable" }
-  | { state: "error"; message: string }
   | {
       state: "ready";
+      /** What the number counts, as the card's label says it: "Entries", "Drafts", "People". */
+      label: string;
       total: number;
-      /** The collection's list, under the card's Filter. */
+      /** The list the number counts: the collection's under the card's Filter, or the people. */
       href: string;
-      /** Present for a collection with a draft and published lifecycle. */
-      split?: { published: CountPart; draft: CountPart };
-      /**
-       * What scheduled releases will publish, linking to exactly that list.
-       * Absent for a reader with no release to read, as on a site without
-       * releases; zero where releases hold none of these entries.
-       */
-      scheduled?: CountPart;
-      /** Present once the trend and the period before it have answered. */
-      trend?: {
-        points: CountTrendPoint[];
-        recent: number;
-        prior: number;
-        change: number;
-      };
+      line: CountLineView;
     };
+
+/** What the label calls each set a number can count. */
+const COUNTED_LABEL: Readonly<Record<CountWidgetData["counted"], string>> = {
+  all: "Entries",
+  published: "Published",
+  draft: "Drafts",
+  people: "People",
+};
 
 /** A collection's list, under the card's Filter and, for a part, a status. */
 function listHref(
@@ -71,97 +78,9 @@ function listHref(
 }
 
 /**
- * The scheduled figure, when its cell answered with a count. A cell that is
- * not available, failed or has not answered leaves the figure out: it is one
- * part of the card, and never takes the number down with it.
- */
-function scheduledOf(
-  cells: Readonly<Record<string, WidgetSlot>>,
-  collection: string,
-  filter: Record<string, unknown> | undefined
-): CountPart | undefined {
-  const scheduled = cells.scheduled;
-  if (scheduled === undefined || !scheduled.ok) return undefined;
-  if (scheduled.result.op !== "count") return undefined;
-  return {
-    count: scheduled.result.total,
-    // The card's Filter and the release condition, at the top level where the
-    // list reads it: the list the figure counts.
-    href: listHref(collection, { ...filter, [IN_RELEASE_KEY]: true }),
-  };
-}
-
-/** A cell's slot as a failure the whole card reports, or `undefined`. */
-function failureOf(slot: WidgetSlot): CountView | undefined {
-  if (slot.ok) return undefined;
-  return slot.code === "unavailable"
-    ? { state: "unavailable" }
-    : { state: "error", message: slot.error };
-}
-
-/**
- * The number, from whichever cell the card asked for it: the split's buckets
- * summed (the null bucket included, so a row with no status still counts), or
- * the plain count of a collection without a lifecycle.
- */
-function totalOf(
-  cells: Readonly<Record<string, WidgetSlot>>
-):
-  | { total: number; buckets?: { value: string | null; count: number }[] }
-  | CountView
-  | undefined {
-  const split = cells.split;
-  if (split !== undefined) {
-    const failed = failureOf(split);
-    if (failed) return failed;
-    if (split.ok && split.result.op === "groupBy") {
-      const buckets = split.result.buckets;
-      return {
-        total: buckets.reduce((sum, bucket) => sum + bucket.count, 0),
-        buckets,
-      };
-    }
-  }
-  const total = cells.total;
-  if (total !== undefined) {
-    const failed = failureOf(total);
-    if (failed) return failed;
-    if (total.ok && total.result.op === "count") {
-      return { total: total.result.total };
-    }
-  }
-  return undefined;
-}
-
-/** The trend, once both of its reads have answered; otherwise nothing yet. */
-function trendOf(
-  cells: Readonly<Record<string, WidgetSlot>>
-): Extract<CountView, { state: "ready" }>["trend"] {
-  const trend = cells.trend;
-  const prior = cells.prior;
-  if (
-    trend === undefined ||
-    prior === undefined ||
-    !trend.ok ||
-    !prior.ok ||
-    trend.result.op !== "timeseries" ||
-    prior.result.op !== "count"
-  ) {
-    return undefined;
-  }
-  const points = trend.result.points;
-  const recent = points.reduce((sum, point) => sum + point.count, 0);
-  return {
-    points,
-    recent,
-    prior: prior.result.total,
-    change: recent - prior.result.total,
-  };
-}
-
-/**
- * The name of the collection a Count card is set to: its label as the server
- * published it to this reader, or its slug where none is known.
+ * The name of what a Count card is set to: Users for the people; a
+ * collection's label as the server published it to this reader, or its slug
+ * where none is known.
  */
 export function collectionLabelOf(
   settings: { collection?: unknown },
@@ -172,44 +91,88 @@ export function collectionLabelOf(
     : undefined;
 }
 
-/** The card's view of its cells, for the collection and Filter it is set to. */
+/** The line the data answered, as the card draws it. */
+function lineOf(
+  data: CountWidgetData,
+  collection: string,
+  filter: Record<string, unknown> | undefined
+): CountLineView {
+  if (data.line === "change" && data.change !== undefined) {
+    return { kind: "change", change: data.change };
+  }
+  if (data.line === "trend" && data.trend !== undefined) {
+    return { kind: "trend", values: data.trend };
+  }
+  if (data.line === "split" && data.split !== undefined) {
+    const { published, draft, scheduled } = data.split;
+    return {
+      kind: "split",
+      published: {
+        count: published,
+        href: listHref(collection, filter, "published"),
+      },
+      draft: { count: draft, href: listHref(collection, filter, "draft") },
+      // What scheduled releases will publish: the card's Filter and the
+      // release condition, at the top level where the list reads it. Absent
+      // where the load left it out, never drawn as zero.
+      ...(scheduled === undefined
+        ? {}
+        : {
+            scheduled: {
+              count: scheduled,
+              href: listHref(collection, {
+                ...filter,
+                [IN_RELEASE_KEY]: true,
+              }),
+            },
+          }),
+    };
+  }
+  return { kind: "none" };
+}
+
+/** The card's view of its data, for the source and Filter it is set to. */
 export function countView(
-  cells: Readonly<Record<string, WidgetSlot>> | undefined,
+  data: CountWidgetData,
   settings: { collection?: unknown; filter?: unknown }
 ): CountView {
   const collection =
     typeof settings.collection === "string" ? settings.collection : undefined;
   if (collection === undefined) return { state: "unavailable" };
-  const read = totalOf(cells ?? {});
-  if (read === undefined) return { state: "loading" };
-  if ("state" in read) return read;
+  const label = COUNTED_LABEL[data.counted];
+  if (data.counted === "people") {
+    return {
+      state: "ready",
+      label,
+      total: data.total,
+      href: ROUTES.USERS,
+      line: lineOf(data, collection, undefined),
+    };
+  }
   const filter =
     typeof settings.filter === "object" && settings.filter !== null
       ? (settings.filter as Record<string, unknown>)
       : undefined;
-  const countOf = (status: string) =>
-    read.buckets?.find(bucket => bucket.value === status)?.count ?? 0;
-  const trend = trendOf(cells ?? {});
-  const scheduled = scheduledOf(cells ?? {}, collection, filter);
   return {
     state: "ready",
-    total: read.total,
-    href: listHref(collection, filter),
-    ...(read.buckets === undefined
-      ? {}
-      : {
-          split: {
-            published: {
-              count: countOf("published"),
-              href: listHref(collection, filter, "published"),
-            },
-            draft: {
-              count: countOf("draft"),
-              href: listHref(collection, filter, "draft"),
-            },
-          },
-        }),
-    ...(scheduled === undefined ? {} : { scheduled }),
-    ...(trend === undefined ? {} : { trend }),
+    label,
+    total: data.total,
+    href: listHref(
+      collection,
+      filter,
+      data.counted === "all" ? undefined : data.counted
+    ),
+    line: lineOf(data, collection, filter),
   };
+}
+
+/**
+ * What the change line says: "+3 this week", or "No change this week" when
+ * nothing was made. `format` writes the number in the admin's locale.
+ */
+export function changeSentence(
+  change: number,
+  format: (value: number) => string
+): string {
+  return change > 0 ? `+${format(change)} this week` : "No change this week";
 }

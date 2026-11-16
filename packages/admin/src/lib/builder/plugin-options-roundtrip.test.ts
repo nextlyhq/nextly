@@ -179,3 +179,71 @@ describe("plugin field options round-trip through the builder", () => {
     ).not.toHaveProperty("pluginOptions");
   });
 });
+
+/**
+ * The server hands a field-group field out with the fields of the field groups
+ * it names resolved onto it (`componentFields`, `componentSchemas`). They are
+ * not part of the field's definition, so a save never writes them back: a copy
+ * of another definition frozen into this one would go stale the moment that
+ * field group changed.
+ */
+describe("a field group's resolved fields", () => {
+  const RESOLVED = {
+    componentFields: [{ name: "meta_title", type: "text" }],
+    componentSchemas: { seo: { label: "SEO", fields: [] } },
+  };
+
+  it("are not written back by a save", () => {
+    const loaded = convertToBuilderField(
+      {
+        name: "seo",
+        type: "component",
+        label: "SEO",
+        component: "seo",
+        ...RESOLVED,
+      } as unknown as Parameters<typeof convertToBuilderField>[0],
+      0
+    );
+    const saved = convertToFieldDefinition(loaded);
+    expect(saved).not.toHaveProperty("componentFields");
+    expect(saved).not.toHaveProperty("componentSchemas");
+    expect(saved).not.toHaveProperty("pluginOptions");
+    expect(saved).toMatchObject({ type: "component", component: "seo" });
+  });
+
+  it("leave another type's own option of the same name alone", () => {
+    // Only a field-group field is resolved by the server. A plugin type may
+    // name an option of its own `componentFields`, and must keep it.
+    const own = { componentFields: ["heading", "image"] };
+    const loaded = convertToBuilderField(
+      {
+        name: "gallery",
+        type: "star-rating",
+        label: "Gallery",
+        pluginOptions: own,
+      } as unknown as Parameters<typeof convertToBuilderField>[0],
+      0
+    );
+    expect(
+      (convertToFieldDefinition(loaded) as { pluginOptions?: unknown })
+        .pluginOptions
+    ).toEqual(own);
+  });
+
+  it("are dropped from a definition that was saved holding them", () => {
+    const loaded = convertToBuilderField(
+      {
+        name: "seo",
+        type: "component",
+        label: "SEO",
+        component: "seo",
+        pluginOptions: { ratingScale: SCALE, ...RESOLVED },
+      } as unknown as Parameters<typeof convertToBuilderField>[0],
+      0
+    );
+    expect(
+      (convertToFieldDefinition(loaded) as { pluginOptions?: unknown })
+        .pluginOptions
+    ).toEqual({ ratingScale: SCALE });
+  });
+});

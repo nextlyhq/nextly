@@ -147,6 +147,41 @@ describe("createApiKey", () => {
   });
 });
 
+describe("an API key managing API keys", () => {
+  it("is refused, and told only a signed-in person may", async () => {
+    // A key may not mint or change keys: what kind of caller asked, not a
+    // permission it lacks, so the refusal says so.
+    (requireAnyPermission as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      userId: "user-1",
+      authMethod: "api-key",
+    });
+    const createKey = vi.fn();
+    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
+      createApiKey: createKey,
+    });
+
+    const res = await createApiKey(
+      new Request("http://x/api/api-keys", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "Frontend",
+          tokenType: "full-access",
+          expiresIn: "unlimited",
+        }),
+      })
+    );
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({
+      error: {
+        code: "FORBIDDEN",
+        message: "Only a signed-in person can manage API keys.",
+      },
+    });
+    expect(createKey).not.toHaveBeenCalled();
+  });
+});
+
 describe("updateApiKey", () => {
   it("emits respondMutation with the updated row as item", async () => {
     (requireAnyPermission as ReturnType<typeof vi.fn>).mockResolvedValueOnce({

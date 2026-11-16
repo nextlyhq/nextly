@@ -104,7 +104,18 @@ interface TreeRow {
 }
 
 const ROW_HEIGHT = 28;
-const INDENT_PER_LEVEL = 12;
+
+/**
+ * How far each level of the tree is indented, in pixels.
+ *
+ * Exported because a consumer that lets rows be dragged to a depth has to step
+ * by the same distance the rows are drawn at: an editor reading a pointer's x
+ * as a depth draws its drop line where a row at that depth would start, and
+ * two separate numbers would put the line a level away from the hand.
+ *
+ * @experimental
+ */
+export const TREE_INDENT_PX = 20;
 
 /** The text a row can be typed to, falling back to a string label. */
 function textOf(node: TreeNode): string {
@@ -353,6 +364,34 @@ const TreeView: React.ForwardRefExoticComponent<
       estimateSize: () => ROW_HEIGHT,
       overscan: 8,
     });
+
+    /*
+     * Bring the selected row into view whenever the selection changes, from
+     * wherever it changed.
+     *
+     * The keyboard path scrolls as it moves, but a selection made outside the
+     * tree — a click on the thing the tree describes, an address opening at it
+     * — did not, and a row outside the rendered window has no element, so the
+     * tree showed nothing selected. Once per change: the id is remembered when
+     * its row is reached, so scrolling away afterwards is not undone by the
+     * next render. A row not in the list yet is waited for, because the caller
+     * opens its ancestors after selecting it. `auto` leaves a row already in
+     * view where it is, so a click inside the tree moves nothing.
+     */
+    const revealed = React.useRef<string | null>(null);
+    React.useEffect(() => {
+      // A clear ends the selection, so selecting the same row again later is a
+      // new change, revealed like any other.
+      if (selected === null) {
+        revealed.current = null;
+        return;
+      }
+      if (revealed.current === selected) return;
+      const index = rows.findIndex(row => row.node.id === selected);
+      if (index < 0) return;
+      revealed.current = selected;
+      virtualizer.scrollToIndex(index, { align: "auto" });
+    }, [selected, rows, virtualizer]);
 
     const commitExpanded = (next: Set<string>): void => {
       const ids = [...next];
@@ -639,7 +678,7 @@ const TreeView: React.ForwardRefExoticComponent<
                 style={{
                   height: item.size,
                   transform: `translateY(${item.start}px)`,
-                  paddingLeft: 4 + row.level * INDENT_PER_LEVEL,
+                  paddingLeft: 4 + row.level * TREE_INDENT_PX,
                 }}
               >
                 <span

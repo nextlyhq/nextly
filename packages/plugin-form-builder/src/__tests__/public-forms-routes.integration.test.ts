@@ -45,7 +45,10 @@ async function bootWithForm(
       recaptcha: { enabled: false },
     },
   });
-  current = await createTestNextly({ plugins: [fb.plugin] });
+  // The boot's seeding, so the Public role a visitor is judged by holds what
+  // a real boot grants it: the read of a form, and the plugin's submission
+  // create.
+  current = await createTestNextly({ plugins: [fb.plugin], seedPublic: true });
   await current.nextly.create({ collection: "forms", data: form });
   return createDynamicHandlers();
 }
@@ -182,7 +185,11 @@ describe("GET /api/forms/:slug", () => {
     await current!.nextly.update({
       collection: "forms",
       id: (existing.items[0] as { id: string }).id,
-      data: { status: "closed", closedMessage: "Applications closed." },
+      data: {
+        status: "closed",
+        closedMessage: "Applications closed.",
+        _overwrite: true,
+      },
     });
 
     const res = await handlers.GET(
@@ -233,6 +240,30 @@ describe("POST /api/forms/:slug/submit", () => {
     expect(body.submissionId).toEqual(expect.any(String));
   });
 
+  it("keeps the page it was sent from, without its query", async () => {
+    const handlers = await bootWithForm(CONTACT);
+
+    const res = await handlers.POST(
+      new Request("http://localhost/api/forms/contact/submit", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          referer: "https://acme.test/contact?ref=ana%40mail.test#form",
+        },
+        body: JSON.stringify({ data: { message: "hello" } }),
+      }),
+      params("forms", "contact", "submit")
+    );
+
+    expect(res.status).toBe(201);
+    const { submissionId } = (await res.json()) as { submissionId: string };
+    const stored = (await current!.nextly.findByID({
+      collection: "form-submissions",
+      id: submissionId,
+    })) as { page?: string | null };
+    expect(stored.page).toBe("https://acme.test/contact");
+  });
+
   it("answers 400 when the body carries no data object", async () => {
     const handlers = await bootWithForm(CONTACT);
 
@@ -281,10 +312,14 @@ describe("POST /api/forms/:slug/submit?locale=", () => {
     });
     current = await createTestNextly({
       plugins: [fb.plugin],
+      // As above, and the read of `pages`, whose rule lets anyone read it.
+      seedPublic: true,
       collections: [
         defineCollection({
           slug: "pages",
           localized: true,
+          // The redirect target is read as the visitor, so it is public.
+          access: { read: () => true },
           fields: [
             text({ name: "title" }),
             text({ name: "slug", localized: true }),
@@ -301,7 +336,7 @@ describe("POST /api/forms/:slug/submit?locale=", () => {
     await current.nextly.update({
       collection: "pages",
       id: pageId,
-      data: { slug: "merci" },
+      data: { slug: "merci", _overwrite: true },
       locale: "fr",
     });
     await current.nextly.create({

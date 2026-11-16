@@ -17,11 +17,12 @@
  * `endApply` leaves the page permanently "applying", and a `stopRestart` missed
  * on one branch leaves the overlay up over a page that has finished.
  */
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import type { SchemaChangeConfirmation } from "@admin/components/features/schema-builder/types";
 import { toast } from "@admin/components/ui";
 import { useRestart } from "@admin/context/RestartContext";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type {
   FieldResolution,
   SchemaPreviewResponse,
@@ -51,7 +52,9 @@ export async function mirrorSchemaFile(
   try {
     await write();
   } catch (err) {
-    const message = (err as { message?: string })?.message;
+    // Read through the API's envelope, so a refusal's own reasons reach the user rather than its
+    // generic summary; empty when there is none.
+    const message = apiErrorMessage(err, "");
     toast.warning(
       `${warningLead}, but ui-schema.json could not be updated${message ? `: ${message}` : ""}.`
     );
@@ -76,7 +79,7 @@ async function runPostApply(
   try {
     await step();
   } catch (err) {
-    const message = (err as { message?: string })?.message;
+    const message = apiErrorMessage(err, "");
     toast.warning(
       `${label} schema updated, but a follow-up step did not complete${
         message ? `: ${message}` : ""
@@ -116,6 +119,12 @@ export interface UseSchemaSaveOptions {
   onNoChanges: (fields: FieldDefinition[]) => void;
   /** The schema landed — re-pin the baselines, persist settings, mirror the file. */
   onApplied: (fields: FieldDefinition[]) => void | Promise<void>;
+  /**
+   * The settings `preview` and `apply` are sent besides the fields, such as
+   * the entity's localization. A confirmation applies only when they are as
+   * the preview was made with, as for the fields.
+   */
+  previewedWith?: unknown;
 }
 
 export interface UseSchemaSaveReturn {
@@ -138,8 +147,23 @@ export function useSchemaSave({
   apply,
   onNoChanges,
   onApplied,
+  previewedWith,
 }: UseSchemaSaveOptions): UseSchemaSaveReturn {
   const { startRestart, stopRestart } = useRestart();
+  // The fields and settings each preview was made from. The dialog shows that
+  // preview, so those are what a confirmation agrees to: an edit, an undo or a
+  // settings change made while the preview was on its way, or while it was
+  // shown, is not applied unseen.
+  const previewedFields = useRef(new WeakMap<object, string>());
+  // Whether the page is still there. Leaving it drops its pending changes, so
+  // a preview that answers afterwards saves nothing and asks nobody.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   const handleSave = useCallback(() => {
     void (async () => {
@@ -151,16 +175,25 @@ export function useSchemaSave({
       const fields = getValidatedFields();
       if (!fields) return;
 
+      // Busy until the preview is answered and acted on, so Discard all
+      // cannot clear the editor while this save may still keep its values.
+      confirmation.beginPreview();
       try {
         const previewed = await preview(fields);
+        if (!mounted.current) return;
         if (!previewed.hasChanges) {
           onNoChanges(fields);
           return;
         }
+        previewedFields.current.set(
+          previewed,
+          JSON.stringify({ fields, previewedWith })
+        );
         confirmation.request(previewed);
       } catch (err) {
-        const message = (err as { message?: string })?.message;
-        toast.error(message || "Failed to preview schema changes");
+        toast.error(apiErrorMessage(err, "Failed to preview schema changes"));
+      } finally {
+        confirmation.endPreview();
       }
     })();
   }, [
@@ -170,6 +203,7 @@ export function useSchemaSave({
     preview,
     onNoChanges,
     confirmation,
+    previewedWith,
   ]);
 
   const confirmApply = useCallback(
@@ -180,6 +214,17 @@ export function useSchemaSave({
       const fields = getValidatedFields();
       const previewed = confirmation.preview;
       if (!slug || !fields || !previewed) return;
+      const shown = previewedFields.current.get(previewed);
+      if (
+        shown !== undefined &&
+        shown !== JSON.stringify({ fields, previewedWith })
+      ) {
+        confirmation.settle();
+        toast.error(
+          "The fields or settings changed after the preview. Save again to review what changes."
+        );
+        return;
+      }
 
       void (async () => {
         confirmation.beginApply();
@@ -209,10 +254,11 @@ export function useSchemaSave({
 
           await runPostApply(() => onApplied(fields), label);
         } catch (err) {
-          const message = (err as { message?: string })?.message;
+          // A refused apply names each field and why; its envelope's own message is only
+          // "Validation failed.", which says neither.
           stopRestart(
             false,
-            message || "An error occurred while applying changes"
+            apiErrorMessage(err, "An error occurred while applying changes")
           );
         } finally {
           confirmation.endApply();
@@ -228,6 +274,7 @@ export function useSchemaSave({
       onApplied,
       startRestart,
       stopRestart,
+      previewedWith,
     ]
   );
 

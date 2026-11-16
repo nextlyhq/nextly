@@ -33,6 +33,49 @@ function build(
 }
 
 describe("buildNotificationEmails", () => {
+  it("hands every email the answers by label, for the starter messages' list", () => {
+    const { emails } = buildNotificationEmails({
+      notifications: [rule({ id: "team" }), rule({ id: "copy" })],
+      submittedData: { topic: "sales", message: "Hello" },
+      formName: "Contact",
+      submissionId: "sub_1",
+      fields: [
+        {
+          type: "select",
+          name: "topic",
+          label: "What is it about?",
+          options: [{ label: "Sales", value: "sales" }],
+        },
+        { type: "textarea", name: "message", label: "Message" },
+      ] as never,
+    });
+
+    const expected = [
+      { label: "What is it about?", value: "Sales" },
+      { label: "Message", value: "Hello" },
+    ];
+    expect(
+      emails.map(e => (e.variables._submission as { answers: unknown }).answers)
+    ).toEqual([expected, expected]);
+    // Templates that name answers by field keep reading them.
+    expect(emails[0].variables.topic).toBe("sales");
+  });
+
+  it("never replaces a submitted field's value with its own variables", () => {
+    // Forms whose fields are named like the list or its holder.
+    const { emails } = build([rule({ id: "team" })], {
+      answers: "B, C",
+      submission: "My own field",
+    });
+
+    expect(emails[0].variables.answers).toBe("B, C");
+    expect(emails[0].variables.submission).toBe("My own field");
+    // And the list is still there for the starter messages.
+    expect(emails[0].variables._submission).toEqual(
+      expect.objectContaining({ answers: [] })
+    );
+  });
+
   it("resolves the sender from the rule first, then the plugin default, then leaves it to the provider chain", () => {
     const { emails } = build(
       [

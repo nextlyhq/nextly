@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync } from "fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 
 import { defineConfig } from "tsdown";
@@ -9,6 +9,8 @@ import { defineConfig } from "tsdown";
  *   - src/index.ts        → "."        (isomorphic: the field, plugin, collections)
  *   - src/blocks/index.ts → "./blocks" (the registry a plugin contributes through)
  *   - src/admin/index.ts  → "./admin"  ("use client"; the blocks field's summary)
+ *   - src/canvas/index.tsx → "./canvas" ("use client"; the site's canvas route page)
+ *   - src/site/index.tsx   → "./site"   (server; `<SiteCode>` for the site's layout)
  *
  * There was a `./render` entry, and a separate one for its error boundary — the
  * single client island inside an otherwise server-first renderer. Both are gone
@@ -27,11 +29,23 @@ import { defineConfig } from "tsdown";
 // imports it.
 
 export default defineConfig({
-  // Three entries, where there were five. The renderer and its error boundary
+  // Four entries, where there were five. The renderer and its error boundary
   // were this package's own, built beside `@nextlyhq/blocks-react` rather than
   // on it, so neither has a bundle here to emit. `./admin` survives carrying one
   // component — the blocks field's summary — where it used to carry the editor.
-  entry: ["src/index.ts", "src/blocks/index.ts", "src/admin/index.ts"],
+  // `./canvas` is the one entry a site's own route imports: the page its canvas
+  // route serves, a client component small enough to load in front of the
+  // site's layout without the editor.
+  entry: [
+    "src/index.ts",
+    "src/blocks/index.ts",
+    "src/admin/index.ts",
+    "src/canvas/index.tsx",
+    // `<SiteCode>`, a server component the site's own layout renders. Its own
+    // entry because it reads Next's draft mode, which the isomorphic root
+    // entry must not import.
+    "src/site/index.tsx",
+  ],
   format: ["esm"],
   // `.js` and `.d.ts`, the names the exports map already publishes.
   fixedExtension: false,
@@ -45,13 +59,52 @@ export default defineConfig({
   sourcemap: true,
   minify: false,
   target: "es2022",
+  /*
+   * Stylesheets stay as imports. They are copied into `dist/styles` below, not
+   * bundled, so the admin entry's `import "../styles/editor.css"` has to reach
+   * the host's bundler as written — which then loads the copied file, resolving
+   * its `@import` of the builder's sheet as an app's own import of it would.
+   */
+  external: [/\.css$/],
   onSuccess() {
-    // Copy the editor stylesheet.
+    // Copy the editor stylesheet. Only the sheets: a test kept beside them in
+    // `src/styles` is not part of the package and stays out of `dist`.
     const src = join(process.cwd(), "src/styles");
     const dist = join(process.cwd(), "dist/styles");
     if (existsSync(src)) {
       mkdirSync(dist, { recursive: true });
-      cpSync(src, dist, { recursive: true });
+      cpSync(src, dist, { recursive: true, filter: isShippedStyle });
     }
+    dropStylesheetFromDeclarations(
+      join(process.cwd(), "dist/admin/index.d.ts")
+    );
   },
 });
+
+/** Whether a file under `src/styles` ships: a folder or a sheet, never a test. */
+function isShippedStyle(source: string): boolean {
+  return !/\.test\.[cm]?[jt]sx?$/.test(source);
+}
+
+/** The admin entry's import of its stylesheet, as the declarations carry it. */
+const STYLESHEET_IMPORT_LINE = 'import "../styles/editor.css";';
+
+/**
+ * Removes the stylesheet import from the admin entry's declarations, leaving
+ * it in the JavaScript, which is where it loads the sheet.
+ *
+ * The declaration writer keeps every side-effect import of the source, and a
+ * declaration importing a `.css` file names a module with no types behind it:
+ * a consumer's resolution of the entry's types fails there (the
+ * InternalResolutionError arethetypeswrong reports). A side-effect import
+ * declares nothing, so the declarations lose no type by its removal.
+ */
+function dropStylesheetFromDeclarations(file: string): void {
+  if (!existsSync(file)) return;
+  const text = readFileSync(file, "utf8");
+  const kept = text
+    .split("\n")
+    .filter(line => line.trim() !== STYLESHEET_IMPORT_LINE)
+    .join("\n");
+  if (kept !== text) writeFileSync(file, kept);
+}

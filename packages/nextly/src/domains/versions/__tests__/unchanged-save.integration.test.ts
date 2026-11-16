@@ -158,10 +158,10 @@ describe.each(getConfiguredTestDialects())(
       const id = await t.create("drafted", { title: "a", status: "draft" });
       const before = (await versionsOf(id)).length;
 
-      await t.update("drafted", id, { title: "a" });
+      await t.update("drafted", id, { title: "a", _overwrite: true });
       expect(await versionsOf(id)).toHaveLength(before);
 
-      await t.update("drafted", id, { title: "b" });
+      await t.update("drafted", id, { title: "b", _overwrite: true });
       expect(await versionsOf(id)).toHaveLength(before + 1);
     });
 
@@ -170,10 +170,10 @@ describe.each(getConfiguredTestDialects())(
       const id = await t.create("logged", { title: "a" });
       const before = (await versionsOf(id)).length;
 
-      await t.update("logged", id, { title: "a" });
+      await t.update("logged", id, { title: "a", _overwrite: true });
       expect(await versionsOf(id)).toHaveLength(before);
 
-      await t.update("logged", id, { title: "b" });
+      await t.update("logged", id, { title: "b", _overwrite: true });
       expect(await versionsOf(id)).toHaveLength(before + 1);
     });
 
@@ -182,7 +182,7 @@ describe.each(getConfiguredTestDialects())(
       const singles = current!.getService("singleEntryService");
       await singles.update(
         "masthead",
-        { heading: "a" },
+        { heading: "a", _overwrite: true },
         { overrideAccess: true }
       );
       const all = () =>
@@ -204,14 +204,14 @@ describe.each(getConfiguredTestDialects())(
 
       await singles.update(
         "masthead",
-        { heading: "a" },
+        { heading: "a", _overwrite: true },
         { overrideAccess: true }
       );
       expect(await all()).toHaveLength(before);
 
       await singles.update(
         "masthead",
-        { heading: "b" },
+        { heading: "b", _overwrite: true },
         { overrideAccess: true }
       );
       expect(await all()).toHaveLength(before + 1);
@@ -223,7 +223,7 @@ describe.each(getConfiguredTestDialects())(
       const save = (label: string) =>
         singles.update(
           "masthead",
-          { heading: "a", byline: { label } },
+          { heading: "a", byline: { label }, _overwrite: true },
           { overrideAccess: true }
         );
       const all = () =>
@@ -257,22 +257,47 @@ describe.each(getConfiguredTestDialects())(
     it("compares a language's save with the document's newest version", async () => {
       const t = await boot(dialect);
       const id = await t.create("translated", { title: "hello" }, "en");
-      await t.update("translated", id, { title: "hola" }, "es");
+      await t.update(
+        "translated",
+        id,
+        { title: "hola", _overwrite: true },
+        "es"
+      );
       const before = (await versionsOf(id)).length;
 
       // Unchanged in the language that holds the newest version: nothing.
-      await t.update("translated", id, { title: "hola" }, "es");
+      await t.update(
+        "translated",
+        id,
+        { title: "hola", _overwrite: true },
+        "es"
+      );
       expect(await versionsOf(id)).toHaveLength(before);
 
       // Unchanged in another language is still recorded: its own newest
       // version can predate a change to the shared fields.
-      await t.update("translated", id, { title: "hello" }, "en");
+      await t.update(
+        "translated",
+        id,
+        { title: "hello", _overwrite: true },
+        "en"
+      );
       expect(await versionsOf(id)).toHaveLength(before + 1);
-      await t.update("translated", id, { title: "hello" }, "en");
+      await t.update(
+        "translated",
+        id,
+        { title: "hello", _overwrite: true },
+        "en"
+      );
       expect(await versionsOf(id)).toHaveLength(before + 1);
 
       // A change in one language records one version, in that language.
-      await t.update("translated", id, { title: "buenas" }, "es");
+      await t.update(
+        "translated",
+        id,
+        { title: "buenas", _overwrite: true },
+        "es"
+      );
       const after = await versionsOf(id);
       expect(after).toHaveLength(before + 2);
       expect(after[after.length - 1]?.locale).toBe("es");
@@ -283,7 +308,11 @@ describe.each(getConfiguredTestDialects())(
       const id = await t.create("drafted", { title: "a", status: "draft" });
       const before = (await versionsOf(id)).length;
 
-      await t.update("drafted", id, { title: "a", status: "published" });
+      await t.update("drafted", id, {
+        title: "a",
+        status: "published",
+        _overwrite: true,
+      });
       const after = await versionsOf(id);
       expect(after).toHaveLength(before + 1);
       expect(after[after.length - 1]?.status).toBe("published");
@@ -296,21 +325,33 @@ describe.each(getConfiguredTestDialects())(
         { title: "hello", status: "published" },
         "en"
       );
-      await t.update("bilingual", id, { title: "hola" }, "es");
+      await t.update(
+        "bilingual",
+        id,
+        { title: "hola", _overwrite: true },
+        "es"
+      );
       await t.handler.publishAllLocales({
         collectionName: "bilingual",
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
       // Spanish back to draft: the content is what the newest version holds,
       // and only Spanish's status differs from it.
-      await t.update("bilingual", id, { status: "draft" }, "es");
+      await t.update(
+        "bilingual",
+        id,
+        { status: "draft", _overwrite: true },
+        "es"
+      );
       const before = (await versionsOf(id)).length;
 
       await t.handler.publishAllLocales({
         collectionName: "bilingual",
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
 
       const after = await versionsOf(id);
@@ -323,23 +364,29 @@ describe.each(getConfiguredTestDialects())(
       const singles = current!.getService("singleEntryService");
       await singles.update(
         "edition",
-        { headline: "hello", status: "published" },
+        { headline: "hello", status: "published", _overwrite: true },
         { overrideAccess: true, locale: "en" }
       );
       await singles.update(
         "edition",
-        { headline: "hola" },
+        { headline: "hola", _overwrite: true },
         { overrideAccess: true, locale: "es" }
       );
-      await singles.publishAllLocales("edition", { overrideAccess: true });
+      await singles.publishAllLocales("edition", {
+        overrideAccess: true,
+        data: { _overwrite: true },
+      });
       await singles.update(
         "edition",
-        { status: "draft" },
+        { status: "draft", _overwrite: true },
         { overrideAccess: true, locale: "es" }
       );
       const before = (await singleVersionsOf("edition")).length;
 
-      await singles.publishAllLocales("edition", { overrideAccess: true });
+      await singles.publishAllLocales("edition", {
+        overrideAccess: true,
+        data: { _overwrite: true },
+      });
 
       const after = await singleVersionsOf("edition");
       expect(after).toHaveLength(before + 1);

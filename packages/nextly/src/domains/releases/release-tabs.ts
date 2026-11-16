@@ -16,8 +16,6 @@
  * it goes stale the moment the release runs.
  *
  * @module domains/releases/release-tabs
- * @experimental The tab vocabulary and its rules may change until the releases
- *   list redesign is complete.
  */
 import type { ReleaseState } from "../../schemas/releases/types";
 import type { VersionsWhereCondition } from "../versions/db-api";
@@ -30,8 +28,6 @@ import type { ReleaseListOrder, ReleaseRow } from "./releases-repository";
  *
  * A const array with the type derived from it, so a value from a query string
  * can be checked against the runtime form rather than trusted from a type.
- *
- * @experimental
  */
 export const RELEASE_TABS = [
   "upcoming",
@@ -40,10 +36,9 @@ export const RELEASE_TABS = [
   "done",
 ] as const;
 
-/** @experimental */
 export type ReleaseTab = (typeof RELEASE_TABS)[number];
 
-/** Runtime guard: true iff `v` is one of the release tabs. @experimental */
+/** Runtime guard: true iff `v` is one of the release tabs. */
 export function isReleaseTab(v: unknown): v is ReleaseTab {
   return (
     typeof v === "string" && (RELEASE_TABS as readonly string[]).includes(v)
@@ -56,12 +51,9 @@ export function isReleaseTab(v: unknown): v is ReleaseTab {
  * The two parts of that tab, named so a reader that needs only one — a
  * dashboard counting overdue releases, say — narrows the tab rather than
  * writing its own rule beside it.
- *
- * @experimental
  */
 export const RELEASE_ATTENTION_REASONS = ["stopped", "overdue"] as const;
 
-/** @experimental */
 export type ReleaseAttentionReason = (typeof RELEASE_ATTENTION_REASONS)[number];
 
 /**
@@ -76,8 +68,6 @@ export type ReleaseAttentionReason = (typeof RELEASE_ATTENTION_REASONS)[number];
  *
  * Exported so every reader of "overdue" — the list's tabs, the dashboard, a
  * notice — uses this number rather than a copy of it.
- *
- * @experimental
  */
 export const RELEASE_OVERDUE_AFTER_MS = 10 * 60 * 1000;
 
@@ -118,8 +108,6 @@ export interface ReleaseTabQuery {
  *
  * Exported for the same reason as the threshold: a caller asking "is this
  * overdue" asks it of this cutoff, not of its own arithmetic.
- *
- * @experimental
  */
 export function overdueCutoff(now: Date): Date {
   // Whole seconds, the coarsest precision any dialect stores an instant in
@@ -162,8 +150,6 @@ function attentionParts(
  *
  * `reason` narrows Needs attention to one of its parts, selected from the same
  * definition, so "overdue" is exactly the overdue part of the list.
- *
- * @experimental
  */
 export function releaseTabQuery(
   tab: ReleaseTab,
@@ -257,8 +243,6 @@ export function releaseTabQuery(
  * with the list about where a release belongs. `null` is not expected — every
  * state is in some tab — but a state added later without a tab would land
  * there, and answering `null` keeps that visible rather than guessing.
- *
- * @experimental
  */
 export function releaseTabOf(row: ReleaseRow, now: Date): ReleaseTab | null {
   for (const tab of RELEASE_TABS) {
@@ -273,8 +257,6 @@ export function releaseTabOf(row: ReleaseRow, now: Date): ReleaseTab | null {
  *
  * Derived from the tab rule rather than written beside it, so "overdue" and
  * "in Needs attention because it is late" are one judgement.
- *
- * @experimental
  */
 export function isReleaseOverdue(row: ReleaseRow, now: Date): boolean {
   return row.state === "scheduled" && releaseTabOf(row, now) === "attention";

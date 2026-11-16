@@ -8,8 +8,10 @@
  * A write made by an instance, or a call, that asks to be checked
  * (`overrideAccess: false`) is judged as REST's media routes judge the same
  * caller, before any work: `create-media` to upload or make a folder,
- * `update-media` to edit, `delete-media` to delete, and a checked call that
- * names nobody is refused as unauthenticated. A trusted write is unchanged.
+ * `update-media` to edit, `delete-media` to delete, and a checked write that
+ * names nobody is refused as unauthenticated. A checked read that names nobody
+ * is a visitor's, judged by the Public role's `read-media`. A trusted call is
+ * unchanged.
  *
  * @packageDocumentation
  */
@@ -18,15 +20,14 @@ import {
   currentCallerScope,
   runWithCallerScope,
 } from "../../auth/caller-scope";
-import {
-  SYSTEM_READ_POLICY,
-  SYSTEM_WRITE_POLICY,
-} from "../../domains/auth/system-write-policy";
+import { SYSTEM_WRITE_POLICY } from "../../domains/auth/system-write-policy";
+import type { MediaCopy } from "../../domains/media/copies/media-copies";
 import { NextlyError } from "../../errors/nextly-error";
 import type {
   MediaFile,
   MediaFolder,
 } from "../../services/media/media-service";
+import { z } from "../../zod";
 import type {
   BulkDeleteMediaArgs,
   BulkOperationResult,
@@ -34,18 +35,21 @@ import type {
   DeleteMediaArgs,
   FindMediaArgs,
   FindMediaByIDArgs,
+  FindMediaByIDsArgs,
   ListFoldersArgs,
   ListResult,
+  MediaCopyArgs,
   MutationResult,
   UpdateMediaArgs,
   UploadMediaArgs,
 } from "../types/index";
+import { MEDIA_IDS_PER_READ } from "../types/media";
 
 import type { NextlyContext } from "./context";
 import {
   checkedCaller,
   checkedScope,
-  checkRead,
+  checkMediaRead,
   checkWrite,
   createRequestContext,
   directApiActor,
@@ -53,6 +57,22 @@ import {
   mergeConfig,
   toListResult,
 } from "./helpers";
+
+/**
+ * What `media.findByIDs` takes as `ids`: a list of strings, at most a read's
+ * worth. Every element is checked, so a hole in a sparse array is refused
+ * rather than reaching the query as `undefined`.
+ */
+const MEDIA_IDS = z.array(z.string()).max(MEDIA_IDS_PER_READ);
+
+/**
+ * What `media.copyOf` takes: an id, or else an address, and a width. Its type
+ * names one or the other; given both, the id is read.
+ */
+const MEDIA_COPY_ARGS = z.union([
+  z.object({ id: z.string().min(1), width: z.number().positive().finite() }),
+  z.object({ url: z.string(), width: z.number().positive().finite() }),
+]);
 
 /**
  * Media MIME type enum accepted by `MediaService.listMedia()`.
@@ -78,6 +98,23 @@ export interface MediaNamespace {
   upload(args: UploadMediaArgs): Promise<MediaFile>;
   find(args?: FindMediaArgs): Promise<ListResult<MediaFile>>;
   findByID(args: FindMediaByIDArgs): Promise<MediaFile | null>;
+  /**
+   * Several media files by id, in one read, judged exactly as `findByID`
+   * judges one: the files found, each once, in the order their ids were first
+   * asked for; an id with no file has none.
+   *
+   * @experimental
+   */
+  findByIDs(args: FindMediaByIDsArgs): Promise<MediaFile[]>;
+  /**
+   * A resized copy of an image at the allowed width nearest `width`, by the
+   * address it is served at, or `null` when no copy can be had and the image
+   * is to be used as it is. Checked as `findByID` is, since a copy shows
+   * exactly what its original does.
+   *
+   * @experimental
+   */
+  copyOf(args: MediaCopyArgs): Promise<MediaCopy | null>;
   update(args: UpdateMediaArgs): Promise<MutationResult<MediaFile>>;
   delete(args: DeleteMediaArgs): Promise<MutationResult<{ id: string }>>;
   bulkDelete(args: BulkDeleteMediaArgs): Promise<BulkOperationResult>;
@@ -129,7 +166,7 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
     async list(args: ListFoldersArgs = {}): Promise<MediaFolder[]> {
       // A read is held to the key scope it is checked with, as a write is.
       return asChecked(args, async () => {
-        await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.media.read);
+        await checkMediaRead(ctx.defaultConfig, args);
         if (args.parent) {
           return await ctx.mediaService.listSubfolders(
             args.parent,
@@ -196,7 +233,7 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
 
     async find(args: FindMediaArgs = {}): Promise<ListResult<MediaFile>> {
       return asChecked(args, async () => {
-        await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.media.read);
+        await checkMediaRead(ctx.defaultConfig, args);
         const limit = args.limit ?? 24;
         const page = args.page ?? 1;
 
@@ -221,7 +258,7 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
       return asChecked(args, async () => {
         // Refused before the lookup, so `disableErrors` answers a refusal as
         // a refusal, never as a missing file.
-        await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.media.read);
+        await checkMediaRead(ctx.defaultConfig, args);
         const config = mergeConfig(ctx.defaultConfig, args);
 
         try {
@@ -235,6 +272,46 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
           }
           throw error;
         }
+      });
+    },
+
+    async copyOf(args: MediaCopyArgs): Promise<MediaCopy | null> {
+      return asChecked(args, async () => {
+        // Refused before anything is read, as `findByID` refuses.
+        await checkMediaRead(ctx.defaultConfig, args);
+        const parsed = MEDIA_COPY_ARGS.safeParse(args);
+        if (!parsed.success) {
+          throw NextlyError.invalidInput({
+            message:
+              "media.copyOf() takes an 'id' or a 'url', and a 'width' in pixels above zero",
+          });
+        }
+        const { width, ...source } = parsed.data;
+        return await ctx.mediaService.copyOf(
+          "id" in source ? { id: source.id } : { url: source.url },
+          width,
+          createRequestContext(args)
+        );
+      });
+    },
+
+    async findByIDs(args: FindMediaByIDsArgs): Promise<MediaFile[]> {
+      return asChecked(args, async () => {
+        // Refused before the lookup, as `findByID` refuses one: the same
+        // check, so a caller who may not read one file reads none of many.
+        await checkMediaRead(ctx.defaultConfig, args);
+        // Parsed at the boundary, every element visited (a sparse array's
+        // holes too), and refused before any lookup.
+        const parsed = MEDIA_IDS.safeParse(args.ids);
+        if (!parsed.success) {
+          throw NextlyError.invalidInput({
+            message: `'ids' must be a list of at most ${String(MEDIA_IDS_PER_READ)} media ids for media.findByIDs()`,
+          });
+        }
+        return await ctx.mediaService.findByIds(
+          parsed.data,
+          createRequestContext(args)
+        );
       });
     },
 
@@ -261,6 +338,10 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
             caption: args.data.caption,
             tags: args.data.tags,
             folderId: args.data.folderId,
+            // The same focus point the REST update takes, so server code can
+            // set it as an editor does in the admin.
+            focalX: args.data.focalX,
+            focalY: args.data.focalY,
           },
           writeContext(args),
           writeActor(args)

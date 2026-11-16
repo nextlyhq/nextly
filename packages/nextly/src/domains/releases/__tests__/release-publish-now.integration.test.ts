@@ -18,6 +18,8 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
+
 import { defineCollection } from "../../../collections/config/define-collection";
 import { text } from "../../../collections/fields";
 import {
@@ -34,7 +36,11 @@ import { runJobsPass, sweepDedupeKey } from "../../jobs/jobs-runner";
 import { RELEASES_DRAIN_JOB } from "../releases-drain-job";
 import { ReleasesRepository } from "../releases-repository";
 
-import { deactivate, seedLiveAuthor } from "./helpers/live-author";
+import {
+  deactivate,
+  seedLiveAuthor,
+  seedPlainAuthor,
+} from "./helpers/live-author";
 import {
   ANY_EDITABLE_STATE,
   scheduleAsItStands,
@@ -339,6 +345,84 @@ describe.each(getConfiguredTestDialects())(
 
       expect(ran.state).toBe("published");
       expect(await storedStatus(t, a)).toBe("published");
+    });
+
+    it("lets an author who may publish and not update add a document, and publishes it", async () => {
+      // A release writes the status alone, a publish judged by its own grant
+      // and rule, so the author that write admits is one the release admits,
+      // when the document joins and when the release runs.
+      const t = await boot(dialect);
+      const author = await seedPlainAuthor(t);
+      await grantTo(t, author, "create", ["content-releases"]);
+      for (const action of ["read", "publish"]) {
+        await grantTo(t, author, action, [SLUG]);
+      }
+      const a = await draft(t, "Publisher's");
+      const release = await t.nextly.releases.create({ title: "Launch" });
+
+      await t.nextly.releases.addMember({
+        releaseId: release.id,
+        scopeKind: "collection",
+        scopeSlug: SLUG,
+        entryId: a,
+        locale: null,
+        action: "publish",
+        userId: author,
+        overrideAccess: false,
+      });
+      const ran = await t.nextly.releases.publishNow({ id: release.id });
+
+      expect(ran.state).toBe("published");
+      expect(await storedStatus(t, a)).toBe("published");
+    });
+
+    it("runs a member whose author may publish and not update", async () => {
+      // Joined without the add's check, so only the run's own check of its
+      // author stands between the member and the write.
+      const t = await boot(dialect);
+      const author = await seedPlainAuthor(t);
+      for (const action of ["read", "publish"]) {
+        await grantTo(t, author, action, [SLUG]);
+      }
+      const a = await draft(t, "Publisher's");
+      const id = await releaseOf(t, author, [a]);
+
+      const ran = await t.nextly.releases.publishNow({ id });
+
+      expect(ran.state).toBe("published");
+      expect(await storedStatus(t, a)).toBe("published");
+    });
+
+    it("still refuses an author who may update and not publish", async () => {
+      // The control: the grant the run's write needs is publish.
+      const t = await boot(dialect);
+      const author = await seedPlainAuthor(t);
+      await grantTo(t, author, "create", ["content-releases"]);
+      for (const action of ["read", "update"]) {
+        await grantTo(t, author, action, [SLUG]);
+      }
+      const a = await draft(t, "Editor's");
+      const release = await t.nextly.releases.create({ title: "Launch" });
+
+      await expect(
+        t.nextly.releases.addMember({
+          releaseId: release.id,
+          scopeKind: "collection",
+          scopeSlug: SLUG,
+          entryId: a,
+          locale: null,
+          action: "publish",
+          userId: author,
+          overrideAccess: false,
+        })
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+      // Joined without the check, the run refuses it before writing anything.
+      const id = await releaseOf(t, author, [a]);
+      await expect(t.nextly.releases.publishNow({ id })).rejects.toMatchObject({
+        code: "CONFLICT",
+      });
+      expect(await storedStatus(t, a)).toBe("draft");
     });
 
     it("refuses a release that would stop, and changes nothing", async () => {

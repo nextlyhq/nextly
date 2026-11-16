@@ -36,7 +36,9 @@ test.beforeEach(async ({ page }) => {
 test("the name column stays close to the checkboxes it labels", async ({
   page,
 }) => {
-  const nameHeader = page.locator("th#permission-matrix-name");
+  // `:visible`: a hidden copy of this page, which Next.js may keep mounted,
+  // holds the same id.
+  const nameHeader = page.locator("th#permission-matrix-name:visible");
   await expect(nameHeader).toBeVisible();
 
   const header = await nameHeader.boundingBox();

@@ -1,0 +1,60 @@
+/**
+ * Core's Team activity card, declared with `defineWidget`: who created, saved,
+ * published, unpublished or deleted which entry or Single, newest first,
+ * limited to what the reader may read. One module per widget;
+ * `core-widgets/index.ts` lists them in their order.
+ *
+ * Its `load` reads `system:activity` as the caller its read services were
+ * bound for, the same read the activity endpoint makes: it leaves out every
+ * event about an entry, collection or Single the reader may not read, so the
+ * card neither draws nor counts one. Asked as core's own lists are: its
+ * "Number of entries" (`listEntries`), and one more, so the card can say more
+ * exist.
+ *
+ * @module domains/widgets/core-widgets/team-activity
+ */
+
+import { defineWidget } from "../declaration/define-widget";
+import { listEntries } from "../query-limits";
+import { ACTIVITY_SOURCE_ID } from "../system-source-ids";
+
+import type { CoreListWidgetData } from "./data";
+import { CORE_WIDGET_ID } from "./ids";
+import { LIST_DENSITY_SETTING, LIST_ITEMS } from "./shared";
+import { readCoreList } from "./system-read";
+
+export const teamActivityWidget = defineWidget({
+  id: CORE_WIDGET_ID.teamActivity,
+  // Drawn beside its name in the add panel.
+  icon: "Activity",
+  title: "Team activity",
+  description: "Who changed what in your content, newest first.",
+  // Half the row by default; from a third, where its rows still read, to the full width. Five
+  // rows tall at the default density (h 5), from four (h 4) to the ten a list draws (h 8).
+  size: {
+    default: { w: 6, h: 5 },
+    min: { w: 4, h: 4 },
+    max: { w: 12, h: 8 },
+  },
+  settings: { limit: LIST_ITEMS, density: LIST_DENSITY_SETTING },
+  load: async ({
+    settings,
+    services,
+    signal,
+    now,
+  }): Promise<CoreListWidgetData> =>
+    readCoreList(
+      {
+        source: ACTIVITY_SOURCE_ID,
+        op: "list",
+        // Its "Number of entries", and the one more that says more exist (`listEntries`).
+        limit: listEntries(settings.limit) + 1,
+      },
+      { services, signal, now }
+    ),
+  // Its own component, because a row is a sentence with an avatar and a time
+  // read relative to now, which no list line draws.
+  view: { component: "core#TeamActivity" },
+  // The component draws its own empty state, which says what the feed holds.
+  isEmpty: () => false,
+});

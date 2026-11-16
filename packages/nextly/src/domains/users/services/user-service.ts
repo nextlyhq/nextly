@@ -47,7 +47,12 @@ import {
   validatePasswordStrength,
   type PasswordHasher,
 } from "../../../auth/password";
+import {
+  passwordDigester,
+  type PasswordDigester,
+} from "../../../auth/password/digester";
 import { actorForWrite } from "../../../auth/request-actor";
+import { appPasswordDigester } from "../../../di/password-digester";
 import { NextlyError } from "../../../errors";
 import type {
   RequestContext,
@@ -55,8 +60,10 @@ import type {
   Logger,
 } from "../../../services/shared";
 import { consoleLogger } from "../../../services/shared";
+import type { UserFieldConfig } from "../../../users/config/types";
 import { auditReason } from "../../audit/audit-reasons";
 
+import type { TeamPeopleOptions, TeamPeoplePage } from "./team-people";
 import type { UserAccountService } from "./user-account-service";
 import type {
   UserMutationService,
@@ -128,9 +135,12 @@ export interface ListUsersQueryOptions {
     page?: number;
   };
   search?: string;
+  /** Custom fields the search does not match; see `ListUsersOptions`. */
+  unsearchedFields?: ReadonlySet<string>;
   emailVerified?: boolean;
   hasPassword?: boolean;
-  sortBy?: "createdAt" | "name" | "email";
+  /** A built-in column, or a custom user field by its name. */
+  sortBy?: "createdAt" | "name" | "email" | (string & {});
   sortOrder?: "asc" | "desc";
 }
 
@@ -173,11 +183,19 @@ export class UserService {
     private readonly caller: UserWriteCaller = "app"
   ) {
     // The configured digester must declare its reach contract before anything
-    // consults it. This instance passes it explicitly to the checks its own
-    // custom-hasher flow runs (changePassword), so it is never published as a
-    // process-wide default — a check defaults to the digester its own flow
-    // hashes with, which for every core flow is bcrypt.
+    // consults it.
     if (passwordHasher) assertPasswordHasherContract(passwordHasher);
+  }
+
+  /**
+   * The digester this service hashes and checks passwords with: the hasher
+   * it was given (the app's `passwordHasher`, as registration passes it), or
+   * the app's own, core's bcrypt where the app configures none.
+   */
+  private get passwordDigester(): PasswordDigester {
+    return this.passwordHasher
+      ? passwordDigester(this.passwordHasher)
+      : appPasswordDigester();
   }
 
   /**
@@ -304,6 +322,16 @@ export class UserService {
   }
 
   /**
+   * @internal The custom user fields in effect, code-defined and
+   * admin-defined merged, as the reads and writes use them. A read that
+   * leaves hidden user fields out (`showHiddenFields: false`) derives their
+   * paths from these.
+   */
+  customFieldConfigs(): readonly UserFieldConfig[] {
+    return this.queryService.getEffectiveFields();
+  }
+
+  /**
    * Display names for a set of user ids, for surfaces that attribute an action
    * to a person.
    *
@@ -318,6 +346,15 @@ export class UserService {
     ids: string[]
   ): Promise<{ id: string; name: string | null }[]> {
     return this.queryService.listUsersByIds(ids);
+  }
+
+  /**
+   * The people a dashboard's Team card lists: name, email, the role they hold
+   * now and when they were last active, most recently active first, and how
+   * many the filter matched. The caller decides who may be answered.
+   */
+  async listTeamPeople(options: TeamPeopleOptions): Promise<TeamPeoplePage> {
+    return this.queryService.listTeamPeople(options);
   }
 
   /**
@@ -353,7 +390,9 @@ export class UserService {
     options: ListUsersQueryOptions = {},
     _context: RequestContext
   ): Promise<PaginatedResult<User>> {
-    this.logger.debug("Listing users", { options });
+    // Not the options themselves: they carry the request, whose headers hold
+    // the caller's credentials.
+    this.logger.debug("Listing users");
 
     const limit = options.pagination?.limit ?? 10;
     const page = options.pagination?.page ?? 1;
@@ -362,6 +401,7 @@ export class UserService {
       page,
       limit,
       search: options.search,
+      unsearchedFields: options.unsearchedFields,
       emailVerified: options.emailVerified,
       hasPassword: options.hasPassword,
       sortBy: options.sortBy,
@@ -424,10 +464,7 @@ export class UserService {
           isActive,
           ...customFields,
         },
-        this.caller,
-        // Only this service knows whether the app configures its own hasher,
-        // and so whether a stored value in another format is a password.
-        { customPasswordHasher: this.passwordHasher !== undefined }
+        this.caller
       );
 
       this.logger.info("User updated", { userId });
@@ -480,7 +517,6 @@ export class UserService {
    * @param password - User password
    * @returns Authenticated user (without password hash)
    * @throws NextlyError(AUTH_INVALID_CREDENTIALS) if authentication fails.
-   * @throws NextlyError(INTERNAL_ERROR) if password hasher is not configured.
    *
    * @example
    * ```typescript
@@ -501,6 +537,14 @@ export class UserService {
     // Get user with password hash via account service
     const passwordHash = await this.getPasswordHashByEmail(email);
 
+    // Verify password, with the app's digester. With no stored hash (no such
+    // user, or one without a password) a decoy comparison runs instead, so the
+    // refusal takes as long as a wrong password does.
+    const digester = this.passwordDigester;
+    const verdict = passwordHash
+      ? await digester.verify(password, passwordHash)
+      : await digester.decoy(password).then(() => ({ ok: false as const }));
+
     if (!passwordHash) {
       this.logger.warn(
         "Authentication failed - user not found or no password",
@@ -513,16 +557,7 @@ export class UserService {
       });
     }
 
-    // Verify password
-    if (!this.passwordHasher) {
-      throw NextlyError.internal({
-        logContext: { reason: "password-hasher-not-configured" },
-      });
-    }
-
-    const isValid = await this.passwordHasher.verify(password, passwordHash);
-
-    if (!isValid) {
+    if (!verdict.ok) {
       this.logger.warn("Authentication failed - invalid password", { email });
       throw NextlyError.invalidCredentials({
         logContext: { email, reason: "wrong-password" },
@@ -536,6 +571,18 @@ export class UserService {
       throw NextlyError.invalidCredentials({
         logContext: { email, reason: "user-disappeared-after-verify" },
       });
+    }
+
+    // A bcrypt value core stored before the app configured its hasher is
+    // stored again with the hasher, now that the password is proven: only
+    // while it is still the value checked, and only the hash, so the sessions
+    // it signed stand.
+    if (verdict.rehash) {
+      await this.accountService.storeRehashedPassword(
+        String(user.id),
+        passwordHash,
+        await digester.hash(password)
+      );
     }
 
     this.logger.info("User authenticated", { userId: user.id, email });
@@ -574,16 +621,9 @@ export class UserService {
       });
     }
 
-    if (!this.passwordHasher) {
-      throw NextlyError.internal({
-        logContext: { reason: "password-hasher-not-configured" },
-      });
-    }
-
-    const isValid = await this.passwordHasher.verify(
-      currentPassword,
-      currentHash
-    );
+    const isValid = (
+      await this.passwordDigester.verify(currentPassword, currentHash)
+    ).ok;
 
     if (!isValid) {
       throw NextlyError.invalidCredentials({
@@ -598,7 +638,7 @@ export class UserService {
     // digester in hand answers the reach too — a custom digester's own
     // contract, not the default 72 bytes.
     const passwordStrength = validatePasswordStrength(newPassword, {
-      hasher: this.passwordHasher,
+      hasher: this.passwordDigester.hasher,
     });
     if (!passwordStrength.ok) {
       throw NextlyError.validation({
@@ -614,7 +654,7 @@ export class UserService {
     // a deactivated account in the same statement, and ending every session
     // the account holds. The administrator's write would set a password on a
     // deactivated account, for a later reactivation to switch on.
-    const newHash = await this.passwordHasher.hash(newPassword);
+    const newHash = await this.passwordDigester.hash(newPassword);
     if (!(await this.accountService.changeOwnPasswordHash(userId, newHash))) {
       throw NextlyError.invalidCredentials({
         logContext: { userId, reason: auditReason("inactive") },
@@ -651,7 +691,11 @@ export class UserService {
    */
   async updateProfile(
     userId: string,
-    changes: { name?: string; image?: string },
+    changes: {
+      name?: string;
+      image?: string;
+      interfaceLanguage?: string | null;
+    },
     _context: RequestContext
   ): Promise<User> {
     this.logger.debug("Updating user profile", { userId, changes });

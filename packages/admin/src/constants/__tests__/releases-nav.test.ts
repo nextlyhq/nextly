@@ -21,8 +21,10 @@ import {
   MAIN_MENU_ITEMS,
 } from "@admin/components/layout/sidebar/sidebar-types";
 
+import { railItemOf } from "@admin/components/layout/sidebar/lib/content-rail";
 import { buildCapabilities } from "@admin/hooks/useCurrentUserPermissions";
 import { filterNavigationItems } from "@admin/lib/permissions/authorization";
+import { holdsPermission } from "@admin/lib/permissions/holds-permission";
 import type { AdminCapabilities } from "@admin/types/permissions";
 
 import { isNavSection, NAV_SECTIONS } from "../nav-sections";
@@ -118,8 +120,14 @@ describe("the rail's coverage of the section vocabulary", () => {
     //
     // Reported as the missing NAMES rather than as a count, so a failure says
     // which section has no way in.
-    const railIds = new Set(MAIN_MENU_ITEMS.map(item => item.id));
-    const unreachable = NAV_SECTIONS.filter(section => !railIds.has(section));
+    //
+    // A section's entry is the rail item it is shown under, read through the
+    // rail's own mapping: `collections` and `singles` share the Content item,
+    // and every other section is its own entry, so a new one still needs one.
+    const railIds = new Set<string>(MAIN_MENU_ITEMS.map(item => item.id));
+    const unreachable = NAV_SECTIONS.filter(
+      section => !railIds.has(railItemOf(section))
+    );
     expect(unreachable).toEqual([]);
   });
 
@@ -150,7 +158,12 @@ describe("the OTHER navigation render, which the rail test cannot see", () => {
   // would keep passing after `buildCapabilities` stopped setting a flag the
   // test still sets for itself.
   const holding = (permissions: string[]): AdminCapabilities =>
-    buildCapabilities(permissions, false);
+    buildCapabilities(permissions, false, undefined);
+  /** The drawer's items for a caller holding `permissions`, as it filters them. */
+  const visibleTo = (permissions: string[]) =>
+    filterNavigationItems([...SIDEBAR_NAVIGATION], holding(permissions), slug =>
+      holdsPermission(new Set(permissions), slug)
+    );
 
   it("shows Releases to a caller holding the seeded read permission", () => {
     // The defect this guards: `content-releases` is a SYSTEM resource, so it is
@@ -158,30 +171,33 @@ describe("the OTHER navigation render, which the rail test cannot see", () => {
     // of its own, the generic `action-resource` lookup finds no collection
     // entry and answers false — hiding the section from everyone except a
     // super-admin, while the permission is held and the route works.
-    const visible = filterNavigationItems(
-      [...SIDEBAR_NAVIGATION],
-      holding(["read-content-releases"])
-    );
+    const visible = visibleTo(["read-content-releases"]);
     expect(visible.map(item => item.href)).toContain(ROUTES.RELEASES);
   });
 
   it("hides it from a caller without that permission", () => {
     // The control. Without it the case above passes against a filter that
     // returns everything it is given.
-    const visible = filterNavigationItems(
-      [...SIDEBAR_NAVIGATION],
-      holding(["read-media"])
-    );
+    const visible = visibleTo(["read-media"]);
     expect(visible.map(item => item.href)).not.toContain(ROUTES.RELEASES);
   });
 
   it("still shows Media to that caller, so the filter is doing something", () => {
     // The second control: proves the caller above is not simply being refused
     // everything, which would satisfy the negative case for the wrong reason.
-    const visible = filterNavigationItems(
-      [...SIDEBAR_NAVIGATION],
-      holding(["read-media"])
-    );
+    const visible = visibleTo(["read-media"]);
     expect(visible.map(item => item.href)).toContain(ROUTES.MEDIA);
+  });
+
+  it("authorizes Email for a caller who may only read emails", () => {
+    // Settings and the Email hub are system resources, absent from the
+    // per-collection map: their permissions are asked as the guards ask them.
+    expect(
+      visibleTo(["read-email-templates"]).map(item => item.href)
+    ).toContain(ROUTES.EMAIL);
+    // The control: a caller with no email permission is not shown it.
+    expect(visibleTo(["read-media"]).map(item => item.href)).not.toContain(
+      ROUTES.EMAIL
+    );
   });
 });

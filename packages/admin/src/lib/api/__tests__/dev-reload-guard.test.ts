@@ -145,8 +145,13 @@ describe("tsdown NODE_ENV define", () => {
     // package's remaining NODE_ENV sites — dev-only diagnostics — and is
     // deliberately no longer what keeps dev-reload quiet (the server's
     // runtime `devReload` answer is).
+    // The define reads the build's NODE_ENV through one constant, which the
+    // resolve conditions read too, so both agree on what the build is for.
     expect(configSource).toMatch(
-      /"process\.env\.NODE_ENV"\s*:\s*JSON\.stringify\(\s*process\.env\.NODE_ENV\s*\?\?\s*"production"/
+      /const BUILD_NODE_ENV\s*=\s*process\.env\.NODE_ENV\s*\?\?\s*"production"/
+    );
+    expect(configSource).toMatch(
+      /"process\.env\.NODE_ENV"\s*:\s*JSON\.stringify\(\s*BUILD_NODE_ENV\s*\)/
     );
   });
 });

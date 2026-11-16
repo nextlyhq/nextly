@@ -1,125 +1,126 @@
 "use client";
 
+import { Fragment } from "react";
 import type React from "react";
-import { useState } from "react";
 
-import { Check, Circle, Clock, Copy, Hash } from "@admin/components/icons";
+import { Clock, Hash } from "@admin/components/icons";
+import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { containedContributionEvents } from "@admin/components/shared/target-slot/IsolatedContribution";
+import { PlaceContributionFallback } from "@admin/components/shared/target-slot/PlaceContributionFallback";
+import { Skeleton } from "@admin/components/ui";
 import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
+import { useLocalization } from "@admin/hooks/useLocalization";
+import type {
+  DocumentPanelSectionProps,
+  SidebarSectionProps,
+} from "@admin/lib/plugins/component-registry";
+import type {
+  PanelOrderEntry,
+  PlacedPanelSection,
+  PluginPanelSectionEntry,
+} from "@admin/lib/plugins/document-surfaces";
 import { cn } from "@admin/lib/utils";
+import type { ReleaseDocumentRef } from "@admin/types/releases";
 
-import { LanguagePanel } from "../../LanguagePanel";
+import { useEntryLocale } from "../../EntryLocaleContext";
+import { DocumentLanguagePanel, hasLanguages } from "../../LanguagePanel";
+import { DocumentIdCopy } from "../DocumentIdCopy";
 import type { EntryData, EntryFormMode } from "../useEntryForm";
 
-// "heavy" polish pass on top of that — neutral monochrome lucide icons
-// in front of each row label, a thin separator above the timestamps,
-// the entry ID rendered as a `first5…last3` shortcode with a persistent
-// copy button (not hover-gated), and a slightly more prominent Status
-// pill so the lifecycle state stands out from the surrounding metadata.
+import { PanelSection } from "./PanelSection";
+import { PublishingSection } from "./PublishingSection";
+import { StatusSection, type PanelDocumentStatus } from "./StatusSection";
+
+// The document panel's sections, in the one order both editors draw them:
+// Status, then Publishing, then Language, then Details, then any a plugin
+// adds for the collection. Each section decides
+// whether it applies and draws nothing where it does not, so a document
+// without a lifecycle or languages reads the sections it has, in that order.
+// A side panel section a plugin declares at an edit page's place is drawn
+// where the server placed it among the built-in four (`panelOrder`, from
+// `placedPanelOrder`), and a built-in it replaces is not drawn.
+
+export { pillStateFromForm, PILL_LABEL, type PillState } from "./pill-state";
 
 export interface DocumentPanelProps {
-  /** Form mode. ID/timestamps/status only render in edit mode. */
+  /** Form mode. Nothing is drawn before the document exists. */
   mode: EntryFormMode;
-  /** Entry data with id, status, and timestamps. */
+  /** Entry data with id and timestamps. */
   entry?: EntryData | null;
-  /** Whether the collection has the Draft/Published feature enabled. */
+  /** Whether the collection has the Draft/Published feature enabled, which
+   *  the Status and Publishing sections and the language panel read. */
   hasStatus: boolean;
+  /**
+   * The status in the language being edited, as the document bar's pill reads
+   * it. The Status section says it as a sentence; absent, it is not drawn.
+   */
+  documentStatus?: PanelDocumentStatus;
+  /**
+   * The document as releases address it, which the Publishing section reads.
+   * Absent, the section is not drawn.
+   */
+  releaseDocument?: ReleaseDocumentRef;
   /** The active editing locale, forwarded to the language panel. */
   locale?: string;
   /** Switch the editor to a language, forwarded to the language panel. */
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /** Withholds the panel's mutating actions (reading a past version). */
   actionsDisabled?: boolean;
-  /** Whether the form has unsaved local changes. When the entry is
-   *  published and the form is dirty, the status pill renders as
-   *  "Modified" (Strapi pattern) so the user sees both "what's live"
-   *  and "what you've changed" in one place.
-   *
-   *  Default false. Optional so existing call sites that pass only the
-   *  three required props keep working — they just won't see the
-   *  Modified state. */
-  isDirty?: boolean;
+  /** Withholds opening another language; the same as `actionsDisabled` unless given. */
+  navigationDisabled?: boolean;
+  /** Withholds publishing every language; the same as `actionsDisabled` unless given. */
+  publishAllDisabled?: boolean;
+  /**
+   * Sections plugins add for this collection, drawn after Details under the
+   * heading the panel draws for its own sections.
+   */
+  pluginSections?: readonly PluginPanelSectionEntry[];
+  /**
+   * What each plugin section is handed. Absent, none is drawn: a section
+   * needs the document it is about.
+   */
+  pluginSectionProps?: DocumentPanelSectionProps;
+  /**
+   * The panel's sections in the order the server placed them, with the side
+   * panel sections plugins declared at the page's place among them
+   * (`placedPanelOrder`). Absent, the built-in sections are drawn in their
+   * usual order.
+   */
+  panelOrder?: readonly PanelOrderEntry[];
+  /**
+   * What each placed section is handed: the place's context and entry, and on
+   * a collection entry's page the document's handles too. Absent, placed
+   * sections are handed `pluginSectionProps`; with neither, none is drawn.
+   */
+  placedSectionProps?: SidebarSectionProps | DocumentPanelSectionProps;
 }
 
-/**
- * Derive the displayed pill state from the persisted status, the form dirty
- * flag, and whether a working draft is pending.
- *
- * - "Changed" — a published entry with a persisted working draft waiting to be
- *   promoted (Payload's model). This is the authoritative divergence from live,
- *   so it wins over "Modified": the enabled Save button already signals any
- *   extra unsaved local edits.
- * - "Modified" — a published entry with local edits not yet saved. Drafts never
- *   show Modified (they are inherently work-in-progress).
- */
-export type PillState = "draft" | "modified" | "changed" | "published";
-
-/**
- * What each state is CALLED, in one place.
- *
- * Exported because the page builder covers this panel and has to report the
- * same document in the same words. Two maps of four strings agree on the day
- * they are written and drift the first time one of them is reworded, and the
- * result is one editor calling a document "Changed" while another calls it
- * "Modified" — a distinction `pillStateFromForm` is careful to make.
- */
-export const PILL_LABEL: Record<PillState, string> = {
-  draft: "Draft",
-  modified: "Modified",
-  changed: "Changed",
-  published: "Published",
-};
-export function pillStateFromForm(
-  status: string | undefined,
-  isDirty: boolean,
-  hasWorkingDraft = false
-): PillState {
-  if (status === "published" && hasWorkingDraft) return "changed";
-  if (status === "published" && isDirty) return "modified";
-  return status === "published" ? "published" : "draft";
-}
-
-/**
- * Format an entry ID as `first5…last3` so the rail row stays a single line
- * even for long UUIDs. Returns the original string when it is short enough
- * that truncating would hide more than it reveals.
- *
- * @example
- * formatId("548e813c-8266-40c3-bd9c-ca1816f8")  // "548e8…6f8"
- * formatId("abc12345")                          // "abc12345"
- * formatId(undefined)                           // "—"
- */
-export function formatId(id: string | null | undefined): string {
-  if (!id) return "—";
-  // Why: 9 chars or fewer fits in a single line at the rail width without
-  // ellipsis, and `first5…last3` would be longer than the original at 8.
-  if (id.length <= 9) return id;
-  return `${id.slice(0, 5)}…${id.slice(-3)}`;
-}
+/** The built-in sections, in the order drawn when nothing places them. */
+const BUILT_IN_ORDER: readonly PanelOrderEntry[] = [
+  { kind: "builtIn", name: "status" },
+  { kind: "builtIn", name: "publishing" },
+  { kind: "builtIn", name: "language" },
+  { kind: "builtIn", name: "details" },
+];
 
 export function DocumentPanel({
   mode,
   entry,
   hasStatus,
+  documentStatus,
+  releaseDocument,
   locale,
   onLocaleChange,
   actionsDisabled = false,
-  isDirty = false,
+  navigationDisabled = actionsDisabled,
+  publishAllDisabled = actionsDisabled,
+  pluginSections = [],
+  pluginSectionProps,
+  panelOrder = BUILT_IN_ORDER,
+  placedSectionProps = pluginSectionProps,
 }: DocumentPanelProps): React.ReactElement | null {
-  const isCreate = mode === "create";
-
-  // Hide entirely on create — nothing to show until the entry exists.
-  if (isCreate) return null;
-
-  // A published entry whose overlay read carried `_isWorkingDraft` has a pending
-  // working draft (draft/published split) — surfaced as the "Changed" state.
-  const hasWorkingDraft =
-    (entry as { _isWorkingDraft?: boolean } | null | undefined)
-      ?._isWorkingDraft === true;
-  const pill = pillStateFromForm(
-    entry?.status as string | undefined,
-    isDirty,
-    hasWorkingDraft
-  );
+  // Nothing to say until the document exists.
+  if (mode === "create") return null;
 
   // Per-language translation-status pills. Present only when the entry was
   // fetched with `?translation-status=1` on a localized collection; inert otherwise.
@@ -127,69 +128,190 @@ export function DocumentPanel({
     | Record<string, { translated: boolean; status?: string }>
     | undefined;
 
+  // Whether the document's shared fields hold unpublished changes, which the
+  // language section says.
+  const sharedChangesPending = entry?._sharedChangesPending === true;
+
+  // Each built-in section by the name the server places it under.
+  const builtIn = (name: string): React.ReactNode => {
+    switch (name) {
+      case "status":
+        return hasStatus && documentStatus ? (
+          <StatusSection documentStatus={documentStatus} />
+        ) : null;
+      case "publishing":
+        // A release publishes or unpublishes, so only a document with that
+        // lifecycle has a schedule to read.
+        return hasStatus ? (
+          <PublishingSection document={releaseDocument} />
+        ) : null;
+      case "language":
+        return (
+          <LanguageSection>
+            <DocumentLanguagePanel
+              translations={translations}
+              locale={locale}
+              onLocaleChange={onLocaleChange}
+              hasStatus={hasStatus}
+              actionsDisabled={actionsDisabled}
+              navigationDisabled={navigationDisabled}
+              publishAllDisabled={publishAllDisabled}
+              sharedChangesPending={sharedChangesPending}
+            />
+          </LanguageSection>
+        );
+      case "details":
+        return (
+          <PanelSection title="Details">
+            <dl className="space-y-3">
+              <IdRow id={entry?.id} />
+              <TimestampRows entry={entry} />
+            </dl>
+          </PanelSection>
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
-    <div className="px-5 py-4 border-b border-border">
-      <p className="text-xs font-bold tracking-[0.1em] uppercase text-muted-foreground mb-3">
-        Document
-      </p>
-      <dl className="space-y-3">
-        {hasStatus && <StatusRow state={pill} />}
-        <IdRow id={entry?.id} />
-        <Separator />
-        <TimestampRows entry={entry} />
-      </dl>
-      <TranslationsRow
-        translations={translations}
-        hasStatus={hasStatus}
-        {...(locale === undefined ? {} : { locale })}
-        {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
-        actionsDisabled={actionsDisabled}
-      />
+    <div className="flex flex-col" data-testid="document-panel-sections">
+      {panelOrder.map(part =>
+        part.kind === "builtIn" ? (
+          <Fragment key={`built-in:${part.name}`}>
+            {builtIn(part.name)}
+          </Fragment>
+        ) : placedSectionProps === undefined ? null : (
+          <PlacedSection
+            key={`placed:${part.id}`}
+            part={part}
+            props={placedSectionProps}
+          />
+        )
+      )}
+      {pluginSectionProps === undefined
+        ? null
+        : pluginSections.map(section => (
+            // The panel's own section, so its heading, padding and divider
+            // are the built-in ones in either scheme; the plugin draws the
+            // body, inside its own error boundary, and a body that draws
+            // nothing for this document leaves no empty heading.
+            <PanelSection
+              key={`${section.plugin}:${section.component}:${section.title}`}
+              title={section.title}
+              collapsesWhenEmpty
+            >
+              {section.loading === true ? (
+                // The panel's own loading look, as the Publishing section
+                // draws it, until the component has arrived.
+                <div aria-busy="true">
+                  <span className="sr-only">Loading {section.title}</span>
+                  <Skeleton className="h-4 w-40" />
+                </div>
+              ) : (
+                <PluginSlot
+                  path={section.component}
+                  props={pluginSectionProps}
+                />
+              )}
+            </PanelSection>
+          ))}
     </div>
   );
 }
 
 /**
- * Per-language translation-status pills row. Renders nothing when localization is off
- * or the entry has no `_translations` map, so non-localized documents are unchanged.
+ * A section a plugin placed: the panel's own frame, the plugin's body. It
+ * applies to some documents and not others, so it leaves no heading behind
+ * where its component draws nothing. `flush` draws it above the fields
+ * rather than in the panel. Like every contributed component, its body is
+ * kept to itself (a form of its own does not submit the document's) and one
+ * that cannot be found says so under the heading.
  */
-function TranslationsRow({
-  translations,
-  hasStatus,
-  locale,
-  onLocaleChange,
-  actionsDisabled = false,
+function PlacedSection({
+  part,
+  props,
+  flush = false,
 }: {
-  translations?: Record<string, { translated: boolean; status?: string }>;
-  hasStatus?: boolean;
-  locale?: string;
-  onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
-  actionsDisabled?: boolean;
-}) {
-  // The panel self-hides when localization is off, so an absent map is not a
-  // reason to withhold it: a localized entry fetched without
-  // `?translation-status=1` still has languages to switch between and act on.
+  part: PlacedPanelSection;
+  props: SidebarSectionProps | DocumentPanelSectionProps;
+  flush?: boolean;
+}): React.ReactElement {
   return (
-    <div className="mt-4 pt-4 border-t border-border">
-      {/* The language panel, which replaced the two loose action buttons that
-          used to sit here. They offered the actions without the state they act
-          on, so an author had to read one panel to decide and another to act.
-          The panel carries both, and the same component renders inline where
-          this rail is hidden — so neither the state nor the actions can be the
-          surface that disappears. */}
-      <LanguagePanel
-        {...(translations === undefined ? {} : { translations })}
-        {...(locale === undefined ? {} : { activeLocale: locale })}
-        {...(onLocaleChange === undefined ? {} : { onSelect: onLocaleChange })}
-        hasStatus={hasStatus}
-        actionsDisabled={actionsDisabled}
+    <PanelSection
+      title={part.title}
+      collapsesWhenEmpty
+      flush={flush}
+      // Kept on the section itself, with no wrapper inside it, so a body that
+      // draws nothing still leaves the section empty to collapse.
+      containedEvents={containedContributionEvents}
+    >
+      <PluginSlot
+        path={part.component}
+        props={props}
+        fallback={<PlaceContributionFallback />}
       />
+    </PanelSection>
+  );
+}
+
+/**
+ * The placed sections drawn above the fields where the editor is too narrow
+ * to keep the panel beside them (`placePanelParts`), so a section an author
+ * should meet first is on screen without opening the panel. Each keeps its
+ * heading and its landmark, and draws nothing until there is a document.
+ */
+export function PanelSectionsAboveForm({
+  sections,
+  pluginSectionProps,
+  placedSectionProps = pluginSectionProps,
+  className,
+}: {
+  sections: readonly PlacedPanelSection[];
+  /** What each section is handed, where `placedSectionProps` is not given. */
+  pluginSectionProps?: DocumentPanelSectionProps;
+  /** What each section is handed. Absent with the above, none is drawn. */
+  placedSectionProps?: SidebarSectionProps | DocumentPanelSectionProps;
+  className?: string;
+}): React.ReactElement | null {
+  if (sections.length === 0 || placedSectionProps === undefined) return null;
+  return (
+    <div
+      className={cn("flex flex-col", className)}
+      data-testid="document-panel-above-form"
+    >
+      {sections.map(part => (
+        <PlacedSection
+          key={`placed:${part.id}`}
+          part={part}
+          props={placedSectionProps}
+          flush
+        />
+      ))}
     </div>
   );
 }
 
-function Separator() {
-  return <div className="border-t border-border -mx-5" aria-hidden="true" />;
+/**
+ * The Language section, where the document has languages to show: the
+ * language panel as the editor has always drawn it, one row per language with
+ * its state and the actions that make sense of it. The panel's own header
+ * names it on screen, so the section's heading is said only to a screen reader.
+ */
+function LanguageSection({ children }: { children: React.ReactNode }) {
+  const { enabled, locales } = useLocalization();
+  const { collectionLocalized } = useEntryLocale();
+  // The panel's own rule for when it draws anything, so the section and its
+  // content cannot disagree about an empty section. Without languages the
+  // panel is still mounted, as it always has been, and draws nothing itself.
+  if (!hasLanguages(enabled, collectionLocalized, locales.length)) {
+    return <>{children}</>;
+  }
+  return (
+    <PanelSection title="Language" titleHidden>
+      {children}
+    </PanelSection>
+  );
 }
 
 function RowIcon({ icon: Icon }: { icon: typeof Hash }) {
@@ -201,55 +323,7 @@ function RowIcon({ icon: Icon }: { icon: typeof Hash }) {
   );
 }
 
-function StatusRow({ state }: { state: PillState }) {
-  // Why: heavier pill than the meta-strip variant — matched padding and
-  // font weight so the lifecycle state reads as the most important row.
-  // Both pending states use the muted amber `warning` token (light + dark) —
-  // distinct from Draft (neutral) and Published (foreground/background), and
-  // avoiding saturated AI-style hues. "Modified" flags unsaved local edits;
-  // "Changed" flags a persisted working draft pending publish. They share the
-  // colour because both mean "diverges from what's live"; the label says which,
-  // and pillStateFromForm guarantees they never render at once.
-  const PILL_CLASS: Record<PillState, string> = {
-    draft: "bg-muted text-muted-foreground border border-border",
-    modified:
-      "bg-warning-100 text-warning-800 border border-warning-200 dark:bg-warning-950/40 dark:text-warning-200 dark:border-warning-900",
-    changed:
-      "bg-warning-100 text-warning-800 border border-warning-200 dark:bg-warning-950/40 dark:text-warning-200 dark:border-warning-900",
-    published: "bg-foreground text-background",
-  };
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <dt className="flex items-center gap-2 text-xs text-muted-foreground shrink-0">
-        <RowIcon icon={Circle} />
-        <span>Status</span>
-      </dt>
-      <dd>
-        <span
-          data-pill-state={state}
-          className={cn(
-            "px-2 py-0.5 text-xs font-bold tracking-[0.08em] uppercase rounded",
-            PILL_CLASS[state]
-          )}
-        >
-          {PILL_LABEL[state]}
-        </span>
-      </dd>
-    </div>
-  );
-}
-
 function IdRow({ id }: { id?: string | null }) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = () => {
-    if (!id) return;
-    void navigator.clipboard.writeText(id).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    });
-  };
-
   return (
     <div className="flex items-center justify-between gap-3">
       <dt className="flex items-center gap-2 text-xs text-muted-foreground shrink-0">
@@ -257,28 +331,7 @@ function IdRow({ id }: { id?: string | null }) {
         <span>ID</span>
       </dt>
       <dd className="flex items-center gap-1 min-w-0">
-        <span className="text-xs font-mono text-foreground" title={id ?? ""}>
-          {formatId(id)}
-        </span>
-        {id && (
-          <button
-            type="button"
-            onClick={handleCopy}
-            className="hover:bg-primary/5 rounded p-0.5 transition-colors"
-            aria-label={copied ? "ID copied" : "Copy ID to clipboard"}
-          >
-            {copied ? (
-              // The copied tick uses the per-mode success ink. A fixed ramp
-              // step (`success-600`) is a constant darkening of the brand
-              // green and lands at 4.38:1 on the dark surface, under the 4.5:1
-              // text minimum; `--color-success` is defined for each mode and
-              // measures 5.30:1 light, 5.29:1 dark.
-              <Check className="h-3 w-3 text-success" />
-            ) : (
-              <Copy className="h-3 w-3 text-muted-foreground" />
-            )}
-          </button>
-        )}
+        <DocumentIdCopy id={id} />
       </dd>
     </div>
   );
