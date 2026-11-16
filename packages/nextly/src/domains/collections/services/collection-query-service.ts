@@ -1755,7 +1755,9 @@ export class CollectionQueryService extends BaseService {
     filter: TranslationStatusFilter,
     mainIdColumn: unknown,
     preloaded?: CompanionSchema | null,
-    statusFilter?: StatusFilter | null
+    statusFilter?: StatusFilter | null,
+    /** The documents a due release makes public as of this read. */
+    revealed?: readonly string[]
   ): Promise<ReturnType<typeof buildTranslationStatusCondition>> {
     if (!this.localization) return undefined;
     const companion =
@@ -1763,19 +1765,23 @@ export class CollectionQueryService extends BaseService {
     if (!companion) return undefined;
     // A public read sees a language's publication, never its drafts. There
     // `translated` and `published` both ask whether the language is published,
-    // `missing` whether it is not, and `draft` and `stale`, which only work in
-    // progress answers, find nothing. Only where each language publishes on
-    // its own: elsewhere every language follows the document's one status.
+    // by the read's own rule (its status alone, a due release counting as
+    // published), `missing` whether it is not, and `draft` and `stale`, which
+    // only work in progress answers, find nothing. Only where each language
+    // publishes on its own: elsewhere every language follows the document's
+    // one status.
     const publicRead =
       statusFilter?.isPublicRead === true && companion.hasStatus;
     if (publicRead && (filter.state === "draft" || filter.state === "stale")) {
       return sql`1=0`;
     }
     const published = publicRead
-      ? await this.translationStatusCondition(companion, mainIdColumn, {
-          collectionName,
-          filter: { locale: filter.locale, state: "published" },
-          publicStates: statusFilter?.values,
+      ? publishedInLanguageCondition({
+          companion,
+          statusFilter,
+          revealed,
+          localeChain: [filter.locale],
+          mainIdColumn,
         })
       : undefined;
     if (publicRead) {
@@ -1798,7 +1804,6 @@ export class CollectionQueryService extends BaseService {
     args: {
       collectionName: string;
       filter: TranslationStatusFilter;
-      publicStates?: readonly string[];
     }
   ): Promise<ReturnType<typeof buildTranslationStatusCondition>> {
     const { filter } = args;
@@ -1840,7 +1845,6 @@ export class CollectionQueryService extends BaseService {
           : undefined,
       defaultLocale: this.localization.defaultLocale,
       filter,
-      publicStates: args.publicStates,
       // Where provenance is recorded, a language is judged by its recorded
       // values, as the overview judges it. Asked only for the state that reads
       // it, as the stamp column is.
@@ -2662,7 +2666,8 @@ export class CollectionQueryService extends BaseService {
           translationFilter,
           schema.id,
           companion,
-          statusFilter
+          statusFilter,
+          decisions.reveal
         );
       if (translationCondition) conditions.push(translationCondition);
     }

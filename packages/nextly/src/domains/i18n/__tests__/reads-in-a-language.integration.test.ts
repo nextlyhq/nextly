@@ -1191,6 +1191,24 @@ describe.each(getConfiguredTestDialects())(
         status: "published",
       });
       expect(counted.total).toBe(1);
+      // The language filter asks the same question of a public read: the
+      // language is published, whatever its fields hold.
+      for (const [state, expected] of [
+        ["published", [id]],
+        ["translated", [id]],
+        ["missing", []],
+      ] as const) {
+        const filtered = await t.nextly.find({
+          collection: DOCS,
+          locale: "en",
+          status: "published",
+          where: { _translated: { locale: "es", state } } as never,
+        });
+        expect(
+          filtered.items.map(item => item.id),
+          state
+        ).toEqual(expected);
+      }
     }, 90_000);
 
     // A filter on a translated number judges the number shown, 0 included:

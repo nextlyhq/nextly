@@ -1881,9 +1881,12 @@ export class SingleQueryService extends BaseService {
       mainIdColumn: (translations.mainTable as { id?: unknown }).id,
     });
     if (!condition) return true;
+    // The id alone: a read that selects some fields reads only those columns,
+    // so a column not migrated yet fails only a read that selects it.
     const found = await selectEntryWithCompanion({
       db: this.adapter.getDrizzle(),
       mainTable: translations.mainTable,
+      projection: tableProjection(translations.mainTable, ["id"]),
       where: condition,
       companionTable: translations.companion.table,
       localeChain: translations.localeChain.slice(0, 1),
