@@ -15,12 +15,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
 import { useCurrentUserId } from "@admin/hooks/useCurrentUserId";
-import { documentRecordingKey } from "@admin/hooks/useDocumentAutosave";
+import { emptyThePoint } from "@admin/hooks/useDocumentAutosave";
 import { useLocalization } from "@admin/hooks/useLocalization";
-import {
-  recordingsSent,
-  recordingsSettled,
-} from "@admin/hooks/useSnapshotAutosave";
 import { canonicalJson } from "@admin/lib/canonical-json";
 import {
   forgetTabPreference,
@@ -189,88 +185,22 @@ function holdsNoValues(point: AutosaveDetail): boolean {
 }
 
 /**
- * Replace the author's recovery point with one holding no values, through the
- * same write a recording makes, so no later session or tab offers it.
- *
- * Not a delete: a point holding no values is simply never offered, so no
- * route beyond the recording's own is needed. Written once the recordings
- * already on their way have landed, so none of them lands after it and puts
- * the work back; and only while `stillClean` holds then, since edits made
- * meanwhile are work the next recording keeps. A write that fails leaves the
- * point as it was, offered again next time, which costs a second Discard
- * rather than any work.
+ * Whether the form holds edits, as its subscription last said: read when an
+ * answer is acted on, after a round trip, rather than at render.
  */
-async function emptyThePoint(
-  scope: VersionScope,
-  locale: string | null,
-  stillClean: () => boolean
-): Promise<void> {
-  await recordingsSettled(documentRecordingKey(scope));
-  if (!stillClean()) return;
-  try {
-    await versionApi.saveAutosave(scope, {}, locale);
-  } catch {
-    // See above: the point stays, and is offered again.
-  }
-}
-
-/**
- * Empty the author's point when the form goes back to what the document
- * stores, as when typing in a field and deleting it again.
- *
- * A recording is made while the form holds edits, and the form going clean
- * only stops the next one: the last one stays, holding the undone edits, and
- * would be offered next time as unsaved work. So it is emptied, but only when
- * a recording of this document was sent since the form went dirty: edits
- * undone before anything recorded them leave a point waiting from a last
- * visit, or one put off with Not now, exactly as it was. And only when the
- * form went clean by an undo, not by a reset to new stored values (a save,
- * which deletes the point itself, or a load).
- *
- * @returns whether the form holds edits now, as the subscription last heard
- */
-function useEmptyPointOnUndo(
-  scope: VersionScope | null,
-  form: UseFormReturn<Record<string, unknown>>,
-  locale: string | null
+function useFormHoldsEdits(
+  form: UseFormReturn<Record<string, unknown>>
 ): () => boolean {
   const dirty = useRef(false);
-  const latest = useRef({ scope, locale });
-  latest.current = { scope, locale };
-  const document = documentRecordingKey(scope);
   useEffect(() => {
-    if (document === null) return;
-    // Where the form stood when it went dirty: the recordings sent so far,
-    // and the stored values it was loaded with, as text. Read from what the
-    // subscription hands over: the form's own `formState` is only brought up
-    // to date by a render, so a reset's new values are not in it yet.
-    let dirtyFrom: { sent: number; stored: string } | null = null;
     dirty.current = form.formState.isDirty;
     return form.subscribe({
       formState: { isDirty: true },
-      callback: ({ isDirty, defaultValues }) => {
+      callback: ({ isDirty }) => {
         dirty.current = isDirty === true;
-        // Each change reports here, so the document is written out as text
-        // only where the form turns: going dirty, and going clean again.
-        if (isDirty === true) {
-          dirtyFrom ??= {
-            sent: recordingsSent(document),
-            stored: canonicalJson(defaultValues),
-          };
-          return;
-        }
-        const from = dirtyFrom;
-        dirtyFrom = null;
-        if (from === null || from.stored !== canonicalJson(defaultValues)) {
-          return;
-        }
-        if (recordingsSent(document) === from.sent) return;
-        const { scope: at, locale: language } = latest.current;
-        if (at === null) return;
-        void emptyThePoint(at, language, () => !dirty.current);
       },
     });
-  }, [form, document]);
+  }, [form]);
   return useCallback(() => dirty.current, []);
 }
 
@@ -407,9 +337,9 @@ export interface UseAutosaveRecoveryResult {
   /**
    * Discard: stop offering this recovery point for good, in this tab and in
    * every later session or tab. Unlike `dismiss`, the point is emptied on the
-   * server (see `emptyThePoint`). Written only while the form holds no edits:
-   * edits made since the offer are newer work, which the next recording keeps
-   * in its place.
+   * server (see `emptyThePoint`). Only while the form holds no edits, and
+   * only while the stored point is still the one offered: edits made since,
+   * here or in another tab, are newer work, which their recording keeps.
    */
   discard: () => void;
   /**
@@ -698,14 +628,24 @@ export function useAutosaveRecovery({
     if (data) putOff(pointIdentity(data));
   }, [data, putOff]);
 
-  const isDirty = useEmptyPointOnUndo(scope, form, locale);
+  const holdsEdits = useFormHoldsEdits(form);
   const discard = useCallback(() => {
     // Put off at once, as Not now is, so the offer goes in this tab whatever
     // the write below answers.
     dismiss();
-    if (!scope || !data || isDirty()) return;
-    void emptyThePoint(scope, data.locale, () => !isDirty());
-  }, [dismiss, scope, data, isDirty]);
+    if (!scope || !data || holdsEdits()) return;
+    // Emptied only while it is still the point offered: one rewritten since,
+    // by another tab or by a field recording its own state, is newer work.
+    void emptyThePoint(scope, data.locale, async () => {
+      if (holdsEdits()) return false;
+      try {
+        const now = await versionApi.getAutosave(scope);
+        return now !== null && pointIdentity(now) === pointIdentity(data);
+      } catch {
+        return false;
+      }
+    });
+  }, [dismiss, scope, data, holdsEdits]);
 
   // The document as stored, which the form was loaded with.
   const stored = form.formState.defaultValues;

@@ -12,6 +12,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  lastStoredRecording,
   recordingsSent,
   recordingsSettled,
   useAfterRecordings,
@@ -562,7 +563,8 @@ describe("a real save waits for the recordings already sent", () => {
     const release = async (answer: "stored" | "failed" = "stored") => {
       await act(async () => open.shift()?.(answer));
     };
-    return { save, record, release };
+    const lastSent = () => hook.result.current.lastSent();
+    return { save, record, release, lastSent };
   }
 
   /** Whether the wait has finished, read after the queue has drained. */
@@ -580,22 +582,36 @@ describe("a real save waits for the recordings already sent", () => {
     };
   }
 
-  it("counts each recording sent for a document, and only that document's", async () => {
-    // What a reader of the count asks: was a recording sent since a moment it
-    // noted? Sent, not stored: one on its way may land after any later write.
+  it("numbers each recording sent for a document, and knows the latest one stored", async () => {
+    // What a recorder asks: does the point hold what it recorded last? Sent
+    // is not stored: a recording that failed wrote nothing.
     const before = recordingsSent(DOC);
     const otherBefore = recordingsSent("collection:posts:e3");
     const recorder = heldRecorder();
     recorder.record();
     expect(recordingsSent(DOC)).toBe(before + 1);
+    expect(recorder.lastSent()).toBe(before + 1);
     await recorder.release();
-    // Landing does not take it back.
-    expect(recordingsSent(DOC)).toBe(before + 1);
+    expect(lastStoredRecording(DOC)).toBe(before + 1);
+
     recorder.record();
-    expect(recordingsSent(DOC)).toBe(before + 2);
+    expect(recorder.lastSent()).toBe(before + 2);
     await recorder.release("failed");
+    // Sent, not stored: the point still holds the first.
     expect(recordingsSent(DOC)).toBe(before + 2);
+    expect(lastStoredRecording(DOC)).toBe(before + 1);
     expect(recordingsSent("collection:posts:e3")).toBe(otherBefore);
+  });
+
+  it("knows a recording of the same document by another recorder came after", async () => {
+    const mine = heldRecorder();
+    const theirs = heldRecorder();
+    mine.record();
+    await mine.release();
+    theirs.record();
+    await theirs.release();
+    expect(lastStoredRecording(DOC)).not.toBe(mine.lastSent());
+    expect(lastStoredRecording(DOC)).toBe(theirs.lastSent());
   });
 
   it("answers at once when nothing is on its way, which is the control", async () => {
