@@ -190,6 +190,7 @@ function BuilderWorkspace(
     | "savedFieldIds"
     | "settings"
     | "pending"
+    | "lifecycleEnabled"
   >
 ): JSX.Element {
   const { builder, pending } = props;
