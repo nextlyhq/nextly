@@ -13,6 +13,7 @@ import { sharedEntries } from "./bounded-entries";
 import { holdFailedRecord, retryFailedRecordsAtRead } from "./record-retry";
 import { USE_CACHE_HANDLER_BRAND } from "./shared-handlers";
 import {
+  expireAgainAfterStaleFill,
   expireTags,
   isEntryExpired,
   latestExpiry,
@@ -78,6 +79,14 @@ const useCacheHandler = {
   set(cacheKey: string, pendingEntry: Promise<CacheEntry>): Promise<void> {
     const write = (async () => {
       const { value, ...entry } = await pendingEntry;
+      // A fill that began before one of its tags expired holds the old value.
+      // It is not stored, and its tags are expired again as it finishes, so a
+      // page that joined it while rendering is refused rather than kept.
+      await refreshTagExpiries(entry.tags);
+      if (expireAgainAfterStaleFill(entry.tags, entry.timestamp)) {
+        await value.cancel();
+        return;
+      }
       // Outside development an `expire: 0` entry is dynamic: Next.js
       // regenerates it on every read and never serves the stored copy, so it
       // is not stored, and an entry already there is left as it was. In

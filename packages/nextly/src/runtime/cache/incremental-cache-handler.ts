@@ -125,6 +125,13 @@ function reads(): Map<string, number> {
 function rememberRead(key: string): void {
   const remembered = reads();
   const now = localNow();
+  // A render of this key that a read within the window started is still the
+  // one being filled: a later read of the same key is served that render, so
+  // it does not move when the render began. Moved, a render begun before an
+  // expiry and stored after it would be dated after the expiry, and kept.
+  const earlier = remembered.get(key);
+  const began =
+    earlier !== undefined && now - earlier <= FILL_WINDOW_MS ? earlier : now;
   remembered.delete(key);
   if (remembered.size >= MAX_REMEMBERED_READS) {
     // Reads past the window mark no fill still running, so they go first.
@@ -140,7 +147,7 @@ function rememberRead(key: string): void {
     globalForReads.__nextly_cache_reads_overflowed_at = now;
     return;
   }
-  remembered.set(key, now);
+  remembered.set(key, began);
 }
 
 /**

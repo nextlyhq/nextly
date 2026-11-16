@@ -638,19 +638,50 @@ export function isEntryExpired(
 ): boolean {
   if (Date.now() - storedAt > LEDGER_RETENTION_MS) return true;
   const view = state();
-  const storedOnDatabaseClock = storedAt + offsetOf(view);
   for (const tag of tags) {
-    // Another instance's expiry, on the database's clock, has no order with
-    // this process's events: at or after, since an entry begun in the same
-    // millisecond may hold the old value, and regenerating it costs one read.
-    const recorded = recordedExpiry(view, tag);
-    if (recorded > 0 && recorded >= storedOnDatabaseClock) return true;
-    // This process's own expiry is ordered with its entries by `localNow`, so
-    // strictly after: an entry begun once the expiry was made is fresh.
-    const own = view.own.get(tag);
-    if (own !== undefined && own > storedAt) return true;
+    if (expiredSince(view, tag, storedAt)) return true;
   }
   return false;
+}
+
+/** Whether `tag` expired after something begun at `begunAt` (this process's clock). */
+function expiredSince(view: ViewState, tag: string, begunAt: number): boolean {
+  // Another instance's expiry, on the database's clock, has no order with
+  // this process's events: at or after, since an entry begun in the same
+  // millisecond may hold the old value, and regenerating it costs one read.
+  const recorded = recordedExpiry(view, tag);
+  if (recorded > 0 && recorded >= begunAt + offsetOf(view)) return true;
+  // This process's own expiry is ordered with its entries by `localNow`, so
+  // strictly after: an entry begun once the expiry was made is fresh.
+  const own = view.own.get(tag);
+  return own !== undefined && own > begunAt;
+}
+
+/**
+ * Expires again, in this process and now, the tags of a `use cache` fill that
+ * began before one of them expired: the fill holds the value from before the
+ * write. Answers whether it did.
+ *
+ * The fill itself is refused when stored, but Next.js shares an in-flight
+ * fill between concurrent requests, so a page whose render began after the
+ * write may have joined it and drawn the old value. That page began after the
+ * expiry, so by its own start it would look fresh and be kept old for its
+ * whole lifetime; expired again as the fill finishes, after the page began, it
+ * is refused and rendered again. Local only: a fill is shared only within the
+ * process that runs it. Asks nothing; `refreshTagExpiries` first.
+ */
+export function expireAgainAfterStaleFill(
+  tags: Iterable<string>,
+  begunAt: number
+): boolean {
+  const view = state();
+  const stale = [...new Set(tags)].filter(tag =>
+    expiredSince(view, tag, begunAt)
+  );
+  if (stale.length === 0) return false;
+  const now = localNow();
+  for (const tag of stale) view.own.set(tag, now);
+  return true;
 }
 
 /** The latest expiry among `tags`, on this process's clock; 0 when none expired. */
