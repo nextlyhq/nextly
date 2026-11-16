@@ -56,6 +56,9 @@ import {
   type RegisteredEntity,
   type UniqueColumnRepeats,
 } from "./unique-column-guard";
+// What the refusal tells the reader to do, in a module of its own so the CLI's error table reads it
+// without loading this step.
+import { UNIQUE_INDEX_NAME_HELD_ADVICE } from "./unique-index-name-advice";
 
 /** What the step names itself as, in its refusal and its report. */
 const ONE_TO_ONE_UNIQUES_STEP = "Making one-to-one relationships unique";
@@ -297,10 +300,6 @@ async function refuseNamesHeldElsewhere(
   if (held.length === 0) return;
   throw uniqueIndexNameHeldError(held);
 }
-
-/** What the refusal of a uniqueness whose index name another object holds tells the reader to do. */
-export const UNIQUE_INDEX_NAME_HELD_ADVICE =
-  "Rename or drop what holds the name, then run `nextly migrate` again.";
 
 /**
  * The refusal of uniquenesses whose index names other objects hold.

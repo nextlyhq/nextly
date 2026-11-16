@@ -40,7 +40,7 @@ const FOLD_KEY = "nextly:admin:builder-fold:test:outline-fixture";
 /** The page's side, with the move rule's real answers over the fixture. */
 function callbacks(entityReadOnly = false) {
   const fields = nestedFixtureFields();
-  const ctx: MoveContext = { entityReadOnly, topLevelReservesNames: true };
+  const ctx: MoveContext = { entityReadOnly, surface: "collection" };
   return {
     select: vi.fn(),
     addAt: vi.fn(),

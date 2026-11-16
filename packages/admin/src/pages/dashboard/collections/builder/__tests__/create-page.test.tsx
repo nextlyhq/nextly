@@ -1,28 +1,22 @@
 /**
- * The "How is this edited?" answer must reach both places a new collection is
- * recorded: the create request (so the server makes the field) and
- * ui-schema.json (so the committed schema agrees). The file was written with
- * no fields, so it missed the blocks field the server had just created.
+ * Create on the collection create page makes the collection a pending change:
+ * it waits in this tab's unsaved entities, with the starting field the "What
+ * will editors make?" answer names, and its editor opens. Nothing is created on
+ * the server until the editor's save.
  */
 import { render } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BuilderSettingsValues } from "@admin/components/features/schema-builder/BuilderSettingsModal";
 
 let submit: ((values: BuilderSettingsValues) => void) | undefined;
-/** What the page last told the dialog about a create on its way. */
-let creatingShown: boolean | undefined;
-/** Whether the create mutation is on its way. */
-let createPending = false;
 vi.mock(
   "@admin/components/features/schema-builder/new-entity/NewEntityDialog",
   () => ({
     NewEntityDialog: (props: {
       onCreate: (values: BuilderSettingsValues) => void;
-      creating?: boolean;
     }) => {
       submit = props.onCreate;
-      creatingShown = props.creating;
       return null;
     },
   })
@@ -30,29 +24,29 @@ vi.mock(
 
 const mockCreate = vi.fn();
 vi.mock("@admin/hooks/queries", () => ({
-  useCreateCollection: () => ({ mutate: mockCreate, isPending: createPending }),
+  useCreateCollection: () => ({ mutate: mockCreate, isPending: false }),
 }));
 
-const mockWriteCollection = vi.fn();
-vi.mock("@admin/services/schemaFileApi", () => ({
-  schemaFileApi: {
-    writeCollection: (...args: unknown[]) => mockWriteCollection(...args),
-  },
+const mockNavigate = vi.fn();
+vi.mock("@admin/lib/navigation", () => ({
+  navigateTo: (...args: unknown[]) => mockNavigate(...args),
 }));
-
-vi.mock("@admin/lib/navigation", () => ({ navigateTo: vi.fn() }));
 vi.mock("@admin/components/ui", () => ({
   toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn() },
 }));
 
-import { toast } from "@admin/components/ui";
-import { parseApiError } from "@admin/lib/api/parseApiError";
+import {
+  removeUnsavedEntity,
+  unsavedEntity,
+} from "@admin/lib/builder/unsaved-entities";
 
 import CollectionBuilderPage from "../index";
 
 function values(startingFieldType: string | null): BuilderSettingsValues {
   return {
     singularName: "Post",
+    slug: "post",
+    icon: "FileText",
     startingFieldType,
   } as BuilderSettingsValues;
 }
@@ -60,76 +54,42 @@ function values(startingFieldType: string | null): BuilderSettingsValues {
 beforeEach(() => {
   vi.clearAllMocks();
   submit = undefined;
-  mockWriteCollection.mockResolvedValue(undefined);
 });
 
+afterEach(() => removeUnsavedEntity("collection", "post"));
+
 describe("Collection create page", () => {
-  it("creates the collection with the starting field its answer names", () => {
+  it("keeps the collection unsaved, with the starting field its answer names", () => {
     render(<CollectionBuilderPage />);
     submit?.(values("blocks"));
 
-    expect(mockCreate).toHaveBeenCalledTimes(1);
-    expect(mockCreate.mock.calls[0][0].fields).toEqual([
-      { name: "blocks", type: "blocks" },
-    ]);
+    expect(unsavedEntity("collection", "post")).toEqual({
+      kind: "collection",
+      address: "post",
+      settings: expect.objectContaining({
+        singularName: "Post",
+        pluralName: "Posts",
+        slug: "post",
+        icon: "FileText",
+      }),
+      fields: [{ name: "blocks", type: "blocks" }],
+    });
   });
 
-  it("writes the same starting field to ui-schema.json", async () => {
-    render(<CollectionBuilderPage />);
-    submit?.(values("blocks"));
-    const { onSuccess } = mockCreate.mock.calls[0][1];
-    onSuccess();
-    await vi.waitFor(() =>
-      expect(mockWriteCollection).toHaveBeenCalledTimes(1)
-    );
-
-    const entity = mockWriteCollection.mock.calls[0][0];
-    expect(entity.fields).toEqual([
-      expect.objectContaining({ name: "blocks", type: "blocks" }),
-    ]);
-  });
-
-  it("creates a collection with no starting field for standard fields", () => {
+  it("keeps a collection with no starting field for standard fields", () => {
     render(<CollectionBuilderPage />);
     submit?.(values(null));
 
-    expect(mockCreate.mock.calls[0][0].fields).toEqual([]);
+    expect(unsavedEntity("collection", "post")?.fields).toEqual([]);
   });
 
-  /**
-   * A refused address arrives as a validation envelope whose own message is
-   * only "Validation failed."; the reason is the field's. Toasting the
-   * envelope's message told the person their collection was refused without why.
-   */
-  it("shows the reason a refused address gives, not the envelope's message", () => {
-    const reason =
-      "Collection address 'settings' is reserved: it names a Nextly system resource, whose permissions the collection would share";
+  it("creates nothing on the server, and opens the collection's editor", () => {
     render(<CollectionBuilderPage />);
     submit?.(values(null));
-    const { onError } = mockCreate.mock.calls[0][1];
-    onError(
-      parseApiError(
-        {
-          error: {
-            code: "VALIDATION_ERROR",
-            message: "Validation failed.",
-            data: { errors: [{ path: "slug", message: reason }] },
-          },
-        },
-        400
-      )
+
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockNavigate).toHaveBeenCalledWith(
+      "/admin/builder/collections/post"
     );
-
-    expect(toast.error).toHaveBeenCalledWith(reason);
-  });
-
-  it("tells the dialog while a create is on its way, so Create waits for it", () => {
-    createPending = true;
-    try {
-      render(<CollectionBuilderPage />);
-      expect(creatingShown).toBe(true);
-    } finally {
-      createPending = false;
-    }
   });
 });

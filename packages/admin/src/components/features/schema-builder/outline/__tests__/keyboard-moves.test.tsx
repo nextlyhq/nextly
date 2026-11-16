@@ -22,13 +22,13 @@ import { MoveHarness, newProbe, plain } from "./move-harness";
 /** The rule's whole answer: what the keys do once values are kept across containers. */
 const WHOLE: MoveContext = {
   entityReadOnly: false,
-  topLevelReservesNames: true,
+  surface: "collection",
   containerChanges: true,
 };
 /** What the Builder asks today. */
 const TODAY: MoveContext = {
   entityReadOnly: false,
-  topLevelReservesNames: true,
+  surface: "collection",
 };
 
 const tree = (): BuilderField[] => [

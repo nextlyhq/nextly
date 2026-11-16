@@ -192,6 +192,9 @@ function actorOfValue(value: unknown): RequestActor | undefined {
 const removingValueSchema = z.object({
   files: z.object({
     filename: z.string(),
+    // A removal recorded before resized copies existed names no type, and
+    // its item had no copies, so none are listed for it.
+    mimeType: z.string().default(""),
     url: z.string(),
     thumbnailUrl: z.string().nullable().optional(),
     sizes: z.unknown().optional(),
@@ -524,6 +527,7 @@ export class PendingMediaDeletes {
   ): Promise<void> {
     const files: MediaFilesRecord = {
       filename: row.filename,
+      mimeType: row.mimeType,
       url: row.url,
       thumbnailUrl: row.thumbnailUrl ?? null,
       sizes: row.sizes ?? null,
