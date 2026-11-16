@@ -335,14 +335,23 @@ function boundListCollections(
  * editor's change check, for the sources {@link sourcesCheckAskOf} names.
  */
 function useWatchedSources(
-  request: CanvasBindingsRequest | undefined,
-  drawn: readonly BlockDocument[],
-  identity: DocumentIdentity | null,
-  namedQueries: NamedQueryLookup | undefined,
-  locale: string | undefined,
+  watched: {
+    readonly request: CanvasBindingsRequest | undefined;
+    /** The ask as text, which the answer below was read for. */
+    readonly key: string;
+    readonly drawn: readonly BlockDocument[];
+    readonly identity: DocumentIdentity | null;
+    readonly namedQueries: NamedQueryLookup | undefined;
+    readonly locale: string | undefined;
+  },
   userId: string | null,
-  bound: PageBindings | undefined
+  answer: { readonly key: string; readonly bindings: PageBindings } | null
 ): void {
+  const { request, key, drawn, identity, namedQueries, locale } = watched;
+  // This ask's own answer only: another ask's could fill a bound list with
+  // a collection the page no longer draws.
+  const bound =
+    answer !== null && answer.key === key ? answer.bindings : undefined;
   const asked = useMemo(
     () =>
       sourcesCheckAskOf(request, drawn, identity, namedQueries, locale, bound),
@@ -557,13 +566,9 @@ export function useCanvasBindings(
   // With this ask's answer, so a list whose collection is bound is watched
   // under the collection it draws.
   useWatchedSources(
-    request,
-    drawn,
-    identity,
-    namedQueries,
-    locale,
+    { request, key, drawn, identity, namedQueries, locale },
     userId,
-    answer !== null && answer.key === key ? answer.bindings : undefined
+    answer
   );
   // Bumped when the sources the canvas reads have changed, so the same ask is
   // made again: a source can change while what the page asks stays the same

@@ -357,6 +357,19 @@ export { listCollections } from "./list-collections";
  * check watches the collection a bound list draws, not its stored fallback.
  */
 export { listCollectionsWhere } from "./list-collections";
+/**
+ * @experimental A list's query as the engine reads it, which
+ * {@link listCollectionsWhere} hands to the `wanted` it is given, and the
+ * types it is written in.
+ */
+export type {
+  ListFilter,
+  ListFilterOp,
+  ListFilterScalar,
+  ListQuery,
+  ListRelation,
+  ListSortKey,
+} from "@nextlyhq/blocks-engine";
 export type { PrepareDocumentArgs, PreparedDocument } from "./prepare-document";
 export { preparePageForRead } from "./read-page";
 export type { PreparedPage, ReadPageArgs } from "./read-page";
