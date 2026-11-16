@@ -74,9 +74,9 @@ test.describe("admin screens nest their placeholders validly", () => {
   test("the dashboard while its setup steps load", async ({ page }) => {
     const errors = nestingErrors(page);
     await gotoAdmin(page, "");
-    await expect(
-      page.getByRole("heading", { level: 1 }).first()
-    ).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible({
+      timeout: 30_000,
+    });
     // Settled: every card has drawn its placeholder and its answer.
     await page.waitForLoadState("networkidle");
     expect(errors).toEqual([]);

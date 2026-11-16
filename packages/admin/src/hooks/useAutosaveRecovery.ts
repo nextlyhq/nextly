@@ -15,7 +15,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
 import { useCurrentUserId } from "@admin/hooks/useCurrentUserId";
+import { documentRecordingKey } from "@admin/hooks/useDocumentAutosave";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import {
+  recordingsSent,
+  recordingsSettled,
+} from "@admin/hooks/useSnapshotAutosave";
 import { canonicalJson } from "@admin/lib/canonical-json";
 import {
   forgetTabPreference,
@@ -27,11 +32,6 @@ import {
   versionOf,
   type StaleVersion,
 } from "@admin/lib/document-version";
-import { documentRecordingKey } from "@admin/hooks/useDocumentAutosave";
-import {
-  recordingsSent,
-  recordingsSettled,
-} from "@admin/hooks/useSnapshotAutosave";
 import {
   versionApi,
   type AutosaveDetail,
