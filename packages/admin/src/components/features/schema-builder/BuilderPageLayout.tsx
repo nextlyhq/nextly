@@ -48,6 +48,7 @@ import { BuilderOverlays, type ActiveOverlay } from "./BuilderOverlays";
 import { BuilderReadOnlyNotice } from "./BuilderReadOnlyNotice";
 import type { BuilderSettingsValues } from "./BuilderSettingsModal";
 import { BuilderToolbar } from "./BuilderToolbar";
+import { crumbsByPointer } from "./outline/FocusCrumbs";
 import { LazyFormPreview } from "./outline/LazyFormPreview";
 import { Outline, type OutlineCallbacks } from "./outline/Outline";
 import { useBuilderOutline } from "./outline/useBuilderOutline";
@@ -397,6 +398,7 @@ function FieldListRegion({
       {beforeFieldList}
       <DndContext
         sensors={builder.sensors}
+        collisionDetection={crumbsByPointer}
         onDragStart={builder.handleDragStart}
         accessibility={{
           announcements: builderAnnouncements(builder.fields),
