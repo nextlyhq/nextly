@@ -111,6 +111,15 @@ const SHAPES: Record<
     field: { type: "relationship", relationTo: "users" },
     expected: everywhere([IDX]),
   },
+  // A field group's column is unique only by its own Unique mark: a one-to-one stored by its
+  // cardinality, its target on `options`, gets no `uq_`, and the creator writes no index for it.
+  "a one-to-one stored by its cardinality": {
+    field: {
+      type: "relationship",
+      options: { relationType: "oneToOne", target: "users" },
+    },
+    expected: everywhere([]),
+  },
   "an upload of one file": {
     field: { type: "upload", relationTo: "media" },
     expected: everywhere([IDX]),
