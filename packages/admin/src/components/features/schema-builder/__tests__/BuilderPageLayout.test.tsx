@@ -570,5 +570,23 @@ describe("BuilderPageLayout", () => {
         within(dialog).getByRole("button", { name: /keep editing/i })
       ).toBeEnabled();
     });
+
+    // An unsaved entity's new address being checked: discarding then would let
+    // the entity go before the move renames it, and the move would report its
+    // address as taken.
+    it("offers no Discard Changes while a new address is checked", async () => {
+      renderLayout({
+        unsavedCount: 2,
+        saveHeld: "Save waits while the new address is checked.",
+      });
+      leave();
+      const dialog = await screen.findByRole("alertdialog");
+      expect(
+        within(dialog).getByRole("button", { name: /discard/i })
+      ).toBeDisabled();
+      expect(
+        within(dialog).getByRole("button", { name: /keep editing/i })
+      ).toBeEnabled();
+    });
   });
 });
