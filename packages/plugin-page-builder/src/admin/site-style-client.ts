@@ -223,6 +223,12 @@ export interface SiteStyleSaveResult {
    * every try was made from a version another save had already replaced.
    */
   readonly keptChanging?: true;
+  /**
+   * Set when the server refused the values themselves, naming what is wrong
+   * with them: it answered, and stored nothing. Not set for a failure that
+   * left the answer unknown, such as the network's.
+   */
+  readonly invalid?: true;
 }
 
 /**
@@ -715,7 +721,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
               : "This could not be saved.";
           return { result: { saved: false, issues: { [section]: message } } };
         }
-        return { result: { saved: false, issues } };
+        return { result: { saved: false, issues, invalid: true } };
       }
     },
     [mutation, refetch, readFresh, newest]
@@ -802,7 +808,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
               replaced: merged.replaced,
             };
       });
-      chain.attempt = attemptOf(chain.attempt, turn, done);
+      chain.attempt = attemptOf(chain.attempt, turn, done, section);
       track(SECTION_LABELS[section], chain.attempt.settled);
       chain.tail = done.then(({ holds }) => {
         chain.pending -= 1;
@@ -1231,6 +1237,13 @@ function replayedValue(replayed: SiteStyleReplayed): unknown {
  * answered, rejected with the reasons when it was refused, and, for a write
  * skipped without being sent, settled as the section's attempt before it
  * was, so that it says nothing new about the section.
+ *
+ * One refusal settles rather than rejects: the variables' values refused as
+ * invalid. The variables studio takes the refused variables back at once, so
+ * nothing the page could point at is left unsaved, and the reason is said
+ * beside them; holding the page's save as well would refuse every save until
+ * a reload. A write whose answer is unknown, as on a network failure, and a
+ * refusal of any other section still hold it.
  */
 function attemptOf(
   prior: SectionChain["attempt"],
@@ -1238,12 +1251,14 @@ function attemptOf(
   done: Promise<{
     result: SiteStyleSaveResult;
     skipped?: boolean;
-  }>
+  }>,
+  section: SiteStyleSection
 ): NonNullable<SectionChain["attempt"]> {
   const settled = done.then(({ result, skipped }) => {
     if (skipped === true) return prior?.settled;
     const reasons = Object.values(result.issues);
-    if (!result.saved && reasons.length > 0) {
+    const takenBack = section === "tokens" && result.invalid === true;
+    if (!result.saved && reasons.length > 0 && !takenBack) {
       throw new Error(reasons.join(" "));
     }
     return undefined;

@@ -36,6 +36,8 @@ import {
   namedClassesRead,
   newStyleIssueBudget,
   resolveSiteTokens,
+  sameSiteToken,
+  tokenIdentity,
   tokenLabelIssue,
   usableNamedClasses,
   validateFontFace,
@@ -252,6 +254,57 @@ export function checkStoredTokens(
   };
   issues.push(...tokenEmissionIssues(set, policy));
   return { value: set, issues };
+}
+
+/**
+ * A refused token set with only the refused changes taken back: each
+ * variable whose change {@link checkStoredTokens} refuses on its own returns
+ * to what was stored (or goes, when it was new), and every other change in
+ * the same save stays, to be saved again.
+ *
+ * Each change is judged by itself on top of what was stored, by the save's
+ * own check, so a refusal is pinned on the change that causes it. When no one
+ * change is refused alone, as with a removal refused for a use the save
+ * counted, nothing here can say which it was, and the set stored before
+ * stands, as for any refusal. Nor is anything pinned when what is stored is
+ * not known: every variable would read as just added, and a stored one
+ * refused alone would be dropped and its removal saved.
+ */
+export function tokensKeptAfterRefusal(
+  refused: SiteTokenSet,
+  persisted: SiteTokenSet | null
+): SiteTokenSet | null {
+  if (persisted === null) return null;
+  const before = persisted;
+  const stored = new Map(
+    before.tokens.map(token => [tokenIdentity(token), token])
+  );
+  const known = new Set(checkStoredTokens(before).issues);
+  const refusedIds = new Set<string>();
+  for (const token of refused.tokens) {
+    const id = tokenIdentity(token);
+    const was = stored.get(id);
+    if (was !== undefined && sameSiteToken(was, token)) continue;
+    const alone: SiteTokenSet = {
+      ...before,
+      tokens:
+        was === undefined
+          ? [...before.tokens, token]
+          : before.tokens.map(other => (other === was ? token : other)),
+    };
+    const issues = checkStoredTokens(alone).issues;
+    if (issues.some(issue => !known.has(issue))) refusedIds.add(id);
+  }
+  if (refusedIds.size === 0) return persisted;
+  return {
+    ...refused,
+    tokens: refused.tokens.flatMap(token => {
+      const id = tokenIdentity(token);
+      if (!refusedIds.has(id)) return [token];
+      const was = stored.get(id);
+      return was === undefined ? [] : [was];
+    }),
+  };
 }
 
 /**
