@@ -184,6 +184,7 @@ import {
   detachedCopy,
   judgeEachLanguage,
   keyedByLanguageReach,
+  languagesNotPublishedIn,
   narrowToRowFields,
   publishedInLanguageCondition,
   valuesBesideRow,
@@ -1239,6 +1240,34 @@ export class CollectionQueryService extends BaseService {
       scopeKind: "collection",
       scopeSlug: collectionName,
       now,
+    });
+  }
+
+  /**
+   * On a public read, the languages each of `ids` is not published in, by id: what the field
+   * groups it holds read their translations past (`skipLanguages`), as its own translated fields
+   * do. `undefined` where nothing is skipped; see `languagesNotPublishedIn`.
+   */
+  private async componentSkipLanguages(
+    companion: CompanionSchema | null | undefined,
+    statusFilter: StatusFilter | null,
+    ids: readonly (string | number)[],
+    revealed: Iterable<unknown>
+  ): Promise<Map<string, ReadonlySet<string>> | undefined> {
+    // Asked before the readiness probe, so a trusted or draft read pays nothing for it.
+    if (statusFilter?.isPublicRead !== true || companion?.hasStatus !== true) {
+      return undefined;
+    }
+    return languagesNotPublishedIn({
+      db: this.adapter.getDrizzle<
+        Parameters<typeof languagesNotPublishedIn>[0]["db"]
+      >(),
+      companion,
+      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
+      statusFilter,
+      locales: (this.localization?.locales ?? []).map(l => l.code),
+      ids,
+      revealed,
     });
   }
 
@@ -4339,9 +4368,37 @@ export class CollectionQueryService extends BaseService {
       // Pass depth for relationship expansion within component data
       // Pass select to skip component fields excluded from selection (performance optimization)
       if (this.fieldGroupDataService) {
-        expandedEntries =
-          await this.fieldGroupDataService.populateComponentDataMany({
-            entries: expandedEntries,
+        const fieldGroupData = this.fieldGroupDataService;
+        // On a public read, the languages each entry is not published in, which its field groups'
+        // translations fall back past as its own translated fields do.
+        const skipByEntry = await this.componentSkipLanguages(
+          companion,
+          statusFilter,
+          expandedEntries
+            .map(entry => entry.id)
+            .filter(
+              (id): id is string | number =>
+                typeof id === "string" || typeof id === "number"
+            ),
+          revealed
+        );
+        // The entries that pass over the same languages are read together, one batch each, and
+        // put back in the order the page holds them.
+        const batches = new Map<
+          string,
+          { skipLanguages?: ReadonlySet<string>; indexes: number[] }
+        >();
+        expandedEntries.forEach((entry, index) => {
+          const skipLanguages = skipByEntry?.get(String(entry.id));
+          const key = skipLanguages ? [...skipLanguages].sort().join(",") : "";
+          const batch = batches.get(key) ?? { skipLanguages, indexes: [] };
+          batch.indexes.push(index);
+          batches.set(key, batch);
+        });
+        const populated = [...expandedEntries];
+        for (const { skipLanguages, indexes } of batches.values()) {
+          const filled = await fieldGroupData.populateComponentDataMany({
+            entries: indexes.map(index => expandedEntries[index]),
             // The physical table, as the write recorded it in `_parent_table`.
             parentTable: collectionTableName(collection, params.collectionName),
             fields: fields as FieldConfig[],
@@ -4353,8 +4410,14 @@ export class CollectionQueryService extends BaseService {
             // untranslated embedded field blank instead of showing default text.
             locale: params.locale,
             fallbackLocale: params.fallbackLocale,
+            skipLanguages,
             access: this.buildComponentReadAccess(params, localeChain, caches),
           });
+          filled.forEach((entry, position) => {
+            populated[indexes[position]] = entry;
+          });
+        }
+        expandedEntries = populated;
       }
 
       // ============================================================
@@ -5792,6 +5855,16 @@ export class CollectionQueryService extends BaseService {
           // fields blank rather than showing default-language text.
           locale: params.locale,
           fallbackLocale: params.fallbackLocale,
+          // On a public read, the languages the entry is not published in, which its field
+          // groups' translations fall back past as its own translated fields do.
+          skipLanguages: (
+            await this.componentSkipLanguages(
+              companion,
+              statusFilter,
+              [entryId],
+              decisions.reveal
+            )
+          )?.get(String(entryId)),
           // As on the list path: a related row reached through a component
           // is judged by its own collection's field rules.
           access: this.buildComponentReadAccess(params, localeChain, caches),

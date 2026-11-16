@@ -157,6 +157,7 @@ import {
   detachedCopy,
   judgeEachLanguage,
   keyedByLanguageReach,
+  languagesNotPublishedIn,
   narrowToRowFields,
   publishedInLanguageCondition,
   valuesBesideRow,
@@ -1048,6 +1049,11 @@ export class SingleQueryService extends BaseService {
     translations?: JoinedTranslations;
     /** The documents a due release reveals (`PopulateCompanionArgs.revealed`). */
     revealed?: ReadonlySet<unknown>;
+    /**
+     * On a public read, the languages the Single is not published in, which its field groups'
+     * translations fall back past as its own translated fields do. Absent where nothing is skipped.
+     */
+    componentSkipLanguages?: ReadonlySet<string>;
   }): Promise<SingleDocument> {
     const {
       slug,
@@ -1126,6 +1132,7 @@ export class SingleQueryService extends BaseService {
           // fields blank instead of showing default-language text.
           locale: options.locale,
           fallbackLocale: options.fallbackLocale,
+          skipLanguages: params.componentSkipLanguages,
           // A component's relationship fields copy whole rows out of the target
           // collection, which a Single's field list never describes — so the
           // caller travels down to reach the related row's own rules.
@@ -1580,6 +1587,8 @@ export class SingleQueryService extends BaseService {
         ? undefined
         : await this.languageCountersFirst(singleMeta, doc);
 
+      // Read once for both uses below.
+      const revealed = await this.revealedBy(slug, statusFilter, readNow);
       doc = await this.assembleStoredDocument({
         slug,
         singleMeta: readMeta,
@@ -1589,8 +1598,14 @@ export class SingleQueryService extends BaseService {
         enforceRelatedFieldAccess: true,
         translations,
         // Read as a due release will publish them, as the read admitted it.
-        revealed: new Set<unknown>(
-          await this.revealedBy(slug, statusFilter, readNow)
+        revealed: new Set<unknown>(revealed),
+        // The languages a public reader's field groups fall back past.
+        componentSkipLanguages: await this.componentSkipLanguages(
+          slug,
+          singleMeta,
+          doc,
+          statusFilter,
+          revealed
         ),
       });
 
@@ -1822,6 +1837,42 @@ export class SingleQueryService extends BaseService {
       dialect: this.adapter.dialect,
       status: publishesPerLanguage(singleMeta),
     });
+  }
+
+  /**
+   * On a public read, the languages the Single is not published in: what the field groups it
+   * holds read their translations past, as its own translated fields do. `undefined` where nothing
+   * is skipped; see `languagesNotPublishedIn`.
+   */
+  private async componentSkipLanguages(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    doc: SingleDocument,
+    statusFilter: StatusFilter | null,
+    revealed: readonly string[]
+  ): Promise<ReadonlySet<string> | undefined> {
+    const id = (doc as { id?: unknown }).id;
+    const companion = this.companionOf(slug, singleMeta);
+    // Asked before the readiness probe, so a trusted or draft read pays nothing for it.
+    if (
+      statusFilter?.isPublicRead !== true ||
+      companion?.hasStatus !== true ||
+      (typeof id !== "string" && typeof id !== "number")
+    ) {
+      return undefined;
+    }
+    const skipped = await languagesNotPublishedIn({
+      db: this.adapter.getDrizzle<
+        Parameters<typeof languagesNotPublishedIn>[0]["db"]
+      >(),
+      companion,
+      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
+      statusFilter,
+      locales: (this.localization?.locales ?? []).map(l => l.code),
+      ids: [id],
+      revealed,
+    });
+    return skipped?.get(String(id));
   }
 
   /**

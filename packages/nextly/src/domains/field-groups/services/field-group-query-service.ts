@@ -120,6 +120,14 @@ interface JoinedTranslations {
 export interface ComponentReadLanguage {
   locale?: string;
   fallbackLocale?: ComponentFallbackLocale;
+  /**
+   * The languages the document the component belongs to is not published in,
+   * on a public read of a document that publishes each language on its own.
+   * The component's translations fall back past them, as the document's own
+   * translated fields do, so a language held only as a draft lends a public
+   * reader none of its values. Absent on a trusted read, which skips nothing.
+   */
+  skipLanguages?: ReadonlySet<string>;
 }
 
 /**
@@ -134,8 +142,7 @@ export interface ComponentReadLanguage {
  */
 function componentLocaleChain(
   localization: SanitizedLocalizationConfig,
-  locale: string | undefined,
-  fallbackLocale: ComponentFallbackLocale | undefined
+  { locale, fallbackLocale, skipLanguages }: ComponentReadLanguage
 ): string[] {
   const exact = fallbackLocale === EXACT_STORED_LANGUAGE;
   const requested =
@@ -143,9 +150,15 @@ function componentLocaleChain(
       ? locale
       : resolveRequestedLocale(localization, locale);
   if (exact) return [requested];
-  return (
-    resolveLocaleChain(localization, requested, fallbackLocale) ?? [requested]
-  );
+  const chain = resolveLocaleChain(localization, requested, fallbackLocale) ?? [
+    requested,
+  ];
+  // The fallbacks the document is not published in are passed over. The language asked is kept:
+  // the document's read already refuses a language it is not published in, so one that reaches
+  // here is one it answers in.
+  return skipLanguages
+    ? chain.filter((code, index) => index === 0 || !skipLanguages.has(code))
+    : chain;
 }
 
 export interface PopulateComponentDataParams {
@@ -189,6 +202,8 @@ export interface PopulateComponentDataParams {
    * blank (the admin's no-fallback edit mode); a named locale overrides the configured chain.
    */
   fallbackLocale?: ComponentFallbackLocale;
+  /** i18n: the languages the entry is not published in (see ComponentReadLanguage.skipLanguages). */
+  skipLanguages?: ReadonlySet<string>;
   /**
    * Optional transaction-bound executor. When supplied, component-table reads
    * run on the transaction's connection (read-your-writes, #226) so a version
@@ -235,6 +250,12 @@ export interface PopulateComponentDataManyParams {
   locale?: string;
   /** i18n: per-request fallback control (see PopulateComponentDataParams.fallbackLocale). */
   fallbackLocale?: ComponentFallbackLocale;
+  /**
+   * i18n: the languages every entry of this batch is not published in (see
+   * ComponentReadLanguage.skipLanguages). One set for the batch: a caller whose entries differ
+   * reads each group of entries sharing a set in its own call.
+   */
+  skipLanguages?: ReadonlySet<string>;
   /** See PopulateComponentDataParams.access. */
   access?: ComponentReadAccess;
   /**
@@ -265,11 +286,9 @@ interface ZoneInstance {
  * arguments, so the three per-kind readers cannot take them in a different
  * order.
  */
-interface BatchPopulateRead {
+interface BatchPopulateRead extends ComponentReadLanguage {
   depth: number;
   currentDepth: number;
-  locale?: string;
-  fallbackLocale?: ComponentFallbackLocale;
   access: ComponentReadAccess;
   strict: boolean;
   executor?: unknown;
@@ -441,15 +460,16 @@ export class FieldGroupQueryService extends BaseService {
   private overlayLocalizedComponent(
     meta: DynamicFieldGroupRecord,
     dataArray: Record<string, unknown>[],
-    locale: string | undefined,
-    fallbackLocale?: ComponentFallbackLocale,
+    // The language read, its fallback and the languages it passes over, taken as one so a caller
+    // cannot forward two of them and drop the third.
+    { locale, fallbackLocale, skipLanguages }: ComponentReadLanguage,
     executor?: unknown,
     /** A failed translation read propagates rather than returning shared values. */
     strict = false
   ): Promise<void> {
     return this.overlayLocalizedComponentByLanguage(
       meta,
-      [{ dataArray, locale, fallbackLocale }],
+      [{ dataArray, locale, fallbackLocale, skipLanguages }],
       executor,
       strict
     );
@@ -511,7 +531,8 @@ export class FieldGroupQueryService extends BaseService {
       dataArray: Record<string, unknown>[];
       localeChain: string[];
     }[] = [];
-    for (const { dataArray, locale, fallbackLocale } of languages) {
+    for (const language of languages) {
+      const { dataArray, locale } = language;
       // `?locale=all` (admin/export): the parent read projects its own localized fields as
       // language-keyed maps, so mirror that for the embedded component's translatable fields —
       // otherwise they would be missing entirely (the main comp_* table omits those columns).
@@ -528,7 +549,7 @@ export class FieldGroupQueryService extends BaseService {
       }
       named.push({
         dataArray,
-        localeChain: componentLocaleChain(localization, locale, fallbackLocale),
+        localeChain: componentLocaleChain(localization, language),
       });
     }
     if (named.length === 0) return;
@@ -650,25 +671,21 @@ export class FieldGroupQueryService extends BaseService {
    */
   private async translationPlan(
     meta: DynamicFieldGroupRecord,
-    locale: string | undefined,
-    fallbackLocale: ComponentFallbackLocale | undefined,
+    // The language read, with its fallback and the languages that fallback passes over.
+    language: ComponentReadLanguage,
     executor: unknown
   ): Promise<TranslationPlan | null> {
     const localization = this.localization;
     if (
       !localization ||
       !storesPerLanguage(meta) ||
-      locale === EVERY_TRANSLATION
+      language.locale === EVERY_TRANSLATION
     ) {
       return null;
     }
     const companion = this.companionOf(meta);
     if (!companion) return null;
-    const localeChain = componentLocaleChain(
-      localization,
-      locale,
-      fallbackLocale
-    );
+    const localeChain = componentLocaleChain(localization, language);
     // Resolved before anything reads the companion, because inside a transaction it can only be
     // read and the read itself must not be what fails.
     const readiness = await this.companionReadiness(companion, executor);
@@ -686,8 +703,7 @@ export class FieldGroupQueryService extends BaseService {
     executor: unknown
   ): Promise<TranslationPlan | null> {
     if (languages.length !== 1) return Promise.resolve(null);
-    const [{ locale, fallbackLocale }] = languages;
-    return this.translationPlan(meta, locale, fallbackLocale, executor);
+    return this.translationPlan(meta, languages[0], executor);
   }
 
   /**
@@ -820,7 +836,12 @@ export class FieldGroupQueryService extends BaseService {
     params: PopulateComponentDataParams
   ): Promise<Record<string, unknown>> {
     const [populated] = await this.populateComponentDataInEach(params, [
-      { locale: params.locale, fallbackLocale: params.fallbackLocale },
+      {
+        locale: params.locale,
+        fallbackLocale: params.fallbackLocale,
+        // The languages the entry is not published in travel with the language read.
+        skipLanguages: params.skipLanguages,
+      },
     ]);
     return populated;
   }
@@ -833,7 +854,10 @@ export class FieldGroupQueryService extends BaseService {
    * resolves it. In the order the languages were asked.
    */
   async populateComponentDataByLanguage(
-    params: Omit<PopulateComponentDataParams, "locale" | "fallbackLocale"> & {
+    params: Omit<
+      PopulateComponentDataParams,
+      "locale" | "fallbackLocale" | "skipLanguages"
+    > & {
       languages: readonly ComponentReadLanguage[];
     }
   ): Promise<Record<string, unknown>[]> {
@@ -841,7 +865,10 @@ export class FieldGroupQueryService extends BaseService {
   }
 
   private async populateComponentDataInEach(
-    params: Omit<PopulateComponentDataParams, "locale" | "fallbackLocale">,
+    params: Omit<
+      PopulateComponentDataParams,
+      "locale" | "fallbackLocale" | "skipLanguages"
+    >,
     languages: readonly ComponentReadLanguage[]
   ): Promise<Record<string, unknown>[]> {
     const {
@@ -971,6 +998,8 @@ export class FieldGroupQueryService extends BaseService {
         currentDepth: read.currentDepth,
         locale: read.locale,
         fallbackLocale: read.fallbackLocale,
+        // A nested field group belongs to the same document, so it passes over the same languages.
+        skipLanguages: read.skipLanguages,
         access: read.access,
         strict: read.strict,
         executor: read.executor,
@@ -987,14 +1016,17 @@ export class FieldGroupQueryService extends BaseService {
     values: readonly unknown[] | undefined,
     field: FieldGroupFieldConfig,
     languages: readonly ComponentReadLanguage[],
-    read: Omit<BatchPopulateRead, "locale" | "fallbackLocale">
+    read: Omit<BatchPopulateRead, keyof ComponentReadLanguage>
   ): Promise<void> {
     if (values === undefined) return;
     for (const [index, language] of languages.entries()) {
+      // Each language's own fallback and skipped languages, so a nested read falls back as its
+      // parent's did.
       await this.populateNestedInstances(instancesIn([values[index]]), field, {
         ...read,
         locale: language.locale,
         fallbackLocale: language.fallbackLocale,
+        skipLanguages: language.skipLanguages,
       });
     }
   }
@@ -1014,6 +1046,7 @@ export class FieldGroupQueryService extends BaseService {
       select,
       locale,
       fallbackLocale,
+      skipLanguages,
       access = { trusted: TRUSTS_EVERY_COLLECTION },
       strict = false,
       executor,
@@ -1044,6 +1077,8 @@ export class FieldGroupQueryService extends BaseService {
       currentDepth,
       locale,
       fallbackLocale,
+      // Read by every overlay of the batch and inherited by the field groups nested in it.
+      skipLanguages,
       access,
       strict,
       executor,
@@ -1430,8 +1465,8 @@ export class FieldGroupQueryService extends BaseService {
     await this.overlayLocalizedComponent(
       meta,
       collected.map(c => c.data),
-      read.locale,
-      read.fallbackLocale,
+      // The language, its fallback and the languages it passes over, as the batch reads them.
+      read,
       read.executor,
       read.strict
     );
@@ -1478,8 +1513,8 @@ export class FieldGroupQueryService extends BaseService {
     await this.overlayLocalizedComponent(
       meta,
       entries.map(e => e.data),
-      read.locale,
-      read.fallbackLocale,
+      // The language, its fallback and the languages it passes over, as the batch reads them.
+      read,
       read.executor,
       read.strict
     );
@@ -1638,8 +1673,8 @@ export class FieldGroupQueryService extends BaseService {
       await this.overlayLocalizedComponent(
         await this.registryService.getComponent(slug, read.executor),
         dataArray,
-        read.locale,
-        read.fallbackLocale,
+        // The language, its fallback and the languages it passes over, as the batch reads them.
+        read,
         read.executor,
         read.strict
       );
