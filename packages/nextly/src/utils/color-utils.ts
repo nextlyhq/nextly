@@ -1,4 +1,7 @@
-import { checkContrast } from "@nextlyhq/blocks-engine";
+// The narrow entry, not the package root: this module reaches the admin's
+// every screen through `nextly/config`, and the root would bring the whole
+// engine and its CSS parser there for this one function.
+import { checkContrast } from "@nextlyhq/blocks-engine/contrast";
 
 /**
  * Color utility functions for admin branding.

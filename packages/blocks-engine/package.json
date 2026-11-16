@@ -26,6 +26,11 @@
       "types": "./dist/format.d.ts",
       "import": "./dist/format.mjs",
       "default": "./dist/format.mjs"
+    },
+    "./contrast": {
+      "types": "./dist/contrast.d.ts",
+      "import": "./dist/contrast.mjs",
+      "default": "./dist/contrast.mjs"
     }
   },
   "files": [

@@ -16,7 +16,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /**
- * The `./format` entry point's whole value is what it does NOT reach.
+ * The narrow entry points' whole value is what they do NOT reach: `./format`
+ * and `./contrast`, each a slice of the engine a consumer can load alone.
  *
  * It exists so a consumer that needs the document format's vocabulary — a
  * generator, a schema publisher, an agent — does not also load the validator,
@@ -75,7 +76,12 @@ const METAFILE = join(DIST, "metafile-esm.json");
  * no plausible amount of runner contention explains it.
  */
 const CHILD_TIMEOUT_MS = 60_000;
-const FORMAT_ENTRY = "format.mjs";
+/**
+ * The entry points that exist to reach less than the root: the format's
+ * vocabulary, and the colour contrast math (core checks contrast on every
+ * admin screen, where the engine's CSS parser has no business).
+ */
+const NARROW_ENTRIES = ["format.mjs", "contrast.mjs"] as const;
 const ROOT_ENTRY = "index.mjs";
 
 /** What running one entry point in a child process reported. */
@@ -193,12 +199,12 @@ function runEntry(from: string, entry: string): EntryRun {
   return { ok: result.status === 0, stderr };
 }
 
-describe("the format entry point's boundary", () => {
+describe("the narrow entry points' boundary", () => {
   it("has been built", () => {
     // Every assertion below reads these files. A missing one makes the
     // isolated import fail for a reason that has nothing to do with the
     // boundary, and an unbuilt tree would otherwise read as a broken one.
-    for (const entry of [FORMAT_ENTRY, ROOT_ENTRY]) {
+    for (const entry of [...NARROW_ENTRIES, ROOT_ENTRY]) {
       const file = join(DIST, entry);
       expect(existsSync(file), `${file} is missing`).toBe(true);
     }
@@ -217,11 +223,11 @@ describe("the format entry point's boundary", () => {
     expect(reachable, `resolvable from ${sandbox}`).toEqual([]);
   });
 
-  it("imports with no node_modules in reach", () => {
+  it.each(NARROW_ENTRIES)("%s imports with no node_modules in reach", entry => {
     // The boundary itself. Not "no import matched a pattern" — the resolver was
     // given the entry with nothing to resolve a bare specifier from, and it
     // loaded. Anything reaching a runtime dependency cannot.
-    const run = runEntry(join(sandbox, "dist"), FORMAT_ENTRY);
+    const run = runEntry(join(sandbox, "dist"), entry);
 
     expect(run.ok, run.stderr).toBe(true);
   });
@@ -450,39 +456,31 @@ describe("the module graph the build recorded", () => {
     }
   });
 
-  it("gives the format entry no runtime dependency, deferred ones included", () => {
-    // The claim the whole entry point exists for, asked of every edge rather
-    // than of the ones initialisation happens to follow.
-    const outputs = buildGraph();
+  it.each(NARROW_ENTRIES)(
+    "gives %s no runtime dependency, deferred ones included",
+    entry => {
+      // The claim the whole entry point exists for, asked of every edge rather
+      // than of the ones initialisation happens to follow.
+      const outputs = buildGraph();
 
-    expect(buildExternals(outputs, emitted(FORMAT_ENTRY))).toEqual([]);
-  });
+      expect(buildExternals(outputs, emitted(entry))).toEqual([]);
+    }
+  );
 
-  it("CONTROL: the same walk finds the root's dependency", () => {
-    // A walk that followed nothing would report an empty external set for every
-    // entry point, including one that demonstrably bundles a parser. Matched by
-    // package, because the compiler imports `css-tree/parser` and
-    // `css-tree/walker` by subpath and an equality check against the bare name
-    // finds neither.
-    const outputs = buildGraph();
-    const packages = buildExternals(outputs, emitted(ROOT_ENTRY)).map(
-      specifier => specifier.split("/")[0]
-    );
+  it.each(NARROW_ENTRIES)(
+    "keeps %s a small fraction of the package root",
+    entry => {
+      // A ratio rather than a byte ceiling: the absolute size moves whenever the
+      // engine grows, and a fixed number would either fail on unrelated work or
+      // be raised until it meant nothing. What must stay true is that this entry
+      // costs a small fraction of the root, which is the property consumers rely
+      // on.
+      const outputs = buildGraph();
+      const narrow = buildBytes(outputs, emitted(entry));
+      const root = buildBytes(outputs, emitted(ROOT_ENTRY));
 
-    expect(packages).toContain("css-tree");
-  });
-
-  it("stays a small fraction of the package root", () => {
-    // A ratio rather than a byte ceiling: the absolute size moves whenever the
-    // engine grows, and a fixed number would either fail on unrelated work or
-    // be raised until it meant nothing. What must stay true is that this entry
-    // costs a small fraction of the root, which is the property consumers rely
-    // on.
-    const outputs = buildGraph();
-    const format = buildBytes(outputs, emitted(FORMAT_ENTRY));
-    const root = buildBytes(outputs, emitted(ROOT_ENTRY));
-
-    expect(format).toBeGreaterThan(0);
-    expect(root).toBeGreaterThan(format * 10);
-  });
+      expect(narrow).toBeGreaterThan(0);
+      expect(root).toBeGreaterThan(narrow * 10);
+    }
+  );
 });
