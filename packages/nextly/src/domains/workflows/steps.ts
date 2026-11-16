@@ -399,8 +399,15 @@ export function stepNeedsPerson(step: ResolvedWorkflowStep): boolean {
   return step.kind === "approve" || step.kind === "request-changes";
 }
 
-/** The action of `stage`'s primary step, or null for a stage with no step out of it. */
-function primaryAction(workflow: Workflow, stage: string): string | null {
+/**
+ * The action of `stage`'s primary step, or null for a stage with no step out of it.
+ *
+ * @experimental
+ */
+export function primaryAction(
+  workflow: Workflow,
+  stage: string
+): string | null {
   const primary = primaryStep(workflow, stage);
   return primary ? stepAction(workflow, primary) : null;
 }
@@ -450,6 +457,19 @@ interface ResolvedCaller {
   event: ContentEventActor;
   /** A key's owner, named in the event's payload. */
   ownerId: string | null;
+}
+
+/**
+ * The actor a workflow caller is decided as: a person's own grants, a key's own scope, or trusted
+ * code's. The one resolution steps and reads of review state share.
+ *
+ * @experimental
+ */
+export async function workflowCallerActor(
+  adapter: DrizzleAdapter,
+  caller: WorkflowCaller
+): Promise<Actor> {
+  return (await resolveCaller(adapter, caller)).actor;
 }
 
 async function resolveCaller(

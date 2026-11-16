@@ -2535,6 +2535,76 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
 ];
 
 /**
+ * The workflow routes, by path and verb (@experimental). Documents are named in the query or the
+ * body, as an entry of a collection or a Single, so one route serves both.
+ */
+const WORKFLOW_ROUTES: readonly {
+  path: readonly [string, string | null];
+  verb: string;
+  operation: OperationType;
+  method: string;
+}[] = [
+  {
+    path: ["review-state", null],
+    verb: "GET",
+    operation: "single",
+    method: "getReviewState",
+  },
+  {
+    path: ["waiting", null],
+    verb: "GET",
+    operation: "list",
+    method: "listWaiting",
+  },
+  {
+    path: ["steps", null],
+    verb: "POST",
+    operation: "update",
+    method: "takeStep",
+  },
+  {
+    path: ["steps", "bulk"],
+    verb: "POST",
+    operation: "update",
+    method: "stepMany",
+  },
+  {
+    path: ["assignments", null],
+    verb: "POST",
+    operation: "update",
+    method: "assign",
+  },
+  {
+    path: ["assignments", "bulk"],
+    verb: "POST",
+    operation: "update",
+    method: "assignMany",
+  },
+];
+
+/** A workflow route, or null; a longer path than the table's names none. */
+function parseWorkflowRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined,
+  httpMethod: string
+): Omit<ParsedRoute, "routeParams"> | null {
+  if (subId !== undefined) return null;
+  const route = WORKFLOW_ROUTES.find(
+    candidate =>
+      candidate.path[0] === id &&
+      candidate.path[1] === (subresource ?? null) &&
+      candidate.verb === httpMethod
+  );
+  if (!route) return null;
+  return {
+    service: "workflows",
+    operation: route.operation,
+    method: route.method,
+  };
+}
+
+/**
  * `/api/releases` — the content-release surface.
  *
  * A release is a first-class object with its own lifecycle rather than a
@@ -3378,6 +3448,12 @@ export function parseRestRoute(
   if (resource === "api-keys") {
     const result = parseApiKeyRoutes(id, subresource, httpMethod, routeParams);
     if (result) return result;
+  }
+
+  // Review state, steps and assignments under a workflow (@experimental).
+  if (resource === "workflows") {
+    const result = parseWorkflowRoutes(id, subresource, subId, httpMethod);
+    if (result) return { ...result, routeParams };
   }
 
   // Handle content releases

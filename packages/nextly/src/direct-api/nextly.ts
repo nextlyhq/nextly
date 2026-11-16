@@ -101,6 +101,7 @@ import {
   createJobsNamespace,
   createNoticesNamespace,
   createVersionsNamespace,
+  createWorkflowsNamespace,
   createReleasesNamespace,
   createFieldGroupsNamespace,
   createEmailNamespace,
@@ -118,6 +119,7 @@ import {
   type JobsNamespace,
   type NoticesNamespace,
   type VersionsNamespace,
+  type WorkflowsNamespace,
   type ReleasesNamespace,
   type FieldGroupsNamespace,
   type EmailNamespace,
@@ -305,6 +307,8 @@ export class Nextly implements NextlyContext {
   public readonly versions: VersionsNamespace;
   /** @experimental A subject's content events: a document's or a release's. */
   public readonly contentEvents: ContentEventsNamespace;
+  /** @experimental Review state under a workflow: read it, take steps, assign, what waits. */
+  public readonly workflows: WorkflowsNamespace;
   /** @experimental Recognising a plugin's kind of signed-in person. */
   public readonly principals: NextlyPrincipals;
 
@@ -339,6 +343,7 @@ export class Nextly implements NextlyContext {
     this.notices = createNoticesNamespace();
     this.versions = createVersionsNamespace(this);
     this.contentEvents = createContentEventsNamespace(this);
+    this.workflows = createWorkflowsNamespace(this);
     this.principals = createNextlyPrincipals();
 
     // The instance its callers reach: only the collection and Single
@@ -1183,6 +1188,21 @@ export const nextly = {
     delete: async args =>
       (await requireNextlyOnceStarted()).releases.delete(args),
   } satisfies ReleasesNamespace,
+
+  workflows: {
+    reviewState: async args =>
+      (await requireNextlyOnceStarted()).workflows.reviewState(args),
+    takeStep: async args =>
+      (await requireNextlyOnceStarted()).workflows.takeStep(args),
+    assign: async args =>
+      (await requireNextlyOnceStarted()).workflows.assign(args),
+    stepMany: async args =>
+      (await requireNextlyOnceStarted()).workflows.stepMany(args),
+    assignMany: async args =>
+      (await requireNextlyOnceStarted()).workflows.assignMany(args),
+    waiting: async args =>
+      (await requireNextlyOnceStarted()).workflows.waiting(args),
+  } satisfies WorkflowsNamespace,
 
   users: {
     find: async (args?: FindUsersArgs) =>

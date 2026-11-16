@@ -52,6 +52,14 @@ export {
   type ContentEventsNamespace,
 } from "./content-events";
 export {
+  createWorkflowsNamespace,
+  type WorkflowAssignmentInput,
+  type WorkflowCallArgs,
+  type WorkflowDocumentRef,
+  type WorkflowSeenPart,
+  type WorkflowsNamespace,
+} from "./workflows";
+export {
   createReleasesNamespace,
   type ReleaseCallerArgs,
   type ReleasesNamespace,
