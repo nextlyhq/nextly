@@ -179,6 +179,13 @@ export interface ApplyRepairsArgs {
    * step; an error it throws fails that column as a database's refusal would.
    */
   beforeStep?: (at: ConversionStepAt) => Promise<void>;
+  /**
+   * MySQL only: called before each statement of a step is sent, with its position in the step (1
+   * for the first) and how many the step has. A test uses it to hold the table between them.
+   */
+  beforeStatement?: (
+    at: ConversionStepAt & { statement: number; statements: number }
+  ) => Promise<void>;
 }
 
 /** A column's finding as this run last judged it, and what the run established about it. */
@@ -976,7 +983,8 @@ class ApplyRun {
     finding: DiffersFinding,
     rowId: string,
     keys: readonly RowKey[],
-    step: number
+    step: number,
+    try_: TryContext
   ): Promise<number> {
     const compiler = new MySqlDialect();
     const run = async <R>(statement: SQL): Promise<R[]> => {
@@ -999,6 +1007,10 @@ class ApplyRun {
         await run(statement);
       }
       await run(clearedStepStatement(rowId, step, still.length));
+      // Every lock the clearing needs is held: the watch ends before the COMMIT, so a cancel it
+      // decided while an earlier statement waited cannot end the COMMIT, which could leave it
+      // unknown whether the clearing stayed.
+      await try_.tableReached(true);
       await run(sql`COMMIT`);
       return still.length;
     } catch (error) {
@@ -1036,13 +1048,14 @@ class ApplyRun {
             // The clearing commits with its record, so the record cannot fall behind it; a try
             // that ends waiting rolls it back whole.
             const waited = await inTries(
-              () =>
+              try_ =>
                 this.clearOnSession(
                   sent,
                   finding,
                   rowId,
                   plan.clear ?? [],
-                  index + 1
+                  index + 1,
+                  try_
                 ),
               () => this.rowChangeLasting(table, 1)
             );
@@ -1055,18 +1068,25 @@ class ApplyRun {
             continue;
           }
           const group = plan.statements[index - plan.offset];
-          let done = 0;
-          const waited = await inTries(
-            async () => {
-              for (; done < group.length; done++) {
-                await sent.execute(group[done]);
-              }
-            },
-            () => this.statementLasting(group[done], done + 1)
-          );
-          if (waited.kind === "ran-out") {
-            lock = waited.lock;
-            return;
+          // Each statement is a try of its own, with its own watch: the watch ends between two
+          // statements, so a cancel it decided while one waited cannot end the next. A statement
+          // that waited did not run, so the next try sends it again; those before it committed.
+          for (const [at, statement] of group.entries()) {
+            await this.args.beforeStatement?.({
+              table: finding.location.table,
+              column: finding.location.column,
+              step: index,
+              statement: at + 1,
+              statements: group.length,
+            });
+            const waited = await inTries(
+              () => sent.execute(statement),
+              () => this.statementLasting(statement, at + 1)
+            );
+            if (waited.kind === "ran-out") {
+              lock = waited.lock;
+              return;
+            }
           }
           reached = index + 1;
           await recordStep(this.db, this.dialect, rowId, reached, total);
@@ -1130,7 +1150,7 @@ class ApplyRun {
     table: string,
     work: (
       inTries: <T>(
-        attempt: () => Promise<T>,
+        attempt: (try_: TryContext) => Promise<T>,
         judge: () => Promise<TryLasting | undefined>
       ) => Promise<Waited<T>>,
       session: StatementSession
@@ -1153,14 +1173,14 @@ class ApplyRun {
           () =>
             work(
               <T>(
-                attempt: () => Promise<T>,
+                attempt: (try_: TryContext) => Promise<T>,
                 judge: () => Promise<TryLasting | undefined>
               ): Promise<Waited<T>> =>
                 this.waits.inTries(
                   table,
-                  async ({ onSession }: TryContext) => {
-                    if (id !== undefined) onSession(id);
-                    return attempt();
+                  async (try_: TryContext) => {
+                    if (id !== undefined) try_.onSession(id);
+                    return attempt(try_);
                   },
                   judge
                 ),

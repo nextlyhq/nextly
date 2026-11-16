@@ -426,21 +426,39 @@ export class TableWaits {
           }
         }
       );
-      // The try that got the table is charged for its wait, up to where it said the wait was over;
-      // it is not a try the table's lock report counts.
-      state.spentMs += (reachedAt ?? lastStarted) - started;
-      state.tries += triedNow - 1;
+      this.chargeLastTry(state, started, reachedAt ?? lastStarted, triedNow);
       return { kind: "done", value };
     } catch (error) {
+      if (!(error instanceof TriesRanOut)) {
+        // The last try failed some other way than by waiting: it is charged as a try that got
+        // the table, so a failure after its lock (a wait for another table) uses none of this
+        // table's total for its work.
+        this.chargeLastTry(state, started, reachedAt ?? lastStarted, triedNow);
+        throw error;
+      }
       state.spentMs += this.now() - started;
       state.tries += triedNow;
-      if (!(error instanceof TriesRanOut)) throw error;
       state.ranOut = {
         holder: error.stop.ended.holder,
         ending: endingOf(error.stop),
       };
       return { kind: "ran-out", lock: this.factsOf(table, state) };
     }
+  }
+
+  /**
+   * Charge a wait whose last try did not end waiting: the tries before it, their pauses, and the
+   * last try up to `waitEndedAt` (where it said its wait was over, else its start). The last try
+   * is not one the table's lock report counts.
+   */
+  private chargeLastTry(
+    state: TableState,
+    started: number,
+    waitEndedAt: number,
+    triedNow: number
+  ): void {
+    state.spentMs += waitEndedAt - started;
+    state.tries += Math.max(0, triedNow - 1);
   }
 
   /**

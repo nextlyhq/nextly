@@ -176,6 +176,34 @@ describe("a run's waits for a busy table", () => {
     expect(run.ranOut("dc_posts")).toBeNull();
   });
 
+  it("charges a try that failed past its lock only for its wait, and counts it as no try", async () => {
+    const { run, reachesAfter, attempt } = waits({
+      tryMs: 1_000,
+      totalMs: 4_000,
+    });
+    const afterTheLock = new Error("the record table was locked");
+    const failing = reachesAfter(100, true);
+    // 100 ms waiting for the table, then 10 s of work that fails waiting for something else.
+    await expect(
+      run.inTries("dc_posts", async context => {
+        await failing(context);
+        throw afterTheLock;
+      })
+    ).rejects.toBe(afterTheLock);
+    // Only the 100 ms is the table's: its next wait still has whole tries left.
+    expect(await run.inTries("dc_posts", reachesAfter(0))).toEqual({
+      kind: "done",
+      value: "read",
+    });
+    // 3.9 s left: tries at 0 and 2 s, as for a table nothing had waited for, and the failed try
+    // is none of the tries the report counts.
+    const held = await run.inTries("dc_posts", attempt().run);
+    expect(held).toMatchObject({
+      kind: "ran-out",
+      lock: { tries: 2, waitedMs: 3_100 },
+    });
+  });
+
   it("names a longer single try, not a larger total, where a statement that may not run twice stopped the tries", async () => {
     const { run, attempt } = waits();
     const held = attempt();

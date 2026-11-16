@@ -32,7 +32,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import { sql } from "drizzle-orm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { installRegistryResolver } from "../../../../cli/utils/registry-resolver";
 import { loadDialectTables } from "../../../../database/dialect-tables";
@@ -46,10 +46,13 @@ import {
   type LockWorld,
 } from "../../pipeline/__tests__/helpers/schema-lock-world";
 import { applyRepairs, type ConversionStepAt } from "../apply";
+
+type ApplyOptions = Parameters<typeof applyRepairs>[0];
 import { COLUMN_REPAIRS_TABLE, readRepairs } from "../record";
 import type { RepairRecord } from "../report";
 import { stepName } from "../resume";
 import { dryRunReport } from "../run-report";
+import { TableWaits } from "../table-wait";
 import type { RepairEntity } from "../types";
 
 import { collection, f, tableTools } from "./apply-fixture";
@@ -183,6 +186,7 @@ describe.each(LOCK_DIALECTS)(
       on: RepairEntity[] = entities(),
       extra: {
         beforeStep?: (at: ConversionStepAt) => Promise<void>;
+        beforeStatement?: ApplyOptions["beforeStatement"];
         holdUnderLock?: () => Promise<void>;
       } = {}
     ) =>
@@ -201,6 +205,9 @@ describe.each(LOCK_DIALECTS)(
         ...(extra.beforeStep === undefined
           ? {}
           : { beforeStep: extra.beforeStep }),
+        ...(extra.beforeStatement === undefined
+          ? {}
+          : { beforeStatement: extra.beforeStatement }),
       });
 
     async function createTables() {
@@ -723,6 +730,49 @@ describe.each(LOCK_DIALECTS)(
       expect(record?.failure?.reason).toMatch(/lock/i);
       // Rolled back whole: the column is as it was.
       await holding;
+    });
+
+    it("a MySQL step's statements each run in a watched try of their own", async () => {
+      // A step's statements (SET, PREPARE, EXECUTE, DEALLOCATE) each run in a try, so the try's
+      // watch has ended before the next is sent: a cancel it decided while one statement waited
+      // cannot land on the next.
+      if (dialect !== "mysql") return;
+      await setUp();
+      const tried: string[] = [];
+      const original = TableWaits.prototype.inTries;
+      const inTries = vi
+        .spyOn(TableWaits.prototype, "inTries")
+        .mockImplementation(function (this: TableWaits, ...args) {
+          tried.push(args[0]);
+          return original.apply(this, args) as never;
+        });
+      // How many tries had started as each statement of a step was about to be sent.
+      const seen: { step: string; statement: number; tries: number }[] = [];
+      try {
+        const applied = await apply(entities(), {
+          beforeStatement: at => {
+            seen.push({
+              step: `${at.table}.${at.column}.${String(at.step)}`,
+              statement: at.statement,
+              tries: tried.length,
+            });
+            return Promise.resolve();
+          },
+        });
+        expect(applied.exitCode).toBe(0);
+      } finally {
+        inTries.mockRestore();
+      }
+      const multi = seen.filter(at => at.statement > 1);
+      expect(multi.length).toBeGreaterThan(0);
+      for (const at of multi) {
+        const before = seen.find(
+          other =>
+            other.step === at.step && other.statement === at.statement - 1
+        );
+        // Exactly one try ran between two statements of a step: the earlier statement's own.
+        expect(at.tries - (before?.tries ?? 0)).toBe(1);
+      }
     });
 
     it("the catalog read does not wait for a table another session holds", async () => {
