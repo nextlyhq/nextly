@@ -86,7 +86,8 @@ function colouredSite(light: string): SiteSheetInput {
 /** The site sheet's own element, as the page carries it. */
 function siteSheetOf(markup: string): string {
   return (
-    /<style data-nx-site-sheet="[^"]*">[^<]*<\/style>/.exec(markup)?.[0] ?? ""
+    /<style data-nx-site-sheet="[^"]*">[\s\S]*?<\/style>/.exec(markup)?.[0] ??
+    ""
   );
 }
 
