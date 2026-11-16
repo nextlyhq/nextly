@@ -18,13 +18,20 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  TransactionContext,
+  WhereClause,
+} from "@nextlyhq/adapter-drizzle/types";
 
 import {
   ownDatabaseVisitor,
   visitorWithoutAccessService,
 } from "../../../auth/access/own-database-visitor";
-import { askEachLanguage } from "../../../auth/access/rule-language";
+import {
+  askEachLanguage,
+  withRuleLanguage,
+  writeLanguagesFor,
+} from "../../../auth/access/rule-language";
 import { actorForWrite } from "../../../auth/request-actor";
 import type { FieldConfig } from "../../../collections/fields/types";
 import {
@@ -59,7 +66,24 @@ import {
 } from "../../../shared/lib/field-level-registry";
 import type { Logger } from "../../../shared/types";
 import type { PublicationFacts } from "../../audit/record-activity";
+import {
+  type LifecycleParts,
+  movesLanguage,
+  movesShared,
+} from "../../collections/services/all-locales-lifecycle";
 import { fieldTrustOf } from "../../collections/services/collection-query-service";
+import {
+  publishCallerOf,
+  publishGate,
+  type PublishGateVerdict,
+  type PublishPart,
+} from "../../collections/services/publish-gate";
+import {
+  type PartsField,
+  type PartsReads,
+  type PartsState,
+  publishValueIssues,
+} from "../../collections/services/publish-parts";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
 import { recordTransitionEvents } from "../../content-events/write-event";
 import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
@@ -117,6 +141,10 @@ import { draftComponentValues } from "../../versions/draft-components";
 import { schemaDraftSplit } from "../../versions/draft-split-eligibility";
 import { recordOverwriteIfAsked } from "../../versions/overwrite-record";
 import {
+  draftsKeptByPart,
+  SHARED_DRAFT_SLOT,
+} from "../../versions/part-drafts";
+import {
   judgeSharedValues,
   type LanguageOutcome,
   languagesGoingLiveAsStored,
@@ -137,10 +165,13 @@ import {
   withVerdictState,
 } from "../../versions/publish-all-plan";
 import {
+  differingFields,
   type FieldNameReader,
   readableFieldNames,
   releaseAllSharedBases,
+  releaseSharedBase,
   sharedValuesConflict,
+  snapshotRecord,
 } from "../../versions/shared-publish-base";
 import {
   assertVersionNamesEvery,
@@ -248,6 +279,52 @@ export interface PublishAllSinglePreview {
 }
 
 /**
+ * A move of the parts a caller chose, as a publish or unpublish of chosen parts hands it to this
+ * service: which parts move, every one where `parts` is absent.
+ *
+ * @experimental
+ */
+export interface SinglePartsMove {
+  parts?: LifecycleParts;
+}
+
+/** What moving a Single's parts is told: the options of a publish, and the move of chosen parts. */
+export type SinglePartsOptions = PublishAllSingleLocalesOptions & {
+  /**
+   * Present where the move is a publish or unpublish of chosen parts, whose value rules are
+   * judged again under the lock; absent, every part moves.
+   */
+  partsMove?: SinglePartsMove;
+  /**
+   * A publish made without review, with the caller's reason, as the request asked for it: told to
+   * the publish gate, never stored by the move.
+   */
+  withoutReview?: { reason: string };
+};
+
+/** What an unpublish of chosen parts reports back: the Single, and its version once committed. */
+export interface UnpublishSinglePartsResult {
+  id: string;
+  /** Every language's version once the unpublish has committed. */
+  _rev?: string;
+}
+
+/** One stored language as a publish of chosen parts judges it; see `PartsState`. */
+interface PartsLanguage {
+  live: boolean;
+  values: Readonly<Record<string, unknown>>;
+  pendingSharedEdits?: readonly string[];
+}
+
+/** Whether a move of `parts` moves the part kept under `locale`: the shared part for none. */
+function movesPart(
+  parts: LifecycleParts | undefined,
+  locale: string | null
+): boolean {
+  return locale === null ? movesShared(parts) : movesLanguage(parts, locale);
+}
+
+/**
  * Everything the publish acts on, resolved once before the transaction opens.
  *
  * Gathered up front because the transaction body may RE-RUN: the version-conflict retry
@@ -288,6 +365,11 @@ interface PublishPlan {
    */
   draftsEligible: boolean;
   actor: ReturnType<typeof actorForWrite>;
+  /**
+   * The parts this move moves, where it moves fewer than all of them: only their pending changes
+   * are promoted, their statuses written and their rules asked. Absent, every part moves.
+   */
+  parts?: LifecycleParts;
 }
 
 /** What the committed transaction tells the caller it owes afterwards. */
@@ -396,7 +478,8 @@ export class SinglePublishAllService extends BaseService {
    */
   async publishAllLocales(
     slug: string,
-    options: PublishAllSingleLocalesOptions = {}
+    // A publish of chosen parts carries them here, with the gate it asks under the lock.
+    options: SinglePartsOptions = {}
   ): Promise<SingleResult<PublishAllSingleResult>> {
     // Refused first when the Single is removed from code, before any hook or
     // read of its document, so a refused write changes nothing.
@@ -628,7 +711,8 @@ export class SinglePublishAllService extends BaseService {
    */
   async previewPublishAllLocales(
     slug: string,
-    options: PublishAllSingleLocalesOptions = {}
+    // A description of a publish of chosen parts carries them here; its gate is never judged.
+    options: SinglePartsOptions = {}
   ): Promise<SingleResult<PublishAllSinglePreview>> {
     await refuseWriteIfRemovedFromCode("single", slug);
     let translationsTable: string | undefined;
@@ -686,6 +770,410 @@ export class SinglePublishAllService extends BaseService {
   }
 
   /**
+   * The id of the Single's document, which a publish of chosen parts answers and tells its gate
+   * about, or the answer that ends the request: no such Single, or no document. Never creates the
+   * document, as a publish never does.
+   */
+  async documentIdOf(
+    slug: string
+  ): Promise<{ id: string } | { result: SingleResult<never> }> {
+    const singleMeta = await resolveSingleForRequest(
+      this.adapter,
+      this.singleRegistryService,
+      slug,
+      this.logger,
+      { intent: "write" }
+    );
+    if (!singleMeta) {
+      return {
+        result: {
+          success: false,
+          statusCode: 404,
+          message: `Single "${slug}" not found`,
+        },
+      };
+    }
+    const row = await this.adapter.selectOne<{ id: string }>(
+      singleMeta.tableName,
+      { columns: ["id"] }
+    );
+    return row
+      ? { id: row.id }
+      : {
+          result: {
+            success: false,
+            statusCode: 404,
+            message: `Single "${slug}" has no document to publish`,
+          },
+        };
+  }
+
+  /**
+   * What a publish or unpublish of chosen parts reads before it decides anything: the Single as
+   * stored (see `partsStateOn`), and the caller's refusal for each language asked and, where
+   * `shared`, for the shared part, each one asked rather than stopping at the first. A language is
+   * asked in that language; the shared part in every language, since every language shows it. The
+   * rules are asked off any transaction, since a rule is the app's own code and may read the
+   * database. The move asks them again as it moves the parts. A Single with no document to move,
+   * or a caller without the grant, is answered with the result that ends the request.
+   *
+   * @experimental
+   */
+  async publishPartsReads(
+    slug: string,
+    options: PublishAllSingleLocalesOptions,
+    ask: {
+      action: "publish" | "unpublish";
+      /** The languages whose refusal is asked, or every language the site has. */
+      locales: readonly string[] | "all";
+      shared: boolean;
+    }
+  ): Promise<PartsReads | SingleResult<PublishAllSingleResult>> {
+    await refuseWriteIfRemovedFromCode("single", slug);
+    const resolved = await this.resolvePublishTarget(slug, options, ask.action);
+    if ("result" in resolved) return resolved.result;
+    const { plan } = resolved;
+    // Read on one transaction that writes nothing and locks nothing, as a preview reads.
+    const state = await this.adapter.transaction(tx =>
+      this.partsStateOn(tx, plan, plan.existingDoc)
+    );
+    // Each language the request names, asked in that language, never route-authorized: a route
+    // attests no publish or unpublish rule.
+    const languageRefusals = new Map<string, string>();
+    for (const locale of ask.locales === "all"
+      ? state.configured
+      : ask.locales) {
+      const refusal = await withRuleLanguage(
+        writeLanguagesFor(this.localization, locale),
+        () => this.authorizePublish(plan, options, ask.action)
+      );
+      if (refusal) languageRefusals.set(locale, refusal.message ?? "Refused.");
+    }
+    const sharedRefusal = ask.shared
+      ? await withRuleLanguage(
+          writeLanguagesFor(this.localization, EVERY_LOCALE),
+          () => this.authorizePublish(plan, options, ask.action)
+        )
+      : undefined;
+    return {
+      state,
+      languageRefusals,
+      sharedRefusal: sharedRefusal
+        ? (sharedRefusal.message ?? "Refused.")
+        : null,
+    };
+  }
+
+  /**
+   * Take the chosen parts of this Single down, atomically: each chosen language's `_status` and,
+   * where the shared part moves, the Single's own status, to draft, in one transaction under the
+   * Single's row lock, or nothing. Every part where `partsMove.parts` is absent.
+   *
+   * Asked as a publish is asked, with the unpublish permission and rule: the grant before any
+   * work, the rule in each language taken down. The hooks a status change runs, run as for a
+   * move to draft; the history, the activity trail, the events and the version record what moved.
+   * Never judged by the publish gate, which governs what goes live. Taking the shared part down
+   * while a language not chosen stays live is refused, judged under the lock.
+   *
+   * @experimental
+   */
+  async unpublishParts(
+    slug: string,
+    options: SinglePartsOptions = {}
+  ): Promise<SingleResult<UnpublishSinglePartsResult>> {
+    await refuseWriteIfRemovedFromCode("single", slug);
+    const refused: { denied?: SingleResult<PublishAllSingleResult> } = {};
+    let translationsTable: string | undefined;
+    const stale: PublishAllStale = {
+      check: { kind: "unjudged" },
+      holder: {},
+    };
+    // One context and one account of the request for every hook of the unpublish.
+    const sharedContext: Record<string, unknown> = { ...options.context };
+    const requestFacts = resolveRequestFacts(options.request);
+    try {
+      // Judged against the version the caller read, as a publish is.
+      stale.check = versionCheckFor(
+        { ...options.data },
+        {
+          exempt: releaseRunExemptFor({ scopeKind: "single", scopeSlug: slug }),
+        }
+      );
+      const resolved = await this.resolvePublishTarget(
+        slug,
+        options,
+        "unpublish"
+      );
+      if ("result" in resolved) return resolved.result;
+      const { plan } = resolved;
+      const hookCall: SingleBeforeHookCall = {
+        slug,
+        id: plan.existingDoc.id,
+        originalData:
+          this.queryService?.deserializeJsonFields(
+            plan.existingDoc,
+            plan.fieldConfigs
+          ) ?? plan.existingDoc,
+        user: options.user,
+        context: sharedContext,
+        req: requestFacts,
+      };
+      translationsTable = plan.companion?.companionTableName;
+      const judged = this.everyLanguageJudged(plan, stale.check);
+
+      // The unpublish permission and rule, asked in each language taken down (every one where
+      // every part moves), before the transaction and off its connection.
+      const configured =
+        this.localization?.locales.map(locale => locale.code) ?? [];
+      const denied = await this.refusedInEachLanguage(
+        plan,
+        options,
+        plan.parts === undefined ? configured : [...plan.parts.locales],
+        "unpublish"
+      );
+      if (denied) return denied;
+
+      // The hooks a status change runs before it writes, for a move to draft, outside the
+      // transaction, which may re-run on a version conflict.
+      await runSingleStatusMoveBeforeHooks(
+        this.hookRegistry,
+        hookCall,
+        "draft"
+      );
+
+      const outcome = await this.adapter.transaction(
+        tx =>
+          this.commitUnpublish(tx, plan, options, refused, {
+            stale,
+            languages: judged,
+            personName: options.user?.name ?? null,
+          }),
+        versionConflictRetries()
+      );
+      if (outcome.documentVanished) {
+        return {
+          success: false,
+          statusCode: 404,
+          message: `Single "${slug}" has no document to unpublish`,
+        };
+      }
+      // The hooks an update runs once it is durable, as a publish runs them.
+      const hookDocuments = outcome.hookDocuments;
+      if (hookDocuments !== undefined) {
+        await this.afterCommit(() =>
+          this.runUpdateHooks(hookCall, hookDocuments)
+        );
+      }
+      return {
+        success: true,
+        statusCode: 200,
+        message: "Unpublished.",
+        data: withDocumentVersion({ id: plan.existingDoc.id }, outcome.version),
+        eventRecorded: outcome.eventRecorded,
+        committed: outcome.committed,
+        // A committed status write busts the Single's tag, as a publish's does.
+        revalidationIntent: outcome.committed
+          ? buildSingleRevalidationIntent(
+              slug,
+              readRevalidateConfig(plan.singleMeta)
+            )
+          : undefined,
+      };
+    } catch (error) {
+      if (refused.denied) return refused.denied;
+      const staleRefusal = await this.staleRefusal(slug, options, stale);
+      if (staleRefusal) return staleRefusal;
+      const gone = this.translationsGoneRefusal(slug, translationsTable, error);
+      if (gone) throw gone;
+      throw await publishAllFailure(
+        error,
+        singleNotMigrated(this.singleRegistryService, slug, {
+          trusted: fieldTrustOf(options),
+        })
+      );
+    }
+  }
+
+  /**
+   * The unpublish itself: lock, re-check, write the chosen parts' statuses, capture, record.
+   * Retried on a version conflict, so it derives everything from what this attempt's lock read.
+   */
+  private async commitUnpublish(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    options: SinglePartsOptions,
+    refused: { denied?: SingleResult<PublishAllSingleResult> },
+    version: {
+      stale: PublishAllStale;
+      languages: ReturnType<typeof languagesJudged>;
+      personName: string | null;
+    }
+  ): Promise<PublishOutcome> {
+    const { singleMeta, existingDoc, companion } = plan;
+    const lockedRow = await tx.selectOne<Record<string, unknown>>(
+      singleMeta.tableName,
+      { where: this.whereEq("id", existingDoc.id), forUpdate: true }
+    );
+    if (!lockedRow) {
+      return {
+        documentVanished: true,
+        committed: false,
+        eventRecorded: false,
+        languages: [],
+      };
+    }
+    await this.refuseIfMoved(tx, plan, version);
+    const priorCompanionStatuses =
+      companion && plan.companionPublishable
+        ? await this.readPriorCompanionStatuses(
+            tx,
+            companion,
+            existingDoc.id,
+            plan.slug
+          )
+        : new Map<string, string | null>();
+
+    // Taking the shared part down while a language not chosen stays live would leave that
+    // language shown without it. Judged here, under the lock, on the statuses this overwrites: a
+    // language published since the request was judged refuses it too.
+    const { parts } = plan;
+    if (parts !== undefined && parts.shared) {
+      const stillLive = [...priorCompanionStatuses]
+        .filter(
+          ([locale, status]) =>
+            status === "published" && !parts.locales.has(locale)
+        )
+        .map(([locale]) => locale);
+      if (stillLive.length > 0) {
+        const one = stillLive.length === 1;
+        throw this.refuseWith(
+          NextlyError.conflict({
+            reason: "state",
+            message:
+              `The shared part stays live while ${stillLive.join(", ")} ` +
+              `${one ? "is" : "are"} published: unpublish ${one ? "it" : "them"} too, ` +
+              `or keep the shared part. Nothing was changed.`,
+            logContext: {
+              cause: "shared-part-under-live-languages",
+              single: plan.slug,
+              stillLive,
+            },
+          }),
+          refused
+        );
+      }
+    }
+
+    const now = new Date();
+    // The Single's own status is the shared part's: written only where the shared part moves.
+    const mainMoves = plan.hasMainStatus && movesShared(parts);
+    if (mainMoves) {
+      await tx.update(
+        singleMeta.tableName,
+        {
+          status: "draft",
+          updated_at: now,
+          ...revisionBumpColumns(plan.actor, now),
+        },
+        this.whereEq("id", existingDoc.id)
+      );
+    } else {
+      // A move of chosen languages is a save of the Single, whose own row is left as it is.
+      await bumpDocumentRevision(
+        tx,
+        singleMeta.tableName,
+        { id: existingDoc.id },
+        plan.actor
+      );
+    }
+    const translations = this.movedTranslations(plan);
+    if (companion && plan.companionPublishable && translations) {
+      await tx.update(
+        companion.companionTableName,
+        {
+          _status: "draft",
+          ...translationRevisionBumpColumns(plan.actor, this.adapter.dialect),
+        },
+        translations
+      );
+    }
+    // The row as this unpublish left it, read back on the lock it holds.
+    const unpublishedRow =
+      (await tx.selectOne<Record<string, unknown>>(singleMeta.tableName, {
+        where: this.whereEq("id", existingDoc.id),
+      })) ?? lockedRow;
+
+    const versionNo = singleMeta.versions?.enabled
+      ? await this.capturePublishSnapshot(
+          tx,
+          plan.slug,
+          existingDoc.id,
+          singleMeta.tableName,
+          unpublishedRow,
+          plan.fieldConfigs,
+          options.user,
+          singleMeta.versions.maxPerDoc,
+          "draft"
+        )
+      : null;
+    await this.recordPublishHistory(tx, plan, {
+      user: options.user,
+      mainFrom: lockedRow.status as string | null,
+      priorCompanionStatuses,
+      versionNo,
+      to: "draft",
+    });
+    // Each moved part that was live before is what this took down.
+    const takenDown = [...priorCompanionStatuses].filter(
+      ([locale, status]) =>
+        status === "published" && movesLanguage(parts, locale)
+    );
+    const committed = mainMoves || takenDown.length > 0;
+    await this.recordPublishActivity(tx, plan, committed, {
+      statusAfter: "draft",
+      statusBefore: mainMoves
+        ? (lockedRow.status as string | null | undefined)
+        : takenDown.length > 0
+          ? "published"
+          : "draft",
+      promotedPendingEdits: false,
+    });
+    const documents = {
+      plan,
+      lockedRow,
+      publishedRow: unpublishedRow,
+      priorComponents: new Map<string, Record<string, unknown>>(),
+      priorCompanionValues: new Map<string, Record<string, unknown>>(),
+    };
+    const eventRecorded = plan.recordingEnabled
+      ? await this.recordUnpublishEvents(tx, {
+          ...documents,
+          mainRowTransitioned: mainMoves && lockedRow.status === "published",
+          takenDown: takenDown.map(([locale]) => locale),
+        })
+      : false;
+    await this.runInTransactionPhase(tx, documents, options.user);
+    const hookDocuments = plan.runsUpdateHooks
+      ? await this.publishDocuments(tx, documents)
+      : undefined;
+    return {
+      documentVanished: false,
+      committed,
+      eventRecorded,
+      hookDocuments,
+      version: await documentVersionOn(tx, {
+        dialect: this.adapter.dialect,
+        table: singleMeta.tableName,
+        id: existingDoc.id,
+        languagesTable: translationTableOf(plan.companion, plan.companionReady),
+        localization: this.localization,
+        locale: EVERY_LOCALE,
+      }),
+      languages: [],
+    };
+  }
+
+  /**
    * The refusal for a publish of every language (or its preview) that `error`
    * failed because this Single's translations table is missing: dropped after
    * its `ready` verdict was remembered, so the publish met it at its first
@@ -736,11 +1224,12 @@ export class SinglePublishAllService extends BaseService {
   ): ReturnType<typeof languagesJudged> {
     const given = givenOf(check);
     const table = translationTableOf(plan.companion, plan.companionPublishable);
+    // Only the languages this move moves, where it moves chosen ones.
     const locales = versionLanguagesFor({
       localized: table !== null,
       localization: this.localization,
       locale: EVERY_LOCALE,
-    });
+    })?.filter(locale => movesLanguage(plan.parts, locale));
     if (given === undefined || !locales || locales.length === 0) {
       return undefined;
     }
@@ -790,6 +1279,235 @@ export class SinglePublishAllService extends BaseService {
   }
 
   /**
+   * The publish gate's verdict on a publish, asked on `tx` after the Single's row is locked, with
+   * the parts live before the move as the lock read them; a collection entry's publish asks it
+   * the same way. A part it holds back refuses the whole move, every refusal named, kept in
+   * `refused` before the throw that rolls the transaction back.
+   */
+  private async gateVerdict(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    options: SinglePartsOptions,
+    under: {
+      lockedRow: Record<string, unknown>;
+      priorCompanionStatuses: ReadonlyMap<string, string | null>;
+      refused: { denied?: SingleResult<PublishAllSingleResult> };
+    }
+  ): Promise<PublishGateVerdict> {
+    const configured =
+      this.localization?.locales.map(locale => locale.code) ?? [];
+    // The parts the request moves, as its early question named them: every language the site
+    // has where it chose them all, and the shared part where it moves.
+    const parts: PublishPart[] = [
+      ...(plan.parts === undefined ? configured : [...plan.parts.locales]).map(
+        locale => ({ kind: "language" as const, locale })
+      ),
+      ...(movesShared(plan.parts) ? [{ kind: "shared" as const }] : []),
+    ];
+    const verdict = await publishGate().judge(tx, {
+      scope: { kind: "single", slug: plan.slug },
+      entryId: plan.existingDoc.id,
+      direction: "publish",
+      parts,
+      live: {
+        languages: [...under.priorCompanionStatuses]
+          .filter(([, status]) => status === "published")
+          .map(([locale]) => locale),
+        shared: under.lockedRow.status === "published",
+      },
+      caller: publishCallerOf(options),
+      ...(options.actor === undefined ? {} : { actor: options.actor }),
+      ...(options.withoutReview === undefined
+        ? {}
+        : { withoutReview: options.withoutReview }),
+    });
+    if (verdict.refusals.length === 0) return verdict;
+    // Each held part as a validation issue, as the request's own refusals name parts.
+    throw this.refuseWith(
+      NextlyError.validation({
+        errors: verdict.refusals.map(({ part, code, message }) =>
+          part.kind === "shared"
+            ? { path: "shared", code, message }
+            : { path: part.locale, code, locale: part.locale, message }
+        ),
+      }),
+      under.refused
+    );
+  }
+
+  /**
+   * Keep `error` as the answer of a move whose transaction it rolls back, every issue in its
+   * message as a publish of chosen parts words its own refusals, and hand it back to throw.
+   */
+  private refuseWith(
+    error: NextlyError,
+    refused: { denied?: SingleResult<PublishAllSingleResult> }
+  ): NextlyError {
+    const result = buildSingleErrorResult(error, "Refused.");
+    const issues = result.errors ?? [];
+    refused.denied =
+      issues.length > 0
+        ? { ...result, message: issues.map(issue => issue.message).join(" ") }
+        : result;
+    return error;
+  }
+
+  /**
+   * Whether a value rule of a publish could refuse anything of this Single: a Single has no
+   * setting that requires every language to hold its own values, so only a required unique
+   * translated field can. Read from the declaration, so most Singles read nothing more.
+   */
+  private valueRulesCanRefuse(plan: PublishPlan): boolean {
+    const translated = new Set(
+      (plan.companion?.localizedFields ?? []).map(field => field.name)
+    );
+    return plan.fieldConfigs.some(config => {
+      // Read as declared: not every kind of field carries each of these.
+      const field = config as {
+        name?: unknown;
+        required?: unknown;
+        unique?: unknown;
+      };
+      return (
+        typeof field.name === "string" &&
+        translated.has(field.name) &&
+        field.required === true &&
+        field.unique === true
+      );
+    });
+  }
+
+  /**
+   * Refuse a publish of chosen parts, by throwing, where the value rules refuse the languages it
+   * puts live as this transaction locked the Single: judged before the transaction too, and again
+   * here since a change saved since is what goes live. Only for a move of chosen parts.
+   */
+  private async refuseValueRulesUnderLock(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    options: SinglePartsOptions,
+    lockedRow: Record<string, unknown>,
+    refused: { denied?: SingleResult<PublishAllSingleResult> }
+  ): Promise<void> {
+    if (options.partsMove === undefined || !this.valueRulesCanRefuse(plan)) {
+      return;
+    }
+    const issues = publishValueIssues(
+      await this.partsStateOn(tx, plan, lockedRow),
+      plan.parts === undefined ? "all" : [...plan.parts.locales]
+    );
+    if (issues.length === 0) return;
+    throw this.refuseWith(NextlyError.validation({ errors: issues }), refused);
+  }
+
+  /**
+   * The Single as a publish of chosen parts judges it, read on `tx`: whether its shared part is
+   * live, and each stored language's own state and own values (never filled from another
+   * language) with its pending change's translated values laid over them, since a publish
+   * promotes that change. Where a language's change holds the whole document, the shared fields it
+   * edits are named too, so a publish of it alone is told to take the shared part with it.
+   */
+  private async partsStateOn(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    /** The Single's own row, as the caller read it. */
+    row: Record<string, unknown>
+  ): Promise<PartsState> {
+    const { companion } = plan;
+    const statuses =
+      companion && plan.companionPublishable
+        ? await this.readPriorCompanionStatuses(
+            tx,
+            companion,
+            plan.existingDoc.id,
+            plan.slug
+          )
+        : new Map<string, string | null>();
+    const values =
+      companion && plan.companionReady
+        ? await readCompanionValuesByLocale(
+            this.adapter,
+            tx,
+            companion,
+            plan.existingDoc.id,
+            [...statuses.keys()]
+          )
+        : new Map<string, Record<string, unknown>>();
+    const translated = new Set(
+      (companion?.localizedFields ?? []).map(field => field.name)
+    );
+    const fields: PartsField[] = plan.fieldConfigs.flatMap(config => {
+      // Read as declared: not every kind of field carries each of these.
+      const field = config as {
+        name?: unknown;
+        label?: unknown;
+        required?: unknown;
+        unique?: unknown;
+      };
+      return typeof field.name === "string"
+        ? [
+            {
+              name: field.name,
+              label: typeof field.label === "string" ? field.label : field.name,
+              required: field.required === true,
+              unique: field.unique === true,
+              translatable: translated.has(field.name),
+            },
+          ]
+        : [];
+    });
+    const languages = new Map<string, PartsLanguage>(
+      [...statuses].map(([locale, status]) => [
+        locale,
+        { live: status === "published", values: values.get(locale) ?? {} },
+      ])
+    );
+    const drafts = plan.draftsEligible
+      ? await new VersionsRepository(tx).findAllWorkingDrafts(
+          this.workingDraftRef(plan)
+        )
+      : [];
+    // The live shared values a whole-document change is compared with, read once where needed.
+    const live =
+      !draftsKeptByPart() && drafts.some(draft => draft.locale !== null)
+        ? await this.liveSharedDocument(tx, plan)
+        : null;
+    for (const draft of drafts) {
+      if (draft.locale === null) continue;
+      const snapshot = snapshotRecord(draft.snapshot);
+      const stored = languages.get(draft.locale);
+      const pending = Object.fromEntries(
+        Object.entries(snapshot).filter(([name]) => translated.has(name))
+      );
+      languages.set(draft.locale, {
+        live: stored?.live ?? false,
+        values: { ...stored?.values, ...pending },
+        ...(live === null
+          ? {}
+          : {
+              pendingSharedEdits: differingFields(
+                live.shared.filter(name => name in snapshot),
+                snapshot,
+                live.live,
+                live.views
+              ),
+            }),
+      });
+    }
+    return {
+      configured: this.localization?.locales.map(locale => locale.code) ?? [],
+      translated:
+        plan.singleMeta.localized === true && this.localization !== undefined,
+      defaultLocale: this.localization?.defaultLocale ?? "",
+      sharedLive: row.status === "published",
+      languages,
+      fields,
+      // A Single has no setting requiring every language to hold its own values.
+      requireEveryLanguage: false,
+    };
+  }
+
+  /**
    * The refusal of a publish found out of date inside its transaction, read
    * from the Single as it is now that the transaction has rolled back.
    */
@@ -831,7 +1549,9 @@ export class SinglePublishAllService extends BaseService {
    */
   private async resolvePublishTarget(
     slug: string,
-    options: PublishAllSingleLocalesOptions
+    options: SinglePartsOptions,
+    // The grant asked up front: an unpublish of chosen parts asks its own.
+    operation: "publish" | "unpublish" = "publish"
   ): Promise<
     { plan: PublishPlan } | { result: SingleResult<PublishAllSingleResult> }
   > {
@@ -880,7 +1600,7 @@ export class SinglePublishAllService extends BaseService {
       (singleMeta as { status?: boolean }).status === true
         ? await singleGrantRefusal({
             slug,
-            operation: "publish",
+            operation,
             user: options.user,
             overrideAccess: options.overrideAccess,
             rbacAccessControlService: this.rbacAccessControlService,
@@ -942,6 +1662,10 @@ export class SinglePublishAllService extends BaseService {
             getSingleHookCollection(slug)
           ) === true || getFieldFunctions("single", slug) !== undefined,
         actor: actorForWrite(options.actor ?? null, options.user),
+        // Only the chosen parts move, where a move of chosen parts names them.
+        ...(options.partsMove?.parts === undefined
+          ? {}
+          : { parts: options.partsMove.parts }),
         // Resolved before the transaction: it reads the component registry.
         draftsEligible: (
           await schemaDraftSplit({
@@ -1049,12 +1773,14 @@ export class SinglePublishAllService extends BaseService {
 
   private async authorizePublish(
     plan: PublishPlan,
-    options: PublishAllSingleLocalesOptions
+    options: PublishAllSingleLocalesOptions,
+    // An unpublish of chosen parts is judged by its own permission and rule.
+    operation: "publish" | "unpublish" = "publish"
   ): Promise<SingleResult<PublishAllSingleResult> | undefined> {
     return (
       (await checkSingleAccess({
         slug: plan.slug,
-        operation: "publish",
+        operation,
         user: options.user,
         overrideAccess: options.overrideAccess,
         // NOT route-authorized: the route authorized this POST as `update`, so
@@ -1082,10 +1808,11 @@ export class SinglePublishAllService extends BaseService {
   private async refusedInEachLanguage(
     plan: PublishPlan,
     options: PublishAllSingleLocalesOptions,
-    languages: readonly string[]
+    languages: readonly string[],
+    operation: "publish" | "unpublish" = "publish"
   ): Promise<SingleResult<PublishAllSingleResult> | undefined> {
     const denied = await askEachLanguage(languages, () =>
-      this.authorizePublish(plan, options)
+      this.authorizePublish(plan, options, operation)
     );
     if (!denied) return undefined;
     this.logger.warn("Publish refused in some languages", {
@@ -1140,12 +1867,10 @@ export class SinglePublishAllService extends BaseService {
         : new Map<string, string | null>();
     const judged = [
       ...pending,
-      ...languagesGoingLiveAsStored(
-        publishableShape(plan),
-        pending,
-        { mainStatus, companion: statuses },
-        new Set(this.localization?.locales.map(locale => locale.code) ?? [])
-      ),
+      ...this.goingLiveAsStored(plan, pending, {
+        mainStatus,
+        companion: statuses,
+      }),
     ];
     return this.publishLanguages(
       db,
@@ -1179,12 +1904,21 @@ export class SinglePublishAllService extends BaseService {
     const configured =
       this.localization?.locales.map(locale => locale.code) ?? [];
     const defaultLocale = this.localization?.defaultLocale;
+    const { parts } = plan;
+    const sharedMoves = movesShared(parts);
+    // Of what goes live, only the chosen languages, where a move chooses some; and the default
+    // language with no translation of its own where the shared part moves, since it goes live
+    // with the Single's own status.
     const goingLive = languagesGoingLiveFrom({
       statuses,
       configured,
       defaultLocale,
       mainPublished: mainStatus === "published",
-    });
+    }).filter(
+      locale =>
+        movesLanguage(parts, locale) ||
+        (sharedMoves && locale === defaultLocale && !statuses.has(locale))
+    );
     const service = this.fieldGroupDataService;
     const reaches =
       service !== undefined &&
@@ -1195,19 +1929,46 @@ export class SinglePublishAllService extends BaseService {
       ...new Set(
         [
           ...judged.map(change => change.locale ?? defaultLocale),
+          // A promoted change reaches every language only where it may carry the shared values,
+          // which it does where the shared part moves; otherwise its own language alone.
           ...pending.flatMap(change =>
-            languagesPromotedChangeReaches(
-              change.locale ?? defaultLocale,
-              configured
-            )
+            sharedMoves
+              ? languagesPromotedChangeReaches(
+                  change.locale ?? defaultLocale,
+                  configured
+                )
+              : [change.locale ?? defaultLocale]
           ),
           ...languagesToAsk(goingLive, {
-            configured,
+            configured: sharedMoves
+              ? configured
+              : configured.filter(locale => movesLanguage(parts, locale)),
             reachesLocalizedFieldGroup: reaches,
           }),
         ].filter((locale): locale is string => typeof locale === "string")
       ),
     ];
+  }
+
+  /**
+   * The languages a publish judges as stored beside its pending changes (see
+   * `languagesGoingLiveAsStored`), of the parts it moves: a move of chosen parts judges only
+   * theirs, the Single's own row (no language) only where the shared part moves.
+   */
+  private goingLiveAsStored(
+    plan: PublishPlan,
+    pending: ReadonlyArray<{ locale: string | null }>,
+    prior: {
+      mainStatus: unknown;
+      companion: ReadonlyMap<string, string | null>;
+    }
+  ): { locale: string | null; snapshot: Record<string, never> }[] {
+    return languagesGoingLiveAsStored(
+      publishableShape(plan),
+      pending,
+      prior,
+      new Set(this.localization?.locales.map(locale => locale.code) ?? [])
+    ).filter(change => movesPart(plan.parts, change.locale));
   }
 
   /**
@@ -1220,7 +1981,7 @@ export class SinglePublishAllService extends BaseService {
   private async commitPublish(
     tx: TransactionContext,
     plan: PublishPlan,
-    options: PublishAllSingleLocalesOptions,
+    options: SinglePartsOptions,
     /** Where a refusal to publish is kept for `publishAllLocales` to return. */
     refused: { denied?: SingleResult<PublishAllSingleResult> },
     /** The languages the publish rule was asked about before this transaction. */
@@ -1259,6 +2020,11 @@ export class SinglePublishAllService extends BaseService {
     // and every language it moves. A refusal throws, rolling back the publish.
     if (version) await this.refuseIfMoved(tx, plan, version);
 
+    // The value rules a publish of chosen parts was judged by before the transaction, judged
+    // again on the Single as this transaction locked it, before the gate is asked: a change saved
+    // since is what goes live.
+    await this.refuseValueRulesUnderLock(tx, plan, options, lockedRow, refused);
+
     // Each locale's committed `_status` BEFORE the bulk flip below, so a real
     // draft->published transition can be told from a locale that was already
     // live. Read under the lock and inside the retry so it reflects the state
@@ -1273,6 +2039,15 @@ export class SinglePublishAllService extends BaseService {
           )
         : new Map<string, string | null>();
 
+    // Whatever governs publishing beyond access, asked on this transaction once the row is locked
+    // and before anything is written: a part it holds back refuses the whole move. Its verdict is
+    // settled once the parts are written, before this commits.
+    const verdict = await this.gateVerdict(tx, plan, options, {
+      lockedRow,
+      priorCompanionStatuses,
+      refused,
+    });
+
     // Judged before anything is written, on the row this transaction locked:
     // the gate is the precondition of the publish, not a check of its result.
     // As ONE outcome, because the promotion applies every language's snapshot
@@ -1284,12 +2059,11 @@ export class SinglePublishAllService extends BaseService {
     // Derived from the stored changes, which carry the same languages as the
     // merged ones below: merging shared values replaces a change's values,
     // never a change or its language.
-    const alsoGoingLive = languagesGoingLiveAsStored(
-      publishableShape(plan),
-      stored,
-      { mainStatus: lockedRow.status, companion: priorCompanionStatuses },
-      new Set(this.localization?.locales.map(locale => locale.code) ?? [])
-    );
+    // Of the parts this moves, where it moves chosen ones.
+    const alsoGoingLive = this.goingLiveAsStored(plan, stored, {
+      mainStatus: lockedRow.status,
+      companion: priorCompanionStatuses,
+    });
 
     // What goes live, re-read on the row this transaction locked and before
     // anything is written. The rule was asked before the transaction; a
@@ -1332,14 +2106,17 @@ export class SinglePublishAllService extends BaseService {
     // What the publish does to each language, judged before it writes, as a
     // preview of it judges it. Nothing pending is out of date by now: the
     // shared values were judged above.
-    const languages = await this.languagesOf(
-      tx,
-      plan,
-      stored,
-      priorCompanionStatuses,
-      lockedRow.status,
-      new Map()
-    );
+    // Only the languages this moves are reported, where it moves chosen ones.
+    const languages = (
+      await this.languagesOf(
+        tx,
+        plan,
+        stored,
+        priorCompanionStatuses,
+        lockedRow.status,
+        new Map()
+      )
+    ).filter(language => movesLanguage(plan.parts, language.locale));
 
     // Every language's content as it stood before the drafts are promoted,
     // for the previous state its events are built from: the promotion
@@ -1410,11 +2187,17 @@ export class SinglePublishAllService extends BaseService {
     // nothing for the activity trail to record.
     const committed = hasMainStatus || priorCompanionStatuses.size > 0;
 
+    // The status before, of the parts this moved: the Single's own only where the shared part
+    // moved, and each moved language's.
     await this.recordPublishActivity(tx, plan, committed, {
       statusAfter: "published",
       statusBefore: statusBeforePublish([
-        lockedRow.status as string | null | undefined,
-        ...priorCompanionStatuses.values(),
+        ...(movesShared(plan.parts)
+          ? [lockedRow.status as string | null | undefined]
+          : []),
+        ...[...priorCompanionStatuses]
+          .filter(([locale]) => movesLanguage(plan.parts, locale))
+          .map(([, status]) => status),
       ]),
       promotedPendingEdits: pending.length > 0,
     });
@@ -1459,6 +2242,10 @@ export class SinglePublishAllService extends BaseService {
           priorCompanionValues,
         })
       : undefined;
+
+    // The gate's verdict finishes once the parts are written, on this transaction before it
+    // commits: a verdict that no longer holds throws, and the whole publish rolls back.
+    await verdict.settle();
 
     return {
       documentVanished: false,
@@ -1529,7 +2316,8 @@ export class SinglePublishAllService extends BaseService {
     let mainRowTransitioned = false;
     let firstPublishedAt: Date | undefined;
 
-    if (hasMainStatus) {
+    // The Single's own status is the shared part's: written only where the shared part moves.
+    if (hasMainStatus && movesShared(plan.parts)) {
       mainRowTransitioned = lockedStatus !== "published";
       firstPublishedAt = this.resolveFirstPublication(
         lockedRow,
@@ -1564,7 +2352,9 @@ export class SinglePublishAllService extends BaseService {
     // published and show none of the work being published.
     await this.promotePendingChanges(tx, plan, publishNow, pending, access);
 
-    if (companion && plan.companionPublishable) {
+    // Only the chosen languages' rows, where the move chooses some.
+    const translations = this.movedTranslations(plan);
+    if (companion && plan.companionPublishable && translations) {
       // Every stored translation moves in ONE statement, through the adapter's
       // typed update rather than an interpolated string, so the dialect quoting
       // and parameter binding are the adapter's problem and not this module's.
@@ -1574,7 +2364,7 @@ export class SinglePublishAllService extends BaseService {
           _status: "published",
           ...translationRevisionBumpColumns(plan.actor, this.adapter.dialect),
         },
-        this.whereEq("_parent", existingDoc.id)
+        translations
       );
     }
 
@@ -1589,7 +2379,9 @@ export class SinglePublishAllService extends BaseService {
       }
     )) ?? {
       ...lockedRow,
-      ...(hasMainStatus ? { status: "published", updated_at: publishNow } : {}),
+      ...(hasMainStatus && movesShared(plan.parts)
+        ? { status: "published", updated_at: publishNow }
+        : {}),
       ...(firstPublishedAt ? { first_published_at: firstPublishedAt } : {}),
     };
     return { publishedRow, mainRowTransitioned };
@@ -1810,11 +2602,55 @@ export class SinglePublishAllService extends BaseService {
       );
     }
 
-    await new VersionsRepository(tx).deleteAllWorkingDrafts(
-      this.workingDraftRef(plan)
-    );
-    // Their bases go with them, so retention may let those versions go.
-    await releaseAllSharedBases(tx, this.workingDraftRef(plan));
+    await this.consumePromotedDrafts(tx, plan, pending);
+  }
+
+  /**
+   * Remove the pending changes a publish promoted, with their bases, so retention may let those
+   * versions go. Every one where every part moves; where chosen parts move, only the promoted
+   * ones, the shared draft only where the shared part moved: another language's change stays
+   * held.
+   */
+  private async consumePromotedDrafts(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    pending: readonly PendingChange[]
+  ): Promise<void> {
+    const ref = this.workingDraftRef(plan);
+    if (plan.parts === undefined) {
+      await new VersionsRepository(tx).deleteAllWorkingDrafts(ref);
+      await releaseAllSharedBases(tx, ref);
+      return;
+    }
+    const slots = new Set(pending.map(change => change.locale));
+    // Kept by part, a language's promoted change carried the shared draft with it
+    // (`part-drafts`), so the shared draft goes too where the shared part moved.
+    if (movesShared(plan.parts) && draftsKeptByPart()) {
+      slots.add(SHARED_DRAFT_SLOT);
+    }
+    const repo = new VersionsRepository(tx);
+    for (const slot of slots) {
+      await repo.deleteWorkingDraft(ref, slot);
+      await releaseSharedBase(tx, ref, slot);
+    }
+  }
+
+  /**
+   * The translation rows a move writes the status of: every one of the Single's, or only the
+   * chosen languages' where the move chooses some.
+   */
+  private movedTranslations(plan: PublishPlan): WhereClause | null {
+    const { parts } = plan;
+    if (parts === undefined)
+      return this.whereEq("_parent", plan.existingDoc.id);
+    // No language chosen moves no translation: the shared part alone.
+    if (parts.locales.size === 0) return null;
+    return {
+      and: [
+        { column: "_parent", op: "=", value: plan.existingDoc.id },
+        { column: "_locale", op: "IN", value: [...parts.locales] },
+      ],
+    };
   }
 
   /**
@@ -1983,7 +2819,27 @@ export class SinglePublishAllService extends BaseService {
     plan: PublishPlan
   ): Promise<PendingChange[]> {
     if (!plan.draftsEligible) return [];
-    return pendingChangesInSaveOrder(tx, this.workingDraftRef(plan));
+    const { parts } = plan;
+    if (parts === undefined) {
+      return pendingChangesInSaveOrder(tx, this.workingDraftRef(plan));
+    }
+    // Languages moved without the shared part promote their own changes alone. Kept by part, a
+    // language's change as stored holds its own values only, where the save-order read lays the
+    // shared draft's under it, which would put the shared changes live without the shared part.
+    if (!parts.shared && draftsKeptByPart()) {
+      return (
+        await new VersionsRepository(tx).findAllWorkingDrafts(
+          this.workingDraftRef(plan)
+        )
+      ).filter(
+        change => change.locale !== null && parts.locales.has(change.locale)
+      );
+    }
+    // Each chosen language's change, and the shared part's own (kept under no language) only
+    // where the shared part moves.
+    return (
+      await pendingChangesInSaveOrder(tx, this.workingDraftRef(plan))
+    ).filter(change => movesPart(parts, change.locale));
   }
 
   /**
@@ -2162,12 +3018,11 @@ export class SinglePublishAllService extends BaseService {
           mainRow,
           [
             ...(verdict ? withVerdictState(stored, verdict) : stored),
-            ...languagesGoingLiveAsStored(
-              publishableShape(plan),
-              stored,
-              { mainStatus: mainRow.status, companion: prior },
-              new Set(this.localization?.locales.map(l => l.code) ?? [])
-            ),
+            // Of the parts the publish moves, as it judges them.
+            ...this.goingLiveAsStored(plan, stored, {
+              mainStatus: mainRow.status,
+              companion: prior,
+            }),
           ],
           caller,
           nameIn(document?.live ?? mainRow)
@@ -2175,14 +3030,17 @@ export class SinglePublishAllService extends BaseService {
       );
     }
     return {
-      languages: await this.languagesOf(
-        tx,
-        plan,
-        stored,
-        prior,
-        mainRow.status,
-        named.outOfDate
-      ),
+      // Only the languages the publish moves, where it moves chosen ones.
+      languages: (
+        await this.languagesOf(
+          tx,
+          plan,
+          stored,
+          prior,
+          mainRow.status,
+          named.outOfDate
+        )
+      ).filter(language => movesLanguage(plan.parts, language.locale)),
       blockers,
     };
   }
@@ -2312,7 +3170,9 @@ export class SinglePublishAllService extends BaseService {
     publishedRow: Record<string, unknown>,
     fieldConfigs: FieldConfig[],
     user: UserContext | undefined,
-    maxPerDoc: number | false | undefined
+    maxPerDoc: number | false | undefined,
+    // The status the move left the Single's content in: draft for an unpublish.
+    contentStatus: "published" | "draft" = "published"
   ): Promise<number | null> {
     // Match the read shape: keep user field keys (which may contain
     // underscores like `site_title`) exactly, converting only the timestamp
@@ -2339,7 +3199,7 @@ export class SinglePublishAllService extends BaseService {
       // A publish exists only under the Draft/Published lifecycle.
       lifecycle: true,
       ref: { scopeKind: "single", scopeSlug: slug, entryId },
-      contentStatus: "published",
+      contentStatus,
       parts: {
         parentRow: tagNestedComponentTypes(
           parentRow,
@@ -2372,6 +3232,8 @@ export class SinglePublishAllService extends BaseService {
       mainFrom: string | null;
       priorCompanionStatuses: Map<string, string | null>;
       versionNo: number | null;
+      /** The status the parts moved to: published, where absent. */
+      to?: "published" | "draft";
     }
   ): Promise<void> {
     const configuredLocales = new Set(
@@ -2386,16 +3248,23 @@ export class SinglePublishAllService extends BaseService {
         personName: publish.user?.name ?? null,
         versionNo: publish.versionNo,
       },
+      // Of the parts it moved: the Single's own status only where the shared part moved, and
+      // each moved language's.
       [
-        ...(plan.hasMainStatus
-          ? [{ from: publish.mainFrom, to: "published" }]
+        ...(plan.hasMainStatus && movesShared(plan.parts)
+          ? [{ from: publish.mainFrom, to: publish.to ?? "published" }]
           : []),
         ...[...publish.priorCompanionStatuses]
           .filter(
             ([locale]) =>
-              configuredLocales.size === 0 || configuredLocales.has(locale)
+              (configuredLocales.size === 0 || configuredLocales.has(locale)) &&
+              movesLanguage(plan.parts, locale)
           )
-          .map(([locale, from]) => ({ locale, from, to: "published" })),
+          .map(([locale, from]) => ({
+            locale,
+            from,
+            to: publish.to ?? "published",
+          })),
       ]
     );
   }
@@ -2464,12 +3333,13 @@ export class SinglePublishAllService extends BaseService {
       id: entryId,
     };
 
-    // The languages this publish tells, decided once for both passes below.
+    // The languages this publish tells, decided once for both passes below: only the chosen
+    // ones, where it moves chosen parts.
     const told = this.languagesTold({
       lockedRow,
       priorCompanionStatuses,
       promotedLocales: args.promotedLocales,
-    });
+    }).filter(language => movesLanguage(plan.parts, language.locale));
     // Whether the default language goes live through its own tagged events
     // here, a translation row its pending change creates included. When it
     // does, the per-locale pass emits its transition tagged with its locale,
@@ -2492,6 +3362,7 @@ export class SinglePublishAllService extends BaseService {
       priorCompanionValues: args.priorCompanionValues,
       // The untagged publish event is emitted only when the main row really
       // transitioned AND no default-locale companion event already encodes it.
+      // `mainRowTransitioned` is false where the shared part did not move.
       emitPublished:
         plan.hasMainStatus &&
         mainRowTransitioned &&
@@ -2509,6 +3380,71 @@ export class SinglePublishAllService extends BaseService {
       priorCompanionValues: args.priorCompanionValues,
     });
 
+    return documentRecorded || localeRecorded;
+  }
+
+  /**
+   * Append an unpublish's outbox events on its transaction, as a publish appends its own: one
+   * untagged `single.updated` for the write, with `single.unpublished` where the Single's own row
+   * was taken down and the default language's tagged events do not already say so; and, for each
+   * language taken down, the locale-tagged `single.updated` and `single.unpublished`.
+   */
+  private async recordUnpublishEvents(
+    tx: TransactionContext,
+    args: {
+      plan: PublishPlan;
+      lockedRow: Record<string, unknown>;
+      publishedRow: Record<string, unknown>;
+      mainRowTransitioned: boolean;
+      /** The configured languages this took down. */
+      takenDown: readonly string[];
+      priorComponents: Map<string, Record<string, unknown>>;
+      priorCompanionValues: Map<string, Record<string, unknown>>;
+    }
+  ): Promise<boolean> {
+    const { plan } = args;
+    const configured = new Set(
+      this.localization?.locales.map(locale => locale.code) ?? []
+    );
+    const told = args.takenDown
+      .filter(locale => configured.size === 0 || configured.has(locale))
+      .map(locale => ({
+        locale,
+        priorStatus: "published" as unknown,
+        promoted: false,
+      }));
+    const webhookFields = await expandComponentFields(
+      plan.fieldConfigs,
+      async componentSlug =>
+        this.fieldGroupDataService
+          ? await this.fieldGroupDataService.getComponentFields(
+              componentSlug,
+              tx.getDrizzle()
+            )
+          : null
+    );
+    const resource: WebhookResource = {
+      kind: "single",
+      slug: plan.slug,
+      id: plan.existingDoc.id,
+    };
+    const defaultLocale = this.localization?.defaultLocale;
+    const documentRecorded = await this.recordDocumentEvents(tx, {
+      ...args,
+      webhookFields,
+      resource,
+      emitPublished:
+        args.mainRowTransitioned &&
+        !told.some(language => language.locale === defaultLocale),
+      transition: "single.unpublished",
+    });
+    const localeRecorded = await this.recordLocaleEvents(tx, {
+      ...args,
+      told,
+      webhookFields,
+      resource,
+      to: "draft",
+    });
     return documentRecorded || localeRecorded;
   }
 
@@ -2643,6 +3579,8 @@ export class SinglePublishAllService extends BaseService {
       webhookFields: Awaited<ReturnType<typeof expandComponentFields>>;
       resource: WebhookResource;
       emitPublished: boolean;
+      /** The transition event emitted where `emitPublished`: a publish's, where absent. */
+      transition?: "single.published" | "single.unpublished";
       priorComponents: Map<string, Record<string, unknown>>;
       priorCompanionValues: Map<string, Record<string, unknown>>;
     }
@@ -2660,7 +3598,7 @@ export class SinglePublishAllService extends BaseService {
     });
     if (args.emitPublished) {
       const published = await recordMutationEvent(tx, {
-        type: "single.published",
+        type: args.transition ?? "single.published",
         resource,
         data,
         previous,
@@ -2711,6 +3649,8 @@ export class SinglePublishAllService extends BaseService {
       publishedRow: Record<string, unknown>;
       /** The languages this publish tells, with each one's status before. */
       told: readonly LanguageTold[];
+      /** The status the languages moved to: published, where absent. */
+      to?: "published" | "draft";
       webhookFields: Awaited<ReturnType<typeof expandComponentFields>>;
       resource: WebhookResource;
       priorComponents: Map<string, Record<string, unknown>>;
@@ -2734,6 +3674,7 @@ export class SinglePublishAllService extends BaseService {
         )
       : new Map<string, Record<string, unknown>>();
 
+    const to = args.to ?? "published";
     for (const { locale, priorStatus } of told) {
       const localeValues = after.get(locale) ?? {};
       const data = await this.buildEventDocument(
@@ -2742,7 +3683,7 @@ export class SinglePublishAllService extends BaseService {
         publishedRow,
         localeValues,
         locale,
-        "published"
+        to
       );
       const previous = await this.buildEventDocument(
         tx,
@@ -2755,10 +3696,13 @@ export class SinglePublishAllService extends BaseService {
       );
       // What a publish of this one language records: the write, and, where
       // the language went live, its move to published.
+      // A language taken down records the write and its move to draft.
       const types =
-        priorStatus === "published"
-          ? (["single.updated"] as const)
-          : (["single.updated", "single.published"] as const);
+        to === "draft"
+          ? (["single.updated", "single.unpublished"] as const)
+          : priorStatus === "published"
+            ? (["single.updated"] as const)
+            : (["single.updated", "single.published"] as const);
       for (const type of types) {
         const localeRecorded = await recordMutationEvent(tx, {
           type,
