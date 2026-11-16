@@ -9,13 +9,16 @@
  * @module cli/utils/migration-discovery
  */
 
-import { access, readdir, readFile } from "node:fs/promises";
+import { accessSync, readdirSync, readFileSync } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { checksumOf } from "../../domains/schema/migrate/applied-checksums";
 import { dialectVariantOf } from "../../domains/schema/migrate/dialect-variant";
+import { groupMigrationFiles } from "../../domains/schema/migrate/migration-groups";
+import { compareMigrationBaseNames } from "../../domains/schema/migrate/migration-order";
 import {
   classifyMigrationFile,
   hasOldBuilderName,
@@ -99,7 +102,26 @@ export interface MigrationFolder {
  * reading, so no reader can apply, list, count or compare a file another
  * reader ignores. Classifying reads statements, hence the dialect.
  */
-export async function readMigrationFolder(
+export function readMigrationFolder(
+  migrationsDir: string,
+  dialect: SupportedDialect,
+  declared?: DeclaredNames
+): Promise<MigrationFolder> {
+  // Read inside the promise, so a folder that cannot be read rejects it, as
+  // it did when this read the folder asynchronously.
+  return Promise.resolve().then(() =>
+    readMigrationFolderSync(migrationsDir, dialect, declared)
+  );
+}
+
+/**
+ * `readMigrationFolder`, read synchronously: the one reading, for a reader
+ * that cannot wait, such as `withNextly`, which names the build's newest
+ * migration while Next.js loads `next.config` (`build-schema-version`). The
+ * folder's listing and the few files with an old Builder name are all it
+ * reads, so it costs little whichever way it is called.
+ */
+export function readMigrationFolderSync(
   migrationsDir: string,
   dialect: SupportedDialect,
   /**
@@ -110,7 +132,7 @@ export async function readMigrationFolder(
    * resolves.
    */
   declared?: DeclaredNames
-): Promise<MigrationFolder> {
+): MigrationFolder {
   const folder: MigrationFolder = {
     groups: new Map(),
     oldBuilderFiles: [],
@@ -118,7 +140,7 @@ export async function readMigrationFolder(
   };
   let files: string[];
   try {
-    files = await readdir(migrationsDir);
+    files = readdirSync(migrationsDir);
   } catch (error) {
     // A folder that is not there holds no migrations. One that cannot be
     // listed may hold any, so the failure travels: read as empty, every mark
@@ -139,7 +161,7 @@ export async function readMigrationFolder(
       kept.push(file);
       continue;
     }
-    const content = await readFile(resolve(migrationsDir, file), "utf-8");
+    const content = readFileSync(resolve(migrationsDir, file), "utf-8");
     const snapshot = resolve(
       migrationsDir,
       "meta",
@@ -149,7 +171,7 @@ export async function readMigrationFolder(
     const kind = classifyMigrationFile({
       name: file,
       content,
-      hasSnapshot: await exists(snapshot),
+      hasSnapshot: exists(snapshot),
       hasDialectVariant: varied.has(file),
       markedAsIs: declared?.marks?.get(file) === checksum,
       dialect,
@@ -210,9 +232,10 @@ export function partialBuilderFileLacks(file: PartialBuilderFile): string {
  * (a permission, an I/O error) travels, since a snapshot read as missing
  * when it is there would set its file aside as an old Builder file.
  */
-async function exists(path: string): Promise<boolean> {
+function exists(path: string): boolean {
   try {
-    await access(path);
+    // Read synchronously, as the folder reading that asks it is.
+    accessSync(path);
     return true;
   } catch (error) {
     if ((error as { code?: string }).code === "ENOENT") return false;
@@ -312,35 +335,6 @@ export async function readableMigrationFiles(
   return files;
 }
 
-/** `files` grouped by base name, each group with its dialect variants. */
-function groupMigrationFiles(
-  files: readonly string[]
-): Map<string, MigrationGroup> {
-  const sqlFiles = [...files].sort((a, b) => a.localeCompare(b));
-
-  const migrationGroups = new Map<string, MigrationGroup>();
-
-  for (const file of sqlFiles) {
-    // A dialect suffix (`.mysql.sql`) names a variant of its base's group;
-    // read once, as the old-Builder reading reads it.
-    const variant = dialectVariantOf(file);
-    const baseName = variant?.baseName ?? basename(file, ".sql");
-    const dialect = variant?.dialect;
-
-    // Get or create the group for this base name
-    let group = migrationGroups.get(baseName);
-    if (!group) {
-      group = { baseName, variants: [] };
-      migrationGroups.set(baseName, group);
-    }
-
-    // Add this variant to the group
-    group.variants.push({ file, dialect });
-  }
-
-  return migrationGroups;
-}
-
 /**
  * Select the best migration variant for a given dialect.
  *
@@ -389,16 +383,10 @@ export function getSortedBaseNames(
   return Array.from(groups.keys()).sort(compareMigrationBaseNames);
 }
 
-/**
- * The order two app migrations run in, by base name (the filename without
- * `.sql`): code-unit order, so the timestamp prefix decides. The comparator
- * `getSortedBaseNames` sorts by, exported so anything that has to agree with
- * the run order asks this rather than sorting by a rule of its own.
- */
-export function compareMigrationBaseNames(a: string, b: string): number {
-  if (a === b) return 0;
-  return a < b ? -1 : 1;
-}
+// The run order's comparator lives in a module that imports nothing, so code
+// loaded with `next.config` can order the folder without this module's
+// imports; re-exported here, where readers of the folder have always found it.
+export { compareMigrationBaseNames };
 
 /**
  * What to tell an operator about a Builder-written file with no snapshot: it

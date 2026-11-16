@@ -15,7 +15,7 @@
 // never introspect user-owned tables outside our prefix space.
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 import { foreignKeyNameForColumns } from "../../services/index-name";
 import {
@@ -24,6 +24,7 @@ import {
 } from "../pg-visible-relation";
 
 import { sizeFromDeclaration } from "./declared-size";
+import { startCatalogOf } from "./start-catalog-scope";
 import type {
   CheckSpec,
   ColumnSpec,
@@ -179,29 +180,40 @@ function groupMysqlChecks(
   return checks;
 }
 
-/**
- * Read foreign keys and checks from information_schema for the snapshot's
- * tables, with the same empty-array-not-undefined contract as the other
- * dialects.
- */
-async function attachMysqlConstraints(
-  db: PgMysqlExecute,
-  snapshot: NextlySchemaSnapshot
-): Promise<void> {
-  // Nothing to attach, and nothing safe to ask: an empty snapshot renders the
-  // predicate below as `TABLE_NAME IN ()`, which MySQL rejects as a syntax
-  // error. The throw came out of introspection, so it took the whole snapshot
-  // with it rather than the constraints it could not read — and a fresh
-  // database, whose snapshot is empty by definition, is exactly when this
-  // runs.
-  if (snapshot.tables.length === 0) return;
+/** A snapshot's foreign keys and checks, by table, as one dialect's catalog reports them. */
+interface TableConstraints {
+  fks: Map<string, ForeignKeySpec[]>;
+  checks: Map<string, CheckSpec[]>;
+}
 
-  const tableNamesIn = sql.join(
-    snapshot.tables.map(t => sql`${t.name}`),
-    sql`, `
-  );
-  const fkRaw = await db.execute(
-    sql`SELECT kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME,
+/**
+ * Attach `constraints` to every table of the snapshot, with the same
+ * empty-array-not-undefined contract on every dialect.
+ */
+function attachConstraints(
+  snapshot: NextlySchemaSnapshot,
+  constraints: TableConstraints
+): void {
+  for (const table of snapshot.tables) {
+    table.foreignKeys = constraints.fks.get(table.name) ?? [];
+    table.checks = constraints.checks.get(table.name) ?? [];
+  }
+}
+
+/**
+ * Read foreign keys and checks from information_schema for the named tables.
+ * The caller never asks with no table: MySQL rejects `TABLE_NAME IN ()` as a
+ * syntax error, and a fresh database, whose snapshot is empty, is exactly
+ * when it would. With `parallel`, the two reads go together.
+ */
+async function readMysqlConstraints(
+  db: PgMysqlExecute,
+  tableNamesIn: SQL,
+  parallel: boolean
+): Promise<TableConstraints> {
+  const readForeignKeys = () =>
+    db.execute(
+      sql`SELECT kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME,
                kcu.ORDINAL_POSITION, kcu.REFERENCED_TABLE_NAME,
                kcu.REFERENCED_COLUMN_NAME, rc.DELETE_RULE, rc.UPDATE_RULE
         FROM information_schema.KEY_COLUMN_USAGE kcu
@@ -213,11 +225,10 @@ async function attachMysqlConstraints(
           AND kcu.TABLE_NAME IN (${tableNamesIn})
           AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
         ORDER BY kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION`
-  );
-  const fks = groupMysqlForeignKeys(mysqlResultRows<MysqlForeignKeyRow>(fkRaw));
-
-  const checkRaw = await db.execute(
-    sql`SELECT tc.TABLE_NAME, cc.CONSTRAINT_NAME, cc.CHECK_CLAUSE
+    );
+  const readChecks = () =>
+    db.execute(
+      sql`SELECT tc.TABLE_NAME, cc.CONSTRAINT_NAME, cc.CHECK_CLAUSE
         FROM information_schema.TABLE_CONSTRAINTS tc
         JOIN information_schema.CHECK_CONSTRAINTS cc
           ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
@@ -225,13 +236,14 @@ async function attachMysqlConstraints(
         WHERE tc.CONSTRAINT_SCHEMA = DATABASE()
           AND tc.CONSTRAINT_TYPE = 'CHECK'
           AND tc.TABLE_NAME IN (${tableNamesIn})`
-  );
-  const checks = groupMysqlChecks(mysqlResultRows<MysqlCheckRow>(checkRaw));
-
-  for (const table of snapshot.tables) {
-    table.foreignKeys = fks.get(table.name) ?? [];
-    table.checks = checks.get(table.name) ?? [];
-  }
+    );
+  const [fkRaw, checkRaw] = parallel
+    ? await Promise.all([readForeignKeys(), readChecks()])
+    : [await readForeignKeys(), await readChecks()];
+  return {
+    fks: groupMysqlForeignKeys(mysqlResultRows<MysqlForeignKeyRow>(fkRaw)),
+    checks: groupMysqlChecks(mysqlResultRows<MysqlCheckRow>(checkRaw)),
+  };
 }
 
 /**
@@ -360,19 +372,15 @@ function groupPgChecks(
  * table the constraint actually references, so once the constraint belongs to
  * the right table its target is exact.
  */
-async function attachPgConstraints(
+async function readPgConstraints(
   db: PgMysqlExecute,
-  snapshot: NextlySchemaSnapshot,
-  // `unknown` alone: the union with `ReturnType<typeof sql.join>` said
-  // nothing, because `unknown` absorbs every member of a union it is in. The
-  // value is passed straight through to a tagged template, which accepts it.
-  tableNamesIn: unknown
-): Promise<void> {
-  // The same empty-snapshot guard MySQL needs: PostgreSQL rejects `IN ()` too.
-  if (snapshot.tables.length === 0) return;
-
-  const fkResult = (await db.execute(
-    sql`SELECT con.conname AS name, t.relname AS table, ref.relname AS ref_table,
+  // Never empty: PostgreSQL rejects `IN ()`, so the caller asks only with a table.
+  tableNamesIn: SQL,
+  parallel: boolean
+): Promise<TableConstraints> {
+  const readForeignKeys = () =>
+    db.execute(
+      sql`SELECT con.conname AS name, t.relname AS table, ref.relname AS ref_table,
                con.confdeltype AS on_delete, con.confupdtype AS on_update,
                (SELECT array_agg(att.attname ORDER BY ord)
                 FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
@@ -388,35 +396,36 @@ async function attachPgConstraints(
         WHERE con.contype = 'f'
           AND ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
           AND t.relname IN (${tableNamesIn})`
-  )) as {
-    rows: Array<{
-      name: string;
-      table: string;
-      ref_table: string;
-      on_delete: string;
-      on_update: string;
-      columns: string[];
-      ref_columns: string[];
+    ) as Promise<{
+      rows: Array<{
+        name: string;
+        table: string;
+        ref_table: string;
+        on_delete: string;
+        on_update: string;
+        columns: string[];
+        ref_columns: string[];
+      }>;
     }>;
-  };
-  const checkResult = (await db.execute(
-    sql`SELECT con.conname AS name, t.relname AS table,
+  const readChecks = () =>
+    db.execute(
+      sql`SELECT con.conname AS name, t.relname AS table,
                pg_get_constraintdef(con.oid) AS definition
         FROM pg_constraint con
         JOIN pg_class t ON t.oid = con.conrelid
         WHERE con.contype = 'c'
           AND ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
           AND t.relname IN (${tableNamesIn})`
-  )) as {
-    rows: Array<{ name: string; table: string; definition: string }>;
+    ) as Promise<{
+      rows: Array<{ name: string; table: string; definition: string }>;
+    }>;
+  const [fkResult, checkResult] = parallel
+    ? await Promise.all([readForeignKeys(), readChecks()])
+    : [await readForeignKeys(), await readChecks()];
+  return {
+    fks: groupPgForeignKeys(fkResult?.rows ?? []),
+    checks: groupPgChecks(checkResult?.rows ?? []),
   };
-
-  const fks = groupPgForeignKeys(fkResult?.rows ?? []);
-  const checks = groupPgChecks(checkResult?.rows ?? []);
-  for (const table of snapshot.tables) {
-    table.foreignKeys = fks.get(table.name) ?? [];
-    table.checks = checks.get(table.name) ?? [];
-  }
 }
 
 /**
@@ -733,20 +742,15 @@ export async function introspectLiveColumns(
     const dbTyped = db as PgMysqlExecute;
     // mysql2's execute returns a [rows, fieldPackets] tuple; drizzle-orm/mysql2
     // sometimes wraps it. Handle both shapes defensively.
-    const result = (await dbTyped.execute(
-      sql`SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT,
+    const readColumns = () =>
+      dbTyped.execute(
+        sql`SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT,
                  DATA_TYPE, EXTRA
           FROM information_schema.columns
           WHERE TABLE_SCHEMA = DATABASE()
             AND TABLE_NAME IN (${tableNamesIn})
           ORDER BY TABLE_NAME, ORDINAL_POSITION`
-    )) as MysqlRow[] | [MysqlRow[], unknown];
-    const rows: MysqlRow[] =
-      Array.isArray(result) &&
-      result.length > 0 &&
-      Array.isArray((result as unknown[])[0])
-        ? (result as [MysqlRow[], unknown])[0]
-        : (result as MysqlRow[]);
+      ) as Promise<MysqlRow[] | [MysqlRow[], unknown]>;
     // The key comes from the PRIMARY index rather than `COLUMN_KEY`, which
     // does not mean what its name suggests: a table with no primary key but a
     // NOT NULL UNIQUE index reports `PRI` for that column, because InnoDB
@@ -755,13 +759,26 @@ export async function introspectLiveColumns(
     // has none and rebuilding it elsewhere with the wrong key. Verified
     // against MySQL 8: `STATISTICS` shows only the `slug` index, no `PRIMARY`,
     // while `COLUMN_KEY` still says `PRI`.
-    const pkRaw = (await dbTyped.execute(
-      sql`SELECT TABLE_NAME, COLUMN_NAME
+    const readPrimaryKeys = () =>
+      dbTyped.execute(
+        sql`SELECT TABLE_NAME, COLUMN_NAME
           FROM information_schema.STATISTICS
           WHERE TABLE_SCHEMA = DATABASE()
             AND TABLE_NAME IN (${tableNamesIn})
             AND INDEX_NAME = 'PRIMARY'`
-    )) as MysqlPrimaryKeyRow[] | [MysqlPrimaryKeyRow[], unknown];
+      ) as Promise<MysqlPrimaryKeyRow[] | [MysqlPrimaryKeyRow[], unknown]>;
+    // Sent together while a production start holds its catalog open, where
+    // the round trips are counted (see `introspectLiveSnapshot`).
+    const [result, pkRaw] =
+      startCatalogOf(db) !== undefined
+        ? await Promise.all([readColumns(), readPrimaryKeys()])
+        : [await readColumns(), await readPrimaryKeys()];
+    const rows: MysqlRow[] =
+      Array.isArray(result) &&
+      result.length > 0 &&
+      Array.isArray((result as unknown[])[0])
+        ? (result as [MysqlRow[], unknown])[0]
+        : (result as MysqlRow[]);
     const pkRows: MysqlPrimaryKeyRow[] =
       Array.isArray(pkRaw) &&
       pkRaw.length > 0 &&
@@ -775,17 +792,28 @@ export async function introspectLiveColumns(
     return buildSnapshotFromMysqlRows(rows, primaryKeyColumns);
   }
 
-  // SQLite - PRAGMA per table; no information_schema.
+  // SQLite has no information_schema. Its catalog PRAGMAs are read as table-valued functions
+  // joined over `sqlite_master`, so one statement describes every named table rather than one
+  // PRAGMA per table: the statements no longer grow with the number of tables.
   const dbTyped = db as SqliteAll;
+  const asked = sqliteAskedTables(tableNames);
+  const rows = (await dbTyped.all(
+    sql`SELECT m.name AS tbl, p.cid AS cid, p.name AS name, p.type AS type,
+               p."notnull" AS "notnull", p.dflt_value AS dflt_value, p.pk AS pk
+        FROM sqlite_master m
+        JOIN pragma_table_info(m.name) p
+        WHERE m.type IN ('table', 'view')
+          AND lower(m.name) IN (${asked.lowerIn})
+        ORDER BY m.name, p.cid`
+  )) as Array<SqliteRow & { tbl: string }>;
+  const rowsByTable = groupByAskedTable(rows, asked);
   const tables: TableSpec[] = [];
-  for (const table of tableNames) {
-    const rows = await dbTyped.all(
-      sql`PRAGMA table_info(${sql.identifier(table)})`
-    );
-    if (rows.length === 0) continue;
+  for (const table of asked.names) {
+    const tableRows = rowsByTable.get(table) ?? [];
+    if (tableRows.length === 0) continue;
     tables.push({
       name: table,
-      columns: rows.map(
+      columns: tableRows.map(
         (r): ColumnSpec => ({
           name: r.name,
           // SQLite's PRAGMA table_info auto-uppercases the type name
@@ -1130,37 +1158,81 @@ export async function introspectSqliteRebuildLosses(
   return found;
 }
 
+/**
+ * The live tables' columns, indexes and constraints.
+ *
+ * While a production start holds its catalog open for `db`
+ * (`start-catalog-scope`), the catalog queries go together rather than one
+ * after another: there the round trips are counted. Otherwise each waits for
+ * the last, as a caller holding a small pool or a lock may need.
+ */
 export async function introspectLiveSnapshot(
   db: unknown,
   dialect: SupportedDialect,
   tableNames: string[]
 ): Promise<NextlySchemaSnapshot> {
-  const snapshot = await introspectLiveColumns(db, dialect, tableNames);
-  if (tableNames.length === 0) return snapshot;
+  if (tableNames.length === 0) return { tables: [] };
+  const parallel = startCatalogOf(db) !== undefined;
+  if (dialect === "postgresql") {
+    return readPgLiveSnapshot(db as PgMysqlExecute, tableNames, parallel);
+  }
+  if (dialect === "mysql") {
+    return readMysqlLiveSnapshot(db as PgMysqlExecute, tableNames, parallel);
+  }
+  return readSqliteLiveSnapshot(db, tableNames);
+}
 
+/**
+ * The columns, then the indexes and the constraints: all three sent together
+ * with `parallel`, else each read after the last, and the constraints left
+ * unread when no table was found, as there is nothing to attach them to.
+ */
+async function readColumnsIndexesConstraints<Indexes>(
+  columns: () => Promise<NextlySchemaSnapshot>,
+  indexes: () => Promise<Indexes>,
+  constraints: (
+    found: NextlySchemaSnapshot | undefined
+  ) => Promise<TableConstraints>,
+  parallel: boolean
+): Promise<[NextlySchemaSnapshot, Indexes, TableConstraints | undefined]> {
+  if (parallel) {
+    return Promise.all([columns(), indexes(), constraints(undefined)]);
+  }
+  const found = await columns();
+  const indexRows = await indexes();
+  return [
+    found,
+    indexRows,
+    found.tables.length === 0 ? undefined : await constraints(found),
+  ];
+}
+
+async function readPgLiveSnapshot(
+  db: PgMysqlExecute,
+  tableNames: string[],
+  parallel: boolean
+): Promise<NextlySchemaSnapshot> {
   const tableNamesIn = sql.join(
     tableNames.map(t => sql`${t}`),
     sql`, `
   );
-
-  if (dialect === "postgresql") {
-    const dbTyped = db as PgMysqlExecute;
-    // Index query: one row per KEY of every non-primary index, in key order.
-    // `indnkeyatts` stops before INCLUDE columns, which are payload rather
-    // than part of what the index is on. A key whose `indkey` entry is 0 is
-    // an expression, printed by `pg_get_indexdef` for that key position; a
-    // partial index's predicate is printed by `pg_get_expr`. Both reach the
-    // snapshot in the server's spelling, and the diff reads them as syntax —
-    // without them a declared expression or partial index never matched the
-    // live one and was re-planned on every comparison.
-    //
-    // Scoped through the relation like the column query (`introspectLiveColumns`). `pg_class.relname`
-    // is unique per schema, not per database, so without a scope a same-named
-    // table in another schema contributes its indexes to these rows and
-    // `attachIndexes` groups them under the same name — reporting indexes that
-    // are not on the table being introspected, and masking the absence of ones
-    // that should be.
-    const idxResult = (await dbTyped.execute(
+  // Index query: one row per KEY of every non-primary index, in key order.
+  // `indnkeyatts` stops before INCLUDE columns, which are payload rather
+  // than part of what the index is on. A key whose `indkey` entry is 0 is
+  // an expression, printed by `pg_get_indexdef` for that key position; a
+  // partial index's predicate is printed by `pg_get_expr`. Both reach the
+  // snapshot in the server's spelling, and the diff reads them as syntax —
+  // without them a declared expression or partial index never matched the
+  // live one and was re-planned on every comparison.
+  //
+  // Scoped through the relation like the column query (`introspectLiveColumns`). `pg_class.relname`
+  // is unique per schema, not per database, so without a scope a same-named
+  // table in another schema contributes its indexes to these rows and
+  // `attachIndexes` groups them under the same name — reporting indexes that
+  // are not on the table being introspected, and masking the absence of ones
+  // that should be.
+  const readIndexes = () =>
+    db.execute(
       sql`SELECT t.relname AS table, i.relname AS index, ix.indisunique AS unique,
                  pg_get_expr(ix.indpred, ix.indrelid) AS predicate,
                  (ix.indkey[k.ord - 1] = 0) AS expression,
@@ -1178,31 +1250,47 @@ export async function introspectLiveSnapshot(
             AND t.relname IN (${tableNamesIn})
             AND ix.indisprimary = false
           ORDER BY t.relname, i.relname, k.ord`
-    )) as {
-      rows: IndexRow[];
-    };
-    attachIndexes(
-      snapshot,
-      idxResult.rows.map(r => ({
-        table: r.table,
-        index: r.index,
-        unique: r.unique,
-        column: r.column,
-        expression: r.expression === true,
-        predicate: r.predicate,
-      }))
+    ) as Promise<{ rows: IndexRow[] }>;
+  const [snapshot, idxResult, constraints] =
+    await readColumnsIndexesConstraints(
+      () => introspectLiveColumns(db, "postgresql", tableNames),
+      readIndexes,
+      // PostgreSQL rejects `IN ()` too; the names are never empty here.
+      () => readPgConstraints(db, tableNamesIn, parallel),
+      parallel
     );
-    await attachPgConstraints(dbTyped, snapshot, tableNamesIn);
-    normalizeIndexOrder(snapshot);
-    return snapshot;
-  }
+  attachIndexes(
+    snapshot,
+    idxResult.rows.map(r => ({
+      table: r.table,
+      index: r.index,
+      unique: r.unique,
+      column: r.column,
+      expression: r.expression === true,
+      predicate: r.predicate,
+    }))
+  );
+  if (constraints) attachConstraints(snapshot, constraints);
+  normalizeIndexOrder(snapshot);
+  return snapshot;
+}
 
-  if (dialect === "mysql") {
-    const dbTyped = db as PgMysqlExecute;
-    // Index query: information_schema.STATISTICS. Exclude PRIMARY. A
-    // functional key part reports no COLUMN_NAME; its SQL is in EXPRESSION,
-    // stored escaped the way CHECK_CLAUSE is (see `mysqlCheckExpression`).
-    const idxRaw = (await dbTyped.execute(
+async function readMysqlLiveSnapshot(
+  db: PgMysqlExecute,
+  tableNames: string[],
+  parallel: boolean
+): Promise<NextlySchemaSnapshot> {
+  const namesIn = (names: readonly string[]) =>
+    sql.join(
+      names.map(t => sql`${t}`),
+      sql`, `
+    );
+  const tableNamesIn = namesIn(tableNames);
+  // Index query: information_schema.STATISTICS. Exclude PRIMARY. A
+  // functional key part reports no COLUMN_NAME; its SQL is in EXPRESSION,
+  // stored escaped the way CHECK_CLAUSE is (see `mysqlCheckExpression`).
+  const readIndexes = () =>
+    db.execute(
       sql`SELECT TABLE_NAME, INDEX_NAME, NON_UNIQUE, COLUMN_NAME, SEQ_IN_INDEX,
                  EXPRESSION
           FROM information_schema.STATISTICS
@@ -1210,63 +1298,99 @@ export async function introspectLiveSnapshot(
             AND TABLE_NAME IN (${tableNamesIn})
             AND INDEX_NAME <> 'PRIMARY'
           ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`
-    )) as MysqlIndexRow[] | [MysqlIndexRow[], unknown];
-    const idxRows: MysqlIndexRow[] =
-      Array.isArray(idxRaw) &&
-      idxRaw.length > 0 &&
-      Array.isArray((idxRaw as unknown[])[0])
-        ? (idxRaw as [MysqlIndexRow[], unknown])[0]
-        : (idxRaw as MysqlIndexRow[]);
-    attachIndexes(
-      snapshot,
-      idxRows.map(r => {
-        const expression =
-          r.COLUMN_NAME === null && typeof r.EXPRESSION === "string";
-        return {
-          table: r.TABLE_NAME,
-          index: r.INDEX_NAME,
-          unique: Number(r.NON_UNIQUE) === 0,
-          column: expression
-            ? mysqlCheckExpression(r.EXPRESSION ?? "")
-            : (r.COLUMN_NAME ?? ""),
-          expression,
-        };
-      })
     );
-    await attachMysqlConstraints(dbTyped, snapshot);
-    dropForeignKeyBackingIndexes(snapshot);
-    normalizeIndexOrder(snapshot);
-    return snapshot;
-  }
+  const [snapshot, idxRaw, constraints] = await readColumnsIndexesConstraints(
+    () => introspectLiveColumns(db, "mysql", tableNames),
+    readIndexes,
+    // Asked of the tables found when they are known: MySQL rejects
+    // `TABLE_NAME IN ()`, and a fresh database finds none.
+    found =>
+      readMysqlConstraints(
+        db,
+        found ? namesIn(found.tables.map(t => t.name)) : tableNamesIn,
+        parallel
+      ),
+    parallel
+  );
+  attachIndexes(
+    snapshot,
+    mysqlResultRows<MysqlIndexRow>(idxRaw).map(r => {
+      const expression =
+        r.COLUMN_NAME === null && typeof r.EXPRESSION === "string";
+      return {
+        table: r.TABLE_NAME,
+        index: r.INDEX_NAME,
+        unique: Number(r.NON_UNIQUE) === 0,
+        column: expression
+          ? mysqlCheckExpression(r.EXPRESSION ?? "")
+          : (r.COLUMN_NAME ?? ""),
+        expression,
+      };
+    })
+  );
+  if (constraints) attachConstraints(snapshot, constraints);
+  dropForeignKeyBackingIndexes(snapshot);
+  normalizeIndexOrder(snapshot);
+  return snapshot;
+}
 
-  // SQLite - PRAGMA per table; no information_schema.
-  const dbAny = db as {
-    all(query: unknown): SqliteIndexListRow[] | Promise<SqliteIndexListRow[]>;
-  };
+/**
+ * SQLite: indexes and foreign keys for every table in one statement each,
+ * through the table-valued PRAGMA functions, each carrying the CREATE
+ * statement it may need (an index's, for a partial or expression index; a
+ * table's, for its constraints' names and its checks).
+ */
+async function readSqliteLiveSnapshot(
+  db: unknown,
+  tableNames: string[]
+): Promise<NextlySchemaSnapshot> {
+  const snapshot = await introspectLiveColumns(db, "sqlite", tableNames);
+  if (snapshot.tables.length === 0) return snapshot;
+  const dbAny = db as { all(query: unknown): unknown };
+  const asked = sqliteAskedTables(snapshot.tables.map(spec => spec.name));
+  const indexRows = (await Promise.resolve(
+    dbAny.all(
+      sql`SELECT m.name AS tbl, il.seq AS seq, il.name AS idx, il."unique" AS "unique",
+                 il.origin AS origin, il.partial AS partial, ii.seqno AS seqno,
+                 ii.name AS col, im.sql AS idx_sql
+          FROM sqlite_master m
+          JOIN pragma_index_list(m.name) il
+          JOIN pragma_index_info(il.name) ii
+          LEFT JOIN sqlite_master im ON im.type = 'index' AND im.name = il.name
+          WHERE m.type = 'table'
+            AND lower(m.name) IN (${asked.lowerIn})
+          ORDER BY m.name, il.seq, ii.seqno`
+    )
+  )) as SqliteIndexKeyRow[];
+  const constraintRows = (await Promise.resolve(
+    dbAny.all(
+      sql`SELECT m.name AS tbl, m.sql AS create_sql, fk.id AS id, fk.seq AS seq,
+                 fk."table" AS "table", fk."from" AS "from", fk."to" AS "to",
+                 fk.on_delete AS on_delete, fk.on_update AS on_update
+          FROM sqlite_master m
+          LEFT JOIN pragma_foreign_key_list(m.name) fk
+          WHERE m.type = 'table'
+            AND lower(m.name) IN (${asked.lowerIn})`
+    )
+  )) as SqliteConstraintRow[];
+  const indexesByTable = groupByAskedTable(indexRows ?? [], asked);
+  const constraintsByTable = groupByAskedTable(constraintRows ?? [], asked);
   for (const spec of snapshot.tables) {
-    const table = spec.name;
-    // Indexes: PRAGMA index_list + index_info. Filter pk-origin indexes and
-    // SQLite's auto-created sqlite_autoindex_* (unique-constraint backed).
-    const idxList = await dbAny.all(
-      sql`PRAGMA index_list(${sql.identifier(table)})`
+    spec.indexes = sqliteIndexesFrom(indexesByTable.get(spec.name) ?? []);
+    const constraints = constraintsByTable.get(spec.name) ?? [];
+    // The stored CREATE TABLE, for both constraint readers below.
+    const createSql = constraints[0]?.create_sql ?? undefined;
+    // Foreign keys: foreign_key_list, grouped by the id composite FKs share. The PRAGMA carries
+    // no constraint name, so the name is read from the CREATE statement, and derived by the
+    // compiler's own rule only for a key declared without one. A table with none has one row
+    // of nulls from the outer join.
+    spec.foreignKeys = sqliteForeignKeysFrom(
+      constraints.filter(
+        (row): row is SqliteConstraintRow & { id: number } => row.id !== null
+      ),
+      spec.name,
+      createSql
     );
-    const indexes: IndexSpec[] = [];
-    for (const ix of idxList) {
-      if (ix.origin === "pk") continue;
-      if (ix.name.startsWith("sqlite_autoindex_")) continue;
-      const infoRows = (await dbAny.all(
-        sql`PRAGMA index_info(${sql.identifier(ix.name)})`
-      )) as unknown as SqliteIndexInfoRow[];
-      indexes.push(await sqliteIndex(dbAny, ix, infoRows));
-    }
-    spec.indexes = indexes;
-    // The stored CREATE TABLE, read once for both constraint readers below.
-    const createSql = await sqliteCreateStatement(dbAny, "table", table);
-    // Foreign keys: PRAGMA foreign_key_list, grouped by the id composite
-    // FKs share. The PRAGMA carries no constraint name, so the name is read
-    // from the CREATE statement, and derived by the compiler's own rule only
-    // for a key declared without one.
-    spec.foreignKeys = await sqliteForeignKeys(dbAny, table, createSql);
     // Checks: SQLite has no catalog for them, so the CREATE statement is
     // parsed for NAMED constraints. Anonymous checks stay invisible to the
     // diff, which matches by name and could not match them anyway.
@@ -1274,6 +1398,35 @@ export async function introspectLiveSnapshot(
   }
   normalizeIndexOrder(snapshot);
   return snapshot;
+}
+
+/**
+ * A table's indexes from its index key rows (index_list + index_info, one row
+ * per key), leaving out pk-origin indexes and SQLite's auto-created
+ * sqlite_autoindex_* (unique-constraint backed).
+ */
+function sqliteIndexesFrom(rows: readonly SqliteIndexKeyRow[]): IndexSpec[] {
+  const keysByIndex = new Map<string, SqliteIndexKeyRow[]>();
+  for (const row of rows) {
+    if (row.origin === "pk" || row.idx.startsWith("sqlite_autoindex_")) {
+      continue;
+    }
+    const keys = keysByIndex.get(row.idx) ?? [];
+    keys.push(row);
+    keysByIndex.set(row.idx, keys);
+  }
+  return [...keysByIndex.values()].map(keys =>
+    sqliteIndexFrom(
+      {
+        name: keys[0].idx,
+        unique: keys[0].unique,
+        origin: keys[0].origin,
+        partial: keys[0].partial,
+      },
+      keys.map(key => ({ name: key.col })),
+      keys[0].idx_sql ?? undefined
+    )
+  );
 }
 
 /** The PRAGMA's action spellings, as the diff's ReferentialAction spells them. */
@@ -1285,27 +1438,98 @@ const SQLITE_FK_ACTION: Record<string, ForeignKeySpec["onDelete"]> = {
   "NO ACTION": "no action",
 };
 
-async function sqliteForeignKeys(
-  // The return is `unknown` for the same reason the parameter is: a promise of
-  // unknown and a plain unknown collapse to one type, and the caller awaits it
-  // either way.
-  dbAny: { all(query: unknown): unknown },
+/** One foreign key column of a table, as `pragma_foreign_key_list` reports it. */
+interface SqliteForeignKeyRow {
+  id: number;
+  seq: number;
+  table: string;
+  from: string;
+  to: string;
+  on_delete: string;
+  on_update: string;
+}
+
+/** A table's `sqlite_master` row beside each of its foreign key columns (nulls for none). */
+interface SqliteConstraintRow
+  extends Omit<SqliteForeignKeyRow, "id">,
+    SqliteTableRow {
+  id: number | null;
+  create_sql: string | null;
+}
+
+/** One key of one index, with the index's list entry and stored CREATE INDEX. */
+interface SqliteIndexKeyRow extends SqliteTableRow {
+  idx: string;
+  unique: number;
+  origin: string;
+  partial?: number;
+  col: string | null;
+  idx_sql: string | null;
+}
+
+/** A row that names the table it describes. */
+interface SqliteTableRow {
+  tbl: string;
+}
+
+/** The tables a SQLite read was asked about: each once, by the spelling it was asked by. */
+interface SqliteAskedTables {
+  /** The asked spellings, in the order asked, each table once. */
+  names: string[];
+  /** Each table's ASCII-lower-cased name to its asked spelling. */
+  byLower: Map<string, string>;
+  /** The lower-cased names, for an `IN` list. */
+  lowerIn: SQL;
+}
+
+/**
+ * SQLite compares identifiers without regard to ASCII case, as its PRAGMAs looked each named
+ * table up, so a table matches by its ASCII-lower-cased name (SQLite's `lower()` folds ASCII
+ * only) and keeps the spelling it was asked for.
+ */
+function sqliteAskedTables(tableNames: readonly string[]): SqliteAskedTables {
+  const byLower = new Map<string, string>();
+  for (const name of tableNames) {
+    const lower = asciiLower(name);
+    if (!byLower.has(lower)) byLower.set(lower, name);
+  }
+  return {
+    names: [...byLower.values()],
+    byLower,
+    lowerIn: sql.join(
+      [...byLower.keys()].map(name => sql`${name}`),
+      sql`, `
+    ),
+  };
+}
+
+function asciiLower(name: string): string {
+  return name.replace(/[A-Z]/g, letter => letter.toLowerCase());
+}
+
+/** Rows grouped by the asked spelling of the table each names, in their order. */
+function groupByAskedTable<Row extends SqliteTableRow>(
+  rows: readonly Row[],
+  asked: SqliteAskedTables
+): Map<string, Row[]> {
+  const grouped = new Map<string, Row[]>();
+  for (const row of rows) {
+    const table = asked.byLower.get(asciiLower(row.tbl));
+    if (table === undefined) continue;
+    const list = grouped.get(table) ?? [];
+    list.push(row);
+    grouped.set(table, list);
+  }
+  return grouped;
+}
+
+function sqliteForeignKeysFrom(
+  rows: readonly SqliteForeignKeyRow[],
   table: string,
   createSql: string | undefined
-): Promise<ForeignKeySpec[] | undefined> {
-  const rows = (await Promise.resolve(
-    dbAny.all(sql`PRAGMA foreign_key_list(${sql.identifier(table)})`)
-  )) as Array<{
-    id: number;
-    seq: number;
-    table: string;
-    from: string;
-    to: string;
-    on_delete: string;
-    on_update: string;
-  }>;
-  if ((rows ?? []).length === 0) return [];
-  const byId = new Map<number, typeof rows>();
+): ForeignKeySpec[] {
+  if (rows.length === 0) return [];
+  const byId = new Map<number, SqliteForeignKeyRow[]>();
   for (const row of rows) {
     const list = byId.get(row.id) ?? [];
     list.push(row);
@@ -1385,21 +1609,6 @@ function namedSqliteForeignKeys(
   return names;
 }
 
-/** The stored CREATE statement of a table or index, when SQLite kept one. */
-async function sqliteCreateStatement(
-  dbAny: { all(query: unknown): unknown },
-  type: "table" | "index",
-  name: string
-): Promise<string | undefined> {
-  const rows = (await Promise.resolve(
-    dbAny.all(
-      sql`SELECT sql FROM sqlite_master WHERE type = ${type} AND name = ${name}`
-    )
-  )) as Array<{ sql: string | null }> | undefined;
-  const text = (rows ?? [])[0]?.sql;
-  return typeof text === "string" ? text : undefined;
-}
-
 /**
  * One index as SQLite describes it.
  *
@@ -1410,11 +1619,12 @@ async function sqliteCreateStatement(
  * partial or expression index never matched the live one, and every push
  * dropped and recreated it.
  */
-async function sqliteIndex(
-  dbAny: { all(query: unknown): unknown },
+function sqliteIndexFrom(
   ix: SqliteIndexListRow,
-  infoRows: readonly SqliteIndexInfoRow[]
-): Promise<IndexSpec> {
+  infoRows: readonly SqliteIndexInfoRow[],
+  /** The index's stored CREATE INDEX, read with its keys. */
+  createIndexSql: string | undefined
+): IndexSpec {
   const unique = ix.unique === 1;
   const names = infoRows.map(r => r.name);
   const hasExpression = names.some(name => name === null);
@@ -1422,9 +1632,7 @@ async function sqliteIndex(
   if (ix.partial !== 1 && !hasExpression) {
     return { name: ix.name, columns: plainColumns, unique };
   }
-  const parsed = parseSqliteIndexStatement(
-    await sqliteCreateStatement(dbAny, "index", ix.name)
-  );
+  const parsed = parseSqliteIndexStatement(createIndexSql);
   // A statement that does not read as one key per PRAGMA row is described by
   // what the PRAGMA alone can say.
   if (parsed === null || parsed.keys.length !== names.length) {

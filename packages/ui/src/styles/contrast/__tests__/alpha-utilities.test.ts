@@ -12,13 +12,19 @@
  * in a scanned call-site package invalidates the cached result. It is a
  * supplementary call-site guard for text, border, and ring color utilities.
  */
-import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import {
+  packagesIn,
+  packagesMeasuredBy,
+  rendersUi,
+  repo,
+  trackedFiles,
+} from "../../../__tests__/contrast-scan-coverage";
 import {
   ACCEPTED_ALPHA_UTILITIES,
   type AcceptedAlphaUtility,
@@ -28,22 +34,11 @@ import { parseThemeScale, parseThemeTokens } from "../parse-theme";
 import { applyOpacity, resolveColor, type ResolveContext } from "../resolve";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repo = resolve(here, "../../../../../..");
 
 /**
- * Every match of `pattern` in TRACKED files under `paths`.
- *
- * These assertions read the WHOLE REPOSITORY rather than this package, so
- * anything that happens to exist under a package's `src` while they run is part
- * of what they judge: a fixture another suite writes and deletes, a generated
- * file, a build artifact landing in a source tree. Each becomes a contrast
- * violation reported against a developer who never wrote the utility, in a diff
- * that does not contain it — the same shape as the recorded case where a local
- * end-to-end run's output reddened this very suite.
- *
- * Tracked files are the set these rules are about: what a component renders is
- * what somebody committed. Asking git for them excludes everything transient by
- * construction rather than by a list of things to skip.
+ * Every match of `pattern` in TRACKED files under `paths`, as `file:match`
+ * lines. Which files those are, and why only tracked ones, is
+ * {@link trackedFiles}'s answer, shared with every contrast scan.
  *
  * 🔴 The FILE LIST comes from git and the matching does not. `git grep` has its
  * own engine and does not accept `\b`, so switching to it silently matched
@@ -52,50 +47,31 @@ const repo = resolve(here, "../../../../../..");
  * `RegExp`, in which every pattern in this file means what it means as an ERE:
  * on a clean tree its output equals `grep -HoE`'s byte for byte, 60, 129 and 1
  * hits for the three scans here (2026-10-03).
- *
- * An EMPTY file list throws rather than returning nothing. A pathspec that
- * matches no tracked file and a repository with no violations produce the same
- * empty string, and every assertion here reads emptiness as "no violations".
  */
 function scanTracked(pattern: string, paths: readonly string[]): string {
-  // Listed by git directly, each directory as a glob pathspec, so no shell has
-  // to expand `packages/*/src`: `cmd.exe`, which runs `execSync` on Windows,
-  // leaves it literal, and git then lists nothing.
-  const listed = execFileSync(
-    "git",
-    ["ls-files", "-z", "--", ...paths.map(path => `:(glob)${path}/**`)],
-    { cwd: repo, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
-  );
-  const tracked = listed.split("\0").filter(Boolean);
-  if (tracked.length === 0) {
-    throw new Error(`no tracked files under: ${paths.join(", ")}`);
-  }
-  // Tracked and STILL THERE. `git ls-files` lists the index, so a file deleted
-  // from the working tree is still named until that deletion is staged — and
-  // handing grep a path that is not there exits 2, which this treats as a real
-  // failure and rethrows. Deleting a file and running the suite before staging
-  // is an ordinary thing to do mid-change, and it made this scanner fail with
-  // "No such file or directory" rather than scanning what remained.
-  //
-  // Skipped rather than refused: a file that is gone renders nothing, so it has
-  // no bearing on what these rules measure. The empty-list guard above still
-  // catches a pathspec that names nothing at all.
-  const files = tracked.filter(file => existsSync(resolve(repo, file)));
-
-  // Matched in Node, line by line, each match reported as `file:match` as
-  // `grep -HoE` reported it. No external `grep`: on Windows, Git's MSYS `grep`
-  // returned no match at all for these patterns, and a long file list passed
-  // the command line's length limit.
   const regex = new RegExp(pattern, "g");
   const found: string[] = [];
-  for (const file of files) {
-    for (const line of readFileSync(resolve(repo, file), "utf8").split("\n")) {
-      for (const match of line.matchAll(regex)) {
-        found.push(`${file}:${match[0]}\n`);
-      }
+  for (const file of trackedFiles(paths)) {
+    for (const match of matchesIn(file, regex)) {
+      found.push(`${file}:${match}\n`);
     }
   }
   return found.join("");
+}
+
+/**
+ * Every match of a global `regex` in one repository-relative file.
+ *
+ * Matched in Node, line by line, as `grep -o` matched. No external `grep`: on
+ * Windows, Git's MSYS `grep` returned no match at all for these patterns, and
+ * a long file list passed the command line's length limit.
+ */
+function matchesIn(file: string, regex: RegExp): string[] {
+  const found: string[] = [];
+  for (const line of readFileSync(resolve(repo, file), "utf8").split("\n")) {
+    for (const match of line.matchAll(regex)) found.push(match[0]);
+  }
+  return found;
 }
 
 const css = readFileSync(resolve(here, "../../theme.css"), "utf8");
@@ -136,18 +112,25 @@ const ALLOWED_DECORATIVE = new Set<string>([
   "text-white/60", // schema-restart overlay text on a bg-black/75 scrim (~4.9:1)
   "text-white/70", // caption over a media thumbnail with a dark gradient scrim
   "text-white/80", // gallery-node label over a media thumbnail scrim
+  // The SEO share preview's crop guide: a dashed, aria-hidden line drawn over
+  // the share image to mark where the card cuts a taller picture. Its backdrop
+  // is the picture, not the page, and the cut is also stated in words beside
+  // the preview, so the line is supplementary.
+  "border-white/70",
 ]);
 
 const opaque = (c: Rgb, b: Rgb): Rgb => (c.alpha < 1 ? compositeOver(c, b) : c);
 
 // The call-site packages scanned for faint alpha utilities. Every package that
-// renders admin UI (Tailwind classNames) must be here; SCANNED_DIRS_COMPLETE
-// below fails the build if a new one appears so it cannot go unscanned.
+// uses one must be here; "scans every package that uses these alpha
+// utilities" below fails the run when one is missing, so it cannot go
+// unscanned.
 const SCANNED_DIRS = [
   "packages/ui/src/components",
   "packages/admin/src",
   "packages/plugin-form-builder/src",
   "packages/plugin-page-builder/src",
+  "packages/plugin-seo/src",
 ];
 
 // Match any color utility with an opacity; the name is captured broadly so
@@ -232,20 +215,6 @@ function surfaceFor(name: string): string {
  * opacities (`border-primary/[0.5]`). Rings are included because a focus
  * indicator is a UI boundary held to 3:1.
  */
-/**
- * Whether a matched path is source that RENDERS.
- *
- * Both scans in this file ask this, and they must answer identically. The
- * measuring scan skips tests because a suite naming `border-input/50` as a
- * fixture paints nothing — but the fingerprint asking a different question of
- * the same corpus would fail the run over a package whose only match is in a
- * test, demanding coverage for a file the measurement then ignores. One
- * predicate, so the two cannot disagree about what counts as UI.
- */
-function rendersUi(path: string): boolean {
-  return !/\.test\.|\/__tests__\//.test(path);
-}
-
 /**
  * One `path:match` line from the scan, or `null` when it names nothing to
  * measure — a blank line, a test file, or a utility whose name is not a colour.
@@ -676,44 +645,21 @@ describe("alpha-opacity color utilities", { timeout: 30_000 }, () => {
   });
 
   it("scans every package that uses these alpha utilities", () => {
-    // Fingerprint the packages that actually contain color alpha utilities and
-    // fail if one is not covered by SCANNED_DIRS, so a new admin-UI package
-    // cannot be silently unscanned. Matches are filtered to real theme colors,
-    // matching the scan, so a package using only non-color opacities is ignored.
-    const hits = scanTracked(UTILITY_PATTERN, ["packages/*/src"]);
-    const used = new Set<string>();
-    for (const line of hits.split("\n")) {
-      const sep = line.indexOf(":");
-      if (sep === -1) continue;
-      const path = line.slice(0, sep);
-      // Same predicate the measuring scan uses. Without it this demands
-      // coverage for a package whose only match is a test fixture -- a file
-      // the measurement deliberately ignores -- so the run fails asking for
-      // something that would change nothing.
-      if (!rendersUi(path)) continue;
-      const name = nameOf(splitVariant(line.slice(sep + 1).trim()).combo);
-      if (!name || !isScannableColor(name)) continue;
-      // `(?:^|/)` because `git ls-files` reports REPO-RELATIVE paths —
-      // `packages/admin/src/...` with no leading slash. Requiring one matched
-      // nothing, so `used` stayed empty and this assertion could not report the
-      // very thing it exists for: a package using alpha utilities that nobody
-      // added to `SCANNED_DIRS`.
-      const pkg = /(?:^|\/)packages\/([^/]+)\/src\//.exec(path)?.[1];
-      if (pkg) used.add(pkg);
-    }
-    // An empty scan would satisfy every check below, and on Windows it once
-    // did: the repository uses these utilities, so finding none means the scan
-    // read nothing.
-    expect(used.size).toBeGreaterThan(0);
-    const scanned = new Set(
-      SCANNED_DIRS.map(d => /packages\/([^/]+)\/src/.exec(d)?.[1])
+    // The packages whose rendering source holds an alpha colour utility this
+    // scan would measure, derived from the whole repository by the helper every
+    // contrast scan shares, and asked of each file with the scan's own line
+    // reader -- so a package using only non-colour opacities, or using one only
+    // in a test, demands nothing.
+    const regex = new RegExp(UTILITY_PATTERN, "g");
+    const used = packagesMeasuredBy(path =>
+      matchesIn(path, regex).some(match => parseScanLine(`${path}:${match}`))
     );
-    for (const p of used) {
-      expect(
-        scanned.has(p),
-        `package "${p}" uses alpha color utilities but is not in SCANNED_DIRS`
-      ).toBe(true);
-    }
+    const scanned = packagesIn(SCANNED_DIRS);
+    expect(
+      [...used].filter(pkg => !scanned.has(pkg)).sort(),
+      `These packages use alpha colour utilities but are not in SCANNED_DIRS, ` +
+        `so nothing measures them. Add each one's src directory.`
+    ).toEqual([]);
     // A whole-monorepo scan of every tracked source file, so the budget is I/O
     // rather than work this test controls. Vitest's 5s default left it about twice its own
     // measured runtime, which any parallel suite on the same machine can take

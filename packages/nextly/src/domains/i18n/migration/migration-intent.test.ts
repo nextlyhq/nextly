@@ -53,6 +53,41 @@ describe("localization migration intent", () => {
     expect(parsed?.spec.columns).toEqual([{ name: "body", kind: "text" }]);
   });
 
+  // The ranking that chooses the value an entry keeps travels with the file, so `nextly migrate`
+  // judges the Required and Unique settings on the same rows the file's copy keeps.
+  it("round-trips the ranking a field leaving translation keeps its value by", () => {
+    const liveness = {
+      languageOrder: ["en", "fr", "de"],
+      publicStates: ["published"],
+      companionHasStatus: true,
+    };
+    const line = formatLocalizationIntent({
+      kind: "shared",
+      entity: "collection",
+      spec: spec({ liveness }),
+    });
+
+    const parsed = parseLocalizationIntent(fileWith(line), "m.sql");
+
+    expect(parsed?.spec.liveness).toEqual(liveness);
+  });
+
+  it("refuses a ranking in a header of a version that cannot carry one", () => {
+    const line = formatLocalizationIntent({
+      kind: "shared",
+      entity: "collection",
+      spec: spec({
+        liveness: {
+          languageOrder: ["en"],
+          publicStates: ["published"],
+          companionHasStatus: false,
+        },
+      }),
+    }).replace(/"version":\d+/, '"version":2');
+
+    expect(() => parseLocalizationIntent(fileWith(line), "m.sql")).toThrow();
+  });
+
   // Every kind the spec type permits, rather than a chosen one. The generator may write any member
   // of this set into a header, so a parser that accepts a subset aborts a run on a file the same
   // build just produced. Enumerating the set is what makes the next kind added fail here instead of

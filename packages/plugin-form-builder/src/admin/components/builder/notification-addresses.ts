@@ -1,5 +1,6 @@
 import type { FormNotification } from "../../../types";
 import { parseFieldRef } from "../../../utils/field-references";
+import { teamAddressesOf } from "../../../utils/notification-model";
 
 /**
  * Deliberately loose email shape check (something@something.tld): the goal is
@@ -10,11 +11,6 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export function isValidEmail(value: string): boolean {
   return EMAIL_PATTERN.test(value.trim());
 }
-
-// Re-exported rather than re-implemented. Whether a value is a field reference
-// is the SEND path's question — a value the editor treats as one and delivery
-// does not goes out with its braces intact — so both read the same parser.
-export { parseFieldRef };
 
 /** The address fields a notification can get wrong. */
 export type AddressField = "senderEmail" | "to" | "replyTo";
@@ -56,8 +52,11 @@ export function addressErrorsIn(notification: FormNotification): AddressErrors {
   const sender = addressError("senderEmail", notification.senderEmail);
   if (sender) errors.senderEmail = sender;
 
+  // Every team address, the list or the single one a rule was saved with.
   if (notification.recipientType === "static") {
-    const to = addressError("to", notification.to);
+    const to = teamAddressesOf(notification)
+      .map(address => addressError("to", address))
+      .find(Boolean);
     if (to) errors.to = to;
   }
 

@@ -28,6 +28,11 @@ import {
   teardownEntityI18n,
   type TeardownI18nAdapter,
 } from "../../domains/i18n/migration/teardown-entity-i18n";
+import {
+  busyTableBounds,
+  type BusyTableBounds,
+} from "../../domains/schema/busy-table/bounds";
+import { runStatementsInTries } from "../../domains/schema/busy-table/run-on-session";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
   countDeletions,
@@ -44,6 +49,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import { nextlyI18nArchiveTables } from "../../schemas/nextly-i18n-archive";
 import { UNKNOWN_ARCHIVE_KIND } from "../../schemas/nextly-i18n-archive/ddl";
+import { busyTableNotices } from "../busy-table-options";
 import { reportDryRun } from "../dry-run";
 import { exitWithError } from "../errors/index";
 import { createContext, type CommandContext } from "../program";
@@ -153,6 +159,19 @@ interface RunPruneArgs {
    * take no lock.
    */
   dryRun?: boolean;
+  /**
+   * How the prune's own drops wait for a table another session is using: each statement in its
+   * own tries on one connection (`runStatementsInTries`), stopping with `NEXTLY_TABLE_BUSY` where
+   * one stays busy, the drops before it kept. Absent, each runs once through `adapter`.
+   */
+  busyTable?: PruneBusyTable;
+}
+
+/** The adapter the bounded drops run on, with the bounds and where each try's notice goes. */
+export interface PruneBusyTable {
+  adapter: DrizzleAdapter;
+  bounds: BusyTableBounds;
+  notify: (line: string) => void;
 }
 
 /** Runs `work` while holding the schema lock, and returns what it returned. */
@@ -383,6 +402,35 @@ export async function runPrune(args: RunPruneArgs): Promise<PruneResult> {
   });
 }
 
+/** What a busy-table report and the schema lock's mark call the prune. */
+const PRUNE_CHANGE = "nextly prune";
+
+/**
+ * Runs a prune's schema statements in order, each named by `name` in a report, and returns what
+ * the report calls each one that ran: in tries for a busy table where `busyTable` is given (with
+ * `appliedBefore`, the earlier drops of this prune), else once each through `adapter`.
+ */
+async function runPruneStatements(
+  args: Pick<RunPruneArgs, "adapter" | "busyTable">,
+  statements: readonly string[],
+  name: (index: number) => string,
+  appliedBefore: readonly string[]
+): Promise<readonly string[]> {
+  if (args.busyTable === undefined) {
+    for (const statement of statements) {
+      await args.adapter.executeQuery(statement);
+    }
+    return statements.map((_, index) => `${PRUNE_CHANGE}: ${name(index)}`);
+  }
+  return runStatementsInTries(args.busyTable.adapter, statements, {
+    change: PRUNE_CHANGE,
+    bounds: args.busyTable.bounds,
+    notify: args.busyTable.notify,
+    appliedBefore,
+    name,
+  });
+}
+
 /** Drop what `plan` lists: the orphans' tables and metadata, then the stray companions. */
 async function dropPlanned(
   args: RunPruneArgs,
@@ -410,11 +458,14 @@ async function dropPlanned(
   // The kept columns first, so a column that cannot be dropped stops the prune
   // before any table goes. A type's own table stays, with only the column the
   // site no longer keeps taken from it.
+  // What a busy-table report names as dropped before the statement that stopped.
+  const applied: string[] = [];
   const droppedColumns = await dropKeptColumns(
-    args.adapter,
+    args,
     dialect,
     q,
-    plan.keptColumns
+    plan.keptColumns,
+    applied
   );
 
   const dropped: string[] = [];
@@ -430,8 +481,13 @@ async function dropPlanned(
     });
     // Drop the physical data table, then the metadata row (force-bypass the
     // pipeline lock — prune is the explicit, authorized drop path).
-    await args.adapter.executeQuery(
-      `DROP TABLE IF EXISTS ${q}${orphan.tableName}${q}${cascade}`
+    applied.push(
+      ...(await runPruneStatements(
+        args,
+        [`DROP TABLE IF EXISTS ${q}${orphan.tableName}${q}${cascade}`],
+        () => `the drop of table ${JSON.stringify(orphan.tableName)}`,
+        applied
+      ))
     );
     await args.registry.deleteCollection(orphan.slug, { force: true });
     dropped.push(orphan.slug);
@@ -468,13 +524,16 @@ async function dropPlanned(
  * Drop the kept columns, each covering index first where the dialect needs
  * it: SQLite drops neither a column an index covers nor the index with it,
  * and MySQL no column a functional index names; PostgreSQL takes them with
- * the column. Each index once, though several kept columns share it.
+ * the column. Each index once, though several kept columns share it. The
+ * statements run in order as one list (`runPruneStatements`), and what ran is
+ * added to `applied`.
  */
 async function dropKeptColumns(
-  adapter: RunPruneArgs["adapter"],
+  args: Pick<RunPruneArgs, "adapter" | "busyTable">,
   dialect: string,
   q: string,
-  keptColumns: readonly KeptColumn[]
+  keptColumns: readonly KeptColumn[],
+  applied: string[]
 ): Promise<string[]> {
   const indexes = new Map<string, { table: string; index: string }>();
   for (const kept of keptColumns) {
@@ -482,23 +541,35 @@ async function dropKeptColumns(
       indexes.set(`${kept.table}\u0000${index}`, { table: kept.table, index });
     }
   }
+  // Each statement with what a report calls it: names of tables, indexes and columns, never text.
+  const steps: { statement: string; name: string }[] = [];
   for (const { table, index } of indexes.values()) {
+    const name = `the drop of index ${JSON.stringify(index)} on ${JSON.stringify(table)}`;
     if (dialect === "sqlite") {
-      await adapter.executeQuery(`DROP INDEX IF EXISTS ${q}${index}${q}`);
+      steps.push({ statement: `DROP INDEX IF EXISTS ${q}${index}${q}`, name });
     } else if (dialect === "mysql") {
-      await adapter.executeQuery(
-        `DROP INDEX ${q}${index}${q} ON ${q}${table}${q}`
-      );
+      steps.push({
+        statement: `DROP INDEX ${q}${index}${q} ON ${q}${table}${q}`,
+        name,
+      });
     }
   }
-  const dropped: string[] = [];
   for (const kept of keptColumns) {
-    await adapter.executeQuery(
-      `ALTER TABLE ${q}${kept.table}${q} DROP COLUMN ${q}${kept.column}${q}`
-    );
-    dropped.push(columnName(kept));
+    steps.push({
+      statement: `ALTER TABLE ${q}${kept.table}${q} DROP COLUMN ${q}${kept.column}${q}`,
+      name: `the drop of column ${JSON.stringify(columnName(kept))}`,
+    });
   }
-  return dropped;
+  if (steps.length === 0) return [];
+  applied.push(
+    ...(await runPruneStatements(
+      args,
+      steps.map(step => step.statement),
+      index => steps[index]?.name ?? "",
+      applied
+    ))
+  );
+  return keptColumns.map(columnName);
 }
 
 /** The select surface of a Drizzle handle the archive count reads through. */
@@ -558,6 +629,10 @@ interface PruneCommandOptions {
    * run stops naming its holder. Absent, the lock's own wait.
    */
   lockWaitMs?: number;
+  /** One try's bound for a busy table, in whole seconds, as typed (`--lock-timeout`). */
+  lockTimeout?: string;
+  /** Every try's bound together, in whole seconds, as typed (`--lock-timeout-total`). */
+  lockTimeoutTotal?: string;
 }
 
 /**
@@ -614,6 +689,15 @@ export async function runPruneCommand(
 ): Promise<void> {
   const { logger } = context;
   logger.header("Prune");
+  // The busy-table bounds are checked first, so a value outside its range is refused before
+  // anything is read or changed.
+  const bounds = busyTableBounds({
+    flags: {
+      lockTimeout: options.lockTimeout,
+      lockTimeoutTotal: options.lockTimeoutTotal,
+    },
+    env: process.env,
+  });
   // Read, and a malformed one refused, before anything connects.
   const consent = pruneConsent(options, m => logger.warn(m));
 
@@ -671,6 +755,13 @@ export async function runPruneCommand(
       keptColumns: kept.live,
       releasedByMigration: kept.inMigration,
       dryRun: options.dryRun === true,
+      // Each drop waits for a busy table in tries; each try's notice goes to standard error, kept
+      // back under --quiet.
+      busyTable: {
+        adapter: drizzleAdapter,
+        bounds,
+        notify: busyTableNotices(logger),
+      },
       registry,
       adapter: adapter as unknown as Parameters<typeof runPrune>[0]["adapter"],
       currentSlugs,
@@ -768,7 +859,8 @@ async function finishKeptColumns(
     );
   }
   if (result.consented && inMigration.length > 0) {
-    await writeReleaseMigration(options, context);
+    // Everything the consent agreed to, orphaned tables included, not only the kept columns.
+    await writeReleaseMigration(options, context, result.planned);
   }
 }
 
@@ -776,17 +868,26 @@ async function finishKeptColumns(
  * On a site that keeps migration files, write the migration that drops the
  * kept columns the consent agreed to: every environment then drops them at
  * its next `nextly migrate`, and none is left with a history listing columns
- * its database lacks.
+ * its database lacks. What the consent agreed to is handed on, so the
+ * migration is written without asking about it again.
  */
 async function writeReleaseMigration(
   options: PruneCommandOptions,
-  context: CommandContext
+  context: CommandContext,
+  agreed: readonly Deletion[]
 ): Promise<void> {
   // Loaded only when a migration is written, not with every prune.
   const { runMigrateCreate } = await import("./migrate-create");
   await runMigrateCreate(
     "drop-columns-kept-for-switched-off-types",
-    { cwd: options.cwd, config: options.config, releaseHeldBack: true },
+    {
+      cwd: options.cwd,
+      config: options.config,
+      releaseHeldBack: true,
+      // Its other deletions, if the config has any, are covered as prune's consent covers them.
+      acceptDataLoss: options.acceptDataLoss,
+      approvedDeletions: agreed,
+    },
     context
   );
 }
@@ -797,6 +898,8 @@ export async function pruneAction(
     acceptDataLoss?: AcceptDataLossOption;
     force?: boolean;
     dryRun?: boolean;
+    lockTimeout?: string;
+    lockTimeoutTotal?: string;
   },
   cmd: Command
 ): Promise<void> {

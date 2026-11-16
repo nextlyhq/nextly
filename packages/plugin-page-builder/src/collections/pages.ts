@@ -15,6 +15,9 @@ import { LAYOUTS_SLUG } from "./layouts";
 /** The slug pages are stored under, before any rename a host applies. */
 export const PAGES_SLUG = "pages";
 
+/** The pages' blocks field, which a page draws. */
+export const PAGES_CONTENT_FIELD = "content";
+
 /**
  * There is no page-level custom CSS field.
  *
@@ -127,6 +130,10 @@ export function pagesCollection(
   return defineCollection({
     slug: PAGES_SLUG,
     labels: { singular: "Page", plural: "Pages" },
+    // The site's own pages, though this plugin declares them: a plugin that
+    // extends every content type, such as one adding SEO fields, reaches
+    // them as it reaches the site's own collections.
+    siteContent: true,
     // A page's address may sit beneath another (`docs/getting-started`),
     // each part normalised as a one-part address is. A rule about the stored
     // value only, outside the schema, so an existing site migrates nothing
@@ -138,7 +145,7 @@ export function pagesCollection(
       // Named `content` because that is what the retired choice called its
       // builder arm: a page already holding a block document keeps rendering
       // rather than reading as empty against a field with a new name.
-      blocks({ name: "content", label: "Page Builder" }),
+      blocks({ name: PAGES_CONTENT_FIELD, label: "Page Builder" }),
       // The Layout this page is drawn inside. Empty means the site's default,
       // which is the ordinary case: a page names a Layout only to differ from
       // the rest of the site. A named Layout that is not published falls back

@@ -105,14 +105,16 @@ describe("restoreVersion", () => {
     collectionSpy.mockResolvedValue({
       fields,
       localized: false,
-      versions: { enabled: true },
+      status: true,
+      versions: { enabled: true, drafts: { enabled: true } },
     });
     updateEntrySpy.mockResolvedValue({ success: true });
     updateSingleSpy.mockResolvedValue({ success: true });
     singleRegistrySpy.mockResolvedValue({
       fields,
       localized: false,
-      versions: { enabled: true },
+      status: true,
+      versions: { enabled: true, drafts: { enabled: true } },
     });
     componentSpy.mockResolvedValue({ fields: [] });
     // The app's configured locales; a version naming one outside this list is
@@ -142,6 +144,79 @@ describe("restoreVersion", () => {
     );
   });
 
+  it("refuses where the collection keeps no drafts, before reading the version", async () => {
+    // Without a working draft the only place to put the version is the live
+    // document, which would publish it.
+    collectionSpy.mockResolvedValue({
+      fields,
+      localized: false,
+      status: true,
+      versions: { enabled: true, drafts: { enabled: false } },
+    });
+
+    await expect(restoreVersion(base)).rejects.toMatchObject({
+      code: "BUSINESS_RULE_VIOLATION",
+    });
+    expect(getVersionSpy).not.toHaveBeenCalled();
+    expect(updateEntrySpy).not.toHaveBeenCalled();
+  });
+
+  it("never restores the version's status", async () => {
+    getVersionSpy.mockResolvedValue({
+      versionNo: 3,
+      locale: null,
+      snapshot: { title: "Old title", status: "published" },
+    });
+
+    await restoreVersion(base);
+
+    expect(updateEntrySpy).toHaveBeenCalledWith(expect.anything(), {
+      title: "Old title",
+    });
+  });
+
+  it("writes only the fields it is asked for", async () => {
+    getVersionSpy.mockResolvedValue({
+      versionNo: 3,
+      locale: null,
+      snapshot: { title: "Old title", body: "Old body" },
+    });
+    collectionSpy.mockResolvedValue({
+      fields: [...fields, { name: "body", type: "text" }],
+      localized: false,
+      status: true,
+      versions: { enabled: true, drafts: { enabled: true } },
+    });
+
+    await restoreVersion({ ...base, fields: ["title"] });
+
+    expect(updateEntrySpy).toHaveBeenCalledWith(expect.anything(), {
+      title: "Old title",
+    });
+  });
+
+  it("holds the write as a draft, and records each field's source", async () => {
+    await restoreVersion(base);
+
+    expect(updateEntrySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requireHeldDraft: true,
+        restoredFrom: { title: 3 },
+      }),
+      expect.anything()
+    );
+  });
+
+  it("writes as trusted server code when no person is named", async () => {
+    await restoreVersion({ ...base, user: undefined });
+
+    expect(updateEntrySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ overrideAccess: true }),
+      { title: "Old title" }
+    );
+    expect(updateEntrySpy.mock.calls[0]?.[0]).not.toHaveProperty("user");
+  });
+
   it("records which version the write restored", async () => {
     // Lineage cannot be recovered afterwards: the resulting document looks
     // exactly like someone retyping the old content.
@@ -162,7 +237,8 @@ describe("restoreVersion", () => {
     collectionSpy.mockResolvedValue({
       fields,
       localized: true,
-      versions: { enabled: true },
+      status: true,
+      versions: { enabled: true, drafts: { enabled: true } },
     });
 
     await restoreVersion(base);
@@ -187,7 +263,8 @@ describe("restoreVersion", () => {
     collectionSpy.mockResolvedValue({
       fields: [{ name: "title", type: "text", localized: true }],
       localized: true,
-      versions: { enabled: true },
+      status: true,
+      versions: { enabled: true, drafts: { enabled: true } },
     });
 
     await restoreVersion(base);
@@ -213,7 +290,8 @@ describe("restoreVersion", () => {
         { name: "views", type: "number" },
       ],
       localized: true,
-      versions: { enabled: true },
+      status: true,
+      versions: { enabled: true, drafts: { enabled: true } },
     });
 
     const result = await restoreVersion(base);
@@ -236,7 +314,8 @@ describe("restoreVersion", () => {
         { name: "views", type: "number" },
       ],
       localized: true,
-      versions: { enabled: true },
+      status: true,
+      versions: { enabled: true, drafts: { enabled: true } },
     });
 
     await restoreVersion(base);
@@ -258,7 +337,8 @@ describe("restoreVersion", () => {
     collectionSpy.mockResolvedValue({
       fields,
       localized: true,
-      versions: { enabled: true },
+      status: true,
+      versions: { enabled: true, drafts: { enabled: true } },
     });
 
     await expect(restoreVersion(base)).rejects.toMatchObject({
@@ -358,7 +438,8 @@ describe("restoreVersion", () => {
     collectionSpy.mockResolvedValue({
       fields: componentFields,
       localized: false,
-      versions: { enabled: true },
+      status: true,
+      versions: { enabled: true, drafts: { enabled: true } },
     });
     componentSpy.mockImplementation((slug: string) =>
       Promise.resolve(
@@ -397,7 +478,8 @@ describe("restoreVersion", () => {
     collectionSpy.mockResolvedValue({
       fields,
       localized: false,
-      versions: { enabled: true },
+      status: true,
+      versions: { enabled: true, drafts: { enabled: true } },
     });
 
     await restoreVersion(base);
@@ -423,7 +505,8 @@ describe("restoreVersion", () => {
         { name: "secretNote", type: "text" },
       ],
       localized: false,
-      versions: { enabled: true },
+      status: true,
+      versions: { enabled: true, drafts: { enabled: true } },
     });
     vi.mocked(applyFieldWriteAccess).mockImplementation(
       async ({ data }: { data: Record<string, unknown> }) => {
@@ -462,7 +545,8 @@ describe("restoreVersion", () => {
         },
       ],
       localized: false,
-      versions: { enabled: true },
+      status: true,
+      versions: { enabled: true, drafts: { enabled: true } },
     });
     vi.mocked(applyFieldWriteAccess).mockImplementation(
       async ({ data }: { data: Record<string, unknown> }) => {
@@ -491,7 +575,8 @@ describe("restoreVersion", () => {
         },
       ],
       localized: false,
-      versions: { enabled: true },
+      status: true,
+      versions: { enabled: true, drafts: { enabled: true } },
     });
 
     const result = await restoreVersion(base);
@@ -514,7 +599,8 @@ describe("restoreVersion", () => {
     collectionSpy.mockResolvedValue({
       fields: [{ name: "hero", type: "component", component: "banner" }],
       localized: false,
-      versions: { enabled: true },
+      status: true,
+      versions: { enabled: true, drafts: { enabled: true } },
     });
     componentSpy.mockResolvedValue({
       fields: [{ name: "heading", type: "text" }],
@@ -561,7 +647,8 @@ describe("restoreVersion", () => {
         { name: "views", type: "number" },
       ],
       localized: true,
-      versions: { enabled: true },
+      status: true,
+      versions: { enabled: true, drafts: { enabled: true } },
     });
 
     const result = await restoreVersion(base);
@@ -591,7 +678,8 @@ describe("restoreVersion", () => {
         { name: "hero", type: "component", component: "banner" },
       ],
       localized: false,
-      versions: { enabled: true },
+      status: true,
+      versions: { enabled: true, drafts: { enabled: true } },
     });
     componentSpy.mockResolvedValue({
       fields: [{ name: "heading", type: "text" }],
@@ -621,7 +709,8 @@ describe("restoreVersion", () => {
         { name: "secret", type: "text" },
       ],
       localized: false,
-      versions: { enabled: true },
+      status: true,
+      versions: { enabled: true, drafts: { enabled: true } },
     });
     vi.mocked(applyFieldReadAccess).mockImplementation(
       async ({ entry }: { entry: Record<string, unknown> }) => {
@@ -656,7 +745,8 @@ describe("restoreVersion", () => {
         },
       ],
       localized: false,
-      versions: { enabled: true },
+      status: true,
+      versions: { enabled: true, drafts: { enabled: true } },
     });
     vi.mocked(applyFieldReadAccess).mockImplementation(
       async ({ entry }: { entry: Record<string, unknown> }) => {
@@ -697,7 +787,10 @@ describe("restoreVersion", () => {
     collectionSpy.mockResolvedValue({
       fields,
       localized: false,
-      versions: { enabled: false },
+      // Drafts as configured, versioning since turned off: the drafts a restore
+      // writes are there, but nothing would capture what it replaces.
+      status: true,
+      versions: { enabled: false, drafts: { enabled: true } },
     });
 
     await expect(restoreVersion(base)).rejects.toMatchObject({

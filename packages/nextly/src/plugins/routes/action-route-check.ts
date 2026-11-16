@@ -9,6 +9,11 @@
  * its visibility rule holds on every row, read as the caller. Hiding an action
  * in the admin is not its access control; this is.
  *
+ * A route the plugin's person's-menu item runs is bound to that item too, and
+ * the item's request names no rows: `{ action: "<plugin-slug>.user-menu",
+ * rows: [] }`. No rows are accepted for that id alone, and only on a route the
+ * item names; every list action keeps needing its rows.
+ *
  * One function answers every case, in the order that tells a caller nothing
  * they may not know: the request's shape (400), the action's permission (the
  * gate's own refusal), each row read as the caller (the read's own not-found,
@@ -45,7 +50,8 @@ export const MAX_ACTION_BODY_BYTES = 1024 * 1024;
 /** @experimental An action a route is bound to, as the check reads it. */
 export interface BoundAction {
   id: string;
-  kind: "rowAction" | "bulkAction";
+  /** A list's row or bulk action, or the plugin's person's-menu item. */
+  kind: "rowAction" | "bulkAction" | "userMenuItem";
   /** The collections it is offered on, by served slug; every one when absent. */
   collections?: readonly string[];
   /** Its own permission, as declared: resolved through the plugin's names. */
@@ -113,6 +119,27 @@ const ACTION_REQUEST = z
   })
   .passthrough();
 
+/**
+ * A request from the person's menu: the item's id and no rows. Read only
+ * after a request has failed the list actions' shape, so it never changes
+ * what a list action is asked.
+ */
+const MENU_REQUEST = z
+  .object({ action: z.string().min(1), rows: z.array(z.unknown()).max(0) })
+  .passthrough();
+
+/** The person's-menu item this request names on this route, if it is one. */
+function menuItemRequest(
+  body: unknown,
+  bound: readonly BoundAction[]
+): BoundAction | undefined {
+  const parsed = MENU_REQUEST.safeParse(body);
+  if (!parsed.success) return undefined;
+  return bound.find(
+    a => a.kind === "userMenuItem" && a.id === parsed.data.action
+  );
+}
+
 /** The action a request names and its rows, or why it cannot be one. */
 function actionRequest(
   body: unknown,
@@ -120,11 +147,16 @@ function actionRequest(
 ): { action: BoundAction; rows: NamedRow[] } | NextlyError {
   const parsed = ACTION_REQUEST.safeParse(body);
   if (!parsed.success) {
+    const menuItem = menuItemRequest(body, bound);
+    if (menuItem) return { action: menuItem, rows: [] };
     return malformed("action-request-malformed", {
       issues: parsed.error.issues.map(issue => issue.path.join(".")),
     });
   }
-  const action = bound.find(a => a.id === parsed.data.action);
+  // A list action's shape names rows, which the menu item never takes.
+  const action = bound.find(
+    a => a.id === parsed.data.action && a.kind !== "userMenuItem"
+  );
   if (action === undefined) {
     return malformed("action-not-bound", {
       action: parsed.data.action,

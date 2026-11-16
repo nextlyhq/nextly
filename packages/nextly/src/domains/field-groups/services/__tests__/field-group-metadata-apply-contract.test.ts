@@ -23,6 +23,38 @@ import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
  */
 const bound: string[] = [];
 
+// A Builder save's statements run through the busy-table runner, which waits for a table another
+// session holds; those tries are judged against real databases
+// (`busy-table-parity.integration.test.ts`). Here the save runs as one try that never waits,
+// sending each statement through the double's `executeQuery`, so these stay on the statements
+// the save hands over and the outcome it records.
+vi.mock("../../../schema/busy-table/run-unit", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../schema/busy-table/run-unit")
+  >()),
+  runUnitInTries: (
+    await import("../../../schema/busy-table/__tests__/helpers/run-unit-once")
+  ).runUnitOnce,
+}));
+
+// Whether the created table holds every requested column is judged by the comparison a push makes,
+// tested on its own (`created-table-shape.test.ts`); the double here runs no introspection, so the
+// check answers that nothing was left out and these tests stay on what they inject.
+vi.mock("../../../schema/services/created-table-shape", () => ({
+  columnsTheCreateLeftOut: vi.fn(async () => []),
+  describeColumnsLeftOut: vi.fn(() => ""),
+}));
+
+// A registry write's transaction, and the schema version stored in it, are
+// the integration suite's subject (`schema-version-writers.integration.test.ts`):
+// here a registry write runs on the adapter itself, as it did before it had one.
+vi.mock("../../../schema/schema-version", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../../schema/schema-version")>()),
+  writeRegistryRows: (adapter: unknown, work: (tx: unknown) => unknown) =>
+    work(adapter),
+  writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
+}));
+
 vi.mock("../field-group-table-provisioning", () => ({
   registerComponentRuntimeSchema: vi.fn((_a, _d, tableName: string) => {
     bound.push(tableName);
@@ -31,10 +63,16 @@ vi.mock("../field-group-table-provisioning", () => ({
   // is the state the partial-failure tests below are about; the test that cares about the other
   // answer sets it explicitly rather than letting this double decide.
   reconcileComponentCompanion: vi.fn(async () => true),
-  // The update path probes which discriminator column the existing table carries before it moves
-  // anything. Stubbed to the current spelling: these tests are about which field CHANGES are
-  // accepted, and a real probe would make every one of them a test of the catalog instead.
-  resolveComponentTypeColumn: vi.fn(async () => "type"),
+  // The update path probes the existing table before it moves anything: which discriminator column
+  // it carries, and the columns it holds. Stubbed to the current spelling and to no column listing:
+  // these tests are about which field CHANGES are accepted, and a real probe would make every one
+  // of them a test of the catalog instead. `columns: undefined` is the answer that leaves the
+  // runtime table every declared column (`RuntimeSchemaOptions.heldColumns`), so no fixture here
+  // loses a field to a held-column filter it is not about.
+  resolveComponentTableColumns: vi.fn(async () => ({
+    typeColumn: "type",
+    columns: undefined,
+  })),
 }));
 
 // Enabling localization is gated on the app declaring a `localization` block, and that gate runs
@@ -125,14 +163,29 @@ function adapterDouble(
   // leaves a SQLite TEXT untouched, and a guard tested on one dialect says nothing about the other.
   dialect: "postgresql" | "mysql" | "sqlite" = "postgresql"
 ) {
+  // The parameter is declared even though nothing here reads it: `entityStatements` reads the
+  // recorded calls, and a mock with no declared parameters records them as an empty tuple.
+  const executeQuery = vi.fn(async (_sql: string) => []);
   return withMigrationLockSurface({
     getCapabilities: () => ({ dialect }),
-    // The parameter is declared even though nothing here reads it: `entityStatements` reads the
-    // recorded calls, and a mock with no declared parameters records them as an empty tuple.
-    executeQuery: vi.fn(async (_sql: string) => []),
-    tableExists: vi.fn(async (name: string) =>
-      name === "nextly_meta" ? false : tableExists()
-    ),
+    // The catalog reads a translation toggle asks of each column (`readColumnExtras`) find no
+    // definition of its own: no comment, character set or collation for a move to lose.
+    getDrizzle: () => ({
+      execute: async () => ({ rows: [] }),
+      all: () => [],
+    }),
+    executeQuery,
+    // Recorded so a refusal can be shown to have dropped nothing.
+    dropTable: vi.fn(async (_table: string) => {}),
+    // Before the create's own DDL, its table is not there, so the leftover probe finds nothing to
+    // clear; after it, the supplied answer governs the verification these tests inject.
+    tableExists: vi.fn(async (name: string) => {
+      if (name === "nextly_meta") return false;
+      const built = executeQuery.mock.calls.some(
+        ([sql]) => !isMigrationLockStatement(sql)
+      );
+      return built ? tableExists() : false;
+    }),
   });
 }
 
@@ -217,6 +270,50 @@ describe("a field-group create records its outcome rather than raising it", () =
     // rebound the existing field group's storage to this request's fields.
     expect(entityStatements(adapter)).toEqual([]);
     expect(registry.registerComponent).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A field group's tables are its main table and its `_locales` translations table. A create that
+ * would share one with another field group is refused before anything runs, since building it
+ * would clear or adopt a table that belongs to the other. An address reading as another's
+ * translations table is refused by the address rule itself; a field group stored before that rule
+ * could still hold one, and creating the field group it reads as is refused by name.
+ */
+describe("a field-group create sharing a table with another's family", () => {
+  it("is refused by the address rule when its main table would be another's translations table", async () => {
+    const registry = registryDouble();
+    registry.getAllComponents.mockResolvedValue([
+      { slug: "hero", tableName: "comp_hero" },
+    ]);
+    const adapter = adapterDouble(async () => true);
+
+    await expect(
+      serviceOver(registry, adapter).createFieldGroup({
+        ...INPUT,
+        slug: "hero-locales",
+        tableName: "comp_hero_locales",
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(entityStatements(adapter)).toEqual([]);
+    expect(adapter.dropTable).not.toHaveBeenCalled();
+  });
+
+  it("is refused by name when its translations table is another's main table", async () => {
+    const registry = registryDouble();
+    registry.getAllComponents.mockResolvedValue([
+      { slug: "hero_locales_legacy", tableName: "comp_hero_locales" },
+    ]);
+    const adapter = adapterDouble(async () => true);
+
+    await expect(
+      serviceOver(registry, adapter).createFieldGroup(INPUT)
+    ).rejects.toMatchObject({
+      code: "DUPLICATE",
+      publicMessage: expect.stringContaining('"hero"'),
+    });
+    expect(entityStatements(adapter)).toEqual([]);
+    expect(adapter.dropTable).not.toHaveBeenCalled();
   });
 });
 

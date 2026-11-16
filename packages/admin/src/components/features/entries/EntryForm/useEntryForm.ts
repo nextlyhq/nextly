@@ -24,6 +24,8 @@ import {
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { z } from "zod";
 
+import type { EditorRestore } from "@admin/components/features/versions/editor-restore";
+import { useFormRestore } from "@admin/components/features/versions/useEditorRestoreSurface";
 import { useCreateEntry } from "@admin/hooks/queries/useCreateEntry";
 import { useDeleteEntry } from "@admin/hooks/queries/useDeleteEntry";
 import { useDiscardWorkingDraft } from "@admin/hooks/queries/useDiscardWorkingDraft";
@@ -44,6 +46,7 @@ import {
   holdsPlaceholders,
   withoutPlaceholders,
 } from "@admin/lib/form/stored-references";
+import { readsHeldDraft } from "@admin/lib/held-draft";
 import type { Entry, EntryValue } from "@admin/types/collection";
 import type { RemovedFromCodeMark } from "@admin/types/removed-from-code";
 
@@ -145,6 +148,12 @@ export interface EntryFormCollection extends RemovedFromCodeMark {
    * server-side — only code-first collections enable it.
    */
   draftsEnabled?: boolean;
+  /**
+   * Why drafts are off, when the configuration asked for them. With
+   * `localized-component`, a draft saved before may still be held, and the
+   * editor reads it (`readsHeldDraft`).
+   */
+  draftsDisabledReason?: string;
 }
 
 /**
@@ -333,6 +342,11 @@ export function mapIntentToPayload(
 export interface UseEntryFormReturn {
   /** React Hook Form instance */
   form: UseFormReturn<Record<string, unknown>>;
+  /**
+   * The values a restore puts into the form, which the history fills and the
+   * save names the sources of.
+   */
+  formRestore: EditorRestore;
   /** What the form starts from for the entry on screen. */
   defaultValues: Record<string, unknown>;
   /** Handle form submission. The optional `intent` arg names the user's
@@ -962,6 +976,7 @@ export function useEntryForm({
     defaultValues,
     mode: "onSubmit",
   });
+  const formRestore = useFormRestore(form);
 
   // Reset the form to the entry when the entry changes. defaultValues is
   // useMemo'd on (fields, entry), and the query cache's structural sharing
@@ -1075,7 +1090,7 @@ export function useEntryForm({
         // cancelQueries key onto the same cached document the form is showing. The
         // caller passes how it read the entry; absent that, assume the full-page
         // editor's mode (the working-draft overlay for a drafts collection).
-        draft: readDraft ?? collection.draftsEnabled === true,
+        draft: readDraft ?? readsHeldDraft(collection),
         translationStatus: asksTranslationStatus,
         refusedForm,
       },
@@ -1150,6 +1165,8 @@ export function useEntryForm({
           // And the editor can move to another entry or language.
           stillShown: () => scopeNow.current === startedIn,
           // This entry's recovery points, addressed as its recorder does.
+          // The values a restore put in, whose sources the save names.
+          restore: formRestore,
           recordingsFor: documentRecordingKey(
             autosaveScopeFor("collection", collection.name, entry?.id)
           ),
@@ -1217,6 +1234,7 @@ export function useEntryForm({
     },
     [
       form,
+      formRestore,
       mode,
 
       entry?.id,
@@ -1374,6 +1392,7 @@ export function useEntryForm({
 
   return {
     form,
+    formRestore,
     defaultValues,
     handleSubmit,
     writeStatus,

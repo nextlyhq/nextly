@@ -19,6 +19,8 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 
+import { coalesce } from "../../shared/lib/coalesce";
+
 import {
   IMPLICIT_LANGUAGE,
   localizationFromStoredLanguages,
@@ -31,6 +33,15 @@ export interface StoredLanguageReader {
   /** A value that changes whenever a stored row does, cheap to read. */
   fingerprint(): Promise<string>;
   rows(): Promise<StoredLanguage[]>;
+  /**
+   * The fingerprint and the rows in one read, for the registry's first read, which needs both: a
+   * start would otherwise wait for one read and then the other. A reader without it is read in
+   * two.
+   */
+  fingerprintedRows?(): Promise<{
+    fingerprint: string;
+    rows: StoredLanguage[];
+  }>;
   /**
    * Whether the calling flow is inside an open transaction. A read made there would take another
    * connection from the pool, outside the transaction, so the registry reads nothing and keeps the
@@ -58,7 +69,13 @@ export class LanguageRegistry {
   private retainedCodes: readonly string[] = [];
   private fingerprintSeen: string | undefined;
   private checkedAt: number | undefined;
-  private inFlight: Promise<void> | undefined;
+  /**
+   * The read under way, shared by every ordinary caller (`coalesce`), under
+   * the number of the reads a forced refresh has begun: a forced refresh
+   * starts a read of its own, which every caller after it joins instead.
+   */
+  private readonly inFlight = new Map<number, Promise<void>>();
+  private forcedReads = 0;
   /** Counts reads started, so a read that a later one overtook leaves what the later one stored. */
   private readsStarted = 0;
 
@@ -137,9 +154,10 @@ export class LanguageRegistry {
     if (!reader) return;
     if (options?.force !== true) {
       if (this.isFresh()) return;
-      if (this.inFlight) return this.inFlight;
+    } else {
+      this.forcedReads += 1;
     }
-    await this.track(this.read(reader));
+    await coalesce(this.inFlight, this.forcedReads, () => this.read(reader));
   }
 
   /**
@@ -158,27 +176,34 @@ export class LanguageRegistry {
     );
   }
 
-  /** Shares `reading` with refreshes made while it runs. */
-  private async track(reading: Promise<void>): Promise<void> {
-    this.inFlight = reading;
-    try {
-      await reading;
-    } finally {
-      if (this.inFlight === reading) this.inFlight = undefined;
-    }
-  }
-
   /**
    * Reads the fingerprint, and the rows when it moved. A forced refresh does not wait for a read
    * already under way, so the two can finish in either order: only the read started last stores
    * what it found, or an older read finishing late would put the previous list back and have it
    * trusted for another interval.
    */
+  /**
+   * The fingerprint, and the rows when it moved. Before anything was read the
+   * rows are wanted whatever the fingerprint says, so both come in one read
+   * where the reader offers one.
+   */
+  private async readChanged(
+    reader: StoredLanguageReader
+  ): Promise<{ fingerprint: string; rows: StoredLanguage[] | undefined }> {
+    if (this.fingerprintSeen === undefined && reader.fingerprintedRows) {
+      return reader.fingerprintedRows();
+    }
+    const fingerprint = await reader.fingerprint();
+    return {
+      fingerprint,
+      rows:
+        fingerprint !== this.fingerprintSeen ? await reader.rows() : undefined,
+    };
+  }
+
   private async read(reader: StoredLanguageReader): Promise<void> {
     const started = ++this.readsStarted;
-    const fingerprint = await reader.fingerprint();
-    const rows =
-      fingerprint !== this.fingerprintSeen ? await reader.rows() : undefined;
+    const { fingerprint, rows } = await this.readChanged(reader);
     if (started !== this.readsStarted) return;
     if (rows) {
       this.stored = localizationFromStoredLanguages(rows);

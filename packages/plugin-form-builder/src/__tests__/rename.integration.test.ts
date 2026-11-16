@@ -14,7 +14,7 @@ afterEach(async () => {
 });
 
 describe("form-builder framework .rename()", () => {
-  it("renames the submissions collection; table + afterCreate hook follow via ctx.self", async () => {
+  it("renames the submissions collection; table + in-transaction handlers follow via ctx.self", async () => {
     const { plugin } = formBuilder();
 
     current = await createTestNextly({
@@ -29,16 +29,13 @@ describe("form-builder framework .rename()", () => {
     // The unrenamed forms collection is still present.
     expect(await registry.getCollectionBySlug("forms")).not.toBeNull();
 
-    // init() resolved the submissions slug via ctx.self, so the afterCreate
-    // hook is registered on the RENAMED slug — proving the canonical pattern.
-    // Use getHookCount (specific-slug only) rather than hasHooks: the harness
-    // now registers a global `afterCreate` "*" activity-log hook (matching
-    // production), which hasHooks would conflate with a per-slug hook.
-    expect(current.hooks.getHookCount("afterCreate", "leads")).toBeGreaterThan(
-      0
-    );
-    expect(current.hooks.getHookCount("afterCreate", "form-submissions")).toBe(
-      0
-    );
+    // init() resolved the submissions slug via ctx.self, so the handlers
+    // that queue its notifications and hold its form run inside writes to
+    // the RENAMED slug, and none on the declared one: it has only the '*'
+    // handlers every collection has, which the comparison discounts.
+    const runners = (slug: string) =>
+      current!.hooks.inTransactionRunners(slug).length;
+    expect(runners("leads")).toBeGreaterThan(runners("not-a-collection"));
+    expect(runners("form-submissions")).toBe(runners("not-a-collection"));
   });
 });

@@ -9,7 +9,7 @@ For local development, Nextly ships a **Mailpit** profile in `docker-compose.yml
 
 ## The Email hub
 
-Everything about email lives in one place in the admin: **Email**, in the main navigation. Its tabs run across the top:
+Everything about email lives in one place in the admin: **Email**, under **Settings**, at `/admin/settings/email`. Links to its earlier address, `/admin/email`, redirect there. Its tabs run across the top:
 
 - **Messages** lists every email the site sends, grouped by who owns it (Nextly, each plugin, then the site), with what sends each one and its state: default, customised, update available, off, or kept as before. Search by name or what sends it, filter by owner and state, and start a new email from **New email**.
 - **Design** lists the layouts emails are sent in, and the partials they share.
@@ -21,7 +21,7 @@ The email pages that used to live under Settings (`/admin/settings/email-templat
 
 ### Adding a provider
 
-**Email -> Sending -> Add provider** guides a new provider through three steps:
+**Settings -> Email -> Sending -> Add provider** guides a new provider through three steps:
 
 1. **Choose** the provider type. Log is marked as for development: it writes each email to the server log and delivers nothing.
 2. **Connect** it with only that type's settings. Where the provider can be asked without sending (an SMTP server's sign-in, a Resend key), Nextly checks the settings with it before saving and says plainly what failed. SendLayer can't be checked without sending, so the test in the next step is its check. A provider whose transport package isn't installed yet (SMTP without `nodemailer`) is saved without a check, and the form shows the command to install it.
@@ -31,14 +31,14 @@ A new provider is saved **off**, and never as the default. An accepted test does
 
 When a check or a test fails, the hub says what to check:
 
-| What went wrong                  | What to check                                                                                       |
-| -------------------------------- | --------------------------------------------------------------------------------------------------- |
+| What went wrong                  | What to check                                                                                                                                                                             |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | The sign-in was refused          | The API key, or the username and password. Google Workspace and Microsoft 365 need an app password; a Microsoft 365 mailbox also needs SMTP sending allowed, which tenants often disable. |
-| The sender isn't allowed         | That the From address uses a domain verified with the provider.                                     |
-| The recipient was refused        | Your own address, on your account, and whether the provider is blocking it.                         |
-| The provider is rate limiting    | Wait a minute, then send again.                                                                     |
-| The provider couldn't be reached | The host and port, and that the server can reach the internet.                                      |
-| Anything else                    | The reason is in the server log.                                                                    |
+| The sender isn't allowed         | That the From address uses a domain verified with the provider.                                                                                                                           |
+| The recipient was refused        | Your own address, on your account, and whether the provider is blocking it.                                                                                                               |
+| The provider is rate limiting    | Wait a minute, then send again.                                                                                                                                                           |
+| The provider couldn't be reached | The host and port, and that the server can reach the internet.                                                                                                                            |
+| Anything else                    | The reason is in the server log.                                                                                                                                                          |
 
 Fix the settings and send again without starting over. **Send a test** is also on every provider's row and page. Saving changed sign-in settings on a provider's page checks them first too; **Save anyway** keeps them if you know better.
 
@@ -51,14 +51,14 @@ Where a provider reports the status of your sending domain (Resend does), the pr
 A plugin's own screens link to an email in the hub rather than editing it themselves. An email opens for editing at:
 
 ```text
-/admin/email/messages/edit/<template id>
+/admin/settings/email/messages/edit/<template id>
 ```
 
 The form builder does this from a form's **Notifications** tab, opening the chosen email in a new tab so the form's unsaved changes are kept. The link shows only to someone allowed to edit templates.
 
 ## Provider configuration
 
-Configure your email provider in `nextly.config.ts` as a code-first fallback. Database-managed providers (added in the admin at **Email -> Sending**, see [Adding a provider](#adding-a-provider)) take priority over code-defined config when one is on and set as the default; the full order is under [Provider resolution order](#provider-resolution-order).
+Configure your email provider in `nextly.config.ts` as a code-first fallback. Database-managed providers (added in the admin at **Settings -> Email -> Sending**, see [Adding a provider](#adding-a-provider)) take priority over code-defined config when one is on and set as the default; the full order is under [Provider resolution order](#provider-resolution-order).
 
 > **Note:** `email.providerConfig` is **required** when the `email` block is set. If you only want database-managed providers, you can omit the `email` block entirely.
 
@@ -161,7 +161,7 @@ export default defineConfig({
 When sending an email, Nextly resolves the provider in this order:
 
 1. **Specific provider ID** -- if the call passes a `providerId`.
-2. **Database default provider** -- the provider marked as default on the admin's **Email -> Sending** tab, when it is on.
+2. **Database default provider** -- the provider marked as default on the admin's **Settings -> Email -> Sending** tab, when it is on.
 3. **Code-first config** -- the `providerConfig` from `defineConfig()`.
 4. **The log transport** -- if none of the above resolve, the message is written to the server log instead of being sent, so a fresh install's password-reset flow still works. A `providerId` that doesn't resolve is still an error.
 
@@ -183,7 +183,7 @@ Nextly automatically creates three email templates on first startup:
 | Password Reset     | `password-reset`     | Contains the reset link.        |
 | Email Verification | `email-verification` | Contains the verification link. |
 
-Templates are stored in the database and edited through the admin UI (**Email -> Messages**) using a Lexical-based rich-text editor. They support `{{variable}}` placeholder syntax with HTML escaping.
+Templates are stored in the database and edited through the admin UI (**Settings -> Email -> Messages**) using a Lexical-based rich-text editor. They support `{{variable}}` placeholder syntax with HTML escaping.
 
 The editor's **Send test** sends the saved template, with its sample data, to the signed-in user's own address and nowhere else. It needs the `update-email-templates` permission.
 

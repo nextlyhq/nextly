@@ -1,6 +1,7 @@
 /**
- * No chart paints a colour of its own: every mark is a shared chart slot, and every other line
- * or label a text or border token, so a theme or a brand recolours every chart at once.
+ * No chart paints a colour of its own: every mark is a shared chart slot or a status's solid, and
+ * every other line or label a text or border token, so a theme or a brand recolours every chart
+ * at once.
  *
  * Read from what the charts actually render, the chart engine's marks included, so a colour added
  * by a later change, or one of the engine's own defaults left in place, is caught wherever it is
@@ -52,15 +53,19 @@ function coloursIn(root: HTMLElement): string[] {
 }
 
 /**
- * A shared chart slot; a series' own variable, which its container sets to a slot and which is
- * itself read above; the surface, track, border and text tokens a chart's axes, gridlines,
- * labels and points are drawn in; or the inherited colour a slot or a token class sets.
+ * A shared chart slot; a status's solid; a series' own variable, which its container sets to a
+ * mark and which is itself read above; the surface, track, border and text tokens a chart's axes,
+ * gridlines, labels and points are drawn in; or the inherited colour a slot or a token class sets.
  */
 const ALLOWED =
-  /^(var\(--nx-chart-[1-5]\)|var\(--color-[sg]\d+\)|var\(--nx-(border|card|muted|muted-foreground|foreground)\)|currentColor)$/;
+  /^(var\(--nx-chart-[1-5]\)|var\(--nx-(success|warning|info)-solid\)|var\(--color-[sg]\d+\)|var\(--nx-(border|card|muted|muted-foreground|foreground)\)|currentColor)$/;
 
-/** A series' variable may hold a chart slot and nothing else. */
-const SERIES_VALUE = /^var\(--nx-chart-[1-5]\)$/;
+/**
+ * A series' variable may hold a chart slot, a status's solid, or the muted ink a status that
+ * marks nothing is drawn in, and nothing else: never a tinted shade.
+ */
+const SERIES_VALUE =
+  /^var\(--nx-(chart-[1-5]|(success|warning|info)-solid|muted-foreground)\)$/;
 
 /** A palette class naming a hue directly, rather than a token. */
 const PALETTE_CLASS =

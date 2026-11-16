@@ -87,6 +87,11 @@ export const nextlyVersionsPg = pgTable(
     // this existed, which read as "unknown".
     baseVersionNo: integer("base_version_no"),
     baseDraftRevision: integer("base_draft_revision"),
+    // The version each restored field came from, as `{ field: versionNo }`, on
+    // the version a save carrying restored values records: "Restored from" in
+    // the history reads it, and retention keeps every version it names. NULL
+    // on every other row.
+    fieldSources: jsonb("field_sources").$type<Record<string, number>>(),
   },
   table => [
     // Durable versions get a unique, monotonic sequence per document.

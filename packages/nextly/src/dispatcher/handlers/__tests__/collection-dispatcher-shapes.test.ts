@@ -16,6 +16,18 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// A registry write's transaction, and the schema version stored in it, are
+// the integration suite's subject (`schema-version-writers.integration.test.ts`):
+// here a registry write runs on the adapter itself, as it did before it had one.
+vi.mock("../../../domains/schema/schema-version", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../domains/schema/schema-version")
+  >()),
+  writeRegistryRows: (adapter: unknown, work: (tx: unknown) => unknown) =>
+    work(adapter),
+  writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
+}));
+
 // The respondAction test for applySchemaChanges and the respondData
 // test for previewSchemaChanges need to drive code paths that pull
 // dependencies out of the DI container (registry, adapter, migration
@@ -967,6 +979,9 @@ function makeFakeRegistry(seed: {
 function makeFakeAdapter() {
   return {
     dialect: "postgresql" as const,
+    // The real adapter's dialect question, asked by the translation-move precondition a localized
+    // apply runs before it moves any column.
+    getCapabilities: () => ({ dialect: "postgresql" as const }),
     // The index names a change takes are looked up across the schema even for a table that does
     // not exist yet: nothing holds them here, in node-postgres's `{ rows }` shape.
     getDrizzle: vi.fn().mockReturnValue({
@@ -1428,6 +1443,8 @@ describe("dispatchCollections, localized persistence failure", () => {
     });
     const adapter = {
       dialect: "postgresql" as const,
+      // Asked by the translation-move precondition, as on the real adapter.
+      getCapabilities: () => ({ dialect: "postgresql" as const }),
       tableExists: vi.fn().mockResolvedValue(true),
       getDrizzle: vi.fn().mockReturnValue({
         all: vi.fn().mockResolvedValue([]),

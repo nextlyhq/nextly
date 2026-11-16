@@ -36,6 +36,7 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
+import { useKeptHeightsOnlyFor } from "../frame/held-height";
 import type { AnswerSize } from "../frame/tier";
 import {
   moveAvailability,
@@ -453,6 +454,11 @@ export function ArrangedGrid({
     answers
   );
   const order = dragOrder(drag);
+  // A card taken off the dashboard leaves no height behind on the device.
+  useKeptHeightsOnlyFor(
+    rows.map(row => row.placementId),
+    !isEditing
+  );
   return (
     // The cards' spans answer to the `@container/dashboard` element `WidgetGrid` draws around
     // this, the one element the dashboard's width is measured from.

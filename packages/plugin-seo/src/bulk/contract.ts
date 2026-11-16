@@ -1,0 +1,117 @@
+/**
+ * What Pages' Edit mode and the bulk routes agree on: the old Bulk edit
+ * address, where a content type's pages are read and their titles and
+ * descriptions saved, and the shapes each route answers with. Plain data only,
+ * importing nothing, so the admin's client bundle takes it without bringing
+ * server code along.
+ *
+ * @module bulk/contract
+ */
+
+/**
+ * The old Bulk edit address: its path under the plugin, and the component
+ * that sends a bookmark on to Pages in Edit mode, which took it over. Its
+ * routes below are what Edit mode reads and saves a content type's pages
+ * through.
+ */
+export const BULK_PAGE: {
+  readonly path: "bulk";
+  readonly component: "@nextlyhq/plugin-seo/admin#SeoBulkMoved";
+} = {
+  path: "bulk",
+  component: "@nextlyhq/plugin-seo/admin#SeoBulkMoved",
+};
+
+/** Where the screen reads the content types it can edit. */
+export const BULK_TYPES_PATH = "/bulk/types";
+
+/** Where the screen reads one content type's pages. */
+export const BULK_ROWS_PATH = "/bulk/rows";
+
+/** Where the screen saves the titles and descriptions a person changed. */
+export const BULK_SAVE_PATH = "/bulk/save";
+
+/** How many pages one read of a content type answers. */
+export const BULK_PAGE_SIZE = 100;
+
+/** A content type the screen can edit. */
+export interface BulkType {
+  slug: string;
+  /** Its name for many pages, such as "Blog posts". */
+  label: string;
+  /** Its name for one page, such as "Post". */
+  singular: string;
+  /** How many pages it has that the reader may read. */
+  total: number;
+  /** The pattern its automatic title is made from, where it has one. */
+  titlePattern?: string;
+  /**
+   * Whether a change to a published page is kept as a draft until the page
+   * is published again.
+   */
+  drafts: boolean;
+}
+
+/** What the types route answers. */
+export interface BulkTypesBody {
+  types: BulkType[];
+}
+
+/** One page of a content type, as the table shows it. */
+export interface BulkRow {
+  id: string;
+  /** The page's own name. */
+  label: string;
+  /** Its public address, where its type declares one. */
+  path?: string;
+  /** The title a person typed, or empty. */
+  title: string;
+  /** The description a person typed, or empty. */
+  description: string;
+  /** What the title is without one typed. */
+  autoTitle?: string;
+  /** What the description is without one typed. */
+  autoDescription?: string;
+  /** The version the page was read at, sent back with a change to it. */
+  rev?: string;
+  /** Whether the reader may change this page's SEO; shown read-only if not. */
+  editable: boolean;
+  /** The page's route hides it from search in its own code. */
+  hiddenByCode?: true;
+}
+
+/** What the rows route answers. */
+export interface BulkRowsBody {
+  type: string;
+  rows: BulkRow[];
+  /** How many pages the type has. */
+  total: number;
+  /** Whether there are more pages after these. */
+  more: boolean;
+}
+
+/** One page's changed title or description, or both. */
+export interface BulkChange {
+  id: string;
+  /** The version the page was read at. */
+  rev?: string;
+  title?: string;
+  description?: string;
+}
+
+/** What the save route is sent. */
+export interface BulkSaveRequest {
+  type: string;
+  locale?: string;
+  changes: BulkChange[];
+}
+
+/** What the save route answers, beside its message. */
+export interface BulkSaveBody {
+  saved: number;
+  /** Each saved page's new version, by id. */
+  revs: Record<string, string>;
+}
+
+/** The most pages one save may change. */
+export const BULK_SAVE_LIMIT = 500;

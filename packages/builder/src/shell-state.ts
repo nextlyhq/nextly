@@ -116,7 +116,13 @@ export function isLeftPanel(value: unknown): value is LeftPanel {
  */
 export const PANEL_BOUNDS = {
   left: { min: 240, max: 480, initial: 300 },
-  inspector: { min: 280, max: 520, initial: 320 },
+  /*
+   * The inspector's minimum is the width its widest fixed control needs: the
+   * spacing box holds whole from a 264px field column (16.5rem), and the
+   * panel adds 24px of padding and up to 17px of classic scrollbar, which
+   * it keeps room for. Narrower, the box falls back to a list of rows.
+   */
+  inspector: { min: 308, max: 520, initial: 320 },
 } as const;
 
 /**
@@ -389,27 +395,67 @@ export const SHELL_PREFERENCES_KEY = "nextly.builder.shell";
  * inherits it. With no user known (signed out, or not read yet), nothing is
  * remembered: a record kept for a guess would be read by the wrong author.
  *
+ * A host whose browser storage follows rules of its own (a site that keeps
+ * nothing on the device, a sign-out that forgets the person) passes `open`,
+ * which opens the store under a key; both records, the user's and the one
+ * from before, are then read, written and removed through it alone.
+ *
  * @param userId - the signed-in user's id, or null when there is none
+ * @param open - opens the store under a key; this browser's storage by default
  * @returns a store under that user's own key, or one that keeps nothing
  */
-export function userPreferenceStore(userId: string | null): PreferenceStore {
+export function userPreferenceStore(
+  userId: string | null,
+  open: OpenPreferenceStore = browserStoreWithRemove
+): PreferenceStore {
   if (userId === null || typeof window === "undefined") return NO_STORAGE;
-  // One store per user, so a host may call this on every render: a new
-  // object would read as a different store, and the shell would reload.
-  const cached = userStores.get(userId);
+  // One store per user and opener, so a host may call this on every render:
+  // a new object would read as a different store, and the shell would reload.
+  let stores = userStores.get(open);
+  if (stores === undefined) {
+    stores = new Map();
+    userStores.set(open, stores);
+  }
+  const cached = stores.get(userId);
   if (cached !== undefined) return cached;
-  const store = keyedStore(userId);
-  userStores.set(userId, store);
+  const store = keyedStore(userId, open);
+  stores.set(userId, store);
   return store;
 }
 
-/** The stores handed out so far, by user id. */
-const userStores = new Map<string, PreferenceStore>();
+/**
+ * Opens the store under a key, one that can also remove what it holds: the
+ * record from before is removed once moved, so no second author inherits it.
+ *
+ * @experimental
+ */
+export type OpenPreferenceStore = (
+  key: string
+) => PreferenceStore & { remove: () => void };
+
+/** {@link browserStore}, able to remove what it holds. */
+function browserStoreWithRemove(
+  key: string
+): PreferenceStore & { remove: () => void } {
+  return {
+    ...browserStore(key),
+    remove: () => window.localStorage.removeItem(key),
+  };
+}
+
+/** The stores handed out so far, by opener and then user id. */
+const userStores = new WeakMap<
+  OpenPreferenceStore,
+  Map<string, PreferenceStore>
+>();
 
 /** The store under one user's own key, moving the earlier record on a read. */
-function keyedStore(userId: string): PreferenceStore {
-  const own = browserStore(`${SHELL_PREFERENCES_KEY}:${userId}`);
-  const before = browserStore(SHELL_PREFERENCES_KEY);
+function keyedStore(
+  userId: string,
+  open: OpenPreferenceStore
+): PreferenceStore {
+  const own = open(`${SHELL_PREFERENCES_KEY}:${userId}`);
+  const before = open(SHELL_PREFERENCES_KEY);
   return {
     read: () => {
       const kept = own.read();
@@ -417,7 +463,7 @@ function keyedStore(userId: string): PreferenceStore {
       const moved = before.read();
       if (moved === null) return null;
       own.write(moved);
-      window.localStorage.removeItem(SHELL_PREFERENCES_KEY);
+      before.remove();
       return moved;
     },
     write: own.write,

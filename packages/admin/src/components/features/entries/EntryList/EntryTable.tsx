@@ -30,11 +30,18 @@ import {
 } from "react";
 
 import { Pencil, Trash2 } from "@admin/components/icons";
+import { useHoldForDecidingColumns } from "@admin/components/shared/loading-frame/delayed-reveal";
 import { RangeField } from "@admin/components/shared/range-field";
 import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import {
+  HeldPluginColumnsPass,
+  useDataTablePluginRegistrations,
+  usePluginColumnsPass,
+} from "@admin/components/ui/table/data-table/DataTableView";
+import { pluginColumnsDeciding } from "@admin/components/ui/table/data-table/plugin-registry";
 import {
   ListView,
   type ListColumnsControl,
@@ -356,6 +363,26 @@ export const EntryTable: ForwardRefExoticComponent<
     [collection]
   );
 
+  // A plugin's column decided by a read of its own (whether the collection
+  // has what the column shows) is registered once that read answers. Asked
+  // here from the list's first draw, outline included, so the read leaves
+  // with the rows' own; and once the rows are in, the outline stays a moment
+  // longer while a provider is still deciding, so the column is drawn with
+  // the rows instead of moving every cell beside it when it lands.
+  const registered = useDataTablePluginRegistrations();
+  // One ask of the providers for this list, which the table below draws its
+  // columns from too.
+  const pass = usePluginColumnsPass();
+  const columnsDeciding = useMemo(
+    () => pluginColumnsDeciding(collection.slug, registered, pass),
+    [collection.slug, registered, pass]
+  );
+  const holdForColumns = useHoldForDecidingColumns(
+    !isLoading,
+    columnsDeciding,
+    collection.slug
+  );
+
   // -------------------------------------------------------------------------
   // Sorting
   // -------------------------------------------------------------------------
@@ -488,203 +515,222 @@ export const EntryTable: ForwardRefExoticComponent<
   // -------------------------------------------------------------------------
 
   return (
-    <ListView<EntryRow>
-      search={{
-        value: globalFilter,
-        onChange: handleGlobalFilterChange,
-        placeholder: `Search ${collection.label}...`,
-        inputProps: { "data-entry-search-input": true },
-      }}
-      columnsControl={
-        columnsControl && { ...columnsControl, columns: ownColumns }
-      }
-      hasActiveFilters={hasAnyActiveFilters}
-      filters={
-        showFilterDropdown ? (
-          <>
-            {hasStatusField && onStatusChange && (
-              <>
-                <DropdownMenuLabel>Filter by Status</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuCheckboxItem
-                  checked={status === "all"}
-                  onCheckedChange={() => onStatusChange("all")}
-                >
-                  All Status
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuCheckboxItem
-                  checked={status === "published"}
-                  onCheckedChange={() => onStatusChange("published")}
-                >
-                  Published
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuCheckboxItem
-                  checked={status === "draft"}
-                  onCheckedChange={() => onStatusChange("draft")}
-                >
-                  Draft
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuCheckboxItem
-                  checked={status === "archived"}
-                  onCheckedChange={() => onStatusChange("archived")}
-                >
-                  Archived
-                </DropdownMenuCheckboxItem>
-              </>
-            )}
-
-            {hasLanguageFilter && (
-              <>
-                {hasStatusField && onStatusChange && <DropdownMenuSeparator />}
-                <DropdownMenuLabel>Filter by Language</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {locales
-                  .filter(l => l.code !== defaultLocale)
-                  .flatMap(l =>
-                    (["missing", "translated"] as const).map(state => {
-                      const active =
-                        translationFilter?.locale === l.code &&
-                        translationFilter?.state === state;
-                      return (
-                        <DropdownMenuCheckboxItem
-                          key={`${l.code}-${state}`}
-                          checked={active}
-                          onCheckedChange={() =>
-                            onTranslationFilterChange?.(
-                              active ? null : { locale: l.code, state }
-                            )
-                          }
-                        >
-                          {state === "missing" ? "Missing in" : "Translated in"}{" "}
-                          {l.label}
-                        </DropdownMenuCheckboxItem>
-                      );
-                    })
-                  )}
-              </>
-            )}
-
-            {hasPluginFilters && (
-              <PluginFilterMenuSections
-                filters={pluginFilters}
-                chosen={chosenPluginFilters}
-                onChange={onPluginFilterChange}
-                separateFirst={
-                  !!(hasStatusField && onStatusChange) || hasLanguageFilter
-                }
-              />
-            )}
-
-            {hasDateFilters && (
-              <>
-                <DropdownMenuSeparator />
-                <div className="space-y-3 px-2 py-1.5">
-                  <p className="text-xs font-medium text-muted-foreground">
-                    Created Date
-                  </p>
-                  <RangeField
-                    label="Created date"
-                    type="date"
-                    orientation="column"
-                    from={createdFrom}
-                    to={createdTo}
-                    onFromChange={value => onCreatedFromChange?.(value)}
-                    onToChange={value => onCreatedToChange?.(value)}
-                  />
-
-                  <p className="pt-1 text-xs font-medium text-muted-foreground">
-                    Updated Date
-                  </p>
-                  <RangeField
-                    label="Updated date"
-                    type="date"
-                    orientation="column"
-                    from={updatedFrom}
-                    to={updatedTo}
-                    onFromChange={value => onUpdatedFromChange?.(value)}
-                    onToChange={value => onUpdatedToChange?.(value)}
-                  />
-
-                  <button
-                    type="button"
-                    className="w-full text-left text-xs text-primary hover:underline"
-                    onClick={clearDateFilters}
+    // The table draws its columns from the ask the hold above was decided by.
+    <HeldPluginColumnsPass.Provider value={pass}>
+      <ListView<EntryRow>
+        search={{
+          value: globalFilter,
+          onChange: handleGlobalFilterChange,
+          placeholder: `Search ${collection.label}...`,
+          inputProps: { "data-entry-search-input": true },
+        }}
+        columnsControl={
+          columnsControl && { ...columnsControl, columns: ownColumns }
+        }
+        hasActiveFilters={hasAnyActiveFilters}
+        filters={
+          showFilterDropdown ? (
+            <>
+              {hasStatusField && onStatusChange && (
+                <>
+                  <DropdownMenuLabel>Filter by Status</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuCheckboxItem
+                    checked={status === "all"}
+                    onCheckedChange={() => onStatusChange("all")}
                   >
-                    Clear date filters
-                  </button>
-                </div>
-              </>
-            )}
-          </>
-        ) : null
-      }
-      bulkBar={
-        selected.length > 0 ? (
-          <BulkActionBar
-            selectedCount={selected.length}
-            collection={collection}
-            onDelete={() => onBulkDelete(selected)}
-            onUpdate={
-              onBulkUpdate
-                ? data => onBulkUpdate(selected, data, versions)
-                : undefined
-            }
-            onPublish={
-              onBulkPublish
-                ? () => onBulkPublish(selected, versions)
-                : undefined
-            }
-            onUnpublish={
-              onBulkUnpublish
-                ? () => onBulkUnpublish(selected, versions)
-                : undefined
-            }
-            isPublishing={isBulkPublishing}
-            onClear={clear}
-            declaredActions={declaredBarActions(declaredBulkActions, selected)}
+                    All Status
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={status === "published"}
+                    onCheckedChange={() => onStatusChange("published")}
+                  >
+                    Published
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={status === "draft"}
+                    onCheckedChange={() => onStatusChange("draft")}
+                  >
+                    Draft
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={status === "archived"}
+                    onCheckedChange={() => onStatusChange("archived")}
+                  >
+                    Archived
+                  </DropdownMenuCheckboxItem>
+                </>
+              )}
+
+              {hasLanguageFilter && (
+                <>
+                  {hasStatusField && onStatusChange && (
+                    <DropdownMenuSeparator />
+                  )}
+                  <DropdownMenuLabel>Filter by Language</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  {locales
+                    .filter(l => l.code !== defaultLocale)
+                    .flatMap(l =>
+                      (["missing", "translated"] as const).map(state => {
+                        const active =
+                          translationFilter?.locale === l.code &&
+                          translationFilter?.state === state;
+                        return (
+                          <DropdownMenuCheckboxItem
+                            key={`${l.code}-${state}`}
+                            checked={active}
+                            onCheckedChange={() =>
+                              onTranslationFilterChange?.(
+                                active ? null : { locale: l.code, state }
+                              )
+                            }
+                          >
+                            {state === "missing"
+                              ? "Missing in"
+                              : "Translated in"}{" "}
+                            {l.label}
+                          </DropdownMenuCheckboxItem>
+                        );
+                      })
+                    )}
+                </>
+              )}
+
+              {hasPluginFilters && (
+                <PluginFilterMenuSections
+                  filters={pluginFilters}
+                  chosen={chosenPluginFilters}
+                  onChange={onPluginFilterChange}
+                  separateFirst={
+                    !!(hasStatusField && onStatusChange) || hasLanguageFilter
+                  }
+                />
+              )}
+
+              {hasDateFilters && (
+                <>
+                  <DropdownMenuSeparator />
+                  <div className="space-y-3 px-2 py-1.5">
+                    <p className="text-xs font-medium text-muted-foreground">
+                      Created Date
+                    </p>
+                    <RangeField
+                      label="Created date"
+                      type="date"
+                      orientation="column"
+                      from={createdFrom}
+                      to={createdTo}
+                      onFromChange={value => onCreatedFromChange?.(value)}
+                      onToChange={value => onCreatedToChange?.(value)}
+                    />
+
+                    <p className="pt-1 text-xs font-medium text-muted-foreground">
+                      Updated Date
+                    </p>
+                    <RangeField
+                      label="Updated date"
+                      type="date"
+                      orientation="column"
+                      from={updatedFrom}
+                      to={updatedTo}
+                      onFromChange={value => onUpdatedFromChange?.(value)}
+                      onToChange={value => onUpdatedToChange?.(value)}
+                    />
+
+                    <button
+                      type="button"
+                      className="w-full text-left text-xs text-primary hover:underline"
+                      onClick={clearDateFilters}
+                    >
+                      Clear date filters
+                    </button>
+                  </div>
+                </>
+              )}
+            </>
+          ) : null
+        }
+        bulkBar={
+          selected.length > 0 ? (
+            <BulkActionBar
+              selectedCount={selected.length}
+              collection={collection}
+              onDelete={() => onBulkDelete(selected)}
+              onUpdate={
+                onBulkUpdate
+                  ? data => onBulkUpdate(selected, data, versions)
+                  : undefined
+              }
+              onPublish={
+                onBulkPublish
+                  ? () => onBulkPublish(selected, versions)
+                  : undefined
+              }
+              onUnpublish={
+                onBulkUnpublish
+                  ? () => onBulkUnpublish(selected, versions)
+                  : undefined
+              }
+              isPublishing={isBulkPublishing}
+              onClear={clear}
+              declaredActions={declaredBarActions(
+                declaredBulkActions,
+                selected
+              )}
+            />
+          ) : undefined
+        }
+        // The real heads over the outline rows: the columns are known before
+        // the rows are.
+        skeleton={
+          <EntryTableSkeleton
+            list={collection.slug}
+            headers={columns
+              .filter(column => !column.hidden)
+              .map(column => column.header)}
           />
-        ) : undefined
-      }
-      skeleton={<EntryTableSkeleton />}
-      loading={isLoading}
-      columns={columns}
-      rows={entries}
-      getRowId={rowId}
-      // No selection removes the checkbox column, on every width.
-      selection={selection}
-      rowActions={rowActions}
-      sort={sort}
-      onSortChange={onSortChange}
-      rowHref={row =>
-        buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
-          slug: collection.slug,
-          id: rowId(row),
-        })
-      }
-      primaryColumn={titleField}
-      registryKey={collection.slug}
-      ariaLabel="Entries table"
-      emptyMessage={
-        globalFilter
-          ? "No entries found. Try adjusting your search or filters."
-          : "No entries found."
-      }
-      // Inside the table rather than beside it, so the component that knows
-      // whether the row table or the mobile card view is showing is the one
-      // that places the pager.
-      pagination={{
-        currentPage: pagination.page,
-        totalPages: pagination.totalPages,
-        totalItems: pagination.total,
-        totalCapped: pagination.totalCapped,
-        pageItemCount: pagination.pageItemCount,
-        pageSize: pagination.limit,
-        onPageChange,
-        onPageSizeChange: onLimitChange,
-        isLoading,
-        itemLabel: "entries",
-        ariaLabel: "Entry table pagination",
-      }}
-    />
+        }
+        loading={isLoading || holdForColumns}
+        columns={columns}
+        rows={entries}
+        getRowId={rowId}
+        // No selection removes the checkbox column, on every width.
+        selection={selection}
+        rowActions={rowActions}
+        sort={sort}
+        onSortChange={onSortChange}
+        rowHref={row =>
+          buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
+            slug: collection.slug,
+            id: rowId(row),
+          })
+        }
+        primaryColumn={titleField}
+        registryKey={collection.slug}
+        ariaLabel="Entries table"
+        emptyMessage={
+          globalFilter
+            ? "No entries found. Try adjusting your search or filters."
+            : "No entries found."
+        }
+        // Inside the table rather than beside it, so the component that knows
+        // whether the row table or the mobile card view is showing is the one
+        // that places the pager.
+        pagination={{
+          currentPage: pagination.page,
+          totalPages: pagination.totalPages,
+          totalItems: pagination.total,
+          totalCapped: pagination.totalCapped,
+          pageItemCount: pagination.pageItemCount,
+          pageSize: pagination.limit,
+          onPageChange,
+          onPageSizeChange: onLimitChange,
+          isLoading,
+          itemLabel: "entries",
+          ariaLabel: "Entry table pagination",
+        }}
+      />
+    </HeldPluginColumnsPass.Provider>
   );
 });

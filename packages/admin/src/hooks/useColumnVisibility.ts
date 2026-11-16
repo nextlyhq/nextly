@@ -13,6 +13,11 @@
 import type { VisibilityState } from "@tanstack/react-table";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 
+import {
+  recallPreference,
+  rememberPreference,
+} from "@admin/lib/device-memory/device-memory";
+
 // ============================================================================
 // Constants
 // ============================================================================
@@ -129,7 +134,8 @@ function loadFromStorage(
   defaultColumns?: string[]
 ): string[] | null {
   try {
-    const stored = localStorage.getItem(getStorageKey(collectionSlug));
+    // Through the device memory, which reads storage that throws as nothing.
+    const stored = recallPreference(getStorageKey(collectionSlug));
     if (!stored) return null;
 
     const parsed = JSON.parse(stored);
@@ -187,7 +193,9 @@ function saveToStorage(
   defaultColumns?: string[]
 ): void {
   try {
-    localStorage.setItem(
+    // Kept through the device memory, which keeps nothing where the site
+    // turned remembering off.
+    rememberPreference(
       getStorageKey(collectionSlug),
       JSON.stringify({
         columns: visibleColumns,

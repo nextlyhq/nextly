@@ -17,6 +17,8 @@
 import { watch, type FSWatcher } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
+import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
+
 import { consoleLogger } from "../shared/types";
 
 // Process-wide state lives on globalThis so it survives Turbopack and webpack
@@ -46,7 +48,7 @@ export function configWatchAllowed(
   env: NodeJS.ProcessEnv = process.env
 ): boolean {
   if (env.NODE_ENV !== "development") return false;
-  if (env.NEXT_PHASE === "phase-production-build") return false;
+  if (isNextBuildPhase(env)) return false;
   return env.NEXTLY_DISABLE_HMR !== "1";
 }
 

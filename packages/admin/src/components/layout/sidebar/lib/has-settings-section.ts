@@ -26,10 +26,12 @@ export function canAccessWebhooks(
  * Whether the Settings entry appears in the primary rail.
  *
  * Settings is not one destination but a panel, and the grants that reach into
- * it are not one permission: it hosts API keys, webhooks and User Management
- * alongside the settings screens themselves, each answering
- * to its own grant. A reader whose only access is `read-users` must still see
- * the icon, or the destination they can open has no route to it.
+ * it are not one permission: it hosts Email, API keys, webhooks, background
+ * jobs, Users and Roles alongside the settings screens themselves, each
+ * answering to its own grant. A reader whose only access is `read-users` or
+ * an email grant must still see the icon, or the destination they can open
+ * has no route to it. `canViewSettings` covers every destination outside
+ * People, Email included, since it is read off the panel's own table.
  *
  * Shown while the grants are still resolving, matching the rest of the rail.
  * The alternative flashes: an entry appearing a moment after the page settles

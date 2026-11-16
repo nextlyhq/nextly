@@ -44,6 +44,67 @@ export interface EmailTemplateVariable {
    * @default false
    */
   required?: boolean;
+
+  /**
+   * @experimental What kind of value it holds, for the editor's Data panel.
+   * A declaration without one holds text, as declarations always have.
+   */
+  type?: EmailTemplateVariableType;
+
+  /** @experimental A friendly name for the editor, in place of `name`. */
+  label?: string;
+
+  /** @experimental A value of its type, the editor's starting test data. */
+  example?: EmailTemplateJsonValue;
+
+  /** @experimental The fields of each item of a list, or of an object. */
+  fields?: EmailTemplateVariableField[];
+}
+
+/**
+ * @experimental The kinds of value a template variable may declare. They
+ * shape the editor's test data only: a send renders whatever it is given.
+ * The one list of them: the type is read from it, and so is what a save
+ * accepts.
+ */
+export const EMAIL_TEMPLATE_VARIABLE_TYPES = [
+  "text",
+  "number",
+  "date",
+  "money",
+  "link",
+  "boolean",
+  "list",
+  "object",
+] as const;
+
+/** @experimental One of {@link EMAIL_TEMPLATE_VARIABLE_TYPES}. */
+export type EmailTemplateVariableType =
+  (typeof EMAIL_TEMPLATE_VARIABLE_TYPES)[number];
+
+/**
+ * @experimental A value JSON can hold, as a declaration's example is stored:
+ * declarations are kept in a JSON column and sent to the admin as JSON.
+ */
+export type EmailTemplateJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | EmailTemplateJsonValue[]
+  | { [key: string]: EmailTemplateJsonValue };
+
+/**
+ * @experimental A field of a list's items or of an object variable, declared
+ * as a variable is, without `required`.
+ */
+export interface EmailTemplateVariableField {
+  name: string;
+  description?: string;
+  type?: EmailTemplateVariableType;
+  label?: string;
+  example?: EmailTemplateJsonValue;
+  fields?: EmailTemplateVariableField[];
 }
 
 // ============================================================

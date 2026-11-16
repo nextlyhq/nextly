@@ -912,4 +912,30 @@ describe("LanguagePanel", () => {
     // assertion above would pass against a panel that marked every row.
     expect(screen.getAllByText("changes")).toHaveLength(1);
   });
+
+  // The shared part is every language's, so its pending change is told in
+  // whichever language the editor is in, and only while there is one.
+  describe("shared changes", () => {
+    it("says the shared fields have unpublished changes while they do", () => {
+      useBranding.mockReturnValue({ locales: LOCALES });
+      renderPanel({ translations: TRANSLATIONS, sharedChangesPending: true });
+
+      expect(
+        screen.getByRole("status", { name: "Shared changes pending" })
+      ).toHaveTextContent(
+        "Shared fields have unpublished changes. They go live with the next publish, in every language."
+      );
+    });
+
+    it("says nothing about them when there are none", () => {
+      // The control: the same panel without a pending shared change.
+      useBranding.mockReturnValue({ locales: LOCALES });
+      renderPanel({ translations: TRANSLATIONS, sharedChangesPending: false });
+
+      expect(
+        screen.queryByRole("status", { name: "Shared changes pending" })
+      ).toBeNull();
+      expect(rows().length).toBeGreaterThan(0);
+    });
+  });
 });

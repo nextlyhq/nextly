@@ -14,7 +14,10 @@ import {
   type FilterProblem,
 } from "../../domains/collections/query/filter-shape";
 import { NextlyError } from "../../errors";
-import type { RichTextOutputFormat } from "../../lib/rich-text-html";
+import type {
+  RichTextOutputFormat,
+  RichTextStyles,
+} from "../../lib/rich-text-html";
 import type { StatusOption } from "../../lib/status-filter";
 import { readSelectParam } from "../../query/select-param";
 import type { WhereFilter } from "../../services/collections/query-operators";
@@ -236,6 +239,22 @@ export const parseRichTextFormat = (
     return normalized;
   }
   return undefined;
+};
+
+const VALID_RICH_TEXT_STYLES: readonly RichTextStyles[] = ["default", "none"];
+
+/**
+ * Parse a `richTextStyles` query parameter: `none` for class-only rich text
+ * HTML, `default` for Nextly's inline look. Like `richTextFormat`, a value it
+ * does not know falls back to the default rather than failing the read: the
+ * option changes only how the HTML is styled, never what a read returns.
+ */
+export const parseRichTextStyles = (
+  stylesParam?: string | null
+): RichTextStyles | undefined => {
+  if (!stylesParam) return undefined;
+  const normalized = stylesParam.toLowerCase();
+  return VALID_RICH_TEXT_STYLES.find(styles => styles === normalized);
 };
 
 /**

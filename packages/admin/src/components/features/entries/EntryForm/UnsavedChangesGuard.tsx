@@ -104,6 +104,13 @@ export interface UnsavedChangesGuardProps {
   disabled?: boolean;
 
   /**
+   * A save the page started is on its way. Discard Changes waits for it:
+   * leaving would not stop the save, which could still write the values
+   * discarded. Keep Editing stays offered.
+   */
+  busy?: boolean;
+
+  /**
    * The edited document's fields: a view offered on a field type keeps the
    * document only where it applies to them.
    */
@@ -219,6 +226,7 @@ export function UnsavedChangesGuard({
   onCancel,
   onSave,
   disabled = false,
+  busy = false,
   fields,
   children,
 }: UnsavedChangesGuardProps): JSX.Element {
@@ -340,7 +348,7 @@ export function UnsavedChangesGuard({
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <SaveableChoices
-                saving={saving}
+                saving={saving || busy}
                 onDiscard={handleConfirm}
                 onSave={() => void handleSave()}
               />
@@ -364,6 +372,7 @@ export function UnsavedChangesGuard({
                 <AlertDialogAction
                   onClick={handleConfirm}
                   variant="destructive"
+                  disabled={busy}
                 >
                   Discard Changes
                 </AlertDialogAction>

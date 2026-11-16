@@ -16,6 +16,10 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../../__tests__/fixtures/permission-holders";
 import { clearServices } from "../../../../di/register";
 import { seedBuilderCollection } from "../../../../plugins/__tests__/seed-builder-entity";
 import {
@@ -24,6 +28,7 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { CollectionEntryService } from "../../../../services/collections/collection-entry-service";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
+import { registerFieldFunctions } from "../../../../shared/lib/field-level-registry";
 import { resolveVersionsConfig } from "../../../versions/resolve-config";
 
 let handle: TestNextly | undefined;
@@ -190,5 +195,55 @@ describe("publishing a Builder collection's shared junction", () => {
       headline: "en edited",
       tags: [t1, t3].sort(),
     });
+  });
+
+  // The tags show in every language the shared part is live in, so a change to them that English
+  // carries is asked of each live language's field rules, Spanish's too, even though they sit in a
+  // junction rather than on the row the change is compared with.
+  it("asks every live language's field rules of the tags a language's change edits", async () => {
+    const entries = await boot();
+    const { id, t1, t3 } = await englishBegins(entries);
+    expect((await save(entries, id, "en", { tags: [t1, t3] })).success).toBe(
+      true
+    );
+    registerFieldFunctions("collection", COLLECTION, [
+      {
+        name: "tags",
+        type: "relationship",
+        options: { relationType: "manyToMany", target: "tags" },
+        access: {
+          update: ({ locale }: { locale?: string }) => locale !== "es",
+        },
+      },
+    ]);
+    const publisher = await userWhoMay(handle!, "publisher", "publish", [
+      COLLECTION,
+    ]);
+    await grantTo(handle!, publisher, "read", [COLLECTION]);
+    await grantTo(handle!, publisher, "update", [COLLECTION]);
+
+    const refusal = await handle!.nextly
+      .publish({
+        collection: COLLECTION,
+        id,
+        locales: ["en"],
+        shared: true,
+        overrideAccess: false,
+        user: { id: publisher, email: "publisher@example.test", roles: [] },
+        data: { _overwrite: true },
+      })
+      .then(
+        () => "",
+        (error: unknown) =>
+          error instanceof Error
+            ? `${error.message} ${JSON.stringify((error as { publicData?: unknown }).publicData ?? null)}`
+            : String(error)
+      );
+
+    expect(refusal).toMatch(/tags/);
+    // Nothing went live: the tags every language shows are still the ones published first.
+    const live = (await liveDoc(entries, id, "es")).tags as string[];
+    expect(live).toContain(t1);
+    expect(live).not.toContain(t3);
   });
 });

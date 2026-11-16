@@ -94,7 +94,10 @@ const DashboardPage: React.FC = () => {
             the approved design draws it. No padding of its own above or
             below: the page container's is every admin page's, so the greeting
             starts where other pages' headings do. */}
-        <div className="max-w-[1600px] mx-auto animate-in fade-in slide-in-from-bottom-4 duration-1000">
+        {/* No entrance motion: the greeting and the cards replace the
+            dashboard's outline where it stands, and sliding them in would
+            move every part the outline had placed. */}
+        <div className="max-w-[1600px] mx-auto">
           {/* Every card, through ONE grid.
  
               The seed prompt, the collection counts, the singles and the team

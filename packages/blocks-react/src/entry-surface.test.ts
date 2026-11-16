@@ -27,6 +27,7 @@ import * as blocksEntry from "./blocks/index";
 import * as listReadModule from "./blocks/list-read";
 import * as blockPropsModule from "./blocks/props";
 import * as typographyDefaultsModule from "./blocks/typography-defaults";
+import * as containerRootModule from "./blocks/container-root";
 import * as componentSourceModule from "./component-source";
 import * as contextModule from "./context";
 import * as listCollectionsModule from "./list-collections";
@@ -104,6 +105,13 @@ const SOURCE_MODULES: ReadonlyArray<{
     // can read what it is replacing, and the function that applies it, so a
     // host assembling its own compile context reaches the same answer the
     // renderer does rather than spreading the record in by hand.
+    internal: [],
+  },
+  {
+    name: "blocks/container-root",
+    module: containerRootModule,
+    // Its one value is the consumer surface: which element a Section or Box
+    // renders as its root, asked by an editor.
     internal: [],
   },
   {
@@ -574,6 +582,9 @@ describe("the root entry", () => {
       "conditionDayStart",
       // What a page reads when published, counted in the editor by the route's
       // own read stages.
+      // Which element a Section or Box renders as its root, for an editor
+      // saying what the page will hold.
+      "containerRootTag",
       "countPageReads",
       "createBlockResolver",
       // The provider a route reads its lists through when given none, public
@@ -846,6 +857,10 @@ describe("the next entry", () => {
       "createPublicContentPage",
       "createPublicSinglePage",
       "createSinglePage",
+      // Added deliberately: what a page's design says about it, asked
+      // outside a route by the route's own derivation, so a check or an
+      // admin screen reads the values the published page is answered with.
+      "designMetadataFor",
       // Added deliberately: what a page's bindings read, through whichever
       // reader a route passes, so the editor's canvas reads its binding
       // sources by the published page's own implementation.

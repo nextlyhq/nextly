@@ -40,7 +40,13 @@ import {
 } from "../../../lib/system-columns";
 import { isBuiltInFieldType } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { addressableFields } from "../../../shared/addressable-fields";
 import { isFieldGroupFieldType } from "../../field-groups/storage/field-group-field-type";
+import {
+  relationHoldsReferenceList,
+  toSnakeCase,
+  usesJunctionTable,
+} from "../field-rules";
 import { getFieldType } from "../field-types/field-type-registry";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
@@ -156,7 +162,9 @@ export type ColumnKind =
 export function columnsThatMayHoldNull(
   fields: readonly { name: string; required?: boolean; type?: string }[]
 ): string[] {
-  return fields
+  // Every column of the row, those of the fields inside a group with no name among them
+  // (`fieldsStoredOnRow`); the group itself has no column to hold anything.
+  return fieldsStoredOnRow(fields)
     .filter(
       field =>
         field.required !== true &&
@@ -165,11 +173,29 @@ export function columnsThatMayHoldNull(
     .map(field => toSnakeCase(field.name));
 }
 
-export function toSnakeCase(name: string): string {
-  return name
-    .replace(/([A-Z])/g, "_$1")
-    .toLowerCase()
-    .replace(/^_/, "");
+// The name-to-column rule lives in the browser-safe field rules, which the
+// Builder reaches too; re-exported so this module stays its home for callers.
+export { toSnakeCase } from "../field-rules";
+// Whether a relation holds a list, and whether it is junction-backed: rules the Builder asks too,
+// so they live in the browser-safe field rules, re-exported for this module's callers.
+export { relationHoldsReferenceList, usesJunctionTable } from "../field-rules";
+
+/**
+ * The fields whose columns sit on one row: those at the top of `fields`, and those inside a group
+ * with no name, at any depth.
+ *
+ * A group with no name only lays fields out. It holds no value and has no name to give a column, and
+ * the fields inside it are stored where it sits: on an entry's row for a collection or a Single, and
+ * on the instance's row (`comp_<slug>`) for a field group. The read and write paths already address
+ * those fields at that level through `addressableFields`, so the builders of a row's columns read
+ * the same walk, and the columns and the data paths cannot disagree about which fields a row holds.
+ *
+ * A named group is kept whole: its fields are stored inside its own value, not on the row.
+ */
+export function fieldsStoredOnRow<F>(fields: readonly F[]): F[] {
+  // The walk keeps each element it returns as it was given: the top-level fields and the fields
+  // the groups with no name hold, which are fields of the same list.
+  return addressableFields(fields) as unknown as F[];
 }
 
 /**
@@ -193,7 +219,8 @@ export function columnsDeclaredBy(
   >
 ): Set<string> {
   const columns = new Set<string>();
-  for (const field of fields) {
+  // The fields inside a group with no name occupy columns on the row too (`fieldsStoredOnRow`).
+  for (const field of fieldsStoredOnRow([...fields])) {
     if (!field || typeof field.name !== "string") continue;
     if (!fieldProducesColumn(field)) continue;
     columns.add(toSnakeCase(field.name));
@@ -232,35 +259,6 @@ export function fieldProducesColumn(field: {
   // row. Every other relationship shape does get a column.
   if (usesJunctionTable(field)) return false;
   return true;
-}
-
-/**
- * Whether a field's values live in a junction table instead of a column on its own row.
- *
- * The DDL generator asks this to decide whether to emit a junction table, and `fieldProducesColumn`
- * asks it to decide there is no parent column — one rule, so the two cannot disagree about the same
- * field. They did disagree, and the disagreement was resolved toward the row: an `upload` carrying
- * `relationType: "manyToMany"` had no descriptor column while the generator emitted one.
- *
- * **Junction storage is a `relationship` feature only**, deliberately, because that is the only
- * shape the persistence layer implements. Both halves select junction-backed fields by type:
- * `collection-mutation-service` filters `f.type === "relationship" && relationType === "manyToMany"`
- * on every write, and `collection-relationship-service` builds its relation set from
- * `isRelationshipField`, which is `field.type === "relationship"`. Treating an upload as
- * junction-backed would give it a table that nothing writes to and nothing reads from, so an upload
- * keeps its column and the option is inert on it.
- */
-export function usesJunctionTable(field: {
-  type?: unknown;
-  options?: unknown;
-}): boolean {
-  if (field.type !== "relationship") return false;
-  const options: unknown = field.options;
-  const relationType =
-    typeof options === "object" && options !== null
-      ? (options as { relationType?: unknown }).relationType
-      : undefined;
-  return relationType === "manyToMany";
 }
 
 /**
@@ -364,25 +362,6 @@ export function componentRelationshipHoldsReferenceList(field: {
 }
 
 /**
- * Whether a relation holds a LIST of references, on any row: a `hasMany` relationship or upload (to
- * one collection or several), or a many-to-many, whose links a collection keeps in a junction table
- * and a component row in its own column.
- *
- * Also the rule for which relation is never unique, on every dialect. "Unique" on a list would mean
- * no two entries hold the identical list, which is rarely what is meant, and a unique btree over a
- * long list refuses the save on PostgreSQL once the list holds about a hundred ids. A single
- * reference, polymorphic or not, is one value and keeps its uniqueness.
- */
-export function relationHoldsReferenceList(field: {
-  type?: unknown;
-  hasMany?: unknown;
-  options?: unknown;
-}): boolean {
-  const isRelation = field.type === "relationship" || field.type === "upload";
-  return (isRelation && Boolean(field.hasMany)) || usesJunctionTable(field);
-}
-
-/**
  * Whether a relationship or upload on a component row references ONE entry, in a scalar column:
  * it names one collection and does not hold a list of references
  * (`componentRelationshipHoldsReferenceList`).
@@ -438,6 +417,38 @@ export function getComponentRowColumnDescriptor(
 }
 
 /**
+ * The field as a Single's table stores it: a relationship or upload naming one entry is not
+ * required of the COLUMN, whatever the field says.
+ *
+ * A Single's one entry is created on its first read, from its fields' defaults, and a reference has
+ * none: it starts empty. So its column accepts NULL, and `required` is enforced when the entry is
+ * saved, from the registry's fields, which this never replaces. Every other field keeps its
+ * `required`: each has an empty value of its own kind to start from (`getDefaultValue`).
+ */
+export function asSingleRowColumnField(
+  field: FieldDefinition,
+  builtBy: ColumnOrigin
+): FieldDefinition {
+  return field.required === true &&
+    classifyFieldKind(field, builtBy) === "fkSingle"
+    ? { ...field, required: false }
+    : field;
+}
+
+/** A Single's column for `field` (`asSingleRowColumnField`). */
+export function getSingleRowColumnDescriptor(
+  field: FieldDefinition,
+  dialect: SupportedDialect,
+  builtBy: ColumnOrigin
+): ColumnDescriptor | null {
+  return getColumnDescriptor(
+    asSingleRowColumnField(field, builtBy),
+    dialect,
+    builtBy
+  );
+}
+
+/**
  * A column's kind and the sizes it states, each only where stated: what the
  * index, row and key rules weigh a column by, read the same way from a
  * field's descriptor, a system column's, or a seeded column.
@@ -478,9 +489,10 @@ export function getColumnDescriptor(
   // "skip" covers every column-less field type via fieldProducesColumn: a component
   // and a many-to-many, both of which keep their values in another table.
   const kind = classifyFieldKind(field, builtBy);
-  // FK columns are always created without NOT NULL in the DDL (both generateMigrationSQL
-  // and the Drizzle runtime builder). `required` is enforced at the application layer.
-  const nullable = kind === "fkSingle" ? true : field.required !== true;
+  // A relationship's column follows `required` like any other: the Builder's CREATE makes a
+  // required one NOT NULL, so a migration planned from here does too, and turning `required` on
+  // or off plans the change.
+  const nullable = field.required !== true;
 
   if (kind === "skip") return null;
 
@@ -598,9 +610,18 @@ function textKindFor(
       : "text";
   }
 
+  // A unique field's key needs a bounded column on MySQL, which cannot key TEXT without a prefix
+  // length, and a prefix key would make only the first characters unique. So a Builder field that
+  // states no width and is unique gets the bounded default, as `slug` does: a constraint of the
+  // column. The Builder's creators refused such a field on MySQL rather than make it, so no live
+  // column is described differently by this; the bounded `text` kind is `text` on the other
+  // dialects. The code-first rule already bounds a field that states no width.
+  const keyedUnique = field.unique === true;
+
   switch (builtBy) {
     case "collection":
       if (variant === "short") return "shortText";
+      if (keyedUnique) return "text";
       // Silence is unbounded here, which is the opposite of the code-first default and the reason
       // this argument exists: the same declaration is 65 535 characters on a Builder table and 255
       // on a code-first one, on MySQL.
@@ -616,10 +637,13 @@ function textKindFor(
       // keys are its own, and one that happens to be spelled `maxLength` must not reshape the
       // column — so it builds such a field unbounded. Reading it here bounded a column the creator
       // had just made unbounded, which reports a type change on an untouched column.
-      return isBuiltInFieldType(String(field.type)) &&
+      if (
+        isBuiltInFieldType(String(field.type)) &&
         declaredMaxLength(field, builtBy) !== undefined
-        ? "shortText"
-        : "longText";
+      ) {
+        return "shortText";
+      }
+      return keyedUnique ? "text" : "longText";
 
     case "codeFirst":
       // These four lines ARE the rule this module applied before any builder was named, and that
@@ -1106,8 +1130,10 @@ export function systemColumnsForFields(
   }
 ): SystemColumnDescriptor[] {
   const { builtBy, ...set } = opts;
+  // A field inside a group with no name is stored on the row, so it replaces a system column as a
+  // field beside the group does, and the group itself, which has no name, replaces none.
   const declaresColumn = (column: string): boolean =>
-    fields.some(
+    fieldsStoredOnRow(fields).some(
       f =>
         toSnakeCase(f.name) === column &&
         getColumnDescriptor(f, dialect, builtBy) !== null

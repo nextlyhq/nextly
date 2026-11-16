@@ -197,12 +197,26 @@ export function finishInlineEdit(
 }
 
 /**
+ * The document a store takes: the one the edits Settings tabs hold make
+ * (`flushHeld`), else the one held, with any open passage finished on it.
+ */
+export function documentToStore(
+  inline: { commit: () => InlineEditOutcome },
+  held: BlockDocument,
+  flushHeld: (() => BlockDocument | null) | undefined
+): BlockDocument {
+  return finishInlineEdit(inline, flushHeld?.() ?? held).document;
+}
+
+/**
  * Whether this document holds unsaved work, from EITHER surface that writes it.
  *
- * The status pill otherwise reads the editor's `undoDepth` alone, which is its
- * own history and says nothing about the form — so an author who renamed the
- * page and touched no block was told the document was saved. Two surfaces now
- * write to one document, and the pill has to answer for both.
+ * Read by the Pages panel, which asks before leaving a page with unsaved work.
+ * The editor's `undoDepth` alone is its own history and says nothing about the
+ * form — so an author who renamed the page and touched no block would be told
+ * there was nothing to lose. Two surfaces write to one document, and this has
+ * to answer for both. (The page status pill does not read it: it reports the
+ * saved page, and the save chip reports unsaved work.)
  *
  * The blocks field is COUNTED here, and an earlier version excluded it. The
  * reasoning for excluding it was that the editor owns that field and reports
@@ -215,8 +229,8 @@ export function finishInlineEdit(
  * blocks, leaves the editor, and opens it again before saving. Leaving commits
  * the document into the form, so the field is dirty; reopening builds a fresh
  * editor whose `undoDepth` is zero. With the field excluded, nothing was left
- * to say the document had unsaved work, and the pill read clean over blocks
- * that had never been saved.
+ * to say the document had unsaved work, and it read clean over blocks that
+ * had never been saved.
  *
  * The editor's own history is taken as an argument rather than combined at the
  * call site, so "is this document dirty" is answered in one place. It is also
@@ -229,6 +243,28 @@ export function useDocumentDirty<TFieldValues extends FieldValues>(
 ): boolean {
   const { dirtyFields } = useFormState({ control });
   return editorDirty || Object.keys(dirtyFields).length > 0;
+}
+
+/**
+ * The document an editor going away hands the form: with the edits Settings
+ * tabs hold made first, since a tab's own cleanup runs only after this
+ * handover; nothing where nothing is unsaved and no tab held an edit.
+ */
+export function documentToHandOver(
+  editor: { document: BlockDocument; undoDepth: number },
+  inline: {
+    commit: () => InlineEditOutcome;
+    editing: unknown;
+    editingRich: unknown;
+  },
+  savedAt: SavedAt,
+  flushHeld: (() => BlockDocument | null) | undefined
+): BlockDocument | null {
+  const flushed = flushHeld?.() ?? null;
+  if (flushed === null && !hasUnsavedWork(editor, inline, savedAt)) {
+    return null;
+  }
+  return finishInlineEdit(inline, flushed ?? editor.document).document;
 }
 
 /**
@@ -263,25 +299,26 @@ function useCommitOnUnmount(
     editingRich: unknown;
   },
   onCommit: (value: BlockDocument) => void,
-  savedAt: SavedAt
+  savedAt: SavedAt,
+  flushHeld: (() => BlockDocument | null) | undefined
 ): () => void {
-  const latest = useRef({ editor, inline, onCommit, savedAt });
-  latest.current = { editor, inline, onCommit, savedAt };
+  const latest = useRef({ editor, inline, onCommit, savedAt, flushHeld });
+  latest.current = { editor, inline, onCommit, savedAt, flushHeld };
   const committed = useRef(false);
   useLayoutEffect(
     () => () => {
+      if (committed.current) return;
       const held = latest.current;
-      if (
-        committed.current ||
-        !hasUnsavedWork(held.editor, held.inline, held.savedAt)
-      ) {
-        return;
-      }
+      const handing = documentToHandOver(
+        held.editor,
+        held.inline,
+        held.savedAt,
+        held.flushHeld
+      );
+      if (handing === null) return;
       committed.current = true;
       try {
-        held.onCommit(
-          finishInlineEdit(held.inline, held.editor.document).document
-        );
+        held.onCommit(handing);
       } catch (error) {
         // The repeater row this field sits in is not where the editor was
         // bound, so the write was refused rather than put in another row.
@@ -318,6 +355,7 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   onClose,
   savePoint,
   removalReach,
+  flushHeld,
 }: {
   name: Path<TFieldValues>;
   /**
@@ -344,6 +382,8 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   removalReach?: () =>
     | { readonly count: number; readonly complete: boolean }
     | undefined;
+  /** The edits Settings tabs hold, made before a store (`SettingsPlace`). */
+  flushHeld?: () => BlockDocument | null;
 }): {
   done: () => void;
   /**
@@ -396,7 +436,7 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   // handler in the same action that asks what is being stored.
   const lastCommitted = useRef<BlockDocument | null>(null);
   useBeforeDocumentAction(() => {
-    const committing = finishInlineEdit(inline, editor.document).document;
+    const committing = documentToStore(inline, editor.document, flushHeld);
     savePoint.committing(committing);
     onCommit(committing);
     lastCommitted.current = committing;
@@ -443,7 +483,8 @@ export function useHostCommit<TFieldValues extends FieldValues>({
     editor,
     inline,
     onCommit,
-    savePoint.savedAt
+    savePoint.savedAt,
+    flushHeld
   );
   const done = useCallback(() => {
     /*

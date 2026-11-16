@@ -216,7 +216,7 @@ for (const entry of DIALECTS) {
         );
       }
 
-      it("rolls back to a shared field with English's value, keeping the others archived", async () => {
+      it("rolls back to a shared field with English's value, keeping every language archived", async () => {
         await seedShared();
         await migrateCreate(translated);
         await migrate();
@@ -236,9 +236,13 @@ for (const entry of DIALECTS) {
           locale: string;
           value: string | null;
         }>(
-          `SELECT ${q("locale")} AS locale, ${q("value")} AS value FROM ${q("nextly_i18n_archive")} WHERE ${q("collection")} = '${slug}' AND ${q("field")} = 'body'`
+          `SELECT ${q("locale")} AS locale, ${q("value")} AS value FROM ${q("nextly_i18n_archive")} WHERE ${q("collection")} = '${slug}' AND ${q("field")} = 'body' ORDER BY ${q("locale")}`
         );
-        expect(archived).toEqual([{ locale: "es", value: "Hola" }]);
+        // English, kept as the shared value, is archived too, so the way back can restore it.
+        expect(archived).toEqual([
+          { locale: "en", value: "Hello" },
+          { locale: "es", value: "Hola" },
+        ]);
 
         // Translated again, the value moves back as English's.
         await migrate();

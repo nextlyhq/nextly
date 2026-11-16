@@ -12,6 +12,7 @@
  *
  * @module domains/i18n/migration/ensure-archive
  */
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import {
@@ -21,22 +22,92 @@ import {
 } from "../../../schemas/nextly-i18n-archive";
 import { isIdempotencyError } from "../../schema/pipeline/sql-statement-utils";
 
-/** Creates the archive when it is missing and brings an older one up to date. Idempotent. */
+/** What the localization paths send their schema statements through. */
+export interface I18nStatementRunner {
+  executeQuery(sql: string): Promise<unknown>;
+}
+
+/**
+ * Whether `adapter` is a whole `DrizzleAdapter`, whose statements can wait for a busy table on a
+ * session of their own; a narrower one offers no session.
+ */
+function isWholeAdapter(
+  adapter: I18nStatementRunner
+): adapter is I18nStatementRunner & DrizzleAdapter {
+  const methods = [
+    "withSession",
+    "queryStatement",
+    "getCapabilities",
+    "inTransaction",
+  ];
+  return methods.every(
+    name => typeof Reflect.get(adapter, name) === "function"
+  );
+}
+
+/**
+ * Runs a localization path's schema statements in order. On a whole adapter each one waits for a
+ * table another database session holds in short tries, bounded by `NEXTLY_LOCK_TIMEOUT` /
+ * `NEXTLY_LOCK_TIMEOUT_TOTAL`, and one that stays busy stops with `NEXTLY_TABLE_BUSY` naming the
+ * table and its holder (`runStatementsInTries`), rather than waiting without bound. Elsewhere they
+ * run once each, as they always have: on a narrower adapter, and inside an open transaction.
+ * `change` names them in a report; `name` names each one.
+ */
+export async function runI18nSchemaStatements(
+  adapter: I18nStatementRunner,
+  statements: readonly string[],
+  change: string,
+  name?: (index: number) => string
+): Promise<void> {
+  // Inside an open transaction a session of its own is refused (`withSession`), so the statements
+  // run on the transaction's connection, once each.
+  if (!isWholeAdapter(adapter) || adapter.inTransaction()) {
+    for (const statement of statements) await adapter.executeQuery(statement);
+    return;
+  }
+  // Loaded here, not at the top: the tries' engine is needed only once a statement is sent, and
+  // every path that imports this module would otherwise load it too.
+  const [{ runStatementsInTries }, { busyTableBounds }, { consoleLogger }] =
+    await Promise.all([
+      import("../../schema/busy-table/run-on-session"),
+      import("../../schema/busy-table/bounds"),
+      import("../../../shared/types"),
+    ]);
+  await runStatementsInTries(adapter, statements, {
+    change,
+    bounds: busyTableBounds({ env: process.env }),
+    notify: line => consoleLogger.warn(line),
+    appliedBefore: [],
+    ...(name === undefined ? {} : { name }),
+  });
+}
+
+/** What a busy-table report calls the archive's own statements. */
+const ARCHIVE_CHANGE = "the localization archive's setup";
+
+/**
+ * Creates the archive when it is missing and brings an older one up to date. Idempotent. Each
+ * statement waits for a busy table in tries (`runI18nSchemaStatements`).
+ */
 export async function ensureI18nArchive(
-  adapter: { executeQuery(sql: string): Promise<unknown> },
+  adapter: I18nStatementRunner,
   dialect: SupportedDialect
 ): Promise<void> {
-  for (const statement of getI18nArchiveDdl(dialect)) {
-    await adapter.executeQuery(statement);
-  }
+  await runI18nSchemaStatements(
+    adapter,
+    getI18nArchiveDdl(dialect),
+    ARCHIVE_CHANGE
+  );
   const upgrades = [
     getI18nArchiveIndexRepairDdl(dialect),
     getI18nArchiveKindUpgradeDdl(dialect),
   ];
   for (const statement of upgrades) {
     if (statement === null) continue;
+    // One statement per call, so its "already there" answer is tolerated on its own, as the tries
+    // let every failure other than a busy table through as it is.
     try {
-      await adapter.executeQuery(statement);
+      await runI18nSchemaStatements(adapter, [statement], ARCHIVE_CHANGE);
     } catch (error) {
       if (!isIdempotencyError(error)) throw error;
     }

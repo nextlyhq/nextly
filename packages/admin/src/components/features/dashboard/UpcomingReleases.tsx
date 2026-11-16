@@ -40,7 +40,7 @@ import {
 import { useListDensity } from "@admin/components/features/widgets/frame/list-rows";
 import {
   LeadingChip,
-  StatusPill,
+  StatusChip,
 } from "@admin/components/features/widgets/frame/row-parts";
 import {
   useCardTier,
@@ -187,11 +187,11 @@ function entriesText(value: unknown): string | undefined {
 function statusOf(value: unknown): React.ReactNode {
   const issues = countOf(value);
   if (issues === undefined) return undefined;
-  if (issues === 0) return <StatusPill tone="good">Ready</StatusPill>;
+  if (issues === 0) return <StatusChip tone="good">Ready</StatusChip>;
   return (
-    <StatusPill tone="bad">
+    <StatusChip tone="bad">
       {issues} {issues === 1 ? "issue" : "issues"}
-    </StatusPill>
+    </StatusChip>
   );
 }
 

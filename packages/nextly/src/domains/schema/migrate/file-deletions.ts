@@ -47,12 +47,6 @@ import type { SupportedDialect } from "../../../database/schema-registry";
 import type { LiveColumns } from "../ownership/drop-guard";
 import { keepsEveryStringValue } from "../pipeline/classifier/type-widening";
 import {
-  MYSQL_LIVE_RUN_LENGTH,
-  mysqlLiveRunAt,
-  plainMysqlStatement,
-  type MysqlLiveRun,
-} from "../pipeline/sql-templates/mysql-live-restate";
-import {
   introspectLiveColumns,
   introspectTableNames,
 } from "../pipeline/diff/introspect-live";
@@ -65,6 +59,12 @@ import {
   type HiddenCode,
   type RelationRef,
 } from "../pipeline/live-table-facts";
+import {
+  MYSQL_LIVE_RUN_LENGTH,
+  mysqlLiveRunAt,
+  plainMysqlStatement,
+  type MysqlLiveRun,
+} from "../pipeline/sql-templates/mysql-live-restate";
 
 import type { Deletion } from "./data-loss-consent";
 import type { QuotedToken } from "./split-sql";

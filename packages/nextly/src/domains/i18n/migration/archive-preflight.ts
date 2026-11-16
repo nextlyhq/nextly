@@ -34,6 +34,7 @@ import {
   isUniqueField,
   type UniqueTranslatedColumn,
 } from "./companion-unique-indexes";
+import { ddlType } from "./ddl-types";
 import { ensureI18nArchive } from "./ensure-archive";
 import { fieldsJoiningTranslation } from "./field-joins-translation";
 import {
@@ -44,12 +45,20 @@ import {
   refusalsForTranslatedFieldRenamedAndReshaped,
   refusalsForTranslatedFieldRenamedAsTranslationEnds,
   refusalsForTranslatedFieldsRemovedBesideAdded,
+  moveKeepsEveryValue,
   storageDiffers,
-  storageHolds,
+  type TranslationSurface,
   withoutLeavingConstraints,
 } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
+import { copyLiveness } from "./generate-down";
 import { refusalsForConstrainedFieldsLeaving } from "./leaving-constraint-preconditions";
+import {
+  lossesOnMove,
+  mergeLosses,
+  nonConstantSqliteDefaults,
+  refusalsForMovesLosingDefinition,
+} from "./move-keeps-definition";
 import {
   buildLeavingFieldsArchiveStatements,
   type FieldRename,
@@ -143,8 +152,14 @@ export async function archiveFieldsLeavingTranslation(args: {
   tableName: string;
   /** Which builder made the entity's table, which decides a column's bounds. */
   builtBy: ColumnOrigin;
-  /** The language whose value becomes the shared one, and is therefore not archived. */
+  /** The language whose value becomes the shared one where it is live, and is not archived. */
   defaultLocale: string;
+  /**
+   * The site's languages in its order. With each row's own publish state, it decides the language
+   * an entry's shared value is taken from when the default language's is not what readers saw
+   * (`copyLiveness`); omitted, the default language's, else the first by code.
+   */
+  languageOrder?: readonly string[];
   oldFields: readonly LeavingFieldLike[];
   newFields: readonly LeavingFieldLike[];
   wasLocalized: boolean;
@@ -172,6 +187,9 @@ export async function archiveFieldsLeavingTranslation(args: {
     args.wasLocalized && args.isLocalized
       ? await renameInChange(args)
       : undefined;
+  // Turning translation on or off moves each translated field's values into a new column, which
+  // must not lose part of the definition the column they leave has.
+  await refuseTranslationMovesLosingDefinition({ ...args, surface: "builder" });
   // First, because the checks after it query a translated field's companion column as the field
   // defines it, and over a column that cannot hold that the database refuses the query outright.
   await refuseCompanionColumnsThatCannotHold(args, rename, companionColumns);
@@ -246,7 +264,7 @@ export async function archiveFieldsLeavingTranslation(args: {
     ...refusalsForFieldsJoiningTranslation({
       // A field whose values an earlier apply already moved has nothing left to copy, so its
       // storage changing is judged apart, below.
-      reshaped: reshapedJoiningFields(
+      reshaped: joiningFieldsLosingValues(
         joining.filter(name => !joined.has(name)),
         { ...args, oldFields },
         dialect
@@ -254,7 +272,7 @@ export async function archiveFieldsLeavingTranslation(args: {
       surface: "builder",
     }),
     ...refusalsForMovedJoinsNarrowed({
-      narrowed: narrowedJoiningFields(
+      narrowed: joiningFieldsLosingValues(
         [...joined],
         { ...args, oldFields },
         dialect
@@ -277,6 +295,7 @@ export async function archiveFieldsLeavingTranslation(args: {
       tableName: args.tableName,
       builtBy: args.builtBy,
       defaultLocale: args.defaultLocale,
+      liveness: copyLiveness(args.languageOrder, live.has("_status")),
       // A field whose values an earlier apply already moved has none left here to ask.
       leaving: new Set(
         [...leaving].filter(
@@ -310,6 +329,8 @@ export async function archiveFieldsLeavingTranslation(args: {
       dialect,
       builtBy: args.builtBy,
       defaultLocale: args.defaultLocale,
+      languageOrder: args.languageOrder,
+      companionHasStatus: live.has("_status"),
       // A moved field's archive rows were written by the apply that moved it.
       oldFields: oldFields.filter(f => !moved.has(f.name)),
       newFields: args.newFields,
@@ -599,6 +620,47 @@ function renamedSource(
   return live.has(from) ? renamed : undefined;
 }
 
+/** A retry of a change that made fields translated, as this preflight judges it. */
+export interface JoinRetries {
+  /** The joining fields whose values an earlier apply already moved (`movedJoiningFields`). */
+  moved: ReadonlySet<string>;
+  /** Those of `moved` whose storage the change narrows (`joiningFieldsLosingValues`). */
+  narrowed: ReadonlySet<string>;
+}
+
+/**
+ * The fields `newFields` makes translated whose values an earlier apply of that change already
+ * moved into the translations table, and which of them the change narrows, read from the database
+ * and judged as this preflight judges them. A writer that generates a migration before the push
+ * runs this preflight hands them to the generator, so the file it writes is judged for a retry as
+ * the push is. With no joining field the database is not read.
+ */
+export async function joinRetries(args: {
+  adapter: DrizzleAdapter;
+  /** The entity's main table; the companion is `<tableName>_locales`. */
+  tableName: string;
+  builtBy: ColumnOrigin;
+  oldFields: readonly LeavingFieldLike[];
+  newFields: readonly LeavingFieldLike[];
+}): Promise<JoinRetries> {
+  const joining = fieldsJoiningTranslation(args.oldFields, args.newFields);
+  if (joining.length === 0) return { moved: new Set(), narrowed: new Set() };
+  const dialect = args.adapter.getCapabilities().dialect;
+  const live = new Set(
+    (await liveCompanionColumns(args.adapter, args.tableName)).map(c => c.name)
+  );
+  const moved = await movedJoiningFields(args.adapter, args.tableName, live, {
+    joining,
+    newFields: args.newFields,
+    builtBy: args.builtBy,
+    dialect,
+  });
+  return {
+    moved,
+    narrowed: new Set(joiningFieldsLosingValues([...moved], args, dialect)),
+  };
+}
+
 /**
  * The joining fields whose values an earlier apply of the same change already moved, the mirror of
  * `movedLeavingFields`: the field's column is among the companion's `live` columns, AND the main
@@ -762,6 +824,8 @@ export async function refuseLeavingSettingsTheValuesCannotTake(args: {
   tableName: string;
   builtBy: ColumnOrigin;
   defaultLocale: string;
+  /** See `archiveFieldsLeavingTranslation`'s `languageOrder`. */
+  languageOrder?: readonly string[];
   oldFields: readonly LeavingFieldLike[];
   newFields: readonly LeavingFieldLike[];
   renamed?: FieldRename | null;
@@ -788,6 +852,7 @@ export async function refuseLeavingSettingsTheValuesCannotTake(args: {
     tableName: args.tableName,
     builtBy: args.builtBy,
     defaultLocale: args.defaultLocale,
+    liveness: copyLiveness(args.languageOrder, live.has("_status")),
     leaving,
     oldFields,
     newFields: args.newFields,
@@ -857,14 +922,13 @@ export function fieldsAsFirstPushed<F extends LeavingFieldLike>(args: {
 }
 
 /**
- * The shared fields that become translated in this change while their storage changes, judged
- * against the column each one's value sits in now, which its old definition describes.
+ * Those of `joining` whose storage changes in a way that does not keep every value: stored as the
+ * new fields describe them, they do not hold each value the old fields' column holds
+ * (`moveKeepsEveryValue`, asked with both kinds). One answer for a first move, whose values would
+ * be copied into the new column, and for a retry of a move an earlier apply already made, whose
+ * values sit in a column of the new shape: a change the first allows, the retry finishes.
  */
-/**
- * Those of `joining` whose storage the change narrows: stored as the new fields describe them,
- * they do not hold every value they held before (`storageHolds`).
- */
-function narrowedJoiningFields(
+export function joiningFieldsLosingValues(
   joining: readonly string[],
   args: {
     oldFields: readonly LeavingFieldLike[];
@@ -873,37 +937,120 @@ function narrowedJoiningFields(
   },
   dialect: SupportedDialect
 ): string[] {
-  const columnOf = (field: LeavingFieldLike | undefined) =>
+  // The values sit in the field's shared column, which a unique field's whole-column key can
+  // bound, as the push and `migrate:create` read it from the main table; they move into its
+  // translated one.
+  const columnOf = (
+    field: LeavingFieldLike | undefined,
+    shape: "shared" | "translated"
+  ) =>
     field === undefined
       ? undefined
-      : fieldToLocalizedColumnSpec(field, dialect, args.builtBy);
+      : fieldToLocalizedColumnSpec(field, dialect, args.builtBy, shape);
   const before = new Map(args.oldFields.map(f => [f.name, f]));
   const after = new Map(args.newFields.map(f => [f.name, f]));
   return joining.filter(name => {
-    const from = columnOf(before.get(name));
-    const to = columnOf(after.get(name));
-    return from != null && to != null && !storageHolds(to, from);
+    const from = columnOf(before.get(name), "shared");
+    const to = columnOf(after.get(name), "translated");
+    return (
+      storageDiffers(from, to) &&
+      !(
+        from != null &&
+        to != null &&
+        moveKeepsEveryValue(
+          {
+            type: ddlType(from, dialect),
+            kind: from.kind,
+            length: from.length,
+          },
+          { type: ddlType(to, dialect), kind: to.kind, length: to.length },
+          dialect
+        )
+      )
+    );
   });
 }
 
-function reshapedJoiningFields(
-  joining: readonly string[],
-  args: {
-    oldFields: readonly LeavingFieldLike[];
-    newFields: readonly LeavingFieldLike[];
-    builtBy: ColumnOrigin;
-  },
-  dialect: SupportedDialect
-): string[] {
-  const columnOf = (field: LeavingFieldLike | undefined) =>
-    field === undefined
-      ? undefined
-      : fieldToLocalizedColumnSpec(field, dialect, args.builtBy);
-  const before = new Map(args.oldFields.map(f => [f.name, f]));
-  const after = new Map(args.newFields.map(f => [f.name, f]));
-  return joining.filter(name =>
-    storageDiffers(columnOf(before.get(name)), columnOf(after.get(name)))
+/**
+ * Refuses, before anything changes, a change whose move of a field's values into a new column would
+ * lose part of the column they leave (`lossesOnMove`): a comment; a character set or collation
+ * other than the receiving column's, or the receiving table's for a column the move adds; or a
+ * default the receiving column cannot take (`carriableDefault`, `defaultFitsType`). On SQLite,
+ * turning translation off is also refused for a non-constant default (`nonConstantSqliteDefaults`).
+ *
+ * The fields judged: turning translation on, every translated field, from the main table to the
+ * companion; off, every translated field, back again; kept on, only the fields joining it
+ * (`fieldsJoiningTranslation`), from the main table to the companion. A field leaving translation
+ * while the entity stays translated is not judged here; the leaving-field rules judge its type
+ * alone. A change that keeps translation off moves nothing and asks nothing.
+ */
+export async function refuseTranslationMovesLosingDefinition(args: {
+  adapter: DrizzleAdapter;
+  /** The entity's main table; the companion is `<tableName>_locales`. */
+  tableName: string;
+  builtBy: ColumnOrigin;
+  oldFields: readonly LeavingFieldLike[];
+  newFields: readonly LeavingFieldLike[];
+  wasLocalized: boolean;
+  isLocalized: boolean;
+  surface: TranslationSurface;
+}): Promise<void> {
+  if (!args.wasLocalized && !args.isLocalized) return;
+  const dialect = args.adapter.getCapabilities().dialect;
+  const turningOn = args.isLocalized;
+  // Translation kept on moves only the fields joining it, each as translation turning on would.
+  const joining =
+    args.wasLocalized && args.isLocalized
+      ? new Set(fieldsJoiningTranslation(args.oldFields, args.newFields))
+      : undefined;
+  // The translated fields on the side where translation holds: their columns are the ones moved.
+  const specs = (turningOn ? args.newFields : args.oldFields).flatMap(f => {
+    if (!isFieldLocalized(f, true) || joining?.has(f.name) === false) {
+      return [];
+    }
+    const column = fieldToLocalizedColumnSpec(f, dialect, args.builtBy);
+    return column ? [{ field: f.name, column }] : [];
+  });
+  // Nothing moves, so the database is not asked.
+  if (specs.length === 0) return;
+  const moved = specs.map(m => ({
+    field: m.field,
+    column: m.column.name,
+    spec: m.column,
+  }));
+  const companion = `${args.tableName}_locales`;
+  const [from, to] = turningOn
+    ? [args.tableName, companion]
+    : [companion, args.tableName];
+  const losses = mergeLosses(
+    await lossesOnMove(args.adapter.getDrizzle(), dialect, {
+      moved,
+      from,
+      to,
+    }),
+    // Turning translation off on SQLite restores each column with ADD COLUMN, which takes back
+    // only a constant default.
+    !turningOn && dialect === "sqlite"
+      ? nonConstantSqliteDefaults(
+          await liveCompanionColumns(args.adapter, args.tableName),
+          specs
+        )
+      : []
   );
+  if (losses.length === 0) return;
+  const refusals = refusalsForMovesLosingDefinition({
+    losses,
+    table: from,
+    translation: turningOn ? "on" : "off",
+    surface: args.surface,
+  });
+  throw NextlyError.validation({
+    errors: refusals,
+    logContext: {
+      tableName: args.tableName,
+      fields: refusals.map(r => r.path),
+    },
+  });
 }
 
 /**

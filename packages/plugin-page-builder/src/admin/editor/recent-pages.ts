@@ -7,7 +7,8 @@
  *
  * @module recent-pages
  */
-import { browserStore, type PreferenceStore } from "@nextlyhq/builder";
+import type { PreferenceStore } from "@nextlyhq/builder";
+import { devicePreferenceStore } from "@nextlyhq/plugin-sdk/admin";
 import { z } from "nextly/zod";
 
 /** How many pages "Recent" offers. */
@@ -34,11 +35,15 @@ const storedSchema = z.array(
   })
 );
 
-/** The store for one user, or one that remembers nothing without a user. */
+/**
+ * The store for one user, or one that remembers nothing without a user. Kept
+ * through the admin's preference store, so the site's switch that keeps
+ * nothing on the device holds for it, and signing out forgets it.
+ */
 export function recentPagesStore(userId: string | null): PreferenceStore {
   return userId === null
     ? { read: () => null, write: () => undefined }
-    : browserStore(`${KEY}:${userId}`);
+    : devicePreferenceStore(`${KEY}:${userId}`);
 }
 
 /** The remembered list, newest first; empty when there is none or it is unreadable. */

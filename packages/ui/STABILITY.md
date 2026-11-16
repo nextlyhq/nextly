@@ -87,7 +87,7 @@ Everything else the barrel exports, including: `Accordion`, `Alert`, `AlertDialo
 `Progress`, `ResizablePanelGroup`/`ResizablePanel`/`ResizableHandle`, `Separator`,
 `Skeleton`, `Slider`, `Spinner`, `Table` and its family, `IconField`, `IconPicker`, `IconGlyph`, `TableSearch`, `TableSkeleton`,
 `TreeView` and its `TREE_INDENT_PX`, the table state components, the layout primitives (`Stack`, `Grid`, `Stat`,
-`PageShell`, `Bleed`, `PageHeader`, `SHELL_MEASURE`),
+`PageShell`, `Bleed`, `PageHeader`, `PageFrame`, `PageFrameListener`, `SHELL_MEASURE`),
 `Toaster` and the shortcut manager (`ShortcutProvider`, `ShortcutScope`, `useShortcuts`,
 `useShortcutManager`, `useActiveShortcuts`, `createShortcutManager`, `parseKeys`).
 
@@ -175,6 +175,21 @@ first-party plugin exercised `FieldShell` in production until `plugin-form-build
 Notifications and Status fields adopted the function form for their `Select` controls,
 so it has not yet met the graduation bar.
 
+`FieldShell` takes a `layout` (`FieldLayout`): `stacked`, the default and unchanged, or
+`row`, the settings row with the label and its help in a left column and the control and
+any error in a right one. The wiring is the same computation in both, so a row's label
+still targets its control and its help and error still describe it; only where each part
+stands differs. In the row layout `width` defaults to `fill`, because the right column is
+already the control's measure.
+
+`FieldRow` (with `FieldRowProps`) is that row's grid and nothing else: an `aside` in the
+left column and `children` in the right, stacking on a narrow screen, with no vertical
+padding of its own since `FormSection` owns the rhythm. It exists so the row has ONE
+geometry: `FieldShell`'s row layout and the admin's form-bound `SettingsRow` and grouped
+`SettingsRowGroup` all draw it, where each used to carry the same grid classes. Naming is
+the caller's business, which is why `aside` is a node: a `<label for>` for one control, a
+`<span>` that `aria-labelledby` points at for a group. Both are experimental.
+
 `FormSection` (with `FormSectionProps`) is the form-layout kit's section: a labelled
 card holding a group of fields. It composes `Card` for its container rather than
 hand-rolling its own border and background, so it carries `Card`'s CONTAINER radius
@@ -203,6 +218,12 @@ same reason `FormSection` has none. `FormActions` never computes its `dirty` fla
 page passes it down from the form state that already tracks it, so `@nextlyhq/ui`
 never depends on `react-hook-form`. No first-party plugin exercises it yet, so it
 stays on the experimental list above.
+
+`FormActions` takes a `message`, said in its live region while `dirty` is true in place of
+the default "You have unsaved changes": a bar committing several records at once says
+what changed ("1 page changed"). Like `dirty`, the page states it from the state that
+already knows, and the bar counts nothing. The region is the same element whichever text
+it holds, so a changed count is announced as a change. Omitted, the bar reads as before.
 
 The measure it sits at belongs to `PageShell`, reached through the page. A
 `FormLayout` export used to own that instead, applying its own centred `max-w` and

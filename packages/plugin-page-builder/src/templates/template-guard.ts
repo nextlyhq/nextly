@@ -306,10 +306,25 @@ export async function templateCollectionProblem(
   read: CollectionRecordRead,
   ownCollections: ReadonlySet<string>
 ): Promise<string | null> {
+  // The plugin's own collections are judged before anything is read.
+  return ownCollections.has(collection)
+    ? templateRecordProblem(collection, null, ownCollections)
+    : templateRecordProblem(collection, await read(collection), ownCollections);
+}
+
+/**
+ * {@link templateCollectionProblem}'s judgement of a record already in hand:
+ * the registry's, on a write, or the site's code declaring the collection,
+ * which the page builder reads without a statement.
+ */
+export function templateRecordProblem(
+  collection: string,
+  record: Record<string, unknown> | null,
+  ownCollections: ReadonlySet<string>
+): string | null {
   if (ownCollections.has(collection)) {
     return `"${collection}" belongs to the page builder, and its documents are not drawn with a template.`;
   }
-  const record = await read(collection);
   if (record === null) {
     return `There is no collection "${collection}" to give a template.`;
   }

@@ -24,10 +24,13 @@
  * ```
  */
 
+import { join } from "node:path";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
-import type { AnyRelations } from "drizzle-orm";
+import type { AnyRelations, Table } from "drizzle-orm";
 
 import { authUiProblems } from "../auth/handlers/auth-ui";
 import {
@@ -60,6 +63,7 @@ import type { PermissionSeedService } from "../domains/auth/services/permission-
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { publishCollectionDbOptions } from "../domains/collections/services/collection-id";
 import { toCodeFirstCollectionConfig } from "../domains/collections/services/collection-sync-service";
+import { publishDeclaredCollectionFields } from "../domains/collections/services/declared-collection-fields";
 import { publishDeclaredEntities } from "../domains/dynamic-collections/services/removed-from-code-writes";
 import { resealQueuedMessagesAtBoot } from "../domains/email/queued-send";
 import type { ResolvedEmailRetentionConfig } from "../domains/email/retention-config";
@@ -73,15 +77,15 @@ import { judgeFieldGroupCyclesAtStart } from "../domains/field-groups/field-grou
 import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
 import {
   resolveFieldGroupRegistryName,
-  resolveKnownTypeColumns,
-  resolveTypeColumns,
+  resolveKnownTableColumns,
+  resolveTableColumns,
 } from "../domains/field-groups/storage/resolve-storage-names";
 import { stopGrantsExpiryRetry } from "../domains/flush-content-change";
 import type {
   LanguageAddressRule,
   SanitizedLocalizationConfig,
 } from "../domains/i18n/config/types";
-import { LanguageRegistry } from "../domains/i18n/language-registry";
+import type { LanguageRegistry } from "../domains/i18n/language-registry";
 import {
   mainTableFields,
   publishesPerLanguage,
@@ -89,7 +93,6 @@ import {
   storesPerLanguage,
 } from "../domains/i18n/per-language-storage";
 import { LanguageSettingsService } from "../domains/i18n/services/language-settings-service";
-import { storedLanguageReader } from "../domains/i18n/stored-language-reader";
 import type {
   AnyJobDefinition,
   JobRegistry,
@@ -99,6 +102,7 @@ import { coreRateLimitStoreFor } from "../domains/limits/core-limit-store";
 import type { LimitStore } from "../domains/limits/limit-store";
 import { limitsInMemoryWarning } from "../domains/limits/limits-in-memory-warning";
 import { selectLimitStore } from "../domains/limits/select-limit-store";
+import { stopDeleteWindowTimers } from "../domains/media/delete-window-timers";
 import type { MetaService } from "../domains/meta";
 import type { NoticesService } from "../domains/notices/notices-service";
 import { pluginSettingsSecrets } from "../domains/plugins/settings-service";
@@ -119,17 +123,22 @@ import {
 } from "../domains/schema/field-types/field-type-registry";
 import { pluginCollectionSources } from "../domains/schema/migrate/plugin/plugin-collection-sources";
 import {
+  listTablesAtStart,
+  tableExistsAtStart,
+} from "../domains/schema/pipeline/diff/start-catalog-scope";
+import {
   holdRecordedAtStart,
   registryRows,
 } from "../domains/schema/pipeline/recorded-fields";
-import { builtByFor } from "../domains/schema/pipeline/registered-collections";
 import type {
   DesiredCollection,
   DesiredSchema,
 } from "../domains/schema/pipeline/types";
 import type { ColumnOrigin } from "../domains/schema/services/field-column-descriptor";
 import {
+  activePostgresSchema,
   assertAdapterPostgresSchema,
+  assertInstallationInConfiguredSchema,
   resolvePostgresSchema,
   setActivePostgresSchema,
 } from "../domains/schema/services/postgres-schema";
@@ -156,6 +165,7 @@ import type { WebhookEndpointService } from "../domains/webhooks/services/webhoo
 import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/stored-recording-policy";
 import type { DeferrableEntityKind } from "../domains/widgets/deferred-entities";
 import { withdrawApprovalsUnderEarlierDefinitions } from "../domains/workflows/approval-follows-content";
+import { followWorkflowDefinitions } from "../domains/workflows/definition-sweep";
 import {
   buildWorkflowRegistry,
   publishWorkflows,
@@ -176,9 +186,19 @@ import { createSanitizationHook } from "../hooks/sanitization-hooks";
 import {
   bootApplyEnabled,
   checkRelationsBeforePlugins,
+  markNotInLine,
+  markStartIncomplete,
+  readStartFingerprints,
+  unchangedSinceLastStart,
 } from "../init/boot-apply";
 import { assertBootMigrationsNotRefused } from "../init/boot-migrations-gate";
+import {
+  codeDefinedAccessTargets,
+  languageRegistryFor,
+} from "../init/code-rule-context";
 import type { RunProdMigrationsArgs } from "../init/prod-migrations";
+import { isProductionStart } from "../init/production-start";
+import { bootSeedingFollows } from "../init/seed-permissions";
 import { unwrittenSlugs } from "../init/sync-outcome";
 import { startCompanionReadinessWarmUp } from "../init/warm-companion-readiness";
 import { env } from "../lib/env";
@@ -191,6 +211,12 @@ import {
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
 import { warnUndescribedPlugins } from "../plugins/describe-check";
+import {
+  builderExtensionsOf,
+  installedBuilderEntities,
+  publishBuilderExtensions,
+} from "../plugins/extended-types";
+import { reportUserMenuItemProblems } from "../plugins/header-item";
 import { setInitializedPlugins } from "../plugins/initialized-plugins";
 import {
   collectCustomPermissions,
@@ -218,10 +244,14 @@ import {
   clearPluginDependencies,
   publishPluginDependencies,
 } from "../plugins/plugin-dependencies";
+import { reportPluginLandingWarnings } from "../plugins/plugin-landing";
+import { reportPluginPanelWarnings } from "../plugins/plugin-panel";
 import { sealPluginSettings } from "../plugins/plugin-settings-provider";
+import { PluginStartupTimes } from "../plugins/plugin-startup-times";
 import {
   clearProxyHandlers,
   collectProxyHandlers,
+  markProxyHandlersReady,
   registerProxyHandlers,
   type CollectedProxyHandler,
 } from "../plugins/proxy/proxy-registry";
@@ -237,6 +267,7 @@ import {
 } from "../plugins/routes/collect-routes";
 import {
   rateLimitProxyWarning,
+  undeclaredRouteWarning,
   unkeyedAuthRouteWarnings,
 } from "../plugins/routes/route-options";
 import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
@@ -254,6 +285,7 @@ import {
 } from "../plugins/schema/validate-relations";
 import { extendTargetUnknownError } from "../plugins/schema-error";
 import { breachedPasswordsWarnings } from "../plugins/security/breached-passwords";
+import { resealPluginDigestKeys } from "../plugins/security/keyed-digest";
 import {
   clearPluginServices,
   registerPluginService,
@@ -267,6 +299,7 @@ import {
   withdrawTagExpiryLedger,
 } from "../runtime/cache/ledger-wiring";
 import { ensureSupportedFrameworkVersions } from "../runtime/framework-versions";
+import { setMigrationLogRoot } from "../runtime/notifications/production";
 import type {
   CollectionSource,
   FieldDefinition,
@@ -352,6 +385,8 @@ import {
   registerDocumentLockServices,
   registerVersionServices,
   registerWebhookServices,
+  registerWorkflowComparisonBaselines,
+  registerWorkflowNoticeKinds,
   resetWidgetRegistries,
   type RegistrationContext,
 } from "./registrations";
@@ -359,6 +394,12 @@ import { languageChangeContentCache } from "./registrations/language-change-cont
 // Looking a service up needs only the container, so it lives apart from
 // this file and its every registration.
 import { announceServicesRegistered, getService } from "./service-access";
+import {
+  beginStartReads,
+  endStartReads,
+  runStartStepsTogether,
+  startRegistryNow,
+} from "./start-reads";
 
 // ============================================================
 // Configuration Interface
@@ -768,10 +809,29 @@ export function registerDomainServices(ctx: RegistrationContext): void {
   // release that stops or runs late) can register its kinds against it.
   registerNoticeServices(ctx);
   registerReleaseServices(ctx);
+  // The notices a workflow's steps and assignments give the people they name, registered with
+  // the notices service as the releases' are, so no move can name a person it cannot tell.
+  registerWorkflowNoticeKinds();
+  // The comparisons a review shows, "since submitted" and "since approved", registered with the
+  // history's baselines so its comparison names them as it names its own.
+  registerWorkflowComparisonBaselines();
+}
+
+/** How a caller registers the services. */
+export interface RegisterServicesOptions {
+  /**
+   * Whether this registration is a start: `getNextly()`'s, whichever entry
+   * point began it, or the request path's own. A production start reads the
+   * registry and writes none of it (`isProductionStart`). A command and the
+   * test harness register without it, and keep the code-first sync whatever
+   * `NODE_ENV` says.
+   */
+  start?: boolean;
 }
 
 export async function registerServices(
-  config: NextlyServiceConfig
+  config: NextlyServiceConfig,
+  options: RegisterServicesOptions = {}
 ): Promise<void> {
   // One registration at a time per process. Both boot paths — the
   // instrumentation/Direct API boot and the request path — can arrive while
@@ -807,7 +867,7 @@ export async function registerServices(
   // Nothing awaits between the loop above finding no attempt in flight and
   // this line publishing one, so no other caller can start an attempt in
   // between.
-  await startRegistrationAttempt(config);
+  await startRegistrationAttempt(config, options);
 }
 
 /**
@@ -820,8 +880,14 @@ export async function registerServices(
  * attempt's container. The latch is cleared before the attempt settles, so a
  * waiter resuming from it finds either the next attempt or none.
  */
-function startRegistrationAttempt(config: NextlyServiceConfig): Promise<void> {
-  const attempt: Promise<void> = runRegistrationAttempt(config).finally(() => {
+function startRegistrationAttempt(
+  config: NextlyServiceConfig,
+  options: RegisterServicesOptions
+): Promise<void> {
+  const attempt: Promise<void> = runRegistrationAttempt(
+    config,
+    options
+  ).finally(() => {
     if (globalForReg.__nextly_registrationInFlight === attempt) {
       globalForReg.__nextly_registrationInFlight = undefined;
     }
@@ -832,7 +898,8 @@ function startRegistrationAttempt(config: NextlyServiceConfig): Promise<void> {
 
 /** One registration, releasing what it acquired when it fails. */
 async function runRegistrationAttempt(
-  config: NextlyServiceConfig
+  config: NextlyServiceConfig,
+  options: RegisterServicesOptions
 ): Promise<void> {
   // Plugins an earlier registration started and nobody tore down: the one
   // `clearServices()` ended, which empties the container but cannot await a
@@ -876,8 +943,9 @@ async function runRegistrationAttempt(
   // registration's plugins running.
   ensureSupportedFrameworkVersions(config.appRoot ?? process.cwd());
   try {
-    await registerServicesOnce(config);
+    await registerServicesOnce(config, options);
   } catch (error) {
+    endStartReads();
     // Anything that fails before registration completes leaves a connected
     // adapter and a partly populated container that no `shutdownServices`
     // call will release, because that function acts only on a registered
@@ -891,7 +959,8 @@ async function runRegistrationAttempt(
 
 /** The registration itself; see `registerServices` for what surrounds it. */
 async function registerServicesOnce(
-  config: NextlyServiceConfig
+  config: NextlyServiceConfig,
+  options: RegisterServicesOptions
 ): Promise<void> {
   const {
     transformedConfig,
@@ -943,6 +1012,10 @@ async function registerServicesOnce(
   // outside development and test, the app's own logger included.
   const resolvedLogger = maskingServiceLogger(logger ?? consoleLogger);
   const resolvedBasePath = basePath ?? process.cwd();
+  // The migration log is kept below the same root as every other generated
+  // file: the working directory in an app, a folder of its own for each
+  // test harness instance.
+  setMigrationLogRoot(resolvedBasePath);
 
   logRegisteredPlugins(transformedConfig, resolvedLogger);
   for (const warning of leftAloneWarnings(leftAlone)) {
@@ -976,6 +1049,8 @@ async function registerServicesOnce(
     resolvedLogger.warn?.(warning);
   }
 
+  const structure = startStructureOf(config, options);
+
   // ----------------------------------------
   // Layer 1: Create and Connect Adapter
   // ----------------------------------------
@@ -984,7 +1059,8 @@ async function registerServicesOnce(
   const adapter = await resolveAdapter(
     providedAdapter,
     resolvedLogger,
-    transformedConfig.db?.postgres?.schema
+    transformedConfig.db?.postgres?.schema,
+    { createsSchema: structure.mayDefine }
   );
 
   // ----------------------------------------
@@ -997,9 +1073,28 @@ async function registerServicesOnce(
   const adapterDrizzleDb = adapter.getDrizzle<DatabaseInstance>();
 
   container.registerSingleton<DrizzleAdapter>("adapter", () => adapter);
+  // A production start reads the catalog and the Schema Builder registries
+  // once, together, and every step below that asks is answered from that
+  // reading (`di/start-reads`): its waits on the database stay few and do not
+  // grow with the number of entities. Closed before anything changes either.
+  // The stored schema version, read before anything of the registry is: the
+  // start's definitions are recorded as loaded at it (`definitionsLoaded`),
+  // and a label read after the rows it labels could name a change those rows
+  // do not hold. A change landing after it is still seen as a move by the
+  // first follow.
+  const { versionBeforeLoading, definitionsLoaded } = await import(
+    "../route-handler/schema-version"
+  );
+  const definitionsVersion = await versionBeforeLoading(adapter);
+  if (structure.productionStart) beginStartReads(adapter);
+  // Its first statement, before anything reads a table it would not find.
+  // After the registration above, so a refusal releases the adapter.
+  await refuseDatabaseNotSetUp(adapter, structure);
   // The cache handlers read expiries from this adapter's ledger, and writes
   // made outside a request record theirs into it, for every instance.
   installTagExpiryLedger(adapter);
+
+  await refuseUnmigratedDatabaseInBuildPhase(adapter);
 
   const bootExtensionSchema = await prepareBootSchema(
     adapter,
@@ -1047,11 +1142,19 @@ async function registerServicesOnce(
     adapter,
     resolvedLogger,
     async () => {
+      const completeness = { complete: true };
       const registry = await initializeSchemaRegistry(
         adapter,
         staticRegistry,
         bootExtensionSchema,
-        transformedConfig
+        transformedConfig,
+        // A production start registers a translated entity without the
+        // translation table no migration made; the migrations at start make
+        // it, in their own reload.
+        {
+          createMissingCompanions: !structure.productionStart,
+          completeness,
+        }
       );
 
       // Publish the webhook recording policy from the config INDEPENDENTLY of the
@@ -1069,16 +1172,31 @@ async function registerServicesOnce(
         transformedConfig,
         adapter,
         adapterDrizzleDb,
-        resolvedLogger
+        resolvedLogger,
+        bootExtensionSchema
       );
 
       await publishStoredRecordingPolicies(adapter, transformedConfig);
 
+      const overrides = { differed: false };
       await registerConfigTablesQuietly(
         registry,
         transformedConfig,
         adapter,
-        resolvedLogger
+        resolvedLogger,
+        overrides
+      );
+      // Recorded once the start's definitions are final, at the version read
+      // before the start read any of them, so the first follow does not load
+      // them all again: only for a load that registered every definition, and
+      // only where the configuration replaced no registry-backed table with
+      // other columns (an older build than the one that migrated the
+      // registry, say). Otherwise the first follow loads them again from the
+      // registry, as before.
+      definitionsLoaded(
+        adapter,
+        definitionsVersion,
+        registry !== undefined && completeness.complete && !overrides.differed
       );
 
       installConfigFieldFunctions(transformedConfig);
@@ -1138,13 +1256,22 @@ async function registerServicesOnce(
 
       const { mediaStorage, storage } = registerBootMediaStorage(
         storagePlugins,
-        resolvedLogger
+        resolvedLogger,
+        resolvedBasePath
       );
 
       // Before any schema work, a database laid out for the other choice of the setting is refused:
       // with it on, the push that follows would plan to drop translatable columns a database laid
       // out before the setting still holds on its main tables; with it off, reads would ask main
       // tables for columns the setting kept per language.
+      // At a development start, what the last one recorded of each entity's declaration, read once
+      // before any per-entity work, so the reads below can skip what has not changed.
+      await readStartFingerprints(
+        adapter,
+        resolvedLogger,
+        transformedConfig,
+        bootExtensionSchema?.fingerprint ?? null
+      );
       await refuseMixedStorageInConfig(
         adapter,
         transformedConfig,
@@ -1160,13 +1287,8 @@ async function registerServicesOnce(
         logger: resolvedLogger,
         config: transformedConfig,
         basePath: resolvedBasePath,
-        languages: new LanguageRegistry({
-          configured: transformedConfig.localization,
-          reader: storedLanguageReader(adapter),
-          // A site keeping every translatable field per language stores its values under one
-          // language even before it declares any.
-          implicitLanguage: transformedConfig.perLanguageStorage === true,
-        }),
+        // The construction a command builds for its rules too (`withRuleContextOf`).
+        languages: languageRegistryFor(adapter, transformedConfig),
         schemasDir,
         migrationsDir,
         deferredExtends,
@@ -1212,41 +1334,81 @@ async function registerServicesOnce(
         unresolvedPermissions,
         beforeWrites: changedComponents =>
           judgeWorkflows(transformedConfig, changedComponents),
+        // A production start adds no plugin field to a Builder entity, neither
+        // its column nor its registry row: the entity is served as migrated.
+        materialize: !structure.productionStart,
       });
 
-      await syncCodeFirstEntities(
-        adapter,
-        resolvedLogger,
+      // A production start writes no registry row, no permission and no
+      // migration status: it serves the registry `nextly migrate` wrote, and
+      // only publishes what the configuration declares in this process.
+      if (structure.productionStart) {
+        await publishDeclaredCodeFirstEntities(transformedConfig, workflows);
+        // Rows behind the build, named from the rows the start already read.
+        await reportStartRowsBehindBuild(transformedConfig, resolvedLogger);
+      } else {
+        await syncCodeFirstEntities(
+          adapter,
+          resolvedLogger,
+          transformedConfig,
+          workflows
+        );
+      }
+
+      // The migrations at start change tables and registry rows: what follows
+      // them reads the database again.
+      if (structure.mayDefine) endStartReads();
+      const migratedAtBoot = await runBootMigrations(
+        config,
         transformedConfig,
-        workflows
+        deferredExtends,
+        {
+          adapter,
+          logger: resolvedLogger,
+        }
       );
 
-      await runBootMigrations(config, transformedConfig, deferredExtends, {
-        adapter,
-        logger: resolvedLogger,
-      });
+      // After the boot migrations, which store a new version where they run:
+      // the database's schema version against the build's, read once.
+      await reportStartSchemaVersion(adapter, adapterDrizzleDb, resolvedLogger);
 
-      // Approvals given under an earlier definition of a workflow are withdrawn now the workflows
-      // this boot registered are published, unless the definition keeps them. After the migrations,
-      // so the review states table is there to read where it exists at all.
-      await withdrawApprovalsUnderEarlierDefinitions(
-        adapter,
-        workflows.values()
-      );
+      // A development start brings review state into line with the workflows it registered, and
+      // so does a production start that applied its own migrations, as `nextly migrate` would
+      // have. Any other production start reads nothing of the schema, so there `nextly migrate`,
+      // the deploy step, does this instead (`followWorkflowsAfterMigrate`).
+      if (!isProductionRuntime() || migratedAtBoot) {
+        // Review state recorded under an earlier configuration follows the workflows this boot
+        // registered first: a detached collection's is removed, and renamed or mapped stages are
+        // followed. Before the approvals are judged below, so a part a rename kept is judged under
+        // the definition it now carries.
+        await followWorkflowDefinitions(adapter, workflows.values());
+
+        // Approvals given under an earlier definition of a workflow are withdrawn now the
+        // workflows this boot registered are published, unless the definition keeps them. After
+        // the migrations, so the review states table is there to read where it exists at all.
+        await withdrawApprovalsUnderEarlierDefinitions(
+          adapter,
+          workflows.values()
+        );
+      }
 
       // The stored language list is read before any plugin starts and before registration publishes:
       // until its first read the registry knows no stored languages, and a plugin's `init` writing
       // through the services, or a request served in that gap, would read a site with languages as
       // one without, sending translated values to the main table. After the boot migrations, so the
       // table exists; a read that fails for any other reason fails the boot.
-      await ctx.languages.refresh({ force: true });
-
-      await assertBootPluginSchemaVersions(
-        transformedConfig,
-        adapter,
-        adapterDrizzleDb,
-        resolvedLogger
-      );
+      // Read together with the plugins' recorded schema versions: neither needs the other.
+      await runStartStepsTogether(adapter.getCapabilities().dialect, [
+        () => ctx.languages.refresh({ force: true }),
+        async () => {
+          await assertBootPluginSchemaVersions(
+            transformedConfig,
+            adapter,
+            adapterDrizzleDb,
+            resolvedLogger
+          );
+        },
+      ]);
 
       await prepareExtensionTablesForInit(
         adapter,
@@ -1262,30 +1424,39 @@ async function registerServicesOnce(
 
   assertBootRelationsResolve(schemaRegistry, resolvedLogger);
 
-  // Before any plugin starts, as stored plugin secrets are: the key naming
-  // deleted plugin-defined people, sealed under a secret since rotated, is
-  // sealed again under the current one, so the retired secret can go once
-  // the app has started with both.
-  await resealPrincipalDigestKeyAtBoot(adapter, pluginSettingsSecrets(env));
-  // Held queued messages too, for the same reason: one sealed under a secret
-  // since rotated is sealed again under the current one while the previous
-  // can still open it, so a message outlives any number of rotations.
-  await resealQueuedMessagesAtBoot(adapter, pluginSettingsSecrets(env));
-
-  // In production, until the install has an administrator, setup needs a
-  // token: an install with none gets one here, printed once to this output.
-  if (env.NODE_ENV === "production") {
-    const { superAdminRoleHeld } = await import(
-      "../domains/users/services/last-super-admin"
-    );
-    const { getDialectTables } = await import("../database/index");
-    await issueSetupTokenAtBoot({
-      meta: getService("metaService"),
-      hasAdministrator: () =>
-        superAdminRoleHeld(adapter.getDrizzle(), getDialectTables()),
-      logger: resolvedLogger,
-    });
-  }
+  // The meta rows, read once for the keys' reseal and the setup token, which
+  // each ask of their own rows.
+  const metaService = getService("metaService");
+  let metaRows: Promise<Record<string, unknown>> | undefined;
+  const storedMeta = () => (metaRows ??= metaService.getAll());
+  await runStartStepsTogether(adapter.getCapabilities().dialect, [
+    // Before any plugin starts, as stored plugin secrets are.
+    () =>
+      resealKeysUnderCurrentSecret(
+        adapter,
+        pluginSettingsSecrets(env),
+        storedMeta
+      ),
+    // In production, until the install has an administrator, setup needs a
+    // token: an install with none gets one here, printed once to this output.
+    async () => {
+      if (env.NODE_ENV !== "production") return;
+      const { superAdminRoleHeld } = await import(
+        "../domains/users/services/last-super-admin"
+      );
+      const { getDialectTables } = await import("../database/index");
+      const { SETUP_TOKEN_META_KEY } = await import(
+        "../auth/setup-token/setup-token"
+      );
+      await issueSetupTokenAtBoot({
+        meta: metaService,
+        hasAdministrator: () =>
+          superAdminRoleHeld(adapter.getDrizzle(), getDialectTables()),
+        tokenStored: async () => SETUP_TOKEN_META_KEY in (await storedMeta()),
+        logger: resolvedLogger,
+      });
+    },
+  ]);
 
   // ----------------------------------------
   // Layer 7: Initialize Plugins
@@ -1298,6 +1469,8 @@ async function registerServicesOnce(
   // previous registration's names in place for a reload to believe.
   // A lifecycle command's boot initialises only its target: see
   // `pluginsToInitialize`. Every other boot initialises every configured plugin.
+  // Plugins' own start-up code may change what the start read.
+  endStartReads();
   const { pluginsToInitialize } = await import(
     "../domains/schema/ownership/plugin-lifecycle-state"
   );
@@ -1315,6 +1488,14 @@ async function registerServicesOnce(
   );
   setInitializedPlugins(
     globalForReg.__nextly_pluginTeardown.map(entry => entry.plugin.name)
+  );
+  // Which plugins take part in keeping public addresses unique, against the
+  // set the last start ran with.
+  await recordBootParticipation(
+    adapter,
+    metaService,
+    storedMeta,
+    resolvedLogger
   );
   // Which of the started plugins provides each capability, for code that asks
   // a provider at request time: the route helpers ask the page-metadata
@@ -1641,7 +1822,11 @@ function registerPluginFieldTypes(plugins: PluginDefinition[]): void {
   }
 }
 
-/** Name the boot's plugins, and warn about any without a description. */
+/**
+ * Name the boot's plugins, and warn about any without a description, and in
+ * development about a landing a plugin or the site names wrongly or leaves
+ * out, and about what a plugin's panel declares that the admin is not sent.
+ */
 function logRegisteredPlugins(
   transformedConfig: NextlyServiceConfig,
   logger: Logger
@@ -1658,6 +1843,29 @@ function logRegisteredPlugins(
   // plugin author's and breaks nothing, and an operator cannot fix a
   // third-party package from their own config.
   warnUndescribedPlugins(transformedConfig.plugins, logger);
+  // Beside it for the same reason: a malformed person's-menu item is left
+  // out of the menu without a word otherwise.
+  reportUserMenuItemProblems(transformedConfig.plugins, logger);
+
+  // Once per start, here rather than in the admin metadata, which is built on
+  // every request. Reported in development only and never thrown: the value
+  // is already ignored everywhere, and a rail item that opens a menu item
+  // still works.
+  reportPluginLandingWarnings(
+    transformedConfig.plugins,
+    transformedConfig.admin?.pluginOverrides,
+    process.env.NODE_ENV,
+    logger
+  );
+  // And what a plugin's panel declares that the admin is not sent or can
+  // never draw: a menu item for a page it does not register, a group, count
+  // or badge naming nothing it declares or owns. Reported as the landing is,
+  // for the same reasons, through the host's own logger.
+  reportPluginPanelWarnings(
+    transformedConfig.plugins,
+    process.env.NODE_ENV,
+    logger
+  );
 }
 
 /**
@@ -1700,6 +1908,14 @@ async function prepareBootSchema(
   if (bootDialect === undefined) return undefined;
 
   publishBootPostgresSchema(adapter, bootDialect, transformedConfig, logger);
+  // Before first-run setup and the development push, either of which would
+  // build a second, empty installation in a schema the setting was moved to.
+  if (bootDialect === "postgresql") {
+    await assertInstallationInConfiguredSchema(
+      adapter.getDrizzle(),
+      activePostgresSchema()
+    );
+  }
 
   // Held rather than only published: first-run is reached through a dynamic
   // import, which a bundler may resolve to a second instance of the module
@@ -1714,6 +1930,10 @@ async function prepareBootSchema(
     // see the same set.
     plugins: transformedPlugins,
     config: transformedConfig,
+    // The connected server's limits, so a declared check it will not enforce
+    // or an expression index it cannot build is refused at the compile,
+    // before the push applies anything.
+    server: adapter.getCapabilities(),
     logger,
   });
 }
@@ -1772,7 +1992,12 @@ async function publishStoredRecordingPolicies(
     collections: collectSlugs(transformedConfig.collections),
     singles: collectSlugs(transformedConfig.singles),
   };
-  await publishStoredWebhookRecordingPolicies(adapter, configOwnedSlugs);
+  // At a production start, from its one reading of the registries.
+  await publishStoredWebhookRecordingPolicies(
+    adapter,
+    configOwnedSlugs,
+    startRegistryNow()
+  );
 
   // Register how that read is repeated. The stored decisions are a snapshot, and
   // a toggle applied on one instance only updates that instance's map; without a
@@ -1796,11 +2021,12 @@ async function publishStoredRecordingPolicies(
  * entirely for code-first tables - the DB is still the source of
  * truth for UI-created tables via `loadDynamicTables`.
  */
-async function registerConfigTablesQuietly(
+export async function registerConfigTablesQuietly(
   schemaRegistry: SchemaRegistry | undefined,
   transformedConfig: NextlyServiceConfig,
   adapter: DrizzleAdapter,
-  logger: Logger
+  logger: Logger,
+  overrides?: { differed: boolean }
 ): Promise<void> {
   if (!schemaRegistry) return;
   try {
@@ -1808,7 +2034,8 @@ async function registerConfigTablesQuietly(
       schemaRegistry,
       transformedConfig,
       adapter,
-      logger
+      logger,
+      overrides
     );
   } catch (err) {
     // Non-fatal: the DB-backed pass may still have registered these
@@ -1893,6 +2120,12 @@ async function reconcileBuilderTargets<T>(
     beforeWrites: (
       changedComponents: ReadonlyArray<ReconciledBuilderEntity>
     ) => Promise<T>;
+    /**
+     * Whether the plugin fields merged onto Builder entities are added to
+     * their tables and registry rows. False at a production start, which
+     * serves each entity as the database holds it.
+     */
+    materialize: boolean;
   }
 ): Promise<T> {
   const { adapter, logger, transformedConfig } = args;
@@ -1901,7 +2134,10 @@ async function reconcileBuilderTargets<T>(
   // extends. The reconcile is a pure read+transform; the `changed` filter
   // below keeps a plugin-free or unchanged boot write-free (no registry
   // writes, no DDL, no apply-helper imports) — the byte-for-byte no-op path.
-  const builderEntities = await loadBuilderEntities(adapter);
+  const builderEntities = await loadBuilderEntities(
+    adapter,
+    startRegistryNow()
+  );
 
   assertRegisteredKeepTheirKind(transformedConfig, builderEntities);
 
@@ -1910,7 +2146,7 @@ async function reconcileBuilderTargets<T>(
   // and judged, against every address used; an existing entity keeps its address, whatever the
   // rule now says of it.
   await assertConfiguredAddresses(transformedConfig, builderEntities, table =>
-    adapter.tableExists(table)
+    tableExistsAtStart(adapter, table)
   );
   // Their sibling fields, by the one sibling rule and as early: a pair an entity's registry row
   // does not hold is new and refused; one it holds keeps working.
@@ -1999,11 +2235,19 @@ async function reconcileBuilderTargets<T>(
 
   const judged = await args.beforeWrites(changed.components);
 
+  // The changed entities this start installed: each `kind:slug` whose
+  // plugin fields reached its table and registry row.
+  const materialized = new Set<string>();
+  // Not in `next build`, which writes nothing: a plugin's field on a Builder
+  // entity reaches the database through `nextly migrate`, and the build reads
+  // the entity as the database holds it.
   if (
+    args.materialize &&
     changed.collections.length +
       changed.singles.length +
       changed.components.length >
-    0
+      0 &&
+    !isNextBuildPhase()
   ) {
     await materializeBuilderChanges({
       adapter,
@@ -2012,8 +2256,31 @@ async function reconcileBuilderTargets<T>(
       dialect,
       builderEntities,
       changed,
+      materialized,
     });
   }
+  // Which Builder types each plugin's fields are on, for `typesExtendedBy`
+  // and the admin contributions offered only there: as each entity is
+  // served, so a change not installed (a production start before
+  // `nextly migrate`, or one that failed) is read as stored.
+  publishBuilderExtensions(
+    builderExtensionsOf({
+      collections: installedBuilderEntities(
+        "collection",
+        entities.collections,
+        changed.collections,
+        builderEntities.collections,
+        materialized
+      ),
+      singles: installedBuilderEntities(
+        "single",
+        entities.singles,
+        changed.singles,
+        builderEntities.singles,
+        materialized
+      ),
+    })
+  );
 
   finalizeBuilderTargets(args, builderEntities);
   return judged;
@@ -2048,6 +2315,8 @@ interface MaterializeBuilderArgs {
   dialect: SupportedDialect;
   builderEntities: BuilderEntities;
   changed: ChangedBuilderEntities;
+  /** Told each `kind:slug` whose change was installed. */
+  materialized: Set<string>;
 }
 
 /** The context every kind's materialization shares. */
@@ -2056,6 +2325,8 @@ interface MaterializeContext {
   logger: Logger;
   schemaRegistry: SchemaRegistry | undefined;
   dialect: SupportedDialect;
+  /** Told each `kind:slug` whose change was installed. */
+  materialized: Set<string>;
   addMissingColumnsForFields: (
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -2157,6 +2428,7 @@ async function materializeBuilderKind(
           }
         }
       }
+      ctx.materialized.add(`${args.kind}:${ent.slug}`);
     } catch (err) {
       ctx.logger.warn?.(
         `[plugins] Failed to materialize plugin fields onto Builder ${args.kind} "${ent.slug}": ${
@@ -2253,6 +2525,7 @@ async function materializeBuilderChanges(
     logger: args.logger,
     schemaRegistry: args.schemaRegistry,
     dialect: args.dialect,
+    materialized: args.materialized,
     addMissingColumnsForFields,
   };
 
@@ -2368,13 +2641,19 @@ async function materializeBuilderComponents(
         loaded: args.builderEntities.components,
         persist: (slug, fields) =>
           reg.updateComponent(slug, { fields: fields }),
-        makeRuntime: async (tableName, fields, _status, localized) =>
-          compSchema.generateRuntimeSchema(tableName, fields, {
+        makeRuntime: async (tableName, fields, _status, localized) => {
+          // The discriminator and the columns the table holds, from one catalog read: a field
+          // inside a group with no name whose column the table lacks yet is left out
+          // (`RuntimeSchemaOptions.heldColumns`).
+          const held = (await resolveTableColumns(adapter, [tableName])).get(
+            tableName
+          );
+          return compSchema.generateRuntimeSchema(tableName, fields, {
             localized,
-            typeColumn:
-              (await resolveTypeColumns(adapter, [tableName])).get(tableName) ??
-              STORAGE_FORMAT.columns.type,
-          }),
+            typeColumn: held?.typeColumn ?? STORAGE_FORMAT.columns.type,
+            heldColumns: held?.columns,
+          });
+        },
       })
   );
 }
@@ -2443,12 +2722,48 @@ async function registerMigrationJournal(
   }
 }
 
-/** Layer 2.5: Initialize Media Storage, and its default adapter if any. */
+/**
+ * Record which plugins take part in keeping public addresses unique, against
+ * the set the last start ran with: written only when it changed, from the
+ * meta rows this start has read already. A lifecycle command's boot starts
+ * only the plugin it installs or uninstalls, so it records nothing.
+ */
+async function recordBootParticipation(
+  adapter: DrizzleAdapter,
+  metaService: MetaService,
+  storedMeta: () => Promise<Record<string, unknown>>,
+  logger: Logger
+): Promise<void> {
+  const { isLifecycleCommandBoot } = await import(
+    "../domains/schema/ownership/plugin-lifecycle-state"
+  );
+  if (isLifecycleCommandBoot()) return;
+  const { PARTICIPATION_META_KEY, recordStartParticipation } = await import(
+    "../domains/public-addresses/participation"
+  );
+  await recordStartParticipation(
+    adapter,
+    metaService,
+    (await storedMeta())[PARTICIPATION_META_KEY],
+    logger
+  );
+}
+
+/**
+ * Layer 2.5: Initialize Media Storage, and its default adapter if any. The
+ * local disk a collection with no storage plugin uploads to is
+ * `public/uploads` below `basePath`: the app's root, the working directory
+ * unless one is given.
+ */
 function registerBootMediaStorage(
   storagePlugins: NextlyServiceConfig["storagePlugins"],
-  logger: Logger
+  logger: Logger,
+  basePath: string
 ): { mediaStorage: MediaStorage; storage: IStorageAdapter | null } {
-  const mediaStorage = initializeMediaStorage({ plugins: storagePlugins });
+  const mediaStorage = initializeMediaStorage({
+    plugins: storagePlugins,
+    local: { uploadDir: join(basePath, "public", "uploads") },
+  });
   logStorageConfiguration(mediaStorage, storagePlugins, logger);
   container.registerSingleton<MediaStorage>("mediaStorage", () => mediaStorage);
 
@@ -2575,6 +2890,58 @@ async function syncCodeFirstEntities(
 }
 
 /**
+ * In `next build`, refuse a database with no Nextly tables.
+ *
+ * The build sets up nothing: a database with no Nextly tables is one the
+ * deploy has not migrated, and the build refuses, naming the command, rather
+ * than creating the schema in a database other deployments may share. Before
+ * any schema work, so nothing reads or writes first.
+ */
+async function refuseUnmigratedDatabaseInBuildPhase(
+  adapter: DrizzleAdapter
+): Promise<void> {
+  if (!isNextBuildPhase()) return;
+  const { refuseUnmigratedDatabaseInBuild } = await import("../init/first-run");
+  await refuseUnmigratedDatabaseInBuild(adapter);
+}
+
+/**
+ * Seal again, under the current secret, the keys sealed under one since
+ * rotated: the key naming deleted plugin-defined people, held queued messages
+ * and every plugin digest key stored, a removed plugin's included. The retired
+ * secret can then go once the app has started with both, a message outlives
+ * any number of rotations, and a digest stored beside a plugin's records
+ * matches for as long as they are kept.
+ *
+ * Not in `next build`: no plugin needs these to start, the first start after
+ * the build still has the retired secret to open them, and the build writes
+ * nothing but a plugin's own settings seal.
+ */
+async function resealKeysUnderCurrentSecret(
+  adapter: DrizzleAdapter,
+  secrets: string[],
+  /** The meta rows, read once for every key kept there. */
+  storedMeta: () => Promise<Record<string, unknown>>
+): Promise<void> {
+  if (isNextBuildPhase()) return;
+  const metaService = getService("metaService");
+  // Three independent sets of rows, resealed together; the locked transaction
+  // of the principal key only when it needs resealing.
+  await runStartStepsTogether(adapter.getCapabilities().dialect, [
+    () => resealPrincipalDigestKeyAtBoot(adapter, secrets, storedMeta),
+    () => resealQueuedMessagesAtBoot(adapter, secrets),
+    () =>
+      resealPluginDigestKeys(
+        {
+          getAll: storedMeta,
+          compareAndSet: metaService.compareAndSet.bind(metaService),
+        },
+        secrets
+      ),
+  ]);
+}
+
+/**
  * Layer 6.5: Pending migrations, BEFORE any plugin initialises.
  *
  * Pending migrations apply before `initializePlugins`, so a plugin's `init`
@@ -2589,17 +2956,62 @@ async function runBootMigrations(
   transformedConfig: NextlyServiceConfig,
   deferredExtends: DeferredExtends,
   deps: Pick<RunProdMigrationsArgs, "adapter" | "logger">
-): Promise<void> {
+): Promise<boolean> {
+  // `next build` runs no migration, whatever the setting: the build may point
+  // at a database other deployments share, and the deploy's own `nextly
+  // migrate`, or the first start with migrations at start, migrates it.
+  if (isNextBuildPhase()) return false;
   const { runProdMigrationsIfEnabled } = await import(
     "../init/prod-migrations"
   );
-  if (config.db) {
-    // The raw `db` block with the schema this boot actually runs; see
-    // `bootMigrationsArgs` for why the two come from different configs.
-    await runProdMigrationsIfEnabled(
-      bootMigrationsArgs(config.db, transformedConfig, deferredExtends, deps)
-    );
-  }
+  if (!config.db) return false;
+  // The raw `db` block with the schema this boot actually runs; see
+  // `bootMigrationsArgs` for why the two come from different configs. Answers whether the
+  // migrations applied, so the start can do the deploy step's other work as well.
+  return await runProdMigrationsIfEnabled(
+    bootMigrationsArgs(config.db, transformedConfig, deferredExtends, deps)
+  );
+}
+
+/**
+ * Layer 6.6: the database's schema version against the build's, in
+ * production only.
+ *
+ * One read of the stored version (`reportSchemaVersionAtStart`), and a
+ * warning where the database is behind the build, naming `nextly migrate`,
+ * or a note where it is ahead. Nothing is written and nothing refused: the
+ * app serves whichever way they stand. A development start reaches its schema
+ * through the Builder and the code-first sync as they change, and compares
+ * nothing here.
+ */
+async function reportStartSchemaVersion(
+  adapter: DrizzleAdapter,
+  adapterDrizzleDb: DatabaseInstance,
+  logger: Logger
+): Promise<void> {
+  if (process.env.NODE_ENV !== "production") return;
+  const [
+    { reportSchemaVersionAtStart },
+    { buildSchemaVersion },
+    { latestStoredSchemaVersion },
+  ] = await Promise.all([
+    import("../domains/schema/schema-version"),
+    import("../domains/schema/build-schema-version"),
+    import("../domains/schema/stored-schema-seq"),
+  ]);
+  await reportSchemaVersionAtStart({
+    db: adapterDrizzleDb,
+    dialect: adapter.dialect,
+    build: buildSchemaVersion(),
+    // The start read the version just before it loaded its definitions, and read it again where
+    // boot migrations stored a new one; that newest reading is compared, not a second read of the
+    // same row. A change this process marked since it is not in it, so then the row is read here.
+    stored: latestStoredSchemaVersion(adapter),
+    logger: {
+      warn: message => logger.warn(message),
+      info: message => logger.info(message),
+    },
+  });
 }
 
 /**
@@ -2660,7 +3072,9 @@ async function assertBootPluginSchemaVersions(
  * uninstall stopped part way, is refused everywhere
  * (`plugin-install-gate.ts`). Before the migrations, so a boot that refuses
  * a plugin never applies its modules first, and a half-uninstalled plugin's
- * rolled-back modules are not applied again under it.
+ * rolled-back modules are not applied again under it. A plugin whose schema
+ * prefix differs from the one its recorded tables were created under is
+ * refused here too, everywhere (`plugin-prefix-check.ts`).
  *
  * Skipped in the boot a lifecycle command makes to run a plugin's hook, which
  * runs mid-install or mid-uninstall by design.
@@ -2669,7 +3083,8 @@ async function assertBootPluginInstallStates(
   transformedConfig: NextlyServiceConfig,
   adapter: DrizzleAdapter,
   adapterDrizzleDb: DatabaseInstance,
-  logger: Logger
+  logger: Logger,
+  bootExtensionSchema: ExtensionSchema | undefined
 ): Promise<void> {
   const plugins = transformedConfig.plugins ?? [];
   if (plugins.length === 0) return;
@@ -2698,6 +3113,18 @@ async function assertBootPluginInstallStates(
     registryExists: () => schemaOwnersTableExists(adapter),
     production: process.env.NODE_ENV === "production",
     warn: m => logger.warn?.(m),
+  });
+  // A plugin whose prefix moved since its tables were created, refused here
+  // for the same reason: before the migrations and the development push,
+  // either of which would create its tables again under the new names.
+  const { assertPluginPrefixesKeptIn } = await import(
+    "../domains/schema/ownership/plugin-prefix-check"
+  );
+  await assertPluginPrefixesKeptIn({
+    prefixes: bootExtensionSchema?.pluginPrefixes,
+    db: adapterDrizzleDb,
+    dialect: adapter.dialect,
+    adapter,
   });
 }
 
@@ -3107,7 +3534,15 @@ async function resolveAdapter(
   providedAdapter: DrizzleAdapter | undefined,
   logger: Logger,
   /** `db.postgres.schema`, which no environment variable carries. */
-  postgresSchema: string | undefined
+  postgresSchema: string | undefined,
+  options: {
+    /**
+     * Whether connecting may create the configured PostgreSQL schema. A
+     * production start that does not migrate at start creates none: a missing
+     * one is a database `nextly migrate` has not set up, and is refused so.
+     */
+    createsSchema: boolean;
+  }
 ): Promise<DrizzleAdapter> {
   if (providedAdapter) {
     logger.info?.("Using provided database adapter");
@@ -3126,9 +3561,30 @@ async function resolveAdapter(
     );
   }
 
-  const adapter = await createAdapterFromEnv(
-    postgresSchema !== undefined ? { schema: postgresSchema } : undefined
-  );
+  // Read-only for the schema alone: on PostgreSQL the connect then looks the
+  // schema up rather than creating it. Only there, since the same flag opens
+  // a SQLite file read-only.
+  const schemaReadOnly =
+    !options.createsSchema &&
+    postgresSchema !== undefined &&
+    env.DB_DIALECT === "postgresql";
+  let adapter: DrizzleAdapter;
+  try {
+    adapter = await createAdapterFromEnv(
+      postgresSchema !== undefined
+        ? {
+            schema: postgresSchema,
+            ...(schemaReadOnly ? { readOnly: true } : {}),
+          }
+        : undefined
+    );
+  } catch (error) {
+    if (schemaReadOnly && carriesSqlState(error, INVALID_SCHEMA_NAME)) {
+      const { databaseNotSetUp } = await import("../init/first-run");
+      throw databaseNotSetUp(error);
+    }
+    throw error;
+  }
   const capabilities = adapter.getCapabilities();
   logger.info?.(`Database adapter initialized: ${capabilities.dialect}`);
   logger.info?.(`  - JSONB support: ${capabilities.supportsJsonb ? "✓" : "✗"}`);
@@ -3141,6 +3597,65 @@ async function resolveAdapter(
   return adapter;
 }
 
+/** What a start may do to the database's structure. */
+interface StartStructure {
+  /** A start in production (`isProductionStart`), not a command's registration. */
+  productionStart: boolean;
+  /**
+   * Whether this start may create or change structure: any start but a
+   * production one, and a production one only through the migrations at start,
+   * which are `nextly migrate`'s step and never run in `next build`.
+   */
+  mayDefine: boolean;
+}
+
+/**
+ * A production start serves the structure `nextly migrate` made and defines
+ * none: no table, column, translation table or PostgreSQL schema. Where the
+ * app runs migrations at start, that step is `nextly migrate`'s and may, as the
+ * command does (`bootMigrationsEnabled` reads the same setting).
+ */
+function startStructureOf(
+  config: NextlyServiceConfig,
+  options: RegisterServicesOptions
+): StartStructure {
+  const productionStart = options.start === true && isProductionStart();
+  return {
+    productionStart,
+    mayDefine:
+      !productionStart ||
+      (config.db?.runMigrationsOnBoot === true && !isNextBuildPhase()),
+  };
+}
+
+/**
+ * Against a database with no Nextly tables, a start that may not define
+ * structure creates nothing and refuses, naming `nextly migrate`
+ * (`assertDatabaseSetUp`). In `next build` the build's own refusal answers,
+ * naming the build (`refuseUnmigratedDatabaseInBuildPhase`).
+ */
+async function refuseDatabaseNotSetUp(
+  adapter: DrizzleAdapter,
+  structure: StartStructure
+): Promise<void> {
+  if (structure.mayDefine || isNextBuildPhase()) return;
+  const { assertDatabaseSetUp } = await import("../init/first-run");
+  await assertDatabaseSetUp(adapter);
+}
+
+/** PostgreSQL's code for a schema that does not exist. */
+const INVALID_SCHEMA_NAME = "3F000";
+
+/** Whether `error`, or an error it wraps, carries the SQLSTATE `code`. */
+function carriesSqlState(error: unknown, code: string): boolean {
+  for (let at: unknown = error, hops = 0; hops < 4; hops++) {
+    if (typeof at !== "object" || at === null) return false;
+    if (Reflect.get(at, "code") === code) return true;
+    at = Reflect.get(at, "cause");
+  }
+  return false;
+}
+
 /**
  * Creates the SchemaRegistry with the static system tables and makes it the
  * adapter's table resolver, touching no database.
@@ -3151,7 +3666,7 @@ async function resolveAdapter(
  * it. `undefined` when the registry could not be set up, as
  * `initializeSchemaRegistry` then returns too.
  */
-async function createSchemaRegistry(
+export async function createSchemaRegistry(
   adapter: DrizzleAdapter
 ): Promise<SchemaRegistry | undefined> {
   try {
@@ -3193,14 +3708,38 @@ async function createSchemaRegistry(
  * Dynamic tables come from the `dynamic_collections`, `dynamic_singles`,
  * and `dynamic_components` DB tables and are generated at runtime.
  */
-async function initializeSchemaRegistry(
+export async function initializeSchemaRegistry(
   adapter: DrizzleAdapter,
   registry: SchemaRegistry | undefined,
   extensionSchema: ExtensionSchema | undefined,
   /** What the configuration declares, so an entity removed from code is told apart. */
-  declared: Pick<NextlyServiceConfig, "collections" | "singles">
+  declared: Pick<NextlyServiceConfig, "collections" | "singles">,
+  options: {
+    /**
+     * Told, where given, whether every definition registered: every registry
+     * read and every row loaded (`loadDynamicTables`' failures), the field
+     * group registry found, and every field group's discriminator read. Only
+     * a complete load may be recorded as the one the start served
+     * (`definitionsLoaded`); a partial one is left for the first follow to
+     * load again.
+     */
+    completeness?: { complete: boolean };
+    /**
+     * Whether a translated entity's missing translation table is created. A
+     * production start creates none: the entity is registered as it is, and
+     * its reads and writes say the table is not ready.
+     */
+    createMissingCompanions: boolean;
+  }
 ): Promise<SchemaRegistry | undefined> {
   if (registry === undefined) return undefined;
+  // Every load below that falls short says so, for `options.completeness`.
+  const incomplete = (): void => {
+    if (options.completeness) options.completeness.complete = false;
+  };
+  const noteLoad = (loaded: { failures: readonly unknown[] }): void => {
+    if (loaded.failures.length > 0) incomplete();
+  };
   try {
     const { declaredSlugsOf } = await import(
       "../domains/dynamic-collections/services/removed-from-code"
@@ -3220,13 +3759,18 @@ async function initializeSchemaRegistry(
       // initializeSchemaRegistry doesn't have resolvedLogger in scope;
       // console is the right fallback because first-run is a one-time
       // user-visible event and the boot logger wiring isn't done yet.
-      await ensureFirstRunSetup({
+      const firstRun = await ensureFirstRunSetup({
         adapter,
         extensionSchema,
         logger: consoleLogger,
         // Several processes may start on the same new database at once.
         holdSchemaLock: firstStartSchemaLock(adapter, consoleLogger),
       });
+      // A start that set a new database up changed what the start's shared
+      // reads found: they are read again.
+      if (firstRun.ranSetup && startRegistryNow() !== undefined) {
+        beginStartReads(adapter);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       consoleLogger.warn(
@@ -3237,53 +3781,66 @@ async function initializeSchemaRegistry(
     // Step 2: Dynamic collections. Main table and, for a localized one, its
     // `_locales` companion — one registration through the shared registrar, so
     // singles below and the boot-time reload cannot register a different half.
-    await loadDynamicTables(
-      adapter,
-      "dynamic_collections",
-      async (tableName, fields, hasStatus, localized, builderOwned) => {
-        const { registerDynamicEntitySchema } = await import(
-          "../domains/schema/services/register-dynamic-entity"
-        );
-        await registerDynamicEntitySchema({
-          adapter,
-          registry,
-          dialect,
-          kind: "collection",
-          tableName,
-          fields: fields as FieldDefinition[],
-          status: hasStatus === true,
-          localized,
-          builderOwned,
-        });
-      },
-      // A collection removed from code is registered only while its tables
-      // stand, so this boot does not create its dropped translation table.
-      { declaredSlugs: declaredSlugsOf(declared.collections) }
+    noteLoad(
+      await loadDynamicTables(
+        adapter,
+        "dynamic_collections",
+        async (tableName, fields, hasStatus, localized, builderOwned) => {
+          const { registerDynamicEntitySchema } = await import(
+            "../domains/schema/services/register-dynamic-entity"
+          );
+          await registerDynamicEntitySchema({
+            adapter,
+            registry,
+            dialect,
+            kind: "collection",
+            tableName,
+            fields: fields as FieldDefinition[],
+            status: hasStatus === true,
+            localized,
+            builderOwned,
+            createMissingCompanion: options.createMissingCompanions,
+          });
+        },
+        // A collection removed from code is registered only while its tables
+        // stand, so this boot does not create its dropped translation table.
+        // A production start takes the rows from its one reading of them.
+        {
+          declaredSlugs: declaredSlugsOf(declared.collections),
+          registry: startRegistryNow(),
+        }
+      )
     );
 
     // Step 3: Dynamic singles — the same registration as collections above,
     // asked about a different owner.
-    await loadDynamicTables(
-      adapter,
-      "dynamic_singles",
-      async (tableName, fields, hasStatus, localized, builderOwned) => {
-        const { registerDynamicEntitySchema } = await import(
-          "../domains/schema/services/register-dynamic-entity"
-        );
-        await registerDynamicEntitySchema({
-          adapter,
-          registry,
-          dialect,
-          kind: "single",
-          tableName,
-          fields: fields as FieldDefinition[],
-          status: hasStatus === true,
-          localized,
-          builderOwned,
-        });
-      },
-      // The same rule for a Single removed from code.
-      { declaredSlugs: declaredSlugsOf(declared.singles) }
+    noteLoad(
+      await loadDynamicTables(
+        adapter,
+        "dynamic_singles",
+        async (tableName, fields, hasStatus, localized, builderOwned) => {
+          const { registerDynamicEntitySchema } = await import(
+            "../domains/schema/services/register-dynamic-entity"
+          );
+          await registerDynamicEntitySchema({
+            adapter,
+            registry,
+            dialect,
+            kind: "single",
+            tableName,
+            fields: fields as FieldDefinition[],
+            status: hasStatus === true,
+            localized,
+            builderOwned,
+            createMissingCompanion: options.createMissingCompanions,
+          });
+        },
+        // The same rule for a Single removed from code.
+        {
+          declaredSlugs: declaredSlugsOf(declared.singles),
+          registry: startRegistryNow(),
+        }
+      )
     );
 
     // Step 3.5: Plugin and app extension tables. Without this they reached
@@ -3321,18 +3878,22 @@ async function initializeSchemaRegistry(
     const fieldGroupRegistry = await resolveFieldGroupRegistryName(
       adapter
     ).catch(() => undefined);
-    await loadDynamicTables(
-      adapter,
-      fieldGroupRegistry ?? STORAGE_FORMAT.registryTable,
-      (tableName, fields, _hasStatus, localized, builderOwned) => {
-        loadedFieldGroups.push({
-          tableName,
-          fields: fields as FieldConfig[],
-          localized,
-          builderOwned,
-        });
-        return Promise.resolve();
-      }
+    if (fieldGroupRegistry === undefined) incomplete();
+    noteLoad(
+      await loadDynamicTables(
+        adapter,
+        fieldGroupRegistry ?? STORAGE_FORMAT.registryTable,
+        (tableName, fields, _hasStatus, localized, builderOwned) => {
+          loadedFieldGroups.push({
+            tableName,
+            fields: fields as FieldConfig[],
+            localized,
+            builderOwned,
+          });
+          return Promise.resolve();
+        },
+        { registry: startRegistryNow() }
+      )
     );
     // Resolved per table even though it is one query: the migration renames the
     // registry last, and a table an author named itself keeps its own name
@@ -3342,7 +3903,10 @@ async function initializeSchemaRegistry(
     // catch — which returns `undefined` and skips config-table registration
     // entirely, discarding a boot that was otherwise fine over one metadata
     // probe. A table it could not speak for is absent from the map.
-    const fieldGroupTypeColumns = await resolveKnownTypeColumns(
+    // With each table's columns, read by the same catalog listing, so a field inside a group with
+    // no name whose column the table lacks yet is left out of its runtime table
+    // (`RuntimeSchemaOptions.heldColumns`).
+    const fieldGroupTableColumns = await resolveKnownTableColumns(
       adapter,
       loadedFieldGroups.map(entry => entry.tableName)
     );
@@ -3352,7 +3916,8 @@ async function initializeSchemaRegistry(
       localized,
       builderOwned,
     } of loadedFieldGroups) {
-      const typeColumn = fieldGroupTypeColumns.get(tableName);
+      const held = fieldGroupTableColumns.get(tableName);
+      const typeColumn = held?.typeColumn;
       if (typeColumn === undefined) {
         // 🔴 Left unregistered rather than registered on a guess.
         //
@@ -3369,6 +3934,7 @@ async function initializeSchemaRegistry(
             `it by a name that was not verified. Field-group reads and writes ` +
             `for it will fail until the next start.`
         );
+        incomplete();
         continue;
       }
       const { FieldGroupSchemaService } = await import(
@@ -3380,23 +3946,23 @@ async function initializeSchemaRegistry(
       const runtimeTable = compSchemaService.generateRuntimeSchema(
         tableName,
         fields,
-        { localized: perLanguage, typeColumn }
+        { localized: perLanguage, typeColumn, heldColumns: held?.columns }
       );
       registry.registerDynamicSchema(tableName, runtimeTable);
       if (perLanguage) {
-        const { ensureCompanionTable } = await import(
-          "../domains/i18n/runtime/companion-io"
-        );
-        await ensureCompanionTable(adapter, {
-          // As above: a field group's own creator sizes a text column from a different key again,
-          // and a code-first row in this registry was not built by it at all.
-          builtBy: builtByFor("fieldGroup", builderOwned),
-          slug: tableName,
-          tableName,
-          fields: fields as { name: string; type: string }[],
-          dialect,
-          status: false,
-        });
+        if (options.createMissingCompanions) {
+          // The one making of a field group's translation table, which the
+          // reload after the migrations at start asks of too.
+          const { ensureFieldGroupCompanion } = await import(
+            "../init/field-group-companions"
+          );
+          await ensureFieldGroupCompanion(adapter, {
+            tableName,
+            fields,
+            builderOwned,
+            dialect,
+          });
+        }
         const { buildCompanionRuntimeTable } = await import(
           "../domains/i18n/runtime/companion-registration"
         );
@@ -3448,7 +4014,30 @@ function collectSlugs(
   return slugs;
 }
 
-function publishWebhookRecordingPolicies(config: NextlyServiceConfig): void {
+/**
+ * The webhook-recording decisions a start publishes, for a command that runs without one, such as
+ * `nextly migrate`'s workflow pass: the configuration's own (`publishWebhookRecordingPolicies`),
+ * then the opt-outs the registries store for entities the configuration does not own, read once.
+ * An entity with `webhooks: false` then records no event from the command, as from a request.
+ */
+export async function publishRecordingPoliciesForCommand(
+  adapter: DrizzleAdapter,
+  config: RecordingPolicyConfig
+): Promise<void> {
+  publishWebhookRecordingPolicies(config);
+  await publishStoredWebhookRecordingPolicies(adapter, {
+    collections: collectSlugs(config.collections),
+    singles: collectSlugs(config.singles),
+  });
+}
+
+/** What the recording decisions are read from: the entities and the plugins that contribute some. */
+type RecordingPolicyConfig = Pick<
+  NextlyServiceConfig,
+  "plugins" | "collections" | "singles"
+>;
+
+function publishWebhookRecordingPolicies(config: RecordingPolicyConfig): void {
   // Provenance comes from the plugin contribution list, not the optional
   // `admin.isPlugin` flag: a plugin's opt-out must be tagged `plugin` (so a
   // code-first reconcile never prunes it) even when the plugin never sets that
@@ -3513,9 +4102,55 @@ export async function registerConfigTablesInResolver(
   registry: SchemaRegistry,
   config: NextlyServiceConfig,
   adapter: DrizzleAdapter,
-  logger: Partial<Logger>
+  logger: Partial<Logger>,
+  /**
+   * Told, where given, whether a table this registers replaced one the
+   * registry pass had registered with different columns: the definitions
+   * the start serves then differ from the stored registry, and the start's
+   * load may not be recorded as following it (`definitionsLoaded`).
+   */
+  overrides?: { differed: boolean }
 ): Promise<void> {
   const dialect = adapter.getCapabilities().dialect;
+  const { entityKind, getColumns } = await import("drizzle-orm");
+  /**
+   * A table's columns as it reads and writes them, sorted: each column's
+   * Drizzle class, which holds its decoder and encoder (`SQLiteBoolean` and
+   * `SQLiteInteger` are both `integer`), its SQL type, and every setting it
+   * was built with, the name, nullability and mode among them. A function
+   * setting (a mapper, a default) is rebuilt with each column, so it is
+   * described by its source. Read through `getColumns`, Drizzle v1's column
+   * accessor, typed as a `Table` so it returns the column map rather than a
+   * view's selected fields.
+   */
+  const columnsOf = (table: unknown): string =>
+    Object.values(getColumns(table as Table))
+      .map(column =>
+        JSON.stringify([
+          Reflect.get(column.constructor, entityKind) as unknown,
+          column.getSQLType(),
+          describeSetting(column, entityKind),
+        ])
+      )
+      .sort()
+      .join("\n");
+  // Every registration below goes through here, so a replacement of a
+  // registry-backed table with columns that differ in any of that is seen.
+  const observed: Pick<SchemaRegistry, "registerDynamicSchema"> = {
+    registerDynamicSchema: (tableName, table) => {
+      if (overrides !== undefined && registry.hasTable(tableName)) {
+        const existing = registry.getTable(tableName);
+        if (
+          typeof existing === "object" &&
+          existing !== null &&
+          columnsOf(existing) !== columnsOf(table)
+        ) {
+          overrides.differed = true;
+        }
+      }
+      registry.registerDynamicSchema(tableName, table);
+    },
+  };
   // Loaded here, as the generators it calls were, so they stay out of this
   // module's own load.
   const { registerEntityRuntimeTables } = await import(
@@ -3537,7 +4172,7 @@ export async function registerConfigTablesInResolver(
       // which Draft/Published CRUD reads and writes; the localized one leaves
       // the translatable columns to the companion.
       registerEntityRuntimeTables(
-        registry,
+        observed,
         {
           slug,
           tableName,
@@ -3569,7 +4204,7 @@ export async function registerConfigTablesInResolver(
       // The same registration as a collection's, so a localized single's
       // main table leaves out the columns its migrations put on the companion.
       registerEntityRuntimeTables(
-        registry,
+        observed,
         {
           slug,
           tableName,
@@ -3585,6 +4220,42 @@ export async function registerConfigTablesInResolver(
       );
     }
   }
+}
+
+/**
+ * A column setting as comparable data: functions by their source, objects by
+ * their Drizzle kind and their own settings in key order. The column's table,
+ * and its `config` (the settings it was built from, which it holds again on
+ * itself), are left out, and a value met again on the way is not followed.
+ */
+function describeSetting(
+  value: unknown,
+  kind: symbol,
+  seen: Set<object> = new Set()
+): unknown {
+  if (typeof value === "function") return `fn:${String(value)}`;
+  if (typeof value === "bigint") return `bigint:${value}`;
+  if (typeof value !== "object" || value === null) return value;
+  if (seen.has(value)) return "[seen]";
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.map(item => describeSetting(item, kind, seen));
+  }
+  if (value instanceof Date) return `date:${value.toISOString()}`;
+  const ownKind: unknown =
+    typeof value.constructor === "function"
+      ? Reflect.get(value.constructor, kind)
+      : undefined;
+  return [
+    typeof ownKind === "string" ? ownKind : null,
+    Object.keys(value)
+      .filter(key => key !== "table" && key !== "config")
+      .sort()
+      .map(key => [
+        key,
+        describeSetting((value as Record<string, unknown>)[key], kind, seen),
+      ]),
+  ];
 }
 
 function logStorageConfiguration(
@@ -3630,14 +4301,12 @@ function registerCodeDefinedAccess(
   const rbacService = container.get<RBACAccessControlService>(
     "rbacAccessControlService"
   );
-  for (const collection of transformedConfig.collections ?? []) {
-    if (collection.access) {
-      rbacService.registerCollectionAccess(collection.slug, collection.access);
-    }
-  }
-  for (const single of transformedConfig.singles ?? []) {
-    if (single.access) {
-      rbacService.registerSingleAccess(single.slug, single.access);
+  // The targets a command asks the same rules through (`codeDefinedAccessTargets`).
+  for (const target of codeDefinedAccessTargets(transformedConfig)) {
+    if (target.kind === "collection") {
+      rbacService.registerCollectionAccess(target.slug, target.access);
+    } else {
+      rbacService.registerSingleAccess(target.slug, target.access);
     }
   }
 }
@@ -3721,6 +4390,102 @@ async function publishBootDeferrals(
 }
 
 /**
+ * The configuration's collections as the code-first sync stores them: the
+ * projection every sync route shares, so what boot stores and publishes for a
+ * collection is what reload and `db:sync` store and publish for it.
+ */
+function codeFirstCollectionConfigs(
+  transformedConfig: NextlyServiceConfig
+): CodeFirstCollectionConfig[] {
+  // Provenance (D14): tag each collection by who contributed it. A slug that a
+  // resolved plugin declares in `contributes.collections` is `plugin:<name>`;
+  // everything else (app code-first) is `code`. Drives locking + `nextly prune`.
+  // The rule `nextly migrate`'s registry writer gives a row it creates, too.
+  const sourceBySlug: ReadonlyMap<string, CollectionSource> =
+    pluginCollectionSources(transformedConfig.plugins ?? []);
+  return (transformedConfig.collections ?? []).map(collection =>
+    toCodeFirstCollectionConfig(
+      collection,
+      sourceBySlug.get(collection.slug) ?? "code"
+    )
+  );
+}
+
+/**
+ * What a production start does in place of the code-first sync: it publishes,
+ * in this process, what the configuration declares (the collections' write
+ * options and declared fields, the Singles' live definitions, the code-defined
+ * access, the declared entities and the workflows) and writes nothing. The
+ * registry rows, the permissions and each entity's migration status stay as
+ * `nextly migrate` left them, so a build older or newer than the one that
+ * migrated the database changes none of them, and the number of statements
+ * the start sends does not grow with the number of entities. A declared field
+ * the database was not migrated for is answered as not migrated where a read
+ * or write reaches it.
+ */
+/**
+ * Log each code-first collection or Single whose registry row a production
+ * start finds missing or lacking a field the build declares
+ * (`registry-rows-behind-build`), from the rows the start read, sending no
+ * statement of its own. Never fails the start.
+ */
+async function reportStartRowsBehindBuild(
+  transformedConfig: NextlyServiceConfig,
+  logger: Logger
+): Promise<void> {
+  const registry = startRegistryNow();
+  if (registry === undefined) return;
+  try {
+    const [{ reportRowsBehindBuild }, { toCodeFirstSingleConfig }] =
+      await Promise.all([
+        import("./registry-rows-behind-build"),
+        import("../domains/singles/services/single-registry-service"),
+      ]);
+    await reportRowsBehindBuild(
+      registry,
+      [
+        ...codeFirstCollectionConfigs(transformedConfig).map(config => ({
+          kind: "collection" as const,
+          slug: config.slug,
+          fields: config.fields,
+        })),
+        ...(transformedConfig.singles ?? []).map(single => {
+          const config = toCodeFirstSingleConfig(single);
+          return {
+            kind: "single" as const,
+            slug: config.slug,
+            fields: config.fields,
+          };
+        }),
+      ],
+      logger
+    );
+  } catch (error) {
+    logger.debug("The registry rows could not be compared with the build", {
+      error,
+    });
+  }
+}
+
+async function publishDeclaredCodeFirstEntities(
+  transformedConfig: NextlyServiceConfig,
+  workflows: ReadonlyMap<string, RegisteredWorkflow>
+): Promise<void> {
+  publishCollectionDbOptions(codeFirstCollectionConfigs(transformedConfig));
+  publishDeclaredCollectionFields(transformedConfig.collections ?? []);
+  container
+    .get<SingleRegistryService>("singleRegistryService")
+    .setCodeFirstSingles(transformedConfig.singles ?? []);
+  registerCodeDefinedAccess(transformedConfig);
+  publishDeclaredEntities(transformedConfig);
+  // Nothing was refused a write, since nothing was written: this start's
+  // set replaces whatever an earlier registration in this process published.
+  await publishBootDeferrals("collection", undefined);
+  await publishBootDeferrals("single", undefined);
+  publishWorkflows(workflows);
+}
+
+/**
  * Answers whether the collections registry was found not yet created (every
  * sync error a missing table), which boot tolerates so `/setup` can run.
  */
@@ -3740,6 +4505,7 @@ async function syncCodeFirstCollections(
     // would leave whatever an earlier registration in this process published
     // — an `allowIdOnCreate` a later collection of the same slug would inherit.
     publishCollectionDbOptions([]);
+    publishDeclaredCollectionFields([]);
     return false;
   }
 
@@ -3764,30 +4530,23 @@ async function syncCodeFirstCollections(
     }
   }
 
-  // Provenance (D14): tag each collection by who contributed it. A slug that a
-  // resolved plugin declares in `contributes.collections` is `plugin:<name>`;
-  // everything else (app code-first) is `code`. Drives locking + `nextly prune`.
-  // The rule `nextly migrate`'s registry writer gives a row it creates, too.
-  const sourceBySlug: ReadonlyMap<string, CollectionSource> =
-    pluginCollectionSources(transformedConfig.plugins ?? []);
-
-  // The projection every sync route shares, so what boot stores and publishes
-  // for a collection is what reload and `db:sync` store and publish for it.
-  const codeFirstConfigs: CodeFirstCollectionConfig[] =
-    transformedConfig.collections.map(collection =>
-      toCodeFirstCollectionConfig(
-        collection,
-        sourceBySlug.get(collection.slug) ?? "code"
-      )
-    );
+  const codeFirstConfigs = codeFirstCollectionConfigs(transformedConfig);
 
   // Boot's one publish of the collection db options, from the same projection
   // the sync stores, and before it: they are the config's, not the
   // database's, so they hold whatever the rows below do.
   publishCollectionDbOptions(codeFirstConfigs);
+  // The fields each collection declares, kept in this process so a read or
+  // write that meets a declared field the database lacks names it.
+  publishDeclaredCollectionFields(transformedConfig.collections);
 
-  const syncResult =
-    await collectionRegistry.syncCodeFirstCollections(codeFirstConfigs);
+  // A start's own seeding ensures every entity's permissions once it has
+  // registered the services, so the sync leaves them to it and each is
+  // ensured once. A caller with no seeding to follow has the sync seed them.
+  const syncResult = await collectionRegistry.syncCodeFirstCollections(
+    codeFirstConfigs,
+    { seedPermissions: !bootSeedingFollows() }
+  );
 
   logger.info?.(
     `Collections registered: ${syncResult.created.length} created, ${syncResult.updated.length} updated, ${syncResult.unchanged.length} unchanged`
@@ -3802,6 +4561,8 @@ async function syncCodeFirstCollections(
   // by migrations yet, so every sync fails with "does not exist". That's
   // expected — the app should still start so the /setup endpoint works.
   if (syncResult.errors.length > 0) {
+    // Not brought in line, so the next development start checks them again.
+    for (const { slug } of syncResult.errors) markNotInLine("collection", slug);
     const allAreMissingTable = syncResult.errors.every(
       e =>
         e.error.includes("does not exist") ||
@@ -3835,6 +4596,21 @@ async function syncCodeFirstCollections(
   const collectionsBySlug = new Map(
     (transformedConfig.collections ?? []).map(c => [c.slug, c])
   );
+  // Asked of one listing of the tables there are, read once, rather than of the
+  // database once per collection: a table dropped since the last start is
+  // still found missing, at the same cost for five collections as for fifty.
+  // Compared exactly, as the database compares a quoted table name.
+  let existingTables: Promise<Set<string> | null> | undefined;
+  const tableIsThere = async (tableName: string): Promise<boolean> => {
+    // In the schema the tables are configured to live in (PostgreSQL), which
+    // the listing would otherwise read as `public`.
+    existingTables ??= adapter.listTables(adapter.getConfiguredSchema?.()).then(
+      names => new Set(names),
+      () => null
+    );
+    const listed = await existingTables;
+    return listed ? listed.has(tableName) : adapter.tableExists(tableName);
+  };
   for (const slug of syncResult.unchanged) {
     const collection = collectionsBySlug.get(slug);
     const baseTableName = collection?.dbName ?? slug.replace(/-/g, "_");
@@ -3842,7 +4618,7 @@ async function syncCodeFirstCollections(
       ? baseTableName
       : `dc_${baseTableName}`;
     try {
-      const tableExists = await adapter.tableExists(tableName);
+      const tableExists = await tableIsThere(tableName);
       if (!tableExists) {
         logger.info?.(
           `Table ${tableName} missing for registered collection ${slug}, adding to sync`
@@ -4078,6 +4854,10 @@ async function syncCodeFirstComponents(
   );
 
   if (componentSyncResult.errors.length > 0) {
+    // Not brought in line, so the next development start checks them again.
+    for (const { slug } of componentSyncResult.errors) {
+      markNotInLine("fieldGroup", slug);
+    }
     const errorDetails = componentSyncResult.errors
       .map(e => `  - ${e.slug}: ${e.error}`)
       .join("\n");
@@ -4176,16 +4956,18 @@ async function syncCodeFirstComponents(
           // Hard-coding the creator's spelling here therefore does not describe
           // a table this code just made; it describes a table that may have
           // been migrated long ago.
-          const syncTypeColumns = await resolveTypeColumns(adapter, [
-            tableName,
-          ]);
+          // With the columns the table holds, read by the same listing: a field inside a group
+          // with no name whose column it lacks yet is left out (`heldColumns`).
+          const held = (await resolveTableColumns(adapter, [tableName])).get(
+            tableName
+          );
           const compRuntimeTable = compSchemaService.generateRuntimeSchema(
             tableName,
             compConfig.fields,
             {
               localized: compLocalized,
-              typeColumn:
-                syncTypeColumns.get(tableName) ?? STORAGE_FORMAT.columns.type,
+              typeColumn: held?.typeColumn ?? STORAGE_FORMAT.columns.type,
+              heldColumns: held?.columns,
             }
           );
           const resolver = (
@@ -4282,8 +5064,10 @@ async function syncCodeFirstSingles(
     ReturnType<SingleRegistryService["syncCodeFirstSingles"]>
   > | null = null;
   try {
+    // As for collections: left to the start's seeding when one follows.
     singleSyncResult = await singleRegistry.syncCodeFirstSingles(
-      codeFirstSingleConfigs
+      codeFirstSingleConfigs,
+      { seedPermissions: !bootSeedingFollows() }
     );
     logger.info?.(
       `Singles registered: ${singleSyncResult.created.length} created, ${singleSyncResult.updated.length} updated, ${singleSyncResult.unchanged.length} unchanged`
@@ -4317,6 +5101,9 @@ async function syncCodeFirstSingles(
   // not-found for a single the config declares. Reported rather than
   // swallowed, so the boot says which single and why.
   if (singleSyncResult.errors.length > 0) {
+    // Not brought in line, so the next development start checks them again.
+    for (const { slug } of singleSyncResult.errors)
+      markNotInLine("single", slug);
     const allAreMissingTable = singleSyncResult.errors.every(
       entry =>
         entry.error.includes("does not exist") ||
@@ -4624,7 +5411,7 @@ async function reconcileSingleTablesForBoot(
  * single or field group created by its own DDL came up without those
  * columns while its runtime table named them, so every read of it failed.
  */
-interface BootTableWork {
+export interface BootTableWork {
   /** Only tables that do not exist yet: see `createMissingCodeFirstTables`. */
   desired: DesiredSchema;
   /** Checked in order once the apply has run. */
@@ -4654,8 +5441,13 @@ function emptyBootTableWork(): BootTableWork {
  * existing table can raise a prompt that boot has no terminal to answer.
  * Drift on existing tables belongs to `nextly db:sync` and the HMR reload,
  * which can.
+ *
+ * Each table's creation waits for a busy database in the schema pipeline's tries, bounded by
+ * `NEXTLY_LOCK_TIMEOUT` and `NEXTLY_LOCK_TIMEOUT_TOTAL` as every pipeline apply is; one that stays
+ * busy past them leaves the start incomplete with the stop's report as the warning. Exported for
+ * the test that holds the database while a start creates its tables.
  */
-async function createMissingCodeFirstTables(
+export async function createMissingCodeFirstTables(
   adapter: DrizzleAdapter,
   logger: Logger,
   work: BootTableWork
@@ -4675,11 +5467,14 @@ async function createMissingCodeFirstTables(
         promptChannel: "terminal",
       });
       if (!result.success) {
+        // Tables this start could not create: nothing it did is vouched for.
+        markStartIncomplete();
         logger.warn?.(
           `Auto-sync tables failed (${result.error.code}): ${result.error.message}`
         );
       }
     } catch (error) {
+      markStartIncomplete();
       const errorMsg = error instanceof Error ? error.message : String(error);
       logger.warn?.(`Auto-sync tables failed: ${errorMsg}`);
     }
@@ -4696,6 +5491,8 @@ async function createMissingCodeFirstTables(
       // Reported as missing below.
     }
     try {
+      // A table still missing is not in line, so the next start checks again.
+      if (!exists) markStartIncomplete();
       await (exists ? followUp.afterCreate() : followUp.onMissing());
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
@@ -4704,6 +5501,36 @@ async function createMissingCodeFirstTables(
       );
     }
   }
+}
+
+/**
+ * Seal every plugin's stored settings (`sealPluginSettings`): each plugin's own
+ * rows, so the seals run together where the database serves them
+ * concurrently, and one after another on SQLite, whose seals share its one
+ * connection's transaction. The first failing plugin in plugin order is
+ * returned, as when they ran in turn; undefined when none failed.
+ */
+async function sealEveryPlugin(
+  plugins: readonly PluginDefinition[],
+  dialect: SupportedDialect,
+  seal: (plugin: PluginDefinition) => Promise<void>
+): Promise<{ plugin: PluginDefinition; error: unknown } | undefined> {
+  if (dialect === "sqlite") {
+    for (const plugin of plugins) {
+      try {
+        await seal(plugin);
+      } catch (error) {
+        return { plugin, error };
+      }
+    }
+    return undefined;
+  }
+  const settled = await Promise.allSettled(plugins.map(seal));
+  const at = settled.findIndex(outcome => outcome.status === "rejected");
+  const failed = settled[at];
+  return failed?.status === "rejected"
+    ? { plugin: plugins[at], error: failed.reason }
+    : undefined;
 }
 
 /**
@@ -4745,6 +5572,8 @@ async function initializePlugins(
     readProxyTrustSettings(() => transformedConfig).trustProxy
   );
   if (proxyWarning) logger.warn?.(proxyWarning);
+  const undeclared = undeclaredRouteWarning(collectedRoutes);
+  if (undeclared) logger.warn?.(undeclared);
   for (const warning of unkeyedAuthRouteWarnings(
     collectedRoutes,
     readAuthRateLimit(() => transformedConfig).requestsPerHour > 0
@@ -4799,6 +5628,7 @@ async function initializePlugins(
       | JobRegistry
       | JobsPassDatabase
       | WebhookFastDrainScheduler
+      | MetaService
       | null
   > = {
     collectionService: () =>
@@ -4852,6 +5682,9 @@ async function initializePlugins(
             "webhookFastDrainScheduler"
           )
         : null,
+    // This registration's `nextly_meta`, where each plugin's sealed digest
+    // key is kept.
+    metaService: () => services.container.get<MetaService>("metaService"),
   };
 
   const getServiceForPlugin = <T extends PluginServiceName>(name: T) =>
@@ -4910,6 +5743,9 @@ async function initializePlugins(
    * plugin's failure to clean up must not spare the others'.
    */
   const destroyInitializedPlugins = async (): Promise<void> => {
+    // The proxy handlers registered so far belong to plugins about to be
+    // destroyed: the Proxy must not run them against a failed boot.
+    clearProxyHandlers();
     for (let i = initialized.length - 1; i >= 0; i -= 1) {
       const { plugin, context } = initialized[i];
       if (!plugin.destroy) continue;
@@ -4998,23 +5834,32 @@ async function initializePlugins(
   // settings service over its stored rows, and skipping it left its values
   // under the secret a rotation retires: once that secret was removed they
   // could not be read when the plugin was enabled again.
-  for (const plugin of plugins) {
-    try {
-      await sealPluginSettings(plugin, adapterDrizzleDb, dialect, () =>
-        container.get<AdapterTransactions>("adapter")
-      );
-    } catch (error) {
-      await destroyInitializedPlugins();
-      throw NextlyError.internal({
-        ...(error instanceof Error ? { cause: error } : {}),
-        logContext: {
-          reason: "plugin-settings-seal-failed",
-          plugin: plugin.name,
-          detail: `A stored secret setting could not be sealed under the current secret before the plugin started: ${error instanceof Error ? error.message : String(error)}`,
-        },
-      });
-    }
+  //
+  // Each plugin's own rows, so the seals run together where the database
+  // serves them concurrently (one after another on SQLite, whose seals share
+  // its one connection's transaction). A failure is reported for the first
+  // failing plugin in plugin order, as when they ran in turn.
+  const sealFailure = await sealEveryPlugin(plugins, dialect, plugin =>
+    sealPluginSettings(plugin, adapterDrizzleDb, dialect, () =>
+      container.get<AdapterTransactions>("adapter")
+    )
+  );
+  if (sealFailure) {
+    const { plugin, error } = sealFailure;
+    await destroyInitializedPlugins();
+    throw NextlyError.internal({
+      ...(error instanceof Error ? { cause: error } : {}),
+      logContext: {
+        reason: "plugin-settings-seal-failed",
+        plugin: plugin.name,
+        detail: `A stored secret setting could not be sealed under the current secret before the plugin started: ${error instanceof Error ? error.message : String(error)}`,
+      },
+    });
   }
+
+  // Each plugin's own start-up code (its `init` and `onReady`) is timed, and
+  // the slow ones named once every plugin has started.
+  const startupTimes = new PluginStartupTimes();
 
   // PASS 2 — run `init` for each enabled plugin (services from any plugin are now
   // resolvable). Topological order is preserved from `plugins`.
@@ -5030,7 +5875,9 @@ async function initializePlugins(
       // assumes finished state leaks on exactly the failure it exists for.
       initialized.push({ plugin, context: pluginContext });
       try {
-        await plugin.init(pluginContext);
+        await startupTimes.time(plugin.name, () =>
+          plugin.init?.(pluginContext)
+        );
         logger.info?.(`Plugin "${plugin.name}" initialized`);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -5102,7 +5949,7 @@ async function initializePlugins(
       initialized.push({ plugin, context });
     }
     try {
-      await plugin.onReady(context);
+      await startupTimes.time(plugin.name, () => plugin.onReady?.(context));
       logger.info?.(`Plugin "${plugin.name}" ready`);
     } catch (error) {
       // Same policy as init: a plugin that cannot finish starting has not
@@ -5122,6 +5969,13 @@ async function initializePlugins(
     }
   }
 
+  // Every plugin has started: how long each one's own code took, and a
+  // warning naming each that took longer than it should.
+  startupTimes.report(logger);
+
+  // Every plugin is ready, so the Proxy may now run their handlers; until
+  // here it lets each request through as the page alone.
+  markProxyHandlersReady();
   return teardown;
 }
 
@@ -5247,6 +6101,9 @@ async function releaseServices(opts: {
   // released below, so they stop first; what they owe stays queued for the
   // next registration's jobs runs.
   stopGrantsExpiryRetry();
+  // A media delete's timer finishes through them too: it stops with them, and
+  // the job queued with the delete's marks finishes what it would have.
+  stopDeleteWindowTimers();
   // Before the adapter disconnects, so destroy can still use db.
   await destroyRegisteredPlugins();
   // Before the adapter disconnects, so a sweep under way finishes with it.
@@ -5261,6 +6118,9 @@ async function releaseServices(opts: {
     consoleLogger.error("Error during service shutdown", { error: error });
   } finally {
     container.clear();
+    // The proxy handlers close over the released plugins' contexts, so they
+    // go with them; the Proxy stands aside until a start registers new ones.
+    clearProxyHandlers();
     // The recording policy is a process-global registry, so it must be cleared
     // with the container — otherwise a later instance where a slug is only
     // DB/Builder-backed inherits a prior instance's stale opt-out and silently
@@ -5308,6 +6168,7 @@ async function releaseServices(opts: {
 export function clearServices(): void {
   // Stopped first, for the reason `releaseServices` gives.
   stopGrantsExpiryRetry();
+  stopDeleteWindowTimers();
   // Plugins still running are torn down at the next registration, and their
   // `destroy` may still need the services they were started with: those move
   // aside for them rather than vanish, their contexts re-pointed at them for
@@ -5402,6 +6263,33 @@ function handleUnresolvedExtends(
 }
 
 /**
+ * Of `entities`, those the layout refusal could find laid out the other way, for it to read.
+ *
+ * On SQLite each table's columns take a statement of their own to read, where PostgreSQL and MySQL
+ * read every table's at once. With the setting off, the refusal can only find an entity whose
+ * per-language table exists, so on SQLite the entities are first narrowed to those, from one
+ * listing of the tables: a start then sends the same number of statements however many entities
+ * the site has. With the setting on, any entity's main table may still hold the columns, so every
+ * entity is read.
+ */
+async function entitiesTheLayoutCanRefuse<T extends { tableName: string }>(
+  adapter: DrizzleAdapter,
+  entities: T[],
+  perLanguage: boolean
+): Promise<T[]> {
+  if (perLanguage || adapter.getCapabilities().dialect !== "sqlite") {
+    return entities;
+  }
+  // SQLite compares table names without regard to case.
+  const tables = new Set(
+    (await listTablesAtStart(adapter)).map(name => name.toLowerCase())
+  );
+  return entities.filter(entity =>
+    tables.has(`${entity.tableName}_locales`.toLowerCase())
+  );
+}
+
+/**
  * Refuses the boot of a site keeping every translatable field per language over a database whose
  * main tables still hold the translatable columns of an entity: one its configuration declares, or
  * one the Schema Builder made, read from the registries (`readLayoutScanEntities`).
@@ -5459,15 +6347,30 @@ async function refuseMixedStorageInConfig(
       })
     ),
   ];
+  const declaredTables = new Set(entities.map(entity => entity.tableName));
+  // At a development start, an entity whose declaration a start already brought in line under the
+  // same settings is not read again: nothing about its layout can have changed since.
+  const judged = entities.filter(
+    entity =>
+      !unchangedSinceLastStart(
+        entity.kind === "component" ? "fieldGroup" : entity.kind,
+        entity.slug
+      )
+  );
   // The Schema Builder's entities, by their registered tables; one the configuration also declares
   // is judged as the configuration describes it.
-  entities.push(
+  judged.push(
     ...(await readLayoutScanEntities(
       adapter,
-      new Set(entities.map(entity => entity.tableName))
+      declaredTables,
+      startRegistryNow()
     ))
   );
-  await refuseMixedStorage(adapter, entities, perLanguage);
+  await refuseMixedStorage(
+    adapter,
+    await entitiesTheLayoutCanRefuse(adapter, judged, perLanguage),
+    perLanguage
+  );
   // With no languages declared in the configuration or in Settings, the site would serve the
   // implicit language alone: refused where its per-language tables hold others, so translations
   // never read as gone after a `localization` block is removed.

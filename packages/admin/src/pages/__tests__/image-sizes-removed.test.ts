@@ -45,7 +45,7 @@ describe("the removed Image Sizes screen", () => {
     expect(shown.map(item => item.label)).not.toContain("Image Sizes");
     // The control: the menu is drawn, with the settings beside it.
     expect(shown.map(item => item.id)).toEqual(
-      expect.arrayContaining(["general", "user-fields"])
+      expect.arrayContaining(["general", "email"])
     );
   });
 });

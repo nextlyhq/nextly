@@ -10,6 +10,7 @@ import {
   int as mysqlInt,
   boolean as mysqlBoolean,
   timestamp as mysqlTimestamp,
+  datetime as mysqlDatetime,
   json as mysqlJson,
   varchar as mysqlVarchar,
   double as mysqlDouble,
@@ -35,6 +36,7 @@ import {
   real as sqliteReal,
   numeric as sqliteNumeric,
   index as sqliteIndex,
+  primaryKey as sqlitePrimaryKey,
 } from "drizzle-orm/sqlite-core";
 
 import {
@@ -67,6 +69,7 @@ import { env } from "../../../lib/env";
 import { sqliteTimestamp } from "../../../schemas/_internal/sqlite-timestamp";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import type { ColumnOverride } from "../../schema/extension/draft";
 import type { ExtensionColumn } from "../../schema/extension/types";
 import { columnIndexSql } from "../../schema/pipeline/sql-templates/create-index";
 import {
@@ -75,14 +78,17 @@ import {
   componentRelationIsSingleReference,
   componentRelationshipHoldsReferenceList,
   componentRelationshipStoresJson,
+  fieldsStoredOnRow,
   getComponentRowColumnDescriptor,
   relationHoldsReferenceList,
   usesJunctionTable,
   type ColumnDescriptor,
+  type ColumnOrigin,
 } from "../../schema/services/field-column-descriptor";
 import {
   MAX_INDEX_NAME_LENGTH,
   columnTypeIsIndexable,
+  indexNameForColumn,
   uniquenessCanBeAnIndex,
 } from "../../schema/services/index-name";
 import {
@@ -94,66 +100,36 @@ import {
   buildUserDrizzleColumn,
   contributedColumnsFor,
   contributedSqliteChecks,
+  overriddenColumnsFor,
+  withColumnOverride,
 } from "../../schema/services/runtime-schema-generator";
 
 import { componentFieldHasColumn } from "./field-group-utils";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
 
-const SQL_COLUMN_TYPES: Record<
+/**
+ * The type words of a field group's SYSTEM columns, which belong to no field and so are not the
+ * column descriptor's to answer. A user field's column type is the descriptor's (`columnTypeFor`).
+ */
+const STRUCTURAL_COLUMN_TYPES: Record<
   SupportedDialect,
-  {
-    uuid: string;
-    text: string;
-    varchar: (length: number) => string;
-    boolean: string;
-    integer: string;
-    real: string;
-    decimal: (precision: number, scale: number) => string;
-    timestamp: string;
-    json: string;
-  }
+  { varchar: (length: number) => string; integer: string; timestamp: string }
 > = {
   postgresql: {
-    uuid: "UUID",
-    text: "TEXT",
     varchar: (length: number) => `VARCHAR(${length})`,
-    boolean: "BOOLEAN",
     integer: "INTEGER",
-    // float8, matching the `doublePrecision` column the runtime and the
-    // generated Drizzle schema build for this field. Emitting REAL (float4)
-    // here instead would create a table that never converges: every later diff
-    // would see live float4 against desired float8 and try to alter it again.
-    real: "DOUBLE PRECISION",
-    decimal: (precision: number, scale: number) =>
-      `NUMERIC(${precision}, ${scale})`,
     timestamp: "TIMESTAMP",
-    json: "JSONB",
   },
   mysql: {
-    uuid: "VARCHAR(36)",
-    text: "TEXT",
     varchar: (length: number) => `VARCHAR(${length})`,
-    boolean: "BOOLEAN",
     integer: "INT",
-    real: "DOUBLE",
-    decimal: (precision: number, scale: number) =>
-      `DECIMAL(${precision}, ${scale})`,
     timestamp: "DATETIME",
-    json: "JSON",
   },
   sqlite: {
-    uuid: "TEXT",
-    text: "TEXT",
     varchar: () => "TEXT",
-    boolean: "INTEGER",
     integer: "INTEGER",
-    real: "REAL",
-    // SQLite has no fixed-precision decimal type; a NUMERIC column carries
-    // NUMERIC affinity and stores the value best-effort.
-    decimal: () => "NUMERIC",
     timestamp: "INTEGER",
-    json: "TEXT",
   },
 };
 
@@ -180,6 +156,29 @@ function timestampDefaultValue(dialect: SupportedDialect): string {
 }
 
 /**
+ * The DEFAULT expression each SYSTEM column of a field group's table is created with, by column
+ * name: `structuralColumnDefaults` below, as a function of the dialect alone, so the desired schema
+ * a save and `migrate:create` plan from declares the defaults the table is created with.
+ */
+export function fieldGroupStructuralDefaults(
+  dialect: SupportedDialect
+): ReadonlyMap<string, string> {
+  // The timestamp keyword carries its own `DEFAULT ` prefix in the DDL table; the VALUE is what a
+  // comparison needs, so the prefix is stripped once, in `timestampDefaultValue`.
+  const timestamp = timestampDefaultValue(dialect);
+  return new Map([
+    [STORAGE_FORMAT.columns.order, "0"],
+    ["created_at", timestamp],
+    ["updated_at", timestamp],
+  ]);
+}
+
+/** The name of the index on a field group's `created_at`, as the desired schema names it. */
+function createdAtIndexName(tableName: string): string {
+  return indexNameForColumn(tableName, "created_at");
+}
+
+/**
  * What `generateRuntimeSchema` needs beyond the fields.
  *
  * `typeColumn` is required rather than defaulted. The storage migration renames
@@ -193,13 +192,69 @@ function timestampDefaultValue(dialect: SupportedDialect): string {
 export interface RuntimeSchemaOptions {
   localized?: boolean;
   typeColumn: string;
+  /**
+   * The columns the live table holds, where the caller read them (`resolveTableColumns`).
+   *
+   * A field inside a group with no name is stored on the row, and field groups made before that
+   * was so have no column for it until their next save or `nextly migrate` adds one. Given this, the
+   * runtime table leaves out such a field whose column the table does not hold yet, so the field
+   * group's reads and writes keep working, without that field, as they did before, instead of
+   * naming a column the table lacks. A field beside the group is never left out: a definition
+   * ahead of its table there is answered as not migrated, as everywhere else. Omitted, every
+   * column the fields declare is included, which is right for a table just created or altered.
+   */
+  heldColumns?: readonly string[];
+}
+
+/**
+ * A field as the runtime column mappers read it.
+ *
+ * They switch on `field.type`, which for a plugin-contributed type matches no case. Substituting
+ * the storage primitive's built-in type makes them emit the column that type persists as.
+ * Exported so the record of this creator's earlier column types (`pre-builder-save-column-type`)
+ * reads a plugin field as the creator did.
+ */
+export function asStorageMappedField(field: DataFieldConfig): DataFieldConfig {
+  const storageType = pluginStorageFieldType(field);
+  if (storageType === undefined) return field;
+  const mapped: Record<string, unknown> = {
+    ...(field as unknown as Record<string, unknown>),
+    type: storageType,
+  };
+  // The keys below are how a BUILT-IN field states its physical shape, and
+  // the mappers read them straight off the field. A plugin type's options are
+  // its own and core does not interpret them, so one that happens to be named
+  // `dbType` or `maxLength` would otherwise reshape the column here while the
+  // canonical descriptor — which never sees them — kept mapping the primitive
+  // as declared. The same field would then be one type in a component and
+  // another in a collection.
+  for (const physical of [
+    "dbType",
+    "precision",
+    "scale",
+    "maxLength",
+    "options",
+  ]) {
+    delete mapped[physical];
+  }
+  return mapped as unknown as DataFieldConfig;
 }
 
 export class FieldGroupSchemaService {
   private readonly dialect: SupportedDialect;
   private readonly q: string;
 
-  constructor(dialect?: SupportedDialect) {
+  /**
+   * @param builtBy The column rule of whoever owns the field group's table: the Schema Builder's
+   *   (`fieldGroup`, the default) or the code's (`codeFirst`), as `builtByFor` names them. A text
+   *   field states no width the same way to both: unbounded for a Builder field group, 255 for a
+   *   code-first one, so a table described with the other rule reads as needing a change it does
+   *   not, or hides one it does.
+   */
+  constructor(
+    dialect?: SupportedDialect,
+    private readonly builtBy: ColumnOrigin = "fieldGroup"
+  ) {
     this.dialect = dialect || env.DB_DIALECT || "postgresql";
     this.q = QUOTE_CHAR[this.dialect];
   }
@@ -212,7 +267,7 @@ export class FieldGroupSchemaService {
     fields: FieldConfig[],
     options: { localized?: boolean } = {}
   ): string {
-    const types = SQL_COLUMN_TYPES[this.dialect];
+    const types = STRUCTURAL_COLUMN_TYPES[this.dialect];
     const structuralDefaults = this.structuralColumnDefaults();
     // i18n: a localized component omits its translatable columns from the main comp_ CREATE
     // (they live in the companion `comp_<slug>_locales` table, provisioned out-of-band).
@@ -267,7 +322,7 @@ export class FieldGroupSchemaService {
       // i18n: translatable columns live in the companion, not the main comp_ table.
       if (localizedNames.has(field.name)) continue;
 
-      const columnSQL = this.generateColumnSQL(this.asMappableField(field));
+      const columnSQL = this.generateColumnSQL(field);
       if (columnSQL) {
         lines.push(`  ${columnSQL},`);
       }
@@ -302,6 +357,18 @@ export class FieldGroupSchemaService {
         `CREATE INDEX IF NOT EXISTS ${this.q}${parentIndexName}${this.q} ON ${this.q}${tableName}${this.q}(${parentColumns});`
       );
     }
+
+    // The index the desired schema has always declared on `created_at`, which a save and
+    // `migrate:create` plan from. Left out here, every table this made read as missing it, and its
+    // first save added it.
+    indexStatements.push(
+      this.createIndexSql(
+        createdAtIndexName(tableName),
+        tableName,
+        "created_at",
+        types.timestamp
+      )
+    );
 
     // A plain index on every column that references one entry, then on every
     // other column a field asks to index — one per column either way, by the
@@ -440,37 +507,46 @@ export class FieldGroupSchemaService {
           )
         )
       : new Set<string>();
-    const mainFields = fields.filter(f => {
-      const name = "name" in f ? (f as { name?: string }).name : undefined;
-      return !name || !localizedNames.has(name);
-    });
+    const mainFields = this.heldRowFields(
+      fields.filter(f => {
+        const name = "name" in f ? (f as { name?: string }).name : undefined;
+        return !name || !localizedNames.has(name);
+      }),
+      options.heldColumns
+    );
     const typeColumn = options.typeColumn;
     // Columns a schema hook contributed to this table, read the way every
     // entity runtime table reads them. This table is what drizzle-kit is
     // handed for a field group, so without them the push creates the table
     // without the column the desired spec asks for.
     const contributed = contributedColumnsFor(tableName, this.dialect);
+    // The app's overrides of its field columns' storage, read the same way:
+    // built with the field's own storage, the push would change them back.
+    const overrides = overriddenColumnsFor(tableName, this.dialect);
     switch (this.dialect) {
       case "postgresql":
         return this.generatePostgresSchema(
           tableName,
           mainFields,
           typeColumn,
-          contributed
+          contributed,
+          overrides
         );
       case "mysql":
         return this.generateMySQLSchema(
           tableName,
           mainFields,
           typeColumn,
-          contributed
+          contributed,
+          overrides
         );
       case "sqlite":
         return this.generateSQLiteSchema(
           tableName,
           mainFields,
           typeColumn,
-          contributed
+          contributed,
+          overrides
         );
       default:
         throw new Error(`Unsupported dialect: ${String(this.dialect)}`);
@@ -481,7 +557,8 @@ export class FieldGroupSchemaService {
     tableName: string,
     fields: FieldConfig[],
     typeColumn: string,
-    contributed: readonly ExtensionColumn[]
+    contributed: readonly ExtensionColumn[],
+    overrides: readonly ColumnOverride[] = []
   ): unknown {
     // Required by Drizzle: pgTable() expects a `Record<string, PgColumnBuilderBase>`
     // but the column builders returned by helpers (pgText, pgInteger, ...) have
@@ -508,7 +585,7 @@ export class FieldGroupSchemaService {
       updated_at: pgTimestamp("updated_at").defaultNow().notNull(),
     };
 
-    this.addFieldColumns(columns, fields, contributed);
+    this.addFieldColumns(columns, fields, contributed, overrides);
 
     // Required by Drizzle: pgTable() is generic over the column shape, and
     // our columns map is dynamic (Record<string, unknown>). The index
@@ -530,7 +607,8 @@ export class FieldGroupSchemaService {
     tableName: string,
     fields: FieldConfig[],
     typeColumn: string,
-    contributed: readonly ExtensionColumn[]
+    contributed: readonly ExtensionColumn[],
+    overrides: readonly ColumnOverride[] = []
   ): unknown {
     const columns: Record<string, unknown> = {
       id: mysqlVarchar("id", { length: 36 }).primaryKey(),
@@ -547,11 +625,18 @@ export class FieldGroupSchemaService {
       [STORAGE_FORMAT.columns.type]: mysqlVarchar(typeColumn, {
         length: 255,
       }),
-      created_at: mysqlTimestamp("created_at").defaultNow().notNull(),
-      updated_at: mysqlTimestamp("updated_at").defaultNow().notNull(),
+      // DATETIME, as the CREATE makes them and the desired schema declares them. Declared as
+      // TIMESTAMP here, any save that reached drizzle-kit converted both columns, taking on
+      // TIMESTAMP's 2038 limit and its time-zone conversion.
+      created_at: mysqlDatetime("created_at")
+        .default(sql.raw(timestampDefaultValue("mysql")))
+        .notNull(),
+      updated_at: mysqlDatetime("updated_at")
+        .default(sql.raw(timestampDefaultValue("mysql")))
+        .notNull(),
     };
 
-    this.addFieldColumns(columns, fields, contributed);
+    this.addFieldColumns(columns, fields, contributed, overrides);
 
     return mysqlTable(
       tableName,
@@ -569,10 +654,16 @@ export class FieldGroupSchemaService {
     tableName: string,
     fields: FieldConfig[],
     typeColumn: string,
-    contributed: readonly ExtensionColumn[]
+    contributed: readonly ExtensionColumn[],
+    overrides: readonly ColumnOverride[] = []
   ): unknown {
     const columns: Record<string, unknown> = {
-      id: sqliteText("id").primaryKey(),
+      // NOT NULL, with the key declared on the table below rather than on the
+      // column. On SQLite a primary key that is not an INTEGER takes NULL
+      // unless it says NOT NULL, as the CREATE above does, and drizzle-kit
+      // drops NOT NULL from a column-level key: a push that rebuilt this
+      // table wrote an id that takes NULL. A table-level key keeps it.
+      id: sqliteText("id").notNull(),
       _parent_id: sqliteText(STORAGE_FORMAT.columns.parentId).notNull(),
       _parent_table: sqliteText(STORAGE_FORMAT.columns.parentTable).notNull(),
       _parent_field: sqliteText(STORAGE_FORMAT.columns.parentField).notNull(),
@@ -590,13 +681,15 @@ export class FieldGroupSchemaService {
       ),
     };
 
-    this.addFieldColumns(columns, fields, contributed);
+    this.addFieldColumns(columns, fields, contributed, overrides);
 
     return sqliteTable(
       tableName,
       columns as Record<string, never>,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle table column accessor is dialect-typed
       (table: any) => ({
+        // Unnamed, so drizzle-kit names it as it reads the live table's key.
+        pk: sqlitePrimaryKey({ columns: [table.id] }),
         parentIdx: sqliteIndex(
           `${STORAGE_FORMAT.indexPrefix}${tableName}_parent`
         ).on(table._parent_id, table._parent_table, table._parent_field),
@@ -613,15 +706,6 @@ export class FieldGroupSchemaService {
     );
   }
 
-  /**
-   * A field as the column mappers below can read it.
-   *
-   * They switch on `field.type`, which for a plugin-contributed type matches no
-   * case. Substituting the storage primitive's built-in type makes them emit
-   * the column that type persists as — the same substitution
-   * `getColumnDescriptor` makes for collections and singles, so a component
-   * column matches what the schema pipeline creates for it.
-   */
   /**
    * Refuse a `unique` field the dialect cannot enforce, before any DDL is generated for it.
    *
@@ -654,7 +738,7 @@ export class FieldGroupSchemaService {
         logContext: { tableName, field: listName, dialect: this.dialect },
       });
     }
-    const columnType = this.getColumnType(this.asMappableField(field));
+    const columnType = this.columnTypeFor(field);
     if (columnType === null) return;
     if (uniquenessCanBeAnIndex(columnType, this.dialect)) return;
 
@@ -675,32 +759,6 @@ export class FieldGroupSchemaService {
     });
   }
 
-  private asMappableField(field: DataFieldConfig): DataFieldConfig {
-    const storageType = pluginStorageFieldType(field);
-    if (storageType === undefined) return field;
-    const mapped: Record<string, unknown> = {
-      ...(field as unknown as Record<string, unknown>),
-      type: storageType,
-    };
-    // The keys below are how a BUILT-IN field states its physical shape, and
-    // the mappers read them straight off the field. A plugin type's options are
-    // its own and core does not interpret them, so one that happens to be named
-    // `dbType` or `maxLength` would otherwise reshape the column here while the
-    // canonical descriptor — which never sees them — kept mapping the primitive
-    // as declared. The same field would then be one type in a component and
-    // another in a collection.
-    for (const physical of [
-      "dbType",
-      "precision",
-      "scale",
-      "maxLength",
-      "options",
-    ]) {
-      delete mapped[physical];
-    }
-    return mapped as unknown as DataFieldConfig;
-  }
-
   /**
    * The column type this dialect gives `field`, spelled exactly as the CREATE TABLE spells it.
    *
@@ -712,9 +770,23 @@ export class FieldGroupSchemaService {
    *
    * `null` where this service would emit no column at all, which is the same condition that makes
    * `generateColumnSQL` skip a field.
+   *
+   * The column descriptor's answer for a field on a component's row, read for every field type:
+   * the type a Builder save's migration and the desired schema give the same field, so a table this
+   * creates and one a save creates are the same table. Before 0.0.2-alpha.77 this creator kept a
+   * type map of its own and spelled some columns differently; that spelling is kept, for
+   * recognising tables built with it and never for building one, in `pre-builder-save-column-type`.
    */
   columnTypeFor(field: DataFieldConfig): string | null {
-    return this.getColumnType(this.asMappableField(field));
+    return (
+      getComponentRowColumnDescriptor(
+        field as unknown as Parameters<
+          typeof getComponentRowColumnDescriptor
+        >[0],
+        this.dialect,
+        this.builtBy
+      )?.dialectType ?? null
+    );
   }
 
   /**
@@ -730,14 +802,7 @@ export class FieldGroupSchemaService {
    * ask about and the ones the table actually gets are one expression.
    */
   structuralColumnDefaults(): ReadonlyMap<string, string> {
-    // The timestamp keyword carries its own `DEFAULT ` prefix in the DDL table; the VALUE is what a
-    // comparison needs, so the prefix is stripped once, in `timestampDefaultValue`.
-    const timestamp = timestampDefaultValue(this.dialect);
-    return new Map([
-      [STORAGE_FORMAT.columns.order, "0"],
-      ["created_at", timestamp],
-      ["updated_at", timestamp],
-    ]);
+    return fieldGroupStructuralDefaults(this.dialect);
   }
 
   /**
@@ -750,7 +815,7 @@ export class FieldGroupSchemaService {
    * a caller may need to represent separately.
    */
   columnDefaultFor(field: DataFieldConfig): string | null {
-    const mappable = this.asMappableField(field);
+    const mappable = asStorageMappedField(field);
     if (!isCheckboxField(mappable) || mappable.defaultValue === undefined) {
       return null;
     }
@@ -826,16 +891,43 @@ export class FieldGroupSchemaService {
   }
 
   /**
-   * The canonical descriptor's column for a field type this service does not map itself, or null
-   * for a type it still maps below.
+   * The canonical descriptor's column for a field the runtime table binds from it, or null for one
+   * the dialect mappers below still bind.
    *
-   * An icon's column is read from the descriptor for the SQL and the Drizzle table alike, so a
-   * field group's icon column is the column the desired schema and the diff compare against on
-   * every dialect: `text` on PostgreSQL and SQLite, `varchar(255)` on MySQL.
+   * An icon's and a text field's columns are read from the descriptor for the SQL and the Drizzle
+   * table alike, so they are the columns the desired schema and the diff compare against on every
+   * dialect. An icon is `text` on PostgreSQL and SQLite and `varchar(255)` on MySQL; a text field is
+   * bounded by its own `maxLength`, and without one by the rule of whoever owns the table (`builtBy`).
+   * Mapped here a second time, the Drizzle table once declared a MySQL text field `varchar(255)`,
+   * and a save that reached drizzle-kit narrowed the TEXT column the CREATE had made.
+   *
+   * So is every field the descriptor stores as JSON. The CREATE takes its type from the descriptor
+   * (`columnTypeFor`), and the mappers below bind a `hasMany` number as a scalar and a chips field
+   * as text, so the runtime table would describe a column the table does not have, and drizzle-kit,
+   * handed that table, would convert the JSON list back to a scalar. The other kinds stay with the
+   * mappers: they bind the column the CREATE makes, and the descriptor's builders read some of them
+   * back differently (a decimal as a number rather than a string).
    */
-  private canonicalColumn(field: DataFieldConfig): ColumnDescriptor | null {
-    if (!isIconField(field) || !field.name) return null;
-    return getComponentRowColumnDescriptor(field, this.dialect, "fieldGroup");
+  private canonicalColumn(
+    field: DataFieldConfig,
+    mapped: DataFieldConfig
+  ): ColumnDescriptor | null {
+    if (!field.name) return null;
+    // Asked of the field as declared, exactly as `columnTypeFor` asks for the CREATE, so the runtime
+    // column and the created one are one answer. The storage-mapped field keeps options its plugin
+    // type does not interpret (a `hasMany` on a contributed number type) and would be described as
+    // a different column; it only says which fields the mappers below cannot bind.
+    const descriptor = getComponentRowColumnDescriptor(
+      field as unknown as Parameters<typeof getComponentRowColumnDescriptor>[0],
+      this.dialect,
+      this.builtBy
+    );
+    if (descriptor === null) return null;
+    return isIconField(mapped) ||
+      isTextField(mapped) ||
+      descriptor.kind === "json"
+      ? descriptor
+      : null;
   }
 
   /**
@@ -845,10 +937,11 @@ export class FieldGroupSchemaService {
   private addFieldColumns(
     columns: Record<string, unknown>,
     fields: FieldConfig[],
-    contributed: readonly ExtensionColumn[]
+    contributed: readonly ExtensionColumn[],
+    overrides: readonly ColumnOverride[] = []
   ): void {
     for (const field of this.columnFields(fields)) {
-      const column = this.drizzleColumnFor(field);
+      const column = this.drizzleColumnFor(field, overrides);
       if (column) {
         columns[field.name] = column;
       }
@@ -860,9 +953,14 @@ export class FieldGroupSchemaService {
    * A field's runtime Drizzle column: built from the descriptor where it names the column, and by
    * this dialect's own mapper otherwise, so the runtime table and the CREATE read one answer.
    */
-  private drizzleColumnFor(field: DataFieldConfig): unknown {
-    const mappable = this.asMappableField(field);
-    const canonical = this.canonicalColumn(mappable);
+  private drizzleColumnFor(
+    field: DataFieldConfig,
+    overrides: readonly ColumnOverride[] = []
+  ): unknown {
+    const mappable = asStorageMappedField(field);
+    const overridden = this.overriddenColumn(mappable, overrides);
+    if (overridden) return buildUserDrizzleColumn(overridden, this.dialect);
+    const canonical = this.canonicalColumn(field, mappable);
     if (canonical) return buildUserDrizzleColumn(canonical, this.dialect);
     switch (this.dialect) {
       case "postgresql":
@@ -874,72 +972,48 @@ export class FieldGroupSchemaService {
     }
   }
 
-  private getColumnType(field: DataFieldConfig): string | null {
-    const types = SQL_COLUMN_TYPES[this.dialect];
-
-    const canonical = this.canonicalColumn(field);
-    if (canonical) return canonical.dialectType;
-    if (isTextField(field)) {
-      return field.maxLength ? types.varchar(field.maxLength) : types.text;
+  /**
+   * The field's column with the storage the app's override gives it, from the descriptor every
+   * entity's runtime column reads, or null when no override names it.
+   */
+  private overriddenColumn(
+    field: DataFieldConfig,
+    overrides: readonly ColumnOverride[]
+  ): ColumnDescriptor | null {
+    if (overrides.length === 0 || !field.name) return null;
+    // Any data field: the descriptor maps every type, where the guards in
+    // `canonicalColumn` narrow to the two this service hands it otherwise.
+    const descriptor = getComponentRowColumnDescriptor(
+      field as unknown as Parameters<typeof getComponentRowColumnDescriptor>[0],
+      this.dialect,
+      this.builtBy
+    );
+    if (!descriptor || !overrides.some(o => o.column === descriptor.name)) {
+      return null;
     }
-    if (
-      isTextareaField(field) ||
-      isRichTextField(field) ||
-      isCodeField(field)
-    ) {
-      return types.text;
-    }
-    if (isEmailField(field)) {
-      return types.varchar(255);
-    }
-    if (isPasswordField(field)) {
-      return types.varchar(255);
-    }
-    if (isNumberField(field)) {
-      const kind = this.numberColumnKind(field);
-      if (kind === "integer") return types.integer;
-      if (kind === "decimal") {
-        const { precision, scale } = this.decimalDimensions(field);
-        return types.decimal(precision, scale);
-      }
-      return types.real;
-    }
-    if (isCheckboxField(field)) {
-      return types.boolean;
-    }
-    if (isDateField(field)) {
-      return types.timestamp;
-    }
-    if (isSelectField(field)) {
-      return field.hasMany ? types.json : types.varchar(255);
-    }
-    if (isRadioField(field)) {
-      return types.varchar(255);
-    }
-    if (isUploadField(field) || isRelationshipField(field)) {
-      // A relation holding a list (hasMany, several targets, or a many-to-many, which a component
-      // keeps on its row) is a JSON column; the runtime table and the desired schema ask the same
-      // rule.
-      return componentRelationshipStoresJson(field) ? types.json : types.uuid;
-    }
-    if (isRepeaterField(field) || isGroupField(field)) {
-      return types.json;
-    }
-    if (isJSONField(field)) {
-      return types.json;
-    }
-
-    return null;
+    return withColumnOverride(descriptor, overrides, this.dialect);
   }
 
   // Returns a Drizzle column builder — typed as `unknown` to avoid
   // depending on Drizzle's internal column builder types from the public API.
-  private mapFieldToPostgresColumn(field: DataFieldConfig): unknown {
+  /** A field's column name and whether it is required, as every dialect's mapper reads them. */
+  private columnNaming(
+    field: DataFieldConfig
+  ): { colName: string; isRequired: boolean } | null {
     if (!("name" in field) || !field.name) return null;
-    const isRequired = "required" in field && field.required === true;
-    const colName = this.toSnakeCase(field.name);
+    return {
+      colName: this.toSnakeCase(field.name),
+      isRequired: "required" in field && field.required === true,
+    };
+  }
 
-    if (isTextField(field) || isEmailField(field) || isPasswordField(field)) {
+  private mapFieldToPostgresColumn(field: DataFieldConfig): unknown {
+    const named = this.columnNaming(field);
+    if (named === null) return null;
+    const { colName, isRequired } = named;
+
+    // A text field's column is the descriptor's (`canonicalColumn`).
+    if (isEmailField(field) || isPasswordField(field)) {
       return isRequired ? pgText(colName).notNull() : pgText(colName);
     }
     if (
@@ -982,11 +1056,12 @@ export class FieldGroupSchemaService {
   }
 
   private mapFieldToMySQLColumn(field: DataFieldConfig): unknown {
-    if (!("name" in field) || !field.name) return null;
-    const isRequired = "required" in field && field.required === true;
-    const colName = this.toSnakeCase(field.name);
+    const named = this.columnNaming(field);
+    if (named === null) return null;
+    const { colName, isRequired } = named;
 
-    if (isTextField(field) || isEmailField(field) || isPasswordField(field)) {
+    // A text field's column is the descriptor's (`canonicalColumn`).
+    if (isEmailField(field) || isPasswordField(field)) {
       return isRequired
         ? mysqlVarchar(colName, { length: 255 }).notNull()
         : mysqlVarchar(colName, { length: 255 });
@@ -1037,12 +1112,12 @@ export class FieldGroupSchemaService {
   }
 
   private mapFieldToSQLiteColumn(field: DataFieldConfig): unknown {
-    if (!("name" in field) || !field.name) return null;
-    const isRequired = "required" in field && field.required === true;
-    const colName = this.toSnakeCase(field.name);
+    const named = this.columnNaming(field);
+    if (named === null) return null;
+    const { colName, isRequired } = named;
 
+    // A text field's column is the descriptor's (`canonicalColumn`).
     if (
-      isTextField(field) ||
       isEmailField(field) ||
       isPasswordField(field) ||
       isTextareaField(field) ||
@@ -1109,15 +1184,41 @@ export class FieldGroupSchemaService {
   }
 
   /**
+   * `fields` without each field inside a group with no name whose column `heldColumns` does not
+   * list; see `RuntimeSchemaOptions.heldColumns`. Flattened through `fieldsStoredOnRow`, which
+   * `columnFields` reads again unchanged, so the runtime table still lists the row's fields once.
+   */
+  private heldRowFields(
+    fields: FieldConfig[],
+    heldColumns: readonly string[] | undefined
+  ): FieldConfig[] {
+    if (heldColumns === undefined) return fields;
+    const held = new Set(heldColumns.map(column => column.toLowerCase()));
+    const topLevel = new Set<FieldConfig>(fields);
+    return fieldsStoredOnRow(fields).filter(field => {
+      if (topLevel.has(field)) return true;
+      const name = (field as { name?: unknown }).name;
+      return (
+        typeof name === "string" &&
+        held.has(this.toSnakeCase(name).toLowerCase())
+      );
+    });
+  }
+
+  /**
    * The fields that own a column on the component's row: named data fields,
    * less those `componentFieldHasColumn` rules out. Every loop that builds the
    * CREATE, the indexes, the runtime tables or the ALTER plan reads this list,
    * so they cannot disagree about which fields are columns.
+   *
+   * Read through `fieldsStoredOnRow`: a group with no name only lays fields
+   * out, and the data fields inside it are stored on this row as the ones
+   * beside it are, so each gets its column here.
    */
   private columnFields(
     fields: FieldConfig[]
   ): Array<DataFieldConfig & { name: string }> {
-    return fields.filter(
+    return fieldsStoredOnRow(fields).filter(
       (field): field is DataFieldConfig & { name: string } =>
         (isDataField(field) || isPluginDataField(field)) &&
         componentFieldHasColumn(field) &&

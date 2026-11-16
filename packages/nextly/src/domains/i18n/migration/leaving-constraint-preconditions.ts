@@ -15,7 +15,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 
-import { lit, q } from "./ddl-types";
+import { q } from "./ddl-types";
 import {
   type LeavingFieldLike,
   type LeavingTranslationRefusal,
@@ -25,7 +25,7 @@ import {
 } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import { restoredValue } from "./generate-down";
-import type { CompanionMigrationSpec } from "./types";
+import type { CompanionMigrationSpec, CopyLiveness } from "./types";
 
 interface PreconditionAdapter {
   executeQuery<T = unknown>(sql: string): Promise<T[]>;
@@ -54,6 +54,8 @@ interface LeavingValuesSource {
   mainTable: string;
   companionTable: string;
   defaultLocale: string;
+  /** What decides the language an entry's shared value is taken from (`restoredValue`). */
+  liveness?: CopyLiveness;
 }
 
 /**
@@ -67,25 +69,41 @@ function hasNoCompanionRow(source: LeavingValuesSource, main: string): string {
 }
 
 /**
- * How many entries have no default-language value in the companion column `col` (quoted): no
- * companion row in that language, or NULL there. With `mainCol` (quoted), the main table's column
- * the move copies into, which already exists when the shared file runs: an entry with no companion
- * row at all keeps its main value, so it counts only where that is NULL too.
+ * The value an entry keeps in the shared column, as an SQL expression over the main table: the one
+ * the move writes from the companion column `col` (quoted), from the row the copy chooses
+ * (`restoredValue`). With `mainCol` (quoted), the main table's column the move copies into, which
+ * already exists when the shared file runs: an entry with no companion row at all keeps its main
+ * value.
  */
-async function entriesWithoutDefaultValue(
+function keptValue(
+  source: LeavingValuesSource,
+  col: string,
+  mainCol?: string
+): string {
+  const { dialect } = source;
+  const main = q(source.mainTable, dialect);
+  const restored = restoredValue(
+    source,
+    `${q(source.companionTable, dialect)}.${col}`
+  );
+  return mainCol === undefined
+    ? restored
+    : `CASE WHEN ${hasNoCompanionRow(source, main)} THEN ${main}.${mainCol} ELSE ${restored} END`;
+}
+
+/**
+ * How many entries would keep no value in the companion column `col` (quoted) once it is shared:
+ * judged on the value the move writes (`keptValue`), so an entry whose kept row is empty counts,
+ * and one with no default-language row whose kept language has a value does not.
+ */
+async function entriesLeftWithoutValue(
   source: LeavingValuesSource,
   col: string,
   mainCol?: string
 ): Promise<number> {
   const { adapter, dialect } = source;
-  const keptOnMain =
-    mainCol === undefined
-      ? ""
-      : ` AND NOT (${hasNoCompanionRow(source, "m")} AND m.${mainCol} IS NOT NULL)`;
   const [row] = await adapter.executeQuery<{ n: number | string }>(
-    `SELECT COUNT(*) AS n FROM ${q(source.mainTable, dialect)} m LEFT JOIN ${q(source.companionTable, dialect)} c ` +
-      `ON c.${q("_parent", dialect)} = m.${q("id", dialect)} AND c.${q("_locale", dialect)} = ${lit(source.defaultLocale)} ` +
-      `WHERE c.${col} IS NULL${keptOnMain}`
+    `SELECT COUNT(*) AS n FROM ${q(source.mainTable, dialect)} WHERE (${keptValue(source, col, mainCol)}) IS NULL`
   );
   return Number(row?.n ?? 0);
 }
@@ -102,15 +120,7 @@ async function entriesSharingAValue(
   mainCol?: string
 ): Promise<number> {
   const { adapter, dialect } = source;
-  const main = q(source.mainTable, dialect);
-  const restored = restoredValue(
-    source,
-    `${q(source.companionTable, dialect)}.${col}`
-  );
-  const shared =
-    mainCol === undefined
-      ? restored
-      : `CASE WHEN ${hasNoCompanionRow(source, main)} THEN ${main}.${mainCol} ELSE ${restored} END`;
+  const shared = keptValue(source, col, mainCol);
   const [row] = await adapter.executeQuery<{ n: number | string }>(
     `SELECT COALESCE(SUM(g.n), 0) AS n FROM (SELECT COUNT(*) AS n FROM (SELECT ${shared} AS v FROM ${q(source.mainTable, dialect)}) s ` +
       `WHERE s.v IS NOT NULL GROUP BY s.v HAVING COUNT(*) > 1) g`
@@ -146,6 +156,12 @@ export async function refusalsForConstrainedFieldsLeaving(args: {
   tableName: string;
   builtBy: ColumnOrigin;
   defaultLocale: string;
+  /**
+   * What decides the language each entry's shared value is taken from, so the values judged are
+   * the ones the copy writes (`copyLiveness`). Omitted, the default language's, else the first by
+   * code.
+   */
+  liveness?: CopyLiveness;
   leaving: ReadonlySet<string>;
   oldFields: readonly LeavingFieldLike[];
   newFields: readonly LeavingFieldLike[];
@@ -167,8 +183,9 @@ export async function refusalsForConstrainedFieldsLeaving(args: {
     mainTable: args.tableName,
     companionTable: `${args.tableName}_locales`,
     defaultLocale: args.defaultLocale,
+    liveness: args.liveness,
   };
-  const missing = (col: string) => entriesWithoutDefaultValue(source, col);
+  const missing = (col: string) => entriesLeftWithoutValue(source, col);
   const sharing = (col: string) => entriesSharingAValue(source, col);
 
   const refusals: LeavingTranslationRefusal[] = [];
@@ -236,9 +253,7 @@ async function refusalsForOneField(
   if (constraints.includes("required")) {
     const without = await ctx.missing(col);
     if (without > 0)
-      refusals.push(
-        requiredRefusal(field.name, without, ctx.language, ctx.surface)
-      );
+      refusals.push(requiredRefusal(field.name, without, ctx.surface));
   }
   if (constraints.includes("unique")) {
     const shared = await ctx.sharing(col);
@@ -266,15 +281,17 @@ const STOP_WRITES_STEP =
 function requiredRefusal(
   name: string,
   count: number,
-  language: string,
   surface: PreconditionSurface
 ): LeavingTranslationRefusal {
   const which = count === 1 ? "that entry" : "those entries";
-  const give = `Give ${which} ${withArticle(language)} ${name}`;
+  // The value is given in whichever language the entry keeps, so no language is named.
+  const give = `Give ${which} ${withArticle(name)}`;
   return refusal(
     `fields.${name}`,
     "REQUIRED_FIELD_LEAVES_WITHOUT_VALUES",
-    `${entries(count)} ${count === 1 ? "has" : "have"} no ${language} ${name}, and its ${language} value becomes the shared one.`,
+    // The value an entry keeps may be another language's than the default's (`restoredValue`), so
+    // the message names what is missing, not which language it is missing in.
+    `${entries(count)} would have no ${name} once it is shared: the value ${count === 1 ? "it keeps is" : "they keep is"} empty.`,
     [
       surface === "builder"
         ? `${give}, or turn off Required, and save again.`
@@ -328,6 +345,7 @@ export async function refuseLeavingFileThatCannotTakeItsSettings(
     | "mainTable"
     | "companionTable"
     | "defaultLocale"
+    | "liveness"
     | "settings"
   >,
   source: string,
@@ -344,19 +362,20 @@ export async function refuseLeavingFileThatCannotTakeItsSettings(
     mainTable: spec.mainTable,
     companionTable: spec.companionTable,
     defaultLocale: spec.defaultLocale,
+    // The values judged are the ones this file's copy writes.
+    liveness: spec.liveness,
   };
   const language = languageName(spec.defaultLocale);
   const col = (column: string) => q(column, spec.dialect);
   const refusals: LeavingTranslationRefusal[] = [];
   const onMain = (column: string) => (mainHasColumns ? col(column) : undefined);
   for (const { field, column } of spec.settings.required) {
-    const without = await entriesWithoutDefaultValue(
+    const without = await entriesLeftWithoutValue(
       values,
       col(column),
       onMain(column)
     );
-    if (without > 0)
-      refusals.push(requiredRefusal(field, without, language, "migrate"));
+    if (without > 0) refusals.push(requiredRefusal(field, without, "migrate"));
   }
   for (const { field, column } of spec.settings.unique) {
     const shared = await entriesSharingAValue(

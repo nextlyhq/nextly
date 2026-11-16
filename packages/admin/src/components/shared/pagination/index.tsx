@@ -12,6 +12,19 @@ import { PAGINATION } from "@admin/constants/pagination";
 import { useT } from "@admin/lib/i18n/I18nProvider";
 import { cn } from "@admin/lib/utils";
 
+import {
+  PAGER_BUTTON_SIZE,
+  PAGER_CONTROLS,
+  PAGER_COUNT,
+  PAGER_FRAME,
+  PAGER_NAV,
+  PAGER_SIZE,
+  PAGER_SIZE_BOX,
+  PAGER_SIZE_LABEL,
+  PAGER_SIZE_WORDS,
+  PAGER_SUMMARY,
+  pageCountText,
+} from "./pager-layout";
 import type { PaginationProps } from "./types";
 
 /**
@@ -50,10 +63,7 @@ function PaginationSummary({
    */
   if (totalItems === undefined) {
     return (
-      <div
-        className="whitespace-nowrap order-2 @2xl/content:order-1"
-        data-slot="pagination-summary"
-      >
+      <div className={PAGER_SUMMARY} data-slot="pagination-summary">
         Page <span className="font-semibold">{currentPage + 1}</span> of{" "}
         <span className="font-semibold">{totalPages}</span>
       </div>
@@ -72,10 +82,7 @@ function PaginationSummary({
    * question nobody asked.
    */
   return (
-    <div
-      className="whitespace-nowrap order-2 @2xl/content:order-1"
-      data-slot="pagination-summary"
-    >
+    <div className={PAGER_SUMMARY} data-slot="pagination-summary">
       {totalItems === 0 ? (
         <>No {itemLabel}</>
       ) : (
@@ -193,7 +200,10 @@ function PageNumbers({
             key={slot.key}
             // Square corners: the ellipsis sits inside the same
             // overlapped-border strip as the page buttons.
-            className="flex h-10 w-10 items-center justify-center rounded-none  border border-border-strong bg-background text-muted-foreground text-xs -ml-px"
+            className={cn(
+              PAGER_BUTTON_SIZE,
+              "flex items-center justify-center rounded-none  border border-border-strong bg-background text-muted-foreground text-xs -ml-px"
+            )}
             aria-hidden="true"
           >
             ...
@@ -206,7 +216,8 @@ function PageNumbers({
             className={cn(
               // Square corners: page buttons overlap their borders (-ml-px)
               // into one continuous strip, which a radius would break apart.
-              "flex h-10 w-10 items-center justify-center rounded-none text-xs z-10 -ml-px transition-colors focus:outline-none focus:border-primary cursor-pointer",
+              PAGER_BUTTON_SIZE,
+              "flex items-center justify-center rounded-none text-xs z-10 -ml-px transition-colors focus:outline-none focus:border-primary cursor-pointer",
               currentPage === slot.page
                 ? "bg-primary! text-primary-foreground border-primary! z-20"
                 : "bg-background  border border-border-strong hover-unified disabled:opacity-50 disabled:cursor-not-allowed"
@@ -340,12 +351,15 @@ function PagerButtons({
   const canGoPrevious = currentPage > 0;
   const canGoNext = currentPage < totalPages - 1;
   return (
-    <div className="flex items-center gap-1">
+    <div className={PAGER_NAV}>
       {/* First */}
       <button
         onClick={() => onPageChange(0)}
         disabled={!canGoPrevious || isLoading}
-        className="hidden @md/content:flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+        className={cn(
+          PAGER_BUTTON_SIZE,
+          "hidden @md/content:flex items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+        )}
         aria-label={t("nextly.pagination.first")}
       >
         <ChevronsLeft className="h-4 w-4" />
@@ -355,7 +369,10 @@ function PagerButtons({
       <button
         onClick={() => onPageChange(currentPage - 1)}
         disabled={!canGoPrevious || isLoading}
-        className="flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+        className={cn(
+          PAGER_BUTTON_SIZE,
+          "flex items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+        )}
         aria-label={t("nextly.pagination.previous")}
       >
         <ChevronLeft className="h-4 w-4" />
@@ -368,7 +385,10 @@ function PagerButtons({
       <button
         onClick={() => onPageChange(currentPage + 1)}
         disabled={!canGoNext || isLoading}
-        className="flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+        className={cn(
+          PAGER_BUTTON_SIZE,
+          "flex items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+        )}
         aria-label={t("nextly.pagination.next")}
       >
         <ChevronRight className="h-4 w-4" />
@@ -378,27 +398,16 @@ function PagerButtons({
       <button
         onClick={() => onPageChange(totalPages - 1)}
         disabled={!canGoLast || isLoading}
-        className="hidden @md/content:flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+        className={cn(
+          PAGER_BUTTON_SIZE,
+          "hidden @md/content:flex items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+        )}
         aria-label={t("nextly.pagination.last")}
       >
         <ChevronsRight className="h-4 w-4" />
       </button>
     </div>
   );
-}
-
-/**
- * "Page 3 of 12", or "Page 3" alone when the total is capped and the number
- * of pages is not known.
- */
-function pageCountText(
-  currentPage: number,
-  totalPages: number,
-  totalCapped: boolean
-): string {
-  return totalCapped
-    ? `Page ${currentPage + 1}`
-    : `Page ${currentPage + 1} of ${totalPages}`;
 }
 
 /**
@@ -410,6 +419,69 @@ function landmarkName(
   t: (key: "nextly.pagination.label") => string
 ): string {
   return ariaLabel ?? t("nextly.pagination.label");
+}
+
+/**
+ * The rows-per-page selector. Its visible "Rows per page" text is also its
+ * programmatic name, through `aria-labelledby`: the text is hidden in a narrow
+ * container, and a name taken by reference still holds when the element
+ * naming it is not displayed, where a `<label>` would leave the select
+ * unnamed. The id is per instance, so two pagers on one page each keep their
+ * own name.
+ */
+function PageSizeSelect({
+  pageSize,
+  options,
+  disabled,
+  onChange,
+}: {
+  pageSize: number;
+  options: readonly number[];
+  disabled: boolean;
+  onChange: (pageSize: number) => void;
+}): React.JSX.Element {
+  const labelId = React.useId();
+  return (
+    <div className={PAGER_SIZE}>
+      <span id={labelId} className={PAGER_SIZE_LABEL}>
+        {PAGER_SIZE_WORDS}
+      </span>
+      <div className="relative">
+        <select
+          id="page-size"
+          aria-labelledby={labelId}
+          value={pageSize}
+          onChange={e => onChange(Number(e.target.value))}
+          disabled={disabled}
+          className={cn(
+            PAGER_SIZE_BOX,
+            "appearance-none rounded-md  border border-input bg-background px-2 py-1 text-sm font-medium focus:outline-none focus:border-primary disabled:opacity-50 disabled:cursor-not-allowed hover-unified cursor-pointer"
+          )}
+        >
+          {options.map(size => (
+            <option key={size} value={size}>
+              {size}
+            </option>
+          ))}
+        </select>
+        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-muted-foreground">
+          <svg
+            className="h-3 w-3"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M19 9l-7 7-7-7"
+            />
+          </svg>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -570,12 +642,12 @@ export const Pagination: React.ForwardRefExoticComponent<
     return (
       <nav
         ref={ref}
+        // Named for the loading outline's check: the outline draws a pager
+        // under the same name, which must stand where this one lands.
+        data-frame-part="list-pager"
         aria-label={landmarkName(ariaLabel, t)}
         onKeyDown={handleKeyDown}
-        className={cn(
-          "flex flex-col @2xl/content:flex-row w-full items-center justify-between gap-4 text-xs @md/content:text-sm text-muted-foreground p-4 border-t border-border bg-[var(--nx-table-header-bg)]",
-          className
-        )}
+        className={cn(PAGER_FRAME, className)}
       >
         {/* Left: Info */}
         <PaginationSummary
@@ -589,47 +661,15 @@ export const Pagination: React.ForwardRefExoticComponent<
         />
 
         {/* Right: Controls */}
-        <div className="flex flex-wrap items-center justify-center gap-4 @md/content:gap-6 @4xl/content:gap-8 order-1 @2xl/content:order-2">
+        <div className={PAGER_CONTROLS}>
           {/* Page size selector */}
           {showPageSizeSelector && onPageSizeChange && (
-            <div className="flex items-center space-x-2">
-              <span className="whitespace-nowrap hidden @md/content:inline-block">
-                Rows per page
-              </span>
-              <div className="relative">
-                <select
-                  id="page-size"
-                  value={pageSize}
-                  onChange={e => {
-                    const newPageSize = Number(e.target.value);
-                    onPageSizeChange(newPageSize);
-                  }}
-                  disabled={isLoading}
-                  className="h-9 w-[70px] appearance-none rounded-md  border border-input bg-background px-2 py-1 text-sm font-medium focus:outline-none focus:border-primary disabled:opacity-50 disabled:cursor-not-allowed hover-unified cursor-pointer"
-                >
-                  {pageSizeOptions.map(size => (
-                    <option key={size} value={size}>
-                      {size}
-                    </option>
-                  ))}
-                </select>
-                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-muted-foreground">
-                  <svg
-                    className="h-3 w-3"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M19 9l-7 7-7-7"
-                    />
-                  </svg>
-                </div>
-              </div>
-            </div>
+            <PageSizeSelect
+              pageSize={pageSize}
+              options={pageSizeOptions}
+              disabled={isLoading}
+              onChange={onPageSizeChange}
+            />
           )}
 
           {/* Navigation Buttons Group */}
@@ -651,7 +691,7 @@ export const Pagination: React.ForwardRefExoticComponent<
           </PagerButtons>
 
           {/* Page Count (Far Right) */}
-          <div className="whitespace-nowrap hidden @md/content:block">
+          <div className={PAGER_COUNT}>
             {pageCountText(currentPage, totalPages, totalCapped)}
           </div>
         </div>

@@ -21,6 +21,10 @@ import { Fragment, useEffect, useId, type JSX, type ReactNode } from "react";
 import { useController } from "react-hook-form";
 
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
+import {
+  SegmentedChoice,
+  type SegmentedOption,
+} from "@admin/components/ui/segmented-choice";
 import { cn } from "@admin/lib/utils";
 
 import { widthChoiceName } from "../sizes";
@@ -32,7 +36,6 @@ import {
   segmentedOptionsOf,
   type EntriesSetting,
 } from "./drawer-choices";
-import { SegmentedChoice, type SegmentedOption } from "./SegmentedChoice";
 import type { SettingRule } from "./setting-rules";
 
 /** What the drawer says under a setting, its examples in backticks drawn as code. */
@@ -151,7 +154,7 @@ function SegmentedSettingControl({
       hint={hint}
     >
       <SegmentedChoice
-        size="drawer"
+        size="bordered"
         aria-labelledby={`${id}-label`}
         aria-describedby={hint === undefined ? undefined : `${id}-hint`}
         options={options.map(option =>
@@ -291,7 +294,7 @@ function TextareaSettingControl({
           id={`${id}-left`}
           className={cn(
             "text-xs tabular-nums",
-            left < 0 ? "text-destructive" : "text-muted-foreground"
+            left < 0 ? "text-danger-text" : "text-muted-foreground"
           )}
           data-testid={`setting-left-${setting.name}`}
         >
@@ -305,7 +308,7 @@ function TextareaSettingControl({
         <p
           id={`${id}-problem`}
           role="alert"
-          className="text-xs text-destructive"
+          className="text-xs text-danger-text"
         >
           {problem}
         </p>
@@ -347,7 +350,7 @@ export function WidthControl({
       hint={`${bounds} Height follows the content.`}
     >
       <SegmentedChoice
-        size="drawer"
+        size="bordered"
         aria-labelledby={`${id}-label`}
         aria-describedby={`${id}-hint`}
         options={choices.map(choice => {

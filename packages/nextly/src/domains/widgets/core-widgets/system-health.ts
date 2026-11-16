@@ -124,6 +124,27 @@ export function provideSystemHealth(read: SystemHealthRead): void {
   provided.read = read;
 }
 
+/**
+ * The install's health, read as the caller `services` were bound for: the
+ * card's own read, which refuses anyone but a super-admin before it reads
+ * anything. The diagnostics report reads it too, so the card, its Details and
+ * the report never disagree.
+ */
+export async function readSystemHealth(
+  services: WidgetReadServices,
+  opts: { signal: AbortSignal }
+): Promise<SystemHealthData> {
+  const read = provided.read;
+  if (read === undefined) {
+    // Booted without the System health source: a fault of the install,
+    // never a card claiming all is well.
+    throw NextlyError.internal({
+      logContext: { reason: "system-health-not-provided" },
+    });
+  }
+  return read(services, opts);
+}
+
 /** The runtime and plugins every preview shows. */
 const PREVIEW_DETAILS = {
   runtime: { node: "24.11.0", next: "16.0.1", react: "19.2.0" },
@@ -191,17 +212,7 @@ export const systemHealthWidget = defineWidget({
     min: { w: 4, h: 2 },
     max: { w: 8, h: 4 },
   },
-  load: async ({ services, signal }) => {
-    const read = provided.read;
-    if (read === undefined) {
-      // Booted without the System health source: a fault of the install,
-      // never a card claiming all is well.
-      throw NextlyError.internal({
-        logContext: { reason: "system-health-not-provided" },
-      });
-    }
-    return read(services, { signal });
-  },
+  load: ({ services, signal }) => readSystemHealth(services, { signal }),
   view: { component: "core#SystemHealth" },
   // Never empty: its lines are the answer whatever they say.
   isEmpty: () => false,

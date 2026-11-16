@@ -29,7 +29,10 @@ import {
   COLLECTION_ID_TYPES,
 } from "../../domains/collections/services/collection-db-options";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
-import { publicAddressErrors } from "../../domains/public-addresses/public-address-template";
+import {
+  publicAddressErrors,
+  publicAddressFieldProblem,
+} from "../../domains/public-addresses/public-address-template";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 import {
   isManagedIndexName,
@@ -105,6 +108,7 @@ export type ValidationErrorCode =
   | "FIELD_NAME_REQUIRED"
   | "FIELD_NAME_INVALID_FORMAT"
   | "FIELD_NAME_SQL_KEYWORD"
+  | "FIELD_NEVER_TRANSLATABLE"
   | "FIELD_NAME_DUPLICATE"
   | "FIELD_NAME_RESERVED"
   // A name that reaches a system column under a different spelling. Allowed only as the
@@ -859,6 +863,19 @@ export function validateCollectionConfig(
   errors.push(
     ...publicAddressErrors(config.publicAddress, "collection", config.fields)
   );
+  // The field holding each entry's own address, where one is named.
+  const fieldProblem = publicAddressFieldProblem(
+    config.publicAddressField,
+    config.publicAddress,
+    Array.isArray(config.fields) ? config.fields : []
+  );
+  if (fieldProblem !== null) {
+    errors.push({
+      path: "publicAddressField",
+      code: "PUBLIC_ADDRESS_INVALID",
+      message: fieldProblem,
+    });
+  }
 
   return {
     valid: errors.length === 0,

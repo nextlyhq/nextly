@@ -1,8 +1,27 @@
-import { PageFrame, PageShell } from "@nextlyhq/ui";
+import { PageFrame, PageShell, type PageType } from "@nextlyhq/ui";
 import React from "react";
 
 import { cn } from "@admin/lib/utils";
 import type { PageContainerProps } from "@admin/types/layout/page-container";
+
+/**
+ * Vertical padding that scales with the content panel rather than the
+ * viewport, which is what makes it agree with a sidebar that can open and
+ * close.
+ */
+const RHYTHM = "py-6 @sm/content:py-8";
+
+/**
+ * The vertical rhythm a page of `type` takes from its container, or none.
+ *
+ * A workspace draws its own surface edge to edge, and an editor's banners and
+ * panel start directly under the bar, so neither takes it. Read by the
+ * container and by the plugin page host, which gives a plugin's own frame the
+ * rhythm a core page of that type has.
+ */
+export function pageRhythm(type: PageType): string | undefined {
+  return type === "workspace" || type === "editor" ? undefined : RHYTHM;
+}
 
 /**
  * Page Container Component
@@ -116,10 +135,6 @@ export const PageContainer: React.ForwardRefExoticComponent<
     const surface =
       "w-full max-w-full min-h-[calc(100vh-var(--admin-bar-height))] admin-page-container";
 
-    // Vertical padding scales with the content panel rather than the viewport,
-    // which is what makes it agree with a sidebar that can open and close.
-    const rhythm = "py-6 @sm/content:py-8";
-
     // A page that says its type is drawn by the shared frame, so two pages of
     // one type cannot differ in width or inset. `width` is the older spelling,
     // kept for callers outside the admin; a page passing both gets its type.
@@ -129,14 +144,7 @@ export const PageContainer: React.ForwardRefExoticComponent<
           ref={ref}
           data-testid="page-container"
           type={type}
-          className={cn(
-            surface,
-            // A workspace draws its own surface edge to edge, and an editor's
-            // banners and panel start directly under the bar, so neither
-            // takes the vertical rhythm.
-            type !== "workspace" && type !== "editor" && rhythm,
-            className
-          )}
+          className={cn(surface, pageRhythm(type), className)}
           {...props}
         >
           {children}
@@ -153,7 +161,7 @@ export const PageContainer: React.ForwardRefExoticComponent<
           // No horizontal padding here. `PageShell` spends the inset as GRID
           // COLUMNS, so padding on the same element would add to the gutter
           // rather than replace it, and a descendant cannot cancel padding.
-          className={cn(surface, rhythm, className)}
+          className={cn(surface, RHYTHM, className)}
           {...props}
         >
           {children}
@@ -173,7 +181,7 @@ export const PageContainer: React.ForwardRefExoticComponent<
           // columns from `--nx-gutter` instead, which runs through the same
           // three values on its own thresholds rather than these.
           "px-4 @sm/content:px-6 @2xl/content:px-8",
-          rhythm,
+          RHYTHM,
           className
         )}
         {...props}

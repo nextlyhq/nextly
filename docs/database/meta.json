@@ -7,6 +7,7 @@
     "sqlite",
     "support",
     "encrypted-connections",
-    "extending-the-schema"
+    "extending-the-schema",
+    "coming-from-payload"
   ]
 }

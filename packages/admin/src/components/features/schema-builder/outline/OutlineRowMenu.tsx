@@ -20,6 +20,7 @@ import { extractFieldGroupReferences } from "nextly/field-group-type";
 import type { JSX } from "react";
 
 import { MoreHorizontal } from "@admin/components/icons";
+import { canFocus } from "@admin/lib/builder/outline/focus-view";
 import {
   describeReadOnly,
   type OutlineNode,
@@ -90,12 +91,22 @@ export function OutlineRowMenu({
           actions.focusRow(id);
         }}
       >
-        <DropdownMenuItem onSelect={() => actions.select(id)}>
-          {readOnly ? "View settings" : "Edit settings"}
-        </DropdownMenuItem>
+        {/* A registered block, or its prop, has no settings to open. */}
+        {!node.meta && (
+          <DropdownMenuItem onSelect={() => actions.select(id)}>
+            {readOnly ? "View settings" : "Edit settings"}
+          </DropdownMenuItem>
+        )}
         {group && (
           <DropdownMenuItem onSelect={() => actions.openFieldGroup(group.slug)}>
             Open the field group {group.label}
+          </DropdownMenuItem>
+        )}
+        {/* Showing a container on its own changes nothing, so a read-only
+            one offers it too. */}
+        {actions.focusContainer && canFocus(node) && (
+          <DropdownMenuItem onSelect={() => actions.focusContainer?.(id)}>
+            Focus
           </DropdownMenuItem>
         )}
         {readOnly ? (
@@ -117,16 +128,21 @@ export function OutlineRowMenu({
               Add a field after
             </DropdownMenuItem>
             <DropdownMenuItem
-              disabled={!actions.canMove(id, -1)}
-              onSelect={() => actions.move(id, -1)}
+              disabled={!actions.canMove(id, "up")}
+              onSelect={() => actions.move(id, "up")}
             >
               Move up
             </DropdownMenuItem>
             <DropdownMenuItem
-              disabled={!actions.canMove(id, 1)}
-              onSelect={() => actions.move(id, 1)}
+              disabled={!actions.canMove(id, "down")}
+              onSelect={() => actions.move(id, "down")}
             >
               Move down
+            </DropdownMenuItem>
+            {/* Every place, with why not for the ones it may not go, so it
+                is offered whenever the field itself may move. */}
+            <DropdownMenuItem onSelect={() => actions.openMoveTo(id)}>
+              Move to…
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => actions.duplicate(id)}>
               Duplicate

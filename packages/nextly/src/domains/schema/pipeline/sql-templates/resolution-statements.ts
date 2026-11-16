@@ -10,6 +10,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../../errors/nextly-error";
+import { storedDateValue } from "../../utils/backfill-default";
 
 import { quoteIdent } from "./identifier-quoting";
 
@@ -48,10 +49,15 @@ function sqlValueLiteral(value: unknown, dialect: SupportedDialect): string {
     if (dialect === "postgresql") return value ? "TRUE" : "FALSE";
     return value ? "1" : "0";
   }
+  // A date reaching here is written in the one form a date fill is stored
+  // in, the form the push binds (`storedDateValue`).
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return sqlValueLiteral(storedDateValue(value, dialect), dialect);
+  }
   throw new NextlyError({
     code: "VALIDATION_ERROR",
     publicMessage:
-      "A fill value must be a string, a finite number or a boolean.",
+      "A fill value must be a string, a finite number, a boolean or a date.",
     logContext: { valueType: typeof value },
   });
 }

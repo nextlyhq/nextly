@@ -12,6 +12,7 @@
  * @module template-preview-memory
  */
 import type { PreferenceStore } from "@nextlyhq/builder";
+import { devicePreferenceStore } from "@nextlyhq/plugin-sdk/admin";
 import { z } from "nextly/zod";
 
 import { readStoredList } from "./recent-pages";
@@ -28,14 +29,14 @@ const storedSchema = z.array(z.tuple([z.string(), z.string()]));
 /** A store that remembers nothing, without a user or a session's storage. */
 const NOTHING: PreferenceStore = { read: () => null, write: () => undefined };
 
-/** The store for one user, or one that remembers nothing without a user. */
+/**
+ * The store for one user, or one that remembers nothing without a user. Kept
+ * for the tab through the admin's preference store, so the site's switch
+ * that keeps nothing on the device holds for it, and signing out forgets it.
+ */
 export function templatePreviewStore(userId: string | null): PreferenceStore {
   if (userId === null || typeof window === "undefined") return NOTHING;
-  const key = `${KEY}:${userId}`;
-  return {
-    read: () => window.sessionStorage.getItem(key),
-    write: value => window.sessionStorage.setItem(key, value),
-  };
+  return devicePreferenceStore(`${KEY}:${userId}`, { lifetime: "tab" });
 }
 
 /** Every remembered pair, oldest first; none when unreadable. */

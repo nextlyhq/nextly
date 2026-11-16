@@ -40,14 +40,12 @@
 //      their diff produced them.
 
 import { isNextlyOwnedDocumentColumn } from "../../../../lib/system-columns";
+import { isMysqlTextOrBlobType } from "../sql-templates/create-index";
 import { renderedType } from "../sql-templates/create-table-body";
 
 import { typesDiffer } from "./declared-size";
-import { indexKey, isManagedIndexName, textColumnsOf } from "./index-util";
-import {
-  type ColumnCastContext,
-  normalizeCheckExpression,
-} from "./normalize-check";
+import { isManagedIndexName, keyedIndexes } from "./index-util";
+import { normalizeCheckExpression } from "./normalize-check";
 import { normalizeDefault } from "./normalize-default";
 import type {
   AddColumnOp,
@@ -60,7 +58,6 @@ import type {
   ColumnSpec,
   DropColumnOp,
   DropTableOp,
-  IndexSpec,
   NextlySchemaSnapshot,
   Operation,
   TableSpec,
@@ -129,13 +126,7 @@ export function diffSnapshots(
       // with IF NOT EXISTS, so it no-ops against the old index still carrying
       // the name, and the drop after it then removes the index outright. The
       // pair routes through one bucket with the drop ahead of its add.
-      const indexOps = diffIndexes(
-        name,
-        prevT.indexes,
-        curT.indexes,
-        textColumnsOf(prevT.columns),
-        textColumnsOf(curT.columns)
-      );
+      const indexOps = diffIndexes(name, prevT, curT);
       const rekeyedNames = new Set(
         indexOps
           .filter(
@@ -204,9 +195,56 @@ export function diffSnapshots(
   for (const op of retypedForSwitches) {
     columnsAnIndexBlocks.add(`${op.tableName}\u0000${op.columnName}`);
   }
+  // So does any column retyped to TEXT or BLOB, a field's Unique turned off among them: MySQL
+  // refuses the retype while an index keys the whole column, so an index this run drops goes
+  // first. Dropping it ahead of the change is as good on the other dialects.
+  for (const op of columnOps) {
+    if (op.type === "change_column_type" && isMysqlTextOrBlobType(op.toType)) {
+      columnsAnIndexBlocks.add(`${op.tableName}\u0000${op.columnName}`);
+    }
+  }
   const dropIndexBeforeColumns: Operation[] = [];
   const dropIndexAfterAdds: Operation[] = [];
+  // A replaced key that something in this diff needs gone is dropped first after all: kept until
+  // its replacement is added, it would block the drop of the table it points at, of a column at
+  // either end or of an index supporting it, or (MySQL) a change of type of a column.
+  const droppedNames = new Set(droppedTables.map(table => table.name));
+  // Every column this diff retypes or drops, at either end of a key: neither runs under it.
+  const retyped = new Set(
+    columnOps.flatMap(op =>
+      op.type === "change_column_type" || op.type === "drop_column"
+        ? [`${op.tableName}\u0000${op.columnName}`]
+        : []
+    )
+  );
+  // And every column an index this diff drops stands on: a key may be what that index supports.
   for (const op of dropIndexOps) {
+    if (op.type !== "drop_index") continue;
+    for (const column of op.index.columns) {
+      retyped.add(`${op.tableName}\u0000${column}`);
+    }
+  }
+  const blocksThisDiff = (fk: ForeignKeySpec, tableName: string) =>
+    droppedNames.has(fk.referencesTable) ||
+    fk.columns.some(c => retyped.has(`${tableName}\u0000${c}`)) ||
+    fk.referencesColumns.some(c =>
+      retyped.has(`${fk.referencesTable}\u0000${c}`)
+    );
+  const ordered = dropIndexOps.map(op =>
+    op.type === "drop_foreign_key" &&
+    op.afterReplacement === true &&
+    blocksThisDiff(op.foreignKey, op.tableName)
+      ? {
+          type: op.type,
+          tableName: op.tableName,
+          foreignKey: op.foreignKey,
+          ...(op.beforeConversion === true
+            ? { beforeConversion: true as const }
+            : {}),
+        }
+      : op
+  );
+  for (const op of ordered) {
     const coversBlockedColumn =
       op.type === "drop_index" &&
       op.index.columns.some(column =>
@@ -217,8 +255,11 @@ export function diffSnapshots(
     // names, and a check's columns cannot be read from its SQL. Its add, when
     // it is being re-keyed, stays behind the columns, so the pair still runs
     // drop-then-add and the inverse still re-adds after re-creating columns.
+    // A key a replacement on the same columns supersedes is the exception: it is dropped after
+    // that replacement is added, in the order the foreign-key diff produced (`afterReplacement`).
     const isConstraintDrop =
-      op.type === "drop_check" || op.type === "drop_foreign_key";
+      op.type === "drop_check" ||
+      (op.type === "drop_foreign_key" && op.afterReplacement !== true);
     if (coversBlockedColumn || isConstraintDrop)
       dropIndexBeforeColumns.push(op);
     else dropIndexAfterAdds.push(op);
@@ -399,17 +440,15 @@ function byForeignKeyDependency(tables: readonly TableSpec[]): TableSpec[] {
  */
 function diffIndexes(
   tableName: string,
-  prev: IndexSpec[] | undefined,
-  cur: IndexSpec[] | undefined,
-  prevColumns: ColumnCastContext,
-  curColumns: ColumnCastContext
+  prevT: TableSpec,
+  curT: TableSpec
 ): Operation[] {
-  if (prev === undefined || cur === undefined) return [];
+  if (prevT.indexes === undefined || curT.indexes === undefined) return [];
   const ops: Operation[] = [];
   // Each side is read against its OWN column types: a column changing from
   // text to integer keeps its authored `::text` on the new side.
-  const prevByKey = new Map(prev.map(i => [indexKey(i, prevColumns), i]));
-  const curByKey = new Map(cur.map(i => [indexKey(i, curColumns), i]));
+  const prevByKey = keyedIndexes(prevT.indexes, prevT.columns);
+  const curByKey = keyedIndexes(curT.indexes, curT.columns);
   for (const [key, idx] of curByKey) {
     if (!prevByKey.has(key)) {
       ops.push({ type: "add_index", tableName, index: idx });
@@ -459,7 +498,39 @@ function diffForeignKeys(
       ops.push({ type: "drop_foreign_key", tableName, foreignKey: fk });
     }
   }
-  return ops;
+  return replacementsAfterTheirAdds(ops);
+}
+
+/**
+ * `ops` with each key that another, under a new name on the same columns, replaces dropped after
+ * that replacement is added (`afterReplacement`), so a key moving to another target never leaves
+ * its columns unkeyed, even where each statement commits on its own. A key whose replacement shares
+ * its name is a change of shape, dropped first as before: two keys cannot share a name.
+ */
+function replacementsAfterTheirAdds(ops: Operation[]): Operation[] {
+  const columnsOf = (fk: ForeignKeySpec) => fk.columns.join("\u0000");
+  const added = new Set(
+    ops.flatMap(op =>
+      op.type === "add_foreign_key" ? [columnsOf(op.foreignKey)] : []
+    )
+  );
+  const addedNames = new Set(
+    ops.flatMap(op =>
+      op.type === "add_foreign_key" ? [op.foreignKey.name] : []
+    )
+  );
+  const replaced = (op: Operation) =>
+    op.type === "drop_foreign_key" &&
+    !addedNames.has(op.foreignKey.name) &&
+    added.has(columnsOf(op.foreignKey));
+  return [
+    ...ops.filter(op => !replaced(op)),
+    ...ops.flatMap(op =>
+      op.type === "drop_foreign_key" && replaced(op)
+        ? [{ ...op, afterReplacement: true as const }]
+        : []
+    ),
+  ];
 }
 
 /**

@@ -29,6 +29,7 @@ import {
   historyListLanguages,
   parseComparisonQuery,
   hydrateVersionSnapshot,
+  readableFieldSources,
   readingPersonId,
   redactSnapshotForUser,
   resolveVersionsPolicy,
@@ -63,7 +64,11 @@ import {
 import type { TakenLiveValues } from "../../domains/versions/shared-publish-base";
 import { markVersionSeen } from "../../domains/versions/version-views";
 import { VersionsRepository } from "../../domains/versions/versions-repository";
-import type { VersionRow } from "../../domains/versions/versions-repository";
+import type {
+  VersionMeta,
+  VersionRow,
+} from "../../domains/versions/versions-repository";
+import type { VersionListOptions } from "../../domains/versions/versions-service";
 import { NextlyError } from "../../errors/nextly-error";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import { isUniqueViolation } from "../../shared/lib/unique-violation";
@@ -161,8 +166,7 @@ export async function listVersionsForDocument(
 ): Promise<{ items: VersionMetaWithAuthor[]; meta: PaginationMeta }> {
   // Validate before the gate so malformed pagination fails fast, and validate
   // here rather than per dispatcher so every caller of this core is covered.
-  if (args.limit !== undefined) assertPositiveInteger(args.limit, "limit");
-  if (args.cursor !== undefined) assertPositiveInteger(args.cursor, "cursor");
+  assertVersionPaging(args);
 
   await assertVersionDocumentReadable(
     args.scopeKind,
@@ -182,29 +186,33 @@ export async function listVersionsForDocument(
     args.locale
   );
 
-  const limit = Math.min(args.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
-  const versions = getService("versionsService");
-  // Ask for one extra row: its presence is what proves another page exists.
-  // Inferring from a full page would claim a next page whenever the history
-  // length is an exact multiple of the page size.
-  const window = await versions.list(
-    {
+  const ref = {
+    scopeKind: args.scopeKind,
+    scopeSlug: args.slug,
+    entryId: args.entryId,
+  };
+  const page = await pageOfVersions(ref, {
+    ...(args.limit !== undefined ? { limit: args.limit } : {}),
+    ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
+    // An empty `?locale=` reaches the dispatcher as "" (the route parser keeps
+    // it); `historyListLanguages` treats that as absent, so both list surfaces
+    // list every readable locale rather than matching a non-existent
+    // empty-string locale and returning nothing.
+    languages,
+  });
+  const window = page.items;
+  const hasNext = page.meta.hasNext;
+  const limit = page.meta.limit;
+  // Each row names only the restored fields this reader may read.
+  const items = await readableFieldSources(window, {
+    ref: {
       scopeKind: args.scopeKind,
       scopeSlug: args.slug,
       entryId: args.entryId,
     },
-    {
-      limit: limit + 1,
-      ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
-      // An empty `?locale=` reaches the dispatcher as "" (the route parser keeps
-      // it); `historyListLanguages` treats that as absent, so both list surfaces
-      // list every readable locale rather than matching a non-existent
-      // empty-string locale and returning nothing.
-      ...languages,
-    }
-  );
-  const hasNext = window.length > limit;
-  const items = hasNext ? window.slice(0, limit) : window;
+    user: args.user,
+    authenticatedScope: args.authenticatedScope,
+  });
 
   // Keyset pagination: page/totalPages are not meaningful for a cursor walk,
   // so the meta describes the returned window.
@@ -228,6 +236,62 @@ export async function listVersionsForDocument(
       totalPages: 1,
       hasNext,
       hasPrev: args.cursor !== undefined,
+    },
+  };
+}
+
+/**
+ * Reject a page size or cursor that is not a positive integer: every history
+ * page, a trusted one included, is held to this before it reads anything.
+ */
+export function assertVersionPaging(paging: {
+  limit?: number;
+  cursor?: number;
+}): void {
+  if (paging.limit !== undefined) assertPositiveInteger(paging.limit, "limit");
+  if (paging.cursor !== undefined) {
+    assertPositiveInteger(paging.cursor, "cursor");
+  }
+}
+
+/**
+ * One page of a document's versions, newest first, without snapshots: the
+ * page size (REST's default, never past its ceiling), the extra row that
+ * proves another page exists, and the window's meta. Every list of history,
+ * a trusted one included, pages through this, so they cannot page apart.
+ * The caller has validated the paging (`assertVersionPaging`) and decided
+ * which languages to read.
+ */
+export async function pageOfVersions(
+  ref: { scopeKind: VersionScopeKind; scopeSlug: string; entryId: string },
+  paging: {
+    limit?: number;
+    cursor?: number;
+    languages: Pick<VersionListOptions, "locale" | "locales">;
+  }
+): Promise<{ items: VersionMeta[]; meta: PaginationMeta }> {
+  const limit = Math.min(paging.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
+  // Ask for one extra row: its presence is what proves another page exists.
+  // Inferring from a full page would claim a next page whenever the history
+  // length is an exact multiple of the page size.
+  const window = await getService("versionsService").list(ref, {
+    limit: limit + 1,
+    ...(paging.cursor !== undefined ? { cursor: paging.cursor } : {}),
+    ...paging.languages,
+  });
+  const hasNext = window.length > limit;
+  const items = hasNext ? window.slice(0, limit) : window;
+  // Keyset pagination: page/totalPages are not meaningful for a cursor walk,
+  // so the meta describes the returned window.
+  return {
+    items,
+    meta: {
+      total: items.length,
+      page: 1,
+      limit,
+      totalPages: 1,
+      hasNext,
+      hasPrev: paging.cursor !== undefined,
     },
   };
 }
@@ -303,14 +367,12 @@ export async function getVersionForDocument(
   );
 
   const versions = getService("versionsService");
-  const row = await versions.get(
-    {
-      scopeKind: args.scopeKind,
-      scopeSlug: args.slug,
-      entryId: args.entryId,
-    },
-    args.versionNo
-  );
+  const ref = {
+    scopeKind: args.scopeKind,
+    scopeSlug: args.slug,
+    entryId: args.entryId,
+  };
+  const row = await versions.get(ref, args.versionNo);
   // The version is of the language it records, asked about before any of it
   // is returned.
   await assertHistoryLocalesReadable(
@@ -345,7 +407,14 @@ export async function getVersionForDocument(
     row.locale
   );
 
-  return { ...row, withheld: [...withheld] };
+  // The restored fields it names, as the reader may read them: judged on the
+  // stored snapshot, by the same rules as the one returned above.
+  const [judged] = await readableFieldSources([row], {
+    ref,
+    user: args.user,
+    authenticatedScope: args.authenticatedScope,
+  });
+  return { ...row, fieldSources: judged.fieldSources, withheld: [...withheld] };
 }
 
 /**
@@ -545,7 +614,7 @@ export function assertLabelRequestValid(
   readLabelFromBody(body);
 }
 
-function normalizeLabel(value: unknown, path: string): string | null {
+export function normalizeLabel(value: unknown, path: string): string | null {
   if (value === null) return null;
 
   if (typeof value !== "string") {
@@ -653,6 +722,19 @@ export async function setVersionLabelForDocument(
     entryId: args.entryId,
   };
 
+  // The restored fields the answer names, judged before anything is written:
+  // a rename does not change them, and a judgment that fails then refuses the
+  // call with nothing changed, rather than failing after the name and its
+  // history event are in.
+  const [judged] = await readableFieldSources(
+    [await versions.get(ref, args.versionNo)],
+    {
+      ref,
+      user: args.user,
+      authenticatedScope: readAuthenticatedScope(),
+    }
+  );
+
   // Nothing was asked for, so nothing is written. The version is still read
   // back, so the response shape is the same either way and a caller cannot
   // tell a no-op from a rename by its status. A name given is recorded in the
@@ -668,12 +750,13 @@ export async function setVersionLabelForDocument(
   // version, not to read its content, and returning it here would bypass the
   // redaction the version-detail endpoint applies.
   const { snapshot: _snapshot, ...meta } = row;
-
+  // It names only the restored fields the caller may read, as a list does.
+  const readable = { ...meta, fieldSources: judged.fieldSources };
   // The same shape a history list returns, author included. Without this the
   // renamed row comes back carrying only an author id, and an admin that
   // renders the response directly would show the version losing its author the
   // moment it is named.
-  const [withAuthor] = await attachVersionAuthors([meta]);
+  const [withAuthor] = await attachVersionAuthors([readable]);
   return withAuthor as unknown as VersionRow;
 }
 
@@ -699,8 +782,12 @@ export async function restoreVersionForDocument(
     params: Params;
     /** The HTTP request behind the restore, when one produced it. */
     request?: Request;
+    /** What the caller hands the update's hooks as `ctx.context`. */
+    context?: Record<string, unknown>;
     /** `_rev` and `_overwrite` from the request: see `restoreVersion`. */
     version?: Readonly<Record<string, unknown>>;
+    /** The fields to restore; every field the version holds when absent. */
+    fields?: readonly string[];
   }
 ): Promise<RestoreVersionResult> {
   const caller = readAccessCallerForDispatch(args.user);
@@ -720,18 +807,27 @@ export async function restoreVersionForDocument(
     });
   }
 
+  // The request and hook context the restore carries, handed to the read
+  // gates as the caller's own read of the document hands them, so a read hook
+  // that gates on either judges the caller asking.
+  const hookInputs = {
+    ...(args.request ? { request: args.request } : {}),
+    ...(args.context ? { context: args.context } : {}),
+  };
   await assertVersionDocumentReadable(
     args.scopeKind,
     args.slug,
     args.entryId,
     args.user,
-    readAuthenticatedScope()
+    readAuthenticatedScope(),
+    hookInputs
   );
   // A restore reads the version's snapshot back into its own language, so
   // the caller must be able to read that language before anything is written.
   await assertVersionLanguageReadable(
     { ...args, authenticatedScope: readAuthenticatedScope() },
-    args.versionNo
+    args.versionNo,
+    hookInputs
   );
 
   return restoreVersion({
@@ -747,8 +843,10 @@ export async function restoreVersionForDocument(
     // scope, not the owner's RBAC.
     authenticatedScope: readAuthenticatedScope(),
     request: args.request,
+    ...(args.context ? { context: args.context } : {}),
     // Judged as the update the restore makes is.
     version: args.version,
+    ...(args.fields ? { fields: args.fields } : {}),
   });
 }
 
@@ -920,6 +1018,8 @@ export async function discardWorkingDraftForDocument(
     locale?: string | null;
     /** `_rev` and `_overwrite`: a discard is judged as a save of the change. */
     version?: Readonly<Record<string, unknown>>;
+    /** Discard the shared part's pending change alone (`?part=shared`). @experimental */
+    shared?: boolean;
   }
 ): Promise<unknown> {
   const authenticatedScope = await assertDocumentWriteAllowed(
@@ -933,6 +1033,7 @@ export async function discardWorkingDraftForDocument(
     entryId: args.entryId,
     user: args.user,
     locale: args.locale ?? null,
+    ...(args.shared === true ? { shared: true } : {}),
     authenticatedScope,
     actor: readAuthenticatedActor(),
     version: args.version,

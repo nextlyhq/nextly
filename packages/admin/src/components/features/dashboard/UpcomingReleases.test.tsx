@@ -184,23 +184,23 @@ describe("the upcoming rows", () => {
     expect(within(rows[0]!).getByTestId("entity-row-meta")).toHaveTextContent(
       "1 entry"
     );
-    expect(within(rows[0]!).getByTestId("status-pill")).toHaveTextContent(
+    expect(within(rows[0]!).getByTestId("status-chip")).toHaveTextContent(
       "Ready"
     );
     expect(within(rows[1]!).getByTestId("entity-row-meta")).toHaveTextContent(
       "4 entries"
     );
-    expect(within(rows[1]!).getByTestId("status-pill")).toHaveTextContent(
+    expect(within(rows[1]!).getByTestId("status-chip")).toHaveTextContent(
       "2 issues"
     );
-    expect(within(rows[1]!).getByTestId("status-pill")).toHaveAttribute(
+    expect(within(rows[1]!).getByTestId("status-chip")).toHaveAttribute(
       "data-tone",
       "bad"
     );
-    expect(within(rows[2]!).getByTestId("status-pill")).toHaveTextContent(
+    expect(within(rows[2]!).getByTestId("status-chip")).toHaveTextContent(
       "1 issue"
     );
-    expect(within(rows[3]!).queryByTestId("status-pill")).toBeNull();
+    expect(within(rows[3]!).queryByTestId("status-chip")).toBeNull();
   });
 
   it("lead each release row to its release", () => {

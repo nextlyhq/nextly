@@ -573,13 +573,36 @@ describe.each(LOCK_DIALECTS)(
       it("for a collection's confirmed schema apply, through the registry write", async () => {
         await createdCollection("bsl_latched_apply");
         const paused = gate();
-        const original = adapter.update.bind(adapter);
-        const spy = vi
-          .spyOn(adapter, "update")
-          .mockImplementation(async (...args: Parameters<typeof original>) => {
-            if (args[0] === "dynamic_collections") await paused.wait();
-            return original(...args);
-          });
+        // The registry write runs on the transaction it shares with the stored
+        // schema version (`writeRegistryRows`), so the gate sits on that
+        // transaction's `update` of the registry row.
+        const original = adapter.transaction.bind(adapter);
+        const spy = vi.spyOn(adapter, "transaction").mockImplementation(((
+          work: Parameters<typeof original>[0],
+          options?: Parameters<typeof original>[1]
+        ) =>
+          original(
+            tx =>
+              work(
+                new Proxy(tx, {
+                  get(target, property) {
+                    const value: unknown = Reflect.get(target, property);
+                    if (property !== "update" || typeof value !== "function") {
+                      return typeof value === "function"
+                        ? (value as (...a: unknown[]) => unknown).bind(target)
+                        : value;
+                    }
+                    return async (...args: Parameters<typeof tx.update>) => {
+                      if (args[0] === "dynamic_collections") {
+                        await paused.wait();
+                      }
+                      return tx.update(...args);
+                    };
+                  },
+                })
+              ),
+            options
+          )) as typeof original);
         try {
           await heldAcrossTheSave(paused, () =>
             dispatchCollections(

@@ -252,13 +252,21 @@ describeEachDialect("registry list pagination", dialect => {
     expect(secondPage.docs).toHaveLength(2);
     expect(secondPage.totalDocs).toBe(SINGLES.length);
 
-    // The pages do not repeat rows, and together they cover the registry.
-    const bothPages = [
+    const lastPage = await current.nextly.findSingles({ limit: 2, offset: 4 });
+    expect(lastPage.docs).toHaveLength(1);
+    expect(lastPage.totalDocs).toBe(SINGLES.length);
+
+    // The pages repeat no row, and together they hold the whole registry.
+    // Which rows a page holds follows the list's order, oldest first, and
+    // singles registered in the same second tie there: MySQL keeps
+    // `created_at` to the whole second and returns tied rows in key order,
+    // so no order among them is assumed.
+    const pages = [
       ...firstPage.docs.map(doc => doc.slug),
       ...secondPage.docs.map(doc => doc.slug),
+      ...lastPage.docs.map(doc => doc.slug),
     ].sort();
-    expect(new Set(bothPages).size).toBe(4);
-    expect(bothPages).toEqual([...(await slugsOf(current))].slice(0, 4));
+    expect(pages).toEqual(await slugsOf(current));
   });
 
   it("a page past the end returns no rows and keeps the full total", async () => {

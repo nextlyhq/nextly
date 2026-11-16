@@ -72,7 +72,9 @@ describe("RequestBar", () => {
       const { tone, pill } =
         METHOD_SEMANTICS[method as keyof typeof METHOD_SEMANTICS];
       if (role === null) {
-        expect(`${tone} ${pill}`).not.toMatch(/success|warning|danger|destructive/);
+        expect(`${tone} ${pill}`).not.toMatch(
+          /success|warning|danger|destructive/
+        );
         continue;
       }
       expect(tone).toContain(role);

@@ -301,7 +301,12 @@ export function sendResultOf(
   envelope: SendEnvelope,
   previouslyAccepted: ReadonlySet<string>,
   calls: readonly CallOutcome[]
-): { outcome: EmailSendOutcome; accepted: string[] } {
+): {
+  outcome: EmailSendOutcome;
+  accepted: string[];
+  /** Every recipient's outcome by place, which the result is made from. */
+  recipients: RecipientOutcome[];
+} {
   const recipients = envelopeOutcomes(envelope, previouslyAccepted, calls);
   const outcomes = calls.map(call => call.outcome);
   const base =
@@ -323,5 +328,5 @@ export function sendResultOf(
   const accepted = recipients
     .filter(recipient => recipient.outcome === "accepted")
     .map(recipient => recipientSlot(recipient.kind, recipient.position));
-  return { outcome, accepted };
+  return { outcome, accepted, recipients: listedOutcomes(recipients) };
 }

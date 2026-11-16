@@ -2,6 +2,10 @@
 
 import { useEffect, useState, type JSX } from "react";
 
+import {
+  LOADING_FRAME_TIMES,
+  useDelayedReveal,
+} from "@admin/components/shared/loading-frame/delayed-reveal";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 
 import { GreetingActionTarget } from "./GreetingAction";
@@ -57,6 +61,12 @@ function useMinuteClock(): Date {
 export function WelcomeHeader(): JSX.Element {
   const { user, isLoading } = useDashboardUser();
   const now = useMinuteClock();
+  // The placeholder follows the frame's timing, as the cards' outline below
+  // it does: nothing for a quick answer, a still bar for a slow one.
+  const placeholderShown = useDelayedReveal(
+    isLoading,
+    LOADING_FRAME_TIMES.outline
+  );
 
   return (
     // The row's own bottom margin is the space above the cards, as the
@@ -80,11 +90,14 @@ export function WelcomeHeader(): JSX.Element {
         {isLoading ? (
           <>
             <span className="sr-only">Dashboard</span>
-            <span
-              aria-hidden="true"
-              data-testid="dashboard-greeting-placeholder"
-              className="inline-block h-5 w-56 max-w-full rounded bg-primary/5 align-middle animate-pulse motion-reduce:animate-none"
-            />
+            {placeholderShown ? (
+              // Still, as every outline in the frame is: nothing pulses.
+              <span
+                aria-hidden="true"
+                data-testid="dashboard-greeting-placeholder"
+                className="inline-block h-5 w-56 max-w-full rounded-md bg-secondary align-middle"
+              />
+            ) : null}
           </>
         ) : (
           greetingFor(user?.name, now)

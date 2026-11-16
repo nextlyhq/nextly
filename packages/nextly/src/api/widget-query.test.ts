@@ -139,10 +139,10 @@ beforeEach(() => {
   containerHas.mockReturnValue(false);
   containerGet.mockImplementation((name: string) => {
     if (name === "collectionRegistryService") {
-      return { getAllCollections: async () => registeredCollections };
+      return { getAllCollectionsForRead: async () => registeredCollections };
     }
     if (name === "singleRegistryService") {
-      return { getAllSingles: async () => registeredSingles };
+      return { getAllSinglesForRead: async () => registeredSingles };
     }
     throw new Error(`unexpected container.get("${name}") in this test`);
   });

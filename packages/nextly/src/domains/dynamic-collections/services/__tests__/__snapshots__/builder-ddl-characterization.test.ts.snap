@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS \`dc_pinned\` (
   \`_changed_by_principal_kind\` varchar(64),
   \`_changed_at\` timestamp,
 \`title\` text NOT NULL,
-\`slug_key\` text  UNIQUE,
+\`slug_key\` varchar(255),
 \`short_code\` varchar(120),
 \`summary\` text,
 \`views\` int,
@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS \`dc_pinned\` (
 CREATE INDEX \`idx_dc_pinned_lookup_code\` ON \`dc_pinned\` (\`lookup_code\`(191));
 --> statement-breakpoint
 CREATE INDEX \`idx_dc_pinned_author\` ON \`dc_pinned\` (\`author\`);
+--> statement-breakpoint
+CREATE UNIQUE INDEX \`uq_dc_pinned_slug_key\` ON \`dc_pinned\`(\`slug_key\`);
 --> statement-breakpoint
 CREATE INDEX \`idx_dc_pinned_created_at\` ON \`dc_pinned\`(\`created_at\` DESC);
 --> statement-breakpoint
@@ -114,7 +116,7 @@ CREATE TABLE IF NOT EXISTS \`single_pinned\` (
   \`_changed_by_principal_kind\` varchar(64),
   \`_changed_at\` timestamp,
 \`title\` text NOT NULL,
-\`slug_key\` text  UNIQUE,
+\`slug_key\` varchar(255),
 \`short_code\` varchar(120),
 \`summary\` text,
 \`views\` int,
@@ -125,7 +127,7 @@ CREATE TABLE IF NOT EXISTS \`single_pinned\` (
 \`lookup_code\` text,
 \`author\` varchar(36),
 \`editors\` json,
-\`state\` text   DEFAULT 'draft',
+\`state\` text,
 \`blocks\` json,
 \`meta\` json,
   CONSTRAINT \`chk_single_pinned_validation\` CHECK (LENGTH(\`title\`) >= 3 AND \`title\` REGEXP '^[A-Za-z0-9 ]+$' AND \`views\` >= 0 AND \`views\` <= 10000),
@@ -135,6 +137,8 @@ CREATE TABLE IF NOT EXISTS \`single_pinned\` (
 CREATE INDEX \`idx_single_pinned_lookup_code\` ON \`single_pinned\` (\`lookup_code\`(191));
 --> statement-breakpoint
 CREATE INDEX \`idx_single_pinned_author\` ON \`single_pinned\` (\`author\`);
+--> statement-breakpoint
+CREATE UNIQUE INDEX \`uq_single_pinned_slug_key\` ON \`single_pinned\`(\`slug_key\`);
 --> statement-breakpoint
 CREATE INDEX \`idx_single_pinned_created_at\` ON \`single_pinned\`(\`created_at\` DESC);
 --> statement-breakpoint
@@ -169,7 +173,7 @@ CREATE TABLE IF NOT EXISTS \`single_pinned\` (
   \`_changed_by_principal_kind\` varchar(64),
   \`_changed_at\` timestamp,
 \`title\` text NOT NULL,
-\`slug_key\` text  UNIQUE,
+\`slug_key\` varchar(255),
 \`short_code\` varchar(120),
 \`summary\` text,
 \`views\` int,
@@ -180,7 +184,7 @@ CREATE TABLE IF NOT EXISTS \`single_pinned\` (
 \`lookup_code\` text,
 \`author\` varchar(36),
 \`editors\` json,
-\`state\` text   DEFAULT 'draft',
+\`state\` text,
 \`blocks\` json,
 \`meta\` json,
   CONSTRAINT \`chk_single_pinned_validation\` CHECK (LENGTH(\`title\`) >= 3 AND \`title\` REGEXP '^[A-Za-z0-9 ]+$' AND \`views\` >= 0 AND \`views\` <= 10000),
@@ -190,6 +194,8 @@ CREATE TABLE IF NOT EXISTS \`single_pinned\` (
 CREATE INDEX \`idx_single_pinned_lookup_code\` ON \`single_pinned\` (\`lookup_code\`(191));
 --> statement-breakpoint
 CREATE INDEX \`idx_single_pinned_author\` ON \`single_pinned\` (\`author\`);
+--> statement-breakpoint
+CREATE UNIQUE INDEX \`uq_single_pinned_slug_key\` ON \`single_pinned\`(\`slug_key\`);
 --> statement-breakpoint
 CREATE INDEX \`idx_single_pinned_created_at\` ON \`single_pinned\`(\`created_at\` DESC);
 --> statement-breakpoint
@@ -340,7 +346,7 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
 "lookup_code" text,
 "author" text,
 "editors" jsonb,
-"state" text   DEFAULT 'draft',
+"state" text,
 "blocks" jsonb,
 "meta" jsonb,
   CONSTRAINT "chk_single_pinned_validation" CHECK (LENGTH("title") >= 3 AND "title" ~ '^[A-Za-z0-9 ]+$' AND "views" >= 0 AND "views" <= 10000),
@@ -399,7 +405,7 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
 "lookup_code" text,
 "author" text,
 "editors" jsonb,
-"state" text   DEFAULT 'draft',
+"state" text,
 "blocks" jsonb,
 "meta" jsonb,
   CONSTRAINT "chk_single_pinned_validation" CHECK (LENGTH("title") >= 3 AND "title" ~ '^[A-Za-z0-9 ]+$' AND "views" >= 0 AND "views" <= 10000),
@@ -563,7 +569,7 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
 "lookup_code" text,
 "author" text,
 "editors" text,
-"state" text   DEFAULT 'draft',
+"state" text,
 "blocks" text,
 "meta" text,
   CONSTRAINT "chk_single_pinned_validation" CHECK (LENGTH("title") >= 3 AND "views" >= 0 AND "views" <= 10000),
@@ -622,7 +628,7 @@ CREATE TABLE IF NOT EXISTS "single_pinned" (
 "lookup_code" text,
 "author" text,
 "editors" text,
-"state" text   DEFAULT 'draft',
+"state" text,
 "blocks" text,
 "meta" text,
   CONSTRAINT "chk_single_pinned_validation" CHECK (LENGTH("title") >= 3 AND "views" >= 0 AND "views" <= 10000),
@@ -655,6 +661,48 @@ CREATE INDEX IF NOT EXISTS "idx_dc_tags_single_pinned_tags_single_pinned" ON "dc
 CREATE INDEX IF NOT EXISTS "idx_dc_tags_single_pinned_tags_tags" ON "dc_tags_single_pinned_tags"("tags_id");"
 `;
 
+exports[`field group DDL — pinned as it is today > mysql > emits the same CREATE for a field group 1`] = `
+"-- Create component data table: comp_pinned
+CREATE TABLE IF NOT EXISTS \`comp_pinned\` (
+  \`id\` varchar(36) PRIMARY KEY NOT NULL,
+  \`_parent_id\` varchar(36) NOT NULL,
+  \`_parent_table\` VARCHAR(255) NOT NULL,
+  \`_parent_field\` VARCHAR(255) NOT NULL,
+  \`_order\` INT DEFAULT 0,
+  \`_component_type\` VARCHAR(255),
+  \`title\` text NOT NULL,
+  \`slug_key\` varchar(255),
+  \`short_code\` varchar(120),
+  \`summary\` text,
+  \`views\` int,
+  \`rating\` double,
+  \`published\` tinyint(1),
+  \`published_at\` timestamp,
+  \`payload\` json,
+  \`lookup_code\` text,
+  \`author\` varchar(36),
+  \`editors\` json,
+  \`tags\` varchar(36),
+  \`state\` tinyint(1) DEFAULT true,
+  \`blocks\` json,
+  \`meta\` json,
+  \`created_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  \`updated_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+--> statement-breakpoint
+CREATE INDEX \`idx_comp_pinned_parent\` ON \`comp_pinned\`(\`_parent_id\`, \`_parent_table\`, \`_parent_field\`);
+--> statement-breakpoint
+CREATE INDEX \`idx_comp_pinned_created_at\` ON \`comp_pinned\` (\`created_at\`);
+--> statement-breakpoint
+CREATE INDEX \`idx_comp_pinned_author\` ON \`comp_pinned\` (\`author\`);
+--> statement-breakpoint
+CREATE INDEX \`idx_comp_pinned_tags\` ON \`comp_pinned\` (\`tags\`);
+--> statement-breakpoint
+CREATE INDEX \`idx_comp_pinned_lookup_code\` ON \`comp_pinned\` (\`lookup_code\`(191));
+--> statement-breakpoint
+CREATE UNIQUE INDEX \`uq_comp_pinned_slug_key\` ON \`comp_pinned\`(\`slug_key\`);"
+`;
+
 exports[`field group DDL — pinned as it is today > mysql > emits the same CREATE for a localized field group 1`] = `
 "-- Create component data table: comp_pinned
 CREATE TABLE IF NOT EXISTS \`comp_pinned\` (
@@ -664,22 +712,24 @@ CREATE TABLE IF NOT EXISTS \`comp_pinned\` (
   \`_parent_field\` VARCHAR(255) NOT NULL,
   \`_order\` INT DEFAULT 0,
   \`_component_type\` VARCHAR(255),
-  \`views\` INT,
-  \`rating\` DOUBLE,
-  \`published\` BOOLEAN,
-  \`published_at\` DATETIME,
-  \`payload\` JSON,
-  \`author\` VARCHAR(36),
-  \`editors\` JSON,
-  \`tags\` VARCHAR(36),
-  \`state\` BOOLEAN DEFAULT true,
-  \`blocks\` JSON,
-  \`meta\` JSON,
+  \`views\` int,
+  \`rating\` double,
+  \`published\` tinyint(1),
+  \`published_at\` timestamp,
+  \`payload\` json,
+  \`author\` varchar(36),
+  \`editors\` json,
+  \`tags\` varchar(36),
+  \`state\` tinyint(1) DEFAULT true,
+  \`blocks\` json,
+  \`meta\` json,
   \`created_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   \`updated_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 --> statement-breakpoint
 CREATE INDEX \`idx_comp_pinned_parent\` ON \`comp_pinned\`(\`_parent_id\`, \`_parent_table\`, \`_parent_field\`);
+--> statement-breakpoint
+CREATE INDEX \`idx_comp_pinned_created_at\` ON \`comp_pinned\` (\`created_at\`);
 --> statement-breakpoint
 CREATE INDEX \`idx_comp_pinned_author\` ON \`comp_pinned\` (\`author\`);
 --> statement-breakpoint
@@ -695,27 +745,29 @@ CREATE TABLE IF NOT EXISTS "comp_pinned" (
   "_parent_field" VARCHAR(255) NOT NULL,
   "_order" INTEGER DEFAULT 0,
   "_component_type" VARCHAR(255),
-  "title" TEXT NOT NULL,
-  "slug_key" TEXT,
-  "short_code" VARCHAR(120),
-  "summary" TEXT,
-  "views" INTEGER,
-  "rating" DOUBLE PRECISION,
-  "published" BOOLEAN,
-  "published_at" TIMESTAMP,
-  "payload" JSONB,
-  "lookup_code" TEXT,
-  "author" UUID,
-  "editors" JSONB,
-  "tags" UUID,
-  "state" BOOLEAN DEFAULT true,
-  "blocks" JSONB,
-  "meta" JSONB,
+  "title" text NOT NULL,
+  "slug_key" text,
+  "short_code" varchar(120),
+  "summary" text,
+  "views" int4,
+  "rating" float8,
+  "published" bool,
+  "published_at" timestamp,
+  "payload" jsonb,
+  "lookup_code" text,
+  "author" text,
+  "editors" jsonb,
+  "tags" text,
+  "state" bool DEFAULT true,
+  "blocks" jsonb,
+  "meta" jsonb,
   "created_at" TIMESTAMP NOT NULL DEFAULT NOW(),
   "updated_at" TIMESTAMP NOT NULL DEFAULT NOW()
 );
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_created_at" ON "comp_pinned" ("created_at");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_author" ON "comp_pinned" ("author");
 --> statement-breakpoint
@@ -735,22 +787,24 @@ CREATE TABLE IF NOT EXISTS "comp_pinned" (
   "_parent_field" VARCHAR(255) NOT NULL,
   "_order" INTEGER DEFAULT 0,
   "_component_type" VARCHAR(255),
-  "views" INTEGER,
-  "rating" DOUBLE PRECISION,
-  "published" BOOLEAN,
-  "published_at" TIMESTAMP,
-  "payload" JSONB,
-  "author" UUID,
-  "editors" JSONB,
-  "tags" UUID,
-  "state" BOOLEAN DEFAULT true,
-  "blocks" JSONB,
-  "meta" JSONB,
+  "views" int4,
+  "rating" float8,
+  "published" bool,
+  "published_at" timestamp,
+  "payload" jsonb,
+  "author" text,
+  "editors" jsonb,
+  "tags" text,
+  "state" bool DEFAULT true,
+  "blocks" jsonb,
+  "meta" jsonb,
   "created_at" TIMESTAMP NOT NULL DEFAULT NOW(),
   "updated_at" TIMESTAMP NOT NULL DEFAULT NOW()
 );
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_created_at" ON "comp_pinned" ("created_at");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_author" ON "comp_pinned" ("author");
 --> statement-breakpoint
@@ -766,27 +820,29 @@ CREATE TABLE IF NOT EXISTS "comp_pinned" (
   "_parent_field" TEXT NOT NULL,
   "_order" INTEGER DEFAULT 0,
   "_component_type" TEXT,
-  "title" TEXT NOT NULL,
-  "slug_key" TEXT,
-  "short_code" TEXT,
-  "summary" TEXT,
-  "views" INTEGER,
-  "rating" REAL,
-  "published" INTEGER,
-  "published_at" INTEGER,
-  "payload" TEXT,
-  "lookup_code" TEXT,
-  "author" TEXT,
-  "editors" TEXT,
-  "tags" TEXT,
-  "state" INTEGER DEFAULT 1,
-  "blocks" TEXT,
-  "meta" TEXT,
+  "title" text NOT NULL,
+  "slug_key" text,
+  "short_code" text,
+  "summary" text,
+  "views" integer,
+  "rating" real,
+  "published" integer,
+  "published_at" integer,
+  "payload" text,
+  "lookup_code" text,
+  "author" text,
+  "editors" text,
+  "tags" text,
+  "state" integer DEFAULT 1,
+  "blocks" text,
+  "meta" text,
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
 );
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_created_at" ON "comp_pinned" ("created_at");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_author" ON "comp_pinned" ("author");
 --> statement-breakpoint
@@ -806,22 +862,24 @@ CREATE TABLE IF NOT EXISTS "comp_pinned" (
   "_parent_field" TEXT NOT NULL,
   "_order" INTEGER DEFAULT 0,
   "_component_type" TEXT,
-  "views" INTEGER,
-  "rating" REAL,
-  "published" INTEGER,
-  "published_at" INTEGER,
-  "payload" TEXT,
-  "author" TEXT,
-  "editors" TEXT,
-  "tags" TEXT,
-  "state" INTEGER DEFAULT 1,
-  "blocks" TEXT,
-  "meta" TEXT,
+  "views" integer,
+  "rating" real,
+  "published" integer,
+  "published_at" integer,
+  "payload" text,
+  "author" text,
+  "editors" text,
+  "tags" text,
+  "state" integer DEFAULT 1,
+  "blocks" text,
+  "meta" text,
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
 );
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_parent" ON "comp_pinned"("_parent_id", "_parent_table", "_parent_field");
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "idx_comp_pinned_created_at" ON "comp_pinned" ("created_at");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "idx_comp_pinned_author" ON "comp_pinned" ("author");
 --> statement-breakpoint

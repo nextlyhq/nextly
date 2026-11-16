@@ -1,9 +1,10 @@
 "use client";
 
+import { FieldRow } from "@nextlyhq/ui";
 import type { JSX, ReactNode } from "react";
 import { useId } from "react";
 
-interface SettingsRowGroupProps {
+export interface SettingsRowGroupProps {
   label: string;
   description?: ReactNode;
   children: ReactNode;
@@ -30,28 +31,28 @@ export function SettingsRowGroup({
   const labelId = useId();
 
   return (
-    // No vertical padding here, deliberately. `FormSection` applies the rhythm
-    // to every direct child through `--nx-field-gap`, and the two are additive:
-    // a group that also padded itself would render at double the gap on exactly
-    // the sections that already looked correct. The horizontal grid stays this
-    // component's own business — that is what makes it a labelled two-column
-    // group rather than a stacked field.
-    <div
+    // The two-column grid is `FieldRow`'s, the one `SettingsRow` and the
+    // plugin-facing `FieldShell` row layout draw too, so the three cannot drift
+    // apart. No vertical padding here, deliberately: `FormSection` applies the
+    // rhythm to every direct child through `--nx-field-gap`, and a group that
+    // also padded itself would render at double the gap.
+    <FieldRow
       role="group"
       aria-labelledby={labelId}
-      className="grid grid-cols-1 md:grid-cols-[2fr_3fr] gap-4 md:gap-8 items-start"
-    >
-      <div className="flex flex-col">
-        <span id={labelId} className="text-sm font-semibold text-foreground">
-          {label}
-        </span>
-        {description && (
-          <span className="mt-0.5 text-xs text-muted-foreground leading-relaxed">
-            {description}
+      aside={
+        <>
+          <span id={labelId} className="text-sm font-semibold text-foreground">
+            {label}
           </span>
-        )}
-      </div>
-      <div className="w-full">{children}</div>
-    </div>
+          {description && (
+            <span className="mt-0.5 text-xs text-muted-foreground leading-relaxed">
+              {description}
+            </span>
+          )}
+        </>
+      }
+    >
+      {children}
+    </FieldRow>
   );
 }

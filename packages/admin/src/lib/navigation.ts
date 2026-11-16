@@ -150,9 +150,16 @@ export function setSearchParams(
  * Within the admin the move is the router's own, so the page and its state
  * stay mounted where the same page answers the new address.
  *
+ * Pushes a new history entry by default. Pass `replace` for a move that
+ * stands in for the current entry, such as an old address sending the
+ * reader on to its new one, so Back does not land on it and move again.
+ *
  * @throws Error naming the refused address
  */
-export function navigateWithinAdmin(href: string): void {
+export function navigateWithinAdmin(
+  href: string,
+  options?: { replace?: boolean }
+): void {
   const target = adminTargetOf(href);
   if (target === undefined) {
     throw new Error(
@@ -164,7 +171,8 @@ export function navigateWithinAdmin(href: string): void {
   // plugin unable to clear the query it set.
   const here = `${window.location.pathname}${window.location.search}${window.location.hash}`;
   if (target === here) return;
-  window.history.pushState(null, "", target);
+  if (options?.replace) window.history.replaceState(null, "", target);
+  else window.history.pushState(null, "", target);
 }
 
 /** The admin path and query `href` names, or `undefined` when it names none. */

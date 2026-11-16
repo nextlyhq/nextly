@@ -39,14 +39,14 @@ async function scrollsSideways(page: Page): Promise<boolean> {
 
 /** Open core's Welcome email in the workbench, from the Messages list. */
 async function openWelcome(page: Page, theme: Theme = "light"): Promise<void> {
-  await gotoAdmin(page, "/email", theme);
+  await gotoAdmin(page, "/settings/email", theme);
   // Below tablet width the list is cards; either way the name links in.
   await page
     .getByRole("link", { name: "Welcome Email", exact: true })
     .filter({ visible: true })
     .first()
     .click();
-  await expect(page).toHaveURL(/\/admin\/email\/messages\/edit\//, {
+  await expect(page).toHaveURL(/\/admin\/settings\/email\/messages\/edit\//, {
     timeout: 30_000,
   });
   await expect(page.getByTestId("workbench-header")).toBeVisible({

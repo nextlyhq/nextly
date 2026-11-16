@@ -13,6 +13,7 @@
 import {
   DEFAULT_MIN_PASSWORD_LENGTH,
   MAX_MIN_PASSWORD_LENGTH,
+  type PasswordHasher,
 } from "../../auth/password/policy";
 import type { AuthStrategy } from "../../auth/pipeline/types";
 import type { CollectionConfig } from "../../collections/config/define-collection";
@@ -69,6 +70,7 @@ import type { SingleConfig } from "../../singles/config/types";
 import type { StoragePlugin } from "../../storage/types";
 import type { UserConfig } from "../../users/config/types";
 
+import { DEFAULT_MIGRATIONS_DIR } from "./migrations-dir-default";
 import { DEFAULT_TYPESCRIPT_CONFIG } from "./typescript-config-defaults";
 
 // ============================================================
@@ -133,14 +135,19 @@ export interface DatabaseConfig {
     /**
      * The schema every managed table, index and enum lives in.
      *
-     * Only `"public"` is supported for now, and leaving it out means the
-     * same. Any other value is refused at boot and by every CLI command: the
-     * schema push cannot yet create tables outside `public`, so an
-     * installation pointed elsewhere would start with no core tables.
+     * Defaults to `"public"`. A named schema holds every table Nextly
+     * manages, plus the tables plugins and `db.schema.extend` add. It is
+     * applied as `search_path` on every connection, so one setting covers
+     * everything that resolves a name. The name must be lower-case letters,
+     * digits and underscores, start with a letter or underscore, be at most
+     * 63 characters, and not begin with `pg_`; anything else is refused at
+     * boot.
      *
-     * Reserved for placing an installation in its own namespace, applied as
-     * `search_path` on every connection so one setting covers everything
-     * that resolves a name.
+     * Moving the setting on an existing install is refused with
+     * `NEXTLY_POSTGRES_SCHEMA_MOVED`, because the new schema would start
+     * empty while the old one still holds the data. To start a second,
+     * separate installation in a new schema on purpose, set
+     * `NEXTLY_POSTGRES_SCHEMA_NEW_INSTALL=1` for its first start.
      *
      * MySQL and SQLite have no equivalent (MySQL's schema IS its database,
      * SQLite is one file) and ignore it with a warning, so a config shared
@@ -689,6 +696,13 @@ export interface PluginOverride {
     | "plugins"
     | "users"
     | "settings";
+  /**
+   * Override where a standalone plugin's rail item goes, written as the
+   * plugin's own `admin.landing` is: one of its pages or one of its
+   * collections. The collection may be named by the slug the plugin declares
+   * or by the one this site renamed it to.
+   */
+  landing?: string;
   /** Override or extend the plugin's sidebar appearance (shallow-merged) */
   appearance?: Partial<PluginAdminAppearance>;
 }
@@ -839,6 +853,30 @@ export interface AuthConfig {
    * ```
    */
   loginPlugins?: readonly string[];
+
+  /**
+   * Your own password hasher, for every account password: creating an
+   * account, setting, changing and resetting one, an invite, the first
+   * password, and every sign-in. Without one, core hashes with bcrypt.
+   *
+   * Set here, every way Nextly starts uses it: `getNextly`, the first request
+   * to the route handler, and the CLI. Accounts that hold a bcrypt password
+   * keep signing in, and the first sign-in stores the password again with
+   * this hasher.
+   *
+   * @example
+   * ```ts
+   * auth: {
+   *   passwordHasher: {
+   *     hash: password => argon2.hash(password),
+   *     verify: (password, stored) => argon2.verify(stored, password),
+   *     reach: "unbounded",
+   *     isHash: stored => stored.startsWith("$argon2"),
+   *   },
+   * }
+   * ```
+   */
+  passwordHasher?: PasswordHasher;
 }
 
 /**
@@ -859,6 +897,8 @@ export interface SanitizedAuthConfig {
    * sanitization always fills it, defaulting to `[]`.
    */
   loginPlugins?: readonly string[];
+  /** The app's password hasher (`auth.passwordHasher`), when it brings one. */
+  passwordHasher?: PasswordHasher;
 }
 
 /**
@@ -1192,7 +1232,8 @@ export const DEFAULT_DB_CONFIG: Required<DatabaseConfig> = {
   // and undefined is what "public" means here.
   postgres: {},
   schemasDir: "./src/db/schemas/collections",
-  migrationsDir: "./src/db/migrations",
+  // Read from its own module, which `withNextly` reads without this one.
+  migrationsDir: DEFAULT_MIGRATIONS_DIR,
   uiSchemaFile: "./ui-schema.json",
   runMigrationsOnBoot: false,
   // The schema lock's lease. A holder renews it, so it no longer has to outlast the longest
@@ -1481,6 +1522,11 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
       // the app's login grants from here, and plugin code that could add a
       // name to this list would grant itself on the next read.
       loginPlugins: Object.freeze([...(config.auth?.loginPlugins ?? [])]),
+      // Passed through as given: its contract is asserted where the services
+      // register it, the one place every start path meets.
+      ...(config.auth?.passwordHasher
+        ? { passwordHasher: config.auth.passwordHasher }
+        : {}),
     },
     storage: config.storage ?? [],
     plugins: config.plugins ?? [],

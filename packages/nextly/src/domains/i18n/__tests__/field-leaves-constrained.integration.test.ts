@@ -533,7 +533,9 @@ describeEachDialect(
           path.change([{ ...CODE, localized: false, required: true }, VIEWS])
         );
 
-        expect(reported(refusal)).toMatch(/1 entry has no English code/);
+        expect(reported(refusal)).toMatch(
+          /1 entry would have no code once it is shared/
+        );
         // Nothing changed: still translated, its English values in place.
         expect(await englishCodes(path.table)).toEqual(
           english.filter(v => v !== undefined)

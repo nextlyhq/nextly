@@ -891,6 +891,16 @@ export function formsCollection(
       admin: { hidden: true },
     }),
 
+    // The version whose earlier submissions have all been given their keys;
+    // behind `oneResponseVersion` while that is still being done. Written
+    // only by the plugin (`one-response-rebuild`); no stored default, so a
+    // form saved before it existed reads as up to date.
+    number({
+      name: "oneResponseKeyedVersion",
+      label: "One-response keys made for version",
+      admin: { hidden: true },
+    }),
+
     checkbox({
       name: "honeypotEnabled",
       label: "Honeypot",

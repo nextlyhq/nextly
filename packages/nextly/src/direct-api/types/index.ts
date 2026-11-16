@@ -40,6 +40,10 @@ export type {
   FindByIDArgs,
   CreateArgs,
   UpdateArgs,
+  RewriteFieldArgs,
+  RewriteSingleFieldArgs,
+  PublishArgs,
+  PublishResult,
   DeleteArgs,
   CountArgs,
   GroupArgs,
@@ -93,6 +97,7 @@ export type {
   FindMediaArgs,
   FindMediaByIDArgs,
   FindMediaByIDsArgs,
+  MediaCopyArgs,
   UpdateMediaArgs,
   DeleteMediaArgs,
   BulkDeleteMediaArgs,
@@ -162,6 +167,7 @@ export type {
   QueueTemplateEmailArgs,
   QueuedEmail,
   QueuedEmailState,
+  CancelQueuedEmailArgs,
 } from "./email";
 
 export type {

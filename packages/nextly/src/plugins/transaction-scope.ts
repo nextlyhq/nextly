@@ -18,7 +18,8 @@ export type PluginTransactionMethod =
   | "ctx.services.collections.withTransaction"
   | "ctx.hooks.onInTransaction"
   | "ctx.hooks.onCollectionDelete"
-  | "ctx.publicAddresses";
+  | "ctx.publicAddresses"
+  | "ctx.services.email.onQueuedEmailChange";
 
 /**
  * The refusal for the handle a transaction passed its work, used once that

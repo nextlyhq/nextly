@@ -177,6 +177,12 @@ export interface ApiCollection extends RemovedFromCodeMark {
   /** Display labels for singular/plural forms */
   labels?: CollectionLabels;
 
+  /**
+   * Whether the collection has the Draft / Published lifecycle: its entries
+   * carry a `status`, and its list offers the Draft filter.
+   */
+  status?: boolean;
+
   /** Admin UI configuration */
   admin?: {
     group?: string;

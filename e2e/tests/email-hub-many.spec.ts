@@ -95,7 +95,7 @@ test.afterAll(async () => {
 
 test("draws two hundred emails promptly, grouped by owner", async () => {
   const started = Date.now();
-  await gotoAdmin(page, "/email");
+  await gotoAdmin(page, "/settings/email");
   const table = page.getByRole("table", { name: "Emails" });
   await expect(table.getByText(nameOf(COUNT - 1))).toBeVisible({
     timeout: 30_000,
@@ -119,7 +119,7 @@ test("draws two hundred emails promptly, grouped by owner", async () => {
 });
 
 test("search finds any one of them at once", async () => {
-  await gotoAdmin(page, "/email");
+  await gotoAdmin(page, "/settings/email");
   const table = page.getByRole("table", { name: "Emails" });
   await expect(table.getByText(nameOf(0))).toBeVisible({ timeout: 30_000 });
 
@@ -133,7 +133,7 @@ test("search finds any one of them at once", async () => {
 });
 
 test("the owner filter keeps only that owner's emails", async () => {
-  await gotoAdmin(page, "/email");
+  await gotoAdmin(page, "/settings/email");
   const table = page.getByRole("table", { name: "Emails" });
   await expect(table.getByText(nameOf(0))).toBeVisible({ timeout: 30_000 });
 

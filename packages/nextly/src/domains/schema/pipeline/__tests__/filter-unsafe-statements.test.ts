@@ -8,8 +8,11 @@ import {
   findUnexpectedDestructiveStatements,
   stripKitDropsOfDeclaredConstraints,
   stripKitDropsOfDeclaredIndexes,
+  stripKitDropsOfKeptColumns,
   stripKitDropsOfLiveUniqueConstraints,
 } from "../filter-unsafe-statements";
+import { liveIndexesStandingInForDeclared } from "../diff/index-util";
+import type { IndexSpec, TableSpec } from "../diff/types";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -142,6 +145,75 @@ describe("stripKitDropsOfDeclaredConstraints", () => {
 });
 
 describe("stripKitDropsOfDeclaredIndexes", () => {
+  // A unique index the field holds under drizzle's own name, which the diff reads as the declared
+  // `uq_` index on the same column.
+  const promo = (indexes: IndexSpec[]): TableSpec => ({
+    name: "comp_promo",
+    columns: [
+      { name: "id", type: "varchar(36)", nullable: false },
+      { name: "code", type: "varchar(255)", nullable: false },
+    ],
+    indexes,
+  });
+  const declaredUnique: IndexSpec = {
+    name: "uq_comp_promo_code",
+    columns: ["code"],
+    unique: true,
+  };
+  const liveUnique: IndexSpec = {
+    name: "comp_promo_code_unique",
+    columns: ["code"],
+    unique: true,
+  };
+
+  it("keeps the kit's drop of a live index that stands in for a declared one under another name", () => {
+    const standingIn = liveIndexesStandingInForDeclared(
+      [promo([declaredUnique])],
+      [promo([liveUnique])]
+    );
+    expect(standingIn).toEqual([
+      { tableName: "comp_promo", indexName: "comp_promo_code_unique" },
+    ]);
+
+    const out = stripKitDropsOfDeclaredIndexes(
+      ["DROP INDEX `comp_promo_code_unique` ON `comp_promo`;"],
+      { tables: [promo([declaredUnique])] },
+      standingIn
+    );
+
+    expect(out.kept).toEqual([]);
+    expect(out.strippedCount).toBe(1);
+  });
+
+  it("leaves the kit's drop of a live index no declared index matches by key", () => {
+    // Same column, not unique: a different key, so the diff does not count it as the declared one.
+    const plain: IndexSpec = { ...liveUnique, unique: false };
+    const standingIn = liveIndexesStandingInForDeclared(
+      [promo([declaredUnique])],
+      [promo([plain])]
+    );
+    expect(standingIn).toEqual([]);
+
+    const out = stripKitDropsOfDeclaredIndexes(
+      ["DROP INDEX `comp_promo_code_unique` ON `comp_promo`;"],
+      { tables: [promo([declaredUnique])] },
+      standingIn
+    );
+
+    expect(out.kept).toEqual([
+      "DROP INDEX `comp_promo_code_unique` ON `comp_promo`;",
+    ]);
+  });
+
+  it("names no stand-in for a live index under its declared name", () => {
+    expect(
+      liveIndexesStandingInForDeclared(
+        [promo([declaredUnique])],
+        [promo([declaredUnique])]
+      )
+    ).toEqual([]);
+  });
+
   const desired = {
     tables: [
       {
@@ -378,5 +450,33 @@ describe("stripKitDropsOfLiveUniqueConstraints", () => {
       kept: statements,
       strippedCount: 0,
     });
+  });
+});
+
+describe("stripKitDropsOfKeptColumns", () => {
+  const kept = [{ table: "dc_posts", name: "stamp" }];
+
+  it("leaves out the kit's drop of a kept column, in each dialect's spelling", () => {
+    const { kept: out, strippedCount } = stripKitDropsOfKeptColumns(
+      [
+        'ALTER TABLE "dc_posts" DROP COLUMN "stamp";',
+        "ALTER TABLE `dc_posts` DROP COLUMN `stamp`;",
+        'ALTER TABLE "dc_posts" ADD COLUMN "x" text;',
+      ],
+      kept
+    );
+    expect(out).toEqual(['ALTER TABLE "dc_posts" ADD COLUMN "x" text;']);
+    expect(strippedCount).toBe(2);
+  });
+
+  it("keeps a drop of another column, of the same name on another table, or in a statement doing more", () => {
+    const statements = [
+      'ALTER TABLE "dc_posts" DROP COLUMN "other";',
+      'ALTER TABLE "dc_notes" DROP COLUMN "stamp";',
+      'ALTER TABLE "dc_posts" DROP COLUMN "stamp", DROP COLUMN "other";',
+    ];
+    expect(stripKitDropsOfKeptColumns(statements, kept).kept).toEqual(
+      statements
+    );
   });
 });

@@ -278,7 +278,8 @@ function DraftCount({
     <Link
       href={href}
       aria-label={`${draft} drafts in ${label}`}
-      className="font-medium text-foreground hover:underline"
+      // A 24px target however few digits it holds, its figure kept at the cell's right edge.
+      className="inline-flex min-h-6 min-w-6 items-center justify-end font-medium text-foreground hover:underline"
     >
       <CardFigure value={draft} />
     </Link>
@@ -407,7 +408,8 @@ function RowName({
     <Link
       href={rowHref(row)}
       className={cn(
-        "block truncate hover:underline",
+        // A 24px line, so the name is a target a finger can hit.
+        "block truncate leading-6 hover:underline",
         isEmptyRow(row)
           ? "text-muted-foreground"
           : "font-medium text-foreground",

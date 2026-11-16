@@ -195,7 +195,10 @@ export function MediaDetailsPanel({
       <Sheet open onOpenChange={open => (open ? undefined : onClose())}>
         <SheetContent
           side="bottom"
-          className="flex max-h-[85dvh] flex-col gap-0 rounded-t-lg p-0"
+          dragHandle
+          // As tall as its content, up to 90% of the screen; beyond that the
+          // details scroll inside, under the handle.
+          className="flex max-h-[90dvh] flex-col gap-0 rounded-t-lg p-0"
           onKeyDown={onKeyDown}
           onOpenAutoFocus={event => {
             event.preventDefault();

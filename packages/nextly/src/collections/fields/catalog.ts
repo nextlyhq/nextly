@@ -295,7 +295,13 @@ export const DEFAULT_FIELD_SURFACES: readonly FieldSurface[] = ["entries"];
 export type UserSurfaceFieldType = "url" | "phone";
 
 /** Field types that exist only on the form-builder surface. */
-export type FormSurfaceFieldType = "url" | "phone" | "file" | "time" | "hidden";
+export type FormSurfaceFieldType =
+  | "url"
+  | "phone"
+  | "file"
+  | "time"
+  | "hidden"
+  | "consent";
 
 /**
  * Surface-only catalog entries, described once so every surface that admits
@@ -368,6 +374,18 @@ const HIDDEN_SURFACE_ENTRY = {
   icon: "EyeOff",
 } as const satisfies FieldTypeCatalogEntry<"hidden">;
 
+/**
+ * A box the visitor ticks to agree to a text. Stored in the form's own JSON
+ * with the text shown, so like `file` it has no storage primitive above.
+ */
+const CONSENT_SURFACE_ENTRY = {
+  type: "consent",
+  label: "Consent",
+  category: "Advanced",
+  hint: "Agree to a text; stores the text shown",
+  icon: "CheckCircle2",
+} as const satisfies FieldTypeCatalogEntry<"consent">;
+
 /** The user-profile surface's field types: flat scalars plus url/phone. */
 export type UserFieldCatalogType =
   | "text"
@@ -408,7 +426,7 @@ export const USER_FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry<UserFieldCa
     return combined;
   })();
 
-/** The form-builder surface's field types: flat inputs plus its own five. */
+/** The form-builder surface's field types: flat inputs plus its own six. */
 export type FormFieldCatalogType =
   | "text"
   | "textarea"
@@ -422,13 +440,14 @@ export type FormFieldCatalogType =
   | "date"
   | "time"
   | "file"
-  | "hidden";
+  | "hidden"
+  | "consent";
 
 /**
  * The form-builder picker's catalog: the flat-input subset of the shared
  * catalog plus the form-surface types — url/phone beside email (contact
  * shapes together, matching the user surface), time beside date, and
- * file/hidden appended in their own categories. Form fields live in the
+ * file/hidden/consent appended in their own categories. Form fields live in the
  * form's JSON blob, so none of these touch the schema pipeline.
  */
 export const FORM_FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry<FormFieldCatalogType>[] =
@@ -453,7 +472,11 @@ export const FORM_FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry<FormFieldCa
         combined.push(TIME_SURFACE_ENTRY);
       }
     }
-    combined.push(HIDDEN_SURFACE_ENTRY, FILE_SURFACE_ENTRY);
+    combined.push(
+      HIDDEN_SURFACE_ENTRY,
+      CONSENT_SURFACE_ENTRY,
+      FILE_SURFACE_ENTRY
+    );
     return combined;
   })();
 
@@ -869,6 +892,7 @@ const FIELD_TYPE_SYNONYMS: Readonly<
   time: ["clock", "hour", "minute"],
   file: ["upload", "attachment", "document"],
   hidden: ["invisible", "tracking", "utm"],
+  consent: ["agree", "terms", "privacy", "gdpr", "opt-in"],
 };
 
 /**

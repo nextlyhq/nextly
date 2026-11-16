@@ -74,6 +74,8 @@ vitest.global-setup.*        @mobeenabdullah
 /packages/nextly/src/__tests__/worker-database-guard.ts @mobeenabdullah
 /packages/plugin-form-builder/src/__tests__/setup.ts @mobeenabdullah
 /packages/plugin-accounts/src/test-support/dom-setup.ts @mobeenabdullah
+/packages/plugin-seo/src/__tests__/setup.ts @mobeenabdullah
+/packages/plugin-seo/src/admin/__tests__/dom-setup.ts @mobeenabdullah
 
 # The configuration the checks read.
 /.changeset/config.json      @mobeenabdullah

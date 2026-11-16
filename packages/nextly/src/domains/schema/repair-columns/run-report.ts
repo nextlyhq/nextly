@@ -9,6 +9,8 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { BusyTableBounds } from "../busy-table/bounds";
+
 import {
   describeHolder,
   readSchemaLockState,
@@ -36,14 +38,28 @@ import {
   type SchemaLockState,
 } from "./report-json";
 import {
-  liveStepOf,
+  liveProgressOf,
   noStepReason,
   notResumed,
   progressFinding,
-  readLiveState,
-  stepName,
+  progressStepName,
 } from "./resume";
+import { TableWaits } from "./table-wait";
 import type { ColumnFinding, RepairEntity } from "./types";
+
+/** Why the lock tables were not read: the database's tries had already run out. */
+const DATABASE_HELD =
+  "another connection held the whole database past the run's tries, so Nextly's lock tables could not be read";
+
+/** The command a dry run's next step names. */
+const DRY_RUN_COMMAND = "nextly repair-columns";
+
+/** How a run waits for a table another session is using: its bounds, and where notices go. */
+export interface TableWaitSettings {
+  bounds: BusyTableBounds;
+  /** Prints one line on standard error at each try after the first. */
+  notify: (line: string) => void;
+}
 
 /** The warning a report made while another schema change held the lock carries. */
 function schemaLockWarning(holder: string): DocumentProblem {
@@ -122,25 +138,103 @@ function heldDatabaseLock(table: string, waitedMs: number): TableLockFacts {
   };
 }
 
+/** The key SQLite's whole-database tries are kept under for the lock read before the scan. */
+const SCHEMA_LOCK_READ = "nextly_schema_lock";
+
+/**
+ * The schema lock as the scan starts. On SQLite another connection can hold the whole database,
+ * which would make the lock tables' reads wait outside the run's tries, so they run in the
+ * database's tries; where those run out, the lock is unknown, and every later read of the run
+ * takes the same, spent, tries.
+ */
+async function schemaLockBefore(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect,
+  waits: TableWaits | undefined
+): Promise<SchemaLockReading> {
+  if (waits === undefined || dialect !== "sqlite") {
+    return readSchemaLockState(adapter);
+  }
+  const read = await waits.read(SCHEMA_LOCK_READ, () =>
+    readSchemaLockState(adapter)
+  );
+  return read.kind === "done"
+    ? read.value
+    : { state: "unknown", reason: DATABASE_HELD };
+}
+
+/**
+ * The schema lock over the whole scan, from its readings before and after: held where either
+ * found it held (the earlier holder first), so a change that overlapped the scan from either end
+ * is named; else unknown where either could not tell; else free.
+ */
+function overScan(
+  before: SchemaLockReading,
+  after: SchemaLockReading
+): SchemaLockReading {
+  if (before.state === "held") return before;
+  if (after.state === "held") return after;
+  if (before.state === "unknown") return before;
+  return after;
+}
+
 /** The document of a dry run over `entities`. Reads the database and changes nothing. */
 export async function dryRunReport(args: {
   adapter: DrizzleAdapter;
   dialect: SupportedDialect;
-  entities: readonly RepairEntity[];
+  /** The entities to compare, or how to read them, in the run's waits. */
+  entities:
+    | readonly RepairEntity[]
+    | ((waits: TableWaits | undefined) => Promise<readonly RepairEntity[]>);
   nextlyVersion: string;
+  /**
+   * How to wait for a table another session is using. Left out, each read runs once and a table
+   * that stays closed is waited for as the database's own settings wait.
+   */
+  tableWait?: TableWaitSettings;
 }): Promise<RepairColumnsDocument> {
   const { adapter, dialect } = args;
-  const { schemaLock, warnings } = schemaLockFacts(
-    await readSchemaLockState(adapter)
-  );
+  const waits =
+    args.tableWait === undefined
+      ? undefined
+      : new TableWaits({
+          adapter,
+          dialect,
+          ...args.tableWait,
+          underSchemaLock: false,
+          command: DRY_RUN_COMMAND,
+        });
+  // Read before the scan, so a schema change already running as it starts is named even if it
+  // ends before the scan does; read again after it (`readAfter`), for one that starts during it.
+  const before = await schemaLockBefore(adapter, dialect, waits);
   const started = Date.now();
+  const entities =
+    typeof args.entities === "function"
+      ? await args.entities(waits)
+      : args.entities;
   const findings = await findColumnDifferences({
     db: adapter.getDrizzle(),
     dialect,
-    entities: args.entities,
+    entities,
+    ...(waits === undefined ? {} : { waits }),
   });
   const readMs = Date.now() - started;
-  const unfinished = await unfinishedRecords(args, findings);
+  const unfinished = await unfinishedRecords(
+    { adapter, dialect, entities },
+    findings,
+    waits
+  );
+  // Read after the scan's last read (the unfinished conversions' live steps included): where
+  // another connection held the whole database past its tries, the lock tables cannot be read
+  // either, and reading them would wait again outside the tries.
+  const { schemaLock, warnings } = schemaLockFacts(
+    overScan(
+      before,
+      waits?.wholeDatabaseHeld() === true
+        ? { state: "unknown", reason: DATABASE_HELD }
+        : await readSchemaLockState(adapter)
+    )
+  );
   return reportDocument({
     nextlyVersion: args.nextlyVersion,
     mode: "dry-run",
@@ -151,12 +245,7 @@ export async function dryRunReport(args: {
       ...notResumed(findings, unfinished.places).map(finding =>
         repairRecord(
           finding,
-          finding.kind === "definition-unreadable"
-            ? {
-                ...NO_RUN_FACTS,
-                lock: heldDatabaseLock(finding.location.table, readMs),
-              }
-            : NO_RUN_FACTS,
+          { ...NO_RUN_FACTS, lock: findingLock(finding, readMs) },
           "dry-run"
         )
       ),
@@ -166,9 +255,26 @@ export async function dryRunReport(args: {
 }
 
 /**
+ * The lock that kept a finding's rows or definition from being read: the one its table's tries
+ * ended with, or, for a definition read once with no tries, that one read.
+ */
+export function findingLock(
+  finding: ColumnFinding,
+  readMs: number
+): TableLockFacts | null {
+  if (finding.kind === "differs" || finding.kind === "definition-unreadable") {
+    if (finding.lock !== undefined) return finding.lock;
+  }
+  return finding.kind === "definition-unreadable"
+    ? heldDatabaseLock(finding.location.table, readMs)
+    : null;
+}
+
+/**
  * Each conversion an earlier `--apply` run left at a recorded step, reported as interrupted with
  * the step its record names and the step its live column has reached. Read only: a dry run
- * finishes nothing.
+ * finishes nothing. A column whose table's tries run out stays interrupted at its recorded step,
+ * with the lock that kept its live step from being read.
  */
 async function unfinishedRecords(
   args: {
@@ -176,23 +282,46 @@ async function unfinishedRecords(
     dialect: SupportedDialect;
     entities: readonly RepairEntity[];
   },
-  findings: readonly ColumnFinding[]
+  findings: readonly ColumnFinding[],
+  waits: TableWaits | undefined
 ): Promise<{ records: RepairRecord[]; places: RecordedProgress[] }> {
   const db = args.adapter.getDrizzle();
   const places = await readUnfinishedRepairs(db, args.dialect);
   const records: RepairRecord[] = [];
   for (const progress of places) {
-    const live = await readLiveState(db, args.dialect, progress);
-    const reached = await liveStepOf(db, args.dialect, progress, live);
+    const readStep = (on: unknown) =>
+      liveProgressOf(on, args.dialect, progress);
+    const read =
+      waits === undefined
+        ? { kind: "done" as const, value: await readStep(db) }
+        : await waits.read(progress.table, readStep);
+    if (read.kind === "ran-out") {
+      records.push(
+        repairRecord(
+          progressFinding(progress, findings, args.entities, null),
+          {
+            ...NO_RUN_FACTS,
+            progress: {
+              recordedStep: progressStepName(progress, progress.step),
+              liveStep: null,
+            },
+            lock: read.lock,
+          },
+          "dry-run"
+        )
+      );
+      continue;
+    }
+    const { live, reached } = read.value;
     records.push(
       repairRecord(
         progressFinding(progress, findings, args.entities, live),
         {
           ...NO_RUN_FACTS,
           progress: {
-            recordedStep: stepName(progress.step, progress.steps),
+            recordedStep: progressStepName(progress, progress.step),
             liveStep:
-              reached === null ? null : stepName(reached, progress.steps),
+              reached === null ? null : progressStepName(progress, reached),
           },
           // A column matching no step of its conversion is failed, and left to its owner.
           failure:

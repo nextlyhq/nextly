@@ -41,6 +41,7 @@ import type { EmailTemplateRecord } from "../../../schemas/email-templates/types
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { assertNoOpenTransaction } from "../../../shared/lib/open-transaction";
+import { runReadsInTransaction } from "../../../shared/lib/read-transaction-scope";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import { runAdapterTransaction } from "../../../shared/lib/run-adapter-transaction";
 import { rowLockServer } from "../../audit/audit-log-writer";
@@ -61,6 +62,7 @@ import {
   withEmailFailure,
 } from "../failure";
 import { describeProviderFailure } from "../provider-definition";
+import { cancelQueuedEmailAsPerson } from "../queued-cancel";
 import { warnAboutLateQueuedEmail } from "../queued-email-warning";
 import {
   type QueuedEmail,
@@ -70,6 +72,12 @@ import {
   type StoredQueuedEmail,
   storeQueuedEmail,
 } from "../queued-send";
+import {
+  comparableMailbox,
+  type FinalRecipient,
+  recipientDigesterOf,
+} from "../queued-send-changes";
+import { type QueuedEmailStatus, readQueuedEmails } from "../queued-send-read";
 import {
   assertIdempotencyKey,
   CORE_KEY_SCOPE,
@@ -135,6 +143,14 @@ import {
   type RefusedRecipient,
   thrownFailure,
 } from "./send-failures";
+import {
+  checkedExclusions,
+  type Excluded,
+  finalRecipients,
+  leaveOutExcluded,
+  repeatedOutcomes,
+  unknownOutcomes,
+} from "./send-recipient-report";
 import { mergeTemplateAttachments } from "./template-attachment-merge";
 import { htmlToText, validateTemplateVariables } from "./template-engine";
 
@@ -202,6 +218,54 @@ function deliveryRecipients(payload: {
 /** What a send, or one message of it, reports to the caller. */
 type SendOutcome = EmailSendOutcome;
 
+/**
+ * A template's fields as the editor holds them, saved or not: what a test of
+ * the on-screen version sends instead of the stored ones. An absent field is
+ * the stored one.
+ */
+export type TemplateTestDraft = Partial<
+  Pick<
+    EmailTemplateRecord,
+    | "subject"
+    | "preheader"
+    | "htmlContent"
+    | "plainTextContent"
+    | "useLayout"
+    | "layoutId"
+    | "fromOverride"
+    | "replyTo"
+    | "providerId"
+    | "attachments"
+  >
+>;
+
+/** Who would deliver a send: the provider, named as the admin names it. */
+export interface TestDelivery {
+  /** The provider's own name, or its kind's label for one set in code. */
+  provider: string;
+  /** The provider kind, such as `smtp` or `log`. */
+  type: string;
+  /** False for the log provider, which writes the email to the server log and delivers nothing. */
+  delivers: boolean;
+}
+
+/** A provider kind as the admin names it, or the kind itself when unknown. */
+function providerLabel(type: string): string {
+  const registry = getEmailProviderRegistry();
+  return registry.has(type) ? registry.get(type).label : type;
+}
+
+/** The stored template with the draft's fields over it. */
+function withDraft(
+  stored: EmailTemplateRecord,
+  draft: TemplateTestDraft
+): EmailTemplateRecord {
+  const fields = Object.fromEntries(
+    Object.entries(draft).filter(([, value]) => value !== undefined)
+  );
+  return { ...stored, ...fields };
+}
+
 /** A template send's own provider, addresses, attachments and identity. */
 interface TemplateSendOptions {
   providerId?: string;
@@ -217,6 +281,8 @@ interface TemplateSendOptions {
   person?: PrincipalRef;
   /** @experimental Send this message once for the key (see `send`). */
   idempotencyKey?: string;
+  /** @experimental Leave these recipients out (see `send`). */
+  excludeRecipients?: readonly string[];
 }
 
 /** What one message's dispatch needs beyond the message itself. */
@@ -433,6 +499,8 @@ export class EmailService extends BaseService {
    * set (`withTemplateCopies`).
    */
   private frozenCopies?: { cc: string[]; bcc: string[] };
+  /** Set on a view made by `withRecipientReport`. */
+  private recipientReport?: (recipients: FinalRecipient[]) => void;
 
   constructor(
     adapter: DrizzleAdapter,
@@ -506,6 +574,74 @@ export class EmailService extends BaseService {
   }
 
   /**
+   * @internal This service, handing `report` every final recipient of each
+   * send it makes, with what became of it: what a queued email's attempt
+   * tells the plugin that queued it (`queued-send-changes`).
+   */
+  withRecipientReport(
+    report: (recipients: FinalRecipient[]) => void
+  ): EmailService {
+    const view = Object.create(this) as EmailService;
+    view.recipientReport = report;
+    return view;
+  }
+
+  /**
+   * The envelope that goes out once the recipients `exclusions` names are
+   * left out of what the filters returned, and how many `to` each message
+   * takes: copies sent alone go one message each, whatever the provider
+   * takes.
+   */
+  private async withoutExclusions(
+    filtered: SendEnvelope,
+    exclusions: ReadonlySet<string> | undefined,
+    maxToPerMessage: number | undefined
+  ): Promise<{
+    envelope: SendEnvelope;
+    excluded?: Excluded;
+    perMessage: number | undefined;
+  }> {
+    const digester = recipientDigesterOf(this.keyScope);
+    if (!exclusions || !digester) {
+      return { envelope: filtered, perMessage: maxToPerMessage };
+    }
+    const excluded = await leaveOutExcluded(filtered, exclusions, digester);
+    return {
+      envelope: excluded.envelope,
+      excluded,
+      perMessage: excluded.alone ? 1 : maxToPerMessage,
+    };
+  }
+
+  /**
+   * A send answered from its key's claim, a repeat or one still in
+   * progress, with its final recipients reported as that answer leaves them.
+   */
+  private reportedAnswer(
+    envelope: SendEnvelope,
+    answer: SendOutcome,
+    excluded: Excluded | undefined
+  ): SendOutcome {
+    this.reportRecipients(
+      envelope,
+      answer.repeat
+        ? repeatedOutcomes(envelope, answer)
+        : unknownOutcomes(envelope),
+      excluded
+    );
+    return answer;
+  }
+
+  /** Hand the final recipients to the view's report, when it has one. */
+  private reportRecipients(
+    envelope: SendEnvelope,
+    outcomes: Parameters<typeof finalRecipients>[1],
+    excluded: Parameters<typeof finalRecipients>[2]
+  ): void {
+    this.recipientReport?.(finalRecipients(envelope, outcomes, excluded));
+  }
+
+  /**
    * @internal This service, sending a template with `copies` in place of the
    * copies the template has now: a queued template email is sent with the
    * copies it was queued with, which are the ones its erasure can find.
@@ -553,18 +689,61 @@ export class EmailService extends BaseService {
    * template's own copies left out: a test carries sample data, so it is not
    * the email anyone the template copies (a team inbox, a manager) expects.
    *
+   * With a draft, the test is of what is on screen: the stored template with
+   * the editor's unsaved fields over it, rendered and delivered through the
+   * same path. A draft always tests the stored template, active or not and
+   * whatever code version the site has, since that is what the editor shows.
+   *
    * @param templateSlug - Template slug
    * @param to - The address the test goes to, and the only one
    * @param variables - The sample data it renders with
+   * @param draft - The editor's fields, saved or not
    */
   async sendTemplateTest(
     templateSlug: string,
     to: string,
-    variables: Record<string, unknown>
-  ): Promise<EmailSendOutcome> {
-    return this.sendTemplate(templateSlug, to, variables, undefined, {
-      templateCopies: false,
-    });
+    variables: Record<string, unknown>,
+    draft?: TemplateTestDraft
+  ): Promise<EmailSendOutcome & { delivery?: TestDelivery }> {
+    // The provider the send itself resolved, not one looked up beside it: a
+    // default changed in between would otherwise be named for a message
+    // another provider delivered.
+    let delivery: TestDelivery | undefined;
+    const outcome = await this.sendTemplate(
+      templateSlug,
+      to,
+      variables,
+      undefined,
+      {
+        templateCopies: false,
+        draft,
+        observe: {
+          provider: resolved => {
+            delivery = resolved;
+          },
+        },
+      }
+    );
+    return delivery ? { ...outcome, delivery } : outcome;
+  }
+
+  /**
+   * Who would deliver a send through this provider, or the default one: the
+   * provider by name, and whether it delivers at all. The log provider, which
+   * a site with no provider falls back to, writes the email to the server log
+   * and reaches nobody.
+   *
+   * @throws NextlyError when `providerId` names a provider that can't be used
+   */
+  async testDelivery(providerId?: string | null): Promise<TestDelivery> {
+    const { providerType, providerName } = await this.resolveProviderForSend(
+      providerId ?? undefined
+    );
+    return {
+      provider: providerName,
+      type: providerType,
+      delivers: providerType !== LOG_PROVIDER_TYPE,
+    };
   }
 
   private async sendTemplate(
@@ -572,8 +751,21 @@ export class EmailService extends BaseService {
     to: string | string[],
     variables: Record<string, unknown>,
     options: TemplateSendOptions | undefined,
-    { templateCopies }: { templateCopies: boolean }
+    {
+      templateCopies,
+      draft,
+      observe,
+    }: {
+      templateCopies: boolean;
+      draft?: TemplateTestDraft;
+      observe?: { provider?: (delivery: TestDelivery) => void };
+    }
   ): Promise<EmailSendOutcome> {
+    // A test send is told which provider took it; any other calls `send` as
+    // every send does.
+    const deliver = (message: Parameters<EmailService["send"]>[0]) =>
+      observe ? this.send(message, observe) : this.send(message);
+
     // Whitespace-only overrides must not shadow the template/provider
     // defaults or reach a provider as malformed headers.
     const fromOverride = options?.from?.trim() || undefined;
@@ -597,10 +789,15 @@ export class EmailService extends BaseService {
       );
     }
 
+    // A test of the editor's draft sends the stored template it was edited
+    // from, with the unsaved fields over it.
+    if (dbTemplate && draft) dbTemplate = withDraft(dbTemplate, draft);
+
     if (
       dbTemplate &&
-      sendSource({ stored: dbTemplate, preferCode, hasCode: !!codeFn }) ===
-        "stored"
+      (draft !== undefined ||
+        sendSource({ stored: dbTemplate, preferCode, hasCode: !!codeFn }) ===
+          "stored")
     ) {
       // Surface missing required variables without blocking the send — the
       // authoring UI validates at edit time, and existing sends must not
@@ -635,7 +832,7 @@ export class EmailService extends BaseService {
         options?.attachments
       );
 
-      return this.send({
+      return deliver({
         to,
         subject,
         html,
@@ -657,6 +854,7 @@ export class EmailService extends BaseService {
         attachments:
           mergedAttachments.length > 0 ? mergedAttachments : undefined,
         idempotencyKey: options?.idempotencyKey,
+        excludeRecipients: options?.excludeRecipients,
       });
     }
 
@@ -690,7 +888,7 @@ export class EmailService extends BaseService {
         options?.attachments
       );
 
-      return this.send({
+      return deliver({
         to,
         subject: result.subject,
         html: result.html,
@@ -711,6 +909,7 @@ export class EmailService extends BaseService {
         attachments:
           mergedAttachments.length > 0 ? mergedAttachments : undefined,
         idempotencyKey: options?.idempotencyKey,
+        excludeRecipients: options?.excludeRecipients,
       });
     }
 
@@ -736,57 +935,78 @@ export class EmailService extends BaseService {
    * @param options - Email sending options
    * @returns Send result with success status and optional message ID
    */
-  async send(options: {
+  async send(
+    options: {
+      /**
+       * The recipient, or several. Every `to` address receives the email: in one
+       * message through a provider that takes several, else one message each,
+       * with `cc` and `bcc` on the first. Refused before any provider is
+       * contacted when empty, malformed, longer than the provider takes, or more
+       * than one alongside `person`.
+       */
+      to: string | string[];
+      subject: string;
+      html: string;
+      plainText?: string;
+      /** Override the resolved provider From (e.g. a per-template From). */
+      from?: string;
+      /** Reply-To header. Omitted when not set. */
+      replyTo?: string;
+      providerId?: string;
+      cc?: string[];
+      bcc?: string[];
+      attachments?: EmailAttachmentInput[];
+      /**
+       * Which template produced this message, for the delivery log.
+       *
+       * The SLUG, never the rendered subject: a slug says which kind of message
+       * this was and cannot carry a name, while a rendered subject is the field
+       * most likely to interpolate one.
+       */
+      templateSlug?: string;
+      /**
+       * @experimental The plugin-defined person `to` is, by kind and id, so the
+       * delivery record names them and their deletion report erases it. Names
+       * the `to` rows only: a copied address is someone else.
+       */
+      person?: PrincipalRef;
+      /**
+       * @experimental Send this message once for the key, on every provider.
+       *
+       * Claimed before any provider is contacted. A repeat of a send that
+       * succeeded returns its result, marked `repeat`, without sending; a repeat
+       * while it is still sending reports it in progress; a repeat after it
+       * failed sends again. The same key with a different message is refused.
+       * Keys are scoped to their caller, so two plugins never share one.
+       */
+      idempotencyKey?: string;
+      /**
+       * @experimental Leave out the recipients these digests name: the
+       * caller's own keyed digests of their mailboxes (`recipientDigest`),
+       * compared with the recipients `email.beforeSend` filters returned, so
+       * one a filter adds is left out too. When no `to` is left, each copy
+       * that is gets a message of its own, addressed to it alone; when no
+       * recipient is left, nothing is sent. Offered to plugins, and refused
+       * with `person`.
+       */
+      excludeRecipients?: readonly string[];
+    },
     /**
-     * The recipient, or several. Every `to` address receives the email: in one
-     * message through a provider that takes several, else one message each,
-     * with `cc` and `bcc` on the first. Refused before any provider is
-     * contacted when empty, malformed, longer than the provider takes, or more
-     * than one alongside `person`.
+     * Told which provider the send resolved, once it has: the one that
+     * delivers this message, for a caller that reports it.
      */
-    to: string | string[];
-    subject: string;
-    html: string;
-    plainText?: string;
-    /** Override the resolved provider From (e.g. a per-template From). */
-    from?: string;
-    /** Reply-To header. Omitted when not set. */
-    replyTo?: string;
-    providerId?: string;
-    cc?: string[];
-    bcc?: string[];
-    attachments?: EmailAttachmentInput[];
-    /**
-     * Which template produced this message, for the delivery log.
-     *
-     * The SLUG, never the rendered subject: a slug says which kind of message
-     * this was and cannot carry a name, while a rendered subject is the field
-     * most likely to interpolate one.
-     */
-    templateSlug?: string;
-    /**
-     * @experimental The plugin-defined person `to` is, by kind and id, so the
-     * delivery record names them and their deletion report erases it. Names
-     * the `to` rows only: a copied address is someone else.
-     */
-    person?: PrincipalRef;
-    /**
-     * @experimental Send this message once for the key, on every provider.
-     *
-     * Claimed before any provider is contacted. A repeat of a send that
-     * succeeded returns its result, marked `repeat`, without sending; a repeat
-     * while it is still sending reports it in progress; a repeat after it
-     * failed sends again. The same key with a different message is refused.
-     * Keys are scoped to their caller, so two plugins never share one.
-     */
-    idempotencyKey?: string;
-  }): Promise<EmailSendOutcome> {
+    observe?: { provider?: (delivery: TestDelivery) => void }
+  ): Promise<EmailSendOutcome> {
     if (options.idempotencyKey !== undefined) {
       assertIdempotencyKey(options.idempotencyKey);
     }
     // A precondition, before anything is resolved or sent: a person that
     // cannot be read would leave the record unable to be erased with them.
     const person = await this.personToRecord(options.person);
+    const exclusions = checkedExclusions(options.excludeRecipients, {
+      namesPerson: person !== null,
+      digester: recipientDigesterOf(this.keyScope),
+    });
 
     // The caller's recipients are a precondition too. They are checked again
     // once filters have run, against the envelope that is actually sent.
@@ -806,8 +1026,14 @@ export class EmailService extends BaseService {
       adapter,
       from: resolvedFrom,
       providerType,
+      providerName,
       resolvedProviderId,
     } = await this.resolveProviderForSend(options.providerId);
+    observe?.provider?.({
+      provider: providerName,
+      type: providerType,
+      delivers: providerType !== LOG_PROVIDER_TYPE,
+    });
 
     // A per-template From override wins over the provider's default From.
     const from = options.from?.trim() ? options.from : resolvedFrom;
@@ -886,7 +1112,7 @@ export class EmailService extends BaseService {
       personAddress: person !== null ? requestedTo[0] : undefined,
     });
 
-    const envelope: SendEnvelope = {
+    const filteredEnvelope: SendEnvelope = {
       to,
       from: filtered.from,
       // A handler written before `replyTo` was in the payload may build a new
@@ -901,7 +1127,19 @@ export class EmailService extends BaseService {
 
     // The Reply-To that goes out, whoever set it, is a header like the
     // recipients, and is held to the same rule before any provider is called.
-    assertSendableReplyTo(envelope.replyTo);
+    assertSendableReplyTo(filteredEnvelope.replyTo);
+
+    // The recipients the caller excluded, left out of what the filters
+    // returned (`send-recipient-report`). Nobody left: nothing is sent.
+    const { envelope, excluded, perMessage } = await this.withoutExclusions(
+      filteredEnvelope,
+      exclusions,
+      maxToPerMessage
+    );
+    if (envelope.to.length === 0) {
+      this.reportRecipients(envelope, [], excluded);
+      return { success: true };
+    }
 
     // Claimed on the envelope that goes out, so a filter's change is part of
     // the message the key names. A repeat is answered here, sending nothing.
@@ -910,7 +1148,9 @@ export class EmailService extends BaseService {
       attachments: resolvedAttachments,
       person,
     });
-    if (claimed && "answer" in claimed) return claimed.answer;
+    if (claimed && "answer" in claimed) {
+      return this.reportedAnswer(envelope, claimed.answer, excluded);
+    }
 
     // A keyed retry sends only to the recipients an earlier attempt with the
     // key had not reached. With none, this is the envelope itself.
@@ -920,7 +1160,7 @@ export class EmailService extends BaseService {
     );
     const messages = messagesFor(
       pendingEnvelope(envelope, previouslyAccepted),
-      maxToPerMessage
+      perMessage
     );
 
     const runAfterSend = (value: EmailAfterSendValue) =>
@@ -963,11 +1203,13 @@ export class EmailService extends BaseService {
     });
     // One message is today's send, and its result is returned as it is; a
     // split send's messages are combined into one result.
-    const { outcome, accepted } = sendResultOf(
+    const { outcome, accepted, recipients } = sendResultOf(
       envelope,
       previouslyAccepted,
       calls
     );
+    // As this attempt left them: a call still unsettled reads unknown.
+    this.reportRecipients(envelope, recipients, excluded);
     const late = calls.some(call => call.late);
     let committed = true;
     if (late) {
@@ -1674,6 +1916,58 @@ export class EmailService extends BaseService {
   }
 
   /**
+   * @experimental Where the queued emails among `ids` stand, those this
+   * caller queued only (a plugin's own, through its `ctx.services.email`);
+   * any other id is left out. At most 500 ids.
+   */
+  async readQueued(ids: readonly string[]): Promise<QueuedEmailStatus[]> {
+    return readQueuedEmails(this.adapter, this.keyScope, ids);
+  }
+
+  /**
+   * @experimental This caller's keyed digest of `address`'s mailbox, the
+   * same across restarts and rotations of the install's secret: what each
+   * recipient of a queued email's change carries, and what
+   * `excludeRecipients` takes. Offered to plugins; the first one is taken
+   * outside any transaction, as `ctx.security.digests` asks.
+   *
+   * @throws {NextlyError} `VALIDATION_ERROR` for a caller with no digest key.
+   */
+  async recipientDigest(address: string): Promise<string> {
+    const digester = recipientDigesterOf(this.keyScope);
+    if (!digester) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "address",
+            code: "INVALID",
+            message: "Recipient digests are offered to plugins.",
+          },
+        ],
+      });
+    }
+    return digester(comparableMailbox(address));
+  }
+
+  /**
+   * @experimental Cancel the queued email `id` as a person: one waiting, or
+   * failed with its message held, is cancelled and its message cleared; one
+   * whose attempt is with the provider is asked to stop, which takes effect
+   * if that attempt fails. The plugin that queued it is told, with who
+   * (`userId`, or null for the site's own code). Whoever calls this has been
+   * judged already: the Direct API asks `manage-email-deliveries` first.
+   *
+   * @throws {NextlyError} `NOT_FOUND` for no such email, and `CONFLICT` for
+   *   one already sent or cancelled.
+   */
+  async cancelQueued(
+    id: string,
+    by: { userId: string | null }
+  ): Promise<{ id: string; state: string }> {
+    return cancelQueuedEmailAsPerson(this.adapter, id, by.userId);
+  }
+
+  /**
    * What a send would refuse before anything is resolved, refused when the
    * email is queued rather than at its first attempt: the key, the person,
    * and the recipients as the caller gave them. A staff person is read in
@@ -1697,6 +1991,19 @@ export class EmailService extends BaseService {
   }
 
   /** Store a queued email, and start its first attempt once it is durable. */
+  /**
+   * A message as it is queued: a template's copies taken now, so each
+   * attempt renders the template as saved when the email was queued.
+   */
+  private async sealed(message: QueuedMessage): Promise<QueuedMessage> {
+    return message.kind === "template"
+      ? {
+          ...message,
+          templateCopies: await this.queuedTemplateCopies(message.slug),
+        }
+      : message;
+  }
+
   private async enqueue(
     message: QueuedMessage,
     checks: QueueChecks,
@@ -1706,14 +2013,7 @@ export class EmailService extends BaseService {
     // Refused before anything is read: a lookup on the pool from inside an
     // open transaction can wait on that transaction's own connection.
     if (tx === undefined) assertNoOpenTransaction(this.adapter, operation);
-    const sealed: QueuedMessage =
-      message.kind === "template"
-        ? {
-            ...message,
-            templateCopies: await this.queuedTemplateCopies(message.slug),
-          }
-        : message;
-    const input = (person: PrincipalRef | null) => ({
+    const input = (sealed: QueuedMessage, person: PrincipalRef | null) => ({
       scope: this.keyScope,
       message: sealed,
       person,
@@ -1725,21 +2025,31 @@ export class EmailService extends BaseService {
     if (tx !== undefined) {
       const link = linkedTransaction(tx, operation);
       const stored = await link.run(async adapterTx => {
+        // The template is read on the transaction's own connection: read
+        // through the pool, it would wait for a connection that this
+        // transaction only gives back once it commits, and on a pool of one
+        // it would never get one. A copy is taken, so no lock is held.
+        const sealed = await runReadsInTransaction(
+          adapterTx,
+          () => this.sealed(message),
+          "none"
+        );
         const person = await this.assertQueueable(checks, adapterTx);
-        return storeQueuedEmail(adapterTx, input(person));
+        return storeQueuedEmail(adapterTx, input(sealed, person));
       });
       if (stored.state === "waiting") {
         link.afterCommit(() => this.firstAttempt(stored.jobId));
       }
       return { id: stored.id, state: stored.state };
     }
+    const sealed = await this.sealed(message);
     const person = await this.assertQueueable(checks);
     const stored = await runAdapterTransaction<
       StoredQueuedEmail,
       TransactionContext
     >(
       run => this.adapter.transaction(ctx => run(ctx)),
-      ctx => storeQueuedEmail(ctx, input(person))
+      ctx => storeQueuedEmail(ctx, input(sealed, person))
     );
     // Stored cancelled: its person was deleted first, and nothing is sent.
     if (stored.state === "cancelled") return stored;
@@ -2123,6 +2433,7 @@ export class EmailService extends BaseService {
     adapter: EmailProviderAdapter;
     from: string;
     providerType: string;
+    providerName: string;
     resolvedProviderId?: string;
   }> {
     try {
@@ -2141,6 +2452,7 @@ export class EmailService extends BaseService {
         // obviously local. A caller-supplied `from` still wins downstream.
         from: this.emailConfig?.from ?? "nextly@localhost",
         providerType: LOG_PROVIDER_TYPE,
+        providerName: definition.label,
       };
     }
   }
@@ -2149,6 +2461,8 @@ export class EmailService extends BaseService {
     adapter: EmailProviderAdapter;
     from: string;
     providerType: string;
+    /** The stored provider's name, or the kind's label for one set in code. */
+    providerName: string;
     /**
      * The stored provider this resolved to, when a stored one was used.
      *
@@ -2170,6 +2484,7 @@ export class EmailService extends BaseService {
           provider.fromEmail
         ),
         providerType: provider.type,
+        providerName: provider.name,
         resolvedProviderId: provider.id,
       };
     }
@@ -2209,6 +2524,7 @@ export class EmailService extends BaseService {
           defaultProvider.fromEmail
         ),
         providerType: defaultProvider.type,
+        providerName: defaultProvider.name,
         resolvedProviderId: defaultProvider.id,
       };
     }
@@ -2219,6 +2535,7 @@ export class EmailService extends BaseService {
         adapter: this.createAdapterFromConfig(this.emailConfig.providerConfig),
         from: this.emailConfig.from,
         providerType: this.emailConfig.providerConfig.provider,
+        providerName: providerLabel(this.emailConfig.providerConfig.provider),
       };
     }
 

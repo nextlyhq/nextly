@@ -1,0 +1,77 @@
+{
+  "migrationHash": "397ab764b977b5d2d4a9f3f74d98577fad70d05f51d15539dfd92814c5e7ec40",
+  "snapshot": {
+    "tables": [
+      {
+        "columns": [
+          {
+            "name": "_component_type",
+            "nullable": true,
+            "type": "varchar"
+          },
+          {
+            "name": "_order",
+            "nullable": true,
+            "type": "int4"
+          },
+          {
+            "name": "_parent_field",
+            "nullable": false,
+            "type": "varchar"
+          },
+          {
+            "name": "_parent_id",
+            "nullable": false,
+            "type": "text"
+          },
+          {
+            "name": "_parent_table",
+            "nullable": false,
+            "type": "varchar"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "type": "timestamp"
+          },
+          {
+            "name": "heading",
+            "nullable": true,
+            "type": "text"
+          },
+          {
+            "name": "id",
+            "nullable": false,
+            "primaryKey": true,
+            "type": "text"
+          },
+          {
+            "name": "updated_at",
+            "nullable": false,
+            "type": "timestamp"
+          },
+          {
+            "name": "views",
+            "nullable": true,
+            "type": "int4"
+          }
+        ],
+        "indexes": [
+          {
+            "columns": ["created_at"],
+            "name": "idx_comp_card_created_at",
+            "unique": false
+          },
+          {
+            "columns": ["_parent_id", "_parent_table", "_parent_field"],
+            "name": "idx_comp_card_parent",
+            "unique": false
+          }
+        ],
+        "name": "comp_card"
+      }
+    ]
+  },
+  "translatedFieldsRecorded": true,
+  "version": 1
+}

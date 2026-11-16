@@ -33,6 +33,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { servedSchemaVersion } from "../../../route-handler/schema-version";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { DynamicCollectionService } from "../services/dynamic-collection-service";
 import { ServiceContainer } from "../../../services/index";
@@ -870,7 +871,10 @@ describe.each(getConfiguredTestDialects())(
     it("refuses a write to an entity this instance has not registered, naming it and its table", async () => {
       const target = await boot(dialect);
       // An instance that started before a migration added the entity holds
-      // no table for it; the database has it.
+      // no table for it; the database has it. It has already followed the
+      // stored schema version, which the retraction below does not move, so
+      // its requests reload nothing.
+      await servedSchemaVersion();
       const registry = t().getService(
         "schemaRegistry" as never
       ) as SchemaRegistry;
@@ -980,6 +984,8 @@ describe.each(getConfiguredTestDialects())(
       ) as SchemaRegistry;
       vi.stubEnv("NODE_ENV", "production");
       try {
+        // Followed already, as above, so the retraction is not reloaded away.
+        await servedSchemaVersion();
         registry.retractDynamicSchema(BANNER_TABLE);
         const writes = OPERATIONS.filter(operation =>
           ["Direct updateSingle", "REST Single update"].includes(operation.name)

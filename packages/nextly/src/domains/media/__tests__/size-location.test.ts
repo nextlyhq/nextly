@@ -121,6 +121,7 @@ describe("a size's URL on local disk", () => {
 describe("a delete's reading of a size recorded by its URL alone", () => {
   const record = (base: string) => ({
     filename: "2026/11/photo.png",
+    mimeType: "image/png",
     url: `${base}/2026/11/photo.png`,
     thumbnailUrl: null,
     sizes: JSON.stringify({ small: { url: `${base}/${KEY}` } }),
@@ -150,6 +151,7 @@ describe("a delete's reading of a size recorded by its URL alone", () => {
     const files = storedFilesOf(
       {
         filename: "2026/11/photo.png",
+        mimeType: "image/png",
         // An older record saved under a base URL that does not parse.
         url: "https://new-bucket.example:99999/2026/11/photo.png",
         thumbnailUrl: null,

@@ -226,7 +226,9 @@ export interface AdminPlaceReference {
  * place the same way. A place in a plugin's namespace that no enabled plugin
  * declares names the namespace it belongs to: the plugin that owns it is
  * disabled, absent, or the name is misspelled, and a plugin that adds to
- * another's place should declare it in `dependsOn`.
+ * another's place should declare it in `dependsOn`. A place of a plugin the
+ * contributor names in `optionalDependsOn` never reaches here while that plugin
+ * is absent: its contributions are left out first.
  */
 export function assertPlacesExist(
   places: ReadonlyMap<string, DeclaredAdminPlace>,
@@ -249,7 +251,7 @@ export function assertPlacesExist(
 
     throw resolutionError(
       "admin-place-unknown",
-      `Plugin "${plugin}" adds ${what} to the admin place "${place}", which no enabled plugin declares. It belongs to the plugin whose admin slug is "${owningPrefix}": enable that plugin and declare it in the \`dependsOn\` of "${plugin}", or correct the name.`,
+      `Plugin "${plugin}" adds ${what} to the admin place "${place}", which no enabled plugin declares. It belongs to the plugin whose admin slug is "${owningPrefix}": enable that plugin and declare it in the \`dependsOn\` of "${plugin}" (or in its \`optionalDependsOn\`, to start without it), or correct the name.`,
       { plugin, contribution: what, place, owningPrefix }
     );
   }

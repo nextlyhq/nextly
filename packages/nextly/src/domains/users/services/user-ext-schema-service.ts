@@ -100,6 +100,10 @@ import { runRaw } from "../../schema/pipeline/pre-resolution/executor";
 import { isIdempotencyError } from "../../schema/pipeline/sql-statement-utils";
 import { columnIndexSql } from "../../schema/pipeline/sql-templates/create-index";
 import {
+  applyStatementsInTries,
+  type BusyTableWait,
+} from "../../schema/services/apply-migration-statements";
+import {
   columnTypeIsIndexable,
   uniquenessCanBeAnIndex,
 } from "../../schema/services/index-name";
@@ -435,9 +439,17 @@ export class UserExtSchemaService {
    */
   async ensureUserExtSchema(
     db: unknown,
-    options: { strict?: boolean } = {}
+    options: {
+      strict?: boolean;
+      /**
+       * Where given (a Schema Builder save of a user field), each statement waits for a table
+       * another session is using in short tries, as `nextly migrate` waits.
+       */
+      busyTable?: BusyTableWait;
+    } = {}
   ): Promise<void> {
     const strict = options.strict === true;
+    const busyTable = options.busyTable;
     if (strict && this.columnCollisions.length > 0) {
       throw NextlyError.validation({
         errors: this.columnCollisions.map(c => ({
@@ -474,9 +486,7 @@ export class UserExtSchemaService {
     // 1. CREATE TABLE IF NOT EXISTS (with all columns). runRaw picks the
     //    dialect's call: SQLite's Drizzle database has no .execute(), so
     //    calling it threw and was taken for "already exists".
-    for (const stmt of statements.filter(isCreateTable)) {
-      await this.runDdl(db, stmt, strict);
-    }
+    const plan = [...statements.filter(isCreateTable)];
 
     // 2. ALTER TABLE ADD COLUMN for each field (handles case where
     //    table exists but is missing columns for newly created fields)
@@ -495,12 +505,54 @@ export class UserExtSchemaService {
         alterSQL = `ALTER TABLE ${this.q}${TABLE_NAME}${this.q} ADD COLUMN ${this.q}${columnName}${this.q} ${columnType}`;
       }
 
-      await this.runDdl(db, alterSQL, strict);
+      plan.push(alterSQL);
     }
 
     // 3. The indexes and constraints, now that every column exists.
-    for (const stmt of statements.filter(s => !isCreateTable(s))) {
+    plan.push(...statements.filter(s => !isCreateTable(s)));
+
+    if (busyTable !== undefined) {
+      await this.runPlanInTries(plan, strict, busyTable);
+      return;
+    }
+    for (const stmt of plan) {
       await this.runDdl(db, stmt, strict);
+    }
+  }
+
+  /**
+   * The plan as one change that waits for a busy table in short tries, as `nextly migrate` waits,
+   * so a stop after an earlier statement says what of it stayed. What `runDdl` passes over is
+   * passed over here too; a busy table's stop is reported whatever `strict` asks.
+   */
+  private async runPlanInTries(
+    plan: readonly string[],
+    strict: boolean,
+    busyTable: BusyTableWait
+  ): Promise<void> {
+    let refusal: NextlyError | null = null;
+    try {
+      await applyStatementsInTries(
+        busyTable,
+        plan,
+        "the user fields' table change",
+        (error, statement) => {
+          if (
+            !strict ||
+            isIdempotencyError(error) ||
+            this.isOwnForeignKeyRerun(error, statement)
+          ) {
+            return true;
+          }
+          refusal = this.textColumnUniqueRefusal(error, statement);
+          return false;
+        }
+      );
+    } catch (error) {
+      if (NextlyError.is(error) && error.code === "NEXTLY_TABLE_BUSY") {
+        throw error;
+      }
+      throw refusal ?? error;
     }
   }
 

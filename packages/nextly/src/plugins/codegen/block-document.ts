@@ -520,6 +520,8 @@ const blockNodeObject = z.looseObject({
   name: z.string().optional(),
   customCss: z.string().optional(),
   cssId: z.string().optional(),
+  // "Never quote this": the node's root element carries `data-nosnippet`.
+  nosnippet: z.boolean().optional(),
   attributes: typedRecord(
     value => typeof value === "string",
     { type: "string" },

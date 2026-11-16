@@ -61,6 +61,23 @@ describe("railEntryDecided", () => {
     ).toBe(false);
   });
 
+  /*
+   * Translations shows only on a site with two or more locales, and the locales arrive with the
+   * workspace answer: drawn before it, the entry could be taken back on a one-language site.
+   */
+  it("waits on the workspace answer for Translations, and on nothing else", () => {
+    expect(
+      railEntryDecided(entry("translations"), { ...ANSWERED, workspace: true })
+    ).toBe(false);
+    expect(
+      railEntryDecided(entry("translations"), {
+        workspace: false,
+        permissions: true,
+        content: true,
+      })
+    ).toBe(true);
+  });
+
   it("waits on every answer for a plugin's own entry", () => {
     for (const answer of ["workspace", "permissions", "content"] as const) {
       expect(
@@ -75,7 +92,6 @@ describe("railEntryDecided", () => {
   it("decides an ungated entry at once", () => {
     const pending = { workspace: true, permissions: true, content: true };
     expect(railEntryDecided(entry("dashboard"), pending)).toBe(true);
-    expect(railEntryDecided(entry("translations"), pending)).toBe(true);
   });
 });
 

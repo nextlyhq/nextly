@@ -1,0 +1,311 @@
+/**
+ * Focus: one container on its own, under a breadcrumb from the top level, with
+ * every action still there, a way back that keeps the selection, and moves out
+ * that follow the field so it stays in view and focused.
+ */
+import { within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it } from "vitest";
+
+import { render, screen } from "@admin/__tests__/utils";
+import type { MoveContext } from "@admin/lib/builder/move-rule";
+
+import type { BuilderFieldError } from "@admin/lib/builder/field-validators";
+import type { BlockCatalog } from "@admin/lib/builder/outline/block-rows";
+
+import {
+  nestedFixtureBlockCatalogs,
+  nestedFixtureBlockCatalogsAllMatched,
+  nestedFixtureFieldGroups,
+  nestedFixtureFields,
+} from "../../__fixtures__/nested-fixture";
+import type { BuilderField } from "../../types";
+import { MoveHarness, newProbe, plain } from "./move-harness";
+
+/** The rule's whole answer, every change of container included. */
+const WHOLE: MoveContext = {
+  entityReadOnly: false,
+  surface: "collection",
+  containerChanges: true,
+};
+
+function setup(
+  initial: BuilderField[] = nestedFixtureFields(),
+  blockCatalogs: Map<
+    string,
+    BlockCatalog
+  > = nestedFixtureBlockCatalogsAllMatched(),
+  errors: ReadonlyMap<string, BuilderFieldError> = new Map()
+) {
+  const probe = newProbe();
+  render(
+    <MoveHarness
+      initial={initial}
+      context={WHOLE}
+      fieldGroups={nestedFixtureFieldGroups()}
+      blockCatalogs={blockCatalogs}
+      errors={errors}
+      probe={probe}
+    />
+  );
+  return { probe, user: userEvent.setup() };
+}
+
+const rowAt = (path: string) =>
+  document.querySelector<HTMLElement>(`[data-path="${path}"]`);
+
+/** The paths of the rows drawn, in order. */
+const drawn = () =>
+  [...document.querySelectorAll<HTMLElement>('[role="treeitem"]')].map(
+    row => row.dataset.path
+  );
+
+/** Open a row's menu as the keyboard does. */
+async function openMenu(
+  user: ReturnType<typeof userEvent.setup>,
+  path: string
+): Promise<void> {
+  rowAt(path)?.focus();
+  await user.keyboard("{Shift>}{F10}{/Shift}");
+  await screen.findByRole("menu");
+}
+
+async function focusOn(
+  user: ReturnType<typeof userEvent.setup>,
+  path: string
+): Promise<void> {
+  await openMenu(user, path);
+  await user.click(screen.getByRole("menuitem", { name: "Focus" }));
+}
+
+const crumbs = () => screen.getByRole("navigation", { name: "Focus" });
+
+describe("Focus", () => {
+  it("shows a group on its own, under its crumb", async () => {
+    const { user } = setup();
+    await focusOn(user, "meta");
+    expect(drawn()).toEqual(["meta/title", "meta/rating"]);
+    expect(within(crumbs()).getByText("Meta")).toHaveAttribute(
+      "aria-current",
+      "location"
+    );
+    // Its own fields are the first level drawn.
+    expect(rowAt("meta/title")).toHaveAttribute("aria-level", "1");
+  });
+
+  it("shows repeating rows three deep, with a crumb for each container above", async () => {
+    const { user } = setup();
+    await focusOn(user, "sections");
+    await focusOn(user, "sections/items");
+    await focusOn(user, "sections/items/cta");
+    expect(drawn()).toEqual([
+      "sections/items/cta/label",
+      "sections/items/cta/kind",
+    ]);
+    const nav = crumbs();
+    expect(
+      within(nav)
+        .getAllByRole("listitem")
+        .map(item => item.textContent)
+    ).toEqual(["All fields", "Sections", "Items", "Call to action"]);
+  });
+
+  it("writes its crumbs in the muted and foreground ink, never the brand's primary", async () => {
+    // A site's branding sets the primary colour, so it is not sure to be readable on the
+    // Builder's canvas; the muted and foreground inks are held to the admin's contrast in
+    // both colour schemes. jsdom draws no colour, so the classes are what can be read here.
+    const { user } = setup();
+    await focusOn(user, "sections");
+    await focusOn(user, "sections/items");
+    const nav = crumbs();
+    const links = within(nav).getAllByRole("button");
+    expect(links.map(link => link.textContent)).toEqual([
+      "All fields",
+      "Sections",
+    ]);
+    for (const link of links) {
+      expect(link.classList).toContain("text-muted-foreground");
+      expect(link.classList).not.toContain("text-primary");
+    }
+    const here = within(nav).getByText("Items");
+    expect(here).toHaveAttribute("aria-current", "location");
+    expect(here.classList).toContain("text-foreground");
+  });
+
+  it("shows a blocks field's accepted blocks and their props", async () => {
+    const { user } = setup();
+    await focusOn(user, "body");
+    // The heading block as the first level, its two props beneath it.
+    expect(drawn()).toEqual([
+      "body/#core/heading",
+      "body/#core/heading/#text",
+      "body/#core/heading/#level",
+    ]);
+    expect(rowAt("body/#core/heading")).toHaveAttribute("aria-level", "1");
+    expect(rowAt("body/#core/heading/#text")).toHaveAttribute(
+      "aria-level",
+      "2"
+    );
+  });
+
+  it("adds at the end of the focused container, and offers no end add in a blocks field", async () => {
+    const { probe, user } = setup();
+    await focusOn(user, "meta");
+    await user.click(screen.getByRole("button", { name: "+ Add field" }));
+    expect(probe.addsAt).toEqual([{ parentFieldId: "f-meta" }]);
+
+    await user.click(screen.getByRole("button", { name: "Exit focus" }));
+    await focusOn(user, "body");
+    expect(screen.queryByRole("button", { name: "+ Add field" })).toBeNull();
+  });
+
+  it("adds the first field of an empty focused container into it", async () => {
+    const { probe, user } = setup([
+      plain("title"),
+      plain("details", { type: "group", fields: [] }),
+    ]);
+    await focusOn(user, "details");
+    expect(drawn()).toEqual([]);
+    await user.click(screen.getByRole("button", { name: "+ Add field" }));
+    expect(probe.addsAt).toEqual([{ parentFieldId: "f-details" }]);
+  });
+
+  it("offers no Focus on a blocks field whose policy names a block nothing registers", async () => {
+    // "acme/hero" admits no registered block: the blocks field's own row says so.
+    const { user } = setup(nestedFixtureFields(), nestedFixtureBlockCatalogs());
+    await openMenu(user, "body");
+    expect(screen.queryByRole("menuitem", { name: "Focus" })).toBeNull();
+  });
+
+  it("returns keyboard focus to the nearest row drawn above when Exit leaves it folded away", async () => {
+    const { user } = setup();
+    await focusOn(user, "sections");
+    await focusOn(user, "sections/items");
+    await user.click(screen.getByRole("button", { name: "Fold all" }));
+    await user.click(screen.getByRole("button", { name: "Exit focus" }));
+    // Items, the container that was focused, is folded inside Sections.
+    expect(rowAt("sections/items")).toBeNull();
+    expect(rowAt("sections")).toHaveFocus();
+  });
+
+  it("keeps the tab stop on a first-level row when Left is pressed in a focused view", async () => {
+    // Its container is not drawn, so Left has no row to go up to.
+    const { user } = setup();
+    await focusOn(user, "meta");
+    rowAt("meta/rating")?.focus();
+    await user.keyboard("{ArrowLeft}");
+    expect(rowAt("meta/rating")).toHaveFocus();
+    expect(rowAt("meta/rating")).toHaveAttribute("tabindex", "0");
+  });
+
+  it("says in the breadcrumb that the focused container has an error of its own", async () => {
+    const { user } = setup(
+      nestedFixtureFields(),
+      nestedFixtureBlockCatalogsAllMatched(),
+      new Map([
+        [
+          "f-meta",
+          {
+            kind: "unnamed",
+            message: "Name is required",
+          } satisfies BuilderFieldError,
+        ],
+      ])
+    );
+    await focusOn(user, "meta");
+    // Its row, which carried the badge, is not drawn while it is focused.
+    expect(within(crumbs()).getByText("Has an error")).toHaveAttribute(
+      "title",
+      "Name is required"
+    );
+  });
+
+  it("puts keyboard focus on Exit focus when the focused container draws no row", async () => {
+    const { user } = setup([
+      plain("title"),
+      plain("details", { type: "group", fields: [] }),
+    ]);
+    await focusOn(user, "details");
+    expect(drawn()).toEqual([]);
+    expect(screen.getByRole("button", { name: "Exit focus" })).toHaveFocus();
+  });
+
+  it("puts keyboard focus on the first field Find still shows", async () => {
+    const { user } = setup();
+    await user.type(
+      screen.getByPlaceholderText("Find a field by label, name or type"),
+      "kind"
+    );
+    await focusOn(user, "sections/items/cta");
+    expect(drawn()).toEqual(["sections/items/cta/kind"]);
+    expect(rowAt("sections/items/cta/kind")).toHaveFocus();
+  });
+
+  it("offers Focus only on a group, repeating rows or a blocks field", async () => {
+    const { user } = setup();
+    for (const path of ["summary_a", "seo"]) {
+      await openMenu(user, path);
+      expect(screen.queryByRole("menuitem", { name: "Focus" })).toBeNull();
+      await user.keyboard("{Escape}");
+    }
+  });
+
+  it("returns by a crumb or Exit focus with the selection kept, and focus on it", async () => {
+    const { probe, user } = setup();
+    await focusOn(user, "meta");
+    await user.click(rowAt("meta/title")!);
+    expect(probe.selectedId).toBe("f-meta-title");
+
+    await user.click(
+      within(crumbs()).getByRole("button", { name: "All fields" })
+    );
+    expect(screen.queryByRole("navigation", { name: "Focus" })).toBeNull();
+    expect(drawn()).toContain("summary_a");
+    expect(probe.selectedId).toBe("f-meta-title");
+    expect(rowAt("meta/title")).toHaveAttribute("aria-selected", "true");
+    expect(rowAt("meta/title")).toHaveFocus();
+
+    await focusOn(user, "meta");
+    await user.click(screen.getByRole("button", { name: "Exit focus" }));
+    expect(screen.queryByRole("navigation", { name: "Focus" })).toBeNull();
+    expect(rowAt("meta/title")).toHaveFocus();
+  });
+
+  it("moves a field out by key while focused, and the focus follows it", async () => {
+    const { probe, user } = setup([
+      plain("title"),
+      plain("details", { type: "group", fields: [plain("subtitle")] }),
+    ]);
+    await focusOn(user, "details");
+    rowAt("details/subtitle")?.focus();
+    await user.keyboard("{Alt>}{ArrowLeft}{/Alt}");
+    expect(probe.fields.map(field => field.name)).toContain("subtitle");
+    // Out at the top level, so focus is off and the field is in view, focused.
+    expect(screen.queryByRole("navigation", { name: "Focus" })).toBeNull();
+    expect(rowAt("subtitle")).toHaveFocus();
+  });
+
+  it("moves a field out through Move to… while focused, the focus stepping to where it went", async () => {
+    const { probe, user } = setup([
+      plain("outer", {
+        type: "group",
+        fields: [plain("inner", { type: "group", fields: [plain("note")] })],
+      }),
+    ]);
+    await focusOn(user, "outer");
+    await focusOn(user, "outer/inner");
+    await openMenu(user, "outer/inner/note");
+    await user.click(screen.getByRole("menuitem", { name: "Move to…" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("radio", { name: /^Outer \(/ }));
+    await user.click(within(dialog).getByRole("button", { name: "Move" }));
+    const outer = probe.fields.find(field => field.name === "outer");
+    expect(outer?.fields?.map(field => field.name)).toContain("note");
+    // Focus stepped up to Outer, where the field now is.
+    expect(within(crumbs()).getByText("Outer")).toHaveAttribute(
+      "aria-current",
+      "location"
+    );
+    expect(rowAt("outer/note")).toHaveFocus();
+  });
+});

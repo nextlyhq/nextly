@@ -8,14 +8,17 @@ import { ADMIN_ROBOTS } from "nextly/config";
 import type React from "react";
 import { Suspense, lazy, useEffect, useState } from "react";
 
-import { AdminPending } from "../components/guards/AdminPending";
+import { SessionStallNotice } from "../components/guards/AdminPending";
 import { BuilderGuard } from "../components/guards/BuilderGuard";
 import { PermissionGuard } from "../components/guards/PermissionGuard";
 import { PrivateRoute } from "../components/guards/PrivateRoute";
 import { PublicRoute } from "../components/guards/PublicRoute";
+import { WaitClockContext } from "../components/shared/loading-frame/delayed-reveal";
+import { ScreenOutlineFor } from "../components/shared/loading-frame/screen-outline-for";
 import { PluginPageRegistrar } from "../components/shared/plugin-page-registrar";
 import { Toaster } from "../components/ui/toaster";
 import { AdminI18nProvider } from "../context/providers/AdminI18nProvider";
+import { AdminStartupScript } from "../context/providers/AdminStartupScript";
 import { BrandingProvider } from "../context/providers/BrandingProvider";
 import { DocumentTitleProvider } from "../context/providers/DocumentTitleProvider";
 import { GeneralSettingsSync } from "../context/providers/GeneralSettingsSync";
@@ -29,6 +32,8 @@ import { RoutedPathnameContext } from "../context/RoutedPathnameContext";
 import { invalidateContentCaches } from "../hooks/schema-change-invalidation";
 import { useRouter } from "../hooks/useRouter";
 import { cn } from "../lib/utils";
+import LoginPage from "../pages/(auth)/login";
+import { RouteLoadingOutline } from "../pages/route-loading-outline";
 
 import "../styles/globals.css";
 import { DashboardLayout } from "./DashboardLayout";
@@ -44,7 +49,7 @@ const RestartOverlay = lazy(() =>
  * Handles theme synchronization via React state instead of manual DOM manipulation.
  */
 function AdminAppContent({ nonce }: RootLayoutProps) {
-  const { route, isHydrated, pathname } = useRouter();
+  const { route, isHydrated, pathname, routedAt } = useRouter();
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
@@ -76,10 +81,15 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
         )}
         suppressHydrationWarning
       >
+        {/* The startup request, sent as the browser reads this page rather
+            than once the admin's code has loaded; the admin takes it. */}
+        <AdminStartupScript nonce={nonce} />
         <ThemePaintScript nonce={nonce} />
-        {/* Painted with the server's HTML, so the first thing a visitor sees
-            says the admin is loading, while its code downloads. */}
-        <AdminPending />
+        {/* Nothing but the admin's own surface: before its code runs the
+            admin cannot know the screen, nor whether this browser has signed
+            in here, and a spinner that a fast load replaces at once is the
+            flash the frame exists to avoid. The frame or the sign-in form
+            paints as soon as the code runs, before any request answers. */}
       </div>
     );
   }
@@ -99,9 +109,16 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
   const renderComponent = () => {
     // Suspense lets React handle suspended lazy chunks gracefully; fallback
     // is null because we don't render a load indicator during transitions.
+    // A private screen's code arriving shows the screen's outline, which is
+    // also what it shows while its data loads, so the outline stays put.
+    // The same while a lazily fetched route's code arrives (`lazyRoute`).
+    const routeOutline =
+      routeType === "private" ? <ScreenOutlineFor pathname={pathname} /> : null;
     const suspended = (
-      <Suspense fallback={null}>
-        <Component params={params} searchParams={searchParams} />
+      <Suspense fallback={routeOutline}>
+        <RouteLoadingOutline.Provider value={routeOutline}>
+          <Component params={params} searchParams={searchParams} />
+        </RouteLoadingOutline.Provider>
       </Suspense>
     );
 
@@ -126,11 +143,34 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
         componentElement
       );
 
+      // One frame for both moments: while the session is checked it draws
+      // the screen's outline and no data, and once the server confirms it,
+      // the screen. The same layout element across both, so the frame is
+      // never redrawn when the answer lands.
       return (
-        <PrivateRoute>
-          <div className="flex-1 min-h-0 h-full overflow-hidden">
-            <DashboardLayout>{content}</DashboardLayout>
-          </div>
+        <PrivateRoute
+          signIn={
+            // In the admin's column, scrolling on its own where the form is
+            // taller than the window.
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+              <LoginPage />
+            </div>
+          }
+        >
+          {confirmed => (
+            <div className="flex-1 min-h-0 h-full overflow-hidden">
+              <DashboardLayout sessionConfirmed={confirmed}>
+                {confirmed ? (
+                  content
+                ) : (
+                  <>
+                    <ScreenOutlineFor pathname={pathname} />
+                    <SessionStallNotice />
+                  </>
+                )}
+              </DashboardLayout>
+            </div>
+          )}
         </PrivateRoute>
       );
     }
@@ -190,7 +230,9 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
               endpoint gated by settings permissions, so on the signed-out
               screens (login, register, forgot password, setup) the query
               can only fail and retry once while the form waits on nothing
-              it needs. It renders nothing and sits beside the subtree
+              it needs. The sign-in form drawn in place on a private route
+              mounts it too, so the query itself also waits for a signed-in
+              session (`useGeneralSettings`). It renders nothing and sits beside the subtree
               rather than around it, for the load-bearing reasons recorded
               on GeneralSettingsSync itself. */}
             {routeType !== "public" && <GeneralSettingsSync />}
@@ -203,7 +245,11 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
               {/* The address the router drew this screen for, which a screen
               writing the address compares with the bar's. */}
               <RoutedPathnameContext.Provider value={pathname}>
-                {content}
+                {/* When the browser arrived at this screen: every loading
+                    sign in it is timed from here. */}
+                <WaitClockContext.Provider value={routedAt ?? null}>
+                  {content}
+                </WaitClockContext.Provider>
               </RoutedPathnameContext.Provider>
             </DocumentTitleProvider>
           </AdminI18nProvider>
@@ -238,8 +284,8 @@ function AdminRobotsFallback(): null {
 export interface RootLayoutProps {
   /**
    * The nonce a `script-src` Content Security Policy needs. The admin paints
-   * its saved theme with a small inline script before the first paint, which
-   * such a policy blocks without it.
+   * its saved theme, and sends its startup request, with small inline scripts
+   * before the first paint, which such a policy blocks without it.
    */
   nonce?: string;
 }

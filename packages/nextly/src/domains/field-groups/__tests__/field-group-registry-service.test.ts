@@ -1,4 +1,12 @@
-import { describe, it, expect, beforeEach, vi, beforeAll } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The adapter double holds no stored schema version: registry writes run as
+// they are (`unversionedRegistryWrites`).
+vi.mock("../../schema/schema-version", async importOriginal =>
+  (
+    await import("../../../__tests__/helpers/unversioned-registry-writes")
+  ).unversionedRegistryWrites(await importOriginal())
+);
 
 // The sync asks the reconcile service to clear a diverged mark on a code-managed group. Mocked so
 // the ASK is observable: the repair itself is proved in its own suite, and running it here would
@@ -313,22 +321,20 @@ describe("FieldGroupRegistryService", () => {
     });
 
     it("applies search filter across slug and label", async () => {
-      ctx.adapter.select.mockResolvedValue([]);
+      ctx.adapter.select.mockResolvedValue([
+        dbRow({ id: "1", slug: "seo", label: "Meta", created_at: 1 }),
+        dbRow({ id: "2", slug: "hero", label: "SEO card", created_at: 2 }),
+        dbRow({ id: "3", slug: "footer", label: "Footer", created_at: 3 }),
+      ]);
 
-      await ctx.service.listComponents({ search: "seo" });
+      const result = await ctx.service.listComponents({ search: "Seo" });
 
-      const opts = ctx.adapter.select.mock.calls[0][1] as Record<
-        string,
-        unknown
-      >;
-      const where = opts.where as Record<string, unknown>;
-      const andArr = where.and as Array<Record<string, unknown>>;
-      const orCond = andArr.find(c => "or" in c);
-      expect(orCond).toBeDefined();
-      const ors = orCond!.or as Array<Record<string, unknown>>;
-      const columns = ors.map(c => c.column);
-      expect(columns).toContain("slug");
-      expect(columns).toContain("label");
+      // Matched on the slug or the label, without regard to case.
+      expect(result.data.map(group => group.slug).sort()).toEqual([
+        "hero",
+        "seo",
+      ]);
+      expect(result.total).toBe(2);
     });
   });
 

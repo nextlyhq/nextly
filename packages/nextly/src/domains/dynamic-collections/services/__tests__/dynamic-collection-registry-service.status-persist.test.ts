@@ -3,7 +3,15 @@
 // admin UI's POST /api/collections (which routes through this service via the
 // dispatcher → metadata-service path) silently dropped status, so the entry
 // edit form never showed Save Draft / Publish even when the user toggled it.
-import { describe, it, expect, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// The adapter double holds no stored schema version: registry writes run as
+// they are (`unversionedRegistryWrites`).
+vi.mock("../../../schema/schema-version", async importOriginal =>
+  (
+    await import("../../../../__tests__/helpers/unversioned-registry-writes")
+  ).unversionedRegistryWrites(await importOriginal())
+);
 
 import { DynamicCollectionRegistryService } from "../dynamic-collection-registry-service";
 

@@ -50,6 +50,47 @@ describe("a plugin's own item in the top bar", () => {
     ).toEqual(["@acme/a/admin#Publish", "@acme/b/admin#Badge"]);
   });
 
+  it("draws only the items that chose the bar, by plugin order", () => {
+    mockBranding = {
+      plugins: [
+        {
+          name: "@acme/late",
+          collections: [],
+          order: 200,
+          header: { slot: "@acme/late/admin#Late" },
+        },
+        {
+          name: "@acme/rail",
+          collections: [],
+          header: { slot: "@acme/rail/admin#Helper", place: "rail-foot" },
+        },
+        {
+          name: "@acme/menu",
+          collections: [],
+          header: {
+            place: "menu",
+            item: {
+              id: "acme-menu.user-menu",
+              label: "Help",
+              icon: "BookOpen",
+              to: "/x",
+            },
+          },
+        },
+        {
+          name: "@acme/early",
+          collections: [],
+          order: 10,
+          headerSlot: "@acme/early/admin#Early",
+        },
+      ],
+    } as AdminBranding;
+    render(<DashboardHeader />);
+    expect(
+      screen.getAllByTestId("plugin-slot").map(slot => slot.dataset.path)
+    ).toEqual(["@acme/early/admin#Early", "@acme/late/admin#Late"]);
+  });
+
   it("draws nothing where no plugin has an item", () => {
     mockBranding = {
       plugins: [

@@ -35,6 +35,10 @@ import {
 import type { PluginMigration } from "../../../domains/schema/migrate/plugin/plugin-migration";
 import { assertBootPluginsInstalled } from "../../../domains/schema/ownership/plugin-install-gate";
 import { SchemaOwnersRepository } from "../../../domains/schema/ownership/schema-owners-repository";
+import {
+  readSchemaVersion,
+  storeSchemaVersion,
+} from "../../../domains/schema/schema-version";
 import type {
   Operation,
   TableSpec,
@@ -355,6 +359,53 @@ describe.each(getConfiguredTestDialects())(
       )) as Array<{ id: string }>;
       return rows.map(row => row.id);
     }
+
+    /*
+     * The install's lifecycle record and the stored schema version share one
+     * transaction: with `nextly_meta` taken away for the install, the
+     * version's write fails at the end of it, and the record is not written.
+     * The modules ran before it, which their tables show, so the install
+     * reached its record. Committed, the install and then the uninstall each
+     * move the version's count and leave its migration alone.
+     */
+    it("records an install and an uninstall in the transaction that stores the schema version", async () => {
+      const seed = "20250101_000000_000_seed";
+      await storeSchemaVersion(db(), dialect, { wrote: true, migration: seed });
+      const version = async () => {
+        const stored = await readSchemaVersion(db(), dialect);
+        return stored.present ? stored.version : undefined;
+      };
+      const records = async () =>
+        (
+          await new SchemaEventsRepository(db(), dialect).listPluginLifecycle()
+        ).filter(row => row.scopeSlug === PLUGIN).length;
+      const before = await version();
+
+      await handle.adapter.executeQuery(
+        "ALTER TABLE nextly_meta RENAME TO nextly_meta_away"
+      );
+      try {
+        await expect(install()).rejects.toBeDefined();
+      } finally {
+        await handle.adapter.executeQuery(
+          "ALTER TABLE nextly_meta_away RENAME TO nextly_meta"
+        );
+      }
+      expect(await exists("lc__notes")).toBe(true);
+      expect(await records()).toBe(0);
+      expect(await version()).toEqual(before);
+
+      await install();
+      expect(await records()).toBe(1);
+      const installed = await version();
+      expect(installed?.migration).toBe(seed);
+      expect(installed?.seq ?? 0).toBeGreaterThan(before?.seq ?? 0);
+
+      await uninstall(false);
+      const uninstalled = await version();
+      expect(uninstalled?.migration).toBe(seed);
+      expect(uninstalled?.seq ?? 0).toBeGreaterThan(installed?.seq ?? 0);
+    });
 
     it("is refused at a production boot until the install command has run", async () => {
       await expect(boot()).rejects.toMatchObject({
@@ -750,6 +801,85 @@ describe.each(getConfiguredTestDialects())(
       await expect(boot()).rejects.toMatchObject({
         code: "PLUGIN_SCHEMA_UNINSTALLED",
       });
+    });
+
+    // Whether `onInstall` runs is read in the access suite beside this one:
+    // here an instance is already started in the process, and the runner
+    // refuses to boot another for a hook.
+    describe("installed again", () => {
+      /** The plugin's lifecycle events, oldest first, by the state each records. */
+      const events = async () =>
+        (await new SchemaEventsRepository(db(), dialect).listPluginLifecycle())
+          .filter(row => row.scopeSlug === PLUGIN)
+          .map(row => row.note);
+
+      /** Whether the ledger records the named module of the plugin applied. */
+      const applied = async (module: PluginMigration) =>
+        (
+          await new SchemaEventsRepository(db(), dialect).listFileApplies()
+        ).some(
+          row =>
+            row.filename === `plugin:${PLUGIN}/${module.name}` &&
+            row.status === "applied"
+        );
+
+      it("records no second event when its recorded state is installed", async () => {
+        await install();
+        expect(await events()).toEqual(["installed"]);
+
+        await install();
+
+        expect(await events()).toEqual(["installed"]);
+        await expect(boot()).resolves.toBeUndefined();
+      });
+
+      it("applies and records a module its upgraded package added, with no event", async () => {
+        // The first release shipped one module, and the install ran it.
+        run.plugin = {
+          ...(run.plugin as object),
+          contributes: {
+            schema: { prefix: "lc", tables: [notes], migrations: [modules[0]] },
+          },
+        };
+        await install();
+        expect(await exists("lc__tags")).toBe(false);
+
+        // The upgraded package adds the second.
+        run.plugin = {
+          ...(run.plugin as object),
+          contributes: {
+            schema: {
+              prefix: "lc",
+              tables: [notes, tags],
+              migrations: modules,
+            },
+          },
+        };
+        await install();
+
+        expect(await exists("lc__tags")).toBe(true);
+        expect(await applied(modules[1])).toBe(true);
+        expect(await events()).toEqual(["installed"]);
+      });
+
+      it.each([
+        ["dropping its data", false],
+        ["keeping its data", true],
+      ])(
+        "records the install event again after an uninstall %s",
+        async (_how, keepData) => {
+          await install();
+          await uninstall(keepData);
+
+          await install();
+
+          // Counted, not read by position: the ledger's list is not ordered.
+          // That the newest record is the install, the boot's gate shows.
+          const recorded = await events();
+          expect(recorded.filter(note => note === "installed")).toHaveLength(2);
+          await expect(boot()).resolves.toBeUndefined();
+        }
+      );
     });
   }
 );

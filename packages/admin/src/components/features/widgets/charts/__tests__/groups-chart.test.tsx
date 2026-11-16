@@ -111,13 +111,17 @@ describe("the order groups are drawn in", () => {
 });
 
 describe("a bar's colour", () => {
-  it("is its status's pinned chart colour, the same on every card", async () => {
-    // Published is slot 3 and draft slot 2 wherever they are drawn, and whatever their order.
+  it("is its status's own colour, the same on every card", async () => {
+    // Published is the success solid and draft the muted ink wherever they are drawn, and
+    // whatever their order.
     const drawing = await drawAt("medium", [
       group("draft", 9, "Draft"),
       group("published", 4, "Published"),
     ]);
-    expect(fills(drawing)).toEqual(["var(--nx-chart-2)", "var(--nx-chart-3)"]);
+    expect(fills(drawing)).toEqual([
+      "var(--nx-muted-foreground)",
+      "var(--nx-success-solid)",
+    ]);
   });
 
   it("does not follow the bar's position", async () => {
@@ -126,7 +130,10 @@ describe("a bar's colour", () => {
       group("draft", 1, "Draft"),
       group("published", 4, "Published"),
     ]);
-    expect(fills(drawing)).toEqual(["var(--nx-chart-3)", "var(--nx-chart-2)"]);
+    expect(fills(drawing)).toEqual([
+      "var(--nx-success-solid)",
+      "var(--nx-muted-foreground)",
+    ]);
   });
 
   it("is the first chart colour for every bar of a field that is no status", async () => {
@@ -150,9 +157,9 @@ describe("a bar's colour", () => {
       statuses.map((status, index) => group(status, 10 - index, status))
     );
     expect(fills(drawing)).toEqual([
-      "var(--nx-chart-3)",
-      "var(--nx-chart-2)",
-      "var(--nx-chart-1)",
+      "var(--nx-success-solid)",
+      "var(--nx-muted-foreground)",
+      "var(--nx-info-solid)",
     ]);
   });
 });

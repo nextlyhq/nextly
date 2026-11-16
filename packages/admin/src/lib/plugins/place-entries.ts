@@ -38,6 +38,16 @@ function pageCollection(context: unknown): string | undefined {
     : undefined;
 }
 
+/** The Single a page shows, as its place's context names it, if any. */
+function pageSingle(context: unknown): string | undefined {
+  return typeof context === "object" &&
+    context !== null &&
+    "single" in context &&
+    typeof context.single === "string"
+    ? context.single
+    : undefined;
+}
+
 /**
  * Whether a contribution can be drawn on this page: once the page knows its
  * ids, on a collection it is offered on, and where its rule matches the
@@ -49,6 +59,23 @@ function drawableHere(
   item: DeliveredAdminContribution,
   { context, entry }: PlaceView
 ): boolean {
+  return (
+    offeredHere(item, context) &&
+    (item.visibleWhen === undefined ||
+      (entry !== undefined && rowMatches(item.visibleWhen, entry)))
+  );
+}
+
+/**
+ * Whether a contribution is offered on this page, before its rule is judged:
+ * once the page knows its ids, on a collection or Single it is offered on.
+ * Where a page starts a contribution's reads before its entry has arrived,
+ * this is all it can judge, so a contribution with a rule is started anyway.
+ */
+export function offeredHere(
+  item: DeliveredAdminContribution,
+  context: unknown
+): boolean {
   if (context === null || context === undefined) return false;
   if (item.collections !== undefined) {
     const collection = pageCollection(context);
@@ -56,10 +83,50 @@ function drawableHere(
       return false;
     }
   }
+  if (item.singles !== undefined) {
+    const single = pageSingle(context);
+    if (single === undefined || !item.singles.includes(single)) return false;
+  }
+  return true;
+}
+
+/** The document fields a delivered tab edits, where it names any. */
+function tabFields(item: DeliveredAdminEntry): readonly string[] | undefined {
+  return "builtIn" in item || item.kind !== "tab" ? undefined : item.fields;
+}
+
+/**
+ * Whether a tab can be drawn on a document with these top-level fields: a tab
+ * that edits fields only where the document has every one of them, and only on
+ * an edit page, which names its fields (`fieldNames`). A tab that edits none
+ * is left to the place's other rules.
+ */
+export function tabFitsDocument(
+  item: DeliveredAdminEntry,
+  fieldNames: readonly string[] | undefined
+): boolean {
+  const fields = tabFields(item);
+  if (fields === undefined) return true;
   return (
-    item.visibleWhen === undefined ||
-    (entry !== undefined && rowMatches(item.visibleWhen, entry))
+    fieldNames !== undefined && fields.every(name => fieldNames.includes(name))
   );
+}
+
+/**
+ * The document fields the tabs drawn on this edit page take over, which the
+ * page then leaves out of its own content: they are drawn, and edited, in
+ * their tab. Their values stay in the page's form, so its Save stores them.
+ */
+export function fieldsTakenByTabs(
+  tabs: readonly DeliveredAdminEntry[],
+  fieldNames: readonly string[]
+): ReadonlySet<string> {
+  const taken = new Set<string>();
+  for (const tab of tabs) {
+    if (!tabFitsDocument(tab, fieldNames)) continue;
+    for (const name of tabFields(tab) ?? []) taken.add(name);
+  }
+  return taken;
 }
 
 /**
@@ -76,4 +143,26 @@ export function entriesDrawnHere(
     if ("builtIn" in item || drawableHere(item, view)) return [item];
     return item.replaces === undefined ? [] : [{ builtIn: item.replaces }];
   });
+}
+
+/**
+ * The fields a plugin's switch keeps off this page (`withheldFields` in the
+ * workspace metadata, keyed `collection:<slug>` or `single:<slug>`): fields
+ * the plugin added to the page's type and has switched off there. The page
+ * draws them nowhere, and their stored values are left as they are.
+ */
+export function fieldsWithheldHere(
+  withheld: Readonly<Record<string, readonly string[]>> | undefined,
+  context: unknown
+): ReadonlySet<string> {
+  if (withheld === undefined) return new Set();
+  const collection = pageCollection(context);
+  const single = pageSingle(context);
+  const key =
+    collection !== undefined
+      ? `collection:${collection}`
+      : single !== undefined
+        ? `single:${single}`
+        : undefined;
+  return new Set(key === undefined ? [] : (withheld[key] ?? []));
 }

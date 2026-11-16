@@ -134,6 +134,29 @@ describe("findFieldReferences", () => {
     ]);
   });
 
+  it("finds a field named by one of several conditions, or attached by name", () => {
+    const notifications = [
+      notification({
+        name: "Access team",
+        conditions: {
+          match: "any",
+          list: [
+            { field: "join", comparison: "equals", value: "online" },
+            { field: "access", comparison: "isNotEmpty" },
+          ],
+        },
+      }),
+      notification({ name: "Hiring", attachFields: ["cv"] }),
+    ];
+
+    expect(findFieldReferences("access", [], notifications)).toEqual([
+      { kind: "notification", label: "Access team" },
+    ]);
+    expect(findFieldReferences("cv", [], notifications)).toEqual([
+      { kind: "notification", label: "Hiring" },
+    ]);
+  });
+
   it("ignores references held by disabled notifications", () => {
     const notifications = [
       notification({
@@ -218,6 +241,34 @@ describe("moving references with a renamed field", () => {
       replyTo: "{{work}}",
       condition: { field: "work", comparison: "isNotEmpty" },
     });
+  });
+
+  it("renames the field in several conditions and in the files attached", () => {
+    const [next] = renameInNotifications(
+      [
+        {
+          ...notification,
+          conditions: {
+            match: "all",
+            list: [
+              { field: "email", comparison: "isNotEmpty" },
+              { field: "join", comparison: "equals", value: "online" },
+            ],
+          },
+          attachFields: ["email", "photo"],
+        },
+      ],
+      "email",
+      "work"
+    );
+    expect(next?.conditions).toEqual({
+      match: "all",
+      list: [
+        { field: "work", comparison: "isNotEmpty" },
+        { field: "join", comparison: "equals", value: "online" },
+      ],
+    });
+    expect(next?.attachFields).toEqual(["work", "photo"]);
   });
 
   it("renames conditions on the field in every other field, enabled or not", () => {

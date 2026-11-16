@@ -60,6 +60,12 @@ export interface RemovalWriteReportArgs {
   >;
   /** The breakpoint ids the site's stylesheet is emitted under now. */
   readonly definedBreakpoints: () => Promise<ReadonlySet<string>>;
+  /**
+   * Whether a document of `collection` may hold blocks at all, known without
+   * a read. A run walks only documents that may, so it can have left none of
+   * a collection that may not, and a write to one is not asked about.
+   */
+  readonly mayHoldBlocks: (collection: string) => boolean;
 }
 
 /** Register the report on every committed create and update. */
@@ -84,7 +90,9 @@ async function reportWrite(
   context: unknown
 ): Promise<void> {
   const written = writtenDocument(context);
-  if (written === undefined) return;
+  if (written === undefined || !args.mayHoldBlocks(written.collection)) {
+    return;
+  }
   const report = () => requeueWritten(args, written);
   const { afterCommit } = context as Pick<HookContext, "afterCommit">;
   await (afterCommit ? afterCommit(report) : report());

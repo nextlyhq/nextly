@@ -87,13 +87,20 @@ export function actionOfferedOn(action: DeclaredAction, row: unknown): boolean {
 }
 
 /**
+ * What running an action reads: whose it is, its id, and what it does. A
+ * list's row and bulk actions carry these, and so does a plugin's item in the
+ * person's menu, which runs on no rows.
+ */
+export type RunnableAction = Pick<DeclaredAction, "plugin" | "id" | "action">;
+
+/**
  * Run an action on `rows`. One that runs a route is called with the action
  * and the rows, which the route checks before its handler runs; the request
  * carries the CSRF token as every admin write does. One that opens a
  * component answers which component to draw with the rows.
  */
 export async function runDeclaredAction(
-  action: DeclaredAction,
+  action: RunnableAction,
   rows: readonly ActionRow[]
 ): Promise<ActionOutcome> {
   if ("open" in action.action) return { open: action.action.open };

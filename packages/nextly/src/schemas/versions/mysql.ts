@@ -70,6 +70,8 @@ export const nextlyVersionsMysql = mysqlTable(
     // A recovery point's base, as the PostgreSQL schema says.
     baseVersionNo: int("base_version_no"),
     baseDraftRevision: int("base_draft_revision"),
+    // Each restored field's source version, as the PostgreSQL schema says.
+    fieldSources: json("field_sources").$type<Record<string, number>>(),
   },
   table => [
     // Durable version_no uniqueness per document. A FULL (non-partial) unique

@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { exportDataLossConsent, registerDbSyncCommand } from "../db-sync";
 import { registerI18nRestoreCommand } from "../i18n-restore.command";
 import { registerMigrateCommand } from "../migrate.command";
+import { registerMigrateCreateCommand } from "../migrate-create.command";
 import { downConsent, registerMigrateDownCommand } from "../migrate-down";
 import { registerMigrateFreshCommand } from "../migrate-fresh";
 import { createPermissionsCleanupCommand } from "../permissions-cleanup.command";
@@ -53,6 +54,7 @@ function program(): Command {
   const root = new Command().exitOverride();
   registerDbSyncCommand(root);
   registerMigrateCommand(root);
+  registerMigrateCreateCommand(root);
   registerMigrateDownCommand(root);
   registerMigrateFreshCommand(root);
   registerPruneCommand(root);
@@ -89,6 +91,7 @@ describe("--accept-data-loss on every command that deletes data", () => {
   it.each([
     [["db:sync"]],
     [["migrate"]],
+    [["migrate:create"]],
     [["migrate:down"]],
     [["migrate:fresh"]],
     [["prune"]],

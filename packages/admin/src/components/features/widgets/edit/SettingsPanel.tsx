@@ -105,6 +105,7 @@ import {
   bringRefusedPanelForward,
   useOnePanelOpen,
 } from "./settings-panel-registry";
+import { useToastAboveFooter } from "./useToastAboveFooter";
 
 export interface SettingsPanelProps {
   /** The card this configures, by its placement: one panel is open at a time (`useOnePanelOpen`). */
@@ -557,7 +558,7 @@ function PanelNotices({
         </p>
       )}
       {failure === undefined ? null : (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" className="text-sm text-danger-text">
           {failure}
         </p>
       )}
@@ -727,11 +728,11 @@ function TitleField({
         aria-invalid={problem !== undefined}
         onChange={event => onChange(event.target.value)}
       />
-      <p id={hintId} className="text-sm text-muted-foreground">
-        Leave it empty to title the card from its settings.
+      <p id={hintId} className="text-xs text-muted-foreground">
+        Leave empty to use the name shown.
       </p>
       {problem === undefined ? null : (
-        <p id={problemId} role="alert" className="text-sm text-destructive">
+        <p id={problemId} role="alert" className="text-sm text-danger-text">
           {problem}
         </p>
       )}
@@ -770,7 +771,8 @@ function SectionHeading({
           size="sm"
           // In the text's own colour, underlined: the link variant's primary colour falls under
           // 4.5:1 on the drawer when a brand colour replaces the default primary.
-          className="h-auto p-0 text-xs text-foreground underline"
+          // At least 24px tall, a target a finger can hit beside the heading.
+          className="h-auto min-h-6 p-0 text-xs text-foreground underline"
           disabled={saving}
           aria-label={`Reset ${label} to defaults`}
           onClick={onReset}
@@ -822,9 +824,15 @@ function PanelActions({
   blocked: string | undefined;
   onCancel: () => void;
 }) {
+  // A toast said while the drawer is open stands above these buttons, not over them.
+  const [footer, setFooter] = useState<HTMLDivElement | null>(null);
+  useToastAboveFooter(footer);
   return (
     // At the drawer's foot, below the part that scrolls, so Cancel and Save are always in reach.
-    <div className="flex shrink-0 flex-row justify-end gap-2 border-t border-border bg-background px-5 py-3">
+    <div
+      ref={setFooter}
+      className="flex shrink-0 flex-row justify-end gap-2 border-t border-border bg-background px-5 py-3"
+    >
       <Button
         type="button"
         variant="outline"

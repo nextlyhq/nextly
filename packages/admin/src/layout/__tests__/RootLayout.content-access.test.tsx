@@ -62,9 +62,12 @@ vi.mock("@admin/components/guards/PublicRoute", () => ({
 }));
 
 vi.mock("@admin/components/guards/PrivateRoute", () => ({
-  PrivateRoute: ({ children }: { children: React.ReactNode }) => (
-    <>{children}</>
-  ),
+  // A confirmed session: the guard hands its frame `true`.
+  PrivateRoute: ({
+    children,
+  }: {
+    children: (confirmed: boolean) => React.ReactNode;
+  }) => <>{children(true)}</>,
 }));
 
 const guardProps = vi.fn();

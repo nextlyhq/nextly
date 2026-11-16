@@ -1,16 +1,15 @@
 /**
- * Shared filter + sort helpers that decide which collection / single
- * the sidebar renders FIRST in its respective section. Reused by:
+ * Shared filter + sort helpers that decide which collections and Singles the
+ * Content panel lists, and in what order. Reused by:
  *
- * - `DynamicCollectionNav` and `DynamicSingleNav` (sidebar render order)
- * - `CollectionsLandingRedirect` and `SinglesLandingRedirect` (deciding
- *   where `/admin/collections` and `/admin/singles` should land)
+ * - `DynamicCollectionNav` and `DynamicSingleNav` (the panel's lists)
+ * - the Content overview, whose tables list the same ones in the same order
  *
- * Centralising the logic guarantees the redirect target is always the
- * same as the sidebar's first item (WYSIWYG). If the sidebar's order
- * changes in the future, the redirects follow automatically.
+ * Centralising the logic means the panel and the overview cannot disagree
+ * about what the reader has, or in which order it comes.
  */
 
+import { collectionSidebarGroup } from "@admin/lib/content-groups";
 import {
   filterCollectionItems,
   filterSingleItems,
@@ -43,11 +42,12 @@ interface SinglesLandingDeps {
 
 /**
  * Returns true if `collection` is rendered in the sidebar's "Collections"
- * section. Mirrors the inline filter inside `DynamicCollectionNav`.
+ * section.
  *
  * Rules (any of):
  *   - explicit `admin.sidebarGroup === "collections"`
- *   - no `sidebarGroup` AND not a plugin
+ *   - not a plugin; a `sidebarGroup` of its own shows as a sub-heading inside
+ *     the section (`lib/content-groups`), so it never takes a collection out
  *   - is a plugin AND its plugin metadata `placement === "collections"`
  *
  * Hidden collections (`admin.hidden === true`) are always excluded.
@@ -59,7 +59,7 @@ function isInCollectionsSection(
   if (collection.admin?.hidden) return false;
   const group = collection.admin?.sidebarGroup;
   if (group === "collections") return true;
-  if (!group && !collection.admin?.isPlugin) return true;
+  if (!collection.admin?.isPlugin) return true;
   if (collection.admin?.isPlugin) {
     const meta = pluginMetadata?.find(p =>
       (p.collections ?? []).includes(collection.name)
@@ -71,16 +71,14 @@ function isInCollectionsSection(
 }
 
 /**
- * Returns true if `single` is rendered in the sidebar's "Singles" section.
- * Mirrors the inline filter inside `DynamicSingleNav`. Singles do not have
- * plugin-placement overrides today.
+ * Returns true if `single` is rendered in the sidebar's "Singles" section:
+ * every Single not hidden. Singles do not have plugin-placement overrides,
+ * and a `sidebarGroup` they name has no sub-heading under Singles, so it
+ * leaves them listed there rather than nowhere: the rail's Singles section
+ * counts them the same way.
  */
 function isInSinglesSection(single: ApiSingle): boolean {
-  if (single.admin?.hidden) return false;
-  const group = single.admin?.sidebarGroup;
-  if (group === "singles") return true;
-  if (!group) return true;
-  return false;
+  return !single.admin?.hidden;
 }
 
 /**
@@ -148,7 +146,13 @@ export function searchSidebarSingles(
 /**
  * Apply the sidebar's "Collections" section filter + permission filter
  * + pinned/order/name sort to the supplied list. Returns the items in
- * the EXACT order the sidebar would render them.
+ * the EXACT order the sidebar would render them: each `sidebarGroup` in
+ * the order its first collection appears, then the collections naming no
+ * group, each run sorted pinned/order/name.
+ *
+ * A group's place is read from the order and name alone, not the pins, so
+ * pinning a collection moves it to the top of its own run without moving
+ * its group past the others.
  */
 export function getSidebarCollectionsForLanding(
   items: readonly ApiCollection[],
@@ -158,13 +162,30 @@ export function getSidebarCollectionsForLanding(
     isInCollectionsSection(c, deps.branding?.plugins)
   );
   const permitted = filterCollectionItems(visible, deps.capabilities);
-  const comparator = makeSidebarComparator<ApiCollection>({
-    getKey: c => c.name,
-    getOrder: c => c.admin?.order ?? 100,
-    getDisplayName: collectionDisplayName,
-    pinned: deps.pinnedCollections,
-  });
-  return [...permitted].sort(comparator);
+  const comparatorWith = (pinned: Set<string>) =>
+    makeSidebarComparator<ApiCollection>({
+      getKey: c => c.name,
+      getOrder: c => c.admin?.order ?? 100,
+      getDisplayName: collectionDisplayName,
+      pinned,
+    });
+  // Each group's place: 0, 1, 2, ... as groups first appear in the unpinned
+  // order, and after every group for the collections naming none.
+  const groupPlace = new Map<string, number>();
+  for (const collection of [...permitted].sort(comparatorWith(new Set()))) {
+    const group = collectionSidebarGroup(collection);
+    if (group !== null && !groupPlace.has(group)) {
+      groupPlace.set(group, groupPlace.size);
+    }
+  }
+  const placeOf = (c: ApiCollection) => {
+    const group = collectionSidebarGroup(c);
+    return group === null ? groupPlace.size : (groupPlace.get(group) ?? 0);
+  };
+  const comparator = comparatorWith(deps.pinnedCollections);
+  return [...permitted].sort(
+    (a, b) => placeOf(a) - placeOf(b) || comparator(a, b)
+  );
 }
 
 /**
@@ -184,30 +205,4 @@ export function getSidebarSinglesForLanding(
     pinned: deps.pinnedSingles,
   });
   return [...permitted].sort(comparator);
-}
-
-/**
- * Pick the first collection the sidebar would render, or null when
- * none are visible. The collection's `name` is the URL slug used by
- * `/admin/collections/{name}`.
- */
-export function pickCollectionsLandingTarget(
-  items: ApiCollection[],
-  deps: CollectionsLandingDeps
-): ApiCollection | null {
-  const sorted = getSidebarCollectionsForLanding(items, deps);
-  return sorted[0] ?? null;
-}
-
-/**
- * Pick the first single the sidebar would render, or null when none
- * are visible. The single's `slug` is the URL segment used by
- * `/admin/singles/{slug}`.
- */
-export function pickSinglesLandingTarget(
-  items: ApiSingle[],
-  deps: SinglesLandingDeps
-): ApiSingle | null {
-  const sorted = getSidebarSinglesForLanding(items, deps);
-  return sorted[0] ?? null;
 }

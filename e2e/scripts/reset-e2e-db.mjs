@@ -17,6 +17,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { e2eDatabase } from "../support/e2e-database.mjs";
+import { removeOwedMigrations } from "../support/owed-migrations.mjs";
 import { recreateServerDatabase } from "../support/server-database.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -69,6 +70,11 @@ async function main() {
     }
     await fs.rm(path.join(DATA_DIR, name), { force: true });
   }
+
+  // The migrations a stopped run owed, removed before the server boots: a
+  // booting dev server applies every file it finds to the empty database, and
+  // its ledger would then record files the run's teardown never got to.
+  await removeOwedMigrations();
 
   console.log(`[e2e] Reset ${path.join(DATA_DIR, FILES[0])}`);
 }

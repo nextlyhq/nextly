@@ -89,3 +89,48 @@ describe("submitDocument and the recordings in flight", () => {
     expect(write).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("submitDocument and restored values", () => {
+  /** A form holding "saved", with a restore that names a source for it. */
+  function withRestore(write: (payload: Record<string, unknown>) => unknown) {
+    const form = renderHook(() =>
+      useForm<Record<string, unknown>>({ defaultValues: { title: "saved" } })
+    ).result.current;
+    const restore = {
+      restoredFromForSave: vi.fn(() => ({ title: 3 })),
+      saved: vi.fn(),
+    };
+    const outcome = submitDocument({
+      form,
+      toPayload: v => v,
+      write: vi.fn(async (payload: Record<string, unknown>) => {
+        await write(payload);
+        return { item: { id: "e1" }, stored: payload };
+      }),
+      recordingsFor: null,
+      restore,
+    });
+    return { restore, outcome };
+  }
+
+  it("names each restored field's version on the save, then forgets them", async () => {
+    const sent: Record<string, unknown>[] = [];
+    const { restore, outcome } = withRestore(payload => sent.push(payload));
+
+    await expect(outcome).resolves.toMatchObject({ ok: true });
+    expect(sent[0]).toMatchObject({
+      title: "saved",
+      _restoredFrom: { title: 3 },
+    });
+    expect(restore.saved).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the sources for the next try when the save fails", async () => {
+    const { restore, outcome } = withRestore(() => {
+      throw new Error("refused");
+    });
+
+    await expect(outcome).resolves.toMatchObject({ ok: false });
+    expect(restore.saved).not.toHaveBeenCalled();
+  });
+});

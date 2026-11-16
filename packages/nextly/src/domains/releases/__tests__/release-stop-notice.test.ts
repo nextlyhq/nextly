@@ -7,9 +7,7 @@
  * question goes through the pool, and a pool whose only connection the
  * transaction holds would wait for a second one forever.
  */
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-
-import { loadDialectTables } from "../../../database/dialect-tables";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   getNextlyLogger,
@@ -23,10 +21,6 @@ import {
 import { RELEASE_NOTICE_EMAIL_JOB } from "../release-notice-email";
 import { RELEASE_STOPPED_NOTICE } from "../release-stopped-notice";
 import { ReleasesRepository, type ReleasesDbApi } from "../releases-repository";
-
-// The job is written through the jobs table's Drizzle model, which is the
-// loaded dialect's.
-beforeAll(() => loadDialectTables("postgresql"));
 
 afterEach(() => clearNoticeKindsForTests());
 
@@ -52,18 +46,14 @@ function oneConnection(tablePresent = true, kept?: string) {
       return [{ title: "Launch", createdBy: "owner" }];
     },
     updateCount: async () => 1,
-    insert: async () => undefined,
+    insert: async (table: string, row: Record<string, unknown>) => {
+      if (table === "nextly_jobs") jobs.push({ row, inside: inTransaction });
+      return undefined;
+    },
     delete: async () => 0,
     upsert: vi.fn(async (_table: string, row: Record<string, unknown>) => ({
       id: kept ?? row.id,
     })),
-    getDrizzle: () => ({
-      insert: () => ({
-        values: async (row: Record<string, unknown>) => {
-          jobs.push({ row, inside: inTransaction });
-        },
-      }),
-    }),
   };
   const db = {
     dialect: "postgresql",

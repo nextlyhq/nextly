@@ -38,6 +38,13 @@ export interface DocumentColumnsArgs {
   db: unknown;
   dialect: SupportedDialect;
   logger?: { info?: (message: string) => void };
+  /**
+   * Only these entities' tables, each with its translation table, are read and
+   * changed: what a development start passes for the entities whose declaration
+   * changed since the last one. Absent, every content table is, as `nextly
+   * migrate` and the CLI run it.
+   */
+  tables?: readonly string[];
 }
 
 /**
@@ -131,7 +138,12 @@ export async function addDocumentColumns(
   args: DocumentColumnsArgs
 ): Promise<{ added: number }> {
   const { db, dialect } = args;
-  const tables = await contentTables(db, dialect);
+  const only =
+    args.tables &&
+    new Set(args.tables.flatMap(table => [table, `${table}_locales`]));
+  const tables = (await contentTables(db, dialect)).filter(
+    table => only === undefined || only.has(table)
+  );
   if (tables.length === 0) return { added: 0 };
   // The same descriptors `CREATE TABLE` is written from, so an added column
   // and a created one cannot differ in type, default or nullability.
@@ -168,8 +180,12 @@ export async function addDocumentColumnsUnderLock(
   logger?: {
     info?: (message: string) => void;
     warn?: (message: string) => void;
-  }
+  },
+  /** Only these entities' tables (`DocumentColumnsArgs.tables`); none is a step with nothing to do. */
+  tables?: readonly string[]
 ): Promise<void> {
+  // Nothing to read or change, so the lock is not taken either.
+  if (tables !== undefined && tables.length === 0) return;
   const { withSchemaLock } = await import("../pipeline/schema-lock");
   await withSchemaLock(
     {
@@ -184,6 +200,7 @@ export async function addDocumentColumnsUnderLock(
         db: adapter.getDrizzle(),
         dialect: adapter.dialect,
         ...(logger ? { logger } : {}),
+        ...(tables === undefined ? {} : { tables }),
       })
   );
 }

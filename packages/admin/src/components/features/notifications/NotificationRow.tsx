@@ -125,7 +125,9 @@ function StatusIcon({
   }
   if (status === "in_progress") {
     return (
-      <span className="text-warning-text font-mono text-base leading-5">⏳</span>
+      <span className="text-warning-text font-mono text-base leading-5">
+        ⏳
+      </span>
     );
   }
   // aborted (rare)

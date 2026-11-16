@@ -286,27 +286,30 @@ describe("undo in an open editor", () => {
             to: "team@example.com",
             cc: [],
             bcc: [],
-            replyTo: "lead@example.com",
+            replyTo: "{{email}}",
             templateSlug: "forms-submission",
           },
         ],
       },
     });
-    await user.click(
-      await screen.findByRole("button", { name: "Edit notification Team" })
-    );
+    await user.click(await screen.findByRole("link", { name: "Team" }));
     const replyTo = () => screen.getByRole("combobox", { name: "Reply-To" });
-    expect(replyTo()).toHaveTextContent("A custom address");
+    const visitor = "The visitor, field: Email";
+    expect(replyTo()).toHaveTextContent(visitor);
 
     await user.click(replyTo());
-    await user.click(await screen.findByRole("option", { name: "None" }));
-    expect(replyTo()).toHaveTextContent("None");
+    await user.click(
+      await screen.findByRole("option", { name: "Another address" })
+    );
+    expect(replyTo()).toHaveTextContent("Another address");
 
     await user.click(within(bar()).getByRole("button", { name: "Undo" }));
 
-    // The rule sends to the address again, and the editor says so.
-    expect(replyTo()).toHaveTextContent("A custom address");
-    expect(screen.getByDisplayValue("lead@example.com")).toBeVisible();
+    // Replies go to the visitor again, and the page says so.
+    expect(replyTo()).toHaveTextContent(visitor);
+    expect(
+      screen.queryByRole("textbox", { name: "Reply-To address" })
+    ).toBeNull();
   });
 });
 

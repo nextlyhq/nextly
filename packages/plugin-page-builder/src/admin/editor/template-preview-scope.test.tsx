@@ -60,6 +60,13 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // rather than the collection's answer is told apart.
   humanizeFieldName: (name: string) => `field ${name}`,
   writePluginRoute,
+  // The admin's preference store, as the tab's session storage the preview
+  // memory is kept in: its own rules are the admin's to test.
+  devicePreferenceStore: (key: string) => ({
+    read: () => window.sessionStorage.getItem(key),
+    write: (value: string) => window.sessionStorage.setItem(key, value),
+    remove: () => window.sessionStorage.removeItem(key),
+  }),
   PILL_LABEL: {
     draft: "Draft",
     modified: "Modified",

@@ -265,7 +265,7 @@ async function sweepOne(
     if (windowAt <= known) return;
     const claimed = await insertIfAbsent(tx, db.dialect, row);
     if (!claimed) return;
-    const { id } = await enqueue(tx, db.dialect, {
+    const { id } = await enqueue(tx, {
       slug: schedule.job,
       // The window last, so the schedule's own input cannot replace it.
       input: { ...schedule.input, window: windowAt.toISOString() },

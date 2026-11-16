@@ -52,15 +52,17 @@ export const ROUTES = {
   BUILDER_FIELD_GROUPS_NEW: "/admin/builder/field-groups/new",
   BUILDER_FIELD_GROUPS_EDIT: "/admin/builder/field-groups/[slug]",
 
+  // The Content overview: every collection and Single the reader may open, in
+  // two tables. The rail's Content item and the Content panel's title lead
+  // here; COLLECTIONS and SINGLES below show one table each.
+  CONTENT: "/admin/content",
+
   // ============================================================
-  // Section landing pages (smart redirects).
+  // Section landing pages.
   //
-  // clicking a section icon in the primary sidebar
-  // hits one of these. The page is a router that picks the most-
-  // recently-created record (sorted by `created` DESC), redirects to
-  // its content URL, or renders the standard 404 when zero records
-  // exist. Field groups have no content surface, so /admin/field-groups
-  // is a static redirect to /admin/builder/field-groups instead.
+  // /admin/collections and /admin/singles are the Content overview with
+  // one kind's table. Field groups have no content surface, so
+  // /admin/field-groups is a static redirect to /admin/builder/field-groups.
   // ============================================================
   COLLECTIONS: "/admin/collections",
   SINGLES: "/admin/singles",
@@ -110,16 +112,22 @@ export const ROUTES = {
   USERS_FIELDS: "/admin/users/fields",
   USERS_FIELDS_CREATE: "/admin/users/fields/create",
   USERS_FIELDS_EDIT: "/admin/users/fields/edit/[id]",
-  // The Email hub: Messages (the hub's landing page), Design, Sending and
-  // Activity, each a tab, with the editors under the tab they belong to.
-  EMAIL: "/admin/email",
-  EMAIL_DESIGN: "/admin/email/design",
-  EMAIL_SENDING: "/admin/email/sending",
-  EMAIL_ACTIVITY: "/admin/email/activity",
-  EMAIL_MESSAGES_CREATE: "/admin/email/messages/create",
-  EMAIL_MESSAGES_EDIT: "/admin/email/messages/edit/[id]",
-  EMAIL_SENDING_CREATE: "/admin/email/sending/create",
-  EMAIL_SENDING_EDIT: "/admin/email/sending/edit/[id]",
+  // The Email hub, a Settings destination: Messages (the hub's landing page),
+  // Design, Sending and Activity, each a tab, with the editors under the tab
+  // they belong to.
+  EMAIL: "/admin/settings/email",
+  EMAIL_DESIGN: "/admin/settings/email/design",
+  EMAIL_SENDING: "/admin/settings/email/sending",
+  EMAIL_ACTIVITY: "/admin/settings/email/activity",
+  EMAIL_MESSAGES_CREATE: "/admin/settings/email/messages/create",
+  EMAIL_MESSAGES_EDIT: "/admin/settings/email/messages/edit/[id]",
+  EMAIL_SENDING_CREATE: "/admin/settings/email/sending/create",
+  EMAIL_SENDING_EDIT: "/admin/settings/email/sending/edit/[id]",
+  // Where the hub lived when it had a rail entry of its own. Every address
+  // under it redirects to the same page under Settings, so bookmarks and links
+  // keep working.
+  OLD_EMAIL_HUB: "/admin/email",
+  OLD_EMAIL_HUB_PAGE: "/admin/email/[...rest]",
   // Where email lived under Settings before the hub. Each redirects to its
   // place in the hub, so bookmarks and links keep working.
   SETTINGS_EMAIL_PROVIDERS: "/admin/settings/email-providers",

@@ -4,8 +4,13 @@ import type React from "react";
 import { useEffect, useRef } from "react";
 
 import { ROUTES } from "@admin/constants/routes";
+import { returnWithSession } from "@admin/lib/auth/return-address";
 import { isAuthenticated } from "@admin/lib/auth/session";
 import { checkSetupStatus } from "@admin/lib/auth/setup-status";
+import {
+  announceSignedOut,
+  forgetPerson,
+} from "@admin/lib/device-memory/device-memory";
 import { navigateTo } from "@admin/lib/navigation";
 
 interface PublicRouteProps {
@@ -38,7 +43,16 @@ export function PublicRoute({ children }: PublicRouteProps): React.JSX.Element {
       // anything — the login screen stayed a blank themed div for both.
       // A server that cannot answer leaves the visitor where they are: the page
       // is already drawn, and nothing sends them anywhere on a non-answer.
-      const sessionPromise = isAuthenticated().catch(() => false);
+      const sessionPromise = isAuthenticated().then(
+        authenticated => {
+          // The server says there is no session. Where this browser had a
+          // record of one, it ended: everything remembered about the person
+          // goes, in every open tab.
+          if (!authenticated && forgetPerson()) announceSignedOut();
+          return authenticated;
+        },
+        () => false
+      );
       // `checkSetupStatus` swallows its own failures and fail-safes to
       // "setup complete," so no try/catch is needed here -- the only way
       // this function returns is with a definitive boolean.
@@ -68,7 +82,9 @@ export function PublicRoute({ children }: PublicRouteProps): React.JSX.Element {
         // shared 5-minute session cache.
         const authenticated = await sessionPromise;
         if (!mountedRef.current) return;
-        if (authenticated) {
+        // A sign-in page asked to return somewhere goes there, since the
+        // session it needed is now in hand; otherwise the dashboard.
+        if (authenticated && !returnWithSession()) {
           navigateTo(ROUTES.DASHBOARD);
         }
       }

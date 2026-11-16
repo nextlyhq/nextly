@@ -103,3 +103,49 @@ export function startingFieldName(type: string): string {
   // field nor the choice that produced it.
   return cleaned.replace(/^_+|_+$/g, "") || "content";
 }
+
+/**
+ * The Page Builder's field type. A new entity started with it is laid out from
+ * blocks rather than filled in a form, which is why the new-entity dialog asks
+ * about it in the words of what editors will make.
+ */
+const PAGE_BUILDER_FIELD_TYPE = "blocks";
+
+/**
+ * Whether an entity is laid out from blocks: the Page Builder's field at its
+ * top level, which a new entry or a Single's document opens the Page Builder
+ * on.
+ */
+export function hasPageBuilderField(
+  fields: readonly { name: string; type: string }[]
+): boolean {
+  return fields.some(field => field.type === PAGE_BUILDER_FIELD_TYPE);
+}
+
+/**
+ * The starting-field choices in the new-entity dialog's words: what editors
+ * will make. The standard fields are "Entries with fields" and the Page
+ * Builder's field "Pages you design visually"; any other plugin's choice keeps
+ * the label and hint its field type gives.
+ */
+export function entryKindChoices(
+  pluginEntries: readonly FieldTypeCatalogEntry<string>[]
+): StartingFieldChoice[] {
+  return startingFieldChoices(pluginEntries).map(choice => {
+    if (choice.type === null) {
+      return {
+        type: null,
+        label: "Entries with fields",
+        hint: "Each entry has the same fields, filled in a form.",
+      };
+    }
+    if (choice.type === PAGE_BUILDER_FIELD_TYPE) {
+      return {
+        type: choice.type,
+        label: "Pages you design visually",
+        hint: "Each page is laid out from blocks in the Page Builder.",
+      };
+    }
+    return choice;
+  });
+}

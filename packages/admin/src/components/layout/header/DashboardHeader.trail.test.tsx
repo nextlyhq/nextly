@@ -92,7 +92,7 @@ describe("the top bar's trail", () => {
       "Content",
       "Blog posts",
     ]);
-    expect(links[0]).toHaveAttribute("href", "/admin/collections");
+    expect(links[0]).toHaveAttribute("href", "/admin/content");
     expect(links[1]).toHaveAttribute("href", "/admin/collections/posts");
     // The last step is the page itself, named and not a link.
     const here = within(trail()).getByText("Spring is here");
@@ -107,6 +107,7 @@ describe("the top bar's trail", () => {
 
     const links = within(trail()).getAllByRole("link");
     expect(links.map(link => link.textContent)).toEqual(["Content", "Singles"]);
+    expect(links[0]).toHaveAttribute("href", "/admin/content");
     expect(links[1]).toHaveAttribute("href", "/admin/singles");
     expect(within(trail()).getByText("Homepage")).toHaveAttribute(
       "aria-current",
@@ -203,9 +204,13 @@ describe("the top bar's trail", () => {
       .getByRole("banner")
       .querySelector('[data-top-bar-place="end"]');
     expect(end?.className).toMatch(/(^|\s)flex-1(\s|$)/);
-    // The trail's row is the bar's own: the account menu and help links are no longer in the
-    // bar, so nothing beside it takes its width.
-    expect(slot.parentElement).toBe(screen.getByRole("banner"));
+    // The trail's row is the room the bar gives it and the right part: the bar's own row less
+    // a plugin's header items, growing into the bar and shrinking within it.
+    const room = slot.parentElement!;
+    expect(room.hasAttribute("data-bar-room")).toBe(true);
+    expect(room.className).toMatch(/(^|\s)flex-1(\s|$)/);
+    expect(room.className).toMatch(/(^|\s)min-w-0(\s|$)/);
+    expect(room.parentElement).toBe(screen.getByRole("banner"));
   });
 
   it("draws nothing where no document is open", () => {

@@ -12,6 +12,7 @@
 import type { JSX } from "react";
 
 import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
+import type { StoredHookConfig } from "@admin/types/collection";
 
 import type { BuilderConfig } from "./builder-config";
 import { BuilderFieldPicker } from "./BuilderFieldPicker";
@@ -19,7 +20,7 @@ import {
   BuilderSettingsModal,
   type BuilderSettingsValues,
 } from "./BuilderSettingsModal";
-import type { BuilderFieldsApi } from "./types";
+import type { BuilderField, BuilderFieldsApi } from "./types";
 
 /**
  * Which overlay is open, and the state that overlay needs.
@@ -44,6 +45,12 @@ type Props = {
   onSettingsChange: (next: BuilderSettingsValues) => void;
   /** Code-first entities render every editing affordance disabled. */
   readOnly: boolean;
+  /** A collection's stored hooks, which the settings modal shows read-only. */
+  storedHooks?: readonly StoredHookConfig[];
+  /** The fields as last saved, where a pending delete still holds its name until the save. */
+  savedFields?: readonly BuilderField[];
+  /** Whether the save judges names with Draft/Published on: as stored, or as the pending settings set it. */
+  lifecycleEnabled?: boolean;
 };
 
 export function BuilderOverlays({
@@ -54,6 +61,9 @@ export function BuilderOverlays({
   settings,
   onSettingsChange,
   readOnly,
+  storedHooks,
+  savedFields,
+  lifecycleEnabled = false,
 }: Props): JSX.Element {
   const close = () => onActiveChange({ kind: "none" });
 
@@ -67,6 +77,7 @@ export function BuilderOverlays({
           config={config}
           initialValues={settings}
           readOnly={readOnly}
+          storedHooks={storedHooks}
           onCancel={close}
           onSubmit={next => {
             onSettingsChange(next);
@@ -89,6 +100,8 @@ export function BuilderOverlays({
           onAdded={(fieldId, how) => {
             if (!how.addAnother) onActiveChange({ kind: "edit", fieldId });
           }}
+          savedFields={savedFields}
+          lifecycleEnabled={lifecycleEnabled}
         />
       )}
     </>

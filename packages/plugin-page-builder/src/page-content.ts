@@ -24,7 +24,6 @@ import {
   TEMPLATES_SLUG,
 } from "./collections/templates";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
-import { fieldOf } from "./spacing-mode-reader";
 import { drawingDesign } from "./templates/entry-designs";
 
 export type { ContentAddressHolder } from "./address-claims/content-addresses";
@@ -61,6 +60,8 @@ export interface PageBuilderContentTemplate {
   readonly id: string;
   /** The template's block document. */
   readonly document: unknown;
+  /** Set where this is the entry's own design, not its collection's. */
+  readonly own?: true;
 }
 
 /**
@@ -126,7 +127,14 @@ const DESIGN_SELECT = {
 
 /** A templates row as the route draws an entry with it. */
 function drawnWith(row: Record<string, unknown>): PageBuilderContentTemplate {
-  return { id: String(row.id), document: row[TEMPLATE_CONTENT_FIELD] ?? null };
+  const drawn = {
+    id: String(row.id),
+    document: row[TEMPLATE_CONTENT_FIELD] ?? null,
+  };
+  const entry = row[TEMPLATE_ENTRY_FIELD];
+  return typeof entry === "string" && entry !== ""
+    ? { ...drawn, own: true }
+    : drawn;
 }
 
 /**
@@ -268,4 +276,10 @@ function addressServiceOf(
   throw new Error(
     "[page-builder] the content route reads addresses through the page builder plugin, which this Nextly instance does not have installed."
   );
+}
+
+/** One field of a value read as an object, or `undefined` when it is not one. */
+function fieldOf(value: unknown, key: string): unknown {
+  if (typeof value !== "object" || value === null) return undefined;
+  return (value as Readonly<Record<string, unknown>>)[key];
 }

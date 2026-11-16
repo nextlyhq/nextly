@@ -50,6 +50,8 @@ import {
   isJsonFieldType,
 } from "../services/collection-utils";
 
+import { referenceListFields } from "./reference-list-membership";
+
 /** A collection's runtime table: its columns, by field name. */
 export type DynamicSchema = Record<string, SQLWrapper | undefined>;
 
@@ -140,6 +142,8 @@ export async function prepareFilterCondition(
   const parentTable = collectionTableName(collection, params.collectionName);
   // The dialect the condition runs on, which decides how a match that ignores case folds it.
   const { dialect } = sources.adapter;
+  // The fields keeping a list of related entries' ids, which a filter matches by membership.
+  const referenceLists = referenceListFields(declaredFields(collection));
 
   return {
     componentTables,
@@ -165,7 +169,8 @@ export async function prepareFilterCondition(
           schema,
           dialect,
           localizedCtx,
-          buildLocalizedWhereExists
+          buildLocalizedWhereExists,
+          referenceLists
         );
         if (whereCondition) parts.push(whereCondition);
       }

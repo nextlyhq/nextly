@@ -18,6 +18,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DesiredSchema } from "../../schema/pipeline/types";
 import { resolveLocalizedFieldNames } from "../classify-fields";
+import { appLanguageOrder } from "../configured-locales";
 import { companionUniqueIndexName } from "../migration/companion-unique-indexes";
 import {
   type LeavingFieldLike,
@@ -26,6 +27,7 @@ import {
   withoutLeavingConstraints,
 } from "../migration/field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "../migration/field-to-column-spec";
+import { copyLiveness } from "../migration/generate-down";
 import {
   applyCompanionStatements,
   dropHeldLeavingFields,
@@ -37,13 +39,21 @@ import {
 } from "../migration/reconcile-companion";
 import {
   readRecordedEntities,
+  type RecordedEntities,
   type RecordedEntity,
   recordedBeforeOf,
 } from "../migration/recorded-before";
 import type { I18nTransitionKind } from "../migration/transition-state";
-import { storesPerLanguage } from "../per-language-storage";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../per-language-storage";
 
-import { companionColumnNames, liveCompanionShape } from "./companion-io";
+import {
+  companionColumnNames,
+  companionHasStatusColumn,
+  liveCompanionShape,
+} from "./companion-io";
 import {
   localizableConfigEntities,
   type LocalizableEntity,
@@ -51,7 +61,10 @@ import {
 
 /** The reloaded config, as far as these fields go. */
 type ReloadConfig = Parameters<typeof localizableConfigEntities>[0] & {
-  localization?: { defaultLocale?: string };
+  localization?: {
+    defaultLocale?: string;
+    locales?: readonly (string | { code: string })[];
+  };
 };
 
 /** One entity's fields leaving translation in a reload. */
@@ -60,6 +73,12 @@ export interface FieldsLeavingOnReload {
   slug: string;
   tableName: string;
   status: boolean;
+  /**
+   * Whether each language publishes on its own (`publishesPerLanguage`), so its translations table
+   * has `_status`: translated and Draft/Published. Under per-language storage an untranslated
+   * entity keeps a translations table with no `_status`.
+   */
+  perLanguageStatus: boolean;
   /** The entity's fields as the config declares them now. */
   newFields: readonly LeavingFieldLike[];
   /** The same fields before the reload: those leaving translation as the registry recorded them. */
@@ -103,6 +122,27 @@ export async function prepareFieldsLeavingOnReload(
       cause: error instanceof Error ? error : undefined,
     });
   });
+  return fieldsLeavingUnder(
+    adapter,
+    config,
+    fieldGroupTables,
+    recorded,
+    report
+  );
+}
+
+/**
+ * The same for a run that read the registry before changing it (`nextly db:sync` and its watch),
+ * from `recorded`, what it read. Nothing leaves when nothing was read: the run's companion pass
+ * judges no translations column then either, and leaves each where it is.
+ */
+export async function fieldsLeavingUnder(
+  adapter: DrizzleAdapter,
+  config: ReloadConfig,
+  fieldGroupTables: ReadonlyMap<string, string>,
+  recorded: RecordedEntities | undefined,
+  report: (message: string) => void
+): Promise<{ entries: FieldsLeavingOnReload[]; refused: string[] }> {
   const entries: FieldsLeavingOnReload[] = [];
   const renamed: { slug: string; message: string }[] = [];
   for (const [kind, entities, tableNameOf] of localizableConfigEntities(
@@ -123,11 +163,7 @@ export async function prepareFieldsLeavingOnReload(
   }
   const refusals = [
     ...renamed,
-    ...(await leavingRefusalsOnReload(
-      adapter,
-      entries,
-      defaultLocaleOf(config)
-    )),
+    ...(await leavingRefusalsOnReload(adapter, entries, siteOf(config))),
   ];
   for (const r of refusals) report(r.message);
   return { entries, refused: [...new Set(refusals.map(r => r.slug))] };
@@ -136,6 +172,26 @@ export async function prepareFieldsLeavingOnReload(
 /** The language a field leaving translation keeps as its shared value. */
 function defaultLocaleOf(config: ReloadConfig): string {
   return config.localization?.defaultLocale ?? "en";
+}
+
+/** The site's languages as the reloaded config declares them: the default, and their order. */
+interface SiteLanguages {
+  defaultLocale: string;
+  /**
+   * The order the value an entry keeps is chosen in (`copyLiveness`): the config's own, which is
+   * what this reload applies, else the language registry's.
+   */
+  languageOrder: readonly string[] | undefined;
+}
+
+function siteOf(config: ReloadConfig): SiteLanguages {
+  const declared = config.localization?.locales?.map(locale =>
+    typeof locale === "string" ? locale : locale.code
+  );
+  return {
+    defaultLocale: defaultLocaleOf(config),
+    languageOrder: declared ?? appLanguageOrder(),
+  };
 }
 
 /** One entity the config keeps translated, at its table, or `undefined` for any other. */
@@ -290,6 +346,7 @@ async function leavingIn(
     slug: e.slug,
     tableName: e.tableName,
     status: e.entity.status === true,
+    perLanguageStatus: publishesPerLanguage(e.entity),
     newFields: fields,
     oldFields: fields.map(f =>
       leaving.has(f.name)
@@ -369,7 +426,7 @@ const FIX_OF: Partial<
 async function leavingRefusalsOnReload(
   adapter: DrizzleAdapter,
   entries: readonly FieldsLeavingOnReload[],
-  defaultLocale: string
+  site: SiteLanguages
 ): Promise<{ slug: string; message: string }[]> {
   const dialect = adapter.getCapabilities().dialect;
   const said: { slug: string; message: string }[] = [];
@@ -388,7 +445,13 @@ async function leavingRefusalsOnReload(
         ...judged,
         adapter,
         tableName: e.tableName,
-        defaultLocale,
+        defaultLocale: site.defaultLocale,
+        // The values the move keeps, ranked by each language's own state where its translations
+        // table holds one.
+        liveness: copyLiveness(
+          site.languageOrder,
+          await companionStatusOn(adapter, e)
+        ),
         uniqueIndexed: e.uniqueIndexed,
       })),
     ];
@@ -461,17 +524,108 @@ function withoutLeavingIndexes(
 ): DesiredSchema["collections"] {
   return Object.fromEntries(
     Object.entries(collections).map(([key, collection]) => {
-      const entry = entries.find(
-        e => e.kind === "collection" && e.slug === key
-      );
-      const indexes = collection.indexes?.filter(
-        index =>
-          index.unique !== true ||
-          !index.fields.some(field => entry?.leaving.has(field))
-      );
+      const indexes = indexesHeld(collection.indexes, entries, key);
       return [key, indexes ? { ...collection, indexes } : collection];
     })
   );
+}
+
+/** A collection's `indexes` without the unique ones that cover a field of its that leaves. */
+function indexesHeld<I extends { fields: readonly string[]; unique?: boolean }>(
+  indexes: readonly I[] | undefined,
+  entries: readonly FieldsLeavingOnReload[],
+  slug: string
+): I[] | undefined {
+  const entry = entries.find(e => e.kind === "collection" && e.slug === slug);
+  return indexes?.filter(
+    index =>
+      index.unique !== true ||
+      !index.fields.some(field => entry?.leaving.has(field))
+  );
+}
+
+/** An entity of the config as `nextly db:sync` reads it: its fields, and a collection's indexes. */
+type ConfigEntity = LocalizableEntity & {
+  indexes?: readonly { fields: readonly string[]; unique?: boolean }[];
+};
+
+/** `config` with each entity that has fields leaving translation replaced by `change`'s answer. */
+function withLeavingEntities<C extends ReloadConfig>(
+  config: C,
+  entries: readonly FieldsLeavingOnReload[],
+  change: (
+    kind: I18nTransitionKind,
+    entity: ConfigEntity & {
+      slug: string;
+      fields: NonNullable<ConfigEntity["fields"]>;
+    },
+    entry: FieldsLeavingOnReload
+  ) => ConfigEntity
+): C {
+  if (entries.length === 0) return config;
+  const changed = (
+    kind: I18nTransitionKind,
+    list: readonly unknown[] | undefined
+  ): unknown[] | undefined =>
+    list?.map(item => {
+      const entity = item as ConfigEntity;
+      const entry = entries.find(
+        e => e.kind === kind && e.slug === entity.slug
+      );
+      if (!entry || entity.slug === undefined || entity.fields === undefined) {
+        return item;
+      }
+      return change(kind, entity as Parameters<typeof change>[1], entry);
+    });
+  return {
+    ...config,
+    collections: changed("collection", config.collections),
+    singles: changed("single", config.singles),
+    fieldGroups: changed("fieldGroup", config.fieldGroups),
+  };
+}
+
+/**
+ * `config` with each leaving field's Required and Unique held back, as `withLeavingSettingsHeld`
+ * holds them in a desired schema: for a run that pushes from the config itself (`nextly db:sync`),
+ * which pushes this first and the config as it is once the values are copied.
+ */
+export function configWithLeavingSettingsHeld<C extends ReloadConfig>(
+  config: C,
+  entries: readonly FieldsLeavingOnReload[]
+): C {
+  return withLeavingEntities(config, entries, (kind, entity) => {
+    const indexes =
+      kind === "collection"
+        ? indexesHeld(entity.indexes, entries, entity.slug)
+        : undefined;
+    return {
+      ...entity,
+      fields: heldFields(entries, kind, entity.slug, entity.fields),
+      ...(indexes ? { indexes } : {}),
+    };
+  });
+}
+
+/**
+ * `config` with each leaving field as it was recorded before the run, still translated: what a
+ * run that pushes from the config writes back to the registry when its move does not finish, so
+ * the registry keeps saying the field is translated, and the run's retry finds it leaving again
+ * (`leavingIn` reads the registry's record for that).
+ */
+export function configWithLeavingFieldsTranslated<C extends ReloadConfig>(
+  config: C,
+  entries: readonly FieldsLeavingOnReload[]
+): C {
+  return withLeavingEntities(config, entries, (_kind, entity, entry) => {
+    const recorded = new Map(entry.oldFields.map(f => [f.name, f]));
+    return {
+      ...entity,
+      fields: entity.fields.map(f =>
+        entry.leaving.has(f.name) ? (recorded.get(f.name) ?? f) : f
+      ),
+    };
+  });
 }
 
 /**
@@ -504,14 +658,14 @@ export async function moveFieldsLeavingOnReload(args: {
     e => !args.deferred.has(`${e.kind}:${e.slug}`)
   );
   if (args.blockedBy.length > 0 || entries.length === 0) return [];
-  const defaultLocale = defaultLocaleOf(args.config);
+  const site = siteOf(args.config);
   const all = entries.map(e => e.slug);
   // Each phase reports its own failures; anything else that rejects, such as the re-check's reads,
   // stops the move the same way, before any drop it has not reached.
   try {
-    const planned = await copyEveryEntity(args, entries, defaultLocale);
+    const planned = await copyEveryEntity(args, entries, site);
     if (planned === undefined) return all;
-    if (!(await settleEveryEntity(args, entries, defaultLocale))) return all;
+    if (!(await settleEveryEntity(args, entries, site))) return all;
     return await dropEveryEntity(args, planned);
   } catch (error) {
     args.report(notMoved(all.join(", "), error));
@@ -528,7 +682,7 @@ type Mover = Pick<
 async function copyEveryEntity(
   args: Mover,
   entries: readonly FieldsLeavingOnReload[],
-  defaultLocale: string
+  site: SiteLanguages
 ): Promise<
   { e: FieldsLeavingOnReload; plan: CompanionTransitionPlan }[] | undefined
 > {
@@ -536,7 +690,7 @@ async function copyEveryEntity(
     [];
   for (const e of entries) {
     try {
-      const plan = await planLeavingMove(args.adapter, e, defaultLocale);
+      const plan = await planLeavingMove(args.adapter, e, site);
       await applyCompanionStatements(args.adapter, plan);
       planned.push({ e, plan });
     } catch (error) {
@@ -554,13 +708,9 @@ async function copyEveryEntity(
 async function settleEveryEntity(
   args: Mover,
   entries: readonly FieldsLeavingOnReload[],
-  defaultLocale: string
+  site: SiteLanguages
 ): Promise<boolean> {
-  const refusals = await leavingRefusalsOnReload(
-    args.adapter,
-    entries,
-    defaultLocale
-  );
+  const refusals = await leavingRefusalsOnReload(args.adapter, entries, site);
   for (const r of refusals) args.report(r.message);
   if (refusals.length > 0) return false;
   const settings = entries.some(e => {
@@ -624,7 +774,7 @@ function notMoved(slug: string, error: unknown): string {
 async function planLeavingMove(
   adapter: DrizzleAdapter,
   e: FieldsLeavingOnReload,
-  defaultLocale: string
+  site: SiteLanguages
 ): Promise<CompanionTransitionPlan> {
   const shape = await liveCompanionShape(adapter, {
     tableName: e.tableName,
@@ -634,13 +784,17 @@ async function planLeavingMove(
     companionExists: true,
   });
   const dialect = adapter.getCapabilities().dialect;
+  // Named only where each language has its own `_status`, so the copy ranks by it; left out
+  // otherwise, as before, so the transition reconciles no `_status` on a reload.
+  const companionStatus = await companionStatusOn(adapter, e);
   return buildCompanionTransitionStatements({
     builtBy: "codeFirst",
     slug: e.slug,
     kind: e.kind,
     tableName: e.tableName,
     dialect,
-    defaultLocale,
+    defaultLocale: site.defaultLocale,
+    languageOrder: site.languageOrder,
     status: e.status,
     wasStatus: e.status,
     wasLocalized: true,
@@ -650,7 +804,23 @@ async function planLeavingMove(
     companionExists: true,
     holdLeavingDrops: true,
     ...shape,
+    ...(companionStatus ? { companionHasStatus: true } : {}),
   });
+}
+
+/**
+ * Whether `e`'s translations table holds each language's own `_status`: the entity publishes each
+ * language on its own, and the table has the column (one made before Draft/Published was turned
+ * on may not).
+ */
+async function companionStatusOn(
+  adapter: DrizzleAdapter,
+  e: FieldsLeavingOnReload
+): Promise<boolean> {
+  return (
+    e.perLanguageStatus &&
+    (await companionHasStatusColumn(adapter, `${e.tableName}_locales`))
+  );
 }
 
 /**

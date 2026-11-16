@@ -76,15 +76,26 @@ export function reorderAround(
 }
 
 /**
+ * How far past the grid's right edge the pointer must go to ask for the widest width: further
+ * than the edge's own strip reaches (12px beside the card), so picking the edge up never does.
+ */
+export const PAST_GRID_EDGE_PX = 16;
+
+/**
  * How many of the grid's twelve columns a card reaches when its right edge is dragged to
  * `edgeX` (relative to the grid), from its left edge at `left`: the columns up to the pointer,
  * counting a column reached once the pointer passes the middle of the gap before it.
+ *
+ * A pointer taken past the grid's right edge reaches all twelve, so the card snaps to its widest
+ * width. A card in the row's last column has no room to its right to drag into: past the grid
+ * the pointer soon meets the window's edge, short of the column the next width needs.
  */
 export function columnsReached(
   left: number,
   edgeX: number,
   gridWidth: number
 ): number {
+  if (edgeX > gridWidth + PAST_GRID_EDGE_PX) return GRID_COLUMNS;
   const gap = columnGapPx(gridWidth);
   const column = (gridWidth - (GRID_COLUMNS - 1) * gap) / GRID_COLUMNS;
   return (edgeX - left + gap / 2) / (column + gap);

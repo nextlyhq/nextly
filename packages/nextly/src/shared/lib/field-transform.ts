@@ -14,6 +14,7 @@ import type {
 } from "../../collections/fields/types";
 import { normalizeRelationshipValue } from "../../domains/collections/services/collection-utils";
 import { NextlyError } from "../../errors";
+import { addressableFields } from "../addressable-fields";
 
 import { detachData } from "./detach";
 import { storageTypeToken } from "./plugin-storage";
@@ -21,6 +22,7 @@ import {
   formatRichTextOutput,
   isRichTextValue,
   type RichTextOutputFormat,
+  type RichTextStyles,
 } from "./rich-text-html";
 
 // ============================================================
@@ -106,6 +108,29 @@ function buildFieldMap(fields: FieldConfig[]): Map<string, FieldConfig> {
   }
 
   return map;
+}
+
+/**
+ * A copy of `data` with each value a declared field holds replaced by what
+ * `visit` returns for it. An empty value, or a key no field declares, passes
+ * through untouched. The walk every field-shaped read transform here makes.
+ */
+function mapDeclaredValues(
+  data: Record<string, unknown>,
+  fields: FieldConfig[],
+  visit: (value: unknown, field: FieldConfig, key: string) => unknown
+): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...data };
+  const fieldMap = buildFieldMap(fields);
+
+  for (const [key, value] of Object.entries(result)) {
+    if (value === undefined || value === null) continue;
+    const field = fieldMap.get(key);
+    if (!field) continue;
+    result[key] = visit(value, field, key);
+  }
+
+  return result;
 }
 
 /**
@@ -402,38 +427,25 @@ export function transformFromStorage(
   data: Record<string, unknown>,
   fields: FieldConfig[]
 ): Record<string, unknown> {
-  const result: Record<string, unknown> = { ...data };
-  const fieldMap = buildFieldMap(fields);
-
-  for (const [key, value] of Object.entries(result)) {
-    if (value === undefined || value === null) {
-      continue;
-    }
-
-    const field = fieldMap.get(key);
-
-    // Pass through unknown fields
-    if (!field) {
-      continue;
-    }
-
+  return mapDeclaredValues(data, fields, (value, field, key) => {
     // Only parse JSON serializable types
     if (!isJSONSerializableType(field.type)) {
-      continue;
+      return value;
     }
 
     try {
       // Parse JSON strings back to objects
       if (typeof value === "string") {
         try {
-          result[key] = JSON.parse(value);
+          return JSON.parse(value) as unknown;
         } catch {
           // If parsing fails, keep original value
           // This handles cases where the string is not valid JSON
-          result[key] = value;
+          return value;
         }
       }
       // If already an object/array, keep as-is (database might have returned parsed data)
+      return value;
     } catch (error) {
       throw NextlyError.validation({
         errors: [
@@ -451,9 +463,7 @@ export function transformFromStorage(
         },
       });
     }
-  }
-
-  return result;
+  });
 }
 
 /**
@@ -493,17 +503,19 @@ export function requiresTransformation(fieldType: string): boolean {
 }
 
 /**
- * Normalize relationship field values on write input, at any nesting depth.
+ * Normalize relationship and upload field values on write input, at any
+ * nesting depth.
  *
- * A read at depth serves a relationship as the populated row, and a
- * multi-target one as `{ relationTo, value: row }`. Both come back on save, and
- * stored as they arrive they put a whole row snapshot in the column: later
- * reads then serve that stale copy instead of reloading the target, so an edit
- * to the target never appears.
+ * A read at depth serves a relationship as the populated row, an upload as the
+ * media object, and a multi-target one as `{ relationTo, value: row }`. All
+ * come back on save, and stored as they arrive they put a whole row snapshot in
+ * the column: later reads then serve that stale copy instead of reloading the
+ * target, so an edit to the target never appears.
  *
  * Groups and repeaters are walked rather than skipped. Their contents are
  * serialized to JSON wholesale, so a reference left populated inside one is
- * written as the row and never recognised as a reference again.
+ * written as the row and never recognised as a reference again; a depth-0
+ * read then gives that row where every other read gives the id.
  *
  * Mutates `data` in place, reducing each value to the reference it stands for.
  */
@@ -511,13 +523,26 @@ export function normalizeRelationshipFields(
   data: Record<string, unknown>,
   fields: FieldConfig[]
 ): void {
-  for (const field of fields) {
+  // The fields stored on this object, those inside a group with no name among them, at every
+  // level the walk reaches: such a group stores its fields where it sits.
+  for (const field of addressableFields(fields) as unknown as FieldConfig[]) {
     if (!("name" in field) || !field.name) continue;
     const value = data[field.name];
     if (value == null) continue;
 
     if (field.type === "relationship") {
       data[field.name] = normalizeRelationshipField(field, value);
+      continue;
+    }
+
+    // An upload is a reference to a media row, reduced item by item as a
+    // relationship's is: the id, or the pair a multi-target one names. A list
+    // is kept whole, as the top-level upload reduction keeps it.
+    if (field.type === "upload") {
+      data[field.name] = normalizeRelationshipValue(
+        value,
+        Array.isArray((field as { relationTo?: unknown }).relationTo)
+      );
       continue;
     }
 
@@ -613,7 +638,9 @@ export function coerceDateFieldsToDate(
   data: Record<string, unknown>,
   fields: ReadonlyArray<{ name?: string; type?: string }>
 ): void {
-  for (const field of fields) {
+  // The fields stored on this object, those inside a group with no name among them: a group with
+  // no name stores its fields where it sits, so a date inside one is a column of this row too.
+  for (const field of addressableFields(fields) as unknown as typeof fields) {
     if (!field.name) continue;
     // A timestamp-backed plugin type binds to the same column a `date` does,
     // so it needs the same coercion: Drizzle refuses to bind a string there.
@@ -639,6 +666,8 @@ export function coerceDateFieldsToDate(
  * @param data - Entry data containing rich text fields
  * @param fields - Field configurations for the collection/single
  * @param format - The desired output format for rich text fields
+ * @param styles - How the HTML is styled: Nextly's inline look (`"default"`)
+ *   or classes only, for a site's own CSS (`"none"`). Ignored for JSON.
  * @returns Data with rich text fields transformed to the requested format
  *
  * @example
@@ -654,67 +683,41 @@ export function coerceDateFieldsToDate(
 export function transformRichTextFields(
   data: Record<string, unknown>,
   fields: FieldConfig[],
-  format: RichTextOutputFormat = "json"
+  format: RichTextOutputFormat = "json",
+  styles: RichTextStyles = "default"
 ): Record<string, unknown> {
   // If format is JSON, no transformation needed (default behavior)
   if (format === "json") {
     return data;
   }
 
-  const result: Record<string, unknown> = { ...data };
-  const fieldMap = buildFieldMap(fields);
+  // A nested row (a repeater's item, a group's value) in the same format.
+  const nested = (
+    row: Record<string, unknown>,
+    nestedFields: FieldConfig[]
+  ): Record<string, unknown> =>
+    transformRichTextFields(row, nestedFields, format, styles);
 
-  for (const [key, value] of Object.entries(result)) {
-    if (value === undefined || value === null) {
-      continue;
-    }
-
-    const field = fieldMap.get(key);
-
-    // Pass through unknown fields
-    if (!field) {
-      continue;
-    }
-
-    // Handle rich text fields
+  return mapDeclaredValues(data, fields, (value, field) => {
     if (field.type === "richText") {
-      if (isRichTextValue(value)) {
-        result[key] = formatRichTextOutput(value, format);
-      }
-      continue;
+      return isRichTextValue(value)
+        ? formatRichTextOutput(value, format, { styles })
+        : value;
     }
 
-    // Handle nested rich text in repeater fields
-    if (field.type === "repeater") {
-      const arrayField = field as { fields?: FieldConfig[] };
-      if (Array.isArray(value) && arrayField.fields) {
-        result[key] = value.map(item => {
-          if (typeof item === "object" && item !== null) {
-            return transformRichTextFields(
-              item as Record<string, unknown>,
-              arrayField.fields!,
-              format
-            );
-          }
-          return item;
-        });
-      }
-      continue;
+    // Rich text nested in a repeater's rows or in a group.
+    const nestedFields = (field as { fields?: FieldConfig[] }).fields;
+    if (field.type === "repeater" && Array.isArray(value) && nestedFields) {
+      return value.map(item =>
+        typeof item === "object" && item !== null
+          ? nested(item as Record<string, unknown>, nestedFields)
+          : item
+      );
+    }
+    if (field.type === "group" && typeof value === "object" && nestedFields) {
+      return nested(value as Record<string, unknown>, nestedFields);
     }
 
-    // Handle nested rich text in groups
-    if (field.type === "group") {
-      const groupField = field as { fields?: FieldConfig[] };
-      if (typeof value === "object" && value !== null && groupField.fields) {
-        result[key] = transformRichTextFields(
-          value as Record<string, unknown>,
-          groupField.fields,
-          format
-        );
-      }
-      continue;
-    }
-  }
-
-  return result;
+    return value;
+  });
 }

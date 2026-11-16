@@ -5,6 +5,8 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { ROUTES } from "@admin/constants/routes";
+
 import {
   COULD_NOT_CHECK,
   ENCRYPTION_DOCS,
@@ -325,7 +327,8 @@ describe("System health's facts", () => {
       ).toMatchObject({
         value: "Not set up",
         chip: { tone: "warning" },
-        actions: [{ label: "Set up", href: "/admin/email/sending" }],
+        // The Sending tab of Email, which lives under Settings.
+        actions: [{ label: "Set up", href: ROUTES.EMAIL_SENDING }],
         warnings: 1,
       });
     });

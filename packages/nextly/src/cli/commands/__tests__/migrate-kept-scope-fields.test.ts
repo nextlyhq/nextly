@@ -192,13 +192,33 @@ async function run(
   }
 }
 
-const create = (config: unknown, releaseHeldBack = false) =>
+/**
+ * `migrate:create`, or with `released` the release `nextly prune` writes: what is held back is
+ * released, and the kept columns its consent agreed to are handed on, so only they are written
+ * without asking.
+ */
+const create = (
+  config: unknown,
+  released?: ReadonlyArray<{ table: string; column: string }>
+) =>
   run(config, context => {
     // As `--non-interactive` does: nothing is asked about.
     setNonInteractive(true);
     return runMigrateCreate(
       "create",
-      { cwd: dir, ...(releaseHeldBack ? { releaseHeldBack } : {}) },
+      {
+        cwd: dir,
+        ...(released === undefined
+          ? {}
+          : {
+              releaseHeldBack: true,
+              approvedDeletions: released.map(({ table, column }) => ({
+                kind: "column" as const,
+                table,
+                column,
+              })),
+            }),
+      },
       context
     ).finally(() => setNonInteractive(false));
   });
@@ -355,7 +375,13 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       const before = sqlFiles();
 
       // As `nextly prune` runs it on a site that keeps migration files.
-      expect((await create(project(["pages"]), true)).code).toBeUndefined();
+      expect(
+        (
+          await create(project(["pages"]), [
+            { table: "dc_pages", column: "seo_title" },
+          ])
+        ).code
+      ).toBeUndefined();
       const released = statements(written(before));
       expect(released).toMatch(/dc_pages[^\n;]*DROP COLUMN[^\n;]*seo_title/i);
       expect(released).not.toMatch(/dc_posts[^\n;]*seo_title/i);
@@ -376,9 +402,13 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       // Only a type's own table is released: a migration never drops a
       // translations table's column, so its record stays.
       const before = sqlFiles();
-      expect((await create(project(off, translated), true)).code).toBe(
-        undefined
-      );
+      expect(
+        (
+          await create(project(off, translated), [
+            { table: "dc_posts", column: "seo_title" },
+          ])
+        ).code
+      ).toBe(undefined);
       expect(statements(written(before))).toMatch(
         /dc_posts[^\n;]*DROP COLUMN[^\n;]*seo_title/i
       );

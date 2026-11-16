@@ -4,11 +4,27 @@
  *
  * 1. What a person typed for this page.
  * 2. What the route's code supplies: a title, a description and the social
- *    card's values, never visibility or the canonical.
+ *    card's values, and whether it hides the page; never the canonical.
  * 3. The rule of the Page Builder design drawing the page.
  * 4. The content type's pattern, such as `{Title} | {Site name}`.
  * 5. A value taken from the page's own content.
  * 6. The site's defaults.
+ *
+ * How results may show the page (its image preview size, the text under its
+ * link and the rest of Google's display controls) is the page's own choice,
+ * else the site's default, which asks for large image previews. A page whose
+ * date to leave search has passed is hidden as its own choice.
+ *
+ * Visibility has one level above them all: a content type hidden whole keeps
+ * every page in it hidden, whatever the page's own setting. Below a person's
+ * choice, a route's code may hide its page, never show one: core serves the
+ * page hidden whatever the answer says, so the answer says so too, and the
+ * sitemap and the admin agree with the page.
+ *
+ * The social card's title and description put what a person typed for
+ * search between their own typed text and the route's card text, so a title
+ * typed for the page is not hidden by a route that copies its heading into
+ * the card (`socialValue` below).
  *
  * A level with nothing for a value, or only blank text, gives way to the next
  * rather than answering it empty. Every value is reported with the level
@@ -19,6 +35,14 @@
  */
 import type { PageMetadataImage } from "@nextlyhq/plugin-sdk";
 
+import { typedCanonical } from "../canonical";
+
+import {
+  searchDisplay,
+  type SearchDisplay,
+  type TypedDisplay,
+} from "./display";
+
 /** A level of the order, as a value's source names it. */
 export type SeoLevel =
   | "page"
@@ -27,7 +51,8 @@ export type SeoLevel =
   | "pattern"
   | "content"
   | "site"
-  | "address";
+  | "address"
+  | "type";
 
 /** A value with the level that supplied it. */
 export interface Sourced<T> {
@@ -63,8 +88,16 @@ interface FromField<T> {
 /** What each level holds for one page. */
 export interface Levels {
   /** What a person typed, with visibility and an Advanced canonical. */
-  page: SeoValues & { canonical?: string; hidden?: boolean };
-  code: SeoValues;
+  page: SeoValues & {
+    canonical?: string;
+    /** The person said the page first appeared on another site. */
+    canonicalElsewhere?: boolean;
+    hidden?: boolean;
+    /** How the person chose results may show the page. */
+    display?: TypedDisplay;
+  };
+  /** What the route's code supplied, and whether it hides the page. */
+  code: SeoValues & { hidden?: boolean };
   template: SeoValues;
   pattern: { title?: FromPattern; description?: FromPattern };
   content: {
@@ -72,9 +105,19 @@ export interface Levels {
     description?: FromField<string>;
     image?: FromField<PageMetadataImage>;
   };
-  site: { title?: string; description?: string; image?: PageMetadataImage };
+  site: {
+    title?: string;
+    description?: string;
+    image?: PageMetadataImage;
+    /** Where the site itself is served, which a typed canonical must be on. */
+    productionAddresses?: readonly string[];
+    /** Whether pages ask for large image previews: on unless `false`. */
+    largeImagePreviews?: boolean;
+  };
   /** The page's own public address in its language, where it has one. */
   address?: string;
+  /** Whether the page's content type is hidden from search as a whole. */
+  typeHidden?: boolean;
 }
 
 /** A page's answer: each value with its source. */
@@ -86,30 +129,13 @@ export interface SeoAnswer {
   image?: Sourced<PageMetadataImage>;
   canonical?: Sourced<string>;
   robots: Sourced<{ index: boolean; follow: boolean }>;
+  /** How results may show the page, where it is listed. */
+  display?: SearchDisplay;
 }
 
 /** Text with something in it: blank text is no value. */
 function text(value: string | undefined): string | undefined {
   return value !== undefined && value.trim() !== "" ? value : undefined;
-}
-
-/**
- * A typed canonical a search engine can follow: a path from the site's root,
- * or an http(s) address, trimmed. Anything else (`mailto:`, `javascript:`,
- * stray text) is no canonical, and the page's own address is used.
- */
-function usableCanonical(value: string | undefined): string | undefined {
-  const typed = text(value)?.trim();
-  if (typed === undefined) return undefined;
-  if (typed.startsWith("/")) return typed;
-  try {
-    const url = new URL(typed);
-    return url.protocol === "http:" || url.protocol === "https:"
-      ? typed
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 /** An image with an address to load it from. */
@@ -162,25 +188,58 @@ function textValue(
 }
 
 /**
- * The social card's own text: set at a level that speaks for the card (a
- * person, code or the design), or else the page's own, with its source.
+ * The social card's own text, with its source: what a person typed for the
+ * card, then what they typed for search, then the card text the route's
+ * code or the design sets, and else the page's own value as the order works
+ * it out. A person's typed search text comes before the route's card text
+ * because most hand-written routes copy their heading into the card, which
+ * would otherwise hide what was typed for the page.
  */
 function socialValue(
   levels: Levels,
   key: "socialTitle" | "socialDescription",
   page: Sourced<string> | undefined
 ): Sourced<string> | undefined {
+  const typed = key === "socialTitle" ? "title" : "description";
   return (
     first([
       at("page", levels.page[key]),
+      at("page", levels.page[typed]),
       at("code", levels.code[key]),
       at("template", levels.template[key]),
     ]) ?? page
   );
 }
 
-/** The order applied to every value of one page. */
-export function resolveOrder(levels: Levels): SeoAnswer {
+/**
+ * Whether the page is listed, and what decided it. A hidden type comes
+ * first: its pages stay hidden, whatever each says, and return to their own
+ * setting once the type is shown again. A person's choice comes next, a
+ * passed date to leave search (`datePassed`) among it, then the route's
+ * code, which may hide its page and never list one: a page is listed only
+ * where nothing hides it.
+ */
+function visibilityOf(
+  levels: Levels,
+  datePassed: boolean
+): Sourced<{ index: boolean; follow: boolean }> {
+  const hidden = { index: false, follow: true };
+  if (levels.typeHidden === true) return { value: hidden, from: "type" };
+  if (levels.page.hidden === true || datePassed) {
+    return { value: hidden, from: "page" };
+  }
+  if (levels.code.hidden === true) return { value: hidden, from: "code" };
+  return { value: { index: true, follow: true }, from: "site" };
+}
+
+/**
+ * The order applied to every value of one page, at `now`: the moment a
+ * page's date to leave search is judged against.
+ */
+export function resolveOrder(
+  levels: Levels,
+  now: number = Date.now()
+): SeoAnswer {
   const title = textValue(levels, "title");
   const description = textValue(levels, "description");
   const socialTitle = socialValue(levels, "socialTitle", title);
@@ -203,17 +262,28 @@ export function resolveOrder(levels: Levels): SeoAnswer {
         },
     { value: picture(levels.site.image), from: "site" },
   ]);
-  // Visibility and the canonical are never code's to decide: a person's
-  // choice, else listed and the page's own declared address. A page with no
-  // declared address has no canonical rather than a guessed one.
+  // The canonical is never code's to decide: a person's choice, else the
+  // page's own declared address. A page with no declared address has no
+  // canonical rather than a guessed one.
   const canonical = first<string>([
-    { value: usableCanonical(levels.page.canonical), from: "page" },
+    {
+      value: typedCanonical(levels.page.canonical, {
+        productionAddresses: levels.site.productionAddresses ?? [],
+        elsewhere: levels.page.canonicalElsewhere === true,
+      }),
+      from: "page",
+    },
     { value: text(levels.address), from: "address" },
   ]);
-  const robots: Sourced<{ index: boolean; follow: boolean }> =
-    levels.page.hidden === true
-      ? { value: { index: false, follow: true }, from: "page" }
-      : { value: { index: true, follow: true }, from: "site" };
+  const display = searchDisplay(
+    levels.page.display ?? {},
+    levels.site.largeImagePreviews,
+    now
+  );
+  const robots = visibilityOf(
+    levels,
+    display.unavailableAfter?.passed === true
+  );
   return {
     ...(title === undefined ? {} : { title }),
     ...(description === undefined ? {} : { description }),
@@ -222,5 +292,6 @@ export function resolveOrder(levels: Levels): SeoAnswer {
     ...(image === undefined ? {} : { image }),
     ...(canonical === undefined ? {} : { canonical }),
     robots,
+    display,
   };
 }

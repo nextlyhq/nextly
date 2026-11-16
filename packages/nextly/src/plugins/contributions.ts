@@ -19,6 +19,7 @@ import type { PluginMigration } from "../domains/schema/migrate/plugin/plugin-mi
 import type { DashboardContribution } from "../domains/widgets/declaration/dashboard";
 import type { AnyWidget } from "../domains/widgets/declaration/define-widget";
 import type { FieldGroupConfig } from "../field-groups/config/types";
+import type { EmailTemplateVariable } from "../schemas/email-templates/types";
 import type { SingleConfig } from "../singles/config/types";
 
 import type {
@@ -210,7 +211,14 @@ export interface PluginEmailTemplate {
   /** HTML body; supports `{{variable}}` interpolation. */
   htmlContent: string;
   plainTextContent?: string;
-  variables?: Array<{ name: string; description?: string; required?: boolean }>;
+  /**
+   * The variables the template uses, as core's own are declared; a plugin
+   * may leave the description out. `type`, `label`, `example` and `fields`
+   * are `@experimental` and shape only the editor's test data.
+   */
+  variables?: Array<
+    Omit<EmailTemplateVariable, "description"> & { description?: string }
+  >;
   /** Wrap with the shared layout; default true. */
   useLayout?: boolean;
   /**
@@ -775,9 +783,11 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
    *
    * `target` names entities by slug, or, as a {@link ContentTypeScope}
    * (`@experimental`), every content type the site defines except the ones
-   * listed, including Schema Builder types made later. A scope never reaches a
-   * plugin's own types or Nextly's system ones, and leaves alone a type that
-   * already has a field of the same name rather than refusing to boot.
+   * listed, including Schema Builder types made later. A scope never reaches
+   * Nextly's system types, nor a plugin's own types apart from a collection
+   * marked `siteContent`, and leaves alone a type that already has a field of
+   * the same name rather than refusing to boot. `typesExtendedBy` says which
+   * types a field was added to.
    */
   extend?: Array<{
     target: string | string[] | ContentTypeScope;

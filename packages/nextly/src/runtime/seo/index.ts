@@ -12,6 +12,10 @@ export type {
   SeoMetaInput,
 } from "./build-metadata";
 
+// Structured data placed in a page: the props of its JSON-LD script element.
+export { jsonLdScriptProps } from "./structured-data";
+export type { JsonLdScriptProps } from "./structured-data";
+
 // The page-metadata contract a plugin provides.
 export {
   PAGE_METADATA_CAPABILITY,
@@ -20,10 +24,15 @@ export {
 export type {
   PageMetadataAnswer,
   PageMetadataImage,
+  PageImagePreview,
   PageMetadataInput,
   PageMetadataResolver,
   PageMetadataSource,
   PageMetadataValues,
+  PageListItem,
+  PageQuestion,
+  PageRobots,
+  PageStructuredDataHints,
   StructuredDataNode,
   StructuredDataValue,
 } from "./page-metadata-contract";

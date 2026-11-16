@@ -123,7 +123,8 @@ sessions it already holds within ten seconds. Every access token issued to it
 before the change is refused wherever a session is read: `getSession` and
 `requireAuth`, `GET /auth/session`, a plugin's `ctx.auth.currentUser`, and the
 admin API. That includes a token from the Direct API's `nextly.login()`,
-which is otherwise valid for 30 days. The account's refresh tokens are
+which is otherwise valid for 24 hours, and one whose login the change
+landed in the middle of. The account's refresh tokens are
 deleted in the same change, so its next refresh is refused with
 `REFRESH_FAILED`. That answer clears no cookies: a missing refresh row is
 answered the same way as one another tab has just rotated, whose fresh
@@ -449,13 +450,15 @@ Every successful refresh consumes the old refresh token and issues a new one. A 
 
 Two refreshes presenting the same token get one rotation. The one that loses the race answers 401 `REFRESH_SUPERSEDED` and leaves the cookies alone. The admin retries with the cookies it now holds; any other client should retry once with its current cookies.
 
+A refresh from another network or browser than the one its token was issued to still rotates. With `security.trustProxy` on, each refresh token records the client address and User-Agent it was issued to, and a refresh from another IP family, another IPv4 /24 or IPv6 /48, or another User-Agent logs a `refresh-client-changed` warning naming what changed (never the addresses). It is not refused, because one browser reaches a site from several addresses in ordinary use: a carrier-grade NAT or a connection with several uplinks picks a public address per connection, and a dual-stack browser connects over IPv4 or IPv6. Watch that warning beside `refresh-token-not-found` for a session used from somewhere unexpected.
+
 ### Session revocation on password change and deactivation
 
 Every password write ends the account's sessions: an administrator setting it (`updateUser` or `PATCH /admin/api/users/:id/password`), the user changing their own, a reset, accepting an invite, and setting an initial password. Deactivating an account does the same. Each deletes all of the account's refresh tokens in the same transaction as the write, forcing re-login on every device.
 
 ## Password management
 
-Passwords are hashed with bcryptjs (12 salt rounds). The `AuthService` and password handlers cover the full lifecycle:
+Passwords are hashed with bcryptjs (12 salt rounds) unless your app brings its own hasher ([below](#your-own-password-hasher)). The `AuthService` and password handlers cover the full lifecycle:
 
 - `registerUser()` -- creates a new user with strength-validated password.
 - `verifyCredentials()` -- validates email + password for login.
@@ -465,6 +468,38 @@ Passwords are hashed with bcryptjs (12 salt rounds). The `AuthService` and passw
 - `generateEmailVerificationToken()` / `verifyEmail()` -- email verification flow.
 
 Raw tokens are returned to the user once (in the email link); only the hashes are stored.
+
+### Your own password hasher
+
+To store passwords with another scheme, for example argon2 for accounts brought over from another system, set `auth.passwordHasher` in your config. It is then the one scheme for every account password: creating an account, an administrator setting one, a person changing theirs, a reset link, an invite, the first password, and every sign-in.
+
+```ts
+// nextly.config.ts
+import { hash, verify } from "@node-rs/argon2";
+import { defineConfig } from "nextly/config";
+
+export default defineConfig({
+  auth: {
+    passwordHasher: {
+      name: "argon2id",
+      hash: password => hash(password),
+      verify: (password, stored) => verify(stored, password),
+      // What the hasher reads whole: argon2 reads the whole password.
+      reach: "unbounded",
+      // Recognise your own hashes, so a stored value that is neither yours nor
+      // core's bcrypt is never compared.
+      isHash: stored => stored.startsWith("$argon2"),
+    },
+  },
+});
+```
+
+Set it in the config rather than passing `passwordHasher` to `getNextly`: Nextly starts once per process, and a request to the route handler can start it before your code calls `getNextly`. Every way it starts reads the config, and so does `nextly users:create-admin`, which hashes the administrator it creates with your hasher. Two different hashers, one in each place, are refused at startup.
+
+- `reach` (or `validate`) is required: it tells the password rules how much of a password your hasher reads, so a longer one is refused rather than cut short. The admin's password forms check the same limit before they submit, or none where your hasher reads a password whole.
+- `isHash` is optional. Without it, any stored value that is not core's bcrypt goes to your `verify`. If your hasher writes bcrypt itself (a peppered bcrypt, say), declare `isHash` so its values can be told from core's older ones: without it, every bcrypt value counts as yours, and an older one signs in only if your `verify` accepts it.
+- Accounts that already have a bcrypt password keep signing in. The first sign-in that proves the password stores it again with your hasher, provided your hasher reads the whole password and the password is no longer than the 72 bytes bcrypt compares; otherwise it stays bcrypt. Only the hash changes: existing sessions stay signed in, and the time the password was set is kept.
+- Password fields in your collections are content, not sign-in credentials, and keep using core's bcrypt (`verifyPassword` from `nextly/auth` checks them).
 
 ## Auth configuration
 
@@ -490,6 +525,10 @@ export default defineConfig({
 > **Needs the release after 0.0.2-alpha.68.**
 
 Self-registration is off unless the `auth` block sets `allowRegistration: true`. While it's off, `POST /admin/api/auth/register` answers `403` "Registration is not open.", creating no account and sending no email; an account already awaiting verification can still verify. With it on, a registered account gets no role, and never becomes the [first administrator](#the-first-administrator).
+
+> **Needs the release after 0.0.2-alpha.75.**
+
+The admin follows the same setting. Its sign-in page offers "Sign up" only while registration is on, and `/admin/register` shows its form only then; while it's off, that page says registration is closed and links back to sign-in. Both read the setting from `GET /admin/api/auth/setup-status`, which reports it as `allowRegistration`.
 
 Built-in defaults you can rely on (not configurable yet):
 
@@ -521,26 +560,26 @@ openssl rand -base64 32
 
 ## Auth endpoints
 
-| Method | Path                                   | Description                                                                                  |
-| ------ | -------------------------------------- | -------------------------------------------------------------------------------------------- |
-| GET    | `/admin/api/auth/setup-status`         | Is setup still open, and does it need a setup token (`requiresSetupToken`)?                  |
-| GET    | `/admin/api/auth/session`              | Get the current session.                                                                     |
-| GET    | `/admin/api/auth/csrf`                 | Mint a CSRF token.                                                                           |
-| GET    | `/admin/api/auth/pending`              | Which second factor an interrupted sign-in left outstanding. Never returns the token itself. |
-| GET    | `/admin/api/auth/ui`                   | The login page's provider buttons, challenge views and slots.                                |
-| POST   | `/admin/api/auth/setup`                | Create the first super-admin (auto-logs in); in production, with the setup token.            |
-| POST   | `/admin/api/auth/login`                | Email + password login.                                                                      |
-| POST   | `/admin/api/auth/challenge/resolve`    | Answer a second factor with the pending token.                                               |
-| POST   | `/admin/api/auth/set-initial-password` | Replace an administrator-set password at first sign-in.                                      |
-| POST   | `/admin/api/auth/logout`               | Revoke the current session.                                                                  |
-| POST   | `/admin/api/auth/refresh`              | Rotate access + refresh tokens.                                                              |
-| POST   | `/admin/api/auth/register`             | User registration, when `auth.allowRegistration` is on.                                      |
-| PATCH  | `/admin/api/auth/change-password`      | Change password (auth required).                                                             |
-| POST   | `/admin/api/auth/forgot-password`      | Request a password-reset email.                                                              |
-| POST   | `/admin/api/auth/reset-password`       | Reset password with the email token.                                                         |
-| POST   | `/admin/api/auth/accept-invite`        | Set a password from an invite link.                                                          |
-| POST   | `/admin/api/auth/verify-email`         | Verify email with the email token.                                                           |
-| POST   | `/admin/api/auth/verify-email/resend`  | Resend the verification email.                                                               |
+| Method | Path                                   | Description                                                                                                                   |
+| ------ | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/admin/api/auth/setup-status`         | Is setup still open, does it need a setup token (`requiresSetupToken`), and does the app take sign-ups (`allowRegistration`)? |
+| GET    | `/admin/api/auth/session`              | Get the current session.                                                                                                      |
+| GET    | `/admin/api/auth/csrf`                 | Mint a CSRF token.                                                                                                            |
+| GET    | `/admin/api/auth/pending`              | Which second factor an interrupted sign-in left outstanding. Never returns the token itself.                                  |
+| GET    | `/admin/api/auth/ui`                   | The login page's provider buttons, challenge views and slots.                                                                 |
+| POST   | `/admin/api/auth/setup`                | Create the first super-admin (auto-logs in); in production, with the setup token.                                             |
+| POST   | `/admin/api/auth/login`                | Email + password login.                                                                                                       |
+| POST   | `/admin/api/auth/challenge/resolve`    | Answer a second factor with the pending token.                                                                                |
+| POST   | `/admin/api/auth/set-initial-password` | Replace an administrator-set password at first sign-in.                                                                       |
+| POST   | `/admin/api/auth/logout`               | Revoke the current session.                                                                                                   |
+| POST   | `/admin/api/auth/refresh`              | Rotate access + refresh tokens.                                                                                               |
+| POST   | `/admin/api/auth/register`             | User registration, when `auth.allowRegistration` is on.                                                                       |
+| PATCH  | `/admin/api/auth/change-password`      | Change password (auth required).                                                                                              |
+| POST   | `/admin/api/auth/forgot-password`      | Request a password-reset email.                                                                                               |
+| POST   | `/admin/api/auth/reset-password`       | Reset password with the email token.                                                                                          |
+| POST   | `/admin/api/auth/accept-invite`        | Set a password from an invite link.                                                                                           |
+| POST   | `/admin/api/auth/verify-email`         | Verify email with the email token.                                                                                            |
+| POST   | `/admin/api/auth/verify-email/resend`  | Resend the verification email.                                                                                                |
 
 ## Next steps
 

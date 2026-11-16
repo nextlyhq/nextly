@@ -158,6 +158,14 @@ export function documentBuilderPath(collection: string, id: string): string {
 }
 
 /**
+ * The admin's list of `collection`'s entries, as its own route table spells
+ * it (`/admin/collections/<slug>`).
+ */
+export function collectionListPath(collection: string): string {
+  return `/admin/collections/${encodeURIComponent(collection)}`;
+}
+
+/**
  * The admin's screen for a new entry of `collection`, as its own route
  * table spells it (`/admin/collections/<slug>/create`): where the template
  * preview's New opens.
@@ -186,7 +194,7 @@ function inLanguage(path: string, locale: string | undefined): string {
  * The admin's edit screen for the Single `slug`, as its own route table
  * spells it (`/admin/singles/<slug>`).
  */
-function singleEditPath(slug: string): string {
+export function singleEditPath(slug: string): string {
   return `/admin/singles/${encodeURIComponent(slug)}`;
 }
 

@@ -69,6 +69,12 @@ interface Entries {
     },
     data: Doc
   ): Promise<Result>;
+  getEntry(params: {
+    collectionName: string;
+    entryId: string;
+    overrideAccess?: boolean;
+    locale?: string;
+  }): Promise<Result>;
   publishAllLocales(params: {
     collectionName: string;
     entryId: string;
@@ -137,7 +143,8 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           password({ name: "pin", required: true }),
         ],
       }),
-      // A component placed directly in a component, which nothing stores.
+      // A component placed directly in a component, required there: stored as
+      // a row of its own, beneath the row of the instance that holds it.
       defineFieldGroup({
         slug: "shell",
         fields: [
@@ -288,19 +295,6 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
               (value as Doc | null)?.body !== "draft only" ||
               "this note cannot go live",
           }),
-        ],
-      }),
-      // No translated field of its own: only its note is kept per language.
-      // With drafts, so a publish promotes a pending change in the language
-      // it names.
-      defineCollection({
-        slug: "noted",
-        status: true,
-        versions: { drafts: true },
-        fields: [
-          text({ name: "title" }),
-          fieldGroup({ name: "hero", component: "hero" }),
-          fieldGroup({ name: "note", component: "note" }),
         ],
       }),
       // A zone of translated kinds.
@@ -881,7 +875,7 @@ describe.each(getConfiguredTestDialects())(
         title: "vault",
         status: "draft",
         secured: { label: "front door", pin: "1234" },
-        shell: { label: "wrapper" },
+        shell: { label: "wrapper", core: card("inside") },
       });
       ids.aside = await created(t, "asides", {
         title: "aside",
@@ -894,26 +888,6 @@ describe.each(getConfiguredTestDialects())(
           status: "draft",
           tags: [tag],
         });
-      }
-      // Live with no hero, and a pending change to the translated note.
-      for (const name of ["notedGerman", "notedEnglish"]) {
-        ids[name] = await created(t, "noted", {
-          title: name,
-          status: "published",
-          note: { body: "translated" },
-        });
-        expect(
-          (
-            await entriesOf(t).updateEntry(
-              {
-                collectionName: "noted",
-                entryId: ids[name],
-                overrideAccess: true,
-              },
-              { note: { body: "changed" }, _overwrite: true }
-            )
-          ).success
-        ).toBe(true);
       }
       for (const name of ["zonedA", "zonedB"]) {
         ids[name] = await created(t, "zoned", {
@@ -1019,7 +993,6 @@ describe.each(getConfiguredTestDialects())(
       });
 
       await makeRequired(t, "pages", ["hero", "cards", "zone"]);
-      await makeRequired(t, "noted", ["hero"]);
       await addField(
         t,
         "evolving",
@@ -1224,9 +1197,9 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
-    it("publishes an instance whose required password is stored, and whose unstored direct component is absent", async () => {
-      // A stored password reads back as absent, and a component placed
-      // directly in a component is never stored: neither is a missing value.
+    it("publishes an instance whose required password is stored, and whose required direct component is stored beneath it", async () => {
+      // A stored password reads back as absent, which is not a missing value;
+      // a component placed directly in a component is read from its own row.
       const result = await publish(t, "vaults", ids.vault);
 
       expect(result.success, JSON.stringify(result)).toBe(true);
@@ -1493,15 +1466,6 @@ describe.each(getConfiguredTestDialects())(
         );
         expect(row?.status).toBe(status);
       }
-    });
-
-    it("lets a pending change go live outside the default language where only a component is translated", async () => {
-      const german = await publish(t, "noted", ids.notedGerman, {}, "de");
-      expect(german.success, JSON.stringify(german)).toBe(true);
-
-      const english = await publish(t, "noted", ids.notedEnglish, {}, "en");
-      expect(english.success).toBe(false);
-      expect(refusedPaths(english)).toContain("hero");
     });
 
     it("refuses promoting a pending change saved before a required component was added", async () => {
@@ -1847,6 +1811,133 @@ describe.each(getConfiguredTestDialects())(
         where: { and: [{ column: "id", op: "=", value: ids.aside }] },
       });
       expect(row?.status).toBe("draft");
+    });
+  }
+);
+
+/**
+ * A collection with no translated field of its own, whose only per-language
+ * data is a translated component, holds a pending change only under
+ * per-language storage: without it a save of such a document goes live at
+ * once, since one draft with no language would hold several languages'
+ * component edits. So this case boots with per-language storage, where each
+ * language's edit is held in that language's draft and a publish names the
+ * language it promotes.
+ */
+describe.each(getConfiguredTestDialects())(
+  "publishing a pending change where only a component is translated (%s)",
+  (dialect: TestDialect) => {
+    let t: TestNextly;
+    const ids: Record<string, string> = {};
+
+    /** The note's body as the live document serves it in `locale`. */
+    const liveNote = async (id: string, locale: string): Promise<unknown> => {
+      const read = await entriesOf(t).getEntry({
+        collectionName: "noted",
+        entryId: id,
+        overrideAccess: true,
+        locale,
+      });
+      expect(read.success, JSON.stringify(read)).toBe(true);
+      return ((read.data as Doc).note as Doc | null)?.body;
+    };
+
+    /** A save in `locale` with no status: held as that language's draft. */
+    const hold = async (id: string, locale: string, body: string) => {
+      const saved = await entriesOf(t).updateEntry(
+        { collectionName: "noted", entryId: id, overrideAccess: true, locale },
+        { note: { body }, _overwrite: true }
+      );
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+    };
+
+    beforeAll(async () => {
+      t = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        perLanguageStorage: true,
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "hero",
+            fields: [text({ name: "heading" })],
+          }),
+          // Its values are kept per language, in its translations table.
+          defineFieldGroup({
+            slug: "note",
+            localized: true,
+            fields: [text({ name: "body" })],
+          }),
+        ],
+        collections: [
+          // No translated field of its own: only its note is kept per
+          // language. With drafts, so a publish promotes a pending change in
+          // the language it names.
+          defineCollection({
+            slug: "noted",
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "hero", component: "hero" }),
+              fieldGroup({ name: "note", component: "note" }),
+            ],
+          }),
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+
+      // Each live with no hero and a note in its language, then a pending
+      // change to that note held in the same language.
+      ids.german = await created(t, "noted", {
+        title: "german",
+        status: "published",
+        note: { body: "translated" },
+      });
+      const live = await entriesOf(t).updateEntry(
+        {
+          collectionName: "noted",
+          entryId: ids.german,
+          overrideAccess: true,
+          locale: "de",
+        },
+        {
+          note: { body: "live in german" },
+          status: "published",
+          _overwrite: true,
+        }
+      );
+      expect(live.success, JSON.stringify(live)).toBe(true);
+      await hold(ids.german, "de", "changed in german");
+
+      ids.english = await created(t, "noted", {
+        title: "english",
+        status: "published",
+        note: { body: "translated" },
+      });
+      await hold(ids.english, "en", "changed");
+
+      // The hero is required from here on, which neither document has.
+      await makeRequired(t, "noted", ["hero"]);
+    });
+
+    afterAll(async () => {
+      await t?.destroy();
+    });
+
+    it("lets a pending change go live outside the default language, and refuses it in the default language", async () => {
+      // Held: nothing live moved yet.
+      expect(await liveNote(ids.german, "de")).toBe("live in german");
+      expect(await liveNote(ids.english, "en")).toBe("translated");
+
+      // The shared part, the hero among it, goes live only with the default
+      // language, so a German publish promotes the German note alone.
+      const german = await publish(t, "noted", ids.german, {}, "de");
+      expect(german.success, JSON.stringify(german)).toBe(true);
+      expect(await liveNote(ids.german, "de")).toBe("changed in german");
+
+      const english = await publish(t, "noted", ids.english, {}, "en");
+      expect(english.success).toBe(false);
+      expect(refusedPaths(english)).toContain("hero");
+      expect(await liveNote(ids.english, "en")).toBe("translated");
     });
   }
 );

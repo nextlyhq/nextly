@@ -25,6 +25,13 @@ import {
   stepFileOf,
   type StepFile,
 } from "../../domains/i18n/migration/step-windows";
+import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
+import { busyTableLeftNothing } from "../../domains/schema/busy-table/report";
+import {
+  runUnitInTries,
+  type BusyTableRun,
+} from "../../domains/schema/busy-table/run-unit";
+import { boundedStopRecord } from "../../domains/schema/busy-table/stopped-record";
 import {
   isPluginLedgerRow,
   ledgerFilename,
@@ -75,11 +82,16 @@ import { refuseRequiredColumnsOverNulls } from "../../domains/schema/migrate/req
 import { resolveMigration } from "../../domains/schema/migrate/resolve";
 import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
 import {
+  planRollbackBookkeeping,
+  type RollbackBookkeeping,
+} from "../../domains/schema/migrate/rollback-to-record";
+import {
   assertRunnableStatements,
   marksNoTransaction,
   splitSqlStatements,
 } from "../../domains/schema/migrate/split-sql";
 import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
+import { refuseUniqueIndexesOverRepeats } from "../../domains/schema/migrate/unique-column-guard";
 import {
   assertNoForeignDrops,
   columnsAfter,
@@ -94,8 +106,13 @@ import {
 import type { OwnerRecord } from "../../domains/schema/ownership/owner-registry";
 import { readDdlEventTriggers } from "../../domains/schema/pipeline/live-table-facts";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
+import {
+  storeSchemaVersion,
+  newestAppliedAppMigration,
+} from "../../domains/schema/schema-version";
 import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
+import { busyTableNotices } from "../busy-table-options";
 import { exitWithError } from "../errors";
 import type { CommandContext } from "../program";
 import type { SupportedDialect } from "../utils/adapter";
@@ -340,6 +357,15 @@ export interface MigrateDownCoreDeps {
    */
   recordPluginSchemaVersion?: (db: unknown) => Promise<void>;
   /**
+   * Store the database's schema version after an app migration's DOWN,
+   * through `db`, the handle the DOWN and its `rolled_back` row were written
+   * on: its migration becomes the newest one still applied, so the version
+   * moves back with the registry rows the DOWN wrote, in its transaction.
+   *
+   * Optional so a caller with no schema version to keep supplies nothing.
+   */
+  recordSchemaVersion?: (db: unknown) => Promise<void>;
+  /**
    * Records a `failed` event for an errored DOWN; `transaction` false says it
    * ran outside a transaction, so part of it may have applied.
    */
@@ -355,6 +381,20 @@ export interface MigrateDownCoreDeps {
    * DOWN is recorded only once it ends, as it was before.
    */
   recordDownStarted?: (filename: string) => Promise<string>;
+  /**
+   * After a DOWN stopped waiting for a busy table, writes its ending in one transaction that waits
+   * for the ledger table one try at most (`writeLedgerBounded`): its failed rollback where `failed`,
+   * and the removal of its start row (`attempt`). The ledger table can be the one another session
+   * holds, and the record must not wait past the bounds the stop kept. Absent, the ending is
+   * written by `recordFailed` and `endDownAttempt`, as for any other failure.
+   */
+  recordStopped?: (ending: {
+    filename: string;
+    message: string;
+    transaction: boolean;
+    failed: boolean;
+    attempt?: string;
+  }) => Promise<void>;
   /**
    * Refuses a DOWN whose statements make a column required over rows that would break it,
    * counted before its first statement and before the ledger records an attempt
@@ -450,6 +490,18 @@ export interface MigrateDownCoreDeps {
   interactive?: boolean;
   /** Asks that person a yes-or-no question; only called when `interactive`. */
   askToDelete?: (question: string) => Promise<boolean>;
+  /**
+   * What rolling back `targets` does with the database's registry record
+   * (`planRollbackBookkeeping`), read from `rows`, the ledger rows the targets
+   * were chosen from: a refusal where the point it leaves has nothing recording
+   * the registry, thrown before anything runs, or the bookkeeping to undo where
+   * that point is the record's. Asked for the app's stream only, in both plans;
+   * absent, a caller with no record to keep reads as having none.
+   */
+  registryBookkeeping?: (args: {
+    rows: readonly SchemaEventRow[];
+    targets: readonly string[];
+  }) => Promise<RollbackBookkeeping>;
 }
 
 /**
@@ -636,11 +688,27 @@ export async function rollBackOne(
     | "execDown"
     | "recordRolledBack"
     | "recordPluginSchemaVersion"
+    | "recordSchemaVersion"
     | "recordFailed"
     | "recordDownStarted"
     | "endDownAttempt"
+    | "recordStopped"
     | "refuseRequiredColumns"
-  >
+  >,
+  /**
+   * Run in the DOWN's transaction after its statements and before its
+   * rollback is recorded: the registry rows of the entities whose field types
+   * this DOWN changes back (`RollbackBookkeeping.perFile`), and, for the last
+   * target, the one that reaches the point, the bookkeeping a rollback to the
+   * registry record's point undoes (`RollbackBookkeeping.restore`). In a
+   * transaction it commits with
+   * the DOWN, or neither does. On MySQL, whose schema statements commit as
+   * they run, a failure here leaves the migration recorded applied with its
+   * rollback recorded failed and possibly partial, as any DOWN stopped
+   * part-way there, rather than recorded rolled back with part of its
+   * bookkeeping undone.
+   */
+  atPoint?: () => Promise<void>
 ): Promise<void> {
   // A column made required over rows that would break it: refused here, before the DOWN's first
   // statement and before the ledger records an attempt, so the migration stays applied.
@@ -660,6 +728,7 @@ export async function rollBackOne(
       p.statements,
       { source: p.filename, transaction: p.transaction, direction: "down" },
       async db => {
+        await atPoint?.();
         if (!(await deps.recordRolledBack(p.filename, db))) {
           throw concurrentRunError({
             filename: p.filename,
@@ -668,6 +737,9 @@ export async function rollBackOne(
           });
         }
         if (deps.options.plugin) await deps.recordPluginSchemaVersion?.(db);
+        // An app migration's DOWN moves the stored schema version back, after
+        // its `rolled_back` row, so the ledger it is read from is current.
+        else await deps.recordSchemaVersion?.(db);
         // The rollback is recorded, and it resolves the start row, which is
         // older: failing to remove that row never fails a DOWN whose
         // statements ran. A start row is recorded only where a failed write
@@ -678,18 +750,53 @@ export async function rollBackOne(
       }
     );
   } catch (err) {
-    if (!isConcurrentRun(err) || partial) {
-      await deps.recordFailed(
-        p.filename,
-        truncateErrorMessage(describeError(err, { context: false })),
-        p.transaction
-      );
+    // A DOWN that stopped waiting for a busy table before anything of it was made durable left
+    // the migration applied, as it was: no failed rollback is recorded, and run again it starts.
+    const leftNothing = busyTableLeftNothing(err);
+    // Whether the ledger tells this DOWN's ending without its start row: nothing of it stayed
+    // (a busy stop that changed nothing, or a lost race rolled back whole, whose other run's
+    // rollback is the migration's outcome), or its failed rollback is recorded below. Only then
+    // may the start row go; otherwise it is the one trace that statements of it may have
+    // committed, and removing it would let the next DOWN send them again.
+    let endingRecorded = leftNothing || (isConcurrentRun(err) && !partial);
+    const busy = NextlyError.is(err) && err.code === "NEXTLY_TABLE_BUSY";
+    if (busy && deps.recordStopped !== undefined) {
+      // The whole ending in one bounded write; one that cannot land keeps the start row, the
+      // trace a part-way DOWN needs, and the stop is reported all the same.
+      await deps
+        .recordStopped({
+          filename: p.filename,
+          message: truncateErrorMessage(describeError(err, { context: false })),
+          transaction: p.transaction,
+          failed: !leftNothing,
+          ...(attempt === undefined ? {} : { attempt }),
+        })
+        .catch(() => undefined);
+      throw err;
     }
-    // Recorded failed above; a lost race rolled back whole left nothing to
-    // record, and the other run's rollback is the migration's outcome. A
-    // start row left behind reads as a stopped DOWN, which is still true, so
-    // failing to remove it never hides the DOWN's own error.
-    if (attempt !== undefined) {
+    if (!endingRecorded) {
+      endingRecorded = await deps
+        .recordFailed(
+          p.filename,
+          truncateErrorMessage(describeError(err, { context: false })),
+          p.transaction
+        )
+        .then(
+          () => true,
+          (recordError: unknown) => {
+            // A busy-table stop says so whatever its record does: on SQLite the holder can still
+            // hold the database, so the record cannot be written. Its start row then stays.
+            if (!(NextlyError.is(err) && err.code === "NEXTLY_TABLE_BUSY")) {
+              throw recordError;
+            }
+            return false;
+          }
+        );
+    }
+    // Removed only once the ending is recorded (above). A start row left
+    // behind reads as a stopped DOWN, which is still true, so failing to
+    // remove it never hides the DOWN's own error.
+    if (attempt !== undefined && endingRecorded) {
       await deps.endDownAttempt?.(attempt).catch(() => undefined);
     }
     throw err;
@@ -820,13 +927,19 @@ async function planAndGuard(
     await planRollback(targets, deps, reads),
     (await deps.removedFiles?.()) ?? new Set()
   );
-  if (deps.options.dryRun) return { planned, agreement: new Set() };
+  const bookkeeping = await bookkeepingOf(deps, rows, targets);
+  if (deps.options.dryRun) {
+    return { planned, agreement: new Set(), bookkeeping };
+  }
 
   // Guards — evaluated up front for every target, before executing anything.
   for (const p of planned) {
     const refusal = refusalOf(p, deps);
     if (refusal !== undefined) throw refusal;
   }
+  // A point nothing records the registry at is refused before anything runs,
+  // and before the data-loss consent is asked for a rollback that cannot run.
+  if (bookkeeping?.refusal !== undefined) throw bookkeeping.refusal;
 
   // A DOWN that loses data takes the data-loss consent, judged once for
   // every target before the first runs, by the deletions their statements
@@ -861,7 +974,7 @@ async function planAndGuard(
         ? undefined
         : await eventTriggerNotice(deps.readEventTriggers),
   });
-  return { planned, agreement };
+  return { planned, agreement, bookkeeping };
 }
 
 /**
@@ -871,10 +984,12 @@ async function planAndGuard(
  */
 async function previewRollback(
   planned: readonly PlannedDown[],
-  deps: MigrateDownCoreDeps
+  deps: MigrateDownCoreDeps,
+  bookkeeping: RollbackBookkeeping | undefined
 ): Promise<void> {
-  // The refusal a real run makes under the lock, reported as the others are.
+  // The refusals a real run makes under the lock, reported as the others are.
   await reportUnresolvedRefusal(deps);
+  reportBookkeeping(bookkeeping, deps.logger);
   deps.logger.info(`Would roll back ${planned.length} migration(s):`);
   const notice =
     deps.readEventTriggers === undefined
@@ -914,6 +1029,8 @@ interface GuardedPlan {
   planned: PlannedDown[];
   /** What the operator agreed the targets delete, bound to each file as it stood. */
   agreement: Agreement;
+  /** What the rollback does with the registry record (`MigrateDownCoreDeps.registryBookkeeping`). */
+  bookkeeping?: RollbackBookkeeping;
 }
 
 export async function migrateDownCore(
@@ -970,7 +1087,7 @@ export async function migrateDownCore(
   // disagree; so is what a real run would need the data-loss consent for, so
   // the operator can read the DOWN SQL before deciding to give it.
   if (deps.options.dryRun) {
-    await previewRollback(planned, deps);
+    await previewRollback(planned, deps, guarded.bookkeeping);
     return { rolledBack: [] };
   }
 
@@ -995,13 +1112,27 @@ export async function migrateDownCore(
       if (unresolved !== undefined) throw unresolved;
       // Planned again under the lock, from the database as it stands now; see `planAndGuard`.
       const held = { ...deps, ...(await deps.readOwners?.()) };
-      const { planned: current } = await planAndGuard(held, guarded.agreement);
+      const { planned: current, bookkeeping } = await planAndGuard(
+        held,
+        guarded.agreement
+      );
       if (current.length === 0) {
         deps.logger.info("Nothing to roll back.");
         return;
       }
-      for (const p of current) {
-        await rollBackOne(p, held);
+      for (const [at, p] of current.entries()) {
+        // The last target is the one that reaches the point the rollback
+        // leaves, so the bookkeeping there commits with its DOWN. A DOWN that
+        // changes a field's type back writes its entity's row with it first.
+        const last = at === current.length - 1;
+        await rollBackOne(
+          p,
+          held,
+          inTurn(
+            withTransaction(bookkeeping?.perFile?.get(p.filename), p),
+            last ? withTransaction(bookkeeping?.restore, p) : undefined
+          )
+        );
         rolledBack.push(p.filename);
         deps.logger.success(`Rolled back ${p.filename}`);
       }
@@ -1010,6 +1141,55 @@ export async function migrateDownCore(
   );
 
   return { rolledBack };
+}
+
+/** `step`, told whether `p`'s DOWN runs in a transaction its writes must join. */
+function withTransaction(
+  step: ((inFileTransaction: boolean) => Promise<void>) | undefined,
+  p: Pick<PlannedDown, "transaction">
+): (() => Promise<void>) | undefined {
+  return step === undefined ? undefined : () => step(p.transaction);
+}
+
+/** Each of `steps` given, one after the other; undefined where none is. */
+function inTurn(
+  ...steps: ReadonlyArray<(() => Promise<void>) | undefined>
+): (() => Promise<void>) | undefined {
+  const given = steps.filter(
+    (step): step is () => Promise<void> => step !== undefined
+  );
+  if (given.length === 0) return undefined;
+  return async () => {
+    for (const step of given) await step();
+  };
+}
+
+/**
+ * What rolling back `targets` does with the registry record
+ * (`MigrateDownCoreDeps.registryBookkeeping`): asked of the app's stream
+ * alone, since a plugin's modules carry no registry rows.
+ */
+async function bookkeepingOf(
+  deps: Pick<MigrateDownCoreDeps, "options" | "registryBookkeeping">,
+  rows: readonly SchemaEventRow[],
+  targets: readonly string[]
+): Promise<RollbackBookkeeping | undefined> {
+  if (deps.options.plugin !== undefined) return undefined;
+  return deps.registryBookkeeping?.({ rows, targets });
+}
+
+/** A dry run's line for what a real run does with the registry record. */
+function reportBookkeeping(
+  bookkeeping: RollbackBookkeeping | undefined,
+  logger: MigrateDownCoreDeps["logger"]
+): void {
+  if (bookkeeping?.refusal !== undefined) {
+    logger.info(
+      `✖ a real run would be refused: ${describeError(bookkeeping.refusal, { context: false })}`
+    );
+  } else if (bookkeeping?.summary !== undefined) {
+    logger.info(bookkeeping.summary);
+  }
 }
 
 /** A dry run's line for the unresolved-attempt refusal a real run would make. */
@@ -1076,6 +1256,10 @@ interface MigrateDownCommandOptions {
   dryRun?: boolean;
   forceUnlock?: boolean;
   plugin?: string;
+  /** One try's bound for a busy table, as typed (`--lock-timeout`). */
+  lockTimeout?: string;
+  /** Every try's bound together, as typed (`--lock-timeout-total`). */
+  lockTimeoutTotal?: string;
 }
 
 interface ResolvedDownOptions extends MigrateDownCommandOptions {
@@ -1119,6 +1303,11 @@ export async function downDatabaseDeps(args: {
   migrationsDir?: string;
   /** What the run's declared schema names, which old Builder files are judged against. */
   declared?: DeclaredNames;
+  /**
+   * How a down section waits for a busy table; absent, it runs in one try with no bound of its
+   * own, as before.
+   */
+  busyTable?: Omit<BusyTableRun, "appliedBefore">;
 }): Promise<
   Pick<
     MigrateDownCoreDeps,
@@ -1138,15 +1327,21 @@ export async function downDatabaseDeps(args: {
     | "execDown"
     | "recordRolledBack"
     | "recordPluginSchemaVersion"
+    | "recordSchemaVersion"
     | "recordFailed"
     | "recordDownStarted"
     | "endDownAttempt"
+    | "recordStopped"
     | "refuseRequiredColumns"
   >
 > {
   const { adapter, dialect, plugin } = args;
   const db = adapter.getDrizzle();
   const repo = new SchemaEventsRepository(db, dialect);
+  // A busy-table stop's record waits for the ledger table one try at most.
+  const stoppedTryMs = args.busyTable?.bounds.tryMs;
+  // The down sections this run rolled back, in order.
+  const rolledBack: string[] = [];
   const {
     SchemaOwnersRepository: OwnersRepo,
     schemaOwnersTableExists,
@@ -1159,6 +1354,11 @@ export async function downDatabaseDeps(args: {
     return registryExists ? await new OwnersRepo(db, dialect).read() : [];
   };
   const ownerRows = await readOwnerRows();
+  // Read once, before any DOWN opens its transaction: a database that has no
+  // `nextly_meta` table yet stores no schema version, and a DOWN's version
+  // write must not fail the DOWN there.
+  const versionTableExists =
+    plugin === undefined && (await adapter.tableExists("nextly_meta"));
   return {
     dialect,
     db,
@@ -1191,12 +1391,30 @@ export async function downDatabaseDeps(args: {
         row => row.filename === null || !ignoredRows.has(row.filename)
       );
     },
-    refuseRequiredColumns: (statements, source) =>
-      refuseRequiredColumnsOverNulls(db, dialect, statements, source),
-    execDown: (statements, unit, after) =>
-      runMigrationStatements(adapter, statements, unit, handle =>
-        after(handle)
-      ),
+    // And the unique-index check `nextly migrate` makes of an UP: a DOWN that recreates a unique
+    // index over values that repeat since its UP ran is refused before its first statement.
+    refuseRequiredColumns: async (statements, source) => {
+      await refuseRequiredColumnsOverNulls(db, dialect, statements, source);
+      await refuseUniqueIndexesOverRepeats(db, dialect, statements, source);
+    },
+    execDown: async (statements, unit, after) => {
+      if (args.busyTable === undefined) {
+        return runMigrationStatements(adapter, statements, unit, handle =>
+          after(handle)
+        );
+      }
+      // A down section waits for a busy table in tries; a report names the sections this run
+      // rolled back before it.
+      const ran = await runUnitInTries(
+        adapter,
+        statements,
+        unit,
+        handle => after(handle),
+        { ...args.busyTable, appliedBefore: () => [...rolledBack] }
+      );
+      rolledBack.push(unit.source);
+      return ran;
+    },
     recordRolledBack: async (filename, handle) => {
       const bound = repo.boundTo(handle);
       if (!(await bound.isFileApplied(filename))) return false;
@@ -1213,6 +1431,15 @@ export async function downDatabaseDeps(args: {
         introspectLive: () => Promise.resolve({ tables: [] }),
       });
       return true;
+    },
+    recordSchemaVersion: async handle => {
+      if (!versionTableExists) return;
+      await storeSchemaVersion(handle, dialect, {
+        wrote: false,
+        migration: newestAppliedAppMigration(
+          await repo.boundTo(handle).listFileApplies()
+        ),
+      });
     },
     recordPluginSchemaVersion: async handle => {
       if (plugin === undefined || !registryExists) return;
@@ -1239,6 +1466,33 @@ export async function downDatabaseDeps(args: {
         transaction,
         note: `${args.command ?? "migrate:down"} failed: ${message}`,
       }),
+    ...(stoppedTryMs === undefined
+      ? {}
+      : {
+          recordStopped: ({
+            filename,
+            message,
+            transaction,
+            failed,
+            attempt,
+          }) =>
+            boundedStopRecord(
+              adapter,
+              stoppedTryMs
+            )(async handle => {
+              const bound = repo.boundTo(handle);
+              if (failed) {
+                await recordRollbackFailed({
+                  repo: bound,
+                  filename,
+                  dialect,
+                  transaction,
+                  note: `${args.command ?? "migrate:down"} failed: ${message}`,
+                });
+              }
+              if (attempt !== undefined) await bound.discardAttempt(attempt);
+            }),
+        }),
   };
 }
 
@@ -1292,6 +1546,16 @@ export async function runMigrateDown(
 ): Promise<void> {
   const { logger } = context;
   logger.header("Migrate Down");
+
+  // The busy-table bounds are checked first, so a value outside its range is refused before
+  // anything is read or changed.
+  const bounds = busyTableBounds({
+    flags: {
+      lockTimeout: options.lockTimeout,
+      lockTimeoutTotal: options.lockTimeoutTotal,
+    },
+    env: process.env,
+  });
 
   const opened = await openMigrationCommand(options, logger);
   // A dry run whose database is not there has said so, and ends here.
@@ -1380,6 +1644,9 @@ export async function runMigrateDown(
         plugin: pluginModules(configResult.config.plugins, plugin),
         migrationsDir,
         declared,
+        // An app's down sections and a plugin's modules wait for a busy table in tries, each
+        // try's notice on standard error.
+        busyTable: { bounds, notify: busyTableNotices(logger) },
       })),
       nodeEnv: process.env.NODE_ENV,
       logger,
@@ -1411,6 +1678,16 @@ export async function runMigrateDown(
                 await repo.listFileApplies(),
                 await repo.listFileRemovals()
               ),
+            registryBookkeeping: ({ rows, targets }) =>
+              planRollbackBookkeeping({
+                adapter: adapter as unknown as DrizzleAdapter,
+                dialect,
+                migrationsDir,
+                config: configResult.config,
+                rows,
+                rolledBack: targets,
+                logger,
+              }),
           }
         : {}),
       interactive: canPrompt(),

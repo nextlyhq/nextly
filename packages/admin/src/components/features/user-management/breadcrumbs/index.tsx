@@ -2,8 +2,7 @@ import type { JSX } from "react";
 
 import { Breadcrumbs, type BreadcrumbItem } from "@admin/components/shared";
 import { ROUTES } from "@admin/constants/routes";
-import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
-import { READ_SETTINGS } from "@admin/lib/permissions/system-policy";
+import { useSettingsLanding } from "@admin/hooks/useSettingsLanding";
 
 interface UserBreadcrumbsProps {
   /**
@@ -25,7 +24,7 @@ const PAGE_LABELS = {
   create: "Create User",
   edit: "Edit User",
   list: "Users",
-  fields: "User Fields",
+  fields: "Fields",
   "fields-create": "Create Field",
   "fields-edit": "Edit Field",
 } as const;
@@ -40,15 +39,13 @@ export function UserBreadcrumbs({
   currentPage,
 }: UserBreadcrumbsProps): JSX.Element {
   const currentLabel = PAGE_LABELS[currentPage];
-  const { hasPermission } = useCurrentUserPermissions();
 
-  // User Management lives under the Settings section now, so the trail nests
-  // under a "Settings" parent crumb before the "Users" item. A users-only role
-  // can't open the read-settings-guarded General page, so point the crumb at
-  // the first Settings subpage it can reach (Users here).
-  const settingsHref = hasPermission(READ_SETTINGS)
-    ? ROUTES.SETTINGS
-    : ROUTES.USERS;
+  // Users lives under the Settings section, so the trail nests under a
+  // "Settings" parent crumb before the "Users" item. A users-only role can't
+  // open the read-settings-guarded General page, so the crumb leads to the
+  // first Settings page this reader can open, as the rail's Settings entry
+  // does.
+  const settingsHref = useSettingsLanding();
   const items: BreadcrumbItem[] = [
     { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
     { label: "Settings", href: settingsHref },
@@ -59,11 +56,11 @@ export function UserBreadcrumbs({
   } else {
     items.push({ label: "Users", href: ROUTES.USERS });
 
+    // The user fields screens are reached from the Users page, so their
+    // trail runs Settings › Users › Fields; the create and edit screens add
+    // their own crumb under Fields.
     if (["fields-create", "fields-edit"].includes(currentPage)) {
-      items.push({ label: "User Fields", href: ROUTES.USERS_FIELDS });
-    } else if (currentPage === "fields") {
-      // fields is already covered by the label mapping if it was the last item
-      // but here it's treated as a leaf if it's the current page
+      items.push({ label: PAGE_LABELS.fields, href: ROUTES.USERS_FIELDS });
     }
 
     items.push({ label: currentLabel });

@@ -52,6 +52,7 @@ import {
 // templates. Eliminates the byte-identical-SQL drift risk.
 import { referenceConversionStatements } from "../reference-list-conversion";
 import { conversionForRename } from "../rename-conversion";
+import { assertSchemaLockHeld, markedForSchemaLock } from "../schema-lock";
 import { generateSQL } from "../sql-templates/index";
 
 interface AsyncExecuteHandle {
@@ -78,7 +79,13 @@ export async function executePreResolutionOps(
    * retyping a column they name. Run after the refusals below, so a refused
    * apply has changed nothing even on MySQL, where DDL commits as it runs.
    */
-  leadingStatements: readonly string[] = []
+  leadingStatements: readonly string[] = [],
+  /**
+   * Told after each leading statement and each op finishes, as it finishes. On MySQL and SQLite
+   * each commits as it runs, so a run stopped part-way knows how many stay applied; the count this
+   * returns is told only once every one has finished.
+   */
+  onFinished: () => void = () => undefined
 ): Promise<number> {
   const preOps = ops.filter(
     op => isPreResolutionOp(op) || isMysqlStringNarrowing(op, dialect)
@@ -98,10 +105,12 @@ export async function executePreResolutionOps(
 
   for (const statement of leadingStatements) {
     await runRaw(txOrDb, statement, dialect);
+    onFinished();
   }
 
   for (const op of ordered) {
     await runOrderedOp(txOrDb, op, dialect);
+    onFinished();
   }
 
   // A rename moves the column; it does not change what the column IS. When the two sides differ, the
@@ -566,6 +575,8 @@ export async function runRaw(
   sqlString: string,
   dialect: SupportedDialect
 ): Promise<void> {
+  // A run that lost the schema lock starts no further statement (`assertSchemaLockHeld`).
+  await assertSchemaLockHeld();
   if (dialect === "sqlite") {
     // better-sqlite3 / drizzle-orm/better-sqlite3 uses synchronous .run()
     // (and tx wrappers also expose .run()). The F3 pipeline runs SQLite
@@ -577,5 +588,6 @@ export async function runRaw(
   }
   // PG and MySQL use async .execute()
   const handle = txOrDb as AsyncExecuteHandle;
-  await handle.execute(sql.raw(sqlString));
+  // Carries the run's claim, so a run taking the lock over can find and stop it.
+  await handle.execute(sql.raw(markedForSchemaLock(sqlString)));
 }

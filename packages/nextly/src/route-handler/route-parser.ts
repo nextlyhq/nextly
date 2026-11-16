@@ -80,9 +80,12 @@ export function requiresAuthOnly(service: string, method: string): boolean {
   // needs it), so it requires authentication but no specific permission —
   // matching the collection/single schema-list endpoints above. It must not
   // be public: unauthenticated callers must not enumerate component schemas.
+  // Where a field group is used is the same class of read: every name it
+  // answers with (collections, Singles, field groups and their field paths)
+  // is one any signed-in user already reads through those schema reads.
   if (
     service === "field-groups" &&
-    ["getComponent", "listComponents"].includes(method)
+    ["getComponent", "listComponents", "getComponentUsedBy"].includes(method)
   ) {
     return true;
   }
@@ -99,6 +102,9 @@ export function requiresAuthOnly(service: string, method: string): boolean {
 const ALL_LOCALES_ENTRY_ROUTES: Record<string, string> = {
   "publish-all": "publishAllLocales",
   "unpublish-all": "unpublishAllLocales",
+  // The chosen languages and the shared part, named in the body (@experimental).
+  publish: "publishParts",
+  unpublish: "unpublishParts",
 };
 
 /**
@@ -597,6 +603,23 @@ function parseCollectionRoutes(
     };
   }
 
+  // POST /api/collections/schema/address-check → what creating a collection under an address
+  // would answer, asked before the create. Under the collections service, so the collection
+  // create's own permission gates it.
+  if (
+    id === "schema" &&
+    subresource === "address-check" &&
+    !subId &&
+    httpMethod === "POST"
+  ) {
+    return {
+      service: "collections",
+      operation: "single",
+      method: "checkCollectionAddress",
+      routeParams,
+    };
+  }
+
   if (id === "schema" && subresource && httpMethod === "GET") {
     // GET /api/collections/schema/course → get collection schema with enriched component fields
     routeParams.collectionName = subresource;
@@ -774,11 +797,13 @@ function parseCollectionEntryPublishAllRoute(
   // that difference twice is how a route and its twin start to disagree about
   // the shape they both match.
   const allLocales = ALL_LOCALES_ENTRY_ROUTES[additionalParams[0] ?? ""];
+  // The route ends at the action: a path that goes on past it names nothing here.
   if (
     id &&
     subresource === "entries" &&
     subId &&
     allLocales &&
+    additionalParams.length === 1 &&
     httpMethod === "POST"
   ) {
     routeParams.collectionName = id;
@@ -1552,6 +1577,23 @@ function parseSingleRoutes(
     };
   }
 
+  // POST /api/singles/schema/address-check → what creating a Single under an address would
+  // answer, asked before the create. Under the singles service, so the Single create's own
+  // permission gates it.
+  if (
+    id === "schema" &&
+    subresource === "address-check" &&
+    !subId &&
+    httpMethod === "POST"
+  ) {
+    return {
+      service: "singles",
+      operation: "single",
+      method: "checkSingleAddress",
+      routeParams,
+    };
+  }
+
   return null;
 }
 
@@ -1578,38 +1620,88 @@ function parseComponentRoutes(
   subresource?: string,
   subId?: string
 ): ParsedRoute | null {
+  // A schema action is matched by verb and action. Any other path under
+  // `schema` matches none of the routes below, which take a bare slug only.
+  const schemaRoute =
+    id === "schema" && subresource && subId
+      ? parseComponentSchemaRoute(subresource, subId, httpMethod, routeParams)
+      : null;
+  if (schemaRoute) return schemaRoute;
+
+  // POST /api/field-groups/schema/address-check → what creating a field group under an address
+  // would answer, asked before the create. A POST under this service, so it asks the permission
+  // the field-group create asks.
+  if (
+    id === "schema" &&
+    subresource === "address-check" &&
+    !subId &&
+    httpMethod === "POST"
+  ) {
+    return componentRoute("single", "checkComponentAddress", routeParams);
+  }
+
+  // GET /api/field-groups/[slug]/used-by → the fields that place the field
+  // group, and what holds each. Matched before the bare slug routes below,
+  // which do not look at a subresource and would answer this as the field
+  // group itself.
+  if (id && subresource === "used-by" && !subId && httpMethod === "GET") {
+    routeParams.slug = id;
+    return componentRoute("single", "getComponentUsedBy", routeParams);
+  }
+
+  if (!id) {
+    const route = COMPONENT_COLLECTION_ROUTES[httpMethod];
+    return route
+      ? componentRoute(route.operation, route.method, routeParams)
+      : null;
+  }
+  // The field group itself is a bare slug. A path going further names
+  // something else, so it is no route here rather than the field group: an
+  // unmatched `DELETE /field-groups/<slug>/<anything>` must not delete it.
+  if (subresource !== undefined) return null;
+  const route = COMPONENT_ROUTES[httpMethod];
+  if (!route) return null;
+  routeParams.slug = id;
+  return componentRoute(route.operation, route.method, routeParams);
+}
+
+type ComponentRoute = { operation: ParsedRoute["operation"]; method: string };
+
+function componentRoute(
+  operation: ParsedRoute["operation"],
+  method: string,
+  routeParams: Record<string, string>
+): ParsedRoute {
+  return { service: "field-groups", operation, method, routeParams };
+}
+
+/** /api/field-groups, by verb. */
+const COMPONENT_COLLECTION_ROUTES: Readonly<Record<string, ComponentRoute>> = {
+  // GET /api/field-groups → list all components
+  GET: { operation: "list", method: "listComponents" },
+  // POST /api/field-groups → create component (Schema Builder)
+  POST: { operation: "create", method: "createComponent" },
+};
+
+/** /api/field-groups/[slug], by verb. */
+const COMPONENT_ROUTES: Readonly<Record<string, ComponentRoute>> = {
+  // GET /api/field-groups/[slug] → get component by slug
+  GET: { operation: "single", method: "getComponent" },
+  // PATCH /api/field-groups/[slug] → update component
+  PATCH: { operation: "update", method: "updateComponent" },
+  // DELETE /api/field-groups/[slug] → delete component
+  DELETE: { operation: "delete", method: "deleteComponent" },
+};
+
+/** /api/field-groups/schema/[slug]/[action], by verb and action. */
+const COMPONENT_SCHEMA_ROUTES: Readonly<Record<string, ComponentRoute>> = {
   // POST /api/field-groups/schema/[slug]/preview → preview component schema changes
-  if (
-    id === "schema" &&
-    subresource &&
-    subId === "preview" &&
-    httpMethod === "POST"
-  ) {
-    routeParams.slug = subresource;
-    return {
-      service: "field-groups",
-      operation: "single",
-      method: "previewComponentSchemaChanges",
-      routeParams,
-    };
-  }
-
+  "POST preview": {
+    operation: "single",
+    method: "previewComponentSchemaChanges",
+  },
   // POST /api/field-groups/schema/[slug]/apply → apply confirmed component schema changes
-  if (
-    id === "schema" &&
-    subresource &&
-    subId === "apply" &&
-    httpMethod === "POST"
-  ) {
-    routeParams.slug = subresource;
-    return {
-      service: "field-groups",
-      operation: "update",
-      method: "applyComponentSchemaChanges",
-      routeParams,
-    };
-  }
-
+  "POST apply": { operation: "update", method: "applyComponentSchemaChanges" },
   // GET /api/field-groups/schema/[slug]/reconcile → what that repair WOULD change, changing
   // nothing. The same path as the repair below, separated by verb: GET asks, POST does.
   //
@@ -1617,96 +1709,24 @@ function parseComponentRoutes(
   // `routeHandler` is what enforces that. The plan names live columns and the drift between them
   // and the stored definition, which is not something a principal who may only read definitions
   // should be able to enumerate — and nobody who cannot perform the repair needs to preview it.
-  if (
-    id === "schema" &&
-    subresource &&
-    subId === "reconcile" &&
-    httpMethod === "GET"
-  ) {
-    routeParams.slug = subresource;
-    return {
-      service: "field-groups",
-      operation: "single",
-      method: "previewComponentReconcile",
-      routeParams,
-    };
-  }
-
+  "GET reconcile": { operation: "single", method: "previewComponentReconcile" },
   // POST /api/field-groups/schema/[slug]/reconcile → repair the stored definition to describe the
   // live tables. Classified as `update`: it writes the registry row, so it takes the same
   // authorization as the other definition writes — a reader must not be able to rewrite a
   // definition by way of repairing it.
-  if (
-    id === "schema" &&
-    subresource &&
-    subId === "reconcile" &&
-    httpMethod === "POST"
-  ) {
-    routeParams.slug = subresource;
-    return {
-      service: "field-groups",
-      operation: "update",
-      method: "reconcileComponent",
-      routeParams,
-    };
-  }
+  "POST reconcile": { operation: "update", method: "reconcileComponent" },
+};
 
-  const slug = id;
-
-  // GET /api/field-groups → list all components
-  if (!slug && httpMethod === "GET") {
-    return {
-      service: "field-groups",
-      operation: "list",
-      method: "listComponents",
-      routeParams,
-    };
-  }
-
-  // POST /api/field-groups → create component (Schema Builder)
-  if (!slug && httpMethod === "POST") {
-    return {
-      service: "field-groups",
-      operation: "create",
-      method: "createComponent",
-      routeParams,
-    };
-  }
-
-  // GET /api/field-groups/[slug] → get component by slug
-  if (slug && httpMethod === "GET") {
-    routeParams.slug = slug;
-    return {
-      service: "field-groups",
-      operation: "single",
-      method: "getComponent",
-      routeParams,
-    };
-  }
-
-  // PATCH /api/field-groups/[slug] → update component
-  if (slug && httpMethod === "PATCH") {
-    routeParams.slug = slug;
-    return {
-      service: "field-groups",
-      operation: "update",
-      method: "updateComponent",
-      routeParams,
-    };
-  }
-
-  // DELETE /api/field-groups/[slug] → delete component
-  if (slug && httpMethod === "DELETE") {
-    routeParams.slug = slug;
-    return {
-      service: "field-groups",
-      operation: "delete",
-      method: "deleteComponent",
-      routeParams,
-    };
-  }
-
-  return null;
+function parseComponentSchemaRoute(
+  slug: string,
+  action: string,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  const route = COMPONENT_SCHEMA_ROUTES[`${httpMethod} ${action}`];
+  if (!route) return null;
+  routeParams.slug = slug;
+  return componentRoute(route.operation, route.method, routeParams);
 }
 
 // ============================================================================
@@ -1903,6 +1923,10 @@ const EMAIL_TEMPLATE_OWNERSHIP_ROUTES: Record<
   compare: { httpMethod: "GET", method: "compareTemplate" },
   "apply-update": { httpMethod: "PATCH", method: "applyOwnerUpdate" },
   "undo-update": { httpMethod: "PATCH", method: "undoOwnerUpdate" },
+  // Whether a template is kept on the engine it was written for, and why;
+  // and the step that reads it as Liquid from now on.
+  engine: { httpMethod: "GET", method: "templateEngine" },
+  "read-as-liquid": { httpMethod: "PATCH", method: "readAsLiquid" },
 };
 
 /** A route's operation (which picks nothing: the HTTP method picks the permission) and service method. */
@@ -1941,11 +1965,15 @@ function emailTemplateSubresourceRoute(
       ? { operation: "single", method: "previewTemplate" }
       : undefined;
   }
-  // A test send of the saved template, to the signed-in user's own address.
-  // PATCH so the method-derived permission is `update-email-templates`.
+  // A test send, to the signed-in user's own address: PATCH sends it, so the
+  // method-derived permission is `update-email-templates`; GET says where it
+  // would go and which provider would deliver it, before anything is sent.
   if (subresource === "send-test") {
-    return httpMethod === "PATCH"
-      ? { operation: "update", method: "sendTestTemplate" }
+    if (httpMethod === "PATCH") {
+      return { operation: "update", method: "sendTestTemplate" };
+    }
+    return httpMethod === "GET"
+      ? { operation: "single", method: "testSendTarget" }
       : undefined;
   }
   // The ownership steps. Each changes the template, so each is a PATCH and
@@ -1973,7 +2001,10 @@ function emailTemplateSubresourceRoute(
  * - DELETE /api/email-templates/[id] → delete template
  * - POST /api/email-templates/preview → render unsaved fields (draft)
  * - POST /api/email-templates/[id]/preview → preview with sample data
- * - PATCH /api/email-templates/[id]/send-test → send the saved template to the signed-in user
+ * - GET /api/email-templates/[id]/send-test → where a test would go, and which provider delivers it
+ * - PATCH /api/email-templates/[id]/send-test → send a test, of the saved template or of a draft, to the signed-in user
+ * - GET /api/email-templates/[id]/engine → whether it is kept on its first engine, and why
+ * - PATCH /api/email-templates/[id]/read-as-liquid → read a kept template as Liquid from now on
  * - PATCH /api/email-templates/[id]/override → override an owned template
  * - PATCH /api/email-templates/[id]/reset → return it to its owner's version
  * - GET /api/email-templates/[id]/compare → the owner's changes since the override
@@ -2911,6 +2942,7 @@ const DASHBOARD_ROUTES: Readonly<
 > = {
   GET: {
     stats: { operation: "list", method: "getDashboardStats" },
+    content: { operation: "list", method: "getDashboardContent" },
     "recent-entries": {
       operation: "list",
       method: "getDashboardRecentEntries",
@@ -2922,6 +2954,7 @@ const DASHBOARD_ROUTES: Readonly<
     summary: { operation: "list", method: "getDashboardSummary" },
     "new-types": { operation: "list", method: "getDashboardNewTypes" },
     setup: { operation: "list", method: "getDashboardSetup" },
+    diagnostics: { operation: "list", method: "getDashboardDiagnostics" },
   },
   POST: {
     query: { operation: "list", method: "postWidgetQuery" },
@@ -2942,6 +2975,7 @@ const DASHBOARD_ROUTES: Readonly<
  * Parse dashboard-related routes.
  *
  *   GET  /api/dashboard/stats          → getDashboardStats
+ *   GET  /api/dashboard/content        → getDashboardContent
  *   GET  /api/dashboard/recent-entries → getDashboardRecentEntries
  *   GET  /api/dashboard/activity       → getDashboardActivity
  *   GET  /api/dashboard/layout         → getWidgetLayout
@@ -2957,6 +2991,7 @@ const DASHBOARD_ROUTES: Readonly<
  *   POST /api/dashboard/new-types      → postDashboardNewType
  *   GET  /api/dashboard/setup          → getDashboardSetup
  *   PUT  /api/dashboard/setup          → putDashboardSetup
+ *   GET  /api/dashboard/diagnostics    → getDashboardDiagnostics
  *
  * All require authentication (no specific permission). Handlers manage their
  * own auth.

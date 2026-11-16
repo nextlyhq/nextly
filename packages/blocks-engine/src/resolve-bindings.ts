@@ -47,6 +47,7 @@ import type { PropSchema } from "./block";
 import {
   DEFAULT_BINDING_SOURCE,
   MAX_SEO_SEGMENTS,
+  SEO_TEXT_FIELDS,
   type BlockDocument,
   type BlockNode,
 } from "./document";
@@ -996,7 +997,7 @@ function visitDocumentSeo(
     demand.any = true;
     visitBinding(binding, demand);
   };
-  for (const field of ["title", "description"]) {
+  for (const field of SEO_TEXT_FIELDS) {
     const segments = ownEntry(seo, field);
     if (!Array.isArray(segments)) continue;
     // A stored document may hold more than a save allows; only the segments

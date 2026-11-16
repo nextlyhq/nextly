@@ -26,12 +26,16 @@ const people: MinimalConfigEntity = {
   fields: [{ name: "name", type: "text" }],
 };
 
-/** The profiles, whose `person` points at one person, as the Builder stores the relationship. */
+/**
+ * The profiles, whose `person` points at one person, as the Builder stores the relationship: a
+ * table the Builder made, whose creator's rule (`builtByFor`) makes a one-to-one unique.
+ */
 const profiles = (
   relationType: "oneToOne" | "manyToOne"
 ): MinimalConfigEntity => ({
   slug: "profiles",
   tableName: "dc_profiles",
+  settings: { source: "builder", settings: { slug: "profiles" } },
   fields: [
     { name: "title", type: "text" },
     {

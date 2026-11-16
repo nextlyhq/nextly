@@ -40,6 +40,8 @@ export const WEBHOOK_EVENT_TYPES = [
   "user.deleted",
   // Forms (via plugin-form-builder).
   "form.submission.created",
+  // Workflows: a part's review stage or approval changed, about its entry or Single.
+  "workflow.stage_changed",
 ] as const;
 
 /**

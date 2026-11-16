@@ -2,20 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import {
-  eq,
-  and,
-  or,
-  like,
-  asc,
-  desc,
-  count,
-  inArray,
-  notInArray,
-  sql,
-  type Column,
-  type SQL,
-} from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 
 import { resolveRelations } from "../../../database/resolve-relations";
 import { NextlyError } from "../../../errors";
@@ -29,8 +16,13 @@ import type {
 } from "../../../schemas/dynamic-collections/types";
 import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
+import { listStoredRegistry } from "../../../shared/base-registry-service";
 import { BaseService } from "../../../shared/base-service";
 import { affectedRowCount } from "../../../shared/lib/affected-row-count";
+import {
+  registryPage,
+  warnIfRegistryListingLarge,
+} from "../../../shared/lib/registry-listing-page";
 import type { Logger } from "../../../shared/types";
 import type { DatabaseAdapter } from "../../../shared/types/database-adapter";
 import {
@@ -42,6 +34,10 @@ import {
   flushContentChange,
 } from "../../flush-content-change";
 import {
+  countRegistryWriteOn,
+  writeRegistryRows,
+} from "../../schema/schema-version";
+import {
   clearWebhookRecording,
   setWebhookRecording,
 } from "../../webhooks/recording-policy";
@@ -50,6 +46,9 @@ import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
 import {
   cachedCollectionRow,
   clearRegistryRowCache,
+  forgetRegistryRowsOnTransaction,
+  registryReadTransaction,
+  registryRowOnTransaction,
 } from "./collection-row-cache";
 
 export interface CollectionMetadata {
@@ -131,62 +130,24 @@ export interface ListCollectionsOptions {
   /**
    * Restrict results to collections whose `slug` is in this list.
    *
-   * 🔴 Applied in the WHERE clause, so the COUNT and the page see the same
-   * rows. A caller that filters the returned page in application code instead
+   * 🔴 Applied to the rows before they are counted, so the total and the
+   * page see the same rows. A caller that filters the returned page instead
    * gets a `total` describing rows the reader may not see -- which both leaks
    * how many exist and collapses `totalPages` to 1, because the recomputed
    * total is at most one page. The consumer then reads "there is no next page"
    * and stops, with the rest of what it may see unreachable.
    *
    * `undefined` means no allowlist. `[]` means nothing is visible and
-   * short-circuits, rather than emitting `WHERE slug IN ()`, whose meaning
-   * differs by dialect.
+   * short-circuits to no rows and a zero total.
    */
   slugAllowlist?: string[];
   /**
    * Leave out collections whose `slug` is in this list: the plugins'
-   * collections, on the list of the site's own. A condition on the query, so
+   * collections, on the list of the site's own. Applied before the count, so
    * the count and the page agree; with an allowlist both apply, so it only
    * ever removes rows. `undefined` or `[]` denies nothing.
    */
   slugDenylist?: string[];
-}
-
-/** The slug lists a collections list is limited by. */
-export type CollectionSlugLists = Pick<
-  ListCollectionsOptions,
-  "slugAllowlist" | "slugDenylist"
->;
-
-/**
- * The WHERE conditions a list's slug lists become, for the count and the page
- * alike: an `IN` for the allowlist, a `NOT IN` for a denylist that names a
- * slug, ANDed by the caller.
- *
- * An empty allowlist has no condition: it means nothing is visible, which
- * the list answers before any query, so being asked for one is a caller's
- * mistake. Refused rather than rendered as `IN ()`, whose meaning differs by
- * dialect.
- */
-export function collectionSlugConditions(
-  slugColumn: Column,
-  lists: CollectionSlugLists
-): SQL[] {
-  const conditions: SQL[] = [];
-  if (lists.slugAllowlist) {
-    if (lists.slugAllowlist.length === 0) {
-      throw NextlyError.internal({
-        logContext: {
-          reason: "an empty slug allowlist reached the query builder",
-        },
-      });
-    }
-    conditions.push(inArray(slugColumn, lists.slugAllowlist));
-  }
-  if (lists.slugDenylist && lists.slugDenylist.length > 0) {
-    conditions.push(notInArray(slugColumn, lists.slugDenylist));
-  }
-  return conditions;
 }
 
 export interface ListCollectionsResponse<
@@ -317,39 +278,43 @@ export class DynamicCollectionRegistryService extends BaseService {
     // The cached rows are cleared once the insert has run, landed or not, so a
     // row read while it ran is not served after it.
     try {
-      await this.db.insert(this.dynamicCollections).values({
-        id: metadata.id,
-        slug: metadata.slug,
-        tableName: metadata.tableName,
-        description: metadata.description,
-        labels: metadata.labels,
-        fields: metadata.fields,
-        timestamps: metadata.timestamps ?? true,
-        admin: metadata.admin,
-        source: metadata.source ?? "ui",
-        locked: metadata.locked ?? false,
-        // Draft/Published flag — Drizzle's mode:'boolean' on sqlite + native
-        // bool on postgres/mysql both accept a JS boolean here.
-        status: metadata.status === true,
-        // i18n: persist the localized flag so the read/write path routes translatable
-        // fields to the companion table and the admin shows per-language editing. Without
-        // it, a UI-created localized collection is stored as non-localized (shared).
-        localized: metadata.localized === true,
-        // Resolved versioning config (or null when unversioned). Stored as JSON
-        // the same way `admin` is; Drizzle serializes the object per dialect.
-        versions: metadata.versions ?? null,
-        // Cache-revalidation config (or null). Stored as JSON like `versions`.
-        revalidate: metadata.revalidate ?? null,
-        // Webhook recording policy (or null). Stored as JSON like `revalidate`.
-        webhooks: metadata.webhooks ?? null,
-        configPath: metadata.configPath,
-        schemaHash: metadata.schemaHash,
-        schemaVersion: metadata.schemaVersion ?? 1,
-        migrationStatus: metadata.migrationStatus ?? "pending",
-        lastMigrationId: metadata.lastMigrationId,
-        hooks: metadata.hooks,
-        createdBy: metadata.createdBy,
-      });
+      // With the stored schema version's count (`writeRegistryRows`), on the
+      // write's transaction, where `this.db` then writes.
+      await writeRegistryRows(this.adapter, () =>
+        this.db.insert(this.dynamicCollections).values({
+          id: metadata.id,
+          slug: metadata.slug,
+          tableName: metadata.tableName,
+          description: metadata.description,
+          labels: metadata.labels,
+          fields: metadata.fields,
+          timestamps: metadata.timestamps ?? true,
+          admin: metadata.admin,
+          source: metadata.source ?? "ui",
+          locked: metadata.locked ?? false,
+          // Draft/Published flag — Drizzle's mode:'boolean' on sqlite + native
+          // bool on postgres/mysql both accept a JS boolean here.
+          status: metadata.status === true,
+          // i18n: persist the localized flag so the read/write path routes translatable
+          // fields to the companion table and the admin shows per-language editing. Without
+          // it, a UI-created localized collection is stored as non-localized (shared).
+          localized: metadata.localized === true,
+          // Resolved versioning config (or null when unversioned). Stored as JSON
+          // the same way `admin` is; Drizzle serializes the object per dialect.
+          versions: metadata.versions ?? null,
+          // Cache-revalidation config (or null). Stored as JSON like `versions`.
+          revalidate: metadata.revalidate ?? null,
+          // Webhook recording policy (or null). Stored as JSON like `revalidate`.
+          webhooks: metadata.webhooks ?? null,
+          configPath: metadata.configPath,
+          schemaHash: metadata.schemaHash,
+          schemaVersion: metadata.schemaVersion ?? 1,
+          migrationStatus: metadata.migrationStatus ?? "pending",
+          lastMigrationId: metadata.lastMigrationId,
+          hooks: metadata.hooks,
+          createdBy: metadata.createdBy,
+        })
+      );
     } finally {
       clearRegistryRowCache();
     }
@@ -447,7 +412,9 @@ export class DynamicCollectionRegistryService extends BaseService {
     // rename too: the row then lives under the new slug.
     try {
       if (targetSlug === existing[0].slug) {
-        await writeRow(this.db);
+        // With the stored schema version's count (`writeRegistryRows`); a
+        // rename moves it in its own transaction (`renameEntity`).
+        await writeRegistryRows(this.adapter, () => writeRow(this.db));
       } else {
         // A changed slug is a rename. Everything keyed by the old slug (history,
         // markers, events, release members, permissions, webhook filters) moves
@@ -562,109 +529,70 @@ export class DynamicCollectionRegistryService extends BaseService {
       };
     }
 
-    // 🔴 CONDITIONS, not a filter over the result. Both the count below and
-    // the page query read `whereClause`, so the total describes exactly the
-    // rows this caller may see and `totalPages` counts pages of those. The
-    // denylist (the plugins' collections, on the site's own list) the same.
-    const conditions: (SQL | undefined)[] = collectionSlugConditions(
-      this.dynamicCollections.slug,
-      { slugAllowlist, slugDenylist }
+    // 🔴 CONDITIONS, not a filter over the result. The allowlist and the
+    // denylist (the plugins' collections, on the site's own list) decide
+    // which rows are counted, before the total is taken and the page cut, so
+    // the total describes exactly the rows this caller may see and
+    // `totalPages` counts pages of those.
+    //
+    // In memory, from the registry listing this process holds: the registry
+    // is the documented exception to paging in the database
+    // (`shared/lib/registry-listing-page` says why). Page and total come
+    // from one snapshot of it, and an unchanged registry costs no statement.
+    const allowed = slugAllowlist ? new Set(slugAllowlist) : undefined;
+    const denied = new Set(slugDenylist ?? []);
+    const table = "dynamic_collections";
+    const listed = await listStoredRegistry(
+      this.adapter,
+      this.dialect,
+      table,
+      rows => {
+        warnIfRegistryListingLarge("Collection", rows.length, message =>
+          this.logger.warn(message)
+        );
+        const found = registryPage(rows, {
+          include: row => {
+            const slug = String(row.slug);
+            return (
+              (allowed === undefined || allowed.has(slug)) &&
+              !denied.has(slug) &&
+              (!source || row.source === source)
+            );
+          },
+          ...(search
+            ? { search: { text: search, columns: ["slug", "description"] } }
+            : {}),
+          // "name" is the admin/API alias for "slug": both sort on the slug.
+          orderBy:
+            sortBy === "name" || sortBy === "slug"
+              ? "slug"
+              : sortBy === "updatedAt"
+                ? "updatedAt"
+                : "createdAt",
+          direction: sortOrder === "asc" ? "asc" : "desc",
+          offset: (page - 1) * limit,
+          limit,
+        });
+        return {
+          total: found.total,
+          rows: found.rows.map(row => {
+            const copy = structuredClone(row) as Record<string, unknown>;
+            // `fields` is the only column the schema-less shape drops, and
+            // the return type says so: `Omit<CollectionMetadata, "fields">`.
+            if (!includeSchema) delete copy.fields;
+            return copy;
+          }),
+        };
+      }
     );
 
-    if (search) {
-      const searchPattern = `%${search}%`;
-      conditions.push(
-        or(
-          like(this.dynamicCollections.slug, searchPattern),
-          like(this.dynamicCollections.description, searchPattern)
-        )
-      );
-    }
-
-    if (source) {
-      conditions.push(eq(this.dynamicCollections.source, source));
-    }
-
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
-
-    const orderFn = sortOrder === "asc" ? asc : desc;
-    let orderByClause;
-    switch (sortBy) {
-      // "name" is the admin/API alias for "slug" — both sort on the slug column.
-      case "name":
-      case "slug":
-        orderByClause = orderFn(this.dynamicCollections.slug);
-        break;
-      case "updatedAt":
-        orderByClause = orderFn(this.dynamicCollections.updatedAt);
-        break;
-      case "createdAt":
-      default:
-        orderByClause = orderFn(this.dynamicCollections.createdAt);
-    }
-
-    const offset = (page - 1) * limit;
-
-    const countResult = await this.db
-      .select({ value: count() })
-      .from(this.dynamicCollections)
-      .where(whereClause);
-
-    const total = Number(countResult[0]?.value ?? 0);
+    const total = listed.total;
     const totalPages = Math.ceil(total / limit);
-
-    const collections = includeSchema
-      ? await this.db
-          .select()
-          .from(this.dynamicCollections)
-          .where(whereClause)
-          .orderBy(orderByClause)
-          .limit(limit)
-          .offset(offset)
-      : await this.db
-          // `fields` is the only column this shape drops, and the return type
-          // says so: `Omit<CollectionMetadata, "fields">`. Every other column
-          // has to be named here, because an omission is invisible — the row
-          // still satisfies the declared type while the value arrives
-          // `undefined`, so a caller reading `status` or `versions` off a list
-          // gets nothing and no error. Dropping the schema blob is what makes
-          // the shape cheap; dropping metadata alongside it only makes it wrong.
-          .select({
-            id: this.dynamicCollections.id,
-            slug: this.dynamicCollections.slug,
-            tableName: this.dynamicCollections.tableName,
-            description: this.dynamicCollections.description,
-            labels: this.dynamicCollections.labels,
-            timestamps: this.dynamicCollections.timestamps,
-            status: this.dynamicCollections.status,
-            localized: this.dynamicCollections.localized,
-            versions: this.dynamicCollections.versions,
-            revalidate: this.dynamicCollections.revalidate,
-            webhooks: this.dynamicCollections.webhooks,
-            admin: this.dynamicCollections.admin,
-            hooks: this.dynamicCollections.hooks,
-            source: this.dynamicCollections.source,
-            locked: this.dynamicCollections.locked,
-            configPath: this.dynamicCollections.configPath,
-            schemaHash: this.dynamicCollections.schemaHash,
-            schemaVersion: this.dynamicCollections.schemaVersion,
-            migrationStatus: this.dynamicCollections.migrationStatus,
-            lastMigrationId: this.dynamicCollections.lastMigrationId,
-            createdBy: this.dynamicCollections.createdBy,
-            createdAt: this.dynamicCollections.createdAt,
-            updatedAt: this.dynamicCollections.updatedAt,
-            // `fields` intentionally excluded — the reason this shape exists.
-          })
-          .from(this.dynamicCollections)
-          .where(whereClause)
-          .orderBy(orderByClause)
-          .limit(limit)
-          .offset(offset);
 
     return {
       // Both shapes carry `status` and `localized`, so both need the same
       // coercion `getCollection` applies — see `normalizeCollectionBooleans`.
-      collections: (collections as Record<string, unknown>[]).map(
+      collections: listed.rows.map(
         normalizeCollectionBooleans
       ) as ListCollectionsResponse<TIncludeSchema>["collections"],
       total,
@@ -676,12 +604,28 @@ export class DynamicCollectionRegistryService extends BaseService {
 
   /**
    * One collection's registry row, by slug. Outside a transaction it comes
-   * from the row cache (`collection-row-cache`): a copy, at most a second old
-   * for a change made elsewhere, and current for one made here. Inside one it
-   * is read on the transaction, uncached, so the transaction sees its own
-   * writes.
+   * from the row cache (`collection-row-cache`): a copy, kept until the
+   * stored count of registry writes moves, so a change made elsewhere is seen
+   * within `REGISTRY_ROW_STALENESS_MS`, and current for one made here. Read on a
+   * transaction, it comes from that transaction's memo
+   * (`registryRowOnTransaction`): read there once, uncached by any other, so
+   * the transaction sees its own writes and no other transaction does. Inside
+   * a transaction but read through the pool, it is read every time, as
+   * before.
    */
   async getCollection(slug: string, executor?: unknown): Promise<unknown> {
+    const transaction = registryReadTransaction(this.adapter, executor);
+    if (transaction !== undefined) {
+      // The row as stored, under the key the registry services' own lookup
+      // (`getRecordBySlug`) holds it by: one read of it serves both.
+      const stored = await registryRowOnTransaction(
+        transaction,
+        "record:dynamic_collections",
+        slug,
+        () => this.readStoredCollection(slug, executor)
+      );
+      return this.normalizedOrMissing(slug, stored);
+    }
     if (executor !== undefined || this.adapter.transactionOpenInFlow()) {
       return this.readCollection(slug, executor);
     }
@@ -695,6 +639,17 @@ export class DynamicCollectionRegistryService extends BaseService {
     slug: string,
     executor?: unknown
   ): Promise<Record<string, unknown>> {
+    return this.normalizedOrMissing(
+      slug,
+      await this.readStoredCollection(slug, executor)
+    );
+  }
+
+  /** One collection's registry row as stored, or null when there is none. */
+  private async readStoredCollection(
+    slug: string,
+    executor?: unknown
+  ): Promise<Record<string, unknown> | null> {
     // Run on the caller's transaction executor when supplied so this metadata
     // read does not take a second pooled connection from inside the caller's
     // transaction (which can stall against a small pool); falls back to the
@@ -706,16 +661,21 @@ export class DynamicCollectionRegistryService extends BaseService {
       .from(this.dynamicCollections)
       .where(eq(this.dynamicCollections.slug, slug))
       .limit(1);
+    return (result[0] as Record<string, unknown> | undefined) ?? null;
+  }
 
-    if (result.length === 0) {
+  /** A stored row with its booleans normalized; a missing one is not found. */
+  private normalizedOrMissing(
+    slug: string,
+    row: Record<string, unknown> | null
+  ): Record<string, unknown> {
+    if (row === null) {
       // Typed for the same reason as above, with the wording preserved.
       throw NextlyError.notFound({
         message: `Collection "${slug}" not found`,
         logContext: { collection: slug },
       });
     }
-
-    const row = result[0] as Record<string, unknown>;
     return normalizeCollectionBooleans(row);
   }
 
@@ -798,6 +758,9 @@ export class DynamicCollectionRegistryService extends BaseService {
       await named.release();
       throw error;
     }
+    // Held now, the rows are the latest committed: a row the transaction
+    // read before the hold may predate a commit the hold waited for.
+    forgetRegistryRowsOnTransaction(this.adapter);
     const existing = rows.map(row => row.slug);
     const ids = new Map(rows.map(row => [row.slug, String(row.id)]));
     if (strength === "share") {
@@ -828,10 +791,14 @@ export class DynamicCollectionRegistryService extends BaseService {
       "dynamic_collections",
       { columns: ["revalidate"], where, forUpdate: true }
     );
-    return {
-      removed: await tx.delete("dynamic_collections", where),
-      stored: row?.revalidate,
-    };
+    const removed = await tx.delete("dynamic_collections", where);
+    // The stored schema version's count moves in the same transaction.
+    if (removed > 0) await countRegistryWriteOn(tx, this.dialect);
+    // Cleared as it is removed, so a read later in `tx` does not find the row
+    // the transaction read before; the recording decision stays the caller's
+    // to forget once `tx` commits.
+    clearRegistryRowCache();
+    return { removed, stored: row?.revalidate };
   }
 
   /**

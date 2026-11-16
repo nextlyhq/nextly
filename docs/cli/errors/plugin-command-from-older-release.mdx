@@ -1,0 +1,23 @@
+---
+title: PLUGIN_COMMAND_FROM_OLDER_RELEASE
+description: "A plugin install or uninstall ran in production from a Nextly release older than the one that set the preset roles' grants, and changed nothing."
+---
+
+## Cause
+
+A plugin install or uninstall ran in production from a Nextly release older than the one that set the preset roles' grants, and changed nothing.
+
+`nextly plugins install` sets every preset role's grants (Admin, Editor, Author, Viewer) with the plugin's permissions, by its own release's presets, and records that release. The database records a newer release as having set them, which an older release leaves as they are, so in production neither `nextly plugins install` nor `nextly plugins uninstall` runs from it. Nothing was changed.
+
+## Fix
+
+Run the command from the Nextly release the message names, or a newer one. In development the install goes on and leaves the preset grants as the newer release set them.
+
+## Example
+
+```text
+✗ The preset roles' grants were set by Nextly 0.10.0, newer than this release (0.9.0).
+  Why:  An install sets every preset role's grants with the plugin's permissions, and a release older than the one that set them leaves them as they are, so neither command runs from it in production. Nothing was changed.
+  Next: Run this command from Nextly 0.10.0 or newer.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-command-from-older-release  (PLUGIN_COMMAND_FROM_OLDER_RELEASE)
+```

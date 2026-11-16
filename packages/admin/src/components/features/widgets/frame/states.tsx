@@ -18,6 +18,7 @@ import { Button, Skeleton } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
 import { Lock, RefreshCw, XCircle } from "@admin/components/icons";
+import { ChecklistOutline } from "@admin/components/shared/checklist";
 import { Link } from "@admin/components/ui/link";
 import { cn } from "@admin/lib/utils";
 
@@ -43,7 +44,7 @@ import type { RowsLayout } from "./tier";
  * The kinds of body a skeleton can be shaped like, so it matches what will arrive: one for each
  * display a card is drawn as.
  */
-export type SkeletonShape = "figure" | "rows" | "chart" | "bars";
+export type SkeletonShape = "figure" | "rows" | "chart" | "bars" | "checklist";
 
 /**
  * One line of a skeleton, as tall as a line of `lineClass` and no taller: the bar is `1em` of
@@ -128,6 +129,13 @@ function SkeletonRows({ rows, layout }: { rows: number; layout: RowsLayout }) {
 }
 
 /**
+ * The steps a checklist card's loading state draws when nothing says how many:
+ * four, the setup checklist's count once a project's sample content is
+ * answered, which is most of its life (five before it, fewer without Singles).
+ */
+const CHECKLIST_OUTLINE_STEPS = 4;
+
+/**
  * A skeleton shaped like the body that has not arrived yet: a figure where a number will be,
  * rows where a list will be. A generic block would jump into a different shape when the data
  * lands, which is the layout shift this exists to avoid.
@@ -138,13 +146,25 @@ function SkeletonRows({ rows, layout }: { rows: number; layout: RowsLayout }) {
  */
 export function CardSkeleton({
   shape = "rows",
-  rows = 3,
+  rows: givenRows,
   layout,
 }: {
   shape?: SkeletonShape;
   rows?: number;
   layout?: RowsLayout;
 }): JSX.Element {
+  if (shape === "checklist") {
+    // A checklist's own lines (`ChecklistOutline`), as many as it is told or
+    // the steps a project's setup has for most of its life, so the steps land
+    // at the outline's height.
+    return (
+      <div data-testid="card-skeleton" data-shape={shape}>
+        <span className="sr-only">Loading</span>
+        <ChecklistOutline steps={givenRows ?? CHECKLIST_OUTLINE_STEPS} />
+      </div>
+    );
+  }
+  const rows = givenRows ?? 3;
   if ((shape === "rows" && layout) || shape === "figure") {
     return (
       <div data-testid="card-skeleton" data-shape={shape}>
@@ -311,7 +331,12 @@ export function CardError({
       className="grid justify-items-center gap-1"
       data-testid="widget-card-error"
     >
-      <XCircle className="mb-1 h-5 w-5 text-destructive" aria-hidden="true" />
+      {/* An icon is ink, so it takes the danger status's text colour; the solid one is for fills. */}
+      <XCircle
+        className="mb-1 h-5 w-5 text-danger-text"
+        aria-hidden="true"
+        data-testid="widget-card-error-mark"
+      />
       {/* A string expression rather than JSX text, so the apostrophe is written as itself. */}
       <p className="text-sm font-semibold text-foreground">
         {"This card couldn't load"}

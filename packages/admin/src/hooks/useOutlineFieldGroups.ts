@@ -46,6 +46,11 @@ export function useOutlineFieldGroups(): {
   const query = useQuery({
     queryKey: [...fieldGroupKeys.lists(), "every-definition"],
     queryFn: readEveryFieldGroup,
+    // Read again on each Builder visit: the use counts it carries change when
+    // a collection or Single places a field group, and those saves refresh
+    // their own keys, not this one. Kept while read, so the outline is drawn
+    // from the last answer meanwhile.
+    staleTime: 0,
   });
   const fieldGroups = useMemo(() => {
     const map = new Map<string, LoadedFieldGroup>();
@@ -54,6 +59,9 @@ export function useOutlineFieldGroups(): {
         slug: group.slug,
         label: group.label,
         fields: group.fields,
+        // The list answers with each field group's use count; null when it
+        // could not be read, which the outline then leaves unsaid.
+        placedBy: group.placedBy ?? null,
         // Whether the field group translates its fields. The server sends it
         // on every record; the record's type does not name it, so it is read
         // through a check that holds whatever arrives.

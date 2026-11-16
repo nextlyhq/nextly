@@ -16,6 +16,10 @@ import {
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
+import { ADDRESS_RECORD_CACHE_PART } from "../address-record/store";
+import { seoSettingsCacheTags } from "../settings/single";
+
+import { displayDirectives } from "./display";
 import { resolveOrder, type SeoAnswer } from "./order";
 import { levelsOf, NO_RULES, type SiteRules } from "./page-levels";
 
@@ -26,7 +30,7 @@ export type ReadRules = (
 ) => Promise<SiteRules>;
 
 /** No settings yet: the site's rules are empty. */
-const noRules: ReadRules = async () => NO_RULES;
+const noRules: ReadRules = () => Promise.resolve(NO_RULES);
 
 /**
  * The one resolution of a page: its answer, every value with its source,
@@ -68,8 +72,34 @@ export function answerOf(
     ...(answer.title ? { title: answer.title.value } : {}),
     ...(answer.description ? { description: answer.description.value } : {}),
     ...(answer.canonical ? { canonical: answer.canonical.value } : {}),
-    robots: answer.robots.value,
+    // How results may show the page is said only of a page they list.
+    robots:
+      answer.robots.value.index && answer.display !== undefined
+        ? { ...answer.robots.value, ...displayDirectives(answer.display) }
+        : answer.robots.value,
     ...(Object.keys(social).length > 0 ? { social } : {}),
+  };
+}
+
+/**
+ * `resolver` with `add` worked out over each page's answer, for a part of the
+ * head derived from it, such as its language links or structured data. The
+ * answer's own cache tags are kept: what is added reads nothing they miss.
+ */
+export function overAnswer(
+  resolver: PageMetadataResolver,
+  add: (
+    answer: PageMetadataAnswer,
+    input: PageMetadataInput
+  ) => Promise<PageMetadataAnswer>
+): PageMetadataResolver {
+  return {
+    ...(resolver.tags === undefined
+      ? {}
+      : { tags: input => resolver.tags?.(input) ?? [] }),
+    async resolve(input) {
+      return add(await resolver.resolve(input), input);
+    },
   };
 }
 
@@ -79,9 +109,16 @@ export function seoPageMetadata(
   readRules: ReadRules = noRules
 ): PageMetadataResolver {
   return {
-    // A share image is read from the media library, so any write to it
-    // expires the head that shows it, as a write to the page itself does.
-    tags: () => nextlyTags("media"),
+    // A share image is read from the media library, and the site's rules
+    // from the SEO settings, so a write to either expires the head built from
+    // it, as a write to the page itself does. The address record too: a page
+    // that gains or loses its address to another changes its canonical
+    // without a write to itself.
+    tags: () => [
+      ...nextlyTags("media"),
+      ...ctx.cache.tags(ADDRESS_RECORD_CACHE_PART),
+      ...seoSettingsCacheTags(),
+    ],
     // The page's head is derived from the one resolution, never worked out
     // beside it.
     async resolve(input) {

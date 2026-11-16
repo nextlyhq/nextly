@@ -138,10 +138,7 @@ function HistoryBody({
   }
   if (history.isError) {
     return (
-      <p
-        role="alert"
-        className="text-sm text-danger-text"
-      >
+      <p role="alert" className="text-sm text-danger-text">
         The history of this release could not be loaded.
       </p>
     );

@@ -3,8 +3,10 @@
  * form the apply binds it and the pre-cleanup check judges it.
  *
  * A stated date is written in whatever form an author typed: a calendar date, an offset time.
- * The migration file writes it as the database reads it; the bound value has to reach the same
- * column as a date, and pass the check that refuses a value not of the field's type.
+ * The bound value is the moment it names in the one form a date fill is stored in, which the
+ * migration file writes too, so the two land on the same value: the UTC ISO string on
+ * PostgreSQL, the UTC datetime on MySQL, epoch seconds on SQLite. It has to pass the check that
+ * refuses a value not of the field's type.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -21,6 +23,12 @@ import {
 } from "../dynamic-collection-schema-service";
 
 const NOW = new Date("2026-11-02T00:00:00.000Z");
+
+/** The moment `stated` names, as each dialect's date fill is stored. */
+const storedAs = (dialect: "postgresql" | "mysql", stated: string) => {
+  const iso = new Date(Date.parse(stated)).toISOString();
+  return dialect === "mysql" ? iso.slice(0, 23).replace("T", " ") : iso;
+};
 
 const dated = (stated: string) =>
   ({
@@ -45,8 +53,7 @@ describe("a Required date field's stated default, as the rows are filled with it
     for (const dialect of ["postgresql", "mysql"] as const) {
       it(`is the moment it names on ${dialect}, and passes the check, for "${stated}"`, () => {
         const value = fill(dialect, stated);
-        expect(value).toBeInstanceOf(Date);
-        expect((value as Date).getTime()).toBe(Date.parse(stated));
+        expect(value).toBe(storedAs(dialect, stated));
         expect(
           validateDefaultValue(
             { name: "launched_on", type: "date" },
@@ -104,8 +111,7 @@ describe("a Required plugin field stored as a timestamp, as the rows are filled 
         undefined,
         dialect
       ).addedColumnFillValue(plugin, NOW);
-      expect(value).toBeInstanceOf(Date);
-      expect((value as Date).getTime()).toBe(Date.parse(stated));
+      expect(value).toBe(storedAs(dialect, stated));
     }
   });
 });

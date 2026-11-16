@@ -6,7 +6,15 @@
  *  - deserializeRecord normalises 0/1 and true/false into a JS boolean,
  *    defaulting to false for legacy rows written before the column existed.
  */
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// The adapter double holds no stored schema version: registry writes run as
+// they are (`unversionedRegistryWrites`).
+vi.mock("../../schema/schema-version", async importOriginal =>
+  (
+    await import("../../../__tests__/helpers/unversioned-registry-writes")
+  ).unversionedRegistryWrites(await importOriginal())
+);
 
 import { CollectionRegistryService } from "../services/collection-registry-service";
 

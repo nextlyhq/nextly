@@ -6,7 +6,15 @@
 // filled from the default language, and given the setting before its translations column goes. When
 // the values cannot take the setting, the reload changes nothing and says why.
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 
 import { defineCollection, defineConfig } from "../../config";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
@@ -83,16 +91,27 @@ type Body = {
   pairUnique?: true;
   /** `body` declared under this name instead, as a rename in the config. */
   renamedTo?: string;
+  /** The collection is Draft/Published, so each language publishes on its own. */
+  status?: true;
 };
 
 /** A translated collection whose `body` is translated or shared, with its settings. */
 const collectionWith = (
   slug: string,
-  { summary, titleType, indexedUnique, pairUnique, renamedTo, ...body }: Body
+  {
+    summary,
+    titleType,
+    indexedUnique,
+    pairUnique,
+    renamedTo,
+    status,
+    ...body
+  }: Body
 ) =>
   defineCollection({
     slug,
     localized: true,
+    ...(status ? { status: true } : {}),
     ...(indexedUnique ? { indexes: [{ fields: ["body"], unique: true }] } : {}),
     ...(pairUnique
       ? { indexes: [{ fields: ["body", "title"], unique: true }] }
@@ -253,50 +272,52 @@ describe.each(getConfiguredTestDialects())(
             () => "taken",
             () => "refused"
           );
-        const textOf = (query: unknown) =>
-          JSON.stringify(
-            (query as { queryChunks?: unknown }).queryChunks ?? ""
-          );
-        const drizzle = handle.adapter.getDrizzle.bind(handle.adapter);
-        vi.spyOn(handle.adapter, "getDrizzle").mockImplementation(() => {
-          const db = drizzle() as {
-            transaction(run: (tx: unknown) => Promise<void>): Promise<void>;
-          };
-          return new Proxy(db, {
-            get(target, key, receiver) {
-              if (key !== "transaction")
-                return Reflect.get(target, key, receiver);
-              return (run: (tx: unknown) => Promise<void>) =>
-                target.transaction(tx =>
-                  run(
-                    new Proxy(tx as object, {
-                      get(t, k, r) {
-                        if (k !== "execute") return Reflect.get(t, k, r);
-                        return async (query: unknown) => {
-                          const done = await (
-                            t as { execute(q: unknown): Promise<unknown> }
-                          ).execute(query);
-                          const text = textOf(query);
-                          // Right after the final copy onto main, from another connection.
-                          if (
-                            late.signalled !== true &&
-                            text.includes(`UPDATE \\"${TABLE}\\"`) &&
-                            text.includes(COMPANION)
-                          ) {
-                            late.signalled = true;
-                            copied();
-                            await new Promise(resolve =>
-                              setTimeout(resolve, 300)
-                            );
-                          }
-                          return done;
-                        };
-                      },
-                    })
-                  )
-                );
-            },
-          }) as ReturnType<typeof drizzle>;
+        // Watched at the driver, under every path a statement takes: the move's statements run
+        // through the busy-table runner on a session of its own, not through the adapter's
+        // Drizzle handle, each led by its schema-lock and unit markers. The final copy is the copy
+        // onto main that its unit sends after its own first statement (the lock it takes against
+        // writes, on PostgreSQL), where the move's earlier copy opens a unit of its own. Watched
+        // that way, it is found whether or not that lock is there.
+        const { driverEntryPoints, ownerOf } = await import(
+          "../../__tests__/helpers/record-statements"
+        );
+        const [{ instance }] = await driverEntryPoints(
+          handle.adapter as never,
+          "postgresql"
+        );
+        const driver = ownerOf(instance, "query") as Record<string, unknown>;
+        const query = driver.query as (...args: unknown[]) => unknown;
+        const sentInUnit = new Map<string, number>();
+        driver.query = function (this: unknown, ...args: unknown[]): unknown {
+          const first = args[0] as { text?: unknown } | string | undefined;
+          const text =
+            typeof first === "string"
+              ? first
+              : typeof first?.text === "string"
+                ? first.text
+                : "";
+          const unit = /nextly-unit:(\S+) \*\//.exec(text)?.[1] ?? "";
+          const earlier = sentInUnit.get(unit) ?? 0;
+          sentInUnit.set(unit, earlier + 1);
+          const bare = text.replace(/\/\*[\s\S]*?\*\//g, "").trim();
+          const sent = query.apply(this, args);
+          const finalCopy =
+            late.signalled !== true &&
+            unit !== "" &&
+            earlier > 0 &&
+            bare.startsWith(`UPDATE "${TABLE}"`) &&
+            bare.includes(COMPANION);
+          if (!finalCopy || !(sent instanceof Promise)) return sent;
+          return sent.then(async (done: unknown) => {
+            late.signalled = true;
+            copied();
+            // Held between the final copy and the drop, from inside the move's own transaction.
+            await new Promise(resolve => setTimeout(resolve, 300));
+            return done;
+          });
+        };
+        onTestFinished(() => {
+          driver.query = query;
         });
 
         loaded.config = configWith({ localized: false });
@@ -351,18 +372,51 @@ describe.each(getConfiguredTestDialects())(
       ).rejects.toThrow();
     });
 
-    it("refuses a Required field while an entry has no English value, changing nothing", async () => {
-      await seed({ e1: { en: "Hello", es: "Hola" }, e2: { es: "Solo" } });
+    // An entry with a value in another language keeps that one, so only an entry with none in
+    // any language is left without a value.
+    it("refuses a Required field while an entry has no value in any language, changing nothing", async () => {
+      await seed({ e1: { en: "Hello", es: "Hola" }, e2: {} });
 
       loaded.config = configWith({ localized: false, required: true });
       await reloadNextlyConfig();
 
       // The refusal of the setting, not the terminal prompt for a required column.
-      expect(told()).toMatch(/no English body/);
+      expect(told()).toMatch(/would have no body once it is shared/);
       expect(told()).toMatch(/remove `required`.*save/s);
       expect(await columnsOf(TABLE)).not.toContain("body");
       expect(await columnsOf(COMPANION)).toContain("body");
       expect(await archived()).toEqual([]);
+    });
+
+    // Each language publishes on its own: an English draft is not what readers saw, so the
+    // published Spanish is the value kept, as the Schema Builder's save keeps it.
+    it("keeps the published Spanish over an English draft of a Draft/Published collection", async () => {
+      loaded.config = configWith(
+        { localized: true },
+        { localized: true, status: true }
+      );
+      await reloadNextlyConfig();
+      const companionOf = `${OTHER_TABLE}_locales`;
+      expect(await columnsOf(companionOf)).toContain("_status");
+      await handle.adapter.executeQuery(
+        `INSERT INTO ${q(OTHER_TABLE)} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("status")}) VALUES ('d1', 'd1', 'd1', 'published')`
+      );
+      await handle.adapter.executeQuery(
+        `INSERT INTO ${q(companionOf)} (${q("_parent")}, ${q("_locale")}, ${q("_status")}, ${q("body")}) VALUES ('d1', 'en', 'draft', 'Draft'), ('d1', 'es', 'published', 'Hola')`
+      );
+
+      loaded.config = configWith(
+        { localized: true },
+        { localized: false, status: true }
+      );
+      await reloadNextlyConfig();
+
+      const [main] = await handle.adapter.executeQuery<{
+        body: string | null;
+      }>(
+        `SELECT ${q("body")} AS body FROM ${q(OTHER_TABLE)} WHERE ${q("id")} = 'd1'`
+      );
+      expect(main?.body).toBe("Hola");
     });
 
     it("makes a Unique field unique once its values are copied", async () => {

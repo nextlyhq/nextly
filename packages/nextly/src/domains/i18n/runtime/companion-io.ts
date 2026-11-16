@@ -11,6 +11,7 @@
  * @module domains/i18n/runtime/companion-io
  */
 
+import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 import type {
   SqlParam,
   SupportedDialect,
@@ -1213,7 +1214,7 @@ export async function liveCompanionColumns(
 }
 
 /** `tableName`'s columns as this database has them; empty when the table is missing. */
-async function liveColumnsOf(
+export async function liveColumnsOf(
   adapter: CompanionIntrospectAdapter,
   tableName: string
 ): Promise<readonly ColumnSpec[]> {
@@ -1261,13 +1262,15 @@ export async function liveCompanionShape(
   existingMainColumns: string[];
   presentOnCompanion?: string[];
   liveCompanionColumns?: string[];
+  liveCompanionDefinitions?: Readonly<Record<string, ColumnSpec>>;
   liveCompanionIndexes?: readonly string[];
   liveCompanionNotUnique?: readonly string[];
 }> {
   const { tableName, companionExists } = args;
-  const live = companionExists
-    ? await companionColumnNames(adapter, tableName)
+  const liveSpecs = companionExists
+    ? await liveCompanionColumns(adapter, tableName)
     : undefined;
+  const live = liveSpecs?.map(c => c.name);
   return {
     existingMainColumns: (
       await localizedColumnsOnMain(adapter, tableName, args.oldFields)
@@ -1281,6 +1284,15 @@ export async function liveCompanionShape(
             live
           ),
     liveCompanionColumns: live,
+    // Each companion column as it is, whose wider type and default a column restored to the main
+    // table takes back (`carriedDefinition`).
+    ...(liveSpecs
+      ? {
+          liveCompanionDefinitions: Object.fromEntries(
+            liveSpecs.map(c => [c.name, c] as const)
+          ),
+        }
+      : {}),
     // Only for a companion that exists: there are no indexes on a table that is about to be
     // created, and the transition plans its creates from that.
     ...(companionExists
@@ -1693,6 +1705,38 @@ export async function resolveCompanionSeedDebt(
 }
 
 /**
+ * Runs `statements` in order. On MySQL they run on one connection: a column restated from the
+ * database's own description of it (`restatedColumn`) is built in a session variable and run as a
+ * prepared statement, which another pooled connection cannot see. MySQL commits each schema
+ * statement as it runs, so this pins the connection and does not make the statements atomic.
+ * `afterEach` runs once each statement has landed.
+ */
+async function runStatementsInOrder(
+  adapter: CompanionIntrospectAdapter,
+  statements: readonly string[],
+  afterEach?: () => void
+): Promise<void> {
+  if (adapter.dialect !== "mysql") {
+    for (const statement of statements) {
+      await adapter.executeQuery(statement);
+      afterEach?.();
+    }
+    return;
+  }
+  const db = adapter.getDrizzle<{
+    transaction<T>(
+      run: (tx: { execute(query: unknown): Promise<unknown> }) => Promise<T>
+    ): Promise<T>;
+  }>();
+  await db.transaction(async tx => {
+    for (const statement of statements) {
+      await tx.execute(sql.raw(statement));
+      afterEach?.();
+    }
+  });
+}
+
+/**
  * Finish a copy that an earlier run started and did not complete.
  *
  * The companion already exists, so its CREATE is not reissued — only the copy is, and only for the
@@ -1781,13 +1825,11 @@ async function resumeInterruptedSeed(
         });
       }
     }
-    for (const statement of copy) {
-      // Issued as generated. The seed carries its guard from `buildLocalizationUpStatements`,
-      // which this path asks for — matching on a statement's leading text to decide whether to
-      // rewrite it made the guard a property of whoever executed the statement rather than of the
-      // statement itself.
-      await adapter.executeQuery(statement);
-    }
+    // Issued as generated. The seed carries its guard from `buildLocalizationUpStatements`,
+    // which this path asks for — matching on a statement's leading text to decide whether to
+    // rewrite it made the guard a property of whoever executed the statement rather than of the
+    // statement itself.
+    await runStatementsInOrder(adapter, copy);
     // The interrupted run's debt is discharged, so the record stops describing one.
     // A settlement that did not land means this run no longer holds the transition: someone took
     // it over while the copy ran. Reporting success would let the schema apply that follows drop
@@ -1896,6 +1938,22 @@ async function buildSeedingCreateStatements(
   });
   if (!spec) return null;
 
+  // Each companion column created from a main column takes what that column carries, as the
+  // database has it (`carriedDefinition`): a wider type, and a default.
+  const { carriedDefinition } = await import("../migration/carried-definition");
+  const liveMain = await liveColumnsOf(adapter, args.tableName);
+  const carriedSpec = {
+    ...spec,
+    columns: spec.columns.map(col => {
+      const carried = carriedDefinition(
+        liveMain.find(main => main.name === col.name),
+        col,
+        args.dialect
+      );
+      return carried ? { ...col, carried } : col;
+    }),
+  };
+
   const columnsOnMain = spec.columns
     .map(c => c.name)
     .filter(name => present.has(name));
@@ -1922,7 +1980,7 @@ async function buildSeedingCreateStatements(
   // something the next boot can put back. The copies left on main are inert once reads resolve
   // through the companion, and `nextly migrate` removes them under supervision.
   return buildLocalizationUpStatements(
-    { ...spec, columnsOnMain },
+    { ...carriedSpec, columnsOnMain },
     {
       dropSeededColumns: false,
       guardSeed: options.guardSeed,
@@ -1934,7 +1992,26 @@ async function buildSeedingCreateStatements(
   );
 }
 
-export async function ensureCompanionTable(
+/**
+ * Create a translated entity's translation table where it is missing, or
+ * finish what an existing one still owes (`createOrCompleteCompanionTable`).
+ *
+ * Not in `next build`, which creates no table: a translated entity whose
+ * translation table is missing is one the deploy has not migrated, and
+ * `nextly migrate` makes it. Nothing was created, which is what the answer
+ * says.
+ */
+export function ensureCompanionTable(
+  ...args: Parameters<typeof createOrCompleteCompanionTable>
+): Promise<boolean> {
+  if (isNextBuildPhase()) return Promise.resolve(false);
+  return createOrCompleteCompanionTable(...args);
+}
+
+// The body `ensureCompanionTable` had before the build gate moved in front of
+// it, unchanged; its size is that function's, not new branching.
+// fallow-ignore-next-line complexity
+async function createOrCompleteCompanionTable(
   adapter: CompanionIntrospectAdapter,
   args: {
     /**
@@ -2086,10 +2163,9 @@ export async function ensureCompanionTable(
         status: args.status === true,
         companionExists: false,
       });
-    for (const stmt of statements) {
-      await adapter.executeQuery(stmt);
+    await runStatementsInOrder(adapter, statements, () => {
       created = true;
-    }
+    });
     // Only once every statement landed. Settling earlier would mark a copy complete that a later
     // statement could still fail, and the record would then say the content is in the companion
     // when it is not.

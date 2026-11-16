@@ -18,6 +18,10 @@ import {
   readerFilterVerdict,
   type ContributionAudience,
 } from "../admin-contributions-offer";
+import {
+  publishBuilderExtensions,
+  publishConfiguredExtensions,
+} from "../extended-types";
 import type { PluginDefinition } from "../plugin-context";
 
 const SUPPORT: PluginDefinition = {
@@ -102,6 +106,43 @@ function reader(
 }
 
 describe("contributionsForReader", () => {
+  it("names a Single the plugin contributes by the slug the host renamed it to", async () => {
+    const SETTINGS: PluginDefinition = {
+      name: "@acme/settings",
+      version: "1.0.0",
+      nextly: "*",
+      renameMap: { "acme-settings": "site-settings" },
+      contributes: {
+        singles: [{ slug: "acme-settings", fields: [] }],
+        admin: {
+          contributions: [
+            {
+              id: "acme-settings.tab",
+              kind: "tab",
+              place: "single.edit",
+              label: "Settings",
+              component: "x#Tab",
+              singles: ["acme-settings", "homepage"],
+            },
+          ] as AdminContribution[],
+        },
+      },
+    };
+    const { audience } = reader([]);
+    const meta = await contributionsForReader(
+      [SETTINGS],
+      audience,
+      "workspace"
+    );
+    // Its own Single under its served slug; the host's own as written.
+    expect(meta["single.edit"]?.tab).toEqual([
+      expect.objectContaining({
+        id: "acme-settings.tab",
+        singles: ["site-settings", "homepage"],
+      }),
+    ]);
+  });
+
   it("sends a reader holding every permission each place's lists in order, login's left out", async () => {
     const { audience } = reader(["read-audit"]);
     const meta = await contributionsForReader([SUPPORT], audience, "workspace");
@@ -313,6 +354,116 @@ describe("contributionsForReader", () => {
       "workspace"
     );
     expect({ restricted, full }).toMatchSnapshot();
+  });
+});
+
+describe("contributionsForReader — offered where the plugin's fields were added", () => {
+  // A plugin adding a `notes` field to every content type, with a tab that
+  // edits it and a panel section about it.
+  const NOTES: PluginDefinition = {
+    name: "@acme/notes",
+    version: "1.0.0",
+    nextly: "*",
+    contributes: {
+      extend: [
+        {
+          target: { every: ["collection", "single"] },
+          fields: [{ name: "notes", type: "text" }],
+        },
+      ],
+      admin: {
+        contributions: [
+          {
+            id: "acme-notes.tab",
+            kind: "tab",
+            place: "collection.edit",
+            label: "Notes",
+            component: "x#Tab",
+            fields: ["notes"],
+            extendedWith: ["notes"],
+          },
+          {
+            id: "acme-notes.single-tab",
+            kind: "tab",
+            place: "single.edit",
+            label: "Notes",
+            component: "x#Tab",
+            fields: ["notes"],
+            extendedWith: ["notes"],
+          },
+        ] as AdminContribution[],
+      },
+    },
+  };
+  const added = (...keys: string[]) =>
+    new Map(keys.map(key => [key, new Map([["notes", "@acme/notes"]])]));
+
+  it("offers a tab only on the collections and Singles the field was added to", async () => {
+    publishConfiguredExtensions(added("collection:posts", "single:homepage"));
+    publishBuilderExtensions(added("collection:products"));
+    const meta = await contributionsForReader(
+      [NOTES],
+      reader([], ["posts", "products", "pages"]).audience,
+      "workspace"
+    );
+    expect(meta["collection.edit"]?.tab).toEqual([
+      expect.objectContaining({
+        id: "acme-notes.tab",
+        collections: ["posts", "products"],
+      }),
+    ]);
+    expect(meta["single.edit"]?.tab).toEqual([
+      expect.objectContaining({
+        id: "acme-notes.single-tab",
+        singles: ["homepage"],
+      }),
+    ]);
+    // The option is the server's to settle, and is not sent on.
+    expect(meta["collection.edit"]?.tab?.[0]).not.toHaveProperty(
+      "extendedWith"
+    );
+  });
+
+  it("offers it nowhere while the field was added to no type of that kind", async () => {
+    publishConfiguredExtensions(added("collection:posts"));
+    publishBuilderExtensions(new Map());
+    const meta = await contributionsForReader(
+      [NOTES],
+      reader([], ["posts"]).audience,
+      "workspace"
+    );
+    expect(meta["single.edit"]).toBeUndefined();
+    expect(meta["collection.edit"]?.tab).toHaveLength(1);
+  });
+
+  it("withholds it on a type the plugin's switch has the field off on", async () => {
+    publishConfiguredExtensions(added("collection:posts", "collection:logs"));
+    publishBuilderExtensions(new Map());
+    const off = new Map([
+      ["@acme/notes", new Map([["notes", new Set(["collection:logs"])]])],
+    ]);
+    const meta = await contributionsForReader(
+      [NOTES],
+      reader([], ["posts", "logs"]).audience,
+      "workspace",
+      off
+    );
+    expect(meta["collection.edit"]?.tab).toEqual([
+      expect.objectContaining({ id: "acme-notes.tab", collections: ["posts"] }),
+    ]);
+  });
+
+  it("does not count a field of that name another plugin added", async () => {
+    publishConfiguredExtensions(
+      new Map([["collection:posts", new Map([["notes", "@acme/other"]])]])
+    );
+    publishBuilderExtensions(new Map());
+    const meta = await contributionsForReader(
+      [NOTES],
+      reader([], ["posts"]).audience,
+      "workspace"
+    );
+    expect(meta["collection.edit"]).toBeUndefined();
   });
 });
 

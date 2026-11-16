@@ -6,9 +6,13 @@
  * at the end of a word and "i" plus a combining dot for "İ", either of which would make SQLite
  * alone miss a match the other two dialects find.
  */
+import { sql } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
 import {
+  caseFolded,
   foldCase,
   registerSqliteFoldCase,
   SQLITE_FOLD_CASE_FUNCTION,
@@ -68,5 +72,25 @@ describe("registerSqliteFoldCase", () => {
     ]);
     expect(registered[0]?.fold("ΟΔΟΣ")).toBe("οδοσ");
     expect(registered[0]?.fold(null)).toBeNull();
+  });
+});
+
+describe("caseFolded", () => {
+  // PostgreSQL has no lower() for json or jsonb, the type a hasMany relationship's ids are
+  // stored as there, so it folds the value as text; MySQL lowers the serialized JSON as it is.
+  it("folds the value as text on PostgreSQL, so a json column is matched by its serialized text", () => {
+    expect(
+      new PgDialect().sqlToQuery(
+        caseFolded("postgresql", sql.identifier("topics"))
+      ).sql
+    ).toBe(`replace(lower(("topics")::text), $1, $2)`);
+  });
+
+  it("lowers the value as it is on MySQL", () => {
+    expect(
+      new MySqlDialect().sqlToQuery(
+        caseFolded("mysql", sql.identifier("topics"))
+      ).sql
+    ).toBe("replace(lower(`topics`), ?, ?)");
   });
 });

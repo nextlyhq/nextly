@@ -7,6 +7,8 @@
 
 import type { DataLossVerdict } from "../../../domains/schema/migrate/data-loss-consent";
 import { PLAN_CHANGED_AFTER_CONSENT } from "../../../domains/schema/migrate/plan-changed-after-consent";
+import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-column-guard";
+import { UNIQUE_INDEX_NAME_HELD_ADVICE } from "../../../domains/schema/migrate/unique-index-name-advice";
 import { NextlyError } from "../../../errors/nextly-error";
 import { builderMigrationRemedy } from "../../utils/migration-discovery";
 import { CliError, type CliErrorParts } from "../cli-error";
@@ -65,6 +67,29 @@ function lockRefusal(error: NextlyError): CliErrorParts {
     what: message.slice(0, end + 1),
     why: message.slice(end + 2, nextAt),
     next: message.slice(nextAt + 1),
+  };
+}
+
+/**
+ * A change that stopped waiting for a busy table, as its three parts.
+ *
+ * `tableBusyError` writes its message as one line of what happened, the lines of why (what the
+ * outcome left, the wait and its holder, the changes applied before it), and one line of what to
+ * do next. Split rather than reworded, so the CLI and the boot log keep one wording.
+ */
+function tableBusyParts(error: NextlyError): CliErrorParts {
+  const lines = error.publicMessage.split("\n");
+  if (lines.length < 3) {
+    return {
+      what: lines[0] ?? error.publicMessage,
+      why: "Another database session held a table the change needed, past its bounds.",
+      next: "Run it again once the holding session ends.",
+    };
+  }
+  return {
+    what: lines[0],
+    why: lines.slice(1, -1).join("\n"),
+    next: lines[lines.length - 1],
   };
 }
 
@@ -367,40 +392,26 @@ function coreReasons(list: string): string {
 }
 
 /**
- * A strict core reconcile's refusal: "Core schema reconciliation requires destructive operations:
- * <reasons>. This usually means a Nextly version mismatch. Set NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 to
- * proceed (see release notes)."
+ * A core upgrade's refusal for want of consent: "Bringing Nextly's own tables up to date deletes
+ * data: <deletions>. Nothing was changed. To go ahead, give consent: <consent>. <deprecation>", or
+ * the shared consent's own listing where a consent was given that leaves something out.
  */
 function coreRefusedParts(error: NextlyError): CliErrorParts {
   const message = error.publicMessage;
-  const head = "Core schema reconciliation requires destructive operations: ";
-  const usually = message.lastIndexOf(". This usually means");
-  const set = message.lastIndexOf(" Set NEXTLY_ALLOW_CORE_DESTRUCTIVE");
-  if (!message.startsWith(head) || usually === -1 || set < usually) {
+  const head = "Bringing Nextly's own tables up to date deletes data: ";
+  const nothing = message.indexOf(". Nothing was changed. ");
+  const give = message.indexOf("To go ahead, give consent: ");
+  if (!message.startsWith(head) || nothing === -1 || give < nothing) {
     return {
       what: message,
-      why: "A destructive change to Nextly's own tables is refused without consent.",
-      next: "Set NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 to proceed (see release notes).",
+      why: "A change to Nextly's own tables that deletes data is refused without consent.",
+      next: "Give consent for what it deletes: `--accept-data-loss=<table.column,...>` or `NEXTLY_ACCEPT_DATA_LOSS`.",
     };
   }
   return {
-    what: "Core schema reconciliation requires destructive operations.",
-    why: `${coreReasons(message.slice(head.length, usually))}\n${message.slice(usually + 2, set)}`,
-    next: message.slice(set + 1),
-  };
-}
-
-/** A confirmed core reconcile the operator declined: the destructive changes it named. */
-function coreDeclinedParts(error: NextlyError): CliErrorParts {
-  const message = error.publicMessage;
-  const head =
-    "Core schema reconciliation aborted: destructive operations were not confirmed: ";
-  return {
-    what: "Core schema reconciliation aborted: destructive operations were not confirmed.",
-    why: message.startsWith(head)
-      ? coreReasons(message.slice(head.length).replace(/\.$/, ""))
-      : message,
-    next: "Run `nextly upgrade --reconcile-core` again and confirm each change once you have checked its data is not needed.",
+    what: "Bringing Nextly's own tables up to date deletes data. Nothing was changed.",
+    why: coreReasons(message.slice(head.length, nothing)),
+    next: message.slice(give),
   };
 }
 
@@ -459,6 +470,20 @@ export const MIGRATION_CODES = defineCodes({
     cause:
       "Another run holds the schema lock, so the command did not start and changed nothing.",
     from: [{ code: "NEXTLY_MIGRATE_LOCK_BUSY", describe: lockRefusal }],
+  },
+  TABLE_BUSY: {
+    cause:
+      "A schema change waited for a table another database session was using, past its bounds, and stopped.",
+    from: [{ code: "NEXTLY_TABLE_BUSY", describe: tableBusyParts }],
+  },
+  LOCK_HELD_BY_THIS_PROCESS: {
+    cause:
+      "A write inside a schema change's own SQLite transaction, on another connection to the same database, waited for the lock that transaction holds, so the change stopped without trying again.",
+    // Its message is laid out as a busy table's is (what happened, why, what to do next), so it
+    // splits the same way and keeps one wording.
+    from: [
+      { code: "NEXTLY_LOCK_HELD_BY_THIS_PROCESS", describe: tableBusyParts },
+    ],
   },
   DATA_LOSS_CONSENT_REQUIRED: {
     cause:
@@ -623,6 +648,56 @@ export const MIGRATION_CODES = defineCodes({
             what: "A column could not be made required, because the rows in its way could not be counted.",
             why: issue?.message ?? error.publicMessage,
             next: "Check the database connection and that the table can be read, then run the command again.",
+          };
+        },
+      },
+    ],
+  },
+  UNIQUE_COLUMN_HAS_REPEATS: {
+    cause:
+      "A migration, or `nextly migrate`'s own step, would make a column unique while its entries repeat a value.",
+    from: [
+      {
+        // The refusal names what was not applied (`logContext.source`: a migration file or the
+        // run's own step) in its first sentence, then each column, each line ending in the advice.
+        code: "CONFLICT",
+        reason: "unique-column-over-repeats",
+        describe: error => {
+          const [what, rest] = splitFirst(error.publicMessage);
+          const source = String(error.logContext?.source);
+          return {
+            what: what.startsWith(source)
+              ? `\`${source}\`${what.slice(source.length)}`
+              : what,
+            why: rest.split(` ${UNIQUE_REPEATS_ADVICE}`).join("").trim(),
+            next: UNIQUE_REPEATS_ADVICE,
+          };
+        },
+      },
+    ],
+  },
+  UNIQUE_INDEX_NAME_TAKEN: {
+    cause:
+      "`nextly migrate` would make a one-to-one relationship unique under an index name another object already holds.",
+    from: [
+      {
+        // The refusal names the step, then each field with its index name and what holds it.
+        code: "CONFLICT",
+        reason: "unique-index-name-held",
+        describe: error => {
+          const message = error.publicMessage;
+          const split = message.indexOf(": ");
+          const listed =
+            split === -1
+              ? message
+              : message
+                  .slice(split + 2)
+                  .split(` ${UNIQUE_INDEX_NAME_HELD_ADVICE}`)
+                  .join("");
+          return {
+            what: `${split === -1 ? message : message.slice(0, split)}.`,
+            why: listed.trim(),
+            next: UNIQUE_INDEX_NAME_HELD_ADVICE,
           };
         },
       },
@@ -802,7 +877,7 @@ export const MIGRATION_CODES = defineCodes({
   },
   NEXTLY_CORE_DESTRUCTIVE_REFUSED: {
     cause:
-      "Bringing Nextly's own tables up to date needs a destructive change, which `nextly migrate` makes only with `NEXTLY_ALLOW_CORE_DESTRUCTIVE=1`.",
+      "Bringing Nextly's own tables up to date deletes data, which `nextly migrate` does only with the consent `--accept-data-loss` (or `NEXTLY_ACCEPT_DATA_LOSS`) covering it.",
     from: [
       { code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED", describe: coreRefusedParts },
     ],
@@ -810,19 +885,58 @@ export const MIGRATION_CODES = defineCodes({
   CORE_DESTRUCTIVE_CHANGE_DECLINED: {
     cause:
       "A destructive change to Nextly's own tables was not confirmed at the prompt, so none was made.",
-    from: [
-      {
-        code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
-        when: precondition(message =>
-          message.startsWith("Core schema reconciliation aborted")
-        ),
-        describe: coreDeclinedParts,
-      },
-    ],
+    retired: {
+      why: "`nextly upgrade --reconcile-core` no longer confirms each destructive change: it lists what it deletes with the data-loss consent and asks once, and a no ends as `DATA_LOSS_DECLINED`.",
+    },
   },
   CORE_DESTRUCTIVE_NEEDS_TERMINAL: {
     cause:
       "`nextly upgrade --reconcile-core` has a destructive change to Nextly's own tables to confirm, and no terminal is attached to ask, so none was made.",
+    retired: {
+      why: "`nextly upgrade --reconcile-core` now judges what it deletes by the data-loss consent, as `nextly migrate` does: with no terminal it refuses unless `--accept-data-loss` covers each deletion.",
+    },
+  },
+  NEXTLY_CORE_UPGRADE_UNSUPPORTED: {
+    cause:
+      "This version of Nextly cannot bring Nextly's own tables up to date from this database in one step, so it changed nothing.",
+    from: [
+      {
+        code: "NEXTLY_CORE_UPGRADE_UNSUPPORTED",
+        describe: error => {
+          const message = error.publicMessage;
+          const run = message.indexOf("Run `npx nextly@");
+          return {
+            what: run === -1 ? message : message.slice(0, run).trim(),
+            why: "drizzle-kit cannot plan this upgrade of Nextly's own tables from the database as it stands.",
+            next:
+              run === -1
+                ? "Upgrade through an earlier release first."
+                : message.slice(run),
+          };
+        },
+      },
+    ],
+  },
+  NEXTLY_CORE_UPGRADE_INCOMPLETE: {
+    cause:
+      "A core upgrade ran, but Nextly's own tables still lack a column or table this version declares.",
+    from: [
+      {
+        code: "NEXTLY_CORE_UPGRADE_INCOMPLETE",
+        describe: error => {
+          const message = error.publicMessage;
+          const run = message.indexOf("Run `npx nextly@");
+          return {
+            what: "The core upgrade ran, but Nextly's own tables are not up to date.",
+            why: run === -1 ? message : message.slice(0, run).trim(),
+            next:
+              run === -1
+                ? "Upgrade through an earlier release first."
+                : message.slice(run),
+          };
+        },
+      },
+    ],
   },
   CORE_SCHEMA_APPLY_FAILED: {
     cause: "The database refused a change to Nextly's own tables.",
@@ -1033,23 +1147,6 @@ export function dataLossRefusal(
       context: { reason: `data-loss-${verdict.reason}` },
     }
   );
-}
-
-/**
- * `nextly upgrade --reconcile-core` reached a destructive change to Nextly's own tables with no
- * terminal to confirm it, so it stopped before making any.
- */
-export function coreDestructiveNeedsTerminal(
-  reasons: readonly string[]
-): CliError {
-  return new CliError("CORE_DESTRUCTIVE_NEEDS_TERMINAL", {
-    what: "This confirmation needs a terminal, so nothing was changed.",
-    why: [
-      "`--reconcile-core` asks before each destructive change to Nextly's own tables, and no terminal is attached to ask (or `--non-interactive` was given, or `CI` is set). The changes it would make:",
-      ...reasons.map(reason => `- ${reason}`),
-    ].join("\n"),
-    next: "Run `nextly upgrade --reconcile-core` again at a terminal, and confirm each change once you have checked its data is not needed.",
-  });
 }
 
 /** `nextly migrate:resolve` was given none, or more than one, of its three modes. */

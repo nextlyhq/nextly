@@ -11,10 +11,11 @@
 import { randomUUID } from "node:crypto";
 
 import { apiKeyScope } from "../../../../auth/authenticated-scope";
-import { defineCollection, text } from "../../../../config";
+import { defineCollection, defineSingle, text } from "../../../../config";
 import { getDialectTables } from "../../../../database/index";
 import {
   createTestNextly,
+  type CreateTestNextlyOptions,
   type TestDialect,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
@@ -44,14 +45,30 @@ export const AT = new Date("2026-11-02T10:00:00.000Z");
 
 const drafts = { status: true, versions: { drafts: true } } as const;
 
-/** Boots the install every case uses. */
-export function bootSteps(dialect: TestDialect): Promise<TestNextly> {
+/**
+ * Boots the install every case uses, with `plugins` beside it: a case that reads what the install
+ * emails boots it with a provider's plugin. `tablePrefix` stores each collection's and Single's
+ * table under a name of the file's own, its slug unchanged, so files sharing these slugs never
+ * share a table.
+ */
+export function bootSteps(
+  dialect: TestDialect,
+  plugins?: CreateTestNextlyOptions["plugins"],
+  options: { tablePrefix?: string } = {}
+): Promise<TestNextly> {
+  const table = (slug: string) =>
+    options.tablePrefix === undefined
+      ? {}
+      : { dbName: `${options.tablePrefix}${slug}` };
   return createTestNextly({
     dialect,
+    // Only when given, so every other case boots exactly as before.
+    ...(plugins === undefined ? {} : { plugins }),
     localization: { locales: ["en", "es", "ar"], defaultLocale: "en" },
     collections: [
       defineCollection({
         slug: "posts",
+        ...table("posts"),
         localized: true,
         ...drafts,
         workflow: editorial,
@@ -64,6 +81,7 @@ export function bootSteps(dialect: TestDialect): Promise<TestNextly> {
       }),
       defineCollection({
         slug: "pages",
+        ...table("pages"),
         ...drafts,
         workflow: editorial,
         fields: [text({ name: "title" })],
@@ -72,6 +90,7 @@ export function bootSteps(dialect: TestDialect): Promise<TestNextly> {
       // workflow's built-in steps must meet as any write does.
       defineCollection({
         slug: "locked",
+        ...table("locked"),
         ...drafts,
         workflow: editorial,
         access: { update: () => false, publish: () => false },
@@ -80,6 +99,7 @@ export function bootSteps(dialect: TestDialect): Promise<TestNextly> {
       // Its update rule answers by language: Spanish may be edited, no other language.
       defineCollection({
         slug: "translations",
+        ...table("translations"),
         localized: true,
         ...drafts,
         workflow: editorial,
@@ -88,14 +108,66 @@ export function bootSteps(dialect: TestDialect): Promise<TestNextly> {
       }),
       defineCollection({
         slug: "memos",
+        ...table("memos"),
         ...drafts,
         workflow: handover,
         fields: [text({ name: "title" })],
       }),
+      // Read in every language but Spanish: a notice about a Spanish part is not for its reader.
+      defineCollection({
+        slug: "letters",
+        ...table("letters"),
+        localized: true,
+        ...drafts,
+        workflow: editorial,
+        access: { read: ({ locale }) => locale !== "es" },
+        fields: [text({ name: "title", localized: true })],
+      }),
+      // Its title is hidden from Alice by a field read rule, while she may read the rest.
+      defineCollection({
+        slug: "dossiers",
+        ...table("dossiers"),
+        ...drafts,
+        workflow: editorial,
+        fields: [
+          text({
+            name: "title",
+            access: { read: ({ user }) => user?.id !== "alice" },
+          }),
+        ],
+      }),
+      // Its title is hidden wherever the document's own `level` is "restricted": a rule a read
+      // answers from the whole document, not from the title alone.
+      defineCollection({
+        slug: "dockets",
+        ...table("dockets"),
+        ...drafts,
+        workflow: editorial,
+        fields: [
+          text({
+            name: "title",
+            access: {
+              read: ({ data }: { data?: Record<string, unknown> }) =>
+                data?.level !== "restricted",
+            },
+          }),
+          text({ name: "level" }),
+        ],
+      }),
       defineCollection({
         slug: "notes",
+        ...table("notes"),
         ...drafts,
         workflow: reviewWorkflow(),
+        fields: [text({ name: "title" })],
+      }),
+    ],
+    singles: [
+      defineSingle({
+        slug: "banner",
+        ...table("banner"),
+        ...drafts,
+        workflow: editorial,
         fields: [text({ name: "title" })],
       }),
     ],

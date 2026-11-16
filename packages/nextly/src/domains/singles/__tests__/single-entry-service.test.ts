@@ -1268,12 +1268,28 @@ describe("SingleEntryService", () => {
       const ctx = createCtx({ withRbac: true });
       ctx.registry.registerSingle("site-settings", siteSettingsMeta());
       // Pre-transaction read finds no row (so autoCreated); the in-transaction
-      // read finds the row a hook created in the meantime.
-      ctx.adapter.selectOne.mockResolvedValueOnce(null).mockResolvedValue({
+      // read, a locking read of the Single's table, finds the row a hook
+      // created in the meantime.
+      const hookCreated = {
         id: "hook-created",
         siteName: "S",
         updated_at: "2026-01-01T00:00:00.000Z",
-      });
+      };
+      ctx.adapter.selectOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue(hookCreated);
+      const readOther = ctx.adapter.select.getMockImplementation();
+      ctx.adapter.select.mockImplementation(
+        async (
+          table: string,
+          options?: { forUpdate?: boolean; columns?: string[] }
+        ) =>
+          table === "single_site_settings" &&
+          options?.forUpdate === true &&
+          options.columns === undefined
+            ? [hookCreated]
+            : readOther?.(table, options)
+      );
       ctx.adapter.update.mockResolvedValue([
         { id: "hook-created", siteName: "S2", updated_at: "2026-02-01" },
       ]);

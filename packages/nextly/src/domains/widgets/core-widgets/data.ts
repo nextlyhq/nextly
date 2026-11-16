@@ -214,3 +214,13 @@ export interface TeamWidgetData {
   people: TeamPersonData[];
   total: number;
 }
+
+/**
+ * Core's own default dashboard, re-exported for the admin, which draws its
+ * outline of an unsaved dashboard from it before any card can be read. It is
+ * a list of plain values beside the ids (`./ids`, which imports types only),
+ * so this entry still loads no core widget.
+ *
+ * @internal
+ */
+export { CORE_DEFAULT_LAYOUT } from "./ids";

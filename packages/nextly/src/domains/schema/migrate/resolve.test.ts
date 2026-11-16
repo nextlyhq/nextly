@@ -90,6 +90,35 @@ describe("resolveMigration", () => {
       expect(rows.map(row => row.status)).toEqual(["failed"]);
     });
 
+    it("leaves a same-named plugin module ledger row untouched", async () => {
+      // An app migration and a plugin module can share a module name (e.g.
+      // `001_add_posts`). Resolving the app migration operates on its `.sql`
+      // key and leaves the qualified `plugin:<name>/<module>` row untouched.
+      const { repo, base } = makeDeps(testDb);
+      const pluginFile = "plugin:@acme/fx/001_add_posts";
+      const pluginEventId = await repo.insertEvent({
+        eventType: "file_apply",
+        status: "applied",
+        source: "cli-migrate",
+        filename: pluginFile,
+        startedAt: new Date(1),
+        endedAt: new Date(2),
+      });
+
+      const r = await resolveMigration({
+        mode: "applied",
+        filename: "001_add_posts.sql",
+        ...base,
+      });
+      expect(r.kind).toBe("applied");
+
+      const pluginRow = await repo.findById(pluginEventId);
+      expect(pluginRow?.status).toBe("applied");
+      expect(pluginRow?.supersededBy).toBeNull();
+      const appRows = await repo.findFileApplies("001_add_posts.sql");
+      expect(appRows).toHaveLength(1);
+    });
+
     it("supersedes a prior failed row", async () => {
       const { repo, base } = makeDeps(testDb);
       const failedId = await repo.insertEvent({

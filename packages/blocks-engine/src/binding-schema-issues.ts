@@ -23,7 +23,11 @@ import {
   type CheckedBinding,
 } from "./binding-rules";
 import type { PropSchema } from "./block";
-import { DEFAULT_BINDING_SOURCE, MAX_SEO_SEGMENTS } from "./document";
+import {
+  DEFAULT_BINDING_SOURCE,
+  MAX_SEO_SEGMENTS,
+  SEO_TEXT_FIELDS,
+} from "./document";
 import { withHeldSeverityOf } from "./held-findings";
 import { pointer } from "./issue-text";
 import {
@@ -482,8 +486,8 @@ function seoBindingFindings(
 }
 
 /**
- * The problems of a document's own metadata bindings: each binding among the
- * title's and the description's pieces, and the social image.
+ * The problems of a document's own metadata bindings: each binding among its
+ * text values' pieces, and the social image.
  */
 function seoFindings(
   settings: unknown,
@@ -494,7 +498,7 @@ function seoFindings(
   if (!isPlainRecord(seo)) return [];
   const at = "/settings/seo";
   const findings: BindingFinding[] = [];
-  for (const field of ["title", "description"] as const) {
+  for (const field of SEO_TEXT_FIELDS) {
     const pieces = ownEntry(seo, field);
     if (!Array.isArray(pieces)) continue;
     // No more pieces than a value may hold; the shape check refuses the rest.

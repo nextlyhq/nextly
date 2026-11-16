@@ -93,6 +93,27 @@ describe("repair-columns --apply reaches the run that converts", () => {
     expect(process.exitCode).toBe(0);
   });
 
+  it("a dry run given the data-loss consent says it takes effect only with --apply, on standard error", async () => {
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    await repairColumnsAction(createContext)(
+      { json: true, acceptDataLoss: "dc_posts.meta" },
+      command({ cwd: "/project" })
+    );
+    expect(runs.dryRun).toHaveBeenCalledTimes(1);
+    expect(stderr.mock.calls.map(([text]) => String(text))).toContain(
+      "--accept-data-loss takes effect only with --apply: this run changes nothing.\n"
+    );
+    // Standard output holds the document alone.
+    const stdout = vi
+      .mocked(process.stdout.write)
+      .mock.calls.map(([text]) => String(text));
+    expect(JSON.parse(stdout.join(""))).toMatchObject({
+      result: { mode: "dry-run" },
+    });
+  });
+
   it("without --apply, runs the dry run, and never the apply", async () => {
     await repairColumnsAction(createContext)(
       { json: true },

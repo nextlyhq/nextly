@@ -35,15 +35,26 @@ export { definePlugin } from "nextly";
  * the route, and turn its `PageMetadataAnswer` into the page's head. Its
  * `tags` name what the answer depends on, so a change to them refreshes every
  * page. Boot refuses a second provider, and a provider without the service.
- * Type-only, so importing it pulls no runtime into the plugin.
+ * `PageStructuredDataHints` (with `PageListItem` and `PageQuestion`) is what
+ * a route says about its page for its structured data, handed in as
+ * `input.structuredDataHints`; experimental with the rest of the contract,
+ * and intended to become stable with it. `PageRobots` (with
+ * `PageImagePreview`) is the answer's `robots`: whether the page is listed,
+ * and Google's controls over how it is shown; experimental with the
+ * contract too. Type-only, so importing it pulls no runtime into the plugin.
  */
 export type {
   PageMetadataAnswer,
   PageMetadataImage,
+  PageImagePreview,
   PageMetadataInput,
   PageMetadataResolver,
   PageMetadataSource,
   PageMetadataValues,
+  PageListItem,
+  PageQuestion,
+  PageRobots,
+  PageStructuredDataHints,
 } from "nextly/runtime";
 
 /**
@@ -441,7 +452,10 @@ export type {
  *   `security.breachedPasswords`; `OpaqueSecrets` (`ctx.security.opaque`); and
  *   `OneTimeSecrets` (`ctx.security.secrets`) with `SecretData` and
  *   `TxOption`. Held experimental until a first-party plugin signs people in
- *   with them (see STABILITY.md). `PluginReceivedWebhooks`
+ *   with them (see STABILITY.md). `KeyedDigests` (`ctx.security.digests`),
+ *   keyed one-way digests under the plugin's own key that survive a secret
+ *   rotation, is experimental until a first-party plugin has shipped with it.
+ *   `PluginReceivedWebhooks`
  *   (`ctx.security.webhooks`), verifying a received webhook against a
  *   `standardWebhooks` or a plugin's own `InboundWebhookScheme` and claiming
  *   it once (`claimDelivery`, with `ClaimDeliveryOptions`, `DeliveryClaim`,
@@ -456,6 +470,7 @@ export type {
   PasswordCheck,
   BreachedPasswordsConfig,
   OpaqueSecrets,
+  KeyedDigests,
   OneTimeSecrets,
   SecretData,
   TxOption,
@@ -478,6 +493,8 @@ export type {
  * @experimental `PluginDatabase` — typed, owner-checked access to the tables
  *   the plugin declared (`contributes.schema`) and its dependencies' tables;
  *   `PluginTransaction` — the handle `ctx.db.transaction` passes its work;
+ *   `PluginTransactionBounds` — what `ctx.db.withTransactionBounds` bounds
+ *   each transaction by;
  *   `PluginInsert` — what `ctx.db.insert` takes for a table;
  *   `PluginRawDatabase` — `ctx.db.raw`, the Drizzle fluent builder and a
  *   transaction, with no ownership check, or the live instance for a plugin
@@ -489,17 +506,31 @@ export type {
   PluginInsert,
   PluginRawDatabase,
   PluginTransaction,
+  PluginTransactionBounds,
 } from "nextly";
 
 /**
  * Field authoring — the factories and `FieldConfig` type a plugin uses to build
  * the fields it contributes (`contributes.collections` / `contributes.extend`).
- * @public Exercised by `plugin-seo` (its `seo` field group). Field factories
- *   graduate here as first-party plugins exercise them (D55); more can be added
- *   the same way.
+ * @public Exercised by `plugin-seo` (its `seo` field group) and
+ *   `plugin-form-builder` (its internal `form-uploads` and
+ *   `form-submission-sends` collections, typed `CollectionConfig`, with
+ *   `date`, `json` and `number` fields: a send's when, its recipients and
+ *   cancel causes, and its attempts). Intended to be stable, as the other
+ *   factories here are. Field factories graduate here as first-party plugins
+ *   exercise them; more can be added the same way.
  */
-export { text, textarea, checkbox, upload, group } from "nextly";
-export type { FieldConfig } from "nextly";
+export {
+  text,
+  textarea,
+  checkbox,
+  upload,
+  group,
+  date,
+  json,
+  number,
+} from "nextly";
+export type { FieldConfig, CollectionConfig } from "nextly";
 
 /**
  * Which fields a level addresses, with presentational groups flattened.
@@ -533,8 +564,9 @@ export type {
  * "Every content type the site defines, except these": the target a
  * `contributes.extend` clause takes to reach types it cannot name, and the one
  * function that says which types a scope covers. The site's own collections
- * and Singles, Schema Builder ones made later included; never a plugin's own
- * types, Nextly's system types or field groups. Anything else that needs to
+ * and Singles, Schema Builder ones made later included, and a plugin's
+ * collection marked `siteContent`; never a plugin's other types, Nextly's
+ * system types or field groups. Anything else that needs to
  * know what a scope covers asks `typesReachedBy` rather than deciding again.
  *
  * @experimental
@@ -545,6 +577,30 @@ export type {
   ContentTypeKind,
   ContentTypeScope,
 } from "nextly";
+
+/**
+ * Which content types a plugin's `extend` added a field to, as the latest
+ * start resolved them: `typesExtendedBy(plugin, field)`. A plugin that
+ * extends every content type reads here which types got its field, the
+ * Schema Builder's included, without the ones a scope left alone. Pairs with
+ * a contribution's `extendedWith`, which offers it only on those types.
+ *
+ * @experimental
+ */
+export { typesExtendedBy } from "nextly";
+export type { ExtendedType } from "nextly";
+
+/**
+ * A plugin's switch for the fields its `extend` added: a service named
+ * `EXTENSION_SWITCH_SERVICE` whose `switchedOff(field)` says on which types
+ * the field is off now. There the admin's editors draw the field nowhere and offer
+ * none of the plugin's `extendedWith` contributions; the column and every
+ * stored value stay, and switching it on brings them back.
+ *
+ * @experimental
+ */
+export { EXTENSION_SWITCH_SERVICE } from "nextly";
+export type { ExtensionSwitch } from "nextly";
 
 /**
  * Where an entry is served, as the site declares it. `publicAddressOf` answers
@@ -560,6 +616,17 @@ export { publicAddressOf, typesWithoutAddress } from "nextly";
 export type { PublicAddress, PublicAddressType } from "nextly";
 
 /**
+ * The paths every robots.txt of a Nextly site keeps crawlers out of: the
+ * admin and the API, on a path boundary. A plugin that serves robots.txt
+ * reads them here, as `nextlyRobots` does in core, so a correction reaches
+ * every such file. Intended to become stable once the SEO plugin's robots.txt
+ * has shipped on it.
+ *
+ * @experimental
+ */
+export { FRAMEWORK_CRAWL_EXCLUSIONS } from "nextly";
+
+/**
  * Where a page kept in one language is opened: `languageAddressOf(path,
  * locale)` forms the address a path kept in `locale` is served at, under the
  * language's prefix or on its own domain, as the site declares
@@ -570,6 +637,17 @@ export type { PublicAddress, PublicAddressType } from "nextly";
  */
 export { languageAddressOf } from "nextly";
 export type { LanguageAddress, LanguageAddressRule } from "nextly";
+
+/**
+ * The other way round: `addressOfRequest(url)` answers the language and the
+ * kept path a request asks for, by the same rule, so a Proxy handler can look
+ * an address up in a record kept by language and path. Intended to become
+ * stable with `languageAddressOf`.
+ *
+ * @experimental
+ */
+export { addressOfRequest } from "nextly";
+export type { KeptAddress } from "nextly";
 
 /**
  * Keeping every public address to one page. A plugin that keeps a record of
@@ -697,6 +775,14 @@ export type {
   PluginUserService,
   PluginMediaService,
   PluginEmailService,
+  ForgetSendsInput,
+  QueuedEmailChangeHandler,
+  QueuedEmailChange,
+  QueuedEmailCancelCause,
+  QueuedEmailRecipient,
+  QueuedRecipientOutcome,
+  QueuedEmailStanding,
+  QueuedEmailStatus,
   PluginVersionsService,
   PluginCollectionTransaction,
   PluginVersionPins,
@@ -757,6 +843,24 @@ export type {
  *   still be reaching past the boundary that makes one possible.
  */
 export { getCachedNextly } from "nextly";
+
+/**
+ * @experimental Whether a failure means Nextly is unavailable (its start
+ *   failed, the database is busy or could not be reached, a service is
+ *   unavailable), and the render policy that follows: in production, a page
+ *   render fails rather than being served without what Nextly gives it, so
+ *   Next.js keeps the page's last good render and a build fails instead of
+ *   shipping such pages; in development, and for any other failure, the
+ *   caller's fallback runs. Core's route helpers follow it for a page's head;
+ *   a plugin rendering part of a page from Nextly calls
+ *   `failRenderWhenUnavailable(error)` in its catch, before its fallback, so
+ *   the same failure is answered the same way.
+ *
+ *   From core's root rather than `nextly/runtime`, so it pulls no runtime
+ *   barrel into a plugin. Intended to become stable with the page-metadata
+ *   contract, which `@nextlyhq/plugin-seo` exercises.
+ */
+export { failRenderWhenUnavailable, isNextlyUnavailable } from "nextly";
 
 /**
  * @experimental The cache tag `ctx.cache.tag(part)` gives, for code that
@@ -907,6 +1011,25 @@ export type {
 } from "nextly";
 
 /**
+ * @experimental A field rewrite, made with `ctx.services.collections.rewriteField`:
+ *   one field of an entry (`{ collection, id }`) or a Single (`{ single }`)
+ *   changed on its live copy and on every pending draft that holds it, in one
+ *   transaction, without publishing, applied only from the version the plugin
+ *   read (`STALE_VERSION` otherwise, with nothing changed). The new value is
+ *   given (`{ value }`) or computed from each copy's own
+ *   (`{ from(current, copy) }`); the reason is kept in the document's history,
+ *   which names the plugin. Runs no save hooks.
+ */
+export type {
+  DocumentFieldRewriteRequest,
+  FieldRewriteCopy,
+  FieldRewriteRequest,
+  FieldRewriteResult,
+  FieldRewriteValue,
+  SingleFieldRewriteRequest,
+} from "nextly";
+
+/**
  * @experimental Whether a person may delete one entry, asked of the delete's
  *   own gate without deleting it. Graduates with the stored reads above.
  *
@@ -945,6 +1068,64 @@ export type {
   PluginNavSection,
   PluginCollectionView,
   PluginMenuItem,
+} from "nextly";
+
+/**
+ * @experimental One read a plugin page makes as it opens, declared on the page
+ * as `contributes.admin.pages[].startupReads`: a route of the plugin's own,
+ * named as `usePluginRoute` names it. A fresh tab that opens on the page asks
+ * for it inside the admin's startup request, in its first round, and the
+ * page's own read takes that answer. See `STABILITY.md`.
+ */
+export type { PluginPageStartupRead } from "nextly";
+
+/**
+ * @experimental What a standalone plugin declares about its own panel
+ * (`contributes.admin.panel`, and `group`, `count` and `badge` on a menu
+ * item), drawn by the admin with no plugin code running in the browser:
+ *
+ * - `PluginAdminPanel` holds the panel's `groups`, each a `PluginPanelGroup`
+ *   `{ id, label }`, drawn as headings in the order declared. A menu item's
+ *   `group` names one; items naming none are listed first, under no heading.
+ * - A menu item takes a quiet `count` or an attention `badge`, never both,
+ *   each a `PluginItemCount`: `{ collection, where? }` counts one of the
+ *   plugin's own collections for the reader, `{ attention }` reads one of its
+ *   own dashboard attention items' count. A count is drawn at 0 too; a badge
+ *   only above 0.
+ * - `PluginMenuItemFields` is a menu item's fields apart from its number.
+ *
+ * A development start reports a group, count or badge naming nothing the
+ * plugin declares or owns, and a menu item linking to a page of the plugin's
+ * own that it does not register, which is left out.
+ */
+export type {
+  PluginAdminPanel,
+  PluginItemCount,
+  PluginMenuItemFields,
+  PluginPanelGroup,
+} from "nextly";
+
+/**
+ * @experimental Where a plugin's own item goes (`contributes.admin.header`):
+ * the top bar's right end (the default), the rail's foot above the Inbox, or
+ * the person's menu.
+ *
+ * - `PluginItemPlace` is the three places: `"bar"`, `"rail-foot"`, `"menu"`.
+ * - `PluginHeaderSlotContributions` takes a component, `slot`, kept mounted at
+ *   the bar or the rail's foot for as long as the bar is.
+ * - `PluginHeaderUserMenuContributions` takes `place: "menu"` and a declared
+ *   `item`, a `PluginUserMenuItem`: a label, an icon, and either a link
+ *   (`PluginUserMenuLink`) or an action (`PluginUserMenuAction`). It takes no
+ *   component, since a closed menu's contents are not mounted.
+ */
+export type {
+  PluginHeaderContributions,
+  PluginHeaderSlotContributions,
+  PluginHeaderUserMenuContributions,
+  PluginItemPlace,
+  PluginUserMenuAction,
+  PluginUserMenuItem,
+  PluginUserMenuLink,
 } from "nextly";
 
 /**
@@ -1140,6 +1321,23 @@ export {
   type DocumentEventName,
   type AuthEventName,
   type MediaEventName,
+} from "nextly";
+
+/**
+ * Resized copies of stored images, for a plugin showing an image at a known
+ * width: `ctx.services.media.copyOf(source, width)` answers a copy's address
+ * (`MediaCopy`), or `null` when the image is to be used as it is. Copies come
+ * only at `MEDIA_COPY_WIDTHS`, and any other width is served the nearest
+ * (`nearestMediaCopyWidth`), so a plugin can build `srcset` from the same
+ * list the server keeps.
+ * @experimental until a first-party plugin serves them on a deployed site.
+ */
+export {
+  MEDIA_COPY_WIDTHS,
+  nearestMediaCopyWidth,
+  type MediaCopy,
+  type MediaCopySource,
+  type MediaCopyWidth,
 } from "nextly";
 
 /**

@@ -6,7 +6,8 @@
  * inside the helpers they're used by so a path that never sees SVG never
  * pays the jsdom cost.
  *
- * Pipeline order (cheapest first):
+ * Pipeline order (cheapest first); steps 1-4 are `validateUploadClaim`,
+ * which a signed direct upload is judged by alone:
  *   1. validateFilename            — string check
  *   2. extension blocklist          — Set lookup
  *   3. validateMimeType             — Set lookup + wildcard match
@@ -44,7 +45,7 @@ function fail(
   code: string,
   publicMessage: string,
   logContext: Record<string, unknown>
-): ValidationResult {
+): Extract<ValidationResult, { ok: false }> {
   const error: UploadValidationError = {
     path: PATH_FILE,
     code,
@@ -53,27 +54,24 @@ function fail(
   return { ok: false, errors: [error], logContext };
 }
 
+/** What a claim check found: the claim in its canonical spelling, or why it was refused. */
+export type ClaimResult =
+  | { ok: true; mimeType: string; isSvg: boolean }
+  | Extract<ValidationResult, { ok: false }>;
+
 /**
- * Validate (and sanitize where applicable) an uploaded file. Pure — returns
- * a result rather than throwing. Errors are in canonical
- * `NextlyError.validation` shape; callers wrap with the error class at
- * their own boundary.
+ * Judge what an upload says about itself, before any of its bytes are read: its name, its
+ * extension, its type against the allowlist, and its size against the caps.
  *
- * @example
- * const result = await validateAndSanitizeUpload(
- *   { buffer, filename, mimeType },
- *   resolveUploadValidationConfig(config.security),
- * );
- * if (!result.ok) {
- *   throw NextlyError.validation({ errors: result.errors, logContext: result.logContext });
- * }
- * await store(result.value.buffer);
+ * The first steps of every upload's checks, in the same order and with the same answers:
+ * `validateAndSanitizeUpload` runs this, then the checks that need the bytes. A signed direct
+ * upload, whose bytes go to storage without passing through here, is judged by this alone.
  */
-export async function validateAndSanitizeUpload(
-  input: { buffer: Buffer; filename: string; mimeType: string },
+export function validateUploadClaim(
+  input: { filename: string; mimeType: string; size: number },
   config: ValidationConfig
-): Promise<ValidationResult> {
-  const { buffer, filename } = input;
+): ClaimResult {
+  const { filename, size } = input;
   /*
    * The claim in one spelling, before anything compares against it. Callers
    * reach this boundary by several routes — the mounted handler, the server
@@ -117,20 +115,51 @@ export async function validateAndSanitizeUpload(
     });
   }
 
-  if (buffer.length > config.maxSize) {
+  if (size > config.maxSize) {
     return fail("SIZE_EXCEEDED", "This file is too large.", {
-      actualSize: buffer.length,
+      actualSize: size,
       maxSize: config.maxSize,
     });
   }
-  const claimedSvg = isSvgMimeType(mimeType);
-  if (claimedSvg && buffer.length > config.maxSvgSize) {
+  const isSvg = isSvgMimeType(mimeType);
+  if (isSvg && size > config.maxSvgSize) {
     return fail("SIZE_EXCEEDED", "This file is too large.", {
-      actualSize: buffer.length,
+      actualSize: size,
       maxSize: config.maxSvgSize,
       reason: "svg-specific-cap",
     });
   }
+
+  return { ok: true, mimeType, isSvg };
+}
+
+/**
+ * Validate (and sanitize where applicable) an uploaded file. Pure — returns
+ * a result rather than throwing. Errors are in canonical
+ * `NextlyError.validation` shape; callers wrap with the error class at
+ * their own boundary.
+ *
+ * @example
+ * const result = await validateAndSanitizeUpload(
+ *   { buffer, filename, mimeType },
+ *   resolveUploadValidationConfig(config.security),
+ * );
+ * if (!result.ok) {
+ *   throw NextlyError.validation({ errors: result.errors, logContext: result.logContext });
+ * }
+ * await store(result.value.buffer);
+ */
+export async function validateAndSanitizeUpload(
+  input: { buffer: Buffer; filename: string; mimeType: string },
+  config: ValidationConfig
+): Promise<ValidationResult> {
+  const { buffer, filename } = input;
+  const claim = validateUploadClaim(
+    { filename, mimeType: input.mimeType, size: buffer.length },
+    config
+  );
+  if (!claim.ok) return claim;
+  const { mimeType, isSvg: claimedSvg } = claim;
 
   const magic = await detectAndCompareMime(buffer, mimeType);
   if (!magic.ok) {

@@ -9,9 +9,10 @@ import { useSuppressedChrome } from "../ChromeSuppression";
 import { usePanelFold } from "../PanelFold";
 import { RailAccount } from "../sidebar/RailAccount";
 
+import { BAR_ROOM_ATTRIBUTE, END_PLACE_ROOM } from "./bar-fold";
 import { pluginHeaderItems } from "./header-visibility";
 import { HeaderTrail } from "./HeaderTrail";
-import { TopBarPlaceTarget } from "./TopBarPlaces";
+import { STAND_IN_PLACE, TopBarPlaceTarget } from "./TopBarPlaces";
 
 interface DashboardHeaderProps {
   className?: string;
@@ -30,7 +31,8 @@ interface DashboardHeaderProps {
  * comes before that. The reader's Inbox and account menu are at the foot of the
  * icon rail, so the bar's width belongs to the page, save for one thing: a
  * plugin's own header item (`header.slot`) stays at the bar's far right, on
- * every page, where plugins have always put it. Some draw a button there, and
+ * every page, where plugins have always put it, unless the plugin chose the
+ * rail's foot or the person's menu instead. Some draw a button there, and
  * some draw nothing and register what a page needs, so it is mounted for as
  * long as the bar is.
  *
@@ -68,26 +70,44 @@ export function DashboardHeader({
           <Menu className="h-5 w-5" aria-hidden="true" />
         </button>
       )}
-      {/* The page's place keeps its own width, at most half the bar, and
-          gives way first; the right part takes the rest, so an open
-          document's status sits right after the trail and its actions at the
-          bar's right end. */}
-      <div className="flex min-w-0 max-w-1/2 items-center gap-4">
-        <PanelFoldToggle />
-        <HeaderTrail />
+      {/* The room the trail and the page's right part share: the bar less
+          a plugin's header items beside them, which keep their own width.
+          A document's controls fold by this room's width (`bar-fold`), so
+          they fold rather than run past the bar's right edge. */}
+      <div
+        {...{ [BAR_ROOM_ATTRIBUTE]: "" }}
+        className="@container/barroom flex min-w-0 flex-1 items-center gap-3"
+      >
+        {/* The page's place keeps its own width, at most half the bar, and
+            gives way first; the right part takes the rest, so an open
+            document's status sits right after the trail and its actions at the
+            bar's right end. */}
+        <div className="flex min-w-0 max-w-1/2 items-center gap-4">
+          <PanelFoldToggle />
+          <HeaderTrail />
+          <TopBarPlaceTarget
+            name="start"
+            className="flex min-w-0 items-center empty:hidden"
+          />
+        </div>
         <TopBarPlaceTarget
-          name="start"
-          className="flex min-w-0 items-center empty:hidden"
+          name="end"
+          // The `toolbar` container: an open document's controls size themselves
+          // against the room this part actually has, after the trail, as they did
+          // against a bar of their own. Its width comes from the bar, not from
+          // its content, so it can be one.
+          // Holding only a page's stand-in (an editor's outline) it has no box,
+          // so the box first appears with the page and its trail together, and
+          // the trail never pushes it (`STAND_IN_PLACE`).
+          // From a bar wide enough for every control, the part keeps their
+          // 32rem and the trail gives way (`bar-fold`).
+          className={cn(
+            "@container/toolbar flex min-w-0 flex-1 items-center justify-end gap-2 empty:hidden",
+            END_PLACE_ROOM,
+            STAND_IN_PLACE
+          )}
         />
       </div>
-      <TopBarPlaceTarget
-        name="end"
-        // The `toolbar` container: an open document's controls size themselves
-        // against the room this part actually has, after the trail, as they did
-        // against a bar of their own. Its width comes from the bar, not from
-        // its content, so it can be one.
-        className="@container/toolbar flex min-w-0 flex-1 items-center justify-end gap-2 empty:hidden"
-      />
       {pluginItems.length > 0 && (
         <div
           className="ml-auto flex shrink-0 items-center gap-1"

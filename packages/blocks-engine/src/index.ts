@@ -35,6 +35,7 @@ export {
   DOCUMENT_KINDS,
   MAX_SEO_SEGMENTS,
   MAX_SEO_TEXT_LENGTH,
+  SEO_TEXT_FIELDS,
   BINDING_SOURCES,
   BINDING_FORMAT_TYPES,
   DEFAULT_BINDING_SOURCE,
@@ -64,6 +65,8 @@ export {
   // Reading further reports a reference the page does not render.
   MAX_CLASSES_PER_NODE,
   isTokenRef,
+  tokenRef,
+  tokenRefText,
   isBindingSource,
   isBlockType,
   MAX_BLOCK_TYPE_LENGTH,
@@ -103,6 +106,7 @@ export type {
   DocumentSettings,
   SeoBinding,
   SeoTextSegment,
+  SeoTextField,
   LocaleOverlay,
   LocaleOverlayValue,
   NodeStyles,
@@ -304,7 +308,7 @@ export type {
   SelectionStop,
 } from "./select-nodes";
 
-export { measureBytes, surveyDocument } from "./measure-bytes";
+export { documentWork, measureBytes, surveyDocument } from "./measure-bytes";
 // Resolving linked components. Here rather than beside the renderer because
 // four surfaces need a resolved tree and only one of them renders: the
 // same-document canvas, the class-usage index and SEO derivation all read one
@@ -417,6 +421,11 @@ export type {
 // noticed: a module the entry does not name is absent from `dist` however
 // thoroughly it is tested.
 export { canNest, canBeRoot, canNestInSlot } from "./nesting";
+// The one reading of an allow-list of block names (an exact name, or "ns/*"
+// for a namespace), stable public API: a blocks field's accepted blocks, a
+// slot's, and any reader listing what one accepts all match by it, so the
+// three cannot come to admit different blocks.
+export { slotAdmits } from "./nesting";
 export { placementVerdict } from "./nesting";
 export type { NestingSource, NestingVerdict, NestingRefusal } from "./nesting";
 // The one placement rule over the nesting rule above: declared slots, the
@@ -1154,6 +1163,7 @@ export {
 // a script or an agent has the same right to it, and each would otherwise grow
 // its own vocabulary that agrees with this one only until one of them changed.
 export {
+  addressesNoNode,
   applyOp,
   applyOps,
   // Published for the planners: an insert whose subtree arrives locked is

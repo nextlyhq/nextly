@@ -104,15 +104,93 @@ describe("who wins, for the description", () => {
 });
 
 describe("the social card", () => {
-  it("takes its own title from the first level that sets one", () => {
+  // The social text's own order: what a person typed for the card, then
+  // what they typed for search, then the route's card, then the design's,
+  // then the search value as the main order works it out. Each row takes
+  // the candidates above it away, so the next one wins.
+  describe.each([
+    ["title", "socialTitle"],
+    ["description", "socialDescription"],
+  ] as const)("for the %s", (key, social) => {
+    const every: Levels = {
+      ...none,
+      page: { [social]: "Typed for sharing", [key]: "Typed for search" },
+      code: { [social]: "The route's card", [key]: "The route's own" },
+      template: { [social]: "The design's card" },
+      site: { [key]: "The site's" },
+    };
+    it.each([
+      ["the card text a person typed", "Typed for sharing", "page", every],
+      [
+        "the search text a person typed",
+        "Typed for search",
+        "page",
+        { ...every, page: { [key]: "Typed for search" } },
+      ],
+      [
+        "the route's card text",
+        "The route's card",
+        "code",
+        { ...every, page: {} },
+      ],
+      [
+        "the design's card text",
+        "The design's card",
+        "template",
+        { ...every, page: {}, code: { [key]: "The route's own" } },
+      ],
+      [
+        "the search text as the order works it out",
+        "The route's own",
+        "code",
+        {
+          ...every,
+          page: {},
+          code: { [key]: "The route's own" },
+          template: {},
+        },
+      ],
+    ] as const)(
+      "%s wins when nothing above has one",
+      (_, value, from, levels) => {
+        expect(resolveOrder(levels)[social]).toEqual({ value, from });
+      }
+    );
+  });
+
+  it("shows a typed title where the route copies its heading into the card", () => {
     const answer = resolveOrder({
       ...none,
-      page: { title: "Typed" },
-      template: { socialTitle: "Card title" },
+      page: { title: "How we price our plans" },
+      code: { title: "Blog", socialTitle: "Blog" },
     });
     expect(answer.socialTitle).toEqual({
-      value: "Card title",
-      from: "template",
+      value: "How we price our plans",
+      from: "page",
+    });
+  });
+
+  it("keeps the route's own card text where nothing is typed for the page", () => {
+    const answer = resolveOrder({
+      ...none,
+      code: { title: "Blog", socialTitle: "Read the Acme blog" },
+      pattern: { title: { value: "Blog | Acme", pattern: "{Title} | X" } },
+    });
+    expect(answer.socialTitle).toEqual({
+      value: "Read the Acme blog",
+      from: "code",
+    });
+  });
+
+  it("passes over blank typed text to the next candidate", () => {
+    const answer = resolveOrder({
+      ...none,
+      page: { socialTitle: "  ", title: " " },
+      code: { socialTitle: "The route's card" },
+    });
+    expect(answer.socialTitle).toEqual({
+      value: "The route's card",
+      from: "code",
     });
   });
 
@@ -162,8 +240,7 @@ describe("visibility and the canonical", () => {
     });
   });
 
-  it("takes code's word on neither", () => {
-    // Code supplies a title, description and social values only.
+  it("takes code's word on neither listing a page nor its canonical", () => {
     const answer = resolveOrder({
       ...none,
       code: { title: "From code" },
@@ -171,6 +248,26 @@ describe("visibility and the canonical", () => {
     });
     expect(answer.robots.from).toBe("site");
     expect(answer.canonical).toEqual({ value: "/about", from: "address" });
+  });
+
+  it("is hidden where the route's code hides the page, and code shows none a person hid", () => {
+    expect(resolveOrder({ ...none, code: { hidden: true } }).robots).toEqual({
+      value: { index: false, follow: true },
+      from: "code",
+    });
+    // A person's own choice, or the type's, is named as the reason first.
+    expect(
+      resolveOrder({ ...none, page: { hidden: true }, code: { hidden: true } })
+        .robots.from
+    ).toBe("page");
+    expect(
+      resolveOrder({ ...none, code: { hidden: false }, page: { hidden: true } })
+        .robots
+    ).toEqual({ value: { index: false, follow: true }, from: "page" });
+    expect(
+      resolveOrder({ ...none, code: { hidden: true }, typeHidden: true }).robots
+        .from
+    ).toBe("type");
   });
 
   it("is the page's declared address, unless one is typed under Advanced", () => {
@@ -181,7 +278,10 @@ describe("visibility and the canonical", () => {
     expect(
       resolveOrder({
         ...none,
-        page: { canonical: "https://elsewhere.example/original" },
+        page: {
+          canonical: "https://elsewhere.example/original",
+          canonicalElsewhere: true,
+        },
         address: "/de/ueber",
       }).canonical
     ).toEqual({ value: "https://elsewhere.example/original", from: "page" });
@@ -189,5 +289,27 @@ describe("visibility and the canonical", () => {
 
   it("has none where the page has no declared address", () => {
     expect(resolveOrder(none).canonical).toBeUndefined();
+  });
+});
+
+describe("a hidden group of pages", () => {
+  it("keeps every page in it hidden, whatever the page's own setting", () => {
+    for (const page of [{}, { hidden: true }]) {
+      expect(resolveOrder({ ...none, page, typeHidden: true }).robots).toEqual({
+        value: { index: false, follow: true },
+        from: "type",
+      });
+    }
+  });
+
+  it("returns each page to its own setting once shown again", () => {
+    expect(
+      resolveOrder({ ...none, page: { hidden: true }, typeHidden: false })
+        .robots
+    ).toEqual({ value: { index: false, follow: true }, from: "page" });
+    expect(resolveOrder({ ...none, typeHidden: false }).robots).toEqual({
+      value: { index: true, follow: true },
+      from: "site",
+    });
   });
 });

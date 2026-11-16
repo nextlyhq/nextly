@@ -7,8 +7,9 @@
  * so a site without one serves exactly what it served before. With one, the
  * provider decides, and the route's code is one of its inputs rather than the
  * answer: its title, description and social values are passed in at their own
- * level of the order of who wins, and its visibility and canonical are never
- * used, so the page and every output built from the same answer agree.
+ * level of the order of who wins. Its visibility is a floor: a route may hide
+ * its page, never show one the answer hides. Its canonical is used only where
+ * the answer has none.
  *
  * The `next` import is type-only, like the rest of `runtime/seo`.
  *
@@ -21,6 +22,7 @@ import { z } from "zod";
 
 import { getUnstableRethrow } from "../../actions/next-runtime";
 import { NextlyError } from "../../errors/nextly-error";
+import { failRenderWhenUnavailable } from "../../errors/unavailable";
 import {
   capabilityProvider,
   capabilityProviderIdentity,
@@ -41,6 +43,7 @@ import {
   type PageMetadataResolver,
   type PageMetadataSource,
   type PageMetadataValues,
+  type PageStructuredDataHints,
 } from "./page-metadata-contract";
 import { structuredDataText } from "./structured-data";
 
@@ -74,10 +77,182 @@ function firstImage(images: unknown): PageMetadataImage | undefined {
   }) as PageMetadataImage;
 }
 
+/** Robots directives as Next.js's `robots` object spells them. */
+type RobotsDirectives = Record<string, string | number | boolean>;
+
+/** The robots words that set whether a page is listed, and its links followed. */
+const ROBOTS_WORDS: Readonly<Record<string, RobotsDirectives>> = {
+  all: { index: true, follow: true },
+  none: { index: false, follow: false },
+  index: { index: true },
+  noindex: { index: false },
+  follow: { follow: true },
+  nofollow: { follow: false },
+};
+
+/**
+ * Robots directives written as text, `"noindex, max-snippet:-1"`, as the
+ * object Next.js reads: a word alone is set, a `name:value` pair keeps its
+ * value, as a number where it is one.
+ */
+function directivesOfText(text: string): RobotsDirectives {
+  const directives: RobotsDirectives = {};
+  for (const part of text.split(",")) {
+    const word = part.trim();
+    if (word === "") continue;
+    const colon = word.indexOf(":");
+    if (colon === -1) {
+      const name = word.toLowerCase();
+      Object.assign(directives, ROBOTS_WORDS[name] ?? { [name]: true });
+      continue;
+    }
+    const name = word.slice(0, colon).trim().toLowerCase();
+    const value = word.slice(colon + 1).trim();
+    const number = Number(value);
+    directives[name] = value !== "" && Number.isFinite(number) ? number : value;
+  }
+  return directives;
+}
+
+/**
+ * The directives of a route's `robots` value, given as text or as an object,
+ * without Googlebot's own; undefined where it gives none. The deprecated
+ * `noindex` and `nofollow` keys a JavaScript route may still pass are read as
+ * the `index` and `follow` they stand for.
+ */
+function directivesOf(value: unknown): RobotsDirectives | undefined {
+  if (typeof value === "string") return directivesOfText(value);
+  if (!isRecord(value)) return undefined;
+  const directives: RobotsDirectives = {};
+  for (const [name, inner] of Object.entries(value)) {
+    if (name === "googleBot" || name === "noindex" || name === "nofollow") {
+      continue;
+    }
+    if (
+      typeof inner === "string" ||
+      typeof inner === "number" ||
+      typeof inner === "boolean"
+    ) {
+      directives[name] = inner;
+    }
+  }
+  if (value.noindex === true) directives.index = false;
+  if (value.nofollow === true) directives.follow = false;
+  return directives;
+}
+
+/** Google's image preview sizes, smallest first. */
+const IMAGE_PREVIEWS = ["none", "standard", "large"];
+
+/** A snippet length as a limit to compare: no limit (`-1`) is the largest. */
+const snippetLimit = (value: unknown): number | undefined =>
+  typeof value !== "number" ? undefined : value < 0 ? Infinity : value;
+
+/** A date directive's moment, where it names one. */
+const momentOf = (value: unknown): number | undefined => {
+  if (typeof value !== "string") return undefined;
+  const at = Date.parse(value);
+  return Number.isNaN(at) ? undefined : at;
+};
+
+/**
+ * Where both the route and the answer limit how the page is shown, the
+ * stricter of the two: the smaller image preview and snippet, the earlier
+ * date to leave results. Each side may only narrow what the other allows, as
+ * with visibility, so a route's own limit stands against a looser site
+ * default and a page's own stricter choice stands against a looser route.
+ */
+function stricterLimits(
+  code: RobotsDirectives,
+  answer: RobotsDirectives
+): RobotsDirectives {
+  const stricter: RobotsDirectives = {};
+  const preview = [code["max-image-preview"], answer["max-image-preview"]]
+    .map(value => (typeof value === "string" ? value.toLowerCase() : value))
+    .filter(
+      value => typeof value === "string" && IMAGE_PREVIEWS.includes(value)
+    )
+    .sort(
+      (a, b) =>
+        IMAGE_PREVIEWS.indexOf(String(a)) - IMAGE_PREVIEWS.indexOf(String(b))
+    )[0];
+  if (preview !== undefined) stricter["max-image-preview"] = preview;
+  const snippets = [code["max-snippet"], answer["max-snippet"]].filter(
+    value => snippetLimit(value) !== undefined
+  );
+  if (snippets.length > 0) {
+    stricter["max-snippet"] = snippets.reduce((a, b) =>
+      (snippetLimit(a) ?? Infinity) <= (snippetLimit(b) ?? Infinity) ? a : b
+    );
+  }
+  const dates = [code.unavailable_after, answer.unavailable_after].filter(
+    value => momentOf(value) !== undefined
+  );
+  if (dates.length > 0) {
+    stricter.unavailable_after = dates.reduce((a, b) =>
+      (momentOf(a) ?? Infinity) <= (momentOf(b) ?? Infinity) ? a : b
+    );
+  }
+  return stricter;
+}
+
+/**
+ * The robots a page is served: the answer's visibility, with the route's own
+ * as a floor, and every other directive the route gave, such as Google's
+ * preview limits (`max-image-preview`, `max-snippet`), kept. A route may hide
+ * its page or keep its links unfollowed, never list or follow what the answer
+ * does not; Googlebot's own rule is held to the same floor and keeps its own
+ * stricter values. With no visibility in the answer, the route's is served.
+ */
+function robotsOver(
+  own: Metadata["robots"],
+  answered: Metadata["robots"]
+): Metadata["robots"] {
+  const answer = directivesOf(answered);
+  if (answer === undefined) return own;
+  const code = directivesOf(own) ?? {};
+  const index = answer.index !== false && code.index !== false;
+  const follow = answer.follow !== false && code.follow !== false;
+  const robots: Record<string, unknown> = {
+    ...code,
+    ...answer,
+    ...stricterLimits(code, answer),
+    index,
+    follow,
+  };
+  const googleBot = isRecord(own) ? own.googleBot : undefined;
+  if (googleBot !== undefined) {
+    const bot = directivesOf(googleBot) ?? {};
+    robots.googleBot = {
+      ...bot,
+      index: index && bot.index !== false,
+      follow: follow && bot.follow !== false,
+    };
+  }
+  return robots;
+}
+
+/**
+ * A title the answer decided, in the form it is served: whole, so a layout's
+ * title template cannot add the site's name to a title that already carries
+ * it. The route's own title is the exception, served as the route gave it,
+ * so a page whose title its code still supplies reads as it did without a
+ * provider.
+ */
+function servedTitle(
+  answered: unknown,
+  own: unknown
+): Metadata["title"] | undefined {
+  const text = textOf(answered);
+  if (text === undefined) return undefined;
+  if (textOf(own) === text) return own as Metadata["title"];
+  return { absolute: text };
+}
+
 /**
  * What a route's code set that the order of who wins takes from code: a title,
- * a description and the social card's values. Visibility and the canonical are
- * deliberately not read, since only the answer decides them.
+ * a description, the social card's values, and whether it hides the page.
+ * The canonical is not read: the answer decides it wherever it has one.
  */
 function codeValuesOf(code: Metadata | undefined): PageMetadataValues {
   if (code === undefined) return {};
@@ -99,6 +274,7 @@ function codeValuesOf(code: Metadata | undefined): PageMetadataValues {
           ? twitter.description
           : undefined,
     image: firstImage(openGraph.images) ?? firstImage(twitter.images),
+    hidden: directivesOf(code.robots)?.index === false ? true : undefined,
   });
 }
 
@@ -113,53 +289,146 @@ function without<T extends Record<string, unknown>>(
 }
 
 /** The fields of a card a page's answer decides, and code therefore does not. */
-const ANSWERED_CARD_FIELDS = ["title", "description", "images", "url"];
+const ANSWERED_CARD_FIELDS = ["title", "description", "images"];
+
+/**
+ * A card of the route's own with the answer's laid over it: the answer's
+ * title in the form it is served, and the route's address for the card where
+ * the answer names no canonical.
+ */
+function cardOver(
+  own: unknown,
+  answered: unknown,
+  answersAddress: boolean
+): Record<string, unknown> | undefined {
+  const kept = isRecord(own)
+    ? without(own, [
+        ...ANSWERED_CARD_FIELDS,
+        ...(answersAddress ? ["url"] : []),
+      ])
+    : {};
+  const answer = isRecord(answered) ? answered : {};
+  const card: Record<string, unknown> = { ...kept, ...answer };
+  const title = servedTitle(
+    answer.title,
+    isRecord(own) ? own.title : undefined
+  );
+  if (title !== undefined) card.title = title;
+  return Object.keys(card).length > 0 ? card : undefined;
+}
+
+type Verification = NonNullable<Metadata["verification"]>;
+type VerificationValue = NonNullable<Verification["other"]>[string];
+
+/** A tag's values as a list, however the route gave them. */
+function valuesOf(value: VerificationValue | undefined): (string | number)[] {
+  if (value === undefined) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+/**
+ * The route's own verification tags joined by the answer's. A name both set
+ * keeps both values, since a service reads every tag of its name and two
+ * owners may each have one; a value both set is written once.
+ */
+function verificationOver(
+  own: Metadata["verification"],
+  answered: Metadata["verification"]
+): Metadata["verification"] {
+  const added = answered?.other;
+  if (added === undefined) return own;
+  const other: Record<string, VerificationValue> = { ...own?.other };
+  for (const [name, value] of Object.entries(added)) {
+    const values = [...valuesOf(other[name])];
+    for (const each of valuesOf(value)) {
+      if (!values.includes(each)) values.push(each);
+    }
+    other[name] = values.length === 1 ? (values[0] ?? "") : values;
+  }
+  return { ...own, other };
+}
+
+/** `merged`, the route's own metadata, with the answer's verification tags joined to its own. */
+function joinVerification(
+  merged: Metadata,
+  answered: Metadata["verification"]
+): void {
+  const joined = verificationOver(merged.verification, answered);
+  if (joined !== undefined) merged.verification = joined;
+}
+
+type Alternates = NonNullable<Metadata["alternates"]>;
+
+/**
+ * The route's alternates with the answer's laid over them: each the
+ * answer names replaces the route's, and the other forms of the page are
+ * joined by media type, so the answer's link for one type keeps the route's
+ * links for every other, such as its feed.
+ */
+function alternatesOver(
+  kept: Alternates,
+  answered: Metadata["alternates"]
+): Alternates {
+  const merged: Alternates = { ...kept, ...answered };
+  const types = { ...kept.types, ...answered?.types };
+  if (Object.keys(types).length > 0) merged.types = types;
+  return merged;
+}
 
 /**
  * The route's own metadata with the answer laid over it.
  *
- * What the answer decides is taken from the answer alone: the title and
- * description, visibility, the canonical, and the card's title, description,
- * image and address. Whatever else the route set, such as an Open Graph
- * `type` or keywords, stays, since the answer does not speak to it.
+ * What the answer decides is taken from the answer: the title and
+ * description, and the card's title, description and image. Its visibility is
+ * served with the route's as a floor, and its canonical wherever it names one;
+ * a page the answer gives no canonical, such as one whose type declares no
+ * address, keeps the route's. Whatever else the route set, such as an Open
+ * Graph `type`, keywords or Google's preview limits, stays, since the answer
+ * does not speak to it.
  */
 function overCode(code: Metadata | undefined, answered: Metadata): Metadata {
-  if (code === undefined) return answered;
   const {
-    title: _title,
+    title,
     description: _description,
-    robots: _robots,
+    robots,
     alternates,
     openGraph,
     twitter,
     ...rest
-  } = code;
+  } = code ?? {};
   const merged: Metadata = { ...rest };
-  if (answered.title !== undefined) merged.title = answered.title;
+  const servedAs = servedTitle(answered.title, title);
+  if (servedAs !== undefined) merged.title = servedAs;
+  else if (title !== undefined) merged.title = title;
   if (answered.description !== undefined) {
     merged.description = answered.description;
+  } else if (code?.description !== undefined) {
+    merged.description = code.description;
   }
-  if (answered.robots !== undefined) merged.robots = answered.robots;
+  const servedRobots = robotsOver(robots, answered.robots);
+  if (servedRobots !== undefined && servedRobots !== null) {
+    merged.robots = servedRobots;
+  }
 
+  const answersAddress = answered.alternates?.canonical !== undefined;
   const keptAlternates = isRecord(alternates)
-    ? without(alternates, ["canonical"])
+    ? answersAddress
+      ? without(alternates, ["canonical"])
+      : alternates
     : {};
-  const mergedAlternates = { ...keptAlternates, ...answered.alternates };
+  const mergedAlternates = alternatesOver(keptAlternates, answered.alternates);
   if (Object.keys(mergedAlternates).length > 0) {
     merged.alternates = mergedAlternates;
   }
 
-  const keptCard = isRecord(openGraph)
-    ? without(openGraph, ANSWERED_CARD_FIELDS)
-    : {};
-  const mergedCard = { ...keptCard, ...answered.openGraph };
-  if (Object.keys(mergedCard).length > 0) merged.openGraph = mergedCard;
+  joinVerification(merged, answered.verification);
 
-  const keptTwitter = isRecord(twitter)
-    ? without(twitter, ["title", "description", "images"])
-    : {};
-  const mergedTwitter = { ...keptTwitter, ...answered.twitter };
-  if (Object.keys(mergedTwitter).length > 0) merged.twitter = mergedTwitter;
+  const card = cardOver(openGraph, answered.openGraph, answersAddress);
+  if (card !== undefined) merged.openGraph = card as Metadata["openGraph"];
+  const twitterCard = cardOver(twitter, answered.twitter, answersAddress);
+  if (twitterCard !== undefined) {
+    merged.twitter = twitterCard as Metadata["twitter"];
+  }
 
   return merged;
 }
@@ -210,6 +479,56 @@ function pageMetadataResolver(): PageMetadataResolver | undefined {
   return service;
 }
 
+/** Whether a worker that could not start Nextly has said so yet. */
+let toldNotStarted = false;
+
+/**
+ * Start Nextly where no boot has recorded its providers yet, so a page is
+ * asked of the provider rather than served the route's own head.
+ *
+ * A worker may serve a page before anything has started Nextly in it: every
+ * read the page made was a cache hit, or `next build` is prerendering it where
+ * `instrumentation.ts` does not run. Until a boot records the providers, a
+ * provider cannot be told from none, so the start is made here, as the
+ * site registered it, or awaited where one is under way. A start that fails
+ * fails the render in production (`failRenderWhenUnavailable`), so the page is
+ * never cached or built without its head; elsewhere, and where nothing can
+ * start Nextly at all, the route's own head is served, said once per worker.
+ */
+async function startForProviders(path: string | undefined): Promise<void> {
+  if (capabilityProvidersRecorded()) return;
+  try {
+    // Loaded here: Nextly's start imports the route helpers that import this.
+    const { getCachedNextly } = await import("../../init");
+    await getCachedNextly();
+  } catch (error) {
+    // Next.js's own signals first, such as a start that read a dynamic API
+    // while the page prerenders: Next.js receives them as they were thrown.
+    getUnstableRethrow()(error);
+    failRenderWhenUnavailable(error);
+    if (toldNotStarted) return;
+    toldNotStarted = true;
+    consoleLogger.warn(
+      "Nextly could not be started to ask the page-metadata provider; serving the route's own metadata until it starts. Start it in instrumentation.ts, or register how the app starts it with registerNextlyStart.",
+      { path, error }
+    );
+  }
+}
+
+/**
+ * Whether a page-metadata provider can be asked for a page: its providers
+ * settled first (`startForProviders`), so a worker nothing has started yet
+ * starts Nextly before a route works out what the page's content offers a
+ * provider, not after. A start that cannot be made leaves nobody to ask, so
+ * that content is not read for an answer the route would never receive.
+ */
+export async function pageMetadataProviderToAsk(
+  path: string | undefined
+): Promise<boolean> {
+  await startForProviders(path);
+  return capabilityProvider(PAGE_METADATA_CAPABILITY) !== undefined;
+}
+
 /**
  * JSON with object keys sorted at every depth, so the same input is the same
  * text however its objects were built.
@@ -245,6 +564,11 @@ export interface PageMetadataRequest {
   source: PageMetadataSource;
   /** What the page's own content offers, such as a Page Builder page's blocks. */
   derived?: PageMetadataValues;
+  /**
+   * What the route says about the page for its structured data. Given only
+   * when the structured data is asked for: it cannot change the head.
+   */
+  structuredDataHints?: PageStructuredDataHints;
   /** The route's own metadata, from its `buildMetadata`; undefined when none. */
   code: Metadata | undefined;
   /**
@@ -274,7 +598,22 @@ const pageMetadataAnswerSchema = z.object({
   title: z.string().optional(),
   description: z.string().optional(),
   canonical: z.string().optional(),
-  robots: z.object({ index: z.boolean(), follow: z.boolean() }).optional(),
+  // Google's display controls are optional, each in the form Google reads
+  // it: a size Google has no name for, or a fractional snippet length, is
+  // refused rather than served as a directive Google ignores.
+  robots: z
+    .object({
+      index: z.boolean(),
+      follow: z.boolean(),
+      maxImagePreview: z.enum(["none", "standard", "large"]).optional(),
+      maxSnippet: z.number().int().min(-1).optional(),
+      nosnippet: z.boolean().optional(),
+      noimageindex: z.boolean().optional(),
+      unavailableAfter: z.string().optional(),
+      noarchive: z.boolean().optional(),
+      nocache: z.boolean().optional(),
+    })
+    .optional(),
   social: z
     .object({
       title: z.string().optional(),
@@ -283,13 +622,82 @@ const pageMetadataAnswerSchema = z.object({
       siteName: z.string().optional(),
       locale: z.string().optional(),
       type: z.enum(["website", "article"]).optional(),
+      xAccount: z.string().optional(),
     })
     .optional(),
   languages: z.record(z.string(), z.string()).optional(),
+  // Each key is a media type, as a link's `type` names one.
+  formats: z
+    .record(z.string().regex(/^[a-z]+\/[a-z0-9.+-]+$/i), z.string())
+    .optional(),
   // JSON only, the one form a cached answer and a script element both hold:
   // a node holding anything else refuses the answer.
   structuredData: z.array(z.record(z.string(), z.json())).optional(),
+  // Each name is one a meta tag can carry, so no name can reach the head as
+  // anything but the name of one tag.
+  verification: z
+    .record(z.string().regex(/^[A-Za-z][A-Za-z0-9._:-]{0,99}$/), z.string())
+    .optional(),
 });
+
+/**
+ * An ISO 8601 date and time with its zone, as `unavailable_after` is written:
+ * `2026-12-31T23:59:00Z` or `2026-12-31T23:59:00+05:00`, seconds and a
+ * fraction optional.
+ */
+const ISO_DATE_TIME =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(Z|[+-](\d{2}):(\d{2}))$/;
+
+/**
+ * Whether `value` is a date and time Google can read: the form above, on a
+ * day the calendar has and at a time the clock has. `Date.parse` alone
+ * accepts other forms and rolls an impossible day, such as 30 February, into
+ * the next month.
+ */
+function isReadableDateTime(value: string): boolean {
+  const parts = ISO_DATE_TIME.exec(value);
+  if (parts === null) return false;
+  const [year, month, day, hour, minute, second] = parts
+    .slice(1, 7)
+    .map(part => (part === undefined ? 0 : Number(part)));
+  const zoneHours = parts[8] === undefined ? 0 : Number(parts[8]);
+  const zoneMinutes = parts[9] === undefined ? 0 : Number(parts[9]);
+  const onCalendar = new Date(Date.UTC(year, month - 1, day));
+  return (
+    onCalendar.getUTCFullYear() === year &&
+    onCalendar.getUTCMonth() === month - 1 &&
+    onCalendar.getUTCDate() === day &&
+    hour < 24 &&
+    minute < 60 &&
+    second < 60 &&
+    zoneHours < 24 &&
+    zoneMinutes < 60
+  );
+}
+
+/** The dates already said to be unreadable, each said once. */
+const toldUnreadableDates = new Set<string>();
+
+/**
+ * The answer with a date to leave results Google could not read left out,
+ * and said once in the log: the rest of the answer is still served, and a
+ * directive search engines would misread or ignore never reaches the head.
+ */
+function withReadableDate(answer: PageMetadataAnswer): PageMetadataAnswer {
+  const robots = answer.robots;
+  const date = robots?.unavailableAfter;
+  if (robots === undefined || date === undefined || isReadableDateTime(date)) {
+    return answer;
+  }
+  if (!toldUnreadableDates.has(date)) {
+    toldUnreadableDates.add(date);
+    consoleLogger.warn(
+      `The page-metadata provider gave "${date}" as the date a page leaves search results, which is not an ISO 8601 date and time with its zone; it is left out of the page's robots.`
+    );
+  }
+  const { unavailableAfter: _unreadable, ...readable } = robots;
+  return { ...answer, robots: readable };
+}
 
 /**
  * The provider's answer for one page, cached; undefined when no provider is
@@ -304,6 +712,7 @@ const pageMetadataAnswerSchema = z.object({
 async function pageAnswerFor(
   request: PageMetadataRequest
 ): Promise<PageMetadataAnswer | undefined> {
+  await startForProviders(request.path);
   const resolver = pageMetadataResolver();
   if (resolver === undefined) return undefined;
   const input: PageMetadataInput = {
@@ -312,11 +721,19 @@ async function pageAnswerFor(
     source: request.source,
     code: codeValuesOf(request.code),
     derived: request.derived ?? {},
+    // In the input, so in the answer's cache key: a page asked with what its
+    // route lists is answered apart from its head, which is asked without.
+    ...(request.structuredDataHints === undefined
+      ? {}
+      : { structuredDataHints: request.structuredDataHints }),
   };
   // Parsed inside the cached read, so an answer that is not one is refused
   // there and never stored: the next request asks the provider again.
   return cachedFind(
-    async () => pageMetadataAnswerSchema.parse(await resolver.resolve(input)),
+    async () =>
+      withReadableDate(
+        pageMetadataAnswerSchema.parse(await resolver.resolve(input))
+      ),
     {
       // The provider and its version too, so a replaced or upgraded provider
       // never reads an answer another one cached for the same page.
@@ -340,8 +757,11 @@ async function pageAnswerFor(
  * or the route's own metadata unchanged when no provider is started.
  *
  * A provider that fails is logged and the route's own metadata is served: a
- * page loses its SEO answer for that render, never the page. Next.js's own
- * control-flow signals pass through untouched.
+ * page loses its SEO answer for that render, never the page. Where it failed
+ * because Nextly is unavailable, a production render fails instead
+ * (`failRenderWhenUnavailable`), so Next.js keeps the page's last good render
+ * and a build fails rather than shipping the page without its head. Next.js's
+ * own control-flow signals pass through untouched.
  */
 export async function pageMetadataFor(
   request: PageMetadataRequest
@@ -353,6 +773,7 @@ export async function pageMetadataFor(
     return overCode(code, metadataFromAnswer(answer));
   } catch (error) {
     getUnstableRethrow()(error);
+    failRenderWhenUnavailable(error);
     consoleLogger.error(
       "The page-metadata provider could not answer; serving the route's own metadata.",
       { path: request.path, error }
@@ -367,7 +788,8 @@ export async function pageMetadataFor(
  * end the element. Nothing when no provider is started or the answer has none.
  *
  * A provider that fails is logged and the page is rendered without it, as its
- * head is served without the answer.
+ * head is served without the answer, and a production render fails where
+ * Nextly is unavailable, as its head's does.
  *
  * @experimental Settles with the page-metadata contract.
  */
@@ -378,6 +800,7 @@ export async function pageStructuredDataFor(
     return structuredDataText((await pageAnswerFor(request))?.structuredData);
   } catch (error) {
     getUnstableRethrow()(error);
+    failRenderWhenUnavailable(error);
     consoleLogger.error(
       "The page-metadata provider could not answer; rendering the page without structured data.",
       { path: request.path, error }

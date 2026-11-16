@@ -5,7 +5,7 @@ description: Define single-document content like site settings, headers, and foo
 
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
-A single is a one-off document — content that exists as exactly one instance. Site settings, navigation headers, footers, and homepage configurations are typical singles. Unlike [collections](/docs/configuration/collections), singles have no list view, no create/delete operations, and are auto-created on first access.
+A single is a one-off document — content that exists as exactly one instance. Site settings, navigation headers, footers, and homepage configurations are typical singles. Unlike [collections](/docs/configuration/collections), singles have no list view, no create/delete operations, and are auto-created on first access. When several requests reach a single that has no document yet at the same moment, such as the first page views of a new site, one document is created from its defaults and every request gets it.
 
 > **Source of truth:** the `SingleConfig` interface lives in `packages/nextly/src/singles/config/types.ts`. The `defineSingle()` helper is in `packages/nextly/src/singles/config/define-single.ts`.
 

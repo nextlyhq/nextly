@@ -170,6 +170,8 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE INDEX IF NOT EXISTS "user_roles_user_id_idx"
       ON "user_roles" ("user_id")`,
+    `CREATE INDEX IF NOT EXISTS "user_roles_role_id_idx"
+      ON "user_roles" ("role_id")`,
     `CREATE INDEX IF NOT EXISTS "user_roles_expires_at_idx"
       ON "user_roles" ("expires_at")`,
     `CREATE TABLE IF NOT EXISTS "role_inherits" (
@@ -409,7 +411,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       "updated_at" INTEGER NOT NULL,
       "revision" INTEGER NOT NULL DEFAULT 0,
       "base_version_no" INTEGER,
-      "base_draft_revision" INTEGER
+      "base_draft_revision" INTEGER,
+      "field_sources" TEXT
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_versions_seq_uidx"
       ON "nextly_versions" ("scope_kind", "scope_slug", "entry_id", "version_no")`,

@@ -52,4 +52,5 @@ export {
   time,
   // Special helpers
   hidden,
+  consent,
 } from "./field-helpers";

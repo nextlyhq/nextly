@@ -24,6 +24,7 @@ import {
   assertBuilderFieldNames,
   assertValidFieldsPayload,
   assertValidPluginFieldOptions,
+  readRequestedLifecycle,
 } from "../../api/fields-payload";
 import {
   respondAction,
@@ -47,19 +48,21 @@ import {
   storesPerLanguage,
 } from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
-import {
-  previewCollectionSave,
+import type {
+  BuilderSaveSetup,
   writeCollectionSave,
-  type BuilderSaveSetup,
 } from "../../domains/schema/builder-save/collection-save";
 import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
+import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
+import { reachesRelationStorage } from "../../domains/schema/pipeline/recorded-shapes";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
+import { writeRegistryRows } from "../../domains/schema/schema-version";
 import {
   applyCollectionSchemaChange,
   fieldsAsStored,
@@ -114,6 +117,7 @@ import {
   isTruthyParam,
   parseCountParam,
   parseRichTextFormat,
+  parseRichTextStyles,
   parseSelectParam,
   parseStatusParam,
   parseWhereParam,
@@ -122,9 +126,14 @@ import {
   readClientWhere,
   toNumber,
 } from "../helpers/validation";
-import { versionInputOf, versionInputOfQuery } from "../helpers/version-input";
+import {
+  restoreFieldsOf,
+  versionInputOf,
+  versionInputOfQuery,
+} from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
+import { respondAddressCheck } from "./address-check-route";
 import { readListOwner, slugListsForOwner } from "./list-owner";
 import { readAccessCallerForDispatch } from "./read-access-caller";
 // Shared guard that centralizes required + stale schema-version validation for
@@ -240,6 +249,66 @@ function allLocalesLifecycle(
 }
 
 /**
+ * The body of a publish or unpublish of an entry's chosen parts: the languages, or `"all"`, whether
+ * the shared part is chosen too, and whether to only say what it would do. The version fields
+ * (`_rev`, `_overwrite`) are read beside it, as for every lifecycle move.
+ */
+const PublishPartsBody = z
+  .object({
+    locales: z.union([
+      z.literal("all"),
+      z.array(z.string().min(1).max(64)).max(500),
+    ]),
+    shared: z.boolean().optional(),
+    describe: z.boolean().optional(),
+  })
+  .passthrough();
+
+/**
+ * Publishing or unpublishing the parts of one entry the body chooses (@experimental). Forwarded as
+ * the every-language moves forward theirs: the caller's identity and scope, `routeAuthorized`
+ * false, and the version the move was made from.
+ */
+function partsLifecycle(
+  direction: "publish" | "unpublish",
+  successMessage: string
+): MethodHandler<CollectionsHandlerType> {
+  return {
+    execute: async (svc, p, body, request) => {
+      const collectionName = requireParam(p, "collectionName");
+      const entryId = requireParam(p, "entryId");
+      let parts: z.infer<typeof PublishPartsBody>;
+      try {
+        parts = PublishPartsBody.parse(body ?? {});
+      } catch (error) {
+        if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
+        throw error;
+      }
+      const result = await svc.publishParts(
+        {
+          request,
+          collectionName,
+          entryId,
+          actor: readAuthenticatedActor(),
+          ...callerUser(),
+          routeAuthorized: false,
+          authenticatedScope: readAuthenticatedScope(),
+          data: versionInputOf(body),
+        },
+        {
+          direction,
+          locales: parts.locales,
+          shared: parts.shared,
+          describe: parts.describe,
+        }
+      );
+      const entry = unwrapServiceResult(result, { collectionName, entryId });
+      return respondMutation(result.message ?? successMessage, entry);
+    },
+  };
+}
+
+/**
  * The `together` query parameter of a collection delete: slugs separated by
  * commas, each spelled as a slug is. Absent or empty means none.
  */
@@ -270,6 +339,24 @@ function parseTogetherParam(value: string | undefined): string[] {
     if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
     throw error;
   }
+}
+
+/**
+ * A collection update as it is written: the fields it sends (a settings save sends them as the
+ * editor read them) with each earlier-shaped relationship back in its stored shape, as the schema
+ * apply writes them (`fieldsAsStored`). An update without a field list, or for a collection the
+ * registry does not hold, is passed on as sent, for the service to judge.
+ */
+async function withFieldsAsStored(
+  collectionName: string,
+  body: object
+): Promise<object> {
+  const sent = (body as { fields?: unknown }).fields;
+  if (!Array.isArray(sent)) return body;
+  const collection =
+    await getCollectionRegistryFromDI()?.getCollectionBySlug(collectionName);
+  if (!collection) return body;
+  return { ...body, fields: fieldsAsStored(sent, collection) };
 }
 
 /**
@@ -350,6 +437,8 @@ export const COLLECTION_VERSION_METHODS: Record<
         request,
         // The version the restore was made from, judged as its update is.
         version: versionInputOf(body),
+        // The fields chosen; every field the version holds when none are.
+        fields: restoreFieldsOf(body),
       });
       return respondAction("Version restored.", result);
     },
@@ -366,6 +455,8 @@ export const COLLECTION_VERSION_METHODS: Record<
         // away. An empty value is the same as none: the request named no
         // language, which a localized document resolves to its default.
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+        // `?part=shared` discards the shared part's pending change alone.
+        shared: p.part === "shared",
         // The version the change was read at, from the query: a DELETE
         // carries no body to read it from.
         version: versionInputOfQuery(p),
@@ -470,6 +561,11 @@ const COLLECTIONS_METHODS: Record<
   MethodHandler<CollectionsHandlerType>
 > = {
   ...COLLECTION_VERSION_METHODS,
+  // What creating a collection under an address would answer, for the Builder's new-entity
+  // dialog; writes nothing.
+  checkCollectionAddress: {
+    execute: (_svc, _p, body) => respondAddressCheck("collection", body),
+  },
   createCollection: {
     // The metadata service returns the legacy CollectionServiceResult
     // envelope; we unwrap it and pass the legacy success message through
@@ -630,7 +726,7 @@ const COLLECTIONS_METHODS: Record<
       }
       const result = await svc.updateCollection(
         { collectionName: p.collectionName },
-        body
+        await withFieldsAsStored(p.collectionName, body)
       );
       const collection = unwrapServiceResult(result, {
         slug: p.collectionName,
@@ -717,6 +813,9 @@ const COLLECTIONS_METHODS: Record<
       assertValidFieldsPayload(sentFields, {
         kind: "collection",
         stored: collection.fields ?? [],
+        // The lifecycle as stored, or as the Builder's pending settings will set it.
+        lifecycleEnabled:
+          collection.status === true || readRequestedLifecycle(body) === true,
       });
       // Planned as the apply will write them: an earlier-shaped relationship in its stored shape.
       const fields = fieldsAsStored(sentFields, collection);
@@ -878,6 +977,9 @@ const COLLECTIONS_METHODS: Record<
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
+      // The lifecycle the Builder's pending settings ask for, read (and a malformed value refused)
+      // before the lock is taken.
+      const requestedLifecycle = readRequestedLifecycle(body);
       assertValidFieldsPayload(sentFields, {
         kind: "collection",
         stored: "under-lock",
@@ -927,7 +1029,13 @@ const COLLECTIONS_METHODS: Record<
           );
           // A field name the collection already holds keeps working whatever its case; one this
           // save creates is the Builder's own. Judged against the row as stored now.
-          assertBuilderFieldNames(fields, collection.fields ?? []);
+          // A new field may not take a name the lifecycle declares itself, on now or once the
+          // pending settings land.
+          assertBuilderFieldNames(fields, collection.fields ?? [], {
+            surface: "collection",
+            lifecycleEnabled:
+              collection.status === true || requestedLifecycle === true,
+          });
           // A pair of sibling fields this save would create is refused before any statement or
           // archive write; one the entity already holds keeps working. Asked here because this
           // road reaches its DDL through no shared service that could ask it.
@@ -1023,11 +1131,6 @@ const COLLECTIONS_METHODS: Record<
           const acknowledgedConversions = (
             body as { acknowledgedConversions?: string[] }
           ).acknowledgedConversions;
-          // A translated collection, or one turning translation on or off,
-          // keeps its push in development, which carries values across the
-          // change; the writer writes its migration and records it once the
-          // push has run.
-          const translated = wasLocalized || isLocalized;
           const change: Parameters<typeof applyCollectionSchemaChange>[0] = {
             slug: p.collectionName,
             collection,
@@ -1048,7 +1151,27 @@ const COLLECTIONS_METHODS: Record<
             pushedSummary = (await applyCollectionSchemaChange(change)).summary;
           };
           const written = await saveThroughWriter({
-            ...(translated ? { appliedBy: push } : {}),
+            appliedBy: push,
+            // Whether the push applies the change in development, the writer recording its
+            // migration once the push has run: a translated collection, or one turning
+            // translation on or off, whose push carries its values across the change; and a change
+            // reaching a relation's storage (`reachesRelationStorage`), which the push plans from
+            // the live table, where the file alone, written from the newest snapshot, does not.
+            pushWhen: async () =>
+              wasLocalized ||
+              isLocalized ||
+              reachesRelationStorage({
+                before: collection.fields ?? [],
+                after: fields as unknown as FieldDefinition[],
+                liveTable: async () =>
+                  (
+                    await introspectLiveSnapshot(
+                      adapter.getDrizzle(),
+                      dialect,
+                      [tableName]
+                    )
+                  ).tables[0],
+              }),
             slug: p.collectionName,
             collection: writerRowOf(collection),
             fields: fields as unknown as FieldDefinition[],
@@ -1092,25 +1215,29 @@ const COLLECTIONS_METHODS: Record<
           const newSchemaVersion = currentVersion + 1;
           let versionPersisted = true;
           try {
-            await adapter.update(
-              "dynamic_collections",
-              {
-                fields: JSON.stringify(storedFields),
-                schema_version: newSchemaVersion,
-                // Written but not run outside development: `nextly migrate`
-                // applies it on deploy.
-                ...(written !== undefined && !written.applied
-                  ? { migration_status: "pending" }
-                  : {}),
-                // i18n: persist the state this apply actually ran with (mirrors
-                // the singles apply). The DDL above already performed any
-                // false→true transition, so leaving the stored flag behind would
-                // make the settings write that follows read another false→true
-                // transition and reconcile the companion a second time.
-                localized: isLocalized,
-                updated_at: new Date(),
-              },
-              { and: [{ column: "slug", op: "=", value: p.collectionName }] }
+            // The row and the stored schema version in one transaction, so the
+            // version's count moves with the save it records (`writeRegistryRows`).
+            await writeRegistryRows(adapter, tx =>
+              tx.update(
+                "dynamic_collections",
+                {
+                  fields: JSON.stringify(storedFields),
+                  schema_version: newSchemaVersion,
+                  // Written but not run outside development: `nextly migrate`
+                  // applies it on deploy.
+                  ...(written !== undefined && !written.applied
+                    ? { migration_status: "pending" }
+                    : {}),
+                  // i18n: persist the state this apply actually ran with (mirrors
+                  // the singles apply). The DDL above already performed any
+                  // false→true transition, so leaving the stored flag behind would
+                  // make the settings write that follows read another false→true
+                  // transition and reconcile the companion a second time.
+                  localized: isLocalized,
+                  updated_at: new Date(),
+                },
+                { and: [{ column: "slug", op: "=", value: p.collectionName }] }
+              )
             );
             // Written past the registry services, so the cached rows are cleared
             // here: a read during the save may have cached the row from before it.
@@ -1300,6 +1427,8 @@ const COLLECTIONS_METHODS: Record<
         select: parseSelectParam(p.select),
         where: parseWhereParam(p.where, p.whereBrackets),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
+        // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
+        richTextStyles: parseRichTextStyles(p.richTextStyles),
         sort,
         status,
         // i18n M4: `?locale=` + `?fallback-locale=` select the content language.
@@ -1430,6 +1559,8 @@ const COLLECTIONS_METHODS: Record<
           p.depth !== undefined ? parseInt(String(p.depth), 10) : undefined,
         select: parseSelectParam(p.select),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
+        // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
+        richTextStyles: parseRichTextStyles(p.richTextStyles),
         status,
         // `?draft=true` overlays the pending working draft in place of the live
         // row (draft/published split), matching Payload's read-side `draft`
@@ -1496,6 +1627,8 @@ const COLLECTIONS_METHODS: Record<
     "unpublishAllLocales",
     "All languages unpublished."
   ),
+  publishParts: partsLifecycle("publish", "Published."),
+  unpublishParts: partsLifecycle("unpublish", "Unpublished."),
 
   previewPublishAllLocales: {
     // What publishing every language would do, language by language, without
@@ -1861,14 +1994,31 @@ async function saveThroughWriter(
   change: WriterChange & {
     /** Applies the change in development instead of the file (`writeCollectionSave`). */
     appliedBy?: () => Promise<void>;
+    /**
+     * Whether `appliedBy` applies this change rather than the file. Asked only where the
+     * answer is used, a save the writer runs in development, so a production save or one with
+     * no writer reads nothing for it. Absent, `appliedBy` applies whenever it is given.
+     */
+    pushWhen?: () => Promise<boolean>;
   }
 ): Promise<{ fields: FieldDefinition[]; applied: boolean } | undefined> {
   const prepared = await writerSaveOf(change);
   if (prepared === undefined) return undefined;
+  const viaPush =
+    change.appliedBy !== undefined &&
+    prepared.deps.applies &&
+    (change.pushWhen === undefined || (await change.pushWhen()));
+  // Loaded here, where a save runs: the writer brings the migration generator
+  // and runner, which a request that writes no field change never needs.
+  const { writeCollectionSave } = await import(
+    "../../domains/schema/builder-save/collection-save"
+  );
   const result = await writeCollectionSave(
     prepared.deps,
     prepared.save,
-    change.appliedBy === undefined ? {} : { appliedBy: change.appliedBy }
+    viaPush && change.appliedBy !== undefined
+      ? { appliedBy: change.appliedBy }
+      : {}
   );
   return { fields: prepared.fields, applied: result.applied };
 }
@@ -1881,6 +2031,9 @@ async function saveThroughWriter(
 async function reviewLinesOf(change: WriterChange): Promise<string[]> {
   const prepared = await writerSaveOf(change);
   if (prepared === undefined) return [];
+  const { previewCollectionSave } = await import(
+    "../../domains/schema/builder-save/collection-save"
+  );
   return (await previewCollectionSave(prepared.deps, prepared.save)).notices;
 }
 

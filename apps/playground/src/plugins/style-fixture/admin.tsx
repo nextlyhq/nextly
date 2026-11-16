@@ -24,6 +24,12 @@ import { FILL_PROBE_PATH, STYLE_FIXTURE_PATH } from "./constants";
 // admin.source.css by nextly-build-admin-css). Side-effect import so the host
 // bundler includes it.
 import "./admin.css";
+// The plugin pages drawn with the SDK's page frame and header (side-effect:
+// registerComponents).
+import "./frames";
+// The plugin pages drawn with the SDK's page building blocks (side-effect:
+// registerComponents).
+import "./blocks";
 
 export function Showcase() {
   return (

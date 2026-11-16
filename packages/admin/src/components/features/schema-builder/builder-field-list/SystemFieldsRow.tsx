@@ -19,6 +19,7 @@
 import type { JSX } from "react";
 
 import { useFieldTypeLabel } from "@admin/lib/builder/field-type-label";
+import { rememberPreference } from "@admin/lib/device-memory/device-memory";
 
 import type { BuilderField } from "../types";
 
@@ -38,7 +39,9 @@ export function SystemFieldsRow({
   const handleHide = () => {
     onSetVisible(false);
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(STORAGE_KEY, "false");
+      // Kept through the device memory, which guards storage that throws
+      // and keeps nothing where the site turned remembering off.
+      rememberPreference(STORAGE_KEY, "false");
       window.dispatchEvent(
         new CustomEvent("builder:show-system-fields", { detail: false })
       );

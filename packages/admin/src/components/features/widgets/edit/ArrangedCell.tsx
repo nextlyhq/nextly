@@ -32,7 +32,6 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
-import { CardCollapseContext, type CardCollapse } from "../frame/collapse";
 import { heldCellStyle, useHeldCardHeight } from "../frame/held-height";
 import type { AnswerSize } from "../frame/tier";
 import { CardHiddenReportContext } from "../hidden-while-empty";
@@ -568,19 +567,6 @@ function useHeldCellStyle(
 }
 
 /**
- * Whether the card's body is collapsed to one line (`frame/collapse`), as the body reports it.
- * Never collapsed in customise mode, where the card's controls stand over the frame's header.
- */
-function useBodyCollapse(isEditing: boolean): CardCollapse {
-  const [bodyCollapsed, setBodyCollapsed] = useState(false);
-  const collapsed = bodyCollapsed && !isEditing;
-  return useMemo<CardCollapse>(
-    () => ({ collapsed, setCollapsed: setBodyCollapsed }),
-    [collapsed]
-  );
-}
-
-/**
  * What the card's header holds at each end. While customising it keeps the room its controls are
  * drawn over, and, wherever a handle is drawn, room before the title for it; at rest it holds the
  * menu.
@@ -634,7 +620,6 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
     () => drawnSize(row.size, row.widget.size),
     [row.size, row.widget.size]
   );
-  const collapse = useBodyCollapse(isEditing);
   const held = useHeldCellStyle(
     row.placementId,
     data.slot === undefined,
@@ -693,16 +678,14 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
           returnFocusTo={controls.panelReturnFocusTo}
         />
       ) : null}
-      <CardCollapseContext.Provider value={collapse}>
-        <CardHiddenReportContext.Provider value={reportCardHidden}>
-          <CardBody
-            {...{ widget, placement, headerAction, leading, data, isEditing }}
-            subtitle={heading.subtitle}
-            quick={quick.inline}
-            onOpenSettings={sheet.openFromEmpty}
-          />
-        </CardHiddenReportContext.Provider>
-      </CardCollapseContext.Provider>
+      <CardHiddenReportContext.Provider value={reportCardHidden}>
+        <CardBody
+          {...{ widget, placement, headerAction, leading, data, isEditing }}
+          subtitle={heading.subtitle}
+          quick={quick.inline}
+          onOpenSettings={sheet.openFromEmpty}
+        />
+      </CardHiddenReportContext.Provider>
     </DraggableWidgetCell>
   );
 }

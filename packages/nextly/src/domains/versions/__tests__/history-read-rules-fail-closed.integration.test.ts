@@ -68,6 +68,8 @@ async function documentWithRules(dialect: TestDialect) {
     collections: [
       defineCollection({
         slug: "posts",
+        // Kept with working drafts, which a restore writes.
+        status: true,
         versions: true,
         access: { read: () => true, update: () => true, create: () => true },
         fields: [

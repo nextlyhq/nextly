@@ -47,6 +47,7 @@ import {
 } from "../../domains/schema/extension/active-schema";
 import { col, defineTable } from "../../domains/schema/extension/dsl";
 import { compileAndPublishExtensionSchema } from "../../domains/schema/extension/publish";
+import { SchemaOwnersRepository } from "../../domains/schema/ownership/schema-owners-repository";
 import {
   collectionDbOptions,
   publishCollectionDbOptions,
@@ -1999,6 +2000,51 @@ describe("reloadNextlyConfig", () => {
       });
     });
 
+    describe("a plugin's recorded prefix", () => {
+      // The owner rows the plugin's install recorded, as the registry
+      // returns them: its table under the prefix it was created with.
+      const recordedUnder = (prefix: string) =>
+        vi.spyOn(SchemaOwnersRepository.prototype, "read").mockResolvedValue([
+          {
+            tableName: `${prefix}__notes`,
+            ownerKind: "plugin",
+            ownerId: "@acme/local",
+            migratedBy: "plugin:@acme/local",
+            ownerVersion: "1.0.0",
+            schemaVersion: 1,
+            state: "active",
+          },
+        ]);
+
+      it("refuses a reload that moves it, before the pipeline applies anything", async () => {
+        const read = recordedUnder("old");
+        loadConfigSpy.mockResolvedValue({ config: withPluginTable });
+        unchangedPosts();
+
+        const { reloadNextlyConfig } = await import("../reload-config");
+        await reloadNextlyConfig({ resolver: buildResolver() });
+
+        expect(read).toHaveBeenCalled();
+        expect(pipelineApplySpy).not.toHaveBeenCalled();
+        // The previous config stays, with the schema it compiled: none here.
+        expect(getActiveExtensionSchema("sqlite")).toBeFalsy();
+        read.mockRestore();
+      });
+
+      it("control: lets a reload keeping it through", async () => {
+        // `@acme/local` declares no prefix, so its name gives `acme_local`.
+        const read = recordedUnder("acme_local");
+        loadConfigSpy.mockResolvedValue({ config: withPluginTable });
+        unchangedPosts();
+
+        const { reloadNextlyConfig } = await import("../reload-config");
+        await reloadNextlyConfig({ resolver: buildResolver() });
+
+        expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+        read.mockRestore();
+      });
+    });
+
     it("is put back when the reload does not land", async () => {
       // The schema a previous reload published, distinct from what this one
       // compiles, so "put back" is observable as the same object returning.
@@ -3758,11 +3804,12 @@ describe("reloadNextlyConfig", () => {
         "utf8"
       );
       const commits = source.match(/^\s*commitReload\(/gm) ?? [];
-      // Empty targets, the no-DDL branch, and after a successful apply. Two
+      // A start's reload with every entity unchanged since the last start,
+      // empty targets, the no-DDL branch, and after a successful apply. Two
       // branches deliberately publish nothing: the post-apply localization
       // failure returns before the runtime-schema refresh, and the no-DDL
       // deferred branch skips the metadata sync for every entity.
-      expect(commits).toHaveLength(3);
+      expect(commits).toHaveLength(4);
     });
 
     it("keeps a late app hook behind the config's, across a reload", async () => {

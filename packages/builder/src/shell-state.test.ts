@@ -450,6 +450,35 @@ describe("preferences kept per signed-in user", () => {
     expect(userPreferenceStore(null)).toBe(userPreferenceStore(null));
   });
 
+  it("keeps each user's record, and moves the one from before, in the stores the host opens", () => {
+    // A host whose browser storage follows rules of its own (a site that
+    // keeps nothing on the device) hands the shell its own stores; nothing
+    // then reaches the browser's storage directly.
+    const held = new Map<string, string>();
+    const open = (key: string) => ({
+      read: () => held.get(key) ?? null,
+      write: (value: string) => {
+        held.set(key, value);
+      },
+      remove: () => {
+        held.delete(key);
+      },
+    });
+    held.set(SHELL_PREFERENCES_KEY, LEGACY);
+
+    const store = userPreferenceStore("ada", open);
+    expect(store.read()).toBe(LEGACY);
+    expect([...held.entries()]).toEqual([
+      [`${SHELL_PREFERENCES_KEY}:ada`, LEGACY],
+    ]);
+    store.write("ada's");
+    expect(held.get(`${SHELL_PREFERENCES_KEY}:ada`)).toBe("ada's");
+    expect(window.localStorage.length).toBe(0);
+    // One store per user and opener, so a host may still call it every render.
+    expect(userPreferenceStore("ada", open)).toBe(store);
+    expect(userPreferenceStore("ada")).not.toBe(store);
+  });
+
   it("remembers nothing for no one", () => {
     // Unknown, signed out or unread: nothing is kept for a guess.
     window.localStorage.setItem(SHELL_PREFERENCES_KEY, LEGACY);

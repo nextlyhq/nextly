@@ -29,6 +29,7 @@
 // importing it never loads `next`, so the package's zero-`next` guarantee holds.
 import { slugToStaticParam } from "@nextlyhq/plugin-sdk/routing";
 
+import { productionAddressesOf, typedCanonical } from "./canonical";
 import type { CollectionReads } from "./collection-reads";
 
 /**
@@ -64,6 +65,11 @@ export type UrlForEntry = (
 export interface SitemapOptions {
   /** Collections whose published entries appear in the sitemap. */
   collections: string[];
+  /**
+   * The production addresses the SEO settings hold, read as the page's head
+   * reads them: `NEXTLY_PRODUCTION_ADDRESSES` still wins where it is set.
+   */
+  productionAddresses?: readonly string[];
   /**
    * Absolute site origin for `<loc>` (e.g. "https://example.com"). Must be an
    * origin only — no path, query, fragment, or credentials; per-entry paths come
@@ -259,6 +265,10 @@ function normalizeBasePath(basePath: string): string {
  * that answer and this does not treat it as one. A site that does serve its
  * root lists it with a custom `urlFor`. Omitting a URL costs a listing;
  * advertising one that 404s costs indexing.
+ *
+ * @deprecated Lists entries by the address `urlFor` or `basePath` gives them,
+ * not by each page's answer. The plugin serves the site's sitemap at
+ * `/sitemap.xml`, listing each page at the address its type declares.
  */
 export function defaultUrlForEntry(
   entry: Record<string, unknown>,
@@ -341,7 +351,7 @@ function resolveOnOrigin(path: string, baseOrigin: string): string | null {
 }
 
 /** Normalize a stored timestamp to ISO-8601, or undefined when unusable. */
-function toLastModified(value: unknown): string | undefined {
+export function toLastModified(value: unknown): string | undefined {
   if (value === null || value === undefined || value === "") return undefined;
   if (
     typeof value !== "string" &&
@@ -447,6 +457,23 @@ export function resolveBaseOrigin(baseUrl: string): string {
 }
 
 /**
+ * The filter that keeps a collection's published entries: `status` is
+ * published where the collection has the built-in lifecycle, and nothing
+ * where it has none. A status-less collection has no unpublished state, and
+ * it may define an ordinary `status` field (e.g. "active"/"closed"), so a
+ * blanket `status = published` filter there would wrongly drop live rows.
+ */
+export async function publishedWhere(
+  services: SitemapServices,
+  collection: string
+): Promise<Record<string, unknown> | undefined> {
+  const meta = await services.collections.getCollection(collection, {});
+  return isRecord(meta) && meta.status === true
+    ? { status: { equals: "published" } }
+    : undefined;
+}
+
+/**
  * List every configured collection's PUBLISHED entries and map them to sitemap
  * URLs. Reads as system (a sitemap is public derived data), and pages through
  * ALL matches by advancing the 1-indexed `page` — no silent cap — so a large
@@ -460,6 +487,10 @@ export function resolveBaseOrigin(baseUrl: string): string {
  * entry — all of which are live — is listed; the filter is skipped there rather
  * than applied to a same-named ordinary field. That mirrors the core's own
  * status handling (filter only when the lifecycle column exists).
+ *
+ * @deprecated Lists entries by the address `urlFor` or `basePath` gives them,
+ * not by each page's answer. The plugin serves the site's sitemap at
+ * `/sitemap.xml`, listing each page at the address its type declares.
  */
 export async function buildSitemapUrls(
   services: SitemapServices,
@@ -492,6 +523,11 @@ export async function buildSitemapUrls(
   // it, and a canonical on a different origin is dropped rather than mixed in.
   // Rejects a non-origin/relative baseUrl up front so `<loc>` is never invalid.
   const baseOrigin = resolveBaseOrigin(options.baseUrl);
+  // The addresses the site is served from, as the page's head reads them,
+  // once for the walk: the sitemap's own origin counts only where it is one.
+  const productionAddresses = productionAddressesOf(
+    options.productionAddresses
+  );
   // Only `undefined` takes the default; a supplied value (including 0 or a
   // negative) is honored so the wrapper guard below rejects an impossible cap
   // rather than silently substituting the 50 MB default. A non-finite value
@@ -531,15 +567,7 @@ export async function buildSitemapUrls(
     // Discarded on purpose — this call is the check, not the value.
     if (collectionBasePath !== undefined) normalizeBasePath(collectionBasePath);
 
-    // Apply the published filter ONLY to collections with the built-in
-    // lifecycle. A status-less collection has no unpublished state, and it may
-    // even define an ordinary `status` field (e.g. "active"/"closed"), so a
-    // blanket `status = published` filter there would wrongly drop live rows.
-    const meta = await services.collections.getCollection(collection, {});
-    const hasLifecycle = isRecord(meta) && meta.status === true;
-    const where = hasLifecycle
-      ? { status: { equals: "published" } }
-      : undefined;
+    const where = await publishedWhere(services, collection);
 
     // 1-indexed: the managed service reads by `page`, not `offset`, so the loop
     // MUST advance `page` — advancing an ignored `offset` would re-read page 1
@@ -590,25 +618,26 @@ export async function buildSitemapUrls(
         // absolute); ignore a non-http scheme (`mailto:`/`javascript:`/`data:`)
         // or embedded credentials, keeping the generated URL; and DROP the entry
         // when the canonical is on another origin.
-        const canonical =
-          typeof seo?.canonical === "string" ? seo.canonical.trim() : "";
-        if (canonical) {
-          let offOrigin = false;
-          try {
-            const resolved = new URL(canonical, baseOrigin);
-            const isHttp =
-              resolved.protocol === "http:" || resolved.protocol === "https:";
-            const hasCreds =
-              resolved.username !== "" || resolved.password !== "";
-            if (isHttp && resolved.origin === baseOrigin && !hasCreds) {
-              loc = resolved.href;
-            } else if (isHttp && resolved.origin !== baseOrigin) {
-              offOrigin = true;
-            }
-          } catch {
-            // Malformed canonical → keep the generated URL.
+        //
+        // Decided by the one canonical rule the page's head follows: a typed
+        // address off this origin counts only where the page is confirmed
+        // to have first appeared elsewhere, and then the entry belongs to
+        // that site's sitemap, not this one. The production addresses are
+        // the head's own, so the two never name different canonicals, and a
+        // page whose canonical is the copy at another of them is left to that
+        // address's sitemap.
+        const canonical = typedCanonical(
+          typeof seo?.canonical === "string" ? seo.canonical : undefined,
+          {
+            productionAddresses,
+            elsewhere: seo?.canonicalElsewhere === true,
           }
-          if (offOrigin) continue;
+        );
+        if (canonical !== undefined) {
+          const resolved = new URL(canonical, baseOrigin);
+          if (resolved.origin !== baseOrigin) continue;
+          const hasCreds = resolved.username !== "" || resolved.password !== "";
+          if (!hasCreds) loc = resolved.href;
         }
         // A `<loc>` over the protocol's 2,048-char limit is an invalid record —
         // drop it rather than emit a non-compliant entry.
@@ -637,13 +666,25 @@ export async function buildSitemapUrls(
   return urls;
 }
 
-/** Serialize resolved URLs into a sitemaps.org `<urlset>` document. */
+/**
+ * Serialize resolved URLs into a sitemaps.org `<urlset>` document.
+ *
+ * @deprecated Lists entries by the address `urlFor` or `basePath` gives them,
+ * not by each page's answer. The plugin serves the site's sitemap at
+ * `/sitemap.xml`, listing each page at the address its type declares.
+ */
 export function serializeSitemap(urls: SitemapUrl[]): string {
   const body = urls.map(serializeUrlEntry).join("\n");
   return `${XML_HEADER}${body}${XML_FOOTER}`;
 }
 
-/** Build the full sitemap XML for the configured collections. */
+/**
+ * Build the full sitemap XML for the configured collections.
+ *
+ * @deprecated Lists entries by the address `urlFor` or `basePath` gives them,
+ * not by each page's answer. The plugin serves the site's sitemap at
+ * `/sitemap.xml`, listing each page at the address its type declares.
+ */
 export async function generateSitemap(
   services: SitemapServices,
   options: SitemapOptions

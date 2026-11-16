@@ -21,14 +21,14 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import {
-  LINKS_PLUGIN,
+  LINKS_OWNER,
   LINKS_TABLE,
   MARKER_COLUMN,
   MARKER_PLUGIN,
   SETTINGS,
   TAGS,
   TAGS_TABLE,
-  linksPlugin,
+  linksToTags,
   markerPlugin,
   plainTags,
   settings,
@@ -86,7 +86,10 @@ afterEach(async () => {
 async function generate(
   dialect: TestDialect,
   name: string,
-  config: Record<string, unknown>
+  config: Record<string, unknown>,
+  // Where nobody can be asked, a file that drops a table is written only
+  // under consent naming it, as `--accept-data-loss` gives it.
+  consent: { acceptDataLoss?: string } = {}
 ): Promise<{ exited: string | undefined; errors: string[] }> {
   process.env.DATABASE_URL = URLS[dialect];
   process.env.DB_DIALECT = dialect;
@@ -110,7 +113,7 @@ async function generate(
   try {
     await runMigrateCreate(
       name,
-      { name, config: configPath, cwd: dir },
+      { name, config: configPath, cwd: dir, ...consent },
       context
     );
   } catch (error) {
@@ -228,10 +231,13 @@ describeEachDialect(
         singles: [pointsAtSurvivor],
       });
 
-      const run = await generate(dialect, "drop_tags", {
-        collections: [survivor],
-        singles: [pointsAtSurvivor],
-      });
+      const run = await generate(
+        dialect,
+        "drop_tags",
+        { collections: [survivor], singles: [pointsAtSurvivor] },
+        // The removed collection's own table, named by its `dbName`.
+        { acceptDataLoss: "dc_labels" }
+      );
 
       expect(run).toEqual({ exited: undefined, errors: [] });
       expect(await migrationFiles()).toHaveLength(2);
@@ -266,16 +272,19 @@ describeEachDialect(
       expect(await migrationFiles()).toEqual(before);
     });
 
-    it("refuses to drop a collection a plugin's declared foreign key points at", async () => {
-      await generate(dialect, "initial", {
+    it("refuses to drop a collection a declared foreign key points at", async () => {
+      // The app's own table holds the key: a plugin's key to a collection's table is refused.
+      const links = { schema: { extend: [linksToTags] } };
+      const initial = await generate(dialect, "initial", {
         collections: [plainTags],
-        plugins: [linksPlugin],
+        db: links,
       });
+      expect(initial).toEqual({ exited: undefined, errors: [] });
       const before = await migrationFiles();
 
       const run = await generate(dialect, "drop_tags", {
         collections: [],
-        plugins: [linksPlugin],
+        db: links,
       });
 
       expect(run.exited).toBe("process.exit(1)");
@@ -284,7 +293,7 @@ describeEachDialect(
         `"${TAGS}" cannot be deleted while other schema depends on it.`
       );
       expect(logged).toContain(
-        `Foreign keys that point at its tables: "fk_${LINKS_TABLE}_tag_id" on "${LINKS_TABLE}" (plugin "${LINKS_PLUGIN}").`
+        `Foreign keys that point at its tables: "fk_${LINKS_TABLE}_tag_id" on "${LINKS_TABLE}" (${LINKS_OWNER}).`
       );
       expect(await migrationFiles()).toEqual(before);
     });
@@ -313,7 +322,12 @@ describeEachDialect(
       // collection, not about removing one.
       await generate(dialect, "initial", { collections: [plainTags] });
 
-      const run = await generate(dialect, "drop_tags", { collections: [] });
+      const run = await generate(
+        dialect,
+        "drop_tags",
+        { collections: [] },
+        { acceptDataLoss: TAGS_TABLE }
+      );
 
       expect(run).toEqual({ exited: undefined, errors: [] });
       expect(await migrationFiles()).toHaveLength(2);

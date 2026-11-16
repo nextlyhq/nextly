@@ -32,6 +32,9 @@ import { CopyFromLanguageScope } from "@admin/components/features/entries/CopyFr
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
 import { pluginDocumentLock } from "@admin/components/features/entries/EntryForm/document-lock-affordances";
 import {
+  topLevelFieldNames,
+  useContentFields,
+  useWithoutWithheldFields,
   useDocumentPanelParts,
   useDocumentPlace,
 } from "@admin/components/features/entries/EntryForm/document-place";
@@ -45,7 +48,6 @@ import {
 } from "@admin/components/features/entries/EntryForm/DocumentActionsContext";
 import { DocumentBanners } from "@admin/components/features/entries/EntryForm/DocumentBanners";
 import { DocumentBar } from "@admin/components/features/entries/EntryForm/DocumentBar";
-import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import {
   DOCUMENT_COLUMN_INSET,
   DocumentEditorLayout,
@@ -130,6 +132,10 @@ import {
   historyEnabledFrom,
   historyRetentionFrom,
 } from "@admin/components/features/versions/history-enabled";
+import {
+  useEditorRestoreSurface,
+  useFormRestore,
+} from "@admin/components/features/versions/useEditorRestoreSurface";
 import { PREVIOUS_VERSION } from "@admin/components/features/versions/version-search-params";
 import { versionsHref } from "@admin/components/features/versions/versions-href";
 import {
@@ -139,6 +145,8 @@ import {
   ViewedVersionBody,
   versionAwareToolbarSlots,
 } from "@admin/components/features/versions/viewed-version-host";
+import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
+import { useEditorRevealHold } from "@admin/components/shared/loading-frame/delayed-reveal";
 import { useDiscardSingleWorkingDraft } from "@admin/hooks/queries/useDiscardSingleWorkingDraft";
 import { usePublishAllSingleLocales } from "@admin/hooks/queries/usePublishAllSingleLocales";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
@@ -316,6 +324,17 @@ export interface SingleFormProps {
    * absent, it unlocks as it stands.
    */
   latest?: DocumentLatest;
+  /**
+   * The page's outline of this editor, drawn in its place a moment longer
+   * while what finishes the editor is on its way (`useEditorRevealHold`): the claim
+   * on the Single, and `revealWaiting`. Absent, the editor is drawn at once.
+   */
+  revealOutline?: React.ReactNode;
+  /**
+   * Whether reads the page started for the editor's parts are still on their
+   * way (`usePlaceStartupReads`): the editor holds its outline for them too.
+   */
+  revealWaiting?: boolean;
   /** Additional CSS classes */
   className?: string;
 }
@@ -452,6 +471,19 @@ function singleResetKey(document: SingleDocumentData, locale: unknown): string {
  * panel floats or is a sheet at, where it opens only when asked for. Without
  * it a single loses its language workflow whenever the column is away.
  */
+/**
+ * Whether the Single's shared fields hold unpublished changes, as its editor
+ * read says (`_sharedChangesPending`).
+ */
+function sharedChangesPendingOf(document: unknown): boolean {
+  return (
+    typeof document === "object" &&
+    document !== null &&
+    (document as { _sharedChangesPending?: unknown })._sharedChangesPending ===
+      true
+  );
+}
+
 function SingleFormLanguagePanel({
   actionsDisabled,
   navigationDisabled,
@@ -461,6 +493,7 @@ function SingleFormLanguagePanel({
   locale,
   onLocaleChange,
   panelDocked,
+  sharedChangesPending,
   translations,
 }: {
   actionsDisabled: boolean;
@@ -472,6 +505,8 @@ function SingleFormLanguagePanel({
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /** Whether the docked panel, which carries the language panel, is on screen. */
   panelDocked: boolean;
+  /** The Single's shared fields hold unpublished changes (`_sharedChangesPending`). */
+  sharedChangesPending: boolean;
   translations?: Record<string, { translated: boolean; status?: string }>;
 }) {
   if (!enabled) return null;
@@ -486,6 +521,7 @@ function SingleFormLanguagePanel({
         actionsDisabled={actionsDisabled}
         navigationDisabled={navigationDisabled}
         publishAllDisabled={publishAllDisabled}
+        sharedChangesPending={sharedChangesPending}
       />
     </div>
   );
@@ -680,6 +716,8 @@ export function SingleForm({
   documentBanner,
   documentView,
   latest,
+  revealOutline,
+  revealWaiting = false,
 }: SingleFormProps): React.JSX.Element {
   // Generate Zod schema from field configurations. Singles render title/slug
   // read-only from config, so relax their required rule — submitting must not
@@ -726,6 +764,8 @@ export function SingleForm({
     defaultValues,
     mode: "onSubmit",
   });
+  // The values a restore puts into this form, whose sources the save names.
+  const formRestore = useFormRestore(form);
 
   // Keep the latest computed defaultValues in a ref so the reset effect can read
   // them without depending on the `defaultValues` object identity: React Query
@@ -931,6 +971,16 @@ export function SingleForm({
     // the latest copy: one that cannot would say it shows what it does not.
     version: latest ? version.startedFrom : undefined,
   });
+  // Drawn whole: the outline stays until the claim says who holds the Single
+  // and the parts' started reads are in, briefly at most, as the entry
+  // editor's does.
+  const holdReveal = useEditorRevealHold(
+    revealOutline !== undefined,
+    { claim: lockSurface.settling, reads: revealWaiting },
+    // Each document waits for its own claim and reads: the same editor moved
+    // straight to the next one begins its hold again.
+    `single:${schema.slug}/${document.id ?? ""}`
+  );
   // A gained Single's latest version starts the whole form again, whatever
   // its `updatedAt` says, and the lock holds until it has; the document views
   // key on the count it carries. Someone else's change is said over it.
@@ -951,7 +1001,12 @@ export function SingleForm({
   // Single, whose slug its config fixes). Per the
   // special-casing. Any user-defined field with admin.position: "sidebar"
   // now renders inline like every other Builder field.
-  const allFields = schema.fields;
+  // Less any field a plugin's switch keeps off this Single, which is then
+  // drawn nowhere and never decides the takeover layout.
+  const allFields = useWithoutWithheldFields(
+    { single: schema.slug },
+    schema.fields
+  ) as typeof schema.fields;
   const titleField = allFields.find(f => "name" in f && f.name === "title");
   const slugField = allFields.find(f => "name" in f && f.name === "slug");
   // Takeover layout: a field flagged `layout: "takeover"` (when active) collapses the
@@ -987,10 +1042,29 @@ export function SingleForm({
       }),
     [locale, shownDefaultLocale, version, schema.slug, schema.draftsEnabled]
   );
+  // What a restore puts values back into: this form, under its lock.
+  const { getLocale: localeOf, defaultLocale: editingDefault } =
+    useLocalization();
+  // The language being edited: the default where the address names none.
+  const editingLocale = locale ?? editingDefault;
+  const editingLanguage = localeOf(editingLocale)?.label;
+  const editorRestore = useEditorRestoreSurface({
+    restore: formRestore,
+    form,
+    fields: allFields,
+    readOnly: () => lock.readOnly,
+    localized: schema.localized === true,
+    ...(editingLanguage ? { language: editingLanguage } : {}),
+    ...(editingLocale ? { locale: editingLocale } : {}),
+  });
+  // The version's values are read over every declared field, the withheld
+  // ones too: a drawn field's condition may name one of them.
   const viewedVersionHost = useViewedVersion(
     allFields,
     takeoverTypes,
-    versionFor
+    versionFor,
+    editorRestore,
+    schema.fields
   );
   const {
     viewingVersion,
@@ -1110,6 +1184,15 @@ export function SingleForm({
     () => autosaveScopeFor("single", schema.slug, document?.id),
     [schema.slug, document?.id]
   );
+  /*
+   * Whether this Single keeps recovery points: autosave on, and a stored row
+   * to record against. The server refuses a recording anywhere else, so where
+   * this is false the editor records nothing, offers nothing back and shows no
+   * recording status. One answer for every recorder in the editor, the page
+   * builder's included, and for keeping a refused save's edits.
+   */
+  const keepsRecoveryPoints =
+    autosaveScope !== null && autosaveEnabledFor(schema);
   // Where a save and publishing every language wait for its recordings.
   const recordingsFor = documentRecordingKey(autosaveScope);
 
@@ -1155,6 +1238,8 @@ export function SingleForm({
           mayWrite: () => !writesHeldNow.current,
           // And the editor can move to another language.
           stillShown: () => scopeNow.current === startedIn,
+          // The values a restore put in, whose sources the save names.
+          restore: formRestore,
           // This Single's recovery points, addressed as its recorder does.
           recordingsFor,
           // Why: shared intent→payload helper mirrors the EntryForm
@@ -1215,6 +1300,7 @@ export function SingleForm({
     },
     [
       form,
+      formRestore,
       onSubmit,
       refusedForm,
       blankPasswordFields,
@@ -1292,8 +1378,6 @@ export function SingleForm({
   // the current version. When the point cannot be written, nothing is
   // replaced and the conflict stays open.
   // Whether the conflict's edits can be kept: a Single with autosave on.
-  const keepsRecoveryPoints =
-    autosaveScope !== null && autosaveEnabledFor(schema);
   lock.now.keepsEdits = keepsRecoveryPoints;
   // With `keepEdits` false, for a Single that keeps no recovery points, the
   // edits are discarded, as the conflict said they would be.
@@ -1423,6 +1507,9 @@ export function SingleForm({
     }
   )._translations;
 
+  // Read once: the rail's language panel and the inline one say it alike.
+  const sharedChangesPending = sharedChangesPendingOf(document);
+
   // Adapt the SingleDocumentData shape into what the document bar and the
   // rail panels expect (entry.id / entry.status / entry.created_at /
   // entry.updated_at). The structural alignment is straightforward — singles
@@ -1443,6 +1530,9 @@ export function SingleForm({
     // the per-language pills (DocumentPanel reads `entry._translations`). Absent for non-localized
     // singles / when translation-status wasn't requested → pills render nothing.
     _translations: singleTranslations,
+    // Forwarded for the rail's language panel, which says while the Single's
+    // shared fields hold unpublished changes, docked as inline.
+    _sharedChangesPending: sharedChangesPending,
   } as unknown as Parameters<typeof DocumentBar>[0]["entry"];
 
   // i18n: content-locale context for field components + the rail's language panel.
@@ -1510,6 +1600,16 @@ export function SingleForm({
     { kind: "single", single: schema.slug },
     document
   );
+  // The fields a plugin's tab edits are drawn in that tab, not here; every
+  // field keeps its value in the form, so Save still stores them.
+  const fieldNames = useMemo(() => topLevelFieldNames(allFields), [allFields]);
+  const contentFields = useContentFields(documentPlace, fieldNames, mainFields);
+  // A past version is drawn as it was stored, less any field a plugin's
+  // switch keeps off this Single now.
+  const shownHistoricalFields = useWithoutWithheldFields(
+    documentPlace.context,
+    historicalFields
+  );
   // The side panel's sections in the order the server placed them, with the
   // sections plugins declared at the Single's page among them, as on a
   // collection entry's page.
@@ -1557,8 +1657,12 @@ export function SingleForm({
     // colleague's claim deliberately does not stop it: the recovery point is
     // this author's own work, which is what a takeover preserves.
     // Nor is a reader's form recorded, which cannot change the document, nor
-    // one whose language's answer is on its way, which may not yet.
-    enabled: !updatesHeld && mayRecordRecovery(busy, viewingVersion),
+    // one whose language's answer is on its way, which may not yet. Nor a
+    // Single that keeps no recovery points at all.
+    enabled:
+      keepsRecoveryPoints &&
+      !updatesHeld &&
+      mayRecordRecovery(busy, viewingVersion),
     // The pace the Single configures, else the editor's default.
     debounceMs: autosaveIntervalFrom(schema),
     // Each point records the version its edits began from.
@@ -1568,7 +1672,7 @@ export function SingleForm({
     useAutosaveRecovery({
       // A reader is offered no recovery point: restoring one would make the
       // read-only form dirty with work it cannot save.
-      scope: readOnlyForReader ? null : autosaveScope,
+      scope: readOnlyForReader || !keepsRecoveryPoints ? null : autosaveScope,
       form,
       // The language the form shows: a point recorded in another is never
       // taken for the document.
@@ -1624,7 +1728,7 @@ export function SingleForm({
    * header's chip, and a document view's own through the host.
    */
   const recoveryPoint: RecoveryPointState = {
-    enabled: autosaveScope !== null,
+    enabled: keepsRecoveryPoints,
     storedAt: autosave.lastSavedAt,
     // A recovery point newer than the stored document, still on offer: its
     // edits are not stored, whatever the form says.
@@ -1667,6 +1771,8 @@ export function SingleForm({
     ...(onViewApi === undefined ? {} : { onViewApi }),
   };
 
+  if (holdReveal) return <>{revealOutline}</>;
+
   return (
     // A single is only ever edited standalone, so unlike the entry editor there
     // is no embedded case to exclude.
@@ -1675,7 +1781,7 @@ export function SingleForm({
       // A save alone: during a recovery, work that reaches the form after its
       // one read is still unsaved, so leaving still asks.
       disabled={isSubmitting}
-      fields={schema.fields}
+      fields={allFields}
       // Same rule as the entry editor: a refused switch takes its seed with it.
       onCancel={onSeedHandled}
     >
@@ -1706,7 +1812,9 @@ export function SingleForm({
           // shows: a field covering the bar reports what the bar would have.
           documentStatus={editedStatus}
           // The fields, so a field inside a repeater's row has an address.
-          fields={schema.fields}
+          fields={allFields}
+          // So a field recording its own state stays quiet where this does.
+          keepsRecoveryPoints={keepsRecoveryPoints}
         >
           <EntryLocaleProvider value={localeCtx}>
             {/* Above the header — which mounts the history panel — and above
@@ -1769,7 +1877,7 @@ export function SingleForm({
                           recovery={recovery}
                           viewingVersion={viewingVersion}
                           recovering={recovering}
-                          fields={schema.fields}
+                          fields={allFields}
                           // A document view has no header, so the banner goes
                           // in among its own: an author working in the view
                           // still sees the document is in a scheduled release.
@@ -1908,6 +2016,8 @@ export function SingleForm({
                                       recovering,
                                       removedFromCode,
                                     })}
+                                    fieldNames={fieldNames}
+                                    viewingPastVersion={viewingVersion !== null}
                                   >
                                     {/* The title, fixed by the Single's config and
                                   so read-only. No slug line: a Single's slug
@@ -1949,6 +2059,9 @@ export function SingleForm({
                                       enabled={localizationEnabled}
                                       hasStatus={hasStatus}
                                       panelDocked={panel.docked}
+                                      sharedChangesPending={
+                                        sharedChangesPending
+                                      }
                                       {...(singleTranslations === undefined
                                         ? {}
                                         : { translations: singleTranslations })}
@@ -1965,10 +2078,10 @@ export function SingleForm({
                                     <SingleFormFieldsPanel
                                       document={document}
                                       singleSlug={schema.slug}
-                                      historicalFields={historicalFields}
+                                      historicalFields={shownHistoricalFields}
                                       historicalValues={historicalValues}
                                       isSubmitting={isSubmitting}
-                                      mainFields={mainFields}
+                                      mainFields={contentFields}
                                       readOnly={lock.readOnly}
                                       // A submit in flight withholds restore too: a
                                       // restore racing the ordinary save would let

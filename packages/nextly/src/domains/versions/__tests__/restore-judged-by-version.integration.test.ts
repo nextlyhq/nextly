@@ -48,6 +48,8 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     collections: [
       defineCollection({
         slug: POSTS,
+        // Kept with working drafts, which a restore writes.
+        status: true,
         versions: true,
         fields: [text({ name: "title" })],
       }),
@@ -55,6 +57,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     singles: [
       defineSingle({
         slug: BANNER,
+        status: true,
         versions: true,
         fields: [text({ name: "notice" })],
       }),

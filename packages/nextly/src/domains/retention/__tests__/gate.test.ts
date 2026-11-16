@@ -87,6 +87,16 @@ describe("MetaRetentionGate", () => {
         return row;
       },
       adapter: {
+        selectOne: async (
+          _t: string,
+          options: { where?: WhereClause }
+        ): Promise<unknown> => {
+          ops.push("select");
+          const since = conditionsOf(options.where ?? {}).find(
+            c => c.column === "updatedAt"
+          )?.value as Date;
+          return row && row.updatedAt >= since ? { key: "marker" } : null;
+        },
         delete: async (_t: string, where: WhereClause): Promise<number> => {
           ops.push("delete");
           const before = conditionsOf(where).find(c => c.column === "updatedAt")
@@ -127,7 +137,7 @@ describe("MetaRetentionGate", () => {
       gate.claim(WEBHOOK_RETENTION_GATE_KEY, new Date(T0.getTime() - HOUR), T0)
     ).resolves.toBe(true);
     // The conditional delete IS the claim; the insert only restamps it.
-    expect(f.ops).toEqual(["delete", "insert"]);
+    expect(f.ops).toEqual(["select", "delete", "insert"]);
     expect(f.row?.updatedAt).toEqual(T0);
   });
 
@@ -137,8 +147,10 @@ describe("MetaRetentionGate", () => {
     await expect(
       gate.claim(WEBHOOK_RETENTION_GATE_KEY, new Date(T0.getTime() - HOUR), T0)
     ).resolves.toBe(false);
-    // Nothing stale to delete, and the primary key rejects a duplicate.
-    expect(f.ops).toEqual(["delete", "insert"]);
+    // Answered by the read alone: no delete, and no insert for the primary
+    // key to reject, which every dialect would log as a failed statement.
+    expect(f.ops).toEqual(["select"]);
+    expect(f.row?.updatedAt).toEqual(new Date(T0.getTime() - 60_000));
   });
 
   it("lets exactly one of two racing callers through", async () => {

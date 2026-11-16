@@ -4,13 +4,14 @@
  * from a row it reads through its context, and a row saved afterwards decides
  * the very next request.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection } from "../../../collections/config/define-collection";
 import { text } from "../../../collections/fields/helpers";
 import type { SanitizedNextlyConfig } from "../../../collections/config/define-config";
 import { createNextlyProxy } from "../../../runtime/proxy";
 import { definePlugin } from "../../plugin-context";
+import { hasProxyHandlers, proxyHandlersReady } from "../proxy-registry";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -83,4 +84,55 @@ describe.each(getConfiguredTestDialects())("proxy handlers (%s)", dialect => {
     expect(after?.status).toBe(301);
     expect(after?.headers.get("location")).toBe("https://example.com/new");
   });
+});
+
+describe("a start that fails after registering proxy handlers", () => {
+  it("leaves none registered, so the Proxy stands aside and starts again", async () => {
+    const failing = definePlugin({
+      name: "@test/proxy-then-fail",
+      version: "1.0.0",
+      nextly: ">=0.0.0",
+      contributes: {
+        proxy: [{ name: "marks", handle: () => ({ headers: { "x-m": "1" } }) }],
+      },
+      onReady() {
+        throw new Error("could not finish starting");
+      },
+    });
+
+    await expect(createTestNextly({ plugins: [failing] })).rejects.toThrow();
+
+    // The handlers belonged to plugins the failed start destroyed.
+    expect(hasProxyHandlers()).toBe(false);
+    expect(proxyHandlersReady()).toBe(false);
+  });
+});
+
+describe("a start whose plugin is still getting ready", () => {
+  it("keeps its proxy handlers out until every plugin's onReady has finished", async () => {
+    let finishReady: () => void = () => {};
+    const slow = definePlugin({
+      name: "@test/proxy-slow-ready",
+      version: "1.0.0",
+      nextly: ">=0.0.0",
+      contributes: {
+        proxy: [{ name: "marks", handle: () => ({ headers: { "x-m": "1" } }) }],
+      },
+      onReady: () =>
+        new Promise<void>(resolve => {
+          finishReady = resolve;
+        }),
+    });
+
+    const booting = createTestNextly({ plugins: [slow] });
+    // The handler is registered, and its plugin is not ready yet.
+    await vi.waitFor(() => expect(hasProxyHandlers()).toBe(true), {
+      timeout: 60_000,
+    });
+    expect(proxyHandlersReady()).toBe(false);
+
+    finishReady();
+    current = await booting;
+    expect(proxyHandlersReady()).toBe(true);
+  }, 120_000);
 });

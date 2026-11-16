@@ -54,7 +54,7 @@ async function typeErrors(source: string): Promise<string[]> {
       declarations,
       [
         'declare module "nextly/runtime" { export function registerNextCacheRevalidator(): void; }',
-        'declare module "nextly" { export function createRegister(config: unknown, host?: { cacheComponents?: string | boolean }): () => Promise<void>; }',
+        'declare module "nextly" { export function createRegister(config: unknown, host?: { cacheComponents?: string | boolean; buildSchemaVersion?: string }): () => Promise<void>; }',
         "declare const process: { env: Record<string, string | undefined> };",
       ].join("\n")
     );

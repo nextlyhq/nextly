@@ -21,14 +21,16 @@ import {
   type OutlineNode,
   type VisibleRow,
 } from "@admin/lib/builder/outline/outline-model";
+import { isPendingDelete } from "@admin/lib/builder/outline/pending-rows";
+import type { RowMark } from "@admin/lib/builder/pending-changes";
 import { cn } from "@admin/lib/utils";
 
 import type { OutlineActions } from "./outline-types";
 import { OutlineRowMenu } from "./OutlineRowMenu";
 import { ROW_ID_PREFIX } from "./useTreeKeyDown";
 
-/** The width of one level of indent, in pixels. */
-const INDENT = 20;
+/** The width of one level of indent, in pixels; a drag sideways by it changes level. */
+export const INDENT = 20;
 
 type Props = {
   row: VisibleRow;
@@ -39,8 +41,10 @@ type Props = {
   selected: boolean;
   /** The row the tree's tab stop is on. */
   tabStop: boolean;
-  /** May be dragged within its container. */
+  /** May be dragged, and moved by key: the rule judges where to. */
   draggable: boolean;
+  /** The element naming the keys that move a field, for a row that may move. */
+  movesDescribedBy?: string;
   onSelect: (id: string) => void;
   onToggle: (path: string) => void;
   registerRow: (id: string, element: HTMLElement | null) => void;
@@ -72,11 +76,23 @@ function Badge({
 }
 
 /**
+ * That a field has an error, with the error itself on hover: on its row, and on the breadcrumb's
+ * crumb while the field is the focused container and its row is not drawn.
+ */
+export function ErrorBadge({ error }: { error: string }): JSX.Element {
+  return (
+    <Badge tone="danger">
+      <span title={error}>Has an error</span>
+    </Badge>
+  );
+}
+
+/**
  * What a blocks field accepts, in words, as its policy says it: any block when
  * it names none, no block for an empty list, else the blocks and patterns it
  * names, the first few of them.
  */
-function blocksNote(allow: readonly string[] | undefined): string {
+function blocksPolicy(allow: readonly string[] | undefined): string {
   if (allow === undefined) return "Blocks: any block";
   if (allow.length === 0) return "Blocks: none accepted";
   const shown = allow.slice(0, 3).join(", ");
@@ -105,10 +121,45 @@ function fieldGroupNote(
   }
 }
 
+/** Why the blocks a field accepts are not shown yet, when they are not. */
+const BLOCKS_UNAVAILABLE: Record<
+  NonNullable<NonNullable<OutlineNode["blocks"]>["unavailable"]>,
+  string
+> = {
+  loading: "loading its blocks…",
+  failed: "its blocks could not be loaded",
+  unavailable: "block details need the Page Builder plugin",
+};
+
+/**
+ * A blocks field's note: its policy, then why its blocks are not shown, or
+ * the entries that admit no registered block. Said in the row, so a field
+ * showing no blocks is never taken for one accepting none.
+ */
+function blocksNote(blocks: NonNullable<OutlineNode["blocks"]>): string {
+  const policy = blocksPolicy(blocks.allow);
+  if (blocks.unavailable) {
+    return `${policy} (${BLOCKS_UNAVAILABLE[blocks.unavailable]})`;
+  }
+  return blocks.unmatched
+    ? `${policy} (no registered block matches ${blocks.unmatched.join(", ")})`
+    : policy;
+}
+
 /** What a row says beside its name, if anything. */
 function rowNote(node: OutlineNode): string | null {
-  if (node.blocks) return blocksNote(node.blocks.allow);
+  if (node.blocks) return blocksNote(node.blocks);
   return node.fieldGroup ? fieldGroupNote(node.fieldGroup) : null;
+}
+
+/**
+ * A field-group field's badge: shared, and in how many places, when that is
+ * known. The count is of fields, as the field-group list counts them.
+ */
+function sharedText(node: OutlineNode): string {
+  const usedIn = node.usedIn;
+  if (usedIn === undefined || usedIn === null) return "Shared";
+  return `Shared · used in ${usedIn} ${usedIn === 1 ? "place" : "places"}`;
 }
 
 /** The badges a row carries, in a fixed order; told in words, not colour. */
@@ -129,7 +180,19 @@ function RowBadges({
       show: node.readOnly,
       text: node.readOnly ? `Locked · ${describeReadOnly(node.readOnly)}` : "",
     },
-    { show: node.container === "field-group", text: "Shared" },
+    // What is pending on the row until the save: one mark per kind.
+    ...(node.pending?.marks ?? []).map(pending => ({
+      show: true,
+      text: pendingMarkText(pending, node.pending?.inside),
+    })),
+    {
+      // A field using field groups, and each field group a field accepting
+      // several offers: both are shared, each with its own count when known.
+      show:
+        node.container === "field-group" ||
+        node.container === "field-group-entry",
+      text: sharedText(node),
+    },
   ];
   return (
     <span className="ml-auto flex flex-wrap items-center justify-end gap-1">
@@ -138,13 +201,25 @@ function RowBadges({
         .map(mark => (
           <Badge key={mark.text}>{mark.text}</Badge>
         ))}
-      {error && (
-        <Badge tone="danger">
-          <span title={error}>Has an error</span>
-        </Badge>
-      )}
+      {error && <ErrorBadge error={error} />}
     </span>
   );
+}
+
+/** A pending mark's words: a deleted container says how many go with it. */
+function pendingMarkText(mark: RowMark, inside: number | undefined): string {
+  switch (mark) {
+    case "new":
+      return "New";
+    case "changed":
+      return "Changed";
+    case "moved":
+      return "Moved";
+    case "deleted":
+      return inside
+        ? `Deleted · ${inside} ${inside === 1 ? "field" : "fields"} inside`
+        : "Deleted";
+  }
 }
 
 /** The chevron that folds a container; nothing for a row that holds none. */
@@ -205,6 +280,8 @@ function RowItem({
   onSelect,
   onToggle,
   registerRow,
+  draggable,
+  movesDescribedBy,
 }: Pick<
   Props,
   | "row"
@@ -215,6 +292,8 @@ function RowItem({
   | "onSelect"
   | "onToggle"
   | "registerRow"
+  | "draggable"
+  | "movesDescribedBy"
 >): JSX.Element {
   const { node, level, expanded, match } = row;
   const { field } = node;
@@ -231,6 +310,7 @@ function RowItem({
       aria-setsize={row.setsize}
       aria-expanded={expanded}
       aria-selected={selected}
+      aria-describedby={draggable ? movesDescribedBy : undefined}
       tabIndex={tabStop ? 0 : -1}
       onClick={() => onSelect(node.id)}
       className={cn(
@@ -284,7 +364,10 @@ function OutlineRowView(props: Props): JSX.Element {
     >
       <DragHandle draggable={draggable} sortable={sortable} />
       <RowItem {...props} />
-      <OutlineRowMenu node={row.node} open={menuOpen} actions={actions} />
+      {/* A deleted row offers nothing to do to it until it is back. */}
+      {!isPendingDelete(row.node) && (
+        <OutlineRowMenu node={row.node} open={menuOpen} actions={actions} />
+      )}
     </div>
   );
 }

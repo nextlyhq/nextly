@@ -37,6 +37,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
+import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import { getColumnDescriptor } from "../services/field-column-descriptor";
@@ -399,10 +400,13 @@ describeEachDialect(
       120_000
     );
 
-    // Not yet true on any dialect: the inline UNIQUE an older release created stays, because the
-    // diff plans no removal of it (on SQLite introspection does not report it at all, its index
-    // being an internal `sqlite_autoindex_*`), so the column keeps refusing repeats after the edit,
-    // as it did before this change. Only the uniqueness this change installs (`uq_`) goes.
+    // Not true of the save itself on any dialect: the save's migration file cannot drop the inline
+    // UNIQUE an older release created, which no snapshot records and a database built from files
+    // never had, so after the save the column keeps refusing repeats; only the uniqueness this
+    // change installs (`uq_`) goes. The next `nextly migrate` lets the inline one go on PostgreSQL
+    // and MySQL (`letGoOfEarlierInlineUniques`, tested in migrate-unique-columns); SQLite keeps it,
+    // since only a rebuild removes it and the rebuild cannot yet carry the foreign key an
+    // earlier-shaped relationship holds.
     it.skip("lets a one-to-one made before this change take a repeat once it is edited into a many-to-one", async () => {
       const t = await boot(dialect, "oneToOne", { legacy: true });
       // The profiles' table as the Builder created it before, its one-to-one unique by an inline
@@ -643,6 +647,29 @@ describeEachDialect(
       120_000
     );
 
+    it("keeps a stored relationship and its key through a save of the collection's settings alone", async () => {
+      // The admin sends a settings-only save the fields as its editor read them, with the
+      // fields a preview found nothing to change in.
+      const t = await boot(dialect, "oneToOne", {
+        legacy: true,
+        onDelete: "cascade",
+      });
+      const key = await personKey(t);
+      const stored = await storedPersonField(t);
+
+      await builder(
+        "updateCollection",
+        { collectionName: PROFILES },
+        {
+          labels: { singular: "Profile", plural: "Profiles renamed" },
+          fields: await asTheEditorSendsIt(),
+        }
+      );
+
+      expect(await storedPersonField(t)).toEqual(stored);
+      expect(await personKey(t)).toEqual(key);
+    }, 120_000);
+
     it.skipIf(writerCannotRebuildEarlierKey)(
       "changes only a stored relationship's cardinality when Unique is turned off",
       async () => {
@@ -664,6 +691,68 @@ describeEachDialect(
           },
         });
         expect(await personUniques(t)).toEqual([]);
+      },
+      120_000
+    );
+
+    it("refuses filling an earlier one-to-one's empty entries with one person as it is made Required, changing nothing", async () => {
+      const t = await boot(dialect, "oneToOne", { legacy: true });
+      const ada = await aPerson(t, "Ada");
+      await aProfile(t, null);
+      await aProfile(t, null);
+
+      const refused = await builder(
+        "applySchemaChanges",
+        { collectionName: PROFILES },
+        {
+          fields: await asTheEditorSendsIt({ required: true }),
+          confirmed: true,
+          schemaVersion: await schemaVersion(t),
+          resolutions: { person: { action: "provide_default", value: ada } },
+        }
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(refused).toMatchObject({
+        publicData: {
+          errors: [expect.objectContaining({ code: "FILL_ON_UNIQUE_FIELD" })],
+        },
+      });
+      expect((await storedPersonField(t))?.required).not.toBe(true);
+    }, 120_000);
+
+    it.skipIf(writerCannotRebuildEarlierKey)(
+      "keeps a stored relationship's key's delete action through a rename sent to the update route as read",
+      async () => {
+        const t = await boot(dialect, "oneToOne", {
+          legacy: true,
+          onDelete: "cascade",
+        });
+        const read = (await (
+          (await builder(
+            "getCollection",
+            { collectionName: PROFILES },
+            undefined
+          )) as Response
+        ).json()) as { fields: Record<string, unknown>[] };
+        const fields = read.fields.map(field =>
+          field.name === "person" ? { ...field, name: "owner" } : field
+        );
+
+        await builder(
+          "updateCollection",
+          { collectionName: PROFILES },
+          {
+            fields,
+          }
+        );
+
+        expect(await keyOn(t, "owner")).toEqual({
+          referencesTable: `dc_${PEOPLE}`,
+          onDelete: "cascade",
+        });
       },
       120_000
     );
@@ -755,6 +844,103 @@ describeEachDialect(
       expect(t).toBeDefined();
     }, 120_000);
 
+    // The Single's schema update writes its own ALTER: the column comes back with the edit, and its
+    // unique index with it, made once.
+    it("makes a Single's many-to-many edited into a one-to-one unique", async () => {
+      const t = await boot(dialect, "manyToOne");
+      const title = { name: "title", type: "text" };
+      vi.stubEnv("NODE_ENV", "development");
+      try {
+        await dispatchSingles(
+          "createSingle",
+          {},
+          {
+            slug: "o2o_hub",
+            label: "Hub",
+            fields: [
+              title,
+              {
+                name: "person",
+                type: "relationship",
+                options: { target: PEOPLE, relationType: "manyToMany" },
+              },
+            ],
+          }
+        );
+        await dispatchSingles(
+          "updateSingleSchema",
+          { slug: "o2o_hub" },
+          { fields: [title, storedPerson("oneToOne")] }
+        );
+      } finally {
+        vi.unstubAllEnvs();
+      }
+
+      const live = await introspectLiveSnapshot(
+        t.adapter.getDrizzle(),
+        t.adapter.dialect,
+        ["single_o2o_hub"]
+      );
+      // Once: two unique indexes on the column would cost every write and say nothing more.
+      expect(
+        live.tables[0]?.indexes?.filter(
+          index => index.unique && index.columns.join() === "person"
+        )
+      ).toHaveLength(1);
+    }, 120_000);
+
+    // Each language of a translated Single is its own row, unique within its language: two
+    // languages pointing at one person are not repeats, so the edit into a one-to-one saves.
+    it("makes a translated Single's many-to-one a one-to-one while two of its languages point at one person", async () => {
+      const t = await boot(dialect, "manyToOne", { localized: true });
+      const ada = await aPerson(t, "Ada");
+      const title = { name: "title", type: "text" };
+      vi.stubEnv("NODE_ENV", "development");
+      try {
+        await dispatchSingles(
+          "createSingle",
+          {},
+          {
+            slug: "o2o_page",
+            label: "Page",
+            localized: true,
+            fields: [title, storedPerson("manyToOne", true)],
+          }
+        );
+        const singles: SingleEntryService = t.getService("singleEntryService");
+        for (const locale of ["en", "de"]) {
+          const written = await singles.update(
+            "o2o_page",
+            { person: ada, _overwrite: true },
+            { locale, overrideAccess: true }
+          );
+          expect(written.success, JSON.stringify(written)).toBe(true);
+        }
+
+        await dispatchSingles(
+          "updateSingleSchema",
+          { slug: "o2o_page" },
+          { fields: [title, storedPerson("oneToOne", true)] }
+        );
+      } finally {
+        vi.unstubAllEnvs();
+      }
+
+      const [stored] = await t.adapter.executeQuery<{ fields: unknown }>(
+        t.adapter.dialect === "mysql"
+          ? "SELECT `fields` FROM `dynamic_singles` WHERE `slug` = 'o2o_page'"
+          : `SELECT "fields" FROM "dynamic_singles" WHERE "slug" = 'o2o_page'`
+      );
+      const fields = (
+        typeof stored?.fields === "string"
+          ? JSON.parse(stored.fields)
+          : stored?.fields
+      ) as { name: string; options?: { relationType?: string } }[];
+      expect(
+        fields.find(field => field.name === "person")?.options?.relationType
+      ).toBe("oneToOne");
+    }, 120_000);
+
     it("opens a Single's one-to-one the earlier Builder stored with its target and Unique", async () => {
       await boot(dialect, "oneToOne", { legacy: true });
       vi.stubEnv("NODE_ENV", "development");
@@ -786,110 +972,160 @@ describeEachDialect(
       });
     }, 120_000);
 
-    // MySQL refuses adding a translated relationship to a translated collection as if the new
-    // column were reshaped (field-leaves-translation-rules); re-enable once that refusal is fixed.
-    const translatedRelationshipRefused = dialect === "mysql";
-
     // -------------------------------------------------------------------------
     // Translated
     // -------------------------------------------------------------------------
 
-    it.skipIf(translatedRelationshipRefused)(
-      "makes a translated one-to-one unique within each language",
-      async () => {
-        const t = await boot(dialect, "oneToOne", { localized: true });
-        const ada = await aPerson(t, "Ada");
-        const profile = await aProfile(t, ada, "en");
+    it("makes a translated one-to-one unique within each language", async () => {
+      const t = await boot(dialect, "oneToOne", { localized: true });
+      const ada = await aPerson(t, "Ada");
+      const profile = await aProfile(t, ada, "en");
 
-        // The same profile's other language may point at the same person.
-        await t.nextly.update({
+      // The same profile's other language may point at the same person.
+      await t.nextly.update({
+        collection: PROFILES,
+        id: profile,
+        locale: "de",
+        data: { person: ada, _overwrite: true },
+      });
+      // Another profile may not, in either language.
+      expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(true);
+      expect(await refusedAsRepeat(aProfile(t, ada, "de"))).toBe(true);
+    }, 120_000);
+
+    it("makes a translated many-to-one edited into a one-to-one unique within each language", async () => {
+      const t = await boot(dialect, "manyToOne", { localized: true });
+      const ada = await aPerson(t, "Ada");
+      const profile = await aProfile(t, ada, "en");
+
+      await apply(t, profileFields("oneToOne", true), true);
+
+      await t.nextly.update({
+        collection: PROFILES,
+        id: profile,
+        locale: "de",
+        data: { person: ada, _overwrite: true },
+      });
+      expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(true);
+    }, 120_000);
+
+    it("refuses a translated many-to-one edited into a one-to-one while two profiles in one language point at one person, and changes nothing", async () => {
+      const t = await boot(dialect, "manyToOne", { localized: true });
+      const ada = await aPerson(t, "Ada");
+      await aProfile(t, ada, "en");
+      await aProfile(t, ada, "en");
+
+      // With an untranslated field added in the same save, whose column the main table's push
+      // would add before the translations table's index is created.
+      const outcome = await apply(
+        t,
+        [...profileFields("oneToOne", true), { name: "bio", type: "text" }],
+        true
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(NextlyError.is(outcome)).toBe(true);
+      expect((outcome as NextlyError).code).toBe("VALIDATION_ERROR");
+      expect(JSON.stringify((outcome as NextlyError).publicData)).toContain(
+        `in \\"en\\", these documents share a value`
+      );
+      // Nothing ran: no column added, and a third profile in English still points at the same
+      // person.
+      const live = await introspectLiveSnapshot(
+        t.adapter.getDrizzle(),
+        t.adapter.dialect,
+        [PROFILES_TABLE]
+      );
+      expect(live.tables[0]?.columns.map(column => column.name)).not.toContain(
+        "bio"
+      );
+      expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(false);
+    }, 120_000);
+
+    it("keeps a one-to-one unique as translation is turned on and then off", async () => {
+      const t = await boot(dialect, "oneToOne", { localized: true });
+      const ada = await aPerson(t, "Ada");
+      await aProfile(t, ada, "en");
+
+      // Translation on for the field: its uniqueness follows its column to each language.
+      await apply(t, profileFields("oneToOne", true), true);
+      expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(true);
+
+      // And off again: back on the main table, unique there.
+      await apply(t, profileFields("oneToOne", false), true);
+      expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(true);
+    }, 120_000);
+
+    // The relationship's key needs an index on MySQL, and the Unique mark replaces the plain one
+    // with a unique one as the field leaves translation: the unique one is made first.
+    // The column comes back with the edit, and its unique index with it, made once.
+    it("makes a many-to-many edited into a one-to-one unique", async () => {
+      const t = await boot(dialect, "manyToOne");
+      await apply(t, [
+        { name: "title", type: "text" },
+        {
+          name: "person",
+          type: "relationship",
+          options: { target: PEOPLE, relationType: "manyToMany" },
+        },
+      ]);
+
+      await apply(t, profileFields("oneToOne"));
+
+      const ada = await aPerson(t, "Ada");
+      await aProfile(t, ada);
+      expect(await refusedAsRepeat(aProfile(t, ada))).toBe(true);
+    }, 120_000);
+
+    it("makes a many-to-one renamed and marked Unique in one save unique under its new name", async () => {
+      const t = await boot(dialect, "manyToOne");
+      const ada = await aPerson(t, "Ada");
+      await aProfile(t, ada);
+
+      await apply(
+        t,
+        [
+          { name: "title", type: "text" },
+          { ...person("manyToOne"), name: "owner", unique: true },
+        ],
+        undefined,
+        [
+          {
+            tableName: PROFILES_TABLE,
+            fromColumn: "person",
+            toColumn: "owner",
+            choice: "rename",
+          },
+        ]
+      );
+
+      const second = await t.nextly
+        .create({
           collection: PROFILES,
-          id: profile,
-          locale: "de",
-          data: { person: ada, _overwrite: true },
-        });
-        // Another profile may not, in either language.
-        expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(true);
-        expect(await refusedAsRepeat(aProfile(t, ada, "de"))).toBe(true);
-      },
-      120_000
-    );
-
-    it.skipIf(translatedRelationshipRefused)(
-      "makes a translated many-to-one edited into a one-to-one unique within each language",
-      async () => {
-        const t = await boot(dialect, "manyToOne", { localized: true });
-        const ada = await aPerson(t, "Ada");
-        const profile = await aProfile(t, ada, "en");
-
-        await apply(t, profileFields("oneToOne", true), true);
-
-        await t.nextly.update({
-          collection: PROFILES,
-          id: profile,
-          locale: "de",
-          data: { person: ada, _overwrite: true },
-        });
-        expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(true);
-      },
-      120_000
-    );
-
-    it.skipIf(translatedRelationshipRefused)(
-      "refuses a translated many-to-one edited into a one-to-one while two profiles in one language point at one person, and changes nothing",
-      async () => {
-        const t = await boot(dialect, "manyToOne", { localized: true });
-        const ada = await aPerson(t, "Ada");
-        await aProfile(t, ada, "en");
-        await aProfile(t, ada, "en");
-
-        // With an untranslated field added in the same save, whose column the main table's push
-        // would add before the translations table's index is created.
-        const outcome = await apply(
-          t,
-          [...profileFields("oneToOne", true), { name: "bio", type: "text" }],
-          true
-        ).then(
+          data: { title: "another", owner: ada },
+        })
+        .then(
           () => undefined,
           (error: unknown) => error
         );
+      expect(NextlyError.is(second) && second.code).toBe("DUPLICATE");
+    }, 120_000);
 
-        expect(NextlyError.is(outcome)).toBe(true);
-        expect((outcome as NextlyError).code).toBe("VALIDATION_ERROR");
-        expect(JSON.stringify((outcome as NextlyError).publicData)).toContain(
-          `in \\"en\\", these documents share a value`
-        );
-        // Nothing ran: no column added, and a third profile in English still points at the same
-        // person.
-        const live = await introspectLiveSnapshot(
-          t.adapter.getDrizzle(),
-          t.adapter.dialect,
-          [PROFILES_TABLE]
-        );
-        expect(
-          live.tables[0]?.columns.map(column => column.name)
-        ).not.toContain("bio");
-        expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(false);
-      },
-      120_000
-    );
+    it("keeps a many-to-one marked Unique unique as translation is turned off", async () => {
+      const markedUnique = (localized: boolean) => [
+        { name: "title", type: "text" },
+        { ...person("manyToOne", localized), unique: true },
+      ];
+      const t = await boot(dialect, "manyToOne", { localized: true });
+      await apply(t, markedUnique(true), true);
+      const ada = await aPerson(t, "Ada");
+      await aProfile(t, ada, "en");
 
-    it.skipIf(translatedRelationshipRefused)(
-      "keeps a one-to-one unique as translation is turned on and then off",
-      async () => {
-        const t = await boot(dialect, "oneToOne", { localized: true });
-        const ada = await aPerson(t, "Ada");
-        await aProfile(t, ada, "en");
+      await apply(t, markedUnique(false), true);
 
-        // Translation on for the field: its uniqueness follows its column to each language.
-        await apply(t, profileFields("oneToOne", true), true);
-        expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(true);
-
-        // And off again: back on the main table, unique there.
-        await apply(t, profileFields("oneToOne", false), true);
-        expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(true);
-      },
-      120_000
-    );
+      expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(true);
+    }, 120_000);
   }
 );

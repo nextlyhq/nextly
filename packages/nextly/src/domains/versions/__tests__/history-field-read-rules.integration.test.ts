@@ -1,12 +1,16 @@
 /**
- * Every field read rule applies to history: a version read, a comparison and a
- * restore show a reader only what the rules let them read, including a rule
+ * Every field read rule applies to history: a version read, a comparison, a
+ * restore and the restored fields a version names show a reader only what the
+ * rules let them read, including a rule
  * declared on a field inside a component, which is judged by that component's
  * own registration.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
 import {
   defineCollection,
   defineFieldGroup,
@@ -16,6 +20,8 @@ import {
 import {
   getVersionDiffForDocument,
   getVersionForDocument,
+  listVersionsForDocument,
+  setVersionLabelForDocument,
 } from "../../../dispatcher/handlers/versions-methods";
 import {
   createTestNextly,
@@ -82,6 +88,8 @@ async function documentWithGuardedComponent(dialect: TestDialect) {
     collections: [
       defineCollection({
         slug: "posts",
+        // Kept with working drafts, which a restore writes.
+        status: true,
         versions: true,
         access: { read: () => true, update: () => true, create: () => true },
         fields: [
@@ -92,6 +100,11 @@ async function documentWithGuardedComponent(dialect: TestDialect) {
             access: {
               read: ({ permissions }) => permissions.includes("read-posts"),
             },
+          }),
+          // Readable by BOSS alone, whatever the reader's permissions.
+          text({
+            name: "bossOnly",
+            access: { read: ({ req }) => req.user?.email === BOSS.email },
           }),
           fieldGroup({ name: "banner", component: "banner" }),
         ],
@@ -104,6 +117,7 @@ async function documentWithGuardedComponent(dialect: TestDialect) {
     {
       title: "T1",
       keyed: "K-1",
+      bossOnly: "B-1",
       banner: { heading: "H1", secret: "S-1", fragile: "F-1" },
     }
   );
@@ -113,6 +127,7 @@ async function documentWithGuardedComponent(dialect: TestDialect) {
     {
       title: "T2",
       keyed: "K-2",
+      bossOnly: "B-2",
       banner: { heading: "H2", secret: "S-2", fragile: "F-2" },
       _overwrite: true,
     }
@@ -202,6 +217,52 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(JSON.stringify(asSession)).not.toContain("K-1");
       expect(asSession.withheld).toContain("keyed");
+    });
+
+    it("names a restored field's source only to a reader who may read the field", async () => {
+      const id = await documentWithGuardedComponent(dialect);
+      // A third save puts back the first version's title and BOSS's field,
+      // and names where each came from.
+      await current!.getService("collectionsHandler").updateEntry(
+        { collectionName: "posts", entryId: id, overrideAccess: true },
+        {
+          title: "T1",
+          bossOnly: "B-1",
+          _restoredFrom: { title: 1, bossOnly: 1 },
+          _overwrite: true,
+        }
+      );
+      // CLERK may read the document and rename its versions, but not read
+      // BOSS's field.
+      await userWhoMay(current!, CLERK.id, "read", ["posts"]);
+      await grantTo(current!, CLERK.id, "update", ["posts"]);
+
+      const sourcesOf = (row: unknown) =>
+        (row as { fieldSources?: Record<string, number> | null }).fieldSources;
+      const list = await listVersionsForDocument({ ...at(id), user: CLERK });
+      expect(sourcesOf(list.items.find(row => row.versionNo === 3))).toEqual({
+        title: 1,
+      });
+      const detail = await getVersionForDocument({
+        ...at(id),
+        user: CLERK,
+        versionNo: 3,
+      });
+      expect(sourcesOf(detail)).toEqual({ title: 1 });
+      const renamed = await setVersionLabelForDocument({
+        ...at(id),
+        user: CLERK,
+        versionNo: 3,
+        body: { label: "Put back" },
+        params: {},
+      });
+      expect(sourcesOf(renamed)).toEqual({ title: 1 });
+
+      // The reader the rule allows is told both.
+      const allowed = await listVersionsForDocument({ ...at(id), user: BOSS });
+      expect(sourcesOf(allowed.items.find(row => row.versionNo === 3))).toEqual(
+        { title: 1, bossOnly: 1 }
+      );
     });
 
     it("does not restore a component field the restorer may not read", async () => {

@@ -119,6 +119,45 @@ describe("promptRenames - non-interactive", () => {
   });
 });
 
+describe("promptRenames - a field group", () => {
+  const group = candidate({
+    tableName: "dc_posts",
+    fromColumn: "seo",
+    toColumn: "legacySeo",
+    fromType: "field group",
+    toType: "field group",
+    preservesValues: true,
+    valueChangeReason: undefined,
+    fieldGroupTables: ["comp_seo"],
+  });
+
+  it("asks whether its rows move, suggesting the rename", async () => {
+    await promptRenames([group]);
+    expect(askedWith().message).toContain("field group rename");
+    expect(askedWith().message).toContain(
+      "Its stored rows in comp_seo move to the new name"
+    );
+    expect(askedWith().initialValue).toBe(true);
+  });
+
+  it("warns when a run that cannot ask declines it, since nothing is dropped to ask consent for", async () => {
+    const [decision] = await promptRenames([group], { nonInteractive: true });
+    expect(decision?.accepted).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('stay under "seo", where nothing reads them')
+    );
+  });
+
+  it("stays silent when --accept-renames accepts it", async () => {
+    const [decision] = await promptRenames([group], {
+      nonInteractive: true,
+      autoAccept: true,
+    });
+    expect(decision?.accepted).toBe(true);
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
+
 describe("promptRenames - a cancel", () => {
   /** What `process.exit` was asked for, thrown so the prompt goes no further. */
   class Exited extends Error {

@@ -3,16 +3,11 @@
  * much it says out loud.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
-import { useEffect, useState, type JSX, type ReactNode } from "react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { useEffect, type JSX, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { LOADING_FRAME_TIMES } from "@admin/components/shared/loading-frame/delayed-reveal";
 import { DASHBOARD_LAYOUT_KEY } from "@admin/hooks/queries/useDashboardLayout";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import {
@@ -22,8 +17,7 @@ import {
 import type { AdminBranding } from "@admin/types/branding";
 import type { DashboardLayoutResponse } from "@admin/types/dashboard/widgets";
 
-import { useCardCollapsed } from "../frame/collapse";
-import { GRID_CLASS } from "../sizes";
+import { cardSpanClass, GRID_CLASS } from "../sizes";
 import { WidgetGrid } from "../WidgetGrid";
 
 import { stubDashboardWidth, unstubDashboardWidth } from "./dashboard-width";
@@ -644,44 +638,6 @@ describe("WidgetGrid — sizing", () => {
     ).toBe(screen.getByTestId("dashboard-container"));
   });
 
-  it("draws a card its body collapsed as its header alone, in the frame's own padding, and whole again once opened", async () => {
-    // A body that collapses itself to one line, as the setup card does, with a control to open it.
-    function Collapsible() {
-      const [collapsed, setCollapsed] = useState(true);
-      useCardCollapsed(collapsed);
-      return (
-        <button type="button" onClick={() => setCollapsed(open => !open)}>
-          {collapsed ? "Expand" : "Collapse"}
-        </button>
-      );
-    }
-    registerComponents({ "@acme/admin#A": Collapsible });
-    mockBranding = brandingWith([{ ...sized("bar", 12, 3), title: "Bar" }]);
-    renderGrid();
-    const cell = screen.getByTestId("widget-cell-bar");
-    const card = within(cell).getByRole("region");
-    // Its body is drawn once its answer arrives, and collapses itself then.
-    await within(cell).findByRole("button", { name: "Expand" });
-    expect(card).toHaveAttribute("data-collapsed");
-    // As tall as its header: the frame's own padding, and no row span holding it taller.
-    expect(card).toHaveClass("p-4");
-    expect(card.className).not.toMatch(/py-\[/);
-    expect(cell.style.gridRow).toBe("");
-    // The header is the one line, drawn, so the title names the card on screen and no control in
-    // it is hidden yet focusable; no footer takes room under the line.
-    expect(within(cell).getByTestId("widget-card-header")).not.toHaveClass(
-      "sr-only"
-    );
-    expect(card).toHaveAccessibleName(/Bar/);
-    expect(within(cell).queryByTestId("widget-card-footer")).toBeNull();
-
-    // The must-differ half: opened, the card draws its whole frame.
-    fireEvent.click(within(cell).getByRole("button", { name: "Expand" }));
-    expect(card).not.toHaveAttribute("data-collapsed");
-    expect(cell.style.gridRow).toBe("");
-    expect(within(cell).getByTestId("widget-card-footer")).toBeInTheDocument();
-  });
-
   /**
    * A stored arrangement holding one placement of `acme/one`, twelve columns wide (its widget
    * declares six) and `h` rows high as stored.
@@ -720,6 +676,33 @@ describe("WidgetGrid — sizing", () => {
     );
     return { client, ...render(<WidgetGrid />, { wrapper: Wrapper }) };
   }
+
+  it("draws its outline at the stored arrangement's widths while the widgets are on their way", () => {
+    // The arrangement answered, the workspace's declarations not yet: the
+    // outline stands in, and its cards take the stored cards' spans, so the
+    // cards land where it drew them. A removed card takes no place.
+    mockBranding = brandingWith([]);
+    mockBrandingStatus = { ...mockBrandingStatus, isPending: true };
+    const layout = storedLayout(4);
+    layout.placements = [
+      { id: "a", widgetId: "acme/one", w: 3, h: 2, removed: false },
+      { id: "b", widgetId: "acme/one", w: 3, h: 2, removed: true },
+      { id: "c", widgetId: "acme/one", w: 8, h: 4, removed: false },
+    ];
+    // The outline is drawn once its 0.4 s have passed.
+    vi.useFakeTimers();
+    renderStored(layout);
+    act(() => {
+      vi.advanceTimersByTime(LOADING_FRAME_TIMES.outline);
+    });
+    vi.useRealTimers();
+    const outline = within(screen.getByTestId("widget-grid-loading"));
+    expect(
+      outline
+        .getAllByTestId("dashboard-card-outline")
+        .map(card => card.getAttribute("data-span"))
+    ).toEqual([cardSpanClass(3), cardSpanClass(8)]);
+  });
 
   it("draws a layout stored with any h alike, keeping the stored h and setting no height from it", async () => {
     // 🔴 Fails where a stored `h` still sizes the cell: a row span, or a height asked for, of two
@@ -1183,15 +1166,10 @@ describe("the grid distinguishes 'nothing to draw' from 'nothing has arrived'", 
     // that supplied widgets.
     mockBrandingStatus = { ...mockBrandingStatus, isPending: true };
     renderGrid();
+    // The dashboard's outline stands in the grid's place: the screen's wait,
+    // drawn from 0.4 s by the frame's one outline, never an empty page.
     const loading = screen.getByTestId("widget-grid-loading");
-    expect(loading).toHaveClass("auto-rows-auto");
-    // Each placeholder holds a short card's height itself, the rows holding nothing of their own.
-    const placeholders = [...loading.children] as HTMLElement[];
-    expect(placeholders).toHaveLength(3);
-    for (const placeholder of placeholders) {
-      expect(placeholder).toHaveClass("h-[160px]");
-      expect(placeholder.style.gridRow).toBe("");
-    }
+    expect(loading).toContainElement(screen.getByTestId("screen-outline"));
   });
 
   it("says so when the workspace never answered", () => {

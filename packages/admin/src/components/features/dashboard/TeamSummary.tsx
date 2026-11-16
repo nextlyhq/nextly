@@ -173,13 +173,16 @@ function RoleAndActivity({
 }): JSX.Element | null {
   if (role === undefined && lastActive === undefined) return null;
   return (
-    <span className="flex flex-col items-end gap-0.5">
+    <span className="flex min-w-0 flex-col items-end gap-0.5">
       {role !== undefined && (
+        // A long role name is cut short, its whole name on hover, so the person's own name keeps
+        // its room beside it.
         <span
           data-testid="team-role"
-          className="inline-flex h-5.5 items-center rounded-md border border-border bg-card px-2 text-xs text-foreground"
+          title={role}
+          className="inline-flex h-5.5 max-w-36 items-center rounded-md border border-border bg-card px-2 text-xs text-foreground"
         >
-          {role}
+          <span className="truncate">{role}</span>
         </span>
       )}
       {lastActive !== undefined && (

@@ -9,11 +9,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
+import type { PluginMetadata } from "@admin/types/branding";
 
 import { LayoutsList } from "../LayoutsList";
 
-const { templates } = vi.hoisted(() => ({
+const { templates, plugins } = vi.hoisted(() => ({
   templates: { list: [] as EmailTemplateRecord[] },
+  // The installed plugins the admin knows; none unless a test names some.
+  plugins: { current: undefined as PluginMetadata[] | undefined },
+}));
+
+vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("@admin/context/providers/BrandingProvider")
+  >()),
+  useBranding: () => ({ plugins: plugins.current }),
 }));
 
 function record(
@@ -51,7 +61,7 @@ vi.mock("@admin/hooks/queries/useEmailTemplates", () => ({
 
 vi.mock("../../useTemplateActions", () => ({
   editRouteFor: (item: { id: string }) =>
-    `/admin/email/messages/edit/${item.id}`,
+    `/admin/settings/email/messages/edit/${item.id}`,
   useTemplateActions: () => ({
     canOpen: true,
     actionsFor: () => [],
@@ -60,6 +70,7 @@ vi.mock("../../useTemplateActions", () => ({
 }));
 
 beforeEach(() => {
+  plugins.current = undefined;
   templates.list = [
     record("default", "Default layout", {
       kind: "layout",
@@ -94,10 +105,25 @@ describe("the layouts list", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(
       screen.getByRole("link", { name: "Welcome" }).getAttribute("href")
-    ).toBe("/admin/email/messages/edit/welcome");
+    ).toBe("/admin/settings/email/messages/edit/welcome");
     expect(
       screen.getByRole("button", { name: /Used by 1 email$/ })
     ).toBeTruthy();
+  });
+
+  it("names a plugin's layout by the plugin's name in the admin", () => {
+    plugins.current = [
+      { name: "@acme/plugin-forms", appearance: { label: "Forms" } },
+    ] as PluginMetadata[];
+    templates.list = [
+      record("forms-frame", "Forms frame", {
+        kind: "layout",
+        owner: { kind: "plugin", name: "@acme/plugin-forms", installed: true },
+      }),
+    ];
+    render(<LayoutsList />);
+    expect(screen.getByText("forms-frame · Forms")).toBeTruthy();
+    expect(screen.queryByText(/@acme\/plugin-forms/)).toBeNull();
   });
 
   it("opens each layout in the workbench", () => {
@@ -107,8 +133,8 @@ describe("the layouts list", () => {
       .filter(link => link.textContent === "Open")
       .map(link => link.getAttribute("href"));
     expect(openLinks).toEqual([
-      "/admin/email/messages/edit/default",
-      "/admin/email/messages/edit/plain",
+      "/admin/settings/email/messages/edit/default",
+      "/admin/settings/email/messages/edit/plain",
     ]);
   });
 

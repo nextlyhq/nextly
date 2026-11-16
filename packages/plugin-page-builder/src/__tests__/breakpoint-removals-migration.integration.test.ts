@@ -1,21 +1,28 @@
 /**
- * An existing install upgrading to the breakpoint removal's tables, with the
- * command a deployment runs, on every configured dialect: from a release
- * before the removal's runs table (schema 4), from one with it but before
- * the table keeping what each removal took out (schema 5), and from one with
- * both but before a run could mark the removal it undoes (schema 7).
+ * An existing install upgrading to the breakpoint removal's tables and to the
+ * composition graph lock's row put in place by migration, with the command a
+ * deployment runs, on every configured dialect: from a release before the
+ * removal's runs table (schema 4), from one with it but before the table
+ * keeping what each removal took out (schema 5), from one with both but
+ * before a run could mark the removal it undoes (schema 7), and from one
+ * whose starts put the lock's row in place (schema 10).
  *
  * The install is made the way a site at that release made it: a scratch
  * project configured with this plugin as that release shipped it (its first
- * migration modules, without the later tables), migrated with `nextly
- * migrate`. A row is stored in one of its tables. The project is then
+ * migration modules, without the later tables), with the app's migration
+ * from `nextly migrate:create` (it creates the tables of the collections and
+ * Singles the plugin declares, which the plugin's own modules do not),
+ * migrated with `nextly migrate`. A row is stored in one of its tables. The project is then
  * configured with the plugin as it ships now and migrated again. Exactly the
  * modules after it must run: the runs table takes one open run at a time and
  * a run marks the removal it undoes, a run stored before the upgrade undoes
  * nothing, the fragments table keeps a row with its JSON (the shared styles'
  * with no host), the earlier row and the earlier modules' records are
  * untouched, each
- * new module is recorded applied once, and migrating again does nothing.
+ * new module is recorded applied once, and migrating again does nothing. On
+ * PostgreSQL and MySQL the options table then holds the graph lock's row,
+ * once, and the one a start of the earlier release put there is kept as it
+ * was; SQLite keeps none.
  *
  * The database is one of the test's own on Postgres and MySQL (created beside
  * the integration database and dropped after), and a scratch file on SQLite,
@@ -24,7 +31,6 @@
  * @module __tests__/breakpoint-removals-migration.integration.test
  */
 import { execFile } from "node:child_process";
-import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -35,7 +41,7 @@ import {
   getConfiguredTestDialects,
   type TestDialect,
 } from "@nextlyhq/plugin-sdk/testing";
-import { createAdapter } from "nextly/database";
+import type { createAdapter } from "nextly/database";
 import { describe, expect, it } from "vitest";
 
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
@@ -46,6 +52,12 @@ import {
   SCHEMA_PREFIX,
   siteOptions,
 } from "../schema/tables";
+
+import {
+  openAdapter,
+  scratchDatabase,
+  type ScratchDatabase,
+} from "./scratch-database";
 
 const run = promisify(execFile);
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -76,7 +88,15 @@ const RELEASES = [
     release: "before a run marks the removal it undoes (schema 7)",
     shipped: shippedBefore("_add_breakpoint_removal_undoes"),
   },
+  {
+    release: "whose starts put the graph lock's row in place (schema 10)",
+    shipped: shippedBefore("_seed_composition_graph_lock"),
+    startedLockRow: true,
+  },
 ];
+
+/** The composition graph lock's row's name in the options table. */
+const GRAPH_LOCK_ROW = "composition-graph-lock";
 
 /** What a ledger entry of this plugin's modules reads as. */
 interface LedgerEntry {
@@ -85,62 +105,13 @@ interface LedgerEntry {
   appliedAt: string | null;
 }
 
-/** A database of the test's own, its URL, and how to remove it. */
-interface Database {
-  readonly dialect: TestDialect;
-  readonly url: string;
-  drop(): Promise<void>;
-}
-
-/** A name this test generated, the only kind it builds DDL from. */
-function scratchName(): string {
-  const name = `pb_upgrade_${randomBytes(6).toString("hex")}`;
-  if (!/^[a-z][a-z0-9_]{0,62}$/.test(name)) throw new Error(name);
-  return name;
-}
-
-/** A database created beside the integration one, or a scratch SQLite file. */
-async function scratchDatabase(
-  dialect: TestDialect,
-  folder: string
-): Promise<Database> {
-  if (dialect === "sqlite") {
-    return {
-      dialect,
-      url: `file:${join(folder, "site.sqlite")}`,
-      drop: async () => {},
-    };
-  }
-  const adminUrl =
-    dialect === "postgresql"
-      ? process.env.TEST_POSTGRES_URL
-      : process.env.TEST_MYSQL_URL;
-  if (adminUrl === undefined) throw new Error(`no URL for ${dialect}`);
-  const name = scratchName();
-  const admin = await createAdapter({ type: dialect, url: adminUrl });
-  await admin.executeQuery(`CREATE DATABASE ${name}`);
-  const url = new URL(adminUrl);
-  url.pathname = `/${name}`;
-  return {
-    dialect,
-    url: url.toString(),
-    drop: async () => {
-      try {
-        await admin.executeQuery(`DROP DATABASE IF EXISTS ${name}`);
-      } finally {
-        await admin.disconnect();
-      }
-    },
-  };
-}
-
 /**
  * A scratch project configured with this plugin, its migration modules cut to
  * the first `PB_MODULES` when that is set (the plugin as an earlier release
  * shipped it, without the tables later modules create), and the `nextly`
  * command run in it against `database`.
  */
-function project(database: Database): {
+function project(database: ScratchDatabase): {
   nextly: (
     modules: number | undefined,
     ...args: string[]
@@ -220,48 +191,6 @@ async function ledger(
 }
 
 /**
- * An adapter on `database`. Core's environment is read when an adapter is
- * made, so it names this database while the adapter is open, and is put back
- * by `close`.
- */
-async function openAdapter(database: Database): Promise<{
-  adapter: Awaited<ReturnType<typeof createAdapter>>;
-  close: () => Promise<void>;
-}> {
-  const own = {
-    DATABASE_URL: process.env.DATABASE_URL,
-    DB_DIALECT: process.env.DB_DIALECT,
-  };
-  process.env.DATABASE_URL = database.url;
-  process.env.DB_DIALECT = database.dialect;
-  const restore = () => {
-    for (const [key, value] of Object.entries(own)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  };
-  try {
-    const adapter = await createAdapter({
-      type: database.dialect,
-      url: database.url,
-    });
-    return {
-      adapter,
-      close: async () => {
-        try {
-          await adapter.disconnect();
-        } finally {
-          restore();
-        }
-      },
-    };
-  } catch (error) {
-    restore();
-    throw error;
-  }
-}
-
-/**
  * Rows written and read with SQL. An adapter made outside a booted site has
  * no registry of the plugin's tables, so its typed `insert` and `selectOne`
  * cannot address them. Every name here is a constant of this file; values
@@ -274,6 +203,8 @@ function rowsOn(
 ): {
   insert: (table: string, row: Record<string, string | null>) => Promise<void>;
   column: (table: string, id: string, column: string) => Promise<unknown>;
+  /** The id and value of each row of `table` named `name`, by id. */
+  named: (table: string, name: string) => Promise<string[]>;
 } {
   const quote = (name: string) =>
     dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
@@ -294,6 +225,13 @@ function rowsOn(
       );
       return found[0]?.read;
     },
+    named: async (table, name) => {
+      const found = await adapter.executeQuery<Record<string, unknown>>(
+        `SELECT ${quote("id")}, ${quote("value")} FROM ${quote(table)} WHERE ${quote("name")} = ${slot(0)}`,
+        [name]
+      );
+      return found.map(row => `${String(row.id)} ${String(row.value)}`).sort();
+    },
   };
 }
 
@@ -311,13 +249,21 @@ describe.each(getConfiguredTestDialects())(
   (dialect: TestDialect) => {
     it.each(RELEASES)(
       "applies only the modules after the release $release, keeps what was stored, and does nothing the second time",
-      async ({ shipped }) => {
+      async ({ shipped, startedLockRow }) => {
         const folder = mkdtempSync(join(tmpdir(), "pb-upgrade-db-"));
         const database = await scratchDatabase(dialect, folder);
         const site = project(database);
         let opened: Awaited<ReturnType<typeof openAdapter>> | undefined;
         try {
-          // The earlier release's install.
+          // The earlier release's install: the app's migration for the
+          // collections and Singles the plugin declares, whose tables the
+          // app's migrations create, then the deploy's migrate.
+          const created = await site.nextly(
+            shipped,
+            "migrate:create",
+            "initial"
+          );
+          expect(created.stdout).toContain("Created migration");
           const first = await site.nextly(shipped, "migrate");
           expect(first.stdout).toContain(
             `Plugin migrations: ${String(shipped)} applied`
@@ -359,6 +305,20 @@ describe.each(getConfiguredTestDialects())(
             name: "upgrade-probe",
             value: "kept",
           });
+          // CONTROL: migrating the earlier release put no lock row in place.
+          expect(
+            await rowsOn(dialect, adapter).named(OPTIONS_TABLE, GRAPH_LOCK_ROW)
+          ).toEqual([]);
+          // The row a start of the earlier release put in place, where it
+          // takes a row lock.
+          const started = startedLockRow === true && dialect !== "sqlite";
+          if (started) {
+            await rowsOn(dialect, adapter).insert(OPTIONS_TABLE, {
+              id: "lock-from-a-start",
+              name: GRAPH_LOCK_ROW,
+              value: "from-a-start",
+            });
+          }
           await opened.close();
           opened = undefined;
 
@@ -454,6 +414,16 @@ describe.each(getConfiguredTestDialects())(
           expect(await rows.column(OPTIONS_TABLE, "kept-option", "value")).toBe(
             "kept"
           );
+          // The graph lock's row, once, where the dialect takes a row lock:
+          // the one a start put there kept as it was, or else a new one.
+          const lockRows = await rows.named(OPTIONS_TABLE, GRAPH_LOCK_ROW);
+          if (dialect === "sqlite") {
+            expect(lockRows).toEqual([]);
+          } else if (started) {
+            expect(lockRows).toEqual(["lock-from-a-start from-a-start"]);
+          } else {
+            expect(lockRows).toHaveLength(1);
+          }
 
           // The earlier modules' records untouched, each new one applied once.
           const after = await ledger(site.nextly);
@@ -469,6 +439,9 @@ describe.each(getConfiguredTestDialects())(
           const again = await site.nextly(undefined, "migrate");
           expect(again.stdout).toContain("Nothing to migrate");
           expect(await ledger(site.nextly)).toEqual(after);
+          expect(await rows.named(OPTIONS_TABLE, GRAPH_LOCK_ROW)).toEqual(
+            lockRows
+          );
         } finally {
           await opened?.close();
           site.close();

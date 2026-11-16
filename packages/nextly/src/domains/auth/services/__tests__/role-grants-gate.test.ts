@@ -155,6 +155,7 @@ const sites = sourceFiles(SRC).flatMap(file => {
 
 /** The announcements, named rather than counted, so the set cannot drift unseen. */
 const SITES = [
+  "database/seeders/role-presets.ts:setPresetGrantsRecorded",
   "domains/auth/services/role-inheritance-service.ts:addRoleInheritance",
   "domains/auth/services/role-inheritance-service.ts:removeRoleInheritance",
   "domains/auth/services/role-permission-service.ts:addPermissionToRole",

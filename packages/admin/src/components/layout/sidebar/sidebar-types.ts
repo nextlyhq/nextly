@@ -85,20 +85,6 @@ const releasesRail: MainMenuItem[] = releasesNav
     ]
   : [];
 
-/** The rail entry for the Email hub, derived the same way. */
-const emailNav = canonical(ROUTES.EMAIL);
-const emailRail: MainMenuItem[] = emailNav
-  ? [
-      {
-        id: "email",
-        label: emailNav.title,
-        icon: emailNav.icon,
-        href: emailNav.href ?? ROUTES.EMAIL,
-        requiredPermission: emailNav.requiredPermission,
-      },
-    ]
-  : [];
-
 export const MAIN_MENU_ITEMS: MainMenuItem[] = [
   {
     id: "dashboard",
@@ -108,7 +94,7 @@ export const MAIN_MENU_ITEMS: MainMenuItem[] = [
   },
   // One item for both content sections: finding a piece of content and
   // editing it is one job, whether it is a collection entry or a Single. Its
-  // panel switches between the two (`ContentPanel`).
+  // panel lists both, each under its heading (`ContentPanel`).
   { id: CONTENT_RAIL_ID, label: "Content", icon: Feather, href: "#" },
   { id: "media", label: "Media Library", icon: ImageIcon, href: ROUTES.MEDIA },
   // Beside Media rather than under Settings: a release is editorial work on a
@@ -121,19 +107,17 @@ export const MAIN_MENU_ITEMS: MainMenuItem[] = [
   // because a translator's question is "what needs me, anywhere" — the page
   // exists precisely to cross collection boundaries, so filing it inside one
   // would hide the only view that does not belong to a single collection.
+  // Shown only on a site with more than one locale (`isMultilingual`), where
+  // there is something to translate.
   {
     id: "translations",
     label: "Translations",
     icon: Languages,
     href: ROUTES.TRANSLATIONS,
   },
-  // Email is its own area rather than two pages under Settings: what a site
-  // sends, how it looks and how it goes out are one subject, and a reader
-  // checking a password reset should not have to know it is "configuration".
-  ...emailRail,
   { id: "plugins", label: "Plugins", icon: Puzzle, href: "#" },
-  // User management (Users, User Fields, Roles) lives under Settings now —
-  // there is no dedicated top-level icon for it.
+  // People (Users, Roles) and Email live in the Settings panel, with no
+  // top-level icon of their own.
   { id: "settings", label: "Settings", icon: Settings, href: ROUTES.SETTINGS },
   {
     id: "builders",

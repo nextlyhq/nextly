@@ -29,6 +29,39 @@ function escapedForScript(json: string): string {
   );
 }
 
+/** The props of a JSON-LD script element, for React to spread onto it. */
+export interface JsonLdScriptProps {
+  type: "application/ld+json";
+  dangerouslySetInnerHTML: { __html: string };
+}
+
+/**
+ * The props of the script element that places structured data in a page:
+ * `<script {...jsonLdScriptProps(data)} />`, so the JSON-LD is in the HTML a
+ * crawler receives, with no value able to end the element.
+ *
+ * `data` is JSON-LD text, as `context.structuredData` and the
+ * `*StructuredData` functions give it, or nodes the site builds itself, which
+ * are written as JSON here. Text is escaped again, which changes nothing in
+ * text these functions wrote and makes any other JSON safe to place.
+ *
+ * ```tsx
+ * {structuredData && <script {...jsonLdScriptProps(structuredData)} />}
+ * <script {...jsonLdScriptProps({ "@context": "https://schema.org", "@type": "FAQPage" })} />
+ * ```
+ *
+ * @experimental Settles with the page-metadata contract.
+ */
+export function jsonLdScriptProps(
+  data: string | StructuredDataNode | readonly StructuredDataNode[]
+): JsonLdScriptProps {
+  const json = typeof data === "string" ? data : JSON.stringify(data);
+  return {
+    type: "application/ld+json",
+    dangerouslySetInnerHTML: { __html: escapedForScript(json) },
+  };
+}
+
 /**
  * The page's nodes as one schema.org graph, written to be placed as the body
  * of a JSON-LD script element; nothing for a page with none, so no empty

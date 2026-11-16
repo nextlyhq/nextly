@@ -44,6 +44,8 @@
  */
 
 import { LocalStorageAdapter } from "./adapters/local-adapter";
+import { assertClientUploadClaim } from "./client-upload-claim";
+import { keepsCopies } from "./keeps-copies";
 import {
   recordStorageWriteFailure,
   recordStorageWriteSuccess,
@@ -51,6 +53,7 @@ import {
 import type {
   BulkDeleteResult,
   ClientUploadData,
+  ClientUploadOptions,
   CollectionStorageConfig,
   IStorageAdapter,
   StoragePlugin,
@@ -324,6 +327,15 @@ export class MediaStorage {
   }
 
   /**
+   * Whether the storage a collection's files go to can keep resized copies
+   * beside them. A delete removes copies only from a storage that can have
+   * them, so one that cannot is asked to remove nothing it never held.
+   */
+  keepsCopies(collection?: string): boolean {
+    return keepsCopies(this.getAdapterForCollection(collection));
+  }
+
+  /**
    * Get configuration for a specific collection.
    *
    * @param collection - The collection slug
@@ -496,7 +508,10 @@ export class MediaStorage {
    * @param filename - Original filename
    * @param mimeType - File MIME type
    * @param collection - Collection slug
+   * @param options - The file's exact size, and the URL's lifetime
    * @returns Client upload data, or null if not supported
+   * @throws NextlyError(VALIDATION_ERROR) when the claim fails the upload
+   *   checks, is an SVG, or its extension does not name its type
    *
    * @example
    * ```typescript
@@ -504,7 +519,8 @@ export class MediaStorage {
    * const uploadData = await storage.getClientUploadUrl(
    *   'photo.jpg',
    *   'image/jpeg',
-   *   'media'
+   *   'media',
+   *   { size: file.size }
    * );
    *
    * // Client-side: upload directly to storage
@@ -518,16 +534,30 @@ export class MediaStorage {
   async getClientUploadUrl(
     filename: string,
     mimeType: string,
-    collection: string
+    collection: string,
+    options: ClientUploadOptions
   ): Promise<ClientUploadData | null> {
     if (!this.supportsClientUploads(collection)) {
       return null;
     }
+    // Judged before anything is signed, here rather than in a route, so every
+    // way of asking for a direct upload is held to it. The type signed is the
+    // judged one, in its canonical spelling.
+    const judged = assertClientUploadClaim({
+      filename,
+      mimeType,
+      size: options.size,
+    });
 
     // Find the plugin for this collection
     for (const plugin of this.plugins.values()) {
       if (collection in plugin.collections && plugin.getClientUploadUrl) {
-        return plugin.getClientUploadUrl(filename, mimeType, collection);
+        return plugin.getClientUploadUrl(
+          filename,
+          judged.mimeType,
+          collection,
+          options
+        );
       }
     }
 

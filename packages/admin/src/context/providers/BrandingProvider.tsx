@@ -20,10 +20,14 @@ import {
 
 import { useAuthSession } from "../../hooks/queries/useAuthSession";
 import { useFaviconInjection } from "../../hooks/useFaviconInjection";
-import { readConfiguredBranding } from "../../lib/branding/configured-branding";
 import { enableDevReload } from "../../lib/api/fetcher";
 import { protectedApi } from "../../lib/api/protectedApi";
 import { publicApi } from "../../lib/api/publicApi";
+import { readConfiguredBranding } from "../../lib/branding/configured-branding";
+import {
+  recallBranding,
+  rememberBranding,
+} from "../../lib/device-memory/device-memory";
 import type {
   AdminBranding,
   ResolvedBrandingColors,
@@ -308,7 +312,7 @@ function useColorInjection(colors: ResolvedBrandingColors | undefined) {
 // Provider
 // ============================================================================
 
-interface BrandingProviderProps {
+export interface BrandingProviderProps {
   children: React.ReactNode;
 }
 
@@ -333,6 +337,25 @@ function placesOfBothHalves(
       ...publicHalf?.contributions,
       ...workspaceHalf?.contributions,
     },
+  };
+}
+
+/**
+ * Whether the workspace half is still to come, and whether it is unavailable.
+ * Signed out it is never asked for, and reports unavailable, as the refusal
+ * it is no longer sent for would have made it: a reader concludes nothing
+ * from its absence.
+ */
+function workspaceStatus(state: {
+  sessionPending: boolean;
+  signedIn: boolean;
+  queryPending: boolean;
+  refused: boolean;
+}): { pending: boolean; unavailable: boolean } {
+  const signedOut = !state.sessionPending && !state.signedIn;
+  return {
+    pending: !signedOut && state.queryPending,
+    unavailable: signedOut || state.refused,
   };
 }
 
@@ -375,32 +398,54 @@ export function BrandingProvider({
    * with nothing left to trigger it. A key cannot lose that race, because the
    * new key has no result yet whenever it appears.
    *
-   * `enabled` waits for the session query to SETTLE rather than to succeed. It
-   * stops the anonymous 401 being fired speculatively on every load, and a
-   * session query that itself failed still releases this one — reporting
-   * unavailable, which is true, instead of holding every reader on a skeleton
-   * for a fact that will never arrive.
+   * `enabled` waits for the session query to SETTLE, and then asks only of a
+   * signed-in session. A visitor's request could only be refused, and a
+   * refused query is asked again by every reader that mounts after the
+   * refusal arrived (`retryOnMount`), which the sign-in screen's own
+   * re-renders do. Signed out, or with a session query that itself failed,
+   * the half reports unavailable, which is true, instead of holding every
+   * reader on a skeleton for a fact that will never arrive.
    */
   const { data: session, isPending: sessionPending } = useAuthSession();
   const signedIn = session?.isAuthenticated === true;
 
   const {
     data: workspaceData,
-    isPending: workspacePending,
-    isLoadingError: workspaceUnavailable,
+    isPending: workspaceQueryPending,
+    isLoadingError: workspaceRefused,
     refetch: refetchWorkspace,
   } = useQuery<AdminBranding>({
     queryKey: [...ADMIN_WORKSPACE_KEY, signedIn],
     queryFn: () => protectedApi.get<AdminBranding>("/admin-meta/workspace"),
     staleTime: 5 * 60 * 1000,
     retry: false,
-    enabled: !sessionPending,
+    // A visitor's screen draws the public half alone; see above.
+    enabled: !sessionPending && signedIn,
   });
+  const { pending: workspacePending, unavailable: workspaceUnavailable } =
+    workspaceStatus({
+      sessionPending,
+      signedIn,
+      queryPending: workspaceQueryPending,
+      refused: workspaceRefused,
+    });
 
   // What `nextly.config` sets, as the page's first HTML carries it: read once,
   // before any request answers, so a configured logo is drawn from the first
   // paint, and it wins over branding set in General settings.
   const [configured] = useState(readConfiguredBranding);
+
+  // The site's public branding as this device last saw it (logo, name,
+  // favicon), drawn until the server's own answer arrives, so the sign-in
+  // screen and the frame look like the site from the first paint. The answer
+  // replaces it whole, a logo since removed in settings included.
+  const [remembered] = useState(recallBranding);
+  const publicBranding: AdminBranding | undefined = brandingData ?? remembered;
+  useEffect(() => {
+    if (brandingData !== undefined) {
+      rememberBranding(brandingData as Record<string, unknown>);
+    }
+  }, [brandingData]);
 
   useColorInjection(brandingData?.colors);
   // Only a favicon set in General settings is applied here. A configured one
@@ -408,7 +453,7 @@ export function BrandingProvider({
   // own icon: either way nothing is swapped after load.
   useFaviconInjection(
     configured.favicon === undefined
-      ? brandingData?.favicon?.trim() || null
+      ? publicBranding?.favicon?.trim() || null
       : null
   );
 
@@ -438,10 +483,11 @@ export function BrandingProvider({
     const merged =
       brandingData === undefined &&
       workspaceData === undefined &&
-      Object.keys(configured).length === 0
+      Object.keys(configured).length === 0 &&
+      Object.keys(remembered).length === 0
         ? undefined
         : {
-            ...brandingData,
+            ...publicBranding,
             ...workspaceData,
             ...placesOfBothHalves(brandingData, workspaceData),
             ...configured,
@@ -470,6 +516,8 @@ export function BrandingProvider({
     };
   }, [
     brandingData,
+    publicBranding,
+    remembered,
     workspaceData,
     configured,
     sessionPending,

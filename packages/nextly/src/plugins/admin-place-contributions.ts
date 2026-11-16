@@ -10,6 +10,13 @@
  * @module plugins/admin-place-contributions
  * @experimental
  */
+import { judgeConfiguredAddress } from "../shared/address-rule";
+import {
+  isRequired,
+  numberRule,
+  type ValidatableField,
+} from "../shared/lib/entry-validation";
+
 import type {
   AdminContribution,
   AdminContributionAction,
@@ -17,6 +24,7 @@ import type {
 import { collectionsScopeProblem } from "./admin-filters";
 import {
   ADMIN_CONTRIBUTION_KINDS,
+  adminPlaceNamespaceOf,
   type AdminContributionKind,
   coreAdminPlaceBuiltIns,
   coreAdminPlaceNotReplaceable,
@@ -28,6 +36,7 @@ import {
   type DeclaredAdminPlace,
 } from "./admin-places-registry";
 import { orderContributions, type OrderedEntry } from "./contribution-order";
+import { placeStartupReadsProblem } from "./place-startup-reads";
 import type { PluginDefinition } from "./plugin-context";
 import { isInPluginNamespace, pluginAdminSlug } from "./plugin-slug";
 import { resolutionError } from "./resolution-error";
@@ -58,12 +67,15 @@ const BASE_KEYS = [
   "requiredPermission",
   "visibleWhen",
   "collections",
+  "singles",
+  "startupReads",
+  "extendedWith",
 ];
 
 /** The keys of each kind's own. */
 const KIND_KEYS: Record<AdminContributionKind, readonly string[]> = {
   block: ["component"],
-  tab: ["label", "component"],
+  tab: ["label", "component", "fields"],
   sidebarSection: ["label", "component", "narrow"],
   column: ["label", "field", "component"],
   rowAction: ["label", "action"],
@@ -86,6 +98,15 @@ const ROW_KINDS = new Set<AdminContributionKind>(["rowAction", "bulkAction"]);
  */
 const ROUTE_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
 
+/** The edit pages, whose tabs may edit the document's own fields. */
+const DOCUMENT_PLACES = new Set(["collection.edit", "single.edit"]);
+
+/** The fields an edit page draws itself, whatever tab is open. */
+const PAGE_DRAWN = new Set(["title", "slug"]);
+
+/** A top-level field's name. */
+const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 /** A field's name, or a dotted path into a group. */
 const FIELD_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 
@@ -97,8 +118,12 @@ function isText(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
 }
 
-/** What makes an action unusable, or `undefined`. */
-function actionProblem(
+/**
+ * What makes an action unusable, or `undefined`: exactly one of `open` (a
+ * component) or `run` (one of the plugin's own staff routes). The one reading
+ * of an action, for a list's row and bulk actions and a person's-menu item.
+ */
+export function actionProblem(
   action: unknown,
   plugin: PluginDefinition
 ): string | undefined {
@@ -214,6 +239,46 @@ function kindProblem(
   return isText(declared.component) ? undefined : "it names no component";
 }
 
+/**
+ * What makes a tab's `fields` unusable, or `undefined`: a non-empty list of
+ * top-level field names, on an edit page, the only place with a document whose
+ * fields a tab could take over.
+ */
+function tabFieldsProblem(fields: unknown, place: unknown): string | undefined {
+  if (typeof place !== "string" || !DOCUMENT_PLACES.has(place)) {
+    return `it names \`fields\` at "${String(place)}", which edits no document`;
+  }
+  if (!Array.isArray(fields) || fields.length === 0) {
+    return "its `fields` is not a list of the document's field names";
+  }
+  const named = (fields as unknown[]).find(
+    name => typeof name !== "string" || !FIELD_NAME.test(name)
+  );
+  if (named !== undefined) {
+    return `its \`fields\` names ${JSON.stringify(named)}, which is not a top-level field's name`;
+  }
+  const identity = (fields as string[]).find(name => PAGE_DRAWN.has(name));
+  return identity === undefined
+    ? undefined
+    : `its \`fields\` names "${identity}", which the edit page draws itself above its tabs`;
+}
+
+/** What makes `singles` unusable here, or `undefined`. */
+function singlesProblem(singles: unknown, place: string): string | undefined {
+  if (singles === undefined) return undefined;
+  if (place !== "single.edit") {
+    return `it names \`singles\` at "${place}", which is not a Single's page`;
+  }
+  if (!Array.isArray(singles)) {
+    return "its `singles` is not a list of Single slugs";
+  }
+  for (const slug of singles as unknown[]) {
+    const refusal = judgeConfiguredAddress("single", slug);
+    if (refusal) return `its \`singles\` names no Single: ${refusal.message}`;
+  }
+  return undefined;
+}
+
 /** What makes the placement and audience fields unusable, or `undefined`. */
 function placementProblem(
   declared: Record<string, unknown>,
@@ -250,12 +315,47 @@ function placementProblem(
   return audienceProblem(declared, kind);
 }
 
+/** The places about one content type, where `extendedWith` can narrow it. */
+const TYPE_PLACES = new Set([...COLLECTION_PLACES, "single.edit"]);
+
+/**
+ * What makes `extendedWith` unusable, or `undefined`: a non-empty list of
+ * top-level field names, each one the plugin's own `extend` adds, at a place
+ * about one content type.
+ */
+function extendedWithProblem(
+  extendedWith: unknown,
+  place: string,
+  plugin: PluginDefinition
+): string | undefined {
+  if (extendedWith === undefined) return undefined;
+  if (!TYPE_PLACES.has(place)) {
+    return `it names \`extendedWith\` at "${place}", which is not about one content type`;
+  }
+  if (
+    !Array.isArray(extendedWith) ||
+    extendedWith.length === 0 ||
+    !extendedWith.every(
+      name => typeof name === "string" && FIELD_NAME.test(name)
+    )
+  ) {
+    return "its `extendedWith` is not a list of top-level field names";
+  }
+  const added = new Set(extensionFieldsOf([plugin])[plugin.name] ?? []);
+  const stray = (extendedWith as string[]).find(name => !added.has(name));
+  return stray === undefined
+    ? undefined
+    : `its \`extendedWith\` names "${stray}", which the plugin's \`extend\` does not add`;
+}
+
 /** What makes `visibleWhen` or `collections` unusable here, or `undefined`. */
 function audienceProblem(
   declared: Record<string, unknown>,
   kind: AdminContributionKind
 ): string | undefined {
   const place = declared.place as string;
+  const singles = singlesProblem(declared.singles, place);
+  if (singles) return singles;
   if (declared.collections !== undefined) {
     if (!COLLECTION_PLACES.has(place)) {
       return `it names \`collections\` at "${place}", which is not about a collection`;
@@ -299,6 +399,15 @@ function contributionProblem(
   if (typeof declared.place !== "string") return "it names no place";
   return (
     kindProblem(kind as AdminContributionKind, declared, plugin) ??
+    placeStartupReadsProblem(
+      plugin.name,
+      declared.place,
+      declared.startupReads
+    ) ??
+    (declared.fields === undefined
+      ? undefined
+      : tabFieldsProblem(declared.fields, declared.place)) ??
+    extendedWithProblem(declared.extendedWith, declared.place, plugin) ??
     placementProblem(declared, kind as AdminContributionKind)
   );
 }
@@ -431,6 +540,45 @@ function orderedByPlace(
 }
 
 /**
+ * Whether `declared` adds to a place that belongs to a plugin `plugin` names
+ * in its `optionalDependsOn` and that is not running here: a plugin that
+ * enhances another when present adds nothing to its pages when it is absent
+ * or disabled, rather than stopping the app from starting.
+ *
+ * Only a place no running plugin declares is let go, and only in the
+ * namespace of such an absent plugin: a place a running plugin is missing (a
+ * misspelling), or one of a plugin the contributor does not name, is still
+ * refused by the place check as before.
+ */
+function toAbsentOptionalPlace(
+  plugin: PluginDefinition,
+  declared: unknown,
+  places: ReadonlyMap<string, DeclaredAdminPlace>,
+  running: ReadonlySet<string>
+): boolean {
+  const place = isRecord(declared) ? declared.place : undefined;
+  if (typeof place !== "string" || places.has(place)) return false;
+  const namespace = adminPlaceNamespaceOf(place);
+  return Object.keys(plugin.optionalDependsOn ?? {}).some(
+    owner => !running.has(owner) && pluginAdminSlug(owner) === namespace
+  );
+}
+
+/**
+ * The contributions `plugin` declares, less those to a place of an absent
+ * optional dependency (`toAbsentOptionalPlace`), which are not drawn.
+ */
+function drawnContributions(
+  plugin: PluginDefinition,
+  places: ReadonlyMap<string, DeclaredAdminPlace>,
+  running: ReadonlySet<string>
+): readonly unknown[] {
+  return declaredContributions(plugin).filter(
+    declared => !toAbsentOptionalPlace(plugin, declared, places, running)
+  );
+}
+
+/**
  * @experimental Every enabled plugin's admin contributions, and each place's
  * lists in order, refusing a contribution that is malformed, outside its
  * plugin's namespace, declared twice, at a place that does not exist or does
@@ -447,11 +595,16 @@ export function contributedAdminContributions(
   ordered: OrderedAdminContributions;
 } {
   const places = collectAdminPlaces(plugins);
+  const running = new Set(
+    plugins
+      .filter(plugin => plugin.enabled !== false)
+      .map(plugin => plugin.name)
+  );
   const contributions: ContributedAdminContribution[] = [];
   const owners = new Map<string, string>();
   for (const plugin of plugins) {
     if (plugin.enabled === false) continue;
-    for (const declared of declaredContributions(plugin)) {
+    for (const declared of drawnContributions(plugin, places, running)) {
       const contribution = {
         ...checkedContribution(plugin, declared, places),
         plugin: plugin.name,
@@ -478,4 +631,60 @@ export function contributedAdminContributions(
     assertKindAccepted(contribution, places);
   }
   return { contributions, ordered: orderedByPlace(contributions) };
+}
+
+// The fields a plugin's `extend` adds, and which its extension switch may
+// turn off (`extension-switch`): kept here, where the start already checks
+// what plugins declare, so that check loads nothing the switch reads.
+
+/**
+ * Whether `field` demands a value, or holds a field that does at any depth
+ * (a group's or repeater's own fields): required, or a list with a positive
+ * `minRows` or `minChips`, in either spelling the entry validator reads. A
+ * page that drew it nowhere could not then be saved.
+ */
+function holdsRequired(field: unknown): boolean {
+  if (typeof field !== "object" || field === null) return false;
+  const validatable = field as ValidatableField;
+  // Required, or a list that must hold at least one row or chip: either way
+  // an empty value the page could not fill is refused.
+  if (isRequired(validatable)) return true;
+  for (const bound of ["minRows", "minChips"]) {
+    if ((numberRule(validatable, bound) ?? 0) > 0) return true;
+  }
+  const { fields } = field as { fields?: unknown };
+  return Array.isArray(fields) && fields.some(holdsRequired);
+}
+
+/**
+ * Every field each plugin's `extend` adds, by plugin, or with
+ * `"switchable"` only those its switch may turn off: never a required one,
+ * since a page that drew it nowhere could not be saved, so a required field
+ * is always shown.
+ */
+export function extensionFieldsOf(
+  plugins: readonly PluginDefinition[],
+  which: "all" | "switchable" = "all"
+): Record<string, string[]> {
+  const fields: Record<string, string[]> = {};
+  for (const plugin of plugins) {
+    const declared = (plugin.contributes?.extend ?? []).flatMap(clause =>
+      clause.fields.flatMap(field => {
+        const { name } = field as { name?: unknown };
+        return typeof name === "string" ? [{ name, field }] : [];
+      })
+    );
+    // A name kept wherever any of its declarations holds a required field:
+    // which target a declaration reached is not asked here.
+    const kept = new Set(
+      which === "all"
+        ? []
+        : declared.filter(({ field }) => holdsRequired(field)).map(d => d.name)
+    );
+    const names = declared
+      .map(({ name }) => name)
+      .filter(name => !kept.has(name));
+    if (names.length > 0) fields[plugin.name] = [...new Set(names)];
+  }
+  return fields;
 }

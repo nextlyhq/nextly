@@ -105,16 +105,34 @@ describe("content routes read the shared measure", () => {
     // Asserted per route rather than centrally: the skeleton and the frame are
     // in the same file but different branches, and nothing renders both, so
     // their agreement is not observable at either one.
+    // Each route's skeleton is the shared editor outline, handed the field
+    // column's measure; the outline is what draws the Editor page.
     for (const route of SELF_MEASURING_ROUTES) {
       const source = readFileSync(join(SRC, route), "utf8");
       const skeleton = source.slice(source.indexOf("PageSkeleton()"));
-      const first = [...skeleton.matchAll(CONTAINER_TAG)][0]?.[1] ?? "";
-      expect(first, `no container found in ${route}'s skeleton`).not.toBe("");
+      const call = skeleton.slice(0, skeleton.indexOf("/>"));
       expect(
-        first.includes('type="editor"'),
-        `${route}: the skeleton is not drawn in the Editor page that replaces it`
-      ).toBe(true);
+        call,
+        `${route}: the skeleton is not the editor outline`
+      ).toContain("<EditorOutline");
+      expect(
+        call,
+        `${route}: the skeleton's field column is not the editor's measure`
+      ).toContain("maxWidth: CONTENT_MEASURE_LENGTH");
     }
+    const outline = readFileSync(
+      join(SRC, "components/shared/loading-frame/outlines.tsx"),
+      "utf8"
+    );
+    const drawn = outline.slice(
+      outline.indexOf("export function EditorOutline")
+    );
+    const first = [...drawn.matchAll(CONTAINER_TAG)][0]?.[1] ?? "";
+    expect(first, "no container found in the editor outline").not.toBe("");
+    expect(
+      first.includes('type="editor"'),
+      "the editor outline is not drawn in the Editor page that replaces it"
+    ).toBe(true);
   });
 
   it("bounds the injection slots that the self-measuring frame renders", () => {

@@ -276,10 +276,11 @@ function titleOf(
  * Whether the caller may read a Single's document, read through the Single
  * API as the caller, without creating it: `false` where the caller may not
  * read it. A Single nobody has saved is judged by its default document, which
- * the usage index counts and its first read will store.
+ * the usage index counts and its first read will store. Only the caller's
+ * identity is read, so any context that can name it may ask.
  */
 export async function singleReadableByCaller(
-  ctx: Pick<PluginRouteContext, "caller">,
+  ctx: IdentifiedCaller,
   slug: string
 ): Promise<boolean> {
   const row = await readOrNull(async () =>

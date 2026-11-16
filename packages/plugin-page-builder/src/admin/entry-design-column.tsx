@@ -58,8 +58,18 @@ const DESIGN_COLUMN_NAME = "__pageBuilderOwnDesign";
 
 /** The lists given the column, each with the removal of its registrations. */
 const columned = new Map<string, () => void>();
-/** The lists whose read is out, so a redraw meanwhile asks nothing more. */
-const pending = new Set<string>();
+/**
+ * The lists whose read is out, each with the read, so a redraw meanwhile asks
+ * nothing more and the list is told what its column waits on.
+ */
+const pending = new Map<string, Promise<unknown>>();
+/**
+ * Each list's latest answer from that read, which its cells draw from until
+ * their own read of the same collection lands: a cell drawn first with the
+ * pill's placeholder and then with "Template" would change the column's
+ * width under the reader.
+ */
+const decidedFrom = new Map<string, EntryDesignsResponse>();
 /**
  * When each list last answered that it has no column. Kept only a short
  * while: a collection given a template later in the session gets its column
@@ -79,9 +89,13 @@ let registered = false;
 export function registerEntryDesignColumn(): void {
   if (registered) return;
   registered = true;
-  registerColumns("*", ({ target }) => {
+  registerColumns("*", ({ target, deciding }) => {
     askAbout(target);
-    return [];
+    // While the read is out, the list is told its columns are not known yet,
+    // so it holds its rows a moment rather than drawing them without the
+    // column and then moving every cell when the column arrives.
+    const out = pending.get(target);
+    return out !== undefined && deciding !== undefined ? deciding(out) : [];
   });
 }
 
@@ -108,16 +122,20 @@ function askAbout(target: string): void {
   if (answeredAt !== undefined && Date.now() - answeredAt < NO_COLUMN_FOR_MS) {
     return;
   }
-  pending.add(target);
-  readCollectionDesigns(target).then(
+  const read = readCollectionDesigns(target).then(
     answer => {
       pending.delete(target);
       followDesigns(target, answer);
     },
     () => {
       pending.delete(target);
+      // A failed read stands as "no column" for as long as that answer
+      // would: the list is asked again when this read settles, and asking
+      // the server again at once would repeat a failure on every draw.
+      noColumnAt.set(target, Date.now());
     }
   );
+  pending.set(target, read);
 }
 
 /**
@@ -130,6 +148,8 @@ function followDesigns(
   target: string,
   answer: EntryDesignsResponse | undefined
 ): void {
+  // Kept for the cells drawn next, whichever read it came from.
+  if (answer !== undefined) decidedFrom.set(target, answer);
   if (answer !== undefined && hasDesignColumn(answer)) {
     noColumnAt.delete(target);
     if (columned.has(target)) return;
@@ -166,19 +186,26 @@ const STATUS_COLUMN_NAME = "status";
  * `columns` with the Design column moved to right after Status, so it is on
  * screen beside the lifecycle rather than after every field. A list with no
  * Status column (one whose lifecycle is drawn elsewhere, or a collection
- * without drafts) takes it right after its first column, the one naming each
- * entry, for the same reason: appended, it sits past every field, off screen
- * on a wide collection. A list without the Design column is returned as it
- * came.
+ * without drafts) takes it right after its first shown column, the one naming
+ * each entry, for the same reason: appended, it sits past every field, off
+ * screen on a wide collection. A hidden column before it, as the entry list's
+ * ID column is unless shown, does not count. A list without the Design column
+ * is returned as it came.
  */
-export function designAfterStatus<Column extends { name: string }>(
-  columns: Column[]
-): Column[] {
+export function designAfterStatus<
+  Column extends { name: string; hidden?: boolean },
+>(columns: Column[]): Column[] {
   const design = columns.find(column => column.name === DESIGN_COLUMN_NAME);
   if (design === undefined) return columns;
   const rest = columns.filter(column => column !== design);
   const status = rest.findIndex(column => column.name === STATUS_COLUMN_NAME);
-  const after = status === -1 ? Math.min(1, rest.length) : status + 1;
+  const firstShown = rest.findIndex(column => column.hidden !== true);
+  const after =
+    status !== -1
+      ? status + 1
+      : firstShown !== -1
+        ? firstShown + 1
+        : Math.min(1, rest.length);
   return [...rest.slice(0, after), design, ...rest.slice(after)];
 }
 
@@ -293,9 +320,16 @@ export function DesignCell({
   const read = useEntryDesigns(collection);
   const id = rowIdOf(row);
   const settled = read.fetching ? undefined : read.data;
+  // Drawn from the cell's read once it has settled. Until then, from the
+  // latest settled answer for the collection (`decidedFrom`, the read that
+  // decided the column or a cell's since): newer than what the cache shows
+  // while it is asked again, and there before the cell's first answer, so
+  // the column is drawn at its width, and true, from the first frame. The
+  // cached answer stands in only where no settled one is known.
+  const data = settled ?? decidedFrom.get(collection) ?? read.data;
   // Where the collection's answer is capped, its absence of a row says
   // nothing, so the row is named for the lookup of the rows on screen.
-  const capped = read.data?.meta.hasNext === true && lookupNames(id);
+  const capped = data?.meta.hasNext === true && lookupNames(id);
   // A server render has no rows on screen yet: the list is drawn there
   // before any cell has named its row, and React asks for this snapshot
   // during it.
@@ -317,14 +351,14 @@ export function DesignCell({
     // the read is asked again may be the answer that went out of date.
     if (settled !== undefined) followDesigns(collection, settled);
   }, [collection, settled]);
-  if (read.data === undefined) return readPending(read.error !== null);
-  const { meta } = read.data;
+  if (data === undefined) return readPending(read.error !== null);
+  const { meta } = data;
   // The lookup answers for this row by its key, so it goes first; the
   // collection's answer stands in until it lands.
   const design =
     id === undefined
       ? undefined
-      : (designOf(lookup.data, id) ?? designOf(read.data, id));
+      : (designOf(lookup.data, id) ?? designOf(data, id));
   if (design !== undefined) {
     return (
       <OwnDesignPill

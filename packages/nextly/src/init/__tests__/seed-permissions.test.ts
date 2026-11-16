@@ -7,8 +7,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const seedSystemPermissions = vi.fn();
-const seedAllCollectionPermissions = vi.fn();
-const seedAllSinglePermissions = vi.fn();
+const seedAllEntityPermissions = vi.fn();
 const seedCustomPermissions = vi.fn();
 const markOrphanedPermissions = vi.fn();
 const assignNewPermissionsToSuperAdmin = vi.fn();
@@ -21,8 +20,7 @@ vi.mock("../../di/service-access", () => ({
       ? config
       : {
           seedSystemPermissions,
-          seedAllCollectionPermissions,
-          seedAllSinglePermissions,
+          seedAllEntityPermissions,
           seedCustomPermissions,
           markOrphanedPermissions,
           assignNewPermissionsToSuperAdmin,
@@ -39,8 +37,10 @@ const exportSubmissions = {
 beforeEach(() => {
   vi.clearAllMocks();
   seedSystemPermissions.mockResolvedValue({ newPermissionIds: ["sys-1"] });
-  seedAllCollectionPermissions.mockResolvedValue({ newPermissionIds: [] });
-  seedAllSinglePermissions.mockResolvedValue({ newPermissionIds: [] });
+  seedAllEntityPermissions.mockResolvedValue({
+    collections: { newPermissionIds: [] },
+    singles: { newPermissionIds: [] },
+  });
   seedCustomPermissions.mockResolvedValue({ newPermissionIds: [] });
   config.collections = undefined;
   config.plugins = undefined;
@@ -69,11 +69,12 @@ describe("seedAllPermissions", () => {
   });
 
   /**
-   * Marking reads attribution off the rows, so it has to run against the list
-   * that was just seeded rather than a separately collected one — a second walk
-   * over the declarations is a second chance for them to disagree.
+   * A start marks nothing orphaned, whatever its build stopped declaring: a
+   * permission leaves only when `nextly migrate` applies the recorded
+   * migration that drops it. The control is the seeding itself, which this
+   * start does reach.
    */
-  it("marks orphans against the same list it seeded", async () => {
+  it("marks nothing orphaned", async () => {
     config.plugins = [
       {
         name: "@acme/p",
@@ -84,9 +85,8 @@ describe("seedAllPermissions", () => {
 
     await seedAllPermissions();
 
-    expect(markOrphanedPermissions).toHaveBeenCalledWith(
-      seedCustomPermissions.mock.calls[0][0]
-    );
+    expect(seedCustomPermissions).toHaveBeenCalledTimes(1);
+    expect(markOrphanedPermissions).not.toHaveBeenCalled();
   });
 
   /**

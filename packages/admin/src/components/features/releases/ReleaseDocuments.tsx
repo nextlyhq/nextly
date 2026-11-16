@@ -251,10 +251,7 @@ function DocumentsBody({
 }) {
   if (membersFailed) {
     return (
-      <p
-        role="alert"
-        className="text-sm text-danger-text"
-      >
+      <p role="alert" className="text-sm text-danger-text">
         The documents in this release could not be loaded.
       </p>
     );
@@ -340,9 +337,7 @@ function ReadinessPanel({
       <Icon
         className={cn(
           "hidden size-5 shrink-0 sm:block",
-          headline.tone === "ready"
-            ? "text-success-text"
-            : "text-danger-text"
+          headline.tone === "ready" ? "text-success-text" : "text-danger-text"
         )}
         aria-hidden
       />
@@ -616,9 +611,7 @@ function ProblemList({
           key={problem.text}
           className={cn(
             "flex items-start gap-1.5 text-xs",
-            tone === "hard"
-              ? "text-danger-text"
-              : "text-muted-foreground"
+            tone === "hard" ? "text-danger-text" : "text-muted-foreground"
           )}
         >
           <Icon className="mt-px size-3.5 shrink-0" aria-hidden />
@@ -774,10 +767,7 @@ function ActionControl({
         </DropdownMenuContent>
       </DropdownMenu>
       {change.isError ? (
-        <p
-          role="alert"
-          className="max-w-[16rem] text-xs text-danger-text"
-        >
+        <p role="alert" className="max-w-[16rem] text-xs text-danger-text">
           {releaseErrorMessage(change.error, "It was not changed.")}
         </p>
       ) : null}

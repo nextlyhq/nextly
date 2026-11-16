@@ -15,7 +15,7 @@
 import type { SizeTier } from "@nextlyhq/ui/format";
 import type { CSSProperties } from "react";
 
-import { chartColour, type ChartSlot } from "./chart-colour";
+import { markColour, type ChartMark } from "./chart-colour";
 
 /**
  * A chart's sizes in pixels, here rather than beside the drawing so a chart can hold its place
@@ -33,10 +33,10 @@ export const CHART_PLOT_HEIGHTS: Readonly<Record<SizeTier, number>> =
 export const CHART_DATES_HEIGHT = 18;
 export const CHART_ROW_HEIGHT = 22;
 
-/** One series: what it is called, and the chart colour it is drawn in. */
+/** One series: what it is called, and the mark it is drawn in. */
 export interface ChartSeriesConfig {
   label: string;
-  slot: ChartSlot;
+  mark: ChartMark;
 }
 
 /** Every series of one chart, by its key in the drawn data. */
@@ -47,12 +47,12 @@ export function seriesKey(index: number): string {
   return `s${index}`;
 }
 
-/** The CSS variables a chart's container sets: one colour per series, from its slot's token. */
+/** The CSS variables a chart's container sets: one colour per series, from its mark's token. */
 export function chartConfigStyle(config: ChartConfig): CSSProperties {
   return Object.fromEntries(
     Object.entries(config).map(([key, series]) => [
       `--color-${key}`,
-      chartColour(series.slot),
+      markColour(series.mark),
     ])
   );
 }

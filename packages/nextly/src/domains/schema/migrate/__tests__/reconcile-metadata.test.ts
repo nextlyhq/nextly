@@ -96,9 +96,21 @@ async function run(opts: {
   registerFn?: () => Promise<{
     collectionsRegistered: number;
     singlesRegistered: number;
+    rowsNotWritten: string[];
   }>;
 }) {
   vi.resetModules();
+  // The rows' transaction and the stored schema version beside them are the
+  // integration suite's subject (`schema-version-writers.integration.test.ts`):
+  // here the pass runs as it did before it had one.
+  vi.doMock("../../schema-version", () => ({
+    writeRegistryRows: (
+      _adapter: unknown,
+      work: (tx: { getDrizzle: () => unknown }) => Promise<unknown>
+    ) => work({ getDrizzle: () => ({}) }),
+    inRegistryStep: (_adapter: unknown, work: () => Promise<unknown>) => work(),
+    newestAppliedAppMigration: () => null,
+  }));
   const made = mockRegistries(
     opts.collections ?? [],
     opts.singles ?? [],
@@ -116,6 +128,7 @@ async function run(opts: {
       (async () => ({
         collectionsRegistered: 0,
         singlesRegistered: 0,
+        rowsNotWritten: [],
       }))) as never,
   });
   return { result, made };
@@ -199,6 +212,7 @@ describe("reconcileMigrationMetadata", () => {
       registerFn: (async () => ({
         collectionsRegistered: 0,
         singlesRegistered: 0,
+        rowsNotWritten: [],
       })) as never,
     });
 
@@ -213,6 +227,7 @@ describe("reconcileMigrationMetadata", () => {
       registerFn: async () => ({
         collectionsRegistered: 2,
         singlesRegistered: 1,
+        rowsNotWritten: [],
       }),
     });
 
@@ -264,6 +279,7 @@ describe("reconcileMigrationMetadata", () => {
       registerFn: (async () => ({
         collectionsRegistered: 0,
         singlesRegistered: 0,
+        rowsNotWritten: [],
       })) as never,
     });
 
@@ -321,6 +337,7 @@ describe("reconcileMigrationMetadata holds a row an unapplied migration names", 
       registerFn: (async () => ({
         collectionsRegistered: 0,
         singlesRegistered: 0,
+        rowsNotWritten: [],
       })) as never,
       readPendingEntitiesFn: opts.awaiting as never,
     });

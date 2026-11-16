@@ -18,6 +18,11 @@ import { useCurrentUserId } from "@admin/hooks/useCurrentUserId";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { canonicalJson } from "@admin/lib/canonical-json";
 import {
+  forgetTabPreference,
+  recallTabPreference,
+  rememberTabPreference,
+} from "@admin/lib/device-memory/device-memory";
+import {
   DOCUMENT_VERSION_KEY,
   versionOf,
   type StaleVersion,
@@ -30,7 +35,8 @@ import {
 
 /**
  * Where "Not now" is remembered: this browser tab's session storage, keyed by
- * the document, holding the identity of the recovery point put off.
+ * the document, holding the identity of the recovery point put off; this
+ * page's memory alone where the site turned remembering off.
  *
  * Session storage is copied into a tab duplicated from this one or opened from
  * it, so the point stays put off there too; a tab opened on its own, or a new
@@ -52,7 +58,7 @@ interface PendingPutOff {
 /** The put-offs waiting for the account; none where storage refuses. */
 function pendingPutOffs(): PendingPutOff[] {
   try {
-    const raw = window.sessionStorage.getItem(PENDING_PUT_OFF_KEY);
+    const raw = recallTabPreference(PENDING_PUT_OFF_KEY);
     const parsed: unknown = raw === null ? [] : JSON.parse(raw);
     return Array.isArray(parsed)
       ? parsed.filter(
@@ -68,19 +74,16 @@ function pendingPutOffs(): PendingPutOff[] {
   }
 }
 
-/** Replace the waiting put-offs, ignoring storage that refuses. */
+/**
+ * Replace the waiting put-offs, through the device memory: the tab's session
+ * storage, or this page's memory alone where the site turned remembering off
+ * or the storage refuses them.
+ */
 function writePendingPutOffs(pending: readonly PendingPutOff[]): void {
-  try {
-    if (pending.length === 0) {
-      window.sessionStorage.removeItem(PENDING_PUT_OFF_KEY);
-    } else {
-      window.sessionStorage.setItem(
-        PENDING_PUT_OFF_KEY,
-        JSON.stringify(pending)
-      );
-    }
-  } catch {
-    // Storage refused: "Not now" lasts for this editor, as it did before.
+  if (pending.length === 0) {
+    forgetTabPreference(PENDING_PUT_OFF_KEY);
+  } else {
+    rememberTabPreference(PENDING_PUT_OFF_KEY, JSON.stringify(pending));
   }
 }
 
@@ -200,21 +203,15 @@ function pointIdentity(point: AutosaveDetail): string {
 
 /** Whether this tab already put off the recovery point named `at`. */
 function wasPutOff(documentKey: string, at: string): boolean {
-  try {
-    return window.sessionStorage.getItem(putOffKey(documentKey)) === at;
-  } catch {
-    // Storage refused (a private window, blocked site data): offer again.
-    return false;
-  }
+  // Through the device memory, which reads storage that refuses as nothing.
+  return recallTabPreference(putOffKey(documentKey)) === at;
 }
 
 /** Remember that this tab put off the recovery point named `at`. */
 function rememberPutOff(documentKey: string, at: string): void {
-  try {
-    window.sessionStorage.setItem(putOffKey(documentKey), at);
-  } catch {
-    // Storage refused: "Not now" lasts for this editor, as it did before.
-  }
+  // Kept through the device memory: in this page's memory alone where the
+  // site turned remembering off or the storage refuses it.
+  rememberTabPreference(putOffKey(documentKey), at);
 }
 
 export interface UseAutosaveRecoveryOptions {
@@ -272,6 +269,9 @@ export interface AutosaveRecoveryOffer {
   startingVersionUnknown: boolean;
 }
 
+/** What came of a checked restore; see `restoreChecked`. */
+export type RestoreOutcome = "restored" | "changed" | "unchecked";
+
 export interface UseAutosaveRecoveryResult {
   /** The offer to present, or `null` when there is nothing worth offering. */
   offer: AutosaveRecoveryOffer | null;
@@ -313,6 +313,17 @@ export interface UseAutosaveRecoveryResult {
    */
   restore: (apply?: () => void) => void;
   /**
+   * `restore`, answering what came of it, for a caller that acts once the
+   * restore is settled (a Save that keeps the offered changes): `restored`
+   * when the point was written (by `apply` where given), `changed` when it was
+   * not because the point is no longer what was offered (written since, or
+   * gone; the offer is drawn again from the answer, as `restore` does), and
+   * `unchecked` when it could not be asked about again or the editor moved to
+   * another language meanwhile (nothing written, the offer kept). `restore` is this with the answer
+   * ignored, so the two cannot come to differ.
+   */
+  restoreChecked: (apply?: () => void) => Promise<RestoreOutcome>;
+  /**
    * Read the author's point again and offer it, once edits were just kept as
    * one: an editor that loads the current version over its refused edits.
    */
@@ -352,7 +363,13 @@ async function askedAgain(
   point: AutosaveDetail,
   scope: VersionScope | null
 ): Promise<
-  { stillCurrent: true } | { stillCurrent: false; fresh: AutosaveDetail | null }
+  | { stillCurrent: true }
+  | {
+      stillCurrent: false;
+      fresh: AutosaveDetail | null;
+      /** The read failed, so nothing is known to have changed. */
+      unchecked?: true;
+    }
 > {
   if (offer.olderVersion || !scope) return { stillCurrent: true };
   try {
@@ -365,7 +382,7 @@ async function askedAgain(
       ? { stillCurrent: true }
       : { stillCurrent: false, fresh };
   } catch {
-    return { stillCurrent: false, fresh: point };
+    return { stillCurrent: false, fresh: point, unchecked: true };
   }
 }
 
@@ -395,7 +412,7 @@ function useRestoreOffer({
   locale: string | null;
   defaultLocale: string | null;
   onRestored?: (startedFrom: string | undefined) => void;
-}): Pick<UseAutosaveRecoveryResult, "restore" | "take"> {
+}): Pick<UseAutosaveRecoveryResult, "restore" | "restoreChecked" | "take"> {
   const queryClient = useQueryClient();
   // The language the editor shows when the re-read below answers, which may
   // not be the one the restore was asked in: the author can switch language
@@ -429,21 +446,35 @@ function useRestoreOffer({
     (fresh: AutosaveDetail | null) => queryClient.setQueryData(queryKey, fresh),
     [queryClient, queryKey]
   );
-  const restore = useCallback(
-    (apply?: () => void) => {
-      if (!offer || !point) return;
-      void askedAgain(offer, point, scope).then(answer => {
-        // Switched language meanwhile: the point is another language's work
-        // now, and written it would fill this language's fields with it. The
-        // editor draws its own offer for the language it shows.
-        if (!recordedIn(point, currentLocale.current, defaultLocale)) return;
-        if (answer.stillCurrent) (apply ?? take)();
-        else redraw(answer.fresh);
-      });
+  const restoreChecked = useCallback(
+    async (apply?: () => void): Promise<RestoreOutcome> => {
+      // Nothing on offer: the offer no longer stands, so nothing is written.
+      if (!offer || !point) return "changed";
+      const answer = await askedAgain(offer, point, scope);
+      // Switched language meanwhile: the point is another language's work
+      // now, and written it would fill this language's fields with it. The
+      // editor draws its own offer for the language it shows. Nothing about
+      // the point itself is known to have changed, so not `changed`.
+      if (!recordedIn(point, currentLocale.current, defaultLocale)) {
+        return "unchecked";
+      }
+      if (answer.stillCurrent) {
+        (apply ?? take)();
+        return "restored";
+      }
+      redraw(answer.fresh);
+      return answer.unchecked === true ? "unchecked" : "changed";
     },
     [offer, point, scope, take, redraw, defaultLocale]
   );
-  return { restore, take };
+  // The same restore with its answer ignored, for a control that only asks.
+  const restore = useCallback(
+    (apply?: () => void) => {
+      void restoreChecked(apply);
+    },
+    [restoreChecked]
+  );
+  return { restore, restoreChecked, take };
 }
 
 /**
@@ -578,7 +609,7 @@ export function useAutosaveRecovery({
     [dismissed, data, stored, locale, defaultLocale, isPutOff]
   );
 
-  const { restore, take } = useRestoreOffer({
+  const { restore, restoreChecked, take } = useRestoreOffer({
     offer,
     point: data,
     scope,
@@ -599,5 +630,5 @@ export function useAutosaveRecovery({
     void queryClient.invalidateQueries({ queryKey });
   }, [queryClient, queryKey]);
 
-  return { offer, isResolved, dismiss, restore, take, recheck };
+  return { offer, isResolved, dismiss, restore, restoreChecked, take, recheck };
 }

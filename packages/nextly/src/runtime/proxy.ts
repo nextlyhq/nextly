@@ -24,6 +24,7 @@ import { NextlyError } from "../errors/nextly-error";
 import {
   answerProxyRequest,
   hasProxyHandlers,
+  proxyHandlersReady,
   type CombinedProxyAnswer,
 } from "../plugins/proxy/proxy-registry";
 
@@ -123,11 +124,15 @@ export function createNextlyProxy(
   deps: NextlyProxyDeps = defaultDeps
 ): (request: Request) => Promise<Response | undefined> {
   return async request => {
-    try {
-      await deps.start(config);
-    } catch {
-      // The page's own read reports a start that fails; the Proxy only
-      // stands aside.
+    if (!proxyHandlersReady()) {
+      // Never waited for: the handlers come with the start, and holding the
+      // request for it would hold every page and file the Proxy matches,
+      // the prebuilt admin among them, for the whole start (over a minute
+      // against a far database). The start is begun, or joined, and the
+      // request goes through as the page alone; the handlers apply from the
+      // first request after it finishes. A start that fails is reported by
+      // the page's own read; the Proxy only stands aside.
+      deps.start(config).catch(() => undefined);
       return undefined;
     }
     if (!hasProxyHandlers()) return undefined;

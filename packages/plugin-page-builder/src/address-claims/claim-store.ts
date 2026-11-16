@@ -29,8 +29,6 @@ import {
   type PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
 
-import { asOverwrite } from "../document-version";
-
 import {
   claimKey,
   collectionLockKey,
@@ -439,15 +437,16 @@ async function remove(claims: Claims, tx: Tx, row: ClaimRow): Promise<void> {
 /**
  * Hold `list`'s lock row until this transaction ends, so whatever else
  * claims in that space waits, then reads what this transaction claimed. One
- * that exists is held by updating it, which reads it for update; one created
- * here is held the same way, another transaction creating it waiting on the
- * key's index for this one to end. An address's lock row is created by the
- * save that first claims it, so the waits and releases that contend for it
- * later only update it. (On MySQL two saves creating one lock row at once can
- * deadlock. The database then refuses one of the two: that save fails and
- * rolls back, nothing claimed by it, and its caller may save again. The
- * adapter does not run a deadlocked transaction again itself, so the store
- * avoids deadlocks by taking its locks before the rows they guard.)
+ * that exists is held by reading it for update; one created here is held by
+ * its insert, another transaction creating it waiting on the key's index for
+ * this one to end. An address's lock row is created by the save that first
+ * claims it, so the waits and releases that contend for it later only read
+ * it for update, and write nothing ({@link holdLockRow}). (On MySQL two
+ * saves creating one lock row at once can deadlock. The database then
+ * refuses one of the two: that save fails and rolls back, nothing claimed by
+ * it, and its caller may save again. The adapter does not run a deadlocked
+ * transaction again itself, so the store avoids deadlocks by taking its
+ * locks before the rows they guard.)
  *
  * SQLite runs one writer at a time, so a transaction there already has every
  * claim to itself, and takes no lock.
@@ -458,9 +457,7 @@ async function lock(
   list: ServedAddress
 ): Promise<void> {
   const key = claimKey("lock", list);
-  await holdLockRow(claims, tx, key, columns("lock", key, list, null), {
-    path: pathOf(list),
-  });
+  await holdLockRow(claims, tx, key, columns("lock", key, list, null));
 }
 
 /**
@@ -477,13 +474,10 @@ export async function lockHolder(
   holder: Holder
 ): Promise<void> {
   const key = holderLockKey(holder);
-  await holdLockRow(
-    claims,
-    tx,
-    key,
-    { claimKey: storedKey(key), kind: "lock" },
-    { kind: "lock" }
-  );
+  await holdLockRow(claims, tx, key, {
+    claimKey: storedKey(key),
+    kind: "lock",
+  });
 }
 
 /**
@@ -498,47 +492,40 @@ export async function lockCollection(
   collection: string
 ): Promise<void> {
   const key = collectionLockKey(collection);
-  await holdLockRow(
-    claims,
-    tx,
-    key,
-    { claimKey: storedKey(key), kind: "lock" },
-    { kind: "lock" }
-  );
+  await holdLockRow(claims, tx, key, {
+    claimKey: storedKey(key),
+    kind: "lock",
+  });
 }
 
 /**
- * Hold the lock row keyed `key`, created with `created` where none is stored
- * yet, and otherwise held by writing `touched` over it (see {@link lock}).
+ * Hold the lock row keyed `key` until this transaction ends, created with
+ * `created` where none is stored yet (see {@link lock}).
+ *
+ * Held by reading it for update, never by writing it: on PostgreSQL and
+ * MySQL `SELECT … FOR UPDATE` takes the row's exclusive lock, which another
+ * transaction's read for update or write waits on until this one commits or
+ * rolls back, and reads the latest commit whatever this transaction's
+ * snapshot. A write would take the same lock and add a row version, a
+ * content event, media usage and cache tags to every hold. A row created
+ * here is held by its insert, and another transaction inserting the same key
+ * waits on the unique index until this one ends, then finds it.
  */
 async function holdLockRow(
   claims: Claims,
   tx: Tx,
   key: string,
-  created: Record<string, unknown>,
-  touched: Record<string, unknown>
+  created: Record<string, unknown>
 ): Promise<void> {
   if (claims.dialect === "sqlite") return;
-  // Read for update: the row is written next, and two saves that each held
-  // a shared lock on it would each wait for the other's write.
-  let [row] = await keyed(claims, tx, [key], "update");
-  if (row === undefined) {
-    if ((await insert(claims, tx, created)) !== null) return;
-    [row] = await keyed(claims, tx, [key], "update");
-    if (row === undefined) {
-      throw NextlyError.internal({
-        logContext: { reason: "address-lock-vanished", key },
-      });
-    }
-  }
-  // Held by writing it, whatever it stores: the write is the lock, not a
-  // change made from a read, so it says to overwrite.
-  await claims.services.collections.updateEntryInTransaction(
-    tx,
-    claims.slug,
-    row.id,
-    asOverwrite(touched)
-  );
+  if ((await keyed(claims, tx, [key], "update")).length > 0) return;
+  if ((await insert(claims, tx, created)) !== null) return;
+  // Created by a transaction that committed while this one inserted: held
+  // now that it is there.
+  if ((await keyed(claims, tx, [key], "update")).length > 0) return;
+  throw NextlyError.internal({
+    logContext: { reason: "address-lock-vanished", key },
+  });
 }
 
 /**
@@ -1041,6 +1028,14 @@ function staleClaimsOf(
   };
 }
 
+/** Whether `row` is one of `holder`'s addresses, spaces or waits. */
+function heldByHolder(row: ClaimRow, holder: Holder): boolean {
+  return (
+    sameHolder(row.holder, holder) &&
+    (row.kind === "address" || row.kind === "space" || row.kind === "waiting")
+  );
+}
+
 /** Every address, space and wait `holder` has, as `tx` sees them. */
 function heldBy(claims: Claims, tx: Tx, holder: Holder): Promise<ClaimRow[]> {
   return claimsIn(
@@ -1050,10 +1045,96 @@ function heldBy(claims: Claims, tx: Tx, holder: Holder): Promise<ClaimRow[]> {
       holderCollection: { equals: holder.collection },
       holderId: { equals: holder.id },
     },
-    row =>
-      sameHolder(row.holder, holder) &&
-      (row.kind === "address" || row.kind === "space" || row.kind === "waiting")
+    row => heldByHolder(row, holder)
   );
+}
+
+/**
+ * Every address, space and wait each document `ids` of `collection` has, as
+ * last committed, by id: read through the pool, taking no lock, a page of
+ * claims at a time, so many holders cost one read. For deciding which of
+ * them to reconcile under their locks, never for changing a claim.
+ */
+export async function committedHoldings(
+  claims: Claims,
+  collection: string,
+  ids: readonly string[]
+): Promise<Map<string, ClaimRow[]>> {
+  const wanted = new Set(ids);
+  const holdings = new Map<string, ClaimRow[]>();
+  if (wanted.size === 0) return holdings;
+  for (let page = 1; ; page += 1) {
+    const { rows } = await committedClaims(
+      claims,
+      {
+        holderCollection: { equals: collection },
+        holderId: { in: [...wanted] },
+      },
+      { limit: READ_PAGE, page }
+    );
+    for (const row of rows) {
+      // Matched again exactly: the database may compare the ids loosely.
+      const holder = row.holder;
+      if (holder === null || !wanted.has(holder.id)) continue;
+      if (!heldByHolder(row, { collection, id: holder.id })) continue;
+      holdings.set(holder.id, [...(holdings.get(holder.id) ?? []), row]);
+    }
+    if (rows.length < READ_PAGE) return holdings;
+  }
+}
+
+/** What reconciling one holder changes (see {@link changesFor}). */
+interface HolderChanges {
+  readonly claimAddresses: readonly ServedAddress[];
+  readonly claimSpaces: readonly ServedAddress[];
+  readonly release: readonly ClaimRow[];
+  readonly staleWaits: readonly ClaimRow[];
+}
+
+/** Whether `changes` change nothing. */
+function changesNothing(changes: HolderChanges): boolean {
+  return (
+    changes.claimAddresses.length === 0 &&
+    changes.claimSpaces.length === 0 &&
+    changes.release.length === 0 &&
+    changes.staleWaits.length === 0
+  );
+}
+
+/**
+ * What bringing a holder holding `held` to `desired` changes: the addresses
+ * and spaces it should hold and does not, the claims it holds and should not,
+ * and its waits for what it no longer wants. The one reading reconciling
+ * acts on and a pass judges a holder settled by.
+ */
+function changesFor(
+  held: readonly ClaimRow[],
+  desired: DesiredClaims
+): HolderChanges {
+  const owned = held.filter(row => row.kind !== "waiting");
+  const heldKeys = new Set(owned.map(row => row.key));
+  const { release, waits: staleWaits } = staleClaimsOf(held, desired);
+  return {
+    claimAddresses: desired.addresses.filter(
+      at => !heldKeys.has(storedKey(claimKey("address", at)))
+    ),
+    claimSpaces: desired.spaces.filter(
+      at => !heldKeys.has(storedKey(claimKey("space", at)))
+    ),
+    release,
+    staleWaits,
+  };
+}
+
+/**
+ * Whether a holder holding `held` already holds exactly `desired`: what
+ * {@link reconcileHolder} leaves alone, taking no lock.
+ */
+export function holdsExactly(
+  held: readonly ClaimRow[],
+  desired: DesiredClaims
+): boolean {
+  return changesNothing(changesFor(held, desired));
 }
 
 /**
@@ -1159,24 +1240,9 @@ export async function reconcileHolder(
   describe: DescribeHolder,
   options: { readonly wait?: boolean } = {}
 ): Promise<boolean> {
-  const held = await heldBy(claims, tx, holder);
-  const owned = held.filter(row => row.kind !== "waiting");
-  const heldKeys = new Set(owned.map(row => row.key));
-  const claimAddresses = desired.addresses.filter(
-    at => !heldKeys.has(storedKey(claimKey("address", at)))
-  );
-  const claimSpaces = desired.spaces.filter(
-    at => !heldKeys.has(storedKey(claimKey("space", at)))
-  );
-  const { release, waits: staleWaits } = staleClaimsOf(held, desired);
-  if (
-    claimAddresses.length === 0 &&
-    claimSpaces.length === 0 &&
-    release.length === 0 &&
-    staleWaits.length === 0
-  ) {
-    return false;
-  }
+  const changes = changesFor(await heldBy(claims, tx, holder), desired);
+  if (changesNothing(changes)) return false;
+  const { claimAddresses, claimSpaces, release, staleWaits } = changes;
   await lockInOrder(claims, tx, [
     ...claimAddresses.flatMap(locksFor),
     ...claimSpaces,

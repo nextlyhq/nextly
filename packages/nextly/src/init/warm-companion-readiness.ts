@@ -24,6 +24,8 @@ import {
 import { NextlyError } from "../errors/nextly-error";
 import type { Logger } from "../services/shared";
 
+import { awaitStartInFlight } from "./start-in-flight";
+
 /** The warm-up the last boot started; already settled before any boot. */
 let warmed: Promise<void> = Promise.resolve();
 
@@ -37,28 +39,37 @@ export function startCompanionReadinessWarmUp(deps: {
   registries: StoredRegistries;
   logger: Pick<Logger, "warn">;
 }): void {
-  warmed = (async () => {
-    let entities: Awaited<ReturnType<typeof storedLocalizableEntities>>;
-    try {
-      entities = await storedLocalizableEntities(deps.registries);
-    } catch (error) {
-      deps.logger.warn(
-        "The translated entities could not be listed to resolve their tables at boot",
-        { code: codeOf(error) }
-      );
-      return;
-    }
-    for (const entity of entities) {
+  // Begun once the start in flight, if any, has handed its instance over, and
+  // then after that turn, as the post-start tasks are. Registration calls this
+  // part way through a start, and a turn alone ends at the start's next wait
+  // on the database: begun then, the warm-up's registry listings ran among the
+  // start's own statements and on its time, and whether one was still running
+  // when the start resolved was a matter of timing. On SQLite, whose driver
+  // blocks, reads begun before the turn would run on the start's time as well.
+  warmed = awaitStartInFlight()
+    .then(() => new Promise<void>(resolve => setImmediate(resolve)))
+    .then(async () => {
+      let entities: Awaited<ReturnType<typeof storedLocalizableEntities>>;
       try {
-        await isCompanionReady(deps.adapter, entity.companionTable);
+        entities = await storedLocalizableEntities(deps.registries);
       } catch (error) {
         deps.logger.warn(
-          "A translation table's readiness could not be resolved at boot",
-          { table: entity.companionTable, code: codeOf(error) }
+          "The translated entities could not be listed to resolve their tables at boot",
+          { code: codeOf(error) }
         );
+        return;
       }
-    }
-  })();
+      for (const entity of entities) {
+        try {
+          await isCompanionReady(deps.adapter, entity.companionTable);
+        } catch (error) {
+          deps.logger.warn(
+            "A translation table's readiness could not be resolved at boot",
+            { table: entity.companionTable, code: codeOf(error) }
+          );
+        }
+      }
+    });
 }
 
 /**

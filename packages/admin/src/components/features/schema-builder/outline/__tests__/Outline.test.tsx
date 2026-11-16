@@ -9,14 +9,22 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
+import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
+import {
+  judgeMove,
+  moveDestinations,
+  type MoveContext,
+} from "@admin/lib/builder/move-rule";
 import {
   buildOutline,
   flattenOutline,
   nodePlacement,
   type OutlineNode,
 } from "@admin/lib/builder/outline/outline-model";
+import type { FieldDefinition } from "@admin/types/collection";
 
 import {
+  nestedFixtureBlockCatalogs,
   nestedFixtureFieldGroups,
   nestedFixtureFields,
 } from "../../__fixtures__/nested-fixture";
@@ -25,19 +33,28 @@ import type { BuilderField } from "../../types";
 import { FormPreview } from "../FormPreview";
 import { Outline, type OutlineCallbacks } from "../Outline";
 
-const FOLD_KEY = "test:outline:fixture";
+// Under the admin's own storage prefix, as the builder's fold keys are: the
+// device memory keeps interface preferences only under the admin's keys.
+const FOLD_KEY = "nextly:admin:builder-fold:test:outline-fixture";
 
-function callbacks(): OutlineCallbacks &
-  Record<string, ReturnType<typeof vi.fn>> {
+/** The page's side, with the move rule's real answers over the fixture. */
+function callbacks(entityReadOnly = false) {
+  const fields = nestedFixtureFields();
+  const ctx: MoveContext = { entityReadOnly, surface: "collection" };
   return {
     select: vi.fn(),
     addAt: vi.fn(),
-    move: vi.fn(),
     duplicate: vi.fn(),
     remove: vi.fn(),
     setHidden: vi.fn(),
     openFieldGroup: vi.fn(),
-  };
+    fields,
+    judgeMove: vi.fn((id: string, target: FieldInsertPosition) =>
+      judgeMove(fields, id, target, ctx)
+    ),
+    moveDestinations: vi.fn((id: string) => moveDestinations(fields, id, ctx)),
+    commitMove: vi.fn(),
+  } satisfies OutlineCallbacks;
 }
 
 function fixtureOutline(entityReadOnly = false): OutlineNode[] {
@@ -56,7 +73,7 @@ function renderOutline(
     on?: ReturnType<typeof callbacks>;
   } = {}
 ) {
-  const on = options.on ?? callbacks();
+  const on = options.on ?? callbacks(options.readOnly);
   const nodes = options.nodes ?? fixtureOutline(options.readOnly);
   const view = render(
     <DndContext>
@@ -203,17 +220,82 @@ describe("the outline of the nested fixture", () => {
     expect(on.setHidden).toHaveBeenCalledWith("f-internal-note", false);
   });
 
+  it("shows each accepted field group's own count, on its own row", () => {
+    renderOutline({
+      nodes: buildOutline(
+        [
+          {
+            id: "f-zone",
+            name: "zone",
+            label: "Zone",
+            type: "component",
+            components: ["seo", "social"],
+          } as BuilderField,
+        ],
+        { entityReadOnly: false, fieldGroups: nestedFixtureFieldGroups() }
+      ),
+    });
+    expect(row("zone/@seo")).toHaveTextContent("Shared · used in 3 places");
+    expect(row("zone/@social")).toHaveTextContent("Shared · used in 1 place");
+    // The field itself stands for neither, so it carries no count.
+    expect(row("zone")).not.toHaveTextContent("used in");
+  });
+
   it("a field group's fields, read-only, with its link", async () => {
     const { on } = renderOutline();
     const field = row("seo/meta_title") as HTMLElement;
     expect(field).toHaveTextContent("Defined in the field group SEO");
-    expect(row("seo")).toHaveTextContent("Shared");
+    expect(row("seo")).toHaveTextContent("Shared · used in 3 places");
     field.focus();
     await userEvent.keyboard("{Shift>}{F10}{/Shift}");
     await userEvent.click(
       await screen.findByRole("menuitem", { name: "Open the field group SEO" })
     );
     expect(on.openFieldGroup).toHaveBeenCalledWith("seo");
+  });
+
+  it("draws each accepted block and its props beneath a blocks field, read-only", async () => {
+    const { on } = renderOutline({
+      nodes: buildOutline(nestedFixtureFields(), {
+        entityReadOnly: false,
+        fieldGroups: nestedFixtureFieldGroups(),
+        blockCatalogs: nestedFixtureBlockCatalogs(),
+      }),
+    });
+    const heading = row("body/#core/heading") as HTMLElement;
+    expect(heading).toHaveTextContent("Heading");
+    expect(heading).toHaveTextContent("Block");
+    expect(heading).toHaveTextContent(
+      "Defined by @nextlyhq/plugin-page-builder"
+    );
+    expect(row("body/#core/heading/#level")).toHaveTextContent("Level");
+    expect(row("body/#core/heading/#level")).toHaveTextContent("select");
+    // The entry no registered block answers is said, not dropped.
+    expect(row("body")).toHaveTextContent(
+      "no registered block matches acme/hero"
+    );
+    // A block is no field: nothing to open, and no settings in its menu.
+    await userEvent.click(heading);
+    expect(on.select).not.toHaveBeenCalled();
+    heading.focus();
+    await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+    expect(screen.queryByRole("menuitem", { name: /settings/ })).toBeNull();
+  });
+
+  it("says why a blocks field's blocks are not shown, when they are not", () => {
+    renderOutline({
+      nodes: buildOutline(nestedFixtureFields(), {
+        entityReadOnly: false,
+        fieldGroups: nestedFixtureFieldGroups(),
+        blockCatalogs: new Map([
+          ['["core/heading","acme/hero"]', { state: "unavailable" as const }],
+        ]),
+      }),
+    });
+    expect(row("body")).toHaveTextContent(
+      "block details need the Page Builder plugin"
+    );
+    expect(row("body/#core/heading")).toBeNull();
   });
 
   it("shows a blocks field with the blocks it accepts", () => {
@@ -299,7 +381,7 @@ describe("a read-only row", () => {
       (row(path) as HTMLElement).focus();
       await userEvent.keyboard("/{Alt>}{ArrowUp}{ArrowDown}{/Alt}");
       expect(on.addAt).not.toHaveBeenCalled();
-      expect(on.move).not.toHaveBeenCalled();
+      expect(on.commitMove).not.toHaveBeenCalled();
     }
   );
 
@@ -440,7 +522,13 @@ describe("the tree", () => {
     const { on } = renderOutline();
     (row("summary_b") as HTMLElement).focus();
     await userEvent.keyboard("{Alt>}{ArrowUp}{/Alt}");
-    expect(on.move).toHaveBeenCalledWith("f-summary-b", -1);
+    expect(on.commitMove).toHaveBeenCalledTimes(1);
+    const [moved] = on.commitMove.mock.calls[0] as [BuilderField[]];
+    expect(moved.slice(0, 3).map(field => field.name)).toEqual([
+      "title",
+      "summary_b",
+      "summary_a",
+    ]);
     expect(
       screen.getByText("Moved Summary up, position 2 of 11.")
     ).toBeInTheDocument();
@@ -577,6 +665,55 @@ describe("the form preview's fields", () => {
     expect(screen.getByLabelText(/Banner text/)).toHaveValue("Welcome");
   });
 
+  it("draws a field group placed directly inside another, as the entry form now does", () => {
+    const groups = new Map([
+      [
+        "seo",
+        {
+          slug: "seo",
+          label: "SEO",
+          fields: [
+            { name: "meta_title", label: "Meta title", type: "text" },
+            {
+              name: "social",
+              label: "Social",
+              type: "component",
+              component: "social",
+            },
+          ] as FieldDefinition[],
+        },
+      ],
+      [
+        "social",
+        {
+          slug: "social",
+          label: "Social",
+          fields: [
+            { name: "handle", label: "Handle", type: "text" },
+          ] as FieldDefinition[],
+        },
+      ],
+    ]);
+    render(
+      <FormPreview
+        kind="collection"
+        fields={[
+          {
+            id: "f-seo",
+            name: "seo",
+            label: "SEO",
+            type: "component",
+            component: "seo",
+          } as BuilderField,
+        ]}
+        fieldGroups={groups}
+        fieldGroupsLoad="loaded"
+      />
+    );
+    expect(screen.getByLabelText(/Meta title/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Handle/)).toBeInTheDocument();
+  });
+
   it("says when the field groups it uses could not be loaded", () => {
     render(
       <FormPreview
@@ -614,7 +751,7 @@ describe("moving past a read-only sibling", () => {
     // meta/title's next sibling is meta/rating, which a plugin owns.
     (row("meta/title") as HTMLElement).focus();
     await userEvent.keyboard("{Alt>}{ArrowDown}{/Alt}");
-    expect(on.move).not.toHaveBeenCalled();
+    expect(on.commitMove).not.toHaveBeenCalled();
     await userEvent.keyboard("{Shift>}{F10}{/Shift}");
     expect(
       await screen.findByRole("menuitem", { name: "Move down" })

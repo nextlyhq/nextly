@@ -90,3 +90,66 @@ describe("a translated text column in the translations table on MySQL", () => {
     );
   });
 });
+
+/** A Single or a field group declaring `fields`, as the Builder or code records it. */
+const entityOf = (
+  kind: "single" | "fieldGroup",
+  source: "builder" | "code",
+  fields: MinimalConfigEntity["fields"]
+): MinimalConfigEntity => ({
+  slug: "hero",
+  tableName: kind === "single" ? "single_hero" : "comp_hero",
+  fields,
+  settings: { source, settings: { slug: "hero" } },
+});
+
+/** Each file's up statements, writing `steps` in turn into one folder. */
+async function createdInTurn(
+  kind: "single" | "fieldGroup",
+  steps: MinimalConfigEntity[]
+): Promise<string[]> {
+  const dir = await mkdtemp(join(tmpdir(), "nextly-builder-mapping-"));
+  const written: string[] = [];
+  for (const [index, entity] of steps.entries()) {
+    const result = await generateMigration({
+      name: `step_${index}`,
+      dialect: "mysql",
+      migrationsDir: dir,
+      collections: [],
+      singles: kind === "single" ? [entity] : [],
+      components: kind === "fieldGroup" ? [entity] : [],
+      nonInteractive: true,
+      now: new Date(Date.UTC(2026, 10, 10, 12, index)),
+    });
+    if (result === null) throw new Error("no migration was written");
+    written.push(
+      parseSqlSections(await readFile(result.sqlPath, "utf-8")).upSql
+    );
+  }
+  return written;
+}
+
+const BODY = [{ name: "body", type: "text" }];
+
+describe.each(["single", "fieldGroup"] as const)(
+  "a %s's text column on MySQL",
+  kind => {
+    it("is unbounded TEXT for a Builder one, as its Builder creator makes it, and the next file leaves it alone", async () => {
+      const [first, next] = await createdInTurn(kind, [
+        entityOf(kind, "builder", BODY),
+        entityOf(kind, "builder", [...BODY, { name: "extra", type: "text" }]),
+      ]);
+
+      expect(first).toMatch(/`body` text\b/i);
+      // The next change adds its field and plans nothing for the column already there.
+      expect(next).toMatch(/`extra` text\b/i);
+      expect(next).not.toMatch(/`body`/);
+    });
+
+    it("stays varchar(255) for a code-first one", async () => {
+      const [first] = await createdInTurn(kind, [entityOf(kind, "code", BODY)]);
+
+      expect(first).toMatch(/`body` varchar\(255\)/i);
+    });
+  }
+);

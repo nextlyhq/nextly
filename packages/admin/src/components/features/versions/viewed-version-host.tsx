@@ -42,6 +42,7 @@ import {
   type TakeoverType,
 } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
+import type { VersionScope } from "@admin/services/versionApi";
 
 import {
   ChangesLayoutProvider,
@@ -52,9 +53,12 @@ import {
 import {
   useDocumentHistory,
   type DocumentHistoryValue,
+  type EditorRestoreSurface,
   type RestoreAffordance,
   type ViewedVersion,
 } from "./document-history-context";
+import { restoreIntoEditor } from "./restore-into-editor";
+import { removedFieldsOf, restorePlan, restoresInEditor } from "./restore-plan";
 import { snapshotToFormValues } from "./snapshot-to-form-values";
 import { useChangeNavigation } from "./useChangeNavigation";
 import {
@@ -70,7 +74,10 @@ import {
   type ChangesState,
   type VersionChanges,
 } from "./version-changes";
-import { VersionChangesForm } from "./VersionChangesForm";
+import {
+  VersionChangesForm,
+  type VersionFieldRestore,
+} from "./VersionChangesForm";
 import { VersionComparisonBar } from "./VersionComparisonBar";
 import { WithheldFieldsProvider } from "./withheld-fields-context";
 
@@ -168,15 +175,22 @@ export interface ViewedVersionHost {
  * Holds everything an editor needs to answer a published version, so each
  * editor states the wiring once and neither answers the panel differently.
  *
- * @param fields - every field the document declares, system fields included
+ * @param fields - the fields the editor draws, system fields included
  * @param takeoverTypes - the takeover field types, from the same source the
  *   live layout used
+ * @param valueFields - every field the document declares, where the editor
+ *   draws fewer (a plugin's switch keeps some off the type): the version's
+ *   values are read over these, so a drawn field conditioned on one it does
+ *   not draw is judged on the value the version stored. Defaults to `fields`.
  */
 export function useViewedVersion(
   fields: FieldConfig[],
   takeoverTypes: TakeoverType[],
   /** The editor's version in a language; see `DocumentHistoryValue`. */
-  versionFor?: (locale: string | null) => Promise<string | undefined>
+  versionFor?: (locale: string | null) => Promise<string | undefined>,
+  /** The editor a restore puts values back into; see `DocumentHistoryValue`. */
+  editor?: EditorRestoreSurface,
+  valueFields: FieldConfig[] = fields
 ): ViewedVersionHost {
   // Which past version the document area is showing, or null for the live
   // document. Held by the component that swaps the document, and published
@@ -196,8 +210,9 @@ export function useViewedVersion(
       restore: restoreAffordance,
       setRestore: setRestoreAffordance,
       ...(versionFor ? { versionFor } : {}),
+      ...(editor ? { editor } : {}),
     }),
-    [viewingVersion, restoreAffordance, versionFor]
+    [viewingVersion, restoreAffordance, versionFor, editor]
   );
 
   // One normalization of the version's snapshot, over EVERY declared field.
@@ -206,8 +221,8 @@ export function useViewedVersion(
   // still hold the values the version stored.
   const historicalValues = useMemo(() => {
     if (!viewingVersion) return null;
-    return snapshotToFormValues(fields, viewingVersion.snapshot);
-  }, [viewingVersion, fields]);
+    return snapshotToFormValues(valueFields, viewingVersion.snapshot);
+  }, [viewingVersion, valueFields]);
 
   const historicalFields = useMemo(() => {
     if (!viewingVersion || !historicalValues) return null;
@@ -437,6 +452,30 @@ function baselineOf(viewing: ViewedVersion): number | null {
 }
 
 /**
+ * The fields the version on screen holds that the content type no longer has,
+ * as the comparison the version view draws names them: the history's restore
+ * lists them disabled. Read from the same comparison, so it is fetched once.
+ */
+export function useViewedRemovedFields(
+  scope: VersionScope,
+  viewing: ViewedVersion | null
+): ReadonlySet<string> {
+  const from = viewing ? baselineOf(viewing) : null;
+  const to = viewing ? viewing.versionNo : null;
+  const diff = useVersionDiff({
+    scope,
+    from,
+    to,
+    enabled: from !== null && to !== null,
+  });
+  const data = to === null ? undefined : diffForPair(diff.data, from, to);
+  return useMemo(
+    () => removedFieldsOf(data ? versionChangesOf(data) : null),
+    [data]
+  );
+}
+
+/**
  * What the version on screen changed against the one it is compared with,
  * read from the same comparison the comparison page draws.
  */
@@ -480,6 +519,7 @@ function VersionContent({
   changes,
   order,
   current,
+  restoreField,
 }: {
   viewing: ViewedVersion;
   fields: FieldConfig[];
@@ -487,6 +527,8 @@ function VersionContent({
   changes: VersionChanges | null;
   order: readonly string[];
   current: string | null;
+  /** "Restore this field" on each changed field, where restore is offered. */
+  restoreField?: VersionFieldRestore;
 }) {
   const outerLocale = useEntryLocale();
   const { getLocale, defaultLocale } = useLocalization();
@@ -547,6 +589,7 @@ function VersionContent({
               current={current}
               showUnchanged={showUnchanged}
               onToggleUnchanged={() => setShowUnchanged(v => !v)}
+              {...(restoreField ? { restoreField } : {})}
             />
           ) : (
             // Nothing to mark yet (the first version, or while what changed is
@@ -557,6 +600,60 @@ function VersionContent({
       </TranslationFieldProvider>
     </EntryLocaleProvider>
   );
+}
+
+/**
+ * "Restore this field" for the version on screen: the same restore as
+ * "Restore…", one field at a time, offered only where the history offers
+ * restoring and an editor is there to take the value. Each field is judged
+ * against the editor as it stands when the version is shown.
+ */
+function useFieldRestore(
+  viewing: ViewedVersion,
+  editor: EditorRestoreSurface | undefined,
+  restore: RestoreAffordance | null,
+  changes: VersionChanges | null
+): VersionFieldRestore | undefined {
+  const offered = Boolean(
+    editor &&
+      restore?.canRestore &&
+      restoresInEditor(viewing.locale, editor.locale)
+  );
+  const rows = useMemo(() => {
+    if (!offered || !editor || viewing.isLoading || viewing.error) return null;
+    const snapshot =
+      typeof viewing.snapshot === "object" && viewing.snapshot !== null
+        ? (viewing.snapshot as Record<string, unknown>)
+        : {};
+    return restorePlan({
+      fields: editor.fields,
+      snapshot,
+      current: editor.currentValues(),
+      dirty: editor.dirtyFields(),
+      withheld: viewing.withheld,
+      canEdit: editor.canEdit,
+      ...(editor.translatable ? { translatable: editor.translatable } : {}),
+      removed: removedFieldsOf(changes),
+      // As "Restore…" judges it: a version holding no language restores only
+      // its shared fields on a translated document.
+      versionLocale: viewing.locale,
+    });
+  }, [offered, editor, viewing, changes]);
+  return useMemo(() => {
+    if (!rows || !editor) return undefined;
+    const byName = new Map(rows.map(row => [row.name, row]));
+    return {
+      rowFor: name => byName.get(name),
+      restore: name =>
+        restoreIntoEditor({
+          editor,
+          rows,
+          names: [name],
+          versionNo: viewing.versionNo,
+          savedAt: viewing.about?.createdAt ?? null,
+        }),
+    };
+  }, [rows, editor, viewing.versionNo, viewing.about]);
 }
 
 /**
@@ -577,9 +674,10 @@ function ViewedVersionFrame({
   actionsDisabled: boolean;
   bannerSlot: HTMLElement | null;
 }) {
-  const { restore } = useDocumentHistory();
+  const { restore, editor } = useDocumentHistory();
   const actions = useVersionActions(actionsDisabled);
   const { changes, state } = useViewedChanges(viewing);
+  const restoreField = useFieldRestore(viewing, editor, restore, changes);
   const layout = useMemo(() => layoutNames(fields), [fields]);
   const order = useMemo(
     () => (changes ? changeOrder(changes, layout) : []),
@@ -632,6 +730,7 @@ function ViewedVersionFrame({
           changes={changes}
           order={order}
           current={current}
+          {...(restoreField ? { restoreField } : {})}
         />
         {actions ? (
           <VersionPhoneBar

@@ -139,13 +139,13 @@ To add them to an app by hand:
   one.
 - **Other instances:** with Nextly's cache handlers installed (see Cache
   Components below), every other instance stops serving the previous version
-  within about five seconds. They treat the expiry as standing for one second
-  past the write, the time an instance may keep a collection's settings
-  cached, so a page one of them rebuilt from settings it read just before a
-  schema change is not served either. That second is the whole cost: a tag
-  written more than about once a second keeps the other instances rebuilding
-  the reads that carry it until the writes pause, while the instance making
-  the writes is not affected.
+  within about five seconds. They treat the expiry as standing for two seconds
+  past the write, the time an instance may still hold a collection's settings
+  from before a change, so a page one of them rebuilt from settings it read
+  just before a schema change is not served either. Those two seconds are the
+  whole cost: a tag written more than about once every two seconds keeps the
+  other instances rebuilding the reads that carry it until the writes pause,
+  while the instance making the writes is not affected.
 - **Without Nextly's cache handlers:** Next.js's own cache judges a stored page
   or read by when it was stored, not by when its render read the content. A
   render stores its page after its response is sent, so a render that began

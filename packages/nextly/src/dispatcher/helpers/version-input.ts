@@ -60,3 +60,23 @@ export function versionInputOf(body: unknown): Record<string, unknown> {
     Object.entries(parsed.data).filter(([, value]) => value !== undefined)
   );
 }
+
+// A restore's choice of fields: top-level names, each a non-empty string. Any
+// other key the body names is left to `versionInputOf` or ignored.
+const RestoreFieldsInput = z
+  .object({
+    fields: z.array(z.string().min(1)).max(1000).optional(),
+  })
+  .strip();
+
+/**
+ * The fields a restore's body chooses, or undefined for every field the
+ * version holds. A `fields` that is not a list of names is refused, rather
+ * than read as "all of them".
+ */
+export function restoreFieldsOf(body: unknown): string[] | undefined {
+  if (body === undefined || body === null) return undefined;
+  const parsed = RestoreFieldsInput.safeParse(body);
+  if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+  return parsed.data.fields;
+}

@@ -26,7 +26,11 @@ import {
   EDITOR_WORDS,
   type BuilderShellProps,
 } from "@nextlyhq/builder/shell";
-import { usePluginRoute, writePluginRoute } from "@nextlyhq/plugin-sdk/admin";
+import {
+  PlaceTabs,
+  usePluginRoute,
+  writePluginRoute,
+} from "@nextlyhq/plugin-sdk/admin";
 import {
   Alert,
   AlertDescription,
@@ -76,6 +80,7 @@ import {
   type PageAddressResponse,
 } from "../../pages-search-contract";
 import type { PublishReadinessResponse } from "../../publish-readiness-contract";
+import { PAGE_BUILDER_SETTINGS_PLACE } from "../../settings-place-contract";
 import {
   askReadiness,
   publishChosen,
@@ -88,6 +93,7 @@ import { RemovalStatusRow, RemovalStepPanel } from "./breakpoint-removal-step";
 import { undoableHint } from "./breakpoint-undo-flow";
 import { UndoStatusRow, UndoStepPanel } from "./breakpoint-undo-step";
 import type { SettingsAddress } from "./settings-address";
+import type { SettingsPlace } from "./settings-place";
 import type { SharePreview } from "./share-preview";
 import { SiteCodeSection } from "./site-code-settings";
 import {
@@ -108,6 +114,11 @@ type DialogState = Parameters<
 export interface SettingsDialogProps extends DialogState {
   /** The entry's own fields, drawn by the admin, or null where there are none. */
   pageFields: ReactNode | null;
+  /**
+   * The place other plugins add tabs to, beside the page's own settings, or
+   * null for a document that offers none (a Layout, a component).
+   */
+  place?: SettingsPlace | null;
   /**
    * The page's Layout section, heading and all, or null for a document that
    * is not a page drawn inside a Layout. Drawn as given.
@@ -157,6 +168,7 @@ export function SettingsDialog({
   onOpenChange,
   returnFocus,
   pageFields,
+  place = null,
   pageLayout = null,
   share,
   seoFields,
@@ -217,17 +229,19 @@ export function SettingsDialog({
               value="page"
               className="min-h-0 flex-1 overflow-y-auto px-6 pb-6"
             >
-              <ThisPage
-                pageFields={pageFields}
-                pageLayout={pageLayout}
-                share={share}
-                seoFields={seoFields}
-                address={
-                  address === null ? null : (
-                    <AddressLine address={address} open={open} />
-                  )
-                }
-              />
+              <PlaceTabsOf place={place}>
+                <ThisPage
+                  pageFields={pageFields}
+                  pageLayout={pageLayout}
+                  share={share}
+                  seoFields={seoFields}
+                  address={
+                    address === null ? null : (
+                      <AddressLine address={address} open={open} />
+                    )
+                  }
+                />
+              </PlaceTabsOf>
             </TabsContent>
             {siteTab ? (
               <TabsContent
@@ -282,6 +296,36 @@ export function SettingsDialog({
         </AlertDialogContent>
       </AlertDialog>
     </>
+  );
+}
+
+/**
+ * The page's own settings, with the tabs other plugins add beside them under
+ * General; the settings alone where nothing is added or the document offers
+ * no place.
+ */
+function PlaceTabsOf({
+  place,
+  children,
+}: {
+  place: SettingsPlace | null;
+  children: ReactNode;
+}): JSX.Element {
+  // The tab shown, held here so a tab can show General (`openGeneral`).
+  const [open, setOpen] = useState<string | null>(null);
+  if (place === null) return <>{children}</>;
+  return (
+    <PlaceTabs
+      place={PAGE_BUILDER_SETTINGS_PLACE}
+      context={place.context}
+      tabProps={{ ...place.tabProps, openGeneral: () => setOpen(null) }}
+      openTab={open}
+      onOpenTabChange={setOpen}
+      contentLabel="General"
+      className="pt-4"
+    >
+      {children}
+    </PlaceTabs>
   );
 }
 

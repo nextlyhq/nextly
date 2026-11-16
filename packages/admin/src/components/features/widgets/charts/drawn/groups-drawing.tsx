@@ -155,7 +155,7 @@ export default function GroupsDrawing({
       className="relative min-h-0 flex-1"
       data-motion={animate ? "animated" : "reduced"}
       onMouseMove={pointer.onMouseMove}
-      // design-lint-ok: each group's colour, set once from its chart slot's token.
+      // design-lint-ok: each group's colour, set once from its mark's token.
       style={chartConfigStyle(config)}
     >
       {/* The engine never sees the pointer, and draws no tooltip (`pointer-index`): the pointer

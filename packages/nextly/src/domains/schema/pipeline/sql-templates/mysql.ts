@@ -150,9 +150,25 @@ function generateChangeColumnNullable(op: ChangeColumnNullableOp): string {
 }
 
 function generateChangeColumnDefault(op: ChangeColumnDefaultOp): string {
-  return op.toDefault === undefined
-    ? `ALTER TABLE ${q(op.tableName)} ALTER COLUMN ${q(op.columnName)} DROP DEFAULT`
-    : `ALTER TABLE ${q(op.tableName)} ALTER COLUMN ${q(op.columnName)} SET DEFAULT ${op.toDefault}`;
+  const column = `ALTER TABLE ${q(op.tableName)} ALTER COLUMN ${q(op.columnName)}`;
+  if (op.toDefault === undefined) return `${column} DROP DEFAULT`;
+  return `${column} SET DEFAULT ${settableDefault(op.toDefault)}`;
+}
+
+/** A number, a quoted string, or one of MySQL's literal keywords. */
+const MYSQL_DEFAULT_LITERAL =
+  /^(?:[-+]?\d+(?:\.\d+)?|'(?:[^'\\]|''|\\.)*'|NULL|TRUE|FALSE)$/i;
+
+/**
+ * A default as `ALTER COLUMN … SET DEFAULT` takes it. That clause accepts a literal or an
+ * expression in parentheses and nothing else: the bare `CURRENT_TIMESTAMP` a column definition
+ * may carry is a syntax error there, so every non-literal default is wrapped, unless it already is.
+ */
+function settableDefault(expression: string): string {
+  const value = expression.trim();
+  if (MYSQL_DEFAULT_LITERAL.test(value)) return value;
+  if (value.startsWith("(") && value.endsWith(")")) return value;
+  return `(${value})`;
 }
 
 export class MysqlUnsupportedOperationError extends Error {

@@ -77,6 +77,16 @@ describe("a document's metadata text", () => {
     ).toBe("Second | Field Notes");
   });
 
+  it("fills the title a shared link shows, bound per entry as the title is", () => {
+    const document = documentWith({
+      title: [{ $bind: "title" }, " | Acme"],
+      socialTitle: ["Read: ", { $bind: "title" }],
+    });
+    expect(
+      resolveDocumentSeo(document, runFor({ title: "Hello" })).socialTitle
+    ).toBe("Read: Hello");
+  });
+
   it("formats a bound value as a text prop's would be", () => {
     const document = documentWith({
       description: [
@@ -285,6 +295,15 @@ describe("saving a document's metadata", () => {
 
   it("accepts literal and bound segments and an image binding", () => {
     expect(issuesOf({ title: TITLE, image: { $bind: "cover" } })).toEqual([]);
+  });
+
+  it("holds the title a shared link shows to the shape the title is held to", () => {
+    expect(issuesOf({ socialTitle: ["Read: ", { $bind: "title" }] })).toEqual(
+      []
+    );
+    expect(
+      issuesOf({ socialTitle: "Not a list", image: { $bind: "cover" } })
+    ).toEqual([{ path: "/settings/seo/socialTitle", code: "invalid-seo" }]);
   });
 
   it("refuses a value of the wrong shape, an unknown field and a list item", () => {

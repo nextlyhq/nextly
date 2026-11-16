@@ -18,7 +18,7 @@ import {
 } from "@admin/components/features/email-hub/sending/setup-copy";
 import {
   ChooseProvider,
-  SetupStepper,
+  SETUP_STEPS,
   type SetupStep,
 } from "@admin/components/features/email-hub/sending/SetupSteps";
 import {
@@ -36,6 +36,7 @@ import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
+import { Stepper } from "@admin/components/ui/stepper";
 import {
   EMAIL_PROVIDER_UPDATE_PERMISSIONS,
   holdsAny,
@@ -685,7 +686,7 @@ export default function CreateEmailProviderPage(): JSX.Element {
           parentCrumb={{ label: "Sending", href: ROUTES.EMAIL_SENDING }}
         >
           <div className="space-y-6">
-            <SetupStepper current={setup.step} />
+            <Stepper steps={SETUP_STEPS} current={setup.step - 1} />
             <SetupBody setup={setup} />
           </div>
         </EmailSubpageLayout>

@@ -23,6 +23,7 @@ import {
   DOCUMENT_VERDICT_CODES,
   registryBlockSource,
   registryNestingSource,
+  slotAdmits,
   validateDocument,
   walkNodes,
 } from "@nextlyhq/blocks-engine";
@@ -364,7 +365,10 @@ function disallowedBlockIssues(
 
   const disallowed = new Set<string>();
   walkNodes(doc.nodes, node => {
-    if (typeof node.type === "string" && !isAllowed(node.type, allow)) {
+    // The engine's one reading of an allow-list, which a slot's allow-list
+    // and the blocks route's listing match by too: an exact name, or "ns/*"
+    // bound to the namespace separator ("core/*" never admits "coreevil/x").
+    if (typeof node.type === "string" && !slotAdmits(allow, node.type)) {
       disallowed.add(node.type);
     }
   });
@@ -378,19 +382,4 @@ function disallowedBlockIssues(
       message: `${label} does not accept ${[...disallowed].sort().join(", ")}. Accepted: ${accepted}.`,
     },
   ];
-}
-
-/**
- * Exact name match, or a namespace match for a `namespace/*` pattern.
- *
- * The wildcard binds to the namespace separator rather than to raw characters:
- * `core/*` matches `core/heading` and never `coreevil/banner`. A bare prefix
- * test would quietly admit any namespace that merely starts with the same
- * letters, which is a wider policy than the declaration reads as.
- */
-function isAllowed(type: string, allow: readonly string[]): boolean {
-  return allow.some(pattern => {
-    if (!pattern.endsWith("/*")) return type === pattern;
-    return type.startsWith(pattern.slice(0, -1));
-  });
 }

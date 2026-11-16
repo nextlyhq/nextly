@@ -347,7 +347,7 @@ function emailFact(data: Record<string, unknown>): HealthFact {
   return production(data)
     ? fact("email", "Email", "Not set up", {
         chip: { label: "Warning", tone: "warning" },
-        actions: adminAction("Set up", "email/sending"),
+        actions: adminAction("Set up", "settings/email/sending"),
         warnings: 1,
       })
     : fact("email", "Email", "Not set up", {

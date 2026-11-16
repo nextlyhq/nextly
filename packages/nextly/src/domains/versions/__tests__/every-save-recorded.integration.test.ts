@@ -473,8 +473,12 @@ describe.each(getConfiguredTestDialects())(
         (err: unknown) => err
       );
 
+      // Refused before the version is read: with drafts off, the collection
+      // has no working draft for any restore to write.
       expect(error).toBeDefined();
-      expect(String((error as { code?: string }).code)).toBe("CONFLICT");
+      expect(String((error as { code?: string }).code)).toBe(
+        "BUSINESS_RULE_VIOLATION"
+      );
       const [live] = (
         await current.adapter.select<{
           id: string;

@@ -54,6 +54,8 @@ export interface BuilderConfig {
   failed: boolean;
   /** The submissions collection's resolved slug, once known. */
   submissionsSlug: string | undefined;
+  /** The forms collection's resolved slug, once known. */
+  formsSlug: string | undefined;
 }
 
 const LOADING: BuilderConfig = {
@@ -64,6 +66,7 @@ const LOADING: BuilderConfig = {
   redirectCollections: null,
   failed: false,
   submissionsSlug: undefined,
+  formsSlug: undefined,
 };
 
 /** The editor's configuration from the route's answer, `null` for a failure. */
@@ -86,6 +89,7 @@ function builderConfigFrom(
     redirectCollections: config?.redirectCollections ?? [],
     failed: config === null,
     submissionsSlug: config?.slugs?.submissions,
+    formsSlug: config?.slugs?.forms,
   };
 }
 

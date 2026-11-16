@@ -176,6 +176,13 @@ export function registerClassUsageMaintenance(args: {
    * document again. Absent, a failure is only raised and logged.
    */
   markDirty?: () => Promise<void>;
+  /**
+   * Whether a document of `collection` may hold blocks at all, known without
+   * a read; absent, every collection may. A save to one that may not derives
+   * no rows, so its configuration is not asked for. A delete is not asked:
+   * `forget` removes by id whatever the collection declares now.
+   */
+  mayHoldBlocks?: (collection: string) => boolean;
 }): CommittedWriteReconciler {
   const handler = (context: UnknownRecord) => maintain(args, context);
   for (const phase of MAINTAINED_PHASES) {
@@ -387,6 +394,9 @@ async function planMaintenance(
   // tables, which raise no hooks, so a maintenance write cannot re-enter here.
   const target = hookTargetOf<ClassUsageDirectApi>(context);
   if (target === null) return null;
+  if (target.kind !== "single" && args.mayHoldBlocks?.(target.slug) === false) {
+    return null;
+  }
   return target.kind === "single"
     ? singleMaintenanceOf(args, target)
     : maintenanceOf(args, target, requestContextFor(context));

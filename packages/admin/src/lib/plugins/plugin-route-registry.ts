@@ -14,6 +14,8 @@
  * @module lib/plugins/plugin-route-registry
  */
 
+import { pluginPageAddress } from "nextly/config";
+
 import type { ActiveNavSection } from "@admin/constants/nav-sections";
 
 export interface RegisteredPluginPage {
@@ -33,13 +35,16 @@ export interface RegisteredPluginPage {
 
 const registry = new Map<string, RegisteredPluginPage>();
 
-/** Build the namespaced admin path for a plugin page. */
 /** Where every plugin page's address starts, ahead of its slug. */
 const PLUGIN_PAGE_PREFIX = "/admin/plugins/";
 
+/**
+ * Build the namespaced admin path for a plugin page: core's
+ * `pluginPageAddress`, the address the prebuilt admin page names the page's
+ * startup reads by, so the page is registered where those reads look for it.
+ */
 export function pluginPagePath(slug: string, path: string): string {
-  const clean = path.replace(/^\/+/, "");
-  return `${PLUGIN_PAGE_PREFIX}${slug}/${clean}`;
+  return pluginPageAddress(slug, path);
 }
 
 /**

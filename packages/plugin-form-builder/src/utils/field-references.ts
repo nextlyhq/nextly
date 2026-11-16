@@ -1,10 +1,13 @@
 /**
  * Find what references a form field by name, so destructive actions can be
- * guarded: a field that another field's conditional logic or a notification's
- * recipient/reply-to interpolation points at must not be silently deletable.
+ * guarded: a field that another field's conditional logic, a notification's
+ * recipient/reply-to interpolation, or the form's one response per email
+ * points at must not be silently deletable.
  */
 
-import type { AnyFormField, FormNotification } from "../types";
+import type { AnyFormField, FormNotification, FormSettings } from "../types";
+
+import { conditionsOf } from "./notification-model";
 
 /**
  * The one spelling of a field reference this plugin recognises: `{{fieldName}}`
@@ -26,7 +29,7 @@ export function parseFieldRef(value: string | undefined): string | null {
 
 export interface FieldReference {
   /** What kind of thing holds the reference. */
-  kind: "condition" | "notification";
+  kind: "condition" | "notification" | "setting";
   /** Human label of the referrer (field label or notification name). */
   label: string;
 }
@@ -46,13 +49,41 @@ function referencesInTemplate(template: string, fieldName: string): boolean {
   return templatePattern(fieldName).test(template);
 }
 
-/** All references to `fieldName` across the form's fields and notifications. */
+/** What the form's settings say about one response per person. */
+export type OneResponseChoice = Pick<
+  FormSettings,
+  "oneResponse" | "oneResponseField"
+>;
+
+/** The label a setting that refers to a field is named by. */
+const ONE_RESPONSE_SETTING = "One response per person";
+
+/**
+ * The field one response per email compares, when the form takes one
+ * response per email address; none otherwise.
+ */
+export function oneResponseEmailField(
+  settings: OneResponseChoice | undefined
+): string | undefined {
+  return settings?.oneResponse === "email"
+    ? settings.oneResponseField
+    : undefined;
+}
+
+/**
+ * All references to `fieldName` across the form's fields, notifications and
+ * settings (the Email field one response per person compares).
+ */
 export function findFieldReferences(
   fieldName: string,
   fields: readonly AnyFormField[],
-  notifications: readonly FormNotification[]
+  notifications: readonly FormNotification[],
+  settings?: OneResponseChoice
 ): FieldReference[] {
   const references: FieldReference[] = [];
+  if (oneResponseEmailField(settings) === fieldName) {
+    references.push({ kind: "setting", label: ONE_RESPONSE_SETTING });
+  }
 
   for (const field of fields) {
     if (field.name === fieldName) continue;
@@ -82,9 +113,19 @@ export function findFieldReferences(
     const referencedByTemplate = templates.some(template =>
       referencesInTemplate(template, fieldName)
     );
-    // Send-conditions name the field directly (no interpolation syntax).
-    const referencedByCondition = notification.condition?.field === fieldName;
-    if (referencedByTemplate || referencedByCondition) {
+    // Send-conditions name the field directly (no interpolation syntax),
+    // read through the notification model so one condition and several
+    // count alike; so does a file field the notification attaches by name.
+    const referencedByCondition = conditionsOf(notification).list.some(
+      condition => condition.field === fieldName
+    );
+    const referencedByAttachment =
+      notification.attachFields?.includes(fieldName) ?? false;
+    if (
+      referencedByTemplate ||
+      referencedByCondition ||
+      referencedByAttachment
+    ) {
       references.push({
         kind: "notification",
         label: notification.name || "Notification",
@@ -102,11 +143,15 @@ export function findFieldReferences(
  */
 export function buildFieldReferenceMap(
   fields: readonly AnyFormField[],
-  notifications: readonly FormNotification[]
+  notifications: readonly FormNotification[],
+  settings?: OneResponseChoice
 ): Map<string, FieldReference[]> {
   const map = new Map<string, FieldReference[]>();
   for (const field of fields) {
-    map.set(field.name, findFieldReferences(field.name, fields, notifications));
+    map.set(
+      field.name,
+      findFieldReferences(field.name, fields, notifications, settings)
+    );
   }
   return map;
 }
@@ -140,7 +185,8 @@ export function renameInFieldConditions(
 
 /**
  * The notifications with every reference to `from` naming `to` instead: the
- * addresses (`{{ from }}`) and the condition `findFieldReferences` reads.
+ * addresses (`{{ from }}`), the conditions and the attached file fields
+ * `findFieldReferences` reads.
  */
 export function renameInNotifications(
   notifications: readonly FormNotification[],
@@ -165,6 +211,19 @@ export function renameInNotifications(
     }
     if (notification.condition?.field === from) {
       next.condition = { ...notification.condition, field: to };
+    }
+    if (notification.conditions) {
+      next.conditions = {
+        ...notification.conditions,
+        list: notification.conditions.list.map(condition =>
+          condition.field === from ? { ...condition, field: to } : condition
+        ),
+      };
+    }
+    if (notification.attachFields) {
+      next.attachFields = notification.attachFields.map(name =>
+        name === from ? to : name
+      );
     }
     return next;
   });

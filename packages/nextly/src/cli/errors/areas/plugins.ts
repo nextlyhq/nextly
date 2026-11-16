@@ -153,6 +153,29 @@ export const PLUGIN_CODES = defineCodes({
       },
     ],
   },
+  PLUGIN_COMMAND_FROM_OLDER_RELEASE: {
+    cause:
+      "A plugin install or uninstall ran in production from a Nextly release older than the one that set the preset roles' grants, and changed nothing.",
+    from: [
+      {
+        // Refused before anything is written (`refuseFromAnOlderRelease`): an install sets every
+        // preset role's grants, which an older release than the recorded one leaves as they are.
+        code: "CONFLICT",
+        reason: "preset-grants-set-by-a-newer-release",
+        describe: error => {
+          const [what, ...rest] = sentences(error.publicMessage);
+          return {
+            what: what ?? error.publicMessage,
+            why: "An install sets every preset role's grants with the plugin's permissions, and a release older than the one that set them leaves them as they are, so neither command runs from it in production. Nothing was changed.",
+            next: asSentence(
+              rest.join(" ") ||
+                "Run the command from the release that set them, or a newer one."
+            ),
+          };
+        },
+      },
+    ],
+  },
   PLUGIN_HOOK_SERVICES_REGISTERED: {
     cause:
       "A plugin's install or uninstall hook was not run, because the process already had services registered.",
@@ -623,6 +646,33 @@ export const PLUGIN_CODES = defineCodes({
             nextFrom: 1,
             why: "In production a configured plugin starts only once `nextly plugins install` has run its `onInstall` and recorded it.",
           }),
+      },
+    ],
+  },
+  PLUGIN_SCHEMA_PREFIX_CHANGED: {
+    cause:
+      "A plugin's schema prefix is not the one its existing tables were created under.",
+    from: [
+      {
+        // As `assertPluginPrefixesKept` throws it, before anything is planned: what changed, why
+        // the prefix is fixed, and the declaration that keeps the tables.
+        code: "CONFLICT",
+        reason: "plugin-schema-prefix-changed",
+        describe: error => {
+          const [what = error.publicMessage, ...rest] = sentences(
+            error.publicMessage
+          );
+          const next = rest.at(-1);
+          return {
+            what,
+            why:
+              rest.slice(0, -1).join(" ") ||
+              "A plugin's prefix is fixed once its tables exist, since the rows cannot move to new names.",
+            next:
+              next ??
+              "Declare the prefix its tables were created under in contributes.schema.prefix.",
+          };
+        },
       },
     ],
   },

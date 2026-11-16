@@ -15,7 +15,13 @@ import type {
   PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
-import { seoPageMetadata, type ReadRules } from "../resolver/provider";
+import {
+  overAnswer,
+  seoPageMetadata,
+  type ReadRules,
+} from "../resolver/provider";
+import { readSeoRules } from "../settings/rules";
+import { structuredDataFromSettings } from "../settings/structured-data-rules";
 
 import {
   buildStructuredData,
@@ -38,30 +44,27 @@ export function withStructuredData(
   resolver: PageMetadataResolver,
   readRules: ReadStructuredDataRules = noStructuredDataRules
 ): PageMetadataResolver {
-  return {
-    // The head's own cache tags: structured data reads nothing they miss
-    // but the entries a relationship names, which the page's route tags.
-    ...(resolver.tags === undefined
-      ? {}
-      : { tags: input => resolver.tags?.(input) ?? [] }),
-    async resolve(input) {
-      const answer = await resolver.resolve(input);
-      const { nodes } = await buildStructuredData(
-        ctx,
-        input,
-        answer,
-        await readRules(ctx, input.locale)
-      );
-      return nodes.length === 0 ? answer : { ...answer, structuredData: nodes };
-    },
-  };
+  // The head's own cache tags: structured data reads nothing they miss but
+  // the entries a relationship names, which the page's route tags, and the
+  // name a page built in code goes by in a breadcrumb trail, which changes
+  // only with the route's code, so with a deploy. The address record a
+  // trail is named from is among the head's tags.
+  return overAnswer(resolver, async (answer, input) => {
+    const { nodes } = await buildStructuredData(
+      ctx,
+      input,
+      answer,
+      await readRules(ctx, input.locale)
+    );
+    return nodes.length === 0 ? answer : { ...answer, structuredData: nodes };
+  });
 }
 
 /** Where a page's head and structured data read their rules from. */
 export interface StructuredDataReaders {
-  /** The resolver's rules, as the head reads them. */
+  /** The resolver's rules, as the head reads them: the SEO settings when not given. */
   readRules?: ReadRules;
-  /** The structured data rules, as the page reads them. */
+  /** The structured data rules beneath the SEO settings, as the page reads them. */
   readStructuredDataRules?: ReadStructuredDataRules;
 }
 
@@ -75,9 +78,15 @@ export async function pageStructuredData(
   input: PageMetadataInput,
   readers: StructuredDataReaders = {}
 ): Promise<PageStructuredData> {
-  const answer = await seoPageMetadata(ctx, readers.readRules).resolve(input);
-  const readStructured =
-    readers.readStructuredDataRules ?? noStructuredDataRules;
+  // The same readers the page's own markup is built with: the SEO settings,
+  // over the rules a caller gives, so a diagnosis describes what is served.
+  const answer = await seoPageMetadata(
+    ctx,
+    readers.readRules ?? readSeoRules
+  ).resolve(input);
+  const readStructured = structuredDataFromSettings(
+    readers.readStructuredDataRules ?? noStructuredDataRules
+  );
   return buildStructuredData(
     ctx,
     input,

@@ -50,6 +50,16 @@ import type {
   UiSchemaManifest,
 } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import type { AddressKind } from "../../../shared/address-rule";
+import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
+import { appLanguageOrder } from "../../i18n/configured-locales";
+import { joinRetries } from "../../i18n/migration/archive-preflight";
+import { mainTableFields } from "../../i18n/per-language-storage";
+import { busyTableBounds, type BusyTableBounds } from "../busy-table/bounds";
+import { runUnitInTries } from "../busy-table/run-unit";
+import { boundedStopRecord } from "../busy-table/stopped-record";
+import { unresolvedAttempts } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import { checksumOf } from "../migrate/applied-checksums";
 import {
@@ -58,7 +68,6 @@ import {
   runRecordedAttempt,
   snapshotsEquivalent,
 } from "../migrate/drift-reconcile";
-import { runMigrationStatements } from "../migrate/migration-transaction";
 import { refuseRequiredColumnsOverNulls } from "../migrate/required-column-guard";
 import { resolveMigration } from "../migrate/resolve";
 import { marksNoTransaction, splitSqlStatements } from "../migrate/split-sql";
@@ -67,11 +76,13 @@ import { tablesChangedIn } from "../migrate/statement-targets";
 import {
   appMigrationInputs,
   type AppMigrationInputsArgs,
+  type HeldEntity,
 } from "../migrate-create/app-migration-inputs";
 import {
   buildDesiredSnapshotFromConfig,
   generateMigration,
   type AddedStatements,
+  type GenerateArgs,
 } from "../migrate-create/generate";
 import { loadLatestSnapshot } from "../migrate-create/snapshot-io";
 import { countRowsBreakingNotNull } from "../pipeline/classifier/count-helpers";
@@ -86,12 +97,16 @@ import type {
 import { assertDeleteWithinThreshold } from "../pipeline/pre-cleanup/executor";
 import { validateDefaultValue } from "../pipeline/pre-cleanup/validate-default";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
+import { builtByFor } from "../pipeline/registered-collections";
 import { generateStatements } from "../pipeline/sql-templates/index";
+import { plainMysqlEquivalents } from "../pipeline/sql-templates/mysql-live-restate";
 import type { ColumnResolution } from "../pipeline/sql-templates/resolution-statements";
 import {
   classifyFieldKind,
+  fieldsStoredOnRow,
   getColumnDescriptor,
   toSnakeCase,
+  type ColumnOrigin,
 } from "../services/field-column-descriptor";
 import {
   uniquenessCanBeAnIndex,
@@ -99,7 +114,7 @@ import {
 } from "../services/index-name";
 import { loadUiSchema } from "../ui-schema/loader";
 import { uiToMinimal } from "../ui-schema/merge";
-import { mutateManifest } from "../ui-schema/mutate";
+import { mutateManifest, type ManifestKind } from "../ui-schema/mutate";
 
 /** What the writer works with: the app's database, config and folders. */
 export interface CollectionSaveDeps {
@@ -132,6 +147,11 @@ export type BuilderSaveSetup = Omit<
 
 /** One save of one collection. */
 export interface CollectionSave {
+  /**
+   * The kind of entity saved: a collection when absent. The writer reads
+   * everything that tells the kinds apart from `SAVE_KINDS`.
+   */
+  kind?: AddressKind;
   slug: string;
   /** The collection as it stood before the save; null for a create. */
   previous: UiSchemaEntity | null;
@@ -187,6 +207,49 @@ export interface CollectionSave {
   now?: Date;
 }
 
+/** What tells one kind's save apart from another's. */
+interface SaveKind {
+  kind: AddressKind;
+  /** The definition's list of the kind, which is also the generator's. */
+  manifest: ManifestKind;
+  /** How the kind's table is named (`uiToMinimal`). */
+  prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix;
+  /** The column rule the kind's Builder creator applies (`builtByFor`). */
+  builtBy: ColumnOrigin;
+}
+
+/**
+ * Each kind's save, as the writer reads it. One table, so a save of a Single
+ * or a field group takes its definition list, table name and column rule from
+ * the same place a collection's does, and nothing in the writer names a kind
+ * on its own.
+ */
+const SAVE_KINDS: Record<AddressKind, SaveKind> = {
+  collection: {
+    kind: "collection",
+    manifest: "collections",
+    prefix: "dc_",
+    builtBy: builtByFor("collection", true),
+  },
+  single: {
+    kind: "single",
+    manifest: "singles",
+    prefix: "single_",
+    builtBy: builtByFor("single", true),
+  },
+  fieldGroup: {
+    kind: "fieldGroup",
+    manifest: "components",
+    prefix: STORAGE_FORMAT.tablePrefix,
+    builtBy: builtByFor("fieldGroup", true),
+  },
+};
+
+/** The kind of entity `save` writes. */
+function kindOf(save: CollectionSave): SaveKind {
+  return SAVE_KINDS[save.kind ?? "collection"];
+}
+
 /** What a save wrote. */
 export interface CollectionSaveResult {
   /** The migration files the save wrote, in run order. */
@@ -215,20 +278,40 @@ export async function writeCollectionSave(
      * it has run, each written file is recorded applied where the database
      * stands as its snapshot says, and the save is refused, its files kept,
      * where it does not.
+     *
+     * It answers `"partly-applied"` where it changed the database and then
+     * failed part way: the files are kept, as the change they describe has
+     * partly run, and recorded applied nowhere, so the next `nextly migrate`
+     * names them rather than the database holding a change no file records.
      */
-    appliedBy?: () => Promise<void>;
+    appliedBy?: () => Promise<void | "partly-applied">;
+    /**
+     * Outside development, the change made here once its files are written,
+     * as a field group's or a Single's own DDL makes it (a collection's
+     * leaves it to the deploy's `nextly migrate`). A failure withdraws the
+     * files, as one in development does, so the deploy never applies a change
+     * that was refused; `"partly-applied"` keeps them, recorded nowhere.
+     */
+    appliedAfter?: () => Promise<void | "partly-applied">;
   } = {}
 ): Promise<CollectionSaveResult> {
+  const bounds = boundsFor(deps);
   const written = await writeSave(deps, save, options);
   // Once a push has run, the database changed outside the files: they stay.
   let pushed = false;
   try {
     if (deps.applies && options.appliedBy !== undefined) {
-      await options.appliedBy();
+      const applied = await options.appliedBy();
       pushed = true;
+      if (applied === "partly-applied") {
+        return { files: [...written.names], applied: false };
+      }
       await recordWhatWasPushed(deps, written.files, written.table);
     } else if (deps.applies) {
-      await runWritten(deps, written.files, written.table);
+      await runWritten(deps, written.files, written.table, bounds);
+    } else if (options.appliedAfter !== undefined) {
+      await options.appliedAfter();
+      pushed = true;
     }
     return { files: [...written.names], applied: deps.applies };
   } catch (error) {
@@ -300,11 +383,16 @@ export async function prepareCollectionSave(
   save: CollectionSave,
   options: { historyChecked?: boolean } = {}
 ): Promise<PreparedCollectionSave> {
+  // Read before anything is written, and so before the caller's own work between the two (a
+  // delete's teardown): a bound out of range refuses the save while it still changes nothing.
+  const bounds = boundsFor(deps);
   const written = await writeSave(deps, save, options);
   return {
     files: [...written.names],
     run: async () => {
-      if (deps.applies) await runWritten(deps, written.files, written.table);
+      if (deps.applies) {
+        await runWritten(deps, written.files, written.table, bounds);
+      }
     },
     withdraw: () => written.undo(undefined),
   };
@@ -434,6 +522,7 @@ async function planSave(
   deps: CollectionSaveDeps,
   save: CollectionSave
 ): Promise<SavePlan> {
+  const kind = kindOf(save);
   const current = withPreviousRecorded(
     await loadUiSchema({
       projectRoot: deps.projectRoot,
@@ -443,12 +532,12 @@ async function planSave(
   );
   // Named as the generator names it (`uiToMinimal`), so the scope is the
   // table the migration writes.
-  const table = uiToMinimal(collectionOf(save), "dc_").tableName;
+  const table = uiToMinimal(collectionOf(save), kind.prefix).tableName;
   return {
     current,
     next: (save.removedTogether ?? []).reduce(
-      (manifest, slug) => withCollection(manifest, slug, null),
-      withCollection(current, save.slug, save.entity)
+      (manifest, slug) => withEntity(manifest, kind, slug, null),
+      withEntity(current, kind, save.slug, save.entity)
     ),
     table,
     adoption: await adoptionFor(deps, save, current, table),
@@ -475,17 +564,23 @@ async function adoptionFor(
     await introspectLiveSnapshot(deps.adapter.getDrizzle(), dialect, [table])
   ).tables.find(t => t.name === table);
   if (live === undefined) return null;
+  const kind = kindOf(save);
   const inputs = await appMigrationInputs({
-    ...inputsArgs(deps, [save.previous], save.slug),
-    manifest: withCollection(current, save.slug, save.previous),
+    ...inputsArgs(deps, save, [save.previous]),
+    manifest: withEntity(current, kind, save.slug, save.previous),
   });
-  const declared = inputs.collections.find(c => c.slug === save.slug);
+  const declared = inputs[kind.manifest].find(c => c.slug === save.slug);
+  const placed = (list: ManifestKind) =>
+    declared !== undefined && list === kind.manifest ? [declared] : [];
   const mapped =
     declared === undefined
       ? undefined
-      : buildDesiredSnapshotFromConfig([declared], [], [], dialect).tables.find(
-          t => t.name === table
-        );
+      : buildDesiredSnapshotFromConfig(
+          placed("collections"),
+          placed("singles"),
+          placed("components"),
+          dialect
+        ).tables.find(t => t.name === table);
   return {
     table: live,
     conversions:
@@ -516,6 +611,16 @@ function conversionOf(table: string, op: Operation): ColumnConversion {
         from: op.fromDefault ?? "no default",
         to: op.toDefault ?? "no default",
       };
+    case "add_column":
+      // Named by the column it adds, so the review says which, and each is confirmed on its own:
+      // a field group made before the fields inside its groups with no name were stored lacks one
+      // per such field, which the mapping now declares.
+      return {
+        table,
+        column: op.column.name,
+        from: "missing, as an earlier version made the table",
+        to: `added as Nextly declares it (${op.column.nullable ? "nullable" : "not null"})`,
+      };
     default:
       return {
         table,
@@ -540,6 +645,19 @@ interface SettledRows {
  * Builder's push path keeps. A field the table does not have yet counts every
  * row. Refused before anything is written.
  */
+/**
+ * The saved field an answer names, found where the answer was matched (`saveOfSchemaChange`):
+ * among the row's fields, those inside a group with no name included.
+ */
+function answeredField(
+  save: CollectionSave,
+  column: string
+): UiSchemaEntity["fields"][number] | undefined {
+  return fieldsStoredOnRow(save.entity?.fields ?? []).find(
+    f => f.name === column
+  );
+}
+
 async function settledRows(
   deps: CollectionSaveDeps,
   save: CollectionSave,
@@ -553,7 +671,7 @@ async function settledRows(
     : undefined;
   const settled: SettledRows[] = [];
   for (const resolution of save.resolutions ?? []) {
-    const field = save.entity?.fields.find(f => f.name === resolution.column);
+    const field = answeredField(save, resolution.column);
     if (field === undefined) {
       throw NextlyError.validation({
         errors: [
@@ -566,7 +684,9 @@ async function settledRows(
       });
     }
     if (resolution.kind === "fill") {
-      if (field.unique === true) {
+      // Unique by its Unique mark, or as a relationship stored one-to-one (`builderColumnIsUnique`):
+      // one value would repeat across the rows it fills either way.
+      if (builderColumnIsUnique(field)) {
         throw NextlyError.validation({
           errors: [
             {
@@ -632,7 +752,7 @@ function storesJson(save: CollectionSave, name: string): boolean {
   const field = save.entity?.fields.find(f => f.name === name);
   return (
     field !== undefined &&
-    classifyFieldKind(field as FieldDefinition, "collection") === "json"
+    classifyFieldKind(field as FieldDefinition, kindOf(save).builtBy) === "json"
   );
 }
 
@@ -649,6 +769,12 @@ function resolutionNotice({ column, rows, resolution }: SettledRows): string {
  * the database cannot key (an unbounded MySQL TEXT): the generator leaves such
  * an index out, so the save would claim a uniqueness nothing enforces. The
  * Builder's own DDL refuses it with the same error.
+ *
+ * Only the fields whose columns are on the main table are judged here. A
+ * translated field kept per language has its column in the companion, where
+ * its uniqueness is a per-language index on an expression rather than on the
+ * column, so a MySQL TEXT there can carry it; whether the server can create
+ * that index is judged by `refuseUnindexableTranslatedUnique`.
  */
 function refuseUnenforceableUniques(
   deps: CollectionSaveDeps,
@@ -656,7 +782,14 @@ function refuseUnenforceableUniques(
   table: string
 ): void {
   const dialect = deps.adapter.getCapabilities().dialect;
-  for (const field of save.entity?.fields ?? []) {
+  const entity = save.entity;
+  if (entity === null) return;
+  // The row holds the fields inside a group with no name as columns (`fieldsStoredOnRow`), an
+  // entry's and a field group's instance's alike, so a unique one among them is judged as one
+  // beside the group is.
+  for (const field of fieldsStoredOnRow(
+    mainTableFields(entity, entity.fields)
+  )) {
     // A group with no name only lays fields out and has no column to key.
     const name = field.name;
     if (field.unique !== true || name === undefined) continue;
@@ -664,7 +797,7 @@ function refuseUnenforceableUniques(
     const column = getColumnDescriptor(
       field as FieldDefinition,
       dialect,
-      "collection"
+      kindOf(save).builtBy
     );
     if (column === null) continue;
     if (!uniquenessCanBeAnIndex(column.dialectType, dialect)) {
@@ -704,6 +837,43 @@ function refuseUnconfirmedConversions(
   });
 }
 
+/**
+ * How the generator judges the save's fields joining translation: worded for
+ * the Builder, and knowing which of them an earlier apply of the same change
+ * already moved here and which of those the save narrows (`joinRetries`), as
+ * the push's preflight judges them. The file is generated before that push runs, so without it a retry
+ * the push would finish, or refuse with how to finish it, is refused first as
+ * a first attempt, in the words for code.
+ */
+async function joiningJudgementOf(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): Promise<NonNullable<GenerateArgs["joiningJudgement"]>> {
+  return {
+    slug: save.slug,
+    surface: "builder",
+    retries:
+      save.previous !== null && save.entity !== null
+        ? await joinRetries({
+            adapter: deps.adapter,
+            tableName: table,
+            // The Builder's column rule, which made the entity's tables.
+            builtBy: kindOf(save).builtBy,
+            oldFields: namedFields(save.previous),
+            newFields: namedFields(save.entity),
+          })
+        : { moved: new Set(), narrowed: new Set() },
+  };
+}
+
+/** The collection's fields that carry a column's name; a layout field has none. */
+function namedFields(entity: UiSchemaEntity) {
+  return entity.fields.flatMap(f =>
+    f.name === undefined ? [] : [{ ...f, name: f.name }]
+  );
+}
+
 /** The files a save writes, adopt first. */
 interface SaveFiles {
   adopt: string | undefined;
@@ -730,7 +900,12 @@ async function writeFiles(
   if (plan.adoption !== null && save.previous !== null) {
     const adopted = await generateFor(deps, {
       ...held,
-      manifest: withCollection(plan.current, save.slug, save.previous),
+      manifest: withEntity(
+        plan.current,
+        kindOf(save),
+        save.slug,
+        save.previous
+      ),
       save,
       name: `${migrationSlug(save.slug)}_adopt`,
       table: plan.table,
@@ -762,7 +937,12 @@ async function writeFiles(
     convert.push(
       ...(await generateFor(deps, {
         ...held,
-        manifest: withCollection(plan.current, save.slug, save.previous),
+        manifest: withEntity(
+          plan.current,
+          kindOf(save),
+          save.slug,
+          save.previous
+        ),
         save,
         name: `${migrationSlug(save.slug)}_convert`,
         table: plan.table,
@@ -776,6 +956,7 @@ async function writeFiles(
     ...held,
     manifest: plan.next,
     save,
+    joiningJudgement: await joiningJudgementOf(deps, save, plan.table),
     name: `${migrationSlug(save.slug)}_${save.change}`,
     table: plan.table,
     now: new Date(now.getTime() + offset),
@@ -797,6 +978,13 @@ async function writeFiles(
     ...(save.keys === undefined
       ? {}
       : { newTableKeys: new Map([[plan.table, save.keys.after]]) }),
+    // An existing table's keys before and after, which SQLite changes by rebuilding the table
+    // (`foreignKeysOfExistingTables`); PostgreSQL and MySQL take the appended statements.
+    ...(save.keys === undefined ||
+    save.entity === null ||
+    save.previous === null
+      ? {}
+      : { existingTableKeys: new Map([[plan.table, save.keys]]) }),
   });
   onWritten(change);
   return { adopt, change: [...convert, ...change] };
@@ -884,24 +1072,29 @@ function withPreviousRecorded(
   manifest: UiSchemaManifest,
   save: CollectionSave
 ): UiSchemaManifest {
+  const list = kindOf(save).manifest;
   if (
     save.previous === null ||
-    manifest.collections.some(c => c.slug === save.slug)
+    manifest[list].some(c => c.slug === save.slug)
   ) {
     return manifest;
   }
-  return { ...manifest, collections: [...manifest.collections, save.previous] };
+  return { ...manifest, [list]: [...manifest[list], save.previous] };
 }
 
-/** The definition with `slug` replaced by `entity`, or removed where it is null. */
-function withCollection(
+/**
+ * The definition with the `kind` entity `slug` replaced by `entity`, or
+ * removed where it is null.
+ */
+function withEntity(
   manifest: UiSchemaManifest,
+  kind: SaveKind,
   slug: string,
   entity: UiSchemaEntity | null
 ): UiSchemaManifest {
   return entity === null
-    ? mutateManifest(manifest, { type: "delete", kind: "collections", slug })
-    : mutateManifest(manifest, { type: "upsert", kind: "collections", entity });
+    ? mutateManifest(manifest, { type: "delete", kind: kind.manifest, slug })
+    : mutateManifest(manifest, { type: "upsert", kind: kind.manifest, entity });
 }
 
 /** A file's text, or undefined where there is none. */
@@ -978,14 +1171,17 @@ async function generateFor(
     tablesAsTheyStand?: TableSpec[];
     appended?: { up: AddedStatements; down: AddedStatements };
     newTableKeys?: ReadonlyMap<string, readonly ForeignKeySpec[]>;
+    existingTableKeys?: GenerateArgs["foreignKeysOfExistingTables"];
     resolutions?: readonly ColumnResolution[];
     /** Collections the database holds that no snapshot records (`appMigrationInputs`). */
     held?: readonly UiSchemaEntity[];
+    /** How the collection's fields joining translation are judged (`joiningJudgementOf`). */
+    joiningJudgement?: GenerateArgs["joiningJudgement"];
   }
 ): Promise<string[]> {
   const dialect = deps.adapter.getCapabilities().dialect;
   const inputs = await appMigrationInputs({
-    ...inputsArgs(deps, args.held, args.save.slug),
+    ...inputsArgs(deps, args.save, args.held),
     manifest: args.manifest,
   });
   const before = new Set(await sqlFiles(deps.migrationsDir));
@@ -1017,9 +1213,15 @@ async function generateFor(
     previousMetadataUpserts: inputs.previousMetadataUpserts,
     appStream: inputs.appStream,
     defaultLocale: deps.config.localization?.defaultLocale,
+    // The site's order, which decides the value a field leaving translation keeps, from the same
+    // source the save's own push reads (`appLanguageOrder`: the configuration's where it declares
+    // the languages, Settings' otherwise), the configuration's where that has no answer.
+    languageOrder:
+      appLanguageOrder() ??
+      deps.config.localization?.locales.map(locale => locale.code),
     onWarning: message => deps.logger.warn(message),
     scope: {
-      kind: "collection",
+      kind: kindOf(args.save).kind,
       slug: args.save.slug,
       tables: new Set([args.table]),
     },
@@ -1032,9 +1234,15 @@ async function generateFor(
     ...(args.newTableKeys === undefined
       ? {}
       : { foreignKeysOfNewTables: args.newTableKeys }),
+    ...(args.existingTableKeys === undefined
+      ? {}
+      : { foreignKeysOfExistingTables: args.existingTableKeys }),
     ...(args.resolutions === undefined
       ? {}
       : { resolutions: args.resolutions }),
+    ...(args.joiningJudgement === undefined
+      ? {}
+      : { joiningJudgement: args.joiningJudgement }),
     decideRenames: candidates =>
       Promise.resolve(renamesOf(candidates, args.save.renamedFields ?? [])),
     now: args.now,
@@ -1092,7 +1300,8 @@ const emptyAdded = (): { up: AddedStatements; down: AddedStatements } => ({
  * went or changed is dropped before the generated statements (before its
  * column can go), and one that came or changed is added after them (once its
  * column exists). The down undoes each the other way round. None on SQLite,
- * which cannot alter a key in place; the Builder's DDL adds none there either.
+ * which cannot alter a key in place: there the generator rebuilds the table
+ * with its keys after the change (`foreignKeysOfExistingTables`).
  */
 function keyChanges(
   dialect: SupportedDialect,
@@ -1103,6 +1312,24 @@ function keyChanges(
   const same = (a: ForeignKeySpec, b: ForeignKeySpec) =>
     JSON.stringify(a) === JSON.stringify(b);
   const kept = keys.before.filter(k => keys.after.some(a => same(k, a)));
+  // A key that another on the same columns, under a new name, replaces: dropped with the adds,
+  // after its replacement, so the columns are never left unkeyed (MySQL commits each statement).
+  const replaced = (
+    from: readonly ForeignKeySpec[],
+    to: readonly ForeignKeySpec[]
+  ) =>
+    from.filter(
+      k =>
+        !kept.some(c => same(k, c)) &&
+        to.some(
+          a =>
+            !kept.some(c => same(a, c)) &&
+            a.name !== k.name &&
+            a.columns.join("\u0000") === k.columns.join("\u0000")
+        )
+    );
+  const upKept = [...kept, ...replaced(keys.before, keys.after)];
+  const downKept = [...kept, ...replaced(keys.after, keys.before)];
   const between = (
     from: readonly ForeignKeySpec[],
     to: readonly ForeignKeySpec[]
@@ -1116,10 +1343,13 @@ function keyChanges(
       []
     );
   return {
-    up: { first: between(keys.before, kept), last: between(kept, keys.after) },
+    up: {
+      first: between(keys.before, upKept),
+      last: between(upKept, keys.after),
+    },
     down: {
-      first: between(keys.after, kept),
-      last: between(kept, keys.before),
+      first: between(keys.after, downKept),
+      last: between(downKept, keys.before),
     },
   };
 }
@@ -1149,12 +1379,15 @@ function placedJunctions(
 /** What `appMigrationInputs` is asked with for this app, its definition aside. */
 function inputsArgs(
   deps: CollectionSaveDeps,
-  held: readonly UiSchemaEntity[] = [],
-  judged?: string
+  save: CollectionSave,
+  held: readonly UiSchemaEntity[] = []
 ): AppMigrationInputsArgs {
+  const { kind } = kindOf(save);
   return {
-    ...(held.length === 0 ? {} : { held }),
-    ...(judged === undefined ? {} : { judged }),
+    ...(held.length === 0
+      ? {}
+      : { held: held.map((entity): HeldEntity => ({ kind, entity })) }),
+    judged: { kind, slug: save.slug },
     config: deps.config,
     ...(deps.deferredExtends === undefined
       ? {}
@@ -1176,7 +1409,11 @@ function renamesOf(
   );
   return candidates.map(candidate => ({
     candidate,
-    accepted: pairs.has(`${candidate.fromColumn}\u0000${candidate.toColumn}`),
+    // A renamed field group's rows are moved by the save's own statements (`writerRelations`,
+    // from the detector the push runs too), so the generator is told not to move them again.
+    accepted:
+      candidate.fieldGroupTables === undefined &&
+      pairs.has(`${candidate.fromColumn}\u0000${candidate.toColumn}`),
   }));
 }
 
@@ -1203,6 +1440,16 @@ async function sqlFiles(dir: string): Promise<string[]> {
 }
 
 /**
+ * The bounds a save that applies waits for a busy table within, as `nextly migrate` waits: the
+ * environment's (`NEXTLY_LOCK_TIMEOUT`, `NEXTLY_LOCK_TIMEOUT_TOTAL`). Read first, so a bound out of
+ * range refuses the save before it writes or removes anything; undefined where the save applies
+ * nothing.
+ */
+function boundsFor(deps: CollectionSaveDeps): BusyTableBounds | undefined {
+  return deps.applies ? busyTableBounds({ env: process.env }) : undefined;
+}
+
+/**
  * Run each written file as `nextly migrate` runs it, recorded in the ledger:
  * one with a snapshot through the reconcile, judged on the collection's table
  * alone; a companion with none, as written. An adoption is recorded applied
@@ -1213,21 +1460,31 @@ async function sqlFiles(dir: string): Promise<string[]> {
 async function runWritten(
   deps: CollectionSaveDeps,
   files: SaveFiles,
-  table: string
+  table: string,
+  boundsRead: BusyTableBounds | undefined
 ): Promise<void> {
   const db = deps.adapter.getDrizzle();
   const dialect = deps.adapter.getCapabilities().dialect;
   const repo = new SchemaEventsRepository(db, dialect);
+  const bounds = boundsRead ?? busyTableBounds({ env: process.env });
+  // The record of a file a busy table stopped waits for the ledger table one try at most.
+  const recordStopped = boundedStopRecord(deps.adapter, bounds.tryMs);
+  const applied: string[] = [];
   const executeSql = (
     sql: string,
     unit: { source: string; transaction: boolean },
     after: (db: unknown, statementsExecuted: number) => Promise<void>
   ) =>
-    runMigrationStatements(
+    runUnitInTries(
       deps.adapter,
       splitSqlStatements(sql, dialect, unit),
       unit,
-      after
+      after,
+      {
+        bounds,
+        notify: line => deps.logger.warn(line),
+        appliedBefore: () => [...applied],
+      }
     );
   const ordered =
     files.change.length === 0 && files.adopt !== undefined
@@ -1239,13 +1496,20 @@ async function runWritten(
       : await unitOf(deps, files.adopt);
   let before = await scopedSnapshotBefore(deps, ordered[0], table);
   for (const filename of ordered) {
+    // A column made required over rows that would break it, refused before
+    // any statement, as `nextly migrate` refuses it. Asked outside the
+    // judgement of what stayed: nothing of the file has run, so the refusal
+    // is thrown as it is. Inside it, a MySQL file whose tables the judgement
+    // cannot name (a column restated through a prepared statement) was taken
+    // as part-way, and a refusal that ran nothing was reported as a failure
+    // whose statements stayed applied, its files kept for `migrate:resolve`.
+    await refuseBeforeAnyStatement(filename);
     await runJudgingWhatStayed(deps, table, filename, () => runOne(filename));
+    applied.push(filename);
   }
 
-  async function runOne(filename: string): Promise<void> {
+  async function refuseBeforeAnyStatement(filename: string): Promise<void> {
     const file = await unitOf(deps, filename);
-    // A column made required over rows that would break it, refused before
-    // any statement, as `nextly migrate` refuses it.
     await refuseRequiredColumnsOverNulls(
       db,
       dialect,
@@ -1254,9 +1518,19 @@ async function runWritten(
       }),
       filename
     );
+  }
+
+  async function runOne(filename: string): Promise<void> {
+    const file = await unitOf(deps, filename);
     const target = await snapshotOf(deps, filename);
     if (target === null) {
-      await runRecordedAttempt({ file, dialect, repo, executeSql });
+      await runRecordedAttempt({
+        file,
+        dialect,
+        repo,
+        executeSql,
+        recordStopped,
+      });
       return;
     }
     const scopedTarget = onlyTable(target, table);
@@ -1269,6 +1543,7 @@ async function runWritten(
       dialect,
       repo,
       executeSql,
+      recordStopped,
       ...(adoption === undefined
         ? {}
         : {
@@ -1342,9 +1617,15 @@ function tablesChangedBy(
   dialect: SupportedDialect
 ): string[] | undefined {
   const tables = new Set<string>();
-  for (const statement of splitSqlStatements(file.sql, dialect, {
+  const statements = splitSqlStatements(file.sql, dialect, {
     transaction: file.transaction,
-  })) {
+  });
+  // A MySQL nullability change or rename is written as a prepared run built
+  // from the live column; read as the one ALTER TABLE it amounts to, so its
+  // table is named. Any other PREPARE stays unread.
+  for (const statement of dialect === "mysql"
+    ? plainMysqlEquivalents(statements)
+    : statements) {
     const first = /^\s*([A-Za-z]+)/.exec(statement)?.[1]?.toUpperCase();
     if (first !== undefined && TABLELESS_STATEMENTS.has(first)) continue;
     const changed = tablesChangedIn(statement, dialect);
@@ -1574,7 +1855,14 @@ async function settleAttempts(
   repo: SchemaEventsRepository,
   filename: string
 ): Promise<void> {
-  if ((await repo.findFileApplies(filename)).length === 0) return;
+  // Only an attempt still unresolved needs clearing: one that ended with nothing applied (a
+  // busy table's tries that ran out, say) resolved itself, and there is nothing to clear.
+  if (
+    unresolvedAttempts(filename, await repo.findFileApplies(filename))
+      .length === 0
+  ) {
+    return;
+  }
   const removed = () =>
     Promise.reject(
       new NextlyError({
@@ -1597,11 +1885,27 @@ async function settleAttempts(
 }
 
 /** Whether the error says some of a file's statements stayed applied. */
-function partlyApplied(error: unknown): boolean {
+export function partlyApplied(error: unknown): boolean {
   if (!NextlyError.is(error)) return false;
-  if (error.code === "NEXTLY_MIGRATION_PARTIALLY_APPLIED") return true;
+  if (keptPart(error)) return true;
   const cause = (error as { cause?: unknown }).cause;
-  return (
-    NextlyError.is(cause) && cause.code === "NEXTLY_MIGRATION_PARTIALLY_APPLIED"
-  );
+  return NextlyError.is(cause) && keptPart(cause);
+}
+
+/**
+ * Whether `error` says statements of the file stayed: a part-way failure, or a busy table's tries
+ * that stopped after statements had committed (on MySQL, or outside a transaction), which the
+ * stop's outcome says, whatever the schema shows: a committed row change leaves none.
+ */
+function keptPart(error: NextlyError): boolean {
+  if (error.code === "NEXTLY_MIGRATION_PARTIALLY_APPLIED") return true;
+  if (error.code !== "NEXTLY_TABLE_BUSY") return false;
+  const outcome = (
+    error.logContext as
+      | { stop?: { outcome?: { kind?: unknown; restUndone?: unknown } } }
+      | undefined
+  )?.stop?.outcome;
+  // Read failing closed: an outcome that does not say nothing was kept keeps the files.
+  if (outcome?.kind === "nothing-changed") return false;
+  return !(outcome?.kind === "no-retry" && outcome.restUndone === true);
 }

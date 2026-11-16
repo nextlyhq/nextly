@@ -13,6 +13,7 @@ import { assertNoForeignDrops } from "../../../domains/schema/ownership/drop-gua
 import { assertDependenciesInstalled } from "../../../domains/schema/ownership/install-plan";
 import type { OwnerRecord } from "../../../domains/schema/ownership/owner-registry";
 import { assertPluginsInstalled } from "../../../domains/schema/ownership/plugin-install-gate";
+import { assertPluginPrefixesKept } from "../../../domains/schema/ownership/plugin-prefix-check";
 import { assertSchemaVersionUsable } from "../../../domains/schema/ownership/schema-version-check";
 import {
   planUninstall,
@@ -349,6 +350,22 @@ export const PLUGIN_CASES = {
         warn: () => {},
       })
     ),
+  // As `assertPluginPrefixesKept` throws it for a plugin whose tables were created under "seo".
+  PLUGIN_SCHEMA_PREFIX_CHANGED: () =>
+    thrown(() =>
+      assertPluginPrefixesKept({
+        prefixes: new Map([[PLUGIN, "acme_seo"]]),
+        owners: [
+          {
+            ...APP_POSTS,
+            tableName: "seo__redirects",
+            ownerKind: "plugin",
+            ownerId: PLUGIN,
+            migratedBy: PLUGIN,
+          },
+        ],
+      })
+    ),
   PLUGIN_SCHEMA_UNINSTALLED: () =>
     thrown(() =>
       assertPluginsInstalled({
@@ -485,6 +502,17 @@ export const PLUGIN_CASES = {
       publicMessage:
         "Another migration is holding the migrate lock, so @acme/seo was not installed. Nothing was changed — re-run once it finishes.",
       logContext: { reason: "plugin-lifecycle-lock-busy", outcome: "settled" },
+    }),
+  PLUGIN_COMMAND_FROM_OLDER_RELEASE: () =>
+    NextlyError.conflict({
+      reason: "state",
+      message:
+        "The preset roles' grants were set by Nextly 0.10.0, newer than this release (0.9.0). Run this command from Nextly 0.10.0 or newer.",
+      logContext: {
+        reason: "preset-grants-set-by-a-newer-release",
+        recorded: "0.10.0",
+        running: "0.9.0",
+      },
     }),
   PLUGIN_HOOK_SERVICES_REGISTERED: () =>
     new NextlyError({

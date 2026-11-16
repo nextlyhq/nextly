@@ -12,7 +12,7 @@
  *
  * @module hooks/queries/drawn-field-path
  */
-import { viewFieldRefusal } from "@admin/components/features/entries/EntryForm/document-view-field-gate";
+import { viewFieldRefusal } from "@admin/components/features/entries/EntryForm/document-view-field-refusal";
 import { pathOnForm } from "@admin/lib/errors/error-mapping";
 import { addressableFieldsWithin } from "@admin/lib/plugins/document-view-registry";
 

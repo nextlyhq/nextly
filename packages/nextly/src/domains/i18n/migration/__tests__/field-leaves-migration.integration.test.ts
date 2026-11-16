@@ -61,6 +61,10 @@ import {
   companionColumnNames,
   reconcileCompanionColumns,
 } from "../../runtime/companion-io";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../per-language-storage";
 import { stepFileOf } from "../step-windows";
 import {
   createScratchDatabase,
@@ -291,7 +295,7 @@ for (const entry of DIALECTS) {
       async function archived(): Promise<{ locale: string; value: string }[]> {
         return adapter.executeQuery<{ locale: string; value: string }>(
           `SELECT ${q("locale")} AS locale, ${q("value")} AS value FROM ${q("nextly_i18n_archive")} ` +
-            `WHERE ${q("collection")} = '${slug}' AND ${q("field")} = 'body' ORDER BY ${q("id")}`
+            `WHERE ${q("collection")} = '${slug}' AND ${q("field")} = 'body' AND ${q("entry_id")} = 'e1' ORDER BY ${q("locale")}, ${q("id")}`
         );
       }
 
@@ -301,9 +305,185 @@ for (const entry of DIALECTS) {
           `SELECT ${q("body")} AS body FROM ${q(table)} WHERE ${q("id")} = 'e1'`
         );
         expect(main?.body).toBe("Hello");
-        expect(await archived()).toEqual([{ locale: "es", value: "Hola" }]);
+        expect(await archived()).toEqual([
+          { locale: "en", value: "Hello" },
+          { locale: "es", value: "Hola" },
+        ]);
         expect(await columnsOf(companion)).not.toContain("body");
       }
+
+      /**
+       * The entity as a Draft/Published one, created by its migration, with one entry that has
+       * no default-language row, a German draft and a published French, in a site that lists
+       * German first. Readers see French, so French is what the files must keep.
+       */
+      async function seededReaders(): Promise<{
+        published: MinimalConfigEntity;
+        languageOrder: string[];
+      }> {
+        const published = { ...translated, status: true };
+        const languageOrder = ["en", "de", "fr"];
+        created += 1;
+        await generateMigration({
+          name: `${slug}_${created}`,
+          dialect,
+          migrationsDir,
+          defaultLocale: "en",
+          languageOrder,
+          collections: [published],
+          singles: [],
+          components: [],
+          nonInteractive: true,
+          now: new Date(Date.UTC(2026, 9, 16, 10, created)),
+        });
+        await migrate();
+        await adapter.executeQuery(
+          `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("status")}) VALUES ('e1', 'One', 'one', 'published')`
+        );
+        await adapter.executeQuery(
+          `INSERT INTO ${q(companion)} (${q("_parent")}, ${q("_locale")}, ${q("_status")}, ${q("body")}) VALUES ('e1', 'de', 'draft', 'Hallo'), ('e1', 'fr', 'published', 'Bonjour')`
+        );
+        return { published, languageOrder };
+      }
+
+      /** `nextly migrate:create` for `entity` in a site with that language order. */
+      async function migrateCreateIn(
+        entity: MinimalConfigEntity,
+        languageOrder: string[]
+      ): Promise<void> {
+        created += 1;
+        await generateMigration({
+          name: `${slug}_${created}`,
+          dialect,
+          migrationsDir,
+          defaultLocale: "en",
+          languageOrder,
+          collections: [entity],
+          singles: [],
+          components: [],
+          nonInteractive: true,
+          now: new Date(Date.UTC(2026, 9, 16, 10, created)),
+        });
+      }
+
+      async function keptAndArchived() {
+        const [main] = await adapter.executeQuery<{ body: string | null }>(
+          `SELECT ${q("body")} AS body FROM ${q(table)} WHERE ${q("id")} = 'e1'`
+        );
+        return {
+          shared: main?.body,
+          archived: (await archived()).map(row => row.locale),
+        };
+      }
+
+      // The snapshot keeps no translations table, so whether each language has its own publish
+      // state is known from the entity's own Draft/Published, not from a table it never records.
+      it("keeps the published French over a German draft the site lists first, when a field leaves translation", async () => {
+        const { published, languageOrder } = await seededReaders();
+
+        await migrateCreateIn(
+          {
+            ...published,
+            fields: [
+              { name: "body", type: "text", localized: false },
+              { name: "price", type: "number" },
+            ],
+          },
+          languageOrder
+        );
+        await migrate();
+
+        // The file's archive records the kept French as well, so its DOWN can put it back.
+        expect(await keptAndArchived()).toEqual({
+          shared: "Bonjour",
+          archived: ["de", "fr"],
+        });
+      });
+
+      // Under per-language storage an entity that is not translated keeps its translatable fields
+      // in a translations table with no `_status`: it publishes as one document. Ranking its rows by
+      // a `_status` it does not have would stop the migration.
+      it("moves a field of an untranslated Draft/Published entity under per-language storage out, ranking no _status", async () => {
+        setPerLanguageStorage(true);
+        try {
+          const stored = { ...translated, localized: false, status: true };
+          await migrateCreateIn(stored, ["en", "es"]);
+          await migrate();
+          expect(await columnsOf(companion)).not.toContain("_status");
+          await adapter.executeQuery(
+            `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("status")}) VALUES ('e1', 'One', 'one', 'published')`
+          );
+          await adapter.executeQuery(
+            `INSERT INTO ${q(companion)} (${q("_parent")}, ${q("_locale")}, ${q("body")}) VALUES ('e1', 'en', 'Hello')`
+          );
+
+          await migrateCreateIn(
+            {
+              ...stored,
+              fields: [
+                { name: "body", type: "text", localized: false },
+                { name: "price", type: "number" },
+              ],
+            },
+            ["en", "es"]
+          );
+          await migrate();
+
+          expect((await keptAndArchived()).shared).toBe("Hello");
+        } finally {
+          _resetPerLanguageStorage();
+        }
+      });
+
+      it("puts every language back where it was on the way down, the kept one included", async () => {
+        const { published, languageOrder } = await seededReaders();
+        await adapter.executeQuery(
+          `INSERT INTO ${q(companion)} (${q("_parent")}, ${q("_locale")}, ${q("_status")}, ${q("body")}) VALUES ('e1', 'en', 'draft', 'Hi')`
+        );
+        await migrateCreateIn(
+          {
+            ...published,
+            fields: [
+              { name: "body", type: "text", localized: false },
+              { name: "price", type: "number" },
+            ],
+          },
+          languageOrder
+        );
+        await migrate();
+        expect((await keptAndArchived()).shared).toBe("Bonjour");
+
+        // The shared file, the main file and the archive file, newest first.
+        expect(await migrateDown(3)).toHaveLength(3);
+
+        const back = await adapter.executeQuery<{
+          locale: string;
+          body: string | null;
+        }>(
+          `SELECT ${q("_locale")} AS locale, ${q("body")} AS body FROM ${q(companion)} WHERE ${q("_parent")} = 'e1' ORDER BY ${q("_locale")}`
+        );
+        expect(back).toEqual([
+          { locale: "de", body: "Hallo" },
+          { locale: "en", body: "Hi" },
+          { locale: "fr", body: "Bonjour" },
+        ]);
+      });
+
+      it("keeps the published French over a German draft the site lists first, when the collection stops being translated", async () => {
+        const { published, languageOrder } = await seededReaders();
+
+        await migrateCreateIn(
+          { ...published, localized: false },
+          languageOrder
+        );
+        await migrate();
+
+        // French, kept though it is not the default language, is archived as its own too.
+        expect(await keptAndArchived()).toEqual({
+          shared: "Bonjour",
+          archived: ["de", "fr"],
+        });
+      });
 
       // The column is the migration's: a reconcile afterwards has nothing left to add.
       it("records a translated field added to a translated collection, and takes it back on the way down", async () => {
@@ -416,7 +596,7 @@ for (const entry of DIALECTS) {
         ]);
         expect(await columnsOf(table)).not.toContain("body");
 
-        // Applied again, it changes nothing more: the archive still holds one row.
+        // Applied again, it changes nothing more: the archive holds the same rows.
         await migrate();
         await expectShared();
       });
@@ -709,7 +889,10 @@ for (const entry of DIALECTS) {
         await migrateStoppingBefore(
           f => !before.has(f) && !f.includes("_archive_localization_")
         );
-        expect(await archived()).toEqual([{ locale: "es", value: "Hola" }]);
+        expect(await archived()).toEqual([
+          { locale: "en", value: "Hello" },
+          { locale: "es", value: "Hola" },
+        ]);
 
         const file = (await readdir(migrationsDir)).find(f =>
           f.endsWith(`_archive_localization_${slug}.sql`)
@@ -725,7 +908,10 @@ for (const entry of DIALECTS) {
           await adapter.executeQuery(statement);
         }
 
-        expect(await archived()).toEqual([{ locale: "es", value: "Hola" }]);
+        expect(await archived()).toEqual([
+          { locale: "en", value: "Hello" },
+          { locale: "es", value: "Hola" },
+        ]);
       });
 
       it("shows both moves in a dry run, and changes nothing", async () => {
@@ -853,7 +1039,7 @@ for (const entry of DIALECTS) {
           // A second entry whose English row has no body.
           english: "NULL",
           refusal:
-            /REQUIRED_FIELD_LEAVES_WITHOUT_VALUES: 1 entry has no English body[\s\S]*then run `nextly migrate` again/,
+            /REQUIRED_FIELD_LEAVES_WITHOUT_VALUES: 1 entry would have no body once it is shared[\s\S]*then run `nextly migrate` again/,
         },
         {
           setting: "Unique",
@@ -928,7 +1114,7 @@ for (const entry of DIALECTS) {
         );
 
         await expect(migrate()).rejects.toThrow(
-          /REQUIRED_FIELD_LEAVES_WITHOUT_VALUES: 1 entry has no English body/
+          /REQUIRED_FIELD_LEAVES_WITHOUT_VALUES: 1 entry would have no body once it is shared/
         );
 
         // Refused before the shared file's copy: the companion keeps every value.

@@ -317,6 +317,19 @@ function flagOf(access: CollectionAccess): keyof CollectionCapabilities {
 }
 
 /**
+ * Whether `capabilities` let the user do `access` to the collection or Single
+ * `slug`, as the server answered: what a route's guard asks of its entity.
+ */
+export function capabilitiesAllow(
+  capabilities: AdminCapabilities,
+  slug: string,
+  access: CollectionAccess
+): boolean {
+  const entity = capabilities.collections[slug];
+  return entity ? entity[flagOf(access)] : false;
+}
+
+/**
  * The action and resource a permission slug (`<action>-<resource>`) names,
  * when the action is one the server's answer covers and the resource is not
  * built in: such a slug may be about a collection or Single. Null for any
@@ -951,11 +964,7 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   const canAccessCollection = (
     collectionSlug: string,
     action: CollectionAccess
-  ): boolean => {
-    const entity = capabilities.collections[collectionSlug];
-    if (!entity) return false;
-    return entity[flagOf(action)];
-  };
+  ): boolean => capabilitiesAllow(capabilities, collectionSlug, action);
 
   /**
    * Whether the user may do what `permission` names. A slug the server's

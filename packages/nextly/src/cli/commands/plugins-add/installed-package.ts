@@ -62,7 +62,7 @@ const RESOLVE = "process.stdout.write(import.meta.resolve(process.argv[1]))";
 function reasonOf(error: unknown): string {
   const text =
     typeof error === "object" && error !== null && "stderr" in error
-      ? String((error as { stderr: unknown }).stderr)
+      ? String(error.stderr)
       : String(error);
   const line = text
     .split("\n")

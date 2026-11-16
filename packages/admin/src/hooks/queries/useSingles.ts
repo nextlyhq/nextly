@@ -37,7 +37,7 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
-import { toast } from "@admin/components/ui";
+import { toast } from "@admin/components/ui/toaster";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 import { singleApi, type SingleDocument } from "@admin/services/singleApi";
 import type { ApiSingle, UpdateSinglePayload } from "@admin/types/entities";
@@ -751,6 +751,9 @@ export function useUpdateSingleDocument(
       void queryClient.invalidateQueries({
         queryKey: singleDocumentKeys.all(),
       });
+      // And the dashboard's reads, the Content overview's among them, which
+      // name who edited each Single last and when.
+      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     },
     // The editor reports the failure itself. A refusal because the Single was
     // removed from code also reads its schema again, so an editor opened

@@ -16,12 +16,18 @@
  * - whether a table exists, and which tables there are (the start's own
  *   table creation, which a later change removes, asks this per entity);
  * - the per-language storage layout refusal, which refuses a database laid
- *   out for the other choice of `experimental.perLanguageStorage`;
+ *   out for the other choice of `experimental.perLanguageStorage` (on SQLite
+ *   it reads only an entity whose per-language table exists, so the fixture
+ *   leaves one beside a collection that is not translated);
  * - the column a component's table keeps its discriminator in, which the
- *   start needs to serve the table at all;
+ *   start needs to serve the table at all, read by the one catalog listing
+ *   that also says which of a component's columns the table holds yet;
  * - the two registry tables, for the rules left in their retired
  *   `access_rules` column;
  * - the plugin readiness check's reads of the ledger;
+ * - on PostgreSQL, the check that the configured schema is the one holding the
+ *   installation, which asks which schemas hold the migration history table,
+ *   so a moved `db.postgres.schema` is refused before a table is created;
  * - on SQLite, the one-time timestamp repair, upkeep the start runs after it
  *   resolves, which reads each table's columns to find the timestamps.
  * Anything else that reads a table's shape (the drift check of each
@@ -83,6 +89,7 @@ interface Asker {
     | "per-language layout"
     | "component discriminator"
     | "plugin readiness"
+    | "installation schema"
     | "sqlite timestamp repair";
   /**
    * A schema introspection: the code that called it (its nearest frames,
@@ -158,6 +165,10 @@ vi.mock(
       ...actual,
       resolveKnownTypeColumns: kept(actual.resolveKnownTypeColumns),
       resolveTypeColumns: kept(actual.resolveTypeColumns),
+      // The same catalog read with each table's columns kept, which the start's field-group
+      // registration now asks.
+      resolveKnownTableColumns: kept(actual.resolveKnownTableColumns),
+      resolveTableColumns: kept(actual.resolveTableColumns),
     };
   }
 );
@@ -191,6 +202,18 @@ vi.mock(
     };
   }
 );
+vi.mock("../../domains/schema/services/postgres-schema", async original => {
+  const actual =
+    await original<
+      typeof import("../../domains/schema/services/postgres-schema")
+    >();
+  return {
+    ...actual,
+    assertInstallationInConfiguredSchema: asking.label(() => ({
+      kept: "installation schema",
+    }))(actual.assertInstallationInConfiguredSchema),
+  };
+});
 // The one-time repair of SQLite timestamps, upkeep the start runs after it
 // resolves: it reads each table's columns to find the timestamps to repair,
 // and compares nothing with the configuration.
@@ -391,6 +414,11 @@ describe.each(getConfiguredTestDialects())(
         PLUGIN.name,
         { state: "installed" }
       );
+      // A per-language table left beside a collection that is not translated,
+      // as turning translation off leaves one, so the layout refusal has a
+      // table to read on every dialect. Its main table keeps the columns, so
+      // the start is not refused.
+      await setup.executeQuery("CREATE TABLE dc_pcna_locales (id VARCHAR(36))");
       await shutdownServices();
     }, 180_000);
 
@@ -453,6 +481,7 @@ describe.each(getConfiguredTestDialects())(
           "component discriminator",
           "per-language layout",
           "plugin readiness",
+          ...(dialect === "postgresql" ? ["installation schema"] : []),
         ]) {
           expect(kept, `${reader} is seen`).toContain(reader);
         }

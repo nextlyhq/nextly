@@ -16,9 +16,15 @@ import {
   namedQueriesOf,
   pageBuilderLayouts,
 } from "@nextlyhq/plugin-page-builder";
+import { notFoundLogged } from "@nextlyhq/plugin-seo/next";
 
 import { pageBuilderPlugin } from "../../nextly.config";
-import { siteReader, SITE_STYLE_CONTEXT, SITE_STYLES } from "./site-content";
+import {
+  pageTitle,
+  siteReader,
+  SITE_STYLE_CONTEXT,
+  SITE_STYLES,
+} from "./site-content";
 
 export const pagesRoute: BlocksPageConfig = {
   // The collection the page builder plugin contributes. It already carries
@@ -54,7 +60,8 @@ export const pagesRoute: BlocksPageConfig = {
   // same reader as the page, so the default comes from the same instance.
   layouts: pageBuilderLayouts({ nextly: siteReader }),
   metadata: (entry, _context, derived) => ({
-    title: derived.title ?? (entry.title as string | undefined),
+    // The page's own title, never a heading its blocks offer: see `pageTitle`.
+    title: pageTitle(entry),
     description: derived.description,
     // `derived.canonical` is the entry's path within its collection, already
     // rooted. The root route serves it at that path, so both routes name it:
@@ -66,4 +73,9 @@ export const pagesRoute: BlocksPageConfig = {
       ? { openGraph: { images: [{ url: derived.image }] } }
       : {}),
   }),
+  // A path this route has nothing for is answered not found through the SEO
+  // plugin, which lists it under Redirects › Not found, once per request,
+  // where the plugin is on. Logged here, where the route decides, rather than
+  // from `app/not-found.tsx`, which Next.js renders for every page.
+  notFound: notFoundLogged,
 };

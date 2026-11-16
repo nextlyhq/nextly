@@ -200,6 +200,53 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
   }
 
   /**
+   * Write bytes at exactly the blob `filePath` names, beside one already in
+   * the store.
+   *
+   * A stored path here is the blob's full URL, so `filePath` is one too: a
+   * stored blob's URL with a suffix core derived from it, for a file made from
+   * that blob, such as a resized copy of an image. Written under that URL's
+   * pathname with no random suffix, so the blob's URL is the key it was asked
+   * for and the next read finds it; overwriting is allowed, since two requests
+   * may make the same copy at once and write the same bytes. A key that is not
+   * a Vercel Blob URL is refused before anything is written.
+   *
+   * @experimental
+   */
+  async uploadAt(
+    filePath: string,
+    buffer: Buffer,
+    options: { mimeType: string }
+  ): Promise<UploadResult> {
+    const located = URL.canParse(filePath) ? new URL(filePath) : undefined;
+    if (
+      located === undefined ||
+      located.protocol !== "https:" ||
+      !located.hostname.endsWith(".blob.vercel-storage.com")
+    ) {
+      throw NextlyError.internal({
+        logContext: {
+          adapter: "vercel-blob",
+          reason: "upload-at-key-not-a-blob-url",
+        },
+      });
+    }
+    const result = await put(
+      decodeURIComponent(located.pathname.replace(/^\/+/, "")),
+      buffer,
+      {
+        access: this.resolvedConfig.access,
+        token: this.ensureToken(),
+        contentType: options.mimeType,
+        addRandomSuffix: false,
+        allowOverwrite: true,
+        cacheControlMaxAge: this.resolvedConfig.cacheControlMaxAge,
+      }
+    );
+    return { url: result.url, path: result.url };
+  }
+
+  /**
    * Delete file from Vercel Blob.
    *
    * @param filePath - Full blob URL to delete
@@ -404,7 +451,10 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
       type: "vercel-blob",
       name: "VercelBlobStorageAdapter",
       supportsSignedUrls: false, // Vercel Blob URLs are public by default
-      supportsClientUploads: true, // Via handleUpload API
+      // No: Vercel Blob has no pre-signed upload Nextly can bind to a checked
+      // type and size, so `clientUploads` is refused for it rather than signing
+      // nothing. Its large files go through the standard upload.
+      supportsClientUploads: false,
     };
   }
 

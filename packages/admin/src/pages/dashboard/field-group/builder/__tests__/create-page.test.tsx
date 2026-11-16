@@ -1,68 +1,84 @@
 /**
- * A refused field-group address arrives as a validation envelope whose own
- * message is only "Validation failed."; the reason is the field's. Toasting
- * the envelope's message told the person their field group was refused
- * without why.
+ * Create on the field group create page makes the field group a pending
+ * change: it waits in this tab's unsaved entities, and its editor opens.
+ * Nothing is created on the server until the editor's save.
  */
 import { render } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { BuilderSettingsValues } from "@admin/components/features/schema-builder";
+import type { BuilderSettingsValues } from "@admin/components/features/schema-builder/BuilderSettingsModal";
 
 let submit: ((values: BuilderSettingsValues) => void) | undefined;
-vi.mock("@admin/components/features/schema-builder", () => ({
-  BuilderSettingsModal: (props: {
-    onSubmit: (values: BuilderSettingsValues) => void;
-  }) => {
-    submit = props.onSubmit;
-    return null;
-  },
-}));
+vi.mock(
+  "@admin/components/features/schema-builder/new-entity/NewEntityDialog",
+  () => ({
+    NewEntityDialog: (props: {
+      onCreate: (values: BuilderSettingsValues) => void;
+    }) => {
+      submit = props.onCreate;
+      return null;
+    },
+  })
+);
 
 const mockCreate = vi.fn();
 vi.mock("@admin/hooks/queries/useFieldGroups", () => ({
   useCreateFieldGroup: () => ({ mutate: mockCreate, isPending: false }),
 }));
 
-vi.mock("@admin/services/schemaFileApi", () => ({
-  schemaFileApi: { writeFieldGroup: vi.fn() },
+const mockNavigate = vi.fn();
+vi.mock("@admin/lib/navigation", () => ({
+  navigateTo: (...args: unknown[]) => mockNavigate(...args),
 }));
-
-vi.mock("@admin/lib/navigation", () => ({ navigateTo: vi.fn() }));
 vi.mock("@admin/components/ui", () => ({
   toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn() },
 }));
 
-import { toast } from "@admin/components/ui";
-import { parseApiError } from "@admin/lib/api/parseApiError";
+import {
+  removeUnsavedEntity,
+  unsavedEntity,
+} from "@admin/lib/builder/unsaved-entities";
 
 import FieldGroupBuilderPage from "../index";
+
+const VALUES = {
+  singularName: "Hero banner",
+  slug: "hero_banner",
+  icon: "",
+  category: "Layout",
+} as BuilderSettingsValues;
 
 beforeEach(() => {
   vi.clearAllMocks();
   submit = undefined;
 });
 
-describe("Field group create page", () => {
-  it("shows the reason a refused address gives, not the envelope's message", () => {
-    const reason =
-      "Field group address 'field-groups' is reserved: Nextly uses it for a route or a system table";
-    render(<FieldGroupBuilderPage />);
-    submit?.({ singularName: "Hero" } as BuilderSettingsValues);
-    const { onError } = mockCreate.mock.calls[0][1];
-    onError(
-      parseApiError(
-        {
-          error: {
-            code: "VALIDATION_ERROR",
-            message: "Validation failed.",
-            data: { errors: [{ path: "slug", message: reason }] },
-          },
-        },
-        400
-      )
-    );
+afterEach(() => removeUnsavedEntity("field-group", "hero_banner"));
 
-    expect(toast.error).toHaveBeenCalledWith(reason);
+describe("Field group create page", () => {
+  it("keeps the field group unsaved, with no fields yet", () => {
+    render(<FieldGroupBuilderPage />);
+    submit?.(VALUES);
+
+    expect(unsavedEntity("field-group", "hero_banner")).toEqual({
+      kind: "field-group",
+      address: "hero_banner",
+      settings: expect.objectContaining({
+        singularName: "Hero banner",
+        slug: "hero_banner",
+        category: "Layout",
+      }),
+      fields: [],
+    });
+  });
+
+  it("creates nothing on the server, and opens the field group's editor", () => {
+    render(<FieldGroupBuilderPage />);
+    submit?.(VALUES);
+
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockNavigate).toHaveBeenCalledWith(
+      "/admin/builder/field-groups/hero_banner"
+    );
   });
 });

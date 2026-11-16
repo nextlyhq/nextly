@@ -182,7 +182,7 @@ vi.mock("@admin/services/singleApi", () => ({
 
 vi.mock("../../useTemplateActions", () => ({
   editRouteFor: (record: { id: string }) =>
-    `/admin/email/messages/edit/${record.id}`,
+    `/admin/settings/email/messages/edit/${record.id}`,
   useTemplateActions: () => ({
     canOpen: true,
     actionsFor: () => [],

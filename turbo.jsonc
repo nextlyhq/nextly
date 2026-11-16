@@ -211,7 +211,8 @@
     "__NEXT_ROUTER_BASEPATH", // page builder <SiteCode>: the app's base path, as Next.js inlines it
     "NEXTLY_DISABLE_HMR", // nextly HMR listener: opt-out escape hatch
     "NEXTLY_HMR_URL_OVERRIDE", // nextly HMR listener: custom URL for proxy setups
-    "NEXTLY_GENERATED_FILES_WRITE" // checkAdminComponents: 0 or false stops the running app rewriting generated files
+    "NEXTLY_GENERATED_FILES_WRITE", // checkAdminComponents: 0 or false stops the running app rewriting generated files
+    "NEXTLY_BUILD_SCHEMA_VERSION" // nextly production start: the build's newest migration, which withNextly sets
   ],
 
   "tasks": {

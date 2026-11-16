@@ -92,6 +92,18 @@ export const SYNC_CASES = {
         missing: ["comp_hero"],
       },
     }),
+  // As `syncSchemaInOrder` in `cli/commands/sync-schema.ts` refuses a move before it starts.
+  FIELDS_LEAVING_TRANSLATION_NOT_MOVED: () =>
+    NextlyError.conflict({
+      reason: "state",
+      message:
+        "Fields leaving translation in posts were not moved, and nothing was changed (see above). Their values are intact in the translations table. Fix the error above and sync again.",
+      logContext: {
+        reason: "fields-leaving-translation-not-moved",
+        entities: ["posts"],
+        changed: false,
+      },
+    }),
   // As `provisionLocalization` in `cli/commands/dev-build.ts` refuses the sync.
   LOCALIZATION_NOT_PROVISIONED: () =>
     NextlyError.conflict({

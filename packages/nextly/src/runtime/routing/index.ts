@@ -48,10 +48,17 @@ export type {
   ResolvedContext,
 } from "./content-route";
 
-export { createSingleRoute, createPublicSingleRoute } from "./single-route";
+export {
+  createSingleRoute,
+  createPublicSingleRoute,
+  singlePageMetadata,
+  singlePageStructuredData,
+} from "./single-route";
 export type {
   SingleRoute,
   SingleRouteArgs,
+  SingleRouteParams,
+  SinglePageAnswerConfig,
   SingleRouteConfig,
   SingleContext,
   SingleDraftRequest,

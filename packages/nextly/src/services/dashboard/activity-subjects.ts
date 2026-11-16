@@ -45,7 +45,7 @@ export async function readActivitySubjects(): Promise<ActivitySubjects> {
 async function readSingles(): Promise<ActivitySingles> {
   try {
     const registry = container.get<{
-      getAllSingles: () => Promise<
+      getAllSinglesForRead: () => Promise<
         Array<{
           slug: string;
           label?: unknown;
@@ -56,7 +56,8 @@ async function readSingles(): Promise<ActivitySingles> {
     }>("singleRegistryService");
     const labels = new Map<string, string>();
     const keptOff = new Set<string>();
-    for (const single of await registry.getAllSingles()) {
+    // From the registry cache: asked by the dashboard on every request.
+    for (const single of await registry.getAllSinglesForRead()) {
       if (typeof single.label === "string" && single.label !== "") {
         labels.set(single.slug, single.label);
       }
@@ -75,7 +76,7 @@ async function readSingles(): Promise<ActivitySingles> {
 async function readKeptOffCollections(): Promise<ActivityKeptOffCollections> {
   try {
     const registry = container.get<{
-      getAllCollections: () => Promise<
+      getAllCollectionsForRead: () => Promise<
         Array<{
           slug: string;
           source?: unknown;
@@ -84,7 +85,7 @@ async function readKeptOffCollections(): Promise<ActivityKeptOffCollections> {
       >;
     }>("collectionRegistryService");
     const slugs = new Set<string>();
-    for (const collection of await registry.getAllCollections()) {
+    for (const collection of await registry.getAllCollectionsForRead()) {
       if (keptOffDashboard("collection", collection)) {
         slugs.add(collection.slug);
       }

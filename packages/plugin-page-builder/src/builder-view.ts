@@ -26,6 +26,10 @@ export const REMOVE_LAYOUT_ACTION_COMPONENT =
 export const BINDINGS_TO_FIX_PAGE_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#BindingsToFixPage";
 
+/** The Page Builder overview, the page its rail item opens. */
+export const OVERVIEW_PAGE_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#PageBuilderOverview";
+
 /** The "Bindings to fix" dashboard card. */
 export const BINDINGS_TO_FIX_CARD_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#BindingsToFixCard";

@@ -49,7 +49,9 @@ import { topoSortPlugins } from "./topo-sort";
 import { assertClientConfigs } from "./validate-client-config";
 import { assertDocumentViews } from "./validate-document-views";
 import { validatePluginMenus } from "./validate-menus";
+import { validatePluginNames } from "./validate-names";
 import { validatePluginSlugs } from "./validate-slugs";
+import { validatePluginStartupReads } from "./validate-startup-reads";
 import { validatePluginVersions } from "./validate-versions";
 
 export interface ResolvePluginsOptions {
@@ -163,6 +165,10 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // the item from everyone without the never-seeded permission, which is what
   // a role legitimately lacking access looks like.
   validatePluginMenus(plugins);
+  // And a page's startup reads: one the startup request cannot carry is left
+  // out of the prebuilt admin page, and the page is only slower, with nothing
+  // to say why.
+  validatePluginStartupReads(plugins);
   // A challenge under core's own password-change id would be offered in
   // place of that step, and two under one id leave the registry unable to say
   // which one a pending token names. The registry refuses both too, but only
@@ -302,6 +308,11 @@ export function resolvePlugins(
   plugins: PluginDefinition[],
   opts: ResolvePluginsOptions
 ): PluginDefinition[] {
+  // First, because a name is the key every later record of the plugin is
+  // stored under, and one that is the site's own permission owner (`app`)
+  // must never get as far as being stored. A `setup` transformer's list is
+  // resolved here again, so a plugin it adds or renames is refused the same.
+  validatePluginNames(plugins);
   validatePluginVersions(plugins, opts.coreVersion);
   assertPluginManifests(plugins);
   // After the manifests' shape is known good, so a capability is read from a

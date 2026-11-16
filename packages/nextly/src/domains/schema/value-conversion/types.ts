@@ -108,7 +108,12 @@ export type ConversionReasonKind =
    * can hold a value it would accept and store as a different one: a value written while the
    * conversion runs could be changed with no error.
    */
-  | "late-write";
+  | "late-write"
+  /**
+   * A value that would be cleared, where the new column does not allow a null: clearing it would
+   * leave a null the column refuses, so a value would have to be invented.
+   */
+  | "cleared-under-not-null";
 
 /** The rows one reason applies to: the first keys, up to a bound, and how many there are. */
 export interface AffectedRows {

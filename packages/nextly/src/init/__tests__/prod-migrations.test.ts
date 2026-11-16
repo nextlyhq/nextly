@@ -57,6 +57,7 @@ function args(over: Record<string, unknown> = {}) {
       coreChanged: false,
       ran: true,
     })),
+    provisionUserFields: vi.fn(async () => {}),
     ...over,
   };
 }
@@ -235,6 +236,57 @@ describe("runProdMigrationsIfEnabled", () => {
    * database the app can usefully serve, and `nextly migrate` fixes them. Only
    * "we do not know what we are serving" is fatal.
    */
+  it("refuses to start when a busy table outlasted its tries, as for a held schema lock", async () => {
+    process.env.NODE_ENV = "production";
+    const a = args({
+      migrateCore: vi.fn(async () => {
+        throw new NextlyError({
+          code: "NEXTLY_TABLE_BUSY",
+          publicMessage: "`0007_x.sql` stopped: table busy, nothing changed.",
+          logContext: { reason: "table busy" },
+        });
+      }),
+    });
+
+    await expect(runProdMigrationsIfEnabled(a as never)).rejects.toMatchObject({
+      code: "NEXTLY_TABLE_BUSY",
+    });
+  });
+
+  it("hands the core the busy-table bounds the environment sets", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.NEXTLY_LOCK_TIMEOUT = "2";
+    process.env.NEXTLY_LOCK_TIMEOUT_TOTAL = "30";
+    try {
+      const a = args();
+      await runProdMigrationsIfEnabled(a as never);
+      expect(a.migrateCore).toHaveBeenCalledWith(
+        expect.objectContaining({
+          busyTable: expect.objectContaining({
+            bounds: { tryMs: 2_000, totalMs: 30_000 },
+          }),
+        })
+      );
+    } finally {
+      delete process.env.NEXTLY_LOCK_TIMEOUT;
+      delete process.env.NEXTLY_LOCK_TIMEOUT_TOTAL;
+    }
+  });
+
+  it("refuses to start, running nothing, when a busy-table bound is out of its range", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.NEXTLY_LOCK_TIMEOUT = "0";
+    try {
+      const a = args();
+      await expect(
+        runProdMigrationsIfEnabled(a as never)
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      expect(a.migrateCore).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.NEXTLY_LOCK_TIMEOUT;
+    }
+  });
+
   it("still starts when boot migrations fail for any other reason", async () => {
     process.env.NODE_ENV = "production";
     const a = args({
@@ -243,9 +295,7 @@ describe("runProdMigrationsIfEnabled", () => {
       }),
     });
 
-    await expect(
-      runProdMigrationsIfEnabled(a as never)
-    ).resolves.toBeUndefined();
+    await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(false);
   });
 
   it("still starts when an applied file was edited, logging the refusal", async () => {
@@ -266,9 +316,7 @@ describe("runProdMigrationsIfEnabled", () => {
       errors.push(m);
     };
 
-    await expect(
-      runProdMigrationsIfEnabled(a as never)
-    ).resolves.toBeUndefined();
+    await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(false);
     expect(errors.join("\n")).toContain(
       "20261102_000001_add_posts.sql` has changed since it was applied"
     );
@@ -318,9 +366,7 @@ describe("runProdMigrationsIfEnabled", () => {
         return { applied: 1, coreChanged: false, ran: true };
       }),
     });
-    await expect(
-      runProdMigrationsIfEnabled(a as never)
-    ).resolves.toBeUndefined();
+    await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(true);
     // The boot logger's .error must NOT have fired (no false "failed").
     expect(a.logger.error).not.toHaveBeenCalled();
     // success was routed to the boot logger's info.
@@ -417,9 +463,7 @@ describe("runProdMigrationsIfEnabled", () => {
         throw new Error("boom");
       }),
     });
-    await expect(
-      runProdMigrationsIfEnabled(a as never)
-    ).resolves.toBeUndefined();
+    await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(false);
     expect(a.logger.error).toHaveBeenCalled();
   });
 });

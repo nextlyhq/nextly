@@ -100,6 +100,8 @@ export function DocumentPlaceTabs({
   place,
   form,
   documentLock,
+  fieldNames,
+  viewingPastVersion,
   children,
 }: {
   /** The edit page's place, whose tabs this draws. */
@@ -108,6 +110,16 @@ export function DocumentPlaceTabs({
   form: DocumentTabsForm;
   /** What holds the document, as a side panel section is told it. */
   documentLock: DocumentLockGates;
+  /**
+   * The document's top-level field names, which decide where a tab that
+   * edits fields of the document is drawn.
+   */
+  fieldNames: readonly string[];
+  /**
+   * Whether a past version is on screen: the plugins' tabs read the live
+   * form, so the page draws its own content alone meanwhile.
+   */
+  viewingPastVersion: boolean;
   /** The field column's own content. */
   children: ReactNode;
 }): ReactNode {
@@ -134,6 +146,8 @@ export function DocumentPlaceTabs({
       openTab={openTab}
       onOpenTabChange={openTabChange}
       onShownTabChange={shownTabChange}
+      fieldNames={fieldNames}
+      withheld={viewingPastVersion}
       contentLabel={t("nextly.places.document.content")}
       className={`pt-6 @4xl/content:pt-8 ${DOCUMENT_COLUMN_INSET}`}
     >

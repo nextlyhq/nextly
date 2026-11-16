@@ -33,9 +33,14 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type {
   CountOptions,
+  DeleteOptions,
+  InsertOptions,
   SelectOptions,
   SqlParam,
   TransactionContext,
+  UpdateOptions,
+  UpsertOptions,
+  WhereClause,
 } from "@nextlyhq/adapter-drizzle/types";
 import type { AnyRelations, SQL } from "drizzle-orm";
 
@@ -50,6 +55,12 @@ interface ReadScope {
   readonly tx: TransactionContext;
   /** The lock a row read takes on PostgreSQL and MySQL, or none. */
   readonly lock: ReadLock;
+  /**
+   * Whether the services' positional writes (`insert`, `update`, `delete`,
+   * `upsert` and their siblings) run on the transaction too, not only their
+   * reads (`runReadsAndWritesInTransaction`).
+   */
+  readonly writes: boolean;
   live: boolean;
 }
 
@@ -92,7 +103,31 @@ export async function runReadsInTransaction<T>(
   work: () => Promise<T>,
   lock: ReadLock = "share"
 ): Promise<T> {
-  const scope: ReadScope = { tx, lock, live: true };
+  const scope: ReadScope = { tx, lock, writes: false, live: true };
+  try {
+    return await readTransaction.run(scope, work);
+  } finally {
+    scope.live = false;
+  }
+}
+
+/**
+ * Run `work` with every read AND every positional write its services make
+ * routed to `tx`, for work whose writes must commit or roll back as one with
+ * a write the caller makes on `tx` itself: a registry row and the stored
+ * schema version beside it (`domains/schema/schema-version`). Outside this,
+ * a service's `this.adapter.insert` takes a pooled connection of its own and
+ * commits whatever the transaction does.
+ *
+ * Its reads take no row lock (`none`): such a caller holds a lock of its own
+ * (the schema lock), and a locking read of the rows it is about to write
+ * would only make it wait on readers.
+ */
+export async function runReadsAndWritesInTransaction<T>(
+  tx: TransactionContext,
+  work: () => Promise<T>
+): Promise<T> {
+  const scope: ReadScope = { tx, lock: "none", writes: true, live: true };
   try {
     return await readTransaction.run(scope, work);
   } finally {
@@ -155,6 +190,26 @@ export function readsOnTransaction(value: object): boolean {
   return viewed.has(value);
 }
 
+/** The transaction each view reads on. */
+const viewTransactions = new WeakMap<object, TransactionContext>();
+
+/**
+ * The executor a read made through `value` runs on at this call, when
+ * `value` is a view whose reads run on its transaction
+ * ({@link readsOnTransaction}) and its scope is still the calling flow's:
+ * that transaction's own Drizzle handle. Undefined for an adapter, or a view
+ * kept past its scope's end, whose reads reach the pool.
+ */
+export function readExecutorOfView(value: object): unknown {
+  const adapter = viewed.get(value);
+  const tx = viewTransactions.get(value);
+  return adapter !== undefined &&
+    tx !== undefined &&
+    readTransactionOf(adapter) === tx
+    ? tx.getDrizzle()
+    : undefined;
+}
+
 /**
  * The adapter a service reads through: `adapter` itself, or inside
  * {@link runReadsInTransaction} a view of it whose reads run on the scope's
@@ -173,6 +228,7 @@ export function adapterForReads(adapter: DrizzleAdapter): DrizzleAdapter {
     view = readingOn(adapter, tx);
     byTransaction.set(tx, view);
     viewed.set(view, adapter);
+    viewTransactions.set(view, tx);
   }
   return view;
 }
@@ -198,6 +254,12 @@ function readingOn(
     readTransactionOf(adapter) === tx ? tx : undefined;
   const executorFor = (executor: unknown): unknown =>
     executor ?? live()?.getDrizzle();
+  // A write runs on `tx` only inside a scope that routes writes too
+  // (`runReadsAndWritesInTransaction`); a read-only scope leaves it pooled.
+  const writingOn = (): TransactionContext | undefined =>
+    readTransaction.getStore()?.writes === true ? live() : undefined;
+  const writeExecutorFor = (executor: unknown): unknown =>
+    executor ?? writingOn()?.getDrizzle();
   const routed = {
     getDrizzle: <T = unknown>(relations?: AnyRelations): T => {
       const on = live();
@@ -251,6 +313,63 @@ function readingOn(
         ? adapter.listTables(schema)
         : adapter.listTablesThrough(on, schema);
     },
+    // The writes, routed only in a scope that asks for it. The two inserts
+    // take no executor, so they run through the transaction's own.
+    insert: <T = unknown>(
+      table: string,
+      data: Record<string, unknown>,
+      options?: InsertOptions
+    ): Promise<T> => {
+      const on = writingOn();
+      return on === undefined
+        ? adapter.insert<T>(table, data, options)
+        : on.insert<T>(table, data, options);
+    },
+    insertMany: <T = unknown>(
+      table: string,
+      data: Record<string, unknown>[],
+      options?: InsertOptions
+    ): Promise<T[]> => {
+      const on = writingOn();
+      return on === undefined
+        ? adapter.insertMany<T>(table, data, options)
+        : on.insertMany<T>(table, data, options);
+    },
+    update: <T = unknown>(
+      table: string,
+      data: Record<string, unknown>,
+      where: WhereClause,
+      options?: UpdateOptions,
+      executor?: unknown
+    ): Promise<T[]> =>
+      adapter.update<T>(
+        table,
+        data,
+        where,
+        options,
+        writeExecutorFor(executor)
+      ),
+    updateCount: (
+      table: string,
+      data: Record<string, unknown>,
+      where: WhereClause,
+      executor?: unknown
+    ): Promise<number> =>
+      adapter.updateCount(table, data, where, writeExecutorFor(executor)),
+    delete: (
+      table: string,
+      where: WhereClause,
+      options?: DeleteOptions,
+      executor?: unknown
+    ): Promise<number> =>
+      adapter.delete(table, where, options, writeExecutorFor(executor)),
+    upsert: <T = unknown>(
+      table: string,
+      data: Record<string, unknown>,
+      options: UpsertOptions,
+      executor?: unknown
+    ): Promise<T> =>
+      adapter.upsert<T>(table, data, options, writeExecutorFor(executor)),
   } satisfies Partial<DrizzleAdapter>;
   return new Proxy(adapter, {
     get(target, property) {

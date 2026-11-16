@@ -3,10 +3,15 @@
  * save: a site that had content before the plugin arrived, or whose addresses
  * a deploy moved, is recorded as its pages now stand.
  *
- * It runs only where the record is empty or the fingerprint core gives of
- * every address template differs from the one stored at the last run, and it
- * works in two passes so a deploy that moves one page off an address and
- * another onto it is no clash:
+ * It runs only where the fingerprint core gives of every address template
+ * and site type differs from the one stored at the last run, where no run has
+ * finished (a new or dropped record stores none), where a deploy move is
+ * still owed its redirect, or where a process still running the earlier
+ * version that kept the record in a collection wrote that collection since
+ * the record last took it in (`earlierWritesSince`): the pages and redirects
+ * that process saved are recorded as they now stand, and the moves it noted
+ * are owed their redirects here. It works in two passes so a deploy that
+ * moves one page off an address and another onto it is no clash:
  *
  * 1. every page keeps the addresses it already holds and still resolves to,
  *    and lets go of the rest; a page that no longer exists lets go of all;
@@ -15,6 +20,12 @@
  *
  * The page already holding an address keeps it, newer or not: content never
  * takes the site down, and visitors keep reaching what they reached before.
+ *
+ * Once every claim stands, each address a page let go of leaves a permanent
+ * redirect to the page's new one, as a save would: an old address another
+ * page now holds is refused rather than used as a step to a third page, and
+ * a page that lost its new address gets none. The route has already moved,
+ * so a redirect that cannot be saved lists the old address as a broken link.
  * The fingerprint is stored last, so a start interrupted part-way runs the
  * whole catch-up again.
  *
@@ -25,18 +36,43 @@
  *
  * @module address-record/catch-up
  */
-import { createHash } from "node:crypto";
-
 import {
   NextlyError,
   type AddressHolder,
   type HeldAddress,
   type HeldAddressUpdate,
   type HeldDocument,
+  type ParticipantTransaction,
   type PluginContext,
+  type PluginTransactionBounds,
 } from "@nextlyhq/plugin-sdk";
 
-import { heldNow, recordSlug, rowOf, type RecordRow } from "./participant";
+import { markOutOfDate } from "../problems/store";
+import { redirectDeployMove } from "../redirects/moves";
+import { reclaimRedirectAddresses } from "../redirects/reclaim";
+
+import { heldNow } from "./participant";
+import {
+  forgetPending,
+  keepPending,
+  pendingMoves,
+  type PendingMove,
+} from "./pending-moves";
+import type { RecordRow } from "./rows";
+import {
+  EARLIER_NOTE_KEYS,
+  forgetNotes,
+  earlierWritesSince,
+  type EarlierShape,
+  heldRows,
+  keepEarlierShape,
+  noteKey,
+  putNote,
+  readNotes,
+  takeEarlierPending,
+} from "./store";
+
+type Transaction = ParticipantTransaction["transaction"];
 
 /** A page left without an address another page holds. */
 export interface LostAddress {
@@ -54,23 +90,38 @@ export interface CatchUpReport {
   lost: LostAddress[];
 }
 
-/** The key of the row that stores the fingerprint of the last run. */
-const FINGERPRINT_KEY = createHash("sha256")
-  .update("meta:fingerprint", "utf8")
-  .digest("hex");
+/** The key of the note that stores the fingerprint of the last run. */
+const FINGERPRINT_KEY = noteKey("fingerprint");
 
 /**
- * The key of the row that stores which types were the site's at the last
+ * The key of the note that stores which types were the site's at the last
  * run, so a holder of a type since removed is told apart from a plugin's own.
  */
-const SITE_TYPES_KEY = createHash("sha256")
-  .update("meta:site-types", "utf8")
-  .digest("hex");
+const SITE_TYPES_KEY = noteKey("site-types");
 
 /** How many rows or pages one read takes. */
 const PAGE = 200;
 
 const NOTHING: CatchUpReport = { ran: false, recorded: 0, lost: [] };
+
+/**
+ * The bounds each transaction a catch-up opens is given
+ * (`ctx.db.withTransactionBounds`).
+ */
+export const CATCH_UP_TRANSACTION_BOUNDS: Readonly<PluginTransactionBounds> = {
+  // Long enough for a save holding a page's lock to finish; past it, the
+  // holder is taken to be stuck, and the catch-up fails and is tried again.
+  lockWaitMs: 2000,
+  // A catch-up sends its statements one after another, so a transaction of
+  // its own idle this long belongs to a process that has stopped running.
+  idleMs: 5000,
+};
+
+/**
+ * How old the last failure must be before a request tries the catch-up
+ * again (`retryFailedCatchUp`).
+ */
+export const RETRY_FAILED_AFTER_MS = 10_000;
 
 /** The last catch-up started, and the context it ran with. */
 let started: { ctx: PluginContext; run: Promise<CatchUpReport> } | undefined;
@@ -83,6 +134,40 @@ export function startCatchUp(ctx: PluginContext): Promise<CatchUpReport> {
   const run = caughtUp(ctx);
   started = { ctx, run };
   return run;
+}
+
+/** How many catch-ups are under way. */
+let running = 0;
+/** Whether the last catch-up to finish failed, leaving the record behind. */
+let failed = false;
+/** When the last catch-up to fail failed, by the clock. */
+let failedAt = 0;
+/** Whether a retry is starting: set before it awaits anything, so a second request starts none. */
+let retrying = false;
+
+/**
+ * Whether the record says what each page holds: no catch-up is under way,
+ * and the last one to finish succeeded. An output that lists addresses from
+ * the record answers as not ready otherwise.
+ */
+export function addressRecordReady(): boolean {
+  return running === 0 && !failed;
+}
+
+/**
+ * Start the catch-up again, not awaited, where the last one failed, none is
+ * under way, and the failure is `RETRY_FAILED_AFTER_MS` old: a failure from a
+ * passing cause is not left in place until the next start, and while the
+ * cause is still there the requests that find the record not ready do not
+ * each start a catch-up of their own, every one taking a connection.
+ */
+export function retryFailedCatchUp(): void {
+  if (!failed || running > 0 || retrying || started === undefined) return;
+  if (Date.now() - failedAt < RETRY_FAILED_AFTER_MS) return;
+  retrying = true;
+  void catchUp().finally(() => {
+    retrying = false;
+  });
 }
 
 /** The last catch-up started, to wait for. */
@@ -98,11 +183,35 @@ export function lastCatchUp(): Promise<CatchUpReport> | undefined {
 interface CatchUpOptions {
   afterListing?: () => Promise<void>;
   /**
+   * Runs once every page has let go of what it no longer holds and before
+   * any claims anew: the moment a save may move a page the catch-up moved.
+   */
+  afterReleases?: () => Promise<void>;
+  /**
    * How many pages one listing read takes, and what runs between reads,
    * told the pages listed so far.
    */
   pageSize?: number;
   betweenPages?: (listed: readonly HeldDocument[]) => Promise<void>;
+  /**
+   * How far from the earlier collection's newest write its shape must be
+   * read to be trusted (`earlierWritesSince`); the module's own where unset.
+   */
+  settleMs?: number;
+}
+
+/**
+ * Forget the fingerprint of the last catch-up, so the next start runs the
+ * whole of it whatever else it finds. For an install, and an uninstall that
+ * keeps the plugin's tables: between the two the plugin is not running, so
+ * pages saved meanwhile are in no record, and nothing the fingerprint covers
+ * (the address templates, languages and site types) need have changed to say
+ * so.
+ */
+export async function forgetCatchUpFingerprint(
+  ctx: PluginContext
+): Promise<void> {
+  await forgetNotes(ctx, [FINGERPRINT_KEY]);
 }
 
 /** Run the catch-up again with the last context, as the next start would. */
@@ -124,13 +233,31 @@ async function caughtUp(
   ctx: PluginContext,
   options: CatchUpOptions = {}
 ): Promise<CatchUpReport> {
+  running += 1;
   try {
-    return await runCatchUp(ctx, options);
+    // Every transaction it opens bounded by the database: it runs unawaited,
+    // so on a serverless platform its function may be frozen with one open,
+    // and every save of a page and every other catch-up would otherwise wait
+    // on that transaction's lock rows until the function ran again.
+    const report = await ctx.db.withTransactionBounds(
+      CATCH_UP_TRANSACTION_BOUNDS,
+      async () => {
+        const done = await runCatchUp(ctx, options);
+        if (done.lost.length > 0) await problemsOutOfDate(ctx);
+        return done;
+      }
+    );
+    failed = false;
+    return report;
   } catch (error) {
+    failed = true;
+    failedAt = Date.now();
     ctx.logger.error("The SEO address record could not be brought up to date", {
       error,
     });
     return NOTHING;
+  } finally {
+    running -= 1;
   }
 }
 
@@ -140,78 +267,44 @@ const holderKey = (holder: AddressHolder) =>
 const sameAddress = (a: HeldAddress, b: HeldAddress) =>
   a.locale === b.locale && a.path === b.path && a.range === b.range;
 
-/** The stored fingerprint row, found by its key: one row read. */
-async function storedFingerprint(
-  ctx: PluginContext
-): Promise<{ id: string; value: unknown } | undefined> {
-  const { data } = await ctx.services.ownCollections.listEntries(
-    recordSlug(ctx),
-    {
-      where: { claimKey: { equals: FINGERPRINT_KEY } },
-      pagination: { limit: 1, page: 1 },
-      depth: 0,
-    }
-  );
-  const [row] = data as Record<string, unknown>[];
-  return row === undefined
-    ? undefined
-    : { id: String(row.id), value: row.path };
-}
-
-/** Whether the record holds any address at all: one row read at most. */
-async function holdsAny(ctx: PluginContext): Promise<boolean> {
-  const { data } = await ctx.services.ownCollections.listEntries(
-    recordSlug(ctx),
-    {
-      where: { kind: { in: ["address", "range"] } },
-      pagination: { limit: 1, page: 1 },
-      depth: 0,
-    }
-  );
-  return (data as unknown[]).length > 0;
-}
-
-/** A stored meta row: its id, and the value it keeps. */
-interface MetaRow {
-  id: string;
-  value: unknown;
+/**
+ * Say the SEO Problems list's last full check may no longer hold, never
+ * failing the catch-up: a page left without the address another holds is
+ * listed by the next full check, and until then the list says it is out of
+ * date.
+ */
+async function problemsOutOfDate(ctx: PluginContext): Promise<void> {
+  try {
+    await markOutOfDate(ctx);
+  } catch (error) {
+    ctx.logger.warn("The SEO Problems list could not be marked out of date", {
+      error,
+    });
+  }
 }
 
 /**
- * The record's rows: held addresses, the stored fingerprint, and the types
- * that were the site's at the last run.
+ * The stored fingerprint and site-types notes, found by their keys, whether
+ * any deploy move is still owed its redirect, and the notes of the earlier
+ * record's move: one read.
  */
-async function readRecord(ctx: PluginContext): Promise<{
-  held: RecordRow[];
-  fingerprint?: MetaRow;
-  siteTypes?: MetaRow;
+async function storedGate(ctx: PluginContext): Promise<{
+  fingerprint?: string;
+  siteTypes?: string;
+  pending: boolean;
+  notes: ReadonlyMap<string, string | null>;
 }> {
-  const held: RecordRow[] = [];
-  let fingerprint: MetaRow | undefined;
-  let siteTypes: MetaRow | undefined;
-  for (let page = 1; ; page++) {
-    const { data } = await ctx.services.ownCollections.listEntries(
-      recordSlug(ctx),
-      {
-        where: { kind: { in: ["address", "range", "meta"] } },
-        pagination: { limit: PAGE, page },
-        sort: { field: "claimKey", direction: "asc" },
-        depth: 0,
-      }
-    );
-    for (const entry of data as Record<string, unknown>[]) {
-      if (entry.claimKey === FINGERPRINT_KEY) {
-        fingerprint = { id: String(entry.id), value: entry.path };
-      } else if (entry.claimKey === SITE_TYPES_KEY) {
-        siteTypes = { id: String(entry.id), value: entry.path };
-      } else if (entry.kind !== "meta") {
-        held.push(rowOf(entry));
-      }
-    }
-    if ((data as unknown[]).length < PAGE) {
-      return { held, fingerprint, siteTypes };
-    }
-  }
+  const { notes, pending } = await readNotes(
+    ctx,
+    [FINGERPRINT_KEY, SITE_TYPES_KEY, ...EARLIER_NOTE_KEYS],
+    true
+  );
+  return {
+    fingerprint: notes.get(FINGERPRINT_KEY) ?? undefined,
+    siteTypes: notes.get(SITE_TYPES_KEY) ?? undefined,
+    pending,
+    notes,
+  };
 }
 
 /**
@@ -265,7 +358,8 @@ const sameHolds = (a: readonly HeldAddress[], b: readonly HeldAddress[]) =>
 async function moveIfCurrent(
   ctx: PluginContext,
   update: HeldAddressUpdate,
-  expected: Expected
+  expected: Expected,
+  alongside?: (transaction: Transaction) => Promise<void>
 ): Promise<
   { refused: { address: HeldAddress; heldBy: AddressHolder }[] } | "overtaken"
 > {
@@ -276,7 +370,9 @@ async function moveIfCurrent(
     async transaction => {
       const now = await heldNow(ctx, transaction, update.holder);
       if (!sameHolds(now, before)) return "overtaken" as const;
-      return ctx.publicAddresses.move([update], transaction);
+      const moved = await ctx.publicAddresses.move([update], transaction);
+      if (moved.refused.length === 0) await alongside?.(transaction);
+      return moved;
     }
   );
   if (outcome === "overtaken") expected.delete(key);
@@ -360,7 +456,18 @@ async function keepWhatStands(
     );
     kept.set(key, keep);
     if (keep.length !== before.length) {
-      await moveIfCurrent(ctx, { holder: page.holder, holds: keep }, expected);
+      // The route has moved with the deploy: each address let go of is kept
+      // on the same transaction, owed a redirect to the page's new one once
+      // every claim stands.
+      const released = before.filter(
+        b => !keep.some(held => sameAddress(b, held))
+      );
+      await moveIfCurrent(
+        ctx,
+        { holder: page.holder, holds: keep },
+        expected,
+        transaction => keepPending(ctx, transaction, page.holder, released)
+      );
     }
   }
   return kept;
@@ -373,11 +480,11 @@ async function siteTypeKeys(ctx: PluginContext): Promise<string[]> {
     .sort();
 }
 
-/** The site types a stored meta row names; none where it names nothing usable. */
-function typesIn(row: MetaRow | undefined): Set<string> {
-  if (typeof row?.value !== "string") return new Set();
+/** The site types a stored note names; none where it names nothing usable. */
+function typesIn(value: string | undefined): Set<string> {
+  if (value === undefined) return new Set();
   try {
-    const parsed: unknown = JSON.parse(row.value);
+    const parsed: unknown = JSON.parse(value);
     return new Set(
       Array.isArray(parsed)
         ? parsed.filter((each): each is string => typeof each === "string")
@@ -474,57 +581,134 @@ async function claimTheNew(
   return { recorded, lost };
 }
 
+/**
+ * Make the redirects every page's move owes, this start's and any an earlier
+ * start left owing, each to where the record says the page is now. Each
+ * owed move is forgotten once its redirect is made or refused.
+ */
+async function redirectOwedMoves(ctx: PluginContext): Promise<void> {
+  const owed = new Map<string, PendingMove[]>();
+  for (const move of await pendingMoves(ctx)) {
+    const key = holderKey(move.holder);
+    owed.set(key, [...(owed.get(key) ?? []), move]);
+  }
+  for (const moves of owed.values()) {
+    const [first] = moves;
+    if (first === undefined) continue;
+    await redirectDeployMove(
+      ctx,
+      first.holder,
+      moves.map(move => move.address),
+      transaction => heldNow(ctx, transaction, first.holder)
+    );
+    await forgetPending(
+      ctx,
+      moves.map(move => move.key)
+    );
+  }
+}
+
 async function runCatchUp(
   ctx: PluginContext,
   options: CatchUpOptions
 ): Promise<CatchUpReport> {
   const fingerprint = await ctx.publicAddresses.fingerprint();
-  // The stored fingerprint by its key, and whether any address is recorded:
-  // an unchanged start reads no more than that.
-  const stored = await storedFingerprint(ctx);
-  if (stored?.value === fingerprint && (await holdsAny(ctx))) return NOTHING;
-  const record = await readRecord(ctx);
+  // Skipped on its inputs alone, never on what the record holds: a site none
+  // of whose pages holds an address keeps only these notes, and would
+  // otherwise walk every page at every start. The fingerprint covers every
+  // site type by kind and name, so a type added or removed changes it; the
+  // site-types row is written beside it in the same run, and one missing
+  // means that run never finished. A full uninstall drops the record with
+  // both rows, and one that keeps the data forgets the fingerprint, as an
+  // install does (`forgetCatchUpFingerprint`), so a reinstall runs the whole
+  // catch-up again.
+  const stored = await storedGate(ctx);
+  const earlier = await earlierWritesSince(ctx, stored.notes, options.settleMs);
+  if (earlier === undefined && isCurrent(stored, fingerprint)) return NOTHING;
+  if (earlier !== undefined) await beginTakingIn(ctx, earlier);
+  const held = await heldRows(ctx);
   const siteTypes = await siteTypeKeys(ctx);
   const pages = await everyPage(ctx, options);
   await options.afterListing?.();
-  const was = heldBefore(record.held);
+  const was = heldBefore(held);
   const expected: Expected = new Map(
     [...was].map(([key, entry]) => [key, [...entry.holds]])
   );
   const kept = await keepWhatStands(ctx, pages, was, expected);
   await letGoOfTheGone(ctx, was, kept, expected, {
     now: new Set(siteTypes),
-    before: typesIn(record.siteTypes),
+    before: typesIn(stored.siteTypes),
   });
+  // The redirects that process saved or removed, once every page has let go
+  // of what it no longer holds: a redirect from a page's old address claims
+  // it only after the page lets it go.
+  const redirects =
+    earlier === undefined
+      ? { settled: true }
+      : await reclaimRedirectAddresses(ctx);
+  await options.afterReleases?.();
   const { recorded, lost } = await claimTheNew(ctx, pages, kept, expected);
-  await storeMeta(
+  await redirectOwedMoves(ctx);
+  await storeNote(
     ctx,
-    record.siteTypes?.id,
+    stored.siteTypes,
     SITE_TYPES_KEY,
     JSON.stringify(siteTypes)
   );
   // Stored last: a start interrupted before this point runs it all again.
-  await storeMeta(ctx, record.fingerprint?.id, FINGERPRINT_KEY, fingerprint);
+  await storeNote(ctx, stored.fingerprint, FINGERPRINT_KEY, fingerprint);
+  // And the earlier collection's shape after it, as it was read before the
+  // run began: a start interrupted before it, or a run that could not settle
+  // every redirect, finds the same writes again, and takes them in again.
+  if (earlier !== undefined && redirects.settled) {
+    await keepEarlierShape(ctx, earlier);
+  }
   return { ran: true, recorded, lost };
 }
 
-/** Keep `value` in the meta row `key`, made where it is not there yet. */
-async function storeMeta(
+/**
+ * Whether the stored notes say the record is current for `fingerprint`: the
+ * same fingerprint, the site types kept beside it by a run that finished,
+ * and no deploy move still owed its redirect.
+ */
+function isCurrent(
+  stored: Awaited<ReturnType<typeof storedGate>>,
+  fingerprint: string
+): boolean {
+  return (
+    stored.fingerprint === fingerprint &&
+    stored.siteTypes !== undefined &&
+    !stored.pending
+  );
+}
+
+/**
+ * Begin taking in what a process of the earlier version wrote: say so, and
+ * note here the moves it noted there, before the run, which makes their
+ * redirects with its own.
+ */
+async function beginTakingIn(
   ctx: PluginContext,
-  id: string | undefined,
+  earlier: EarlierShape
+): Promise<void> {
+  ctx.logger.info(
+    "The SEO plugin found addresses an earlier version recorded during a deploy, and brings its record up to date from the pages",
+    { earlier }
+  );
+  await takeEarlierPending(ctx);
+}
+
+/**
+ * Keep `value` in the note `key`. A note already keeping `value` is left
+ * alone, so a start where nothing moved writes nothing.
+ */
+async function storeNote(
+  ctx: PluginContext,
+  stored: string | undefined,
   key: string,
   value: string
 ): Promise<void> {
-  if (id === undefined) {
-    await ctx.services.collections.createEntry(recordSlug(ctx), {
-      claimKey: key,
-      kind: "meta",
-      path: value,
-    });
-    return;
+  if (stored !== value) {
+    await putNote(ctx, key, value, { absent: stored === undefined });
   }
-  await ctx.services.collections.updateEntry(recordSlug(ctx), id, {
-    path: value,
-    _overwrite: true,
-  });
 }

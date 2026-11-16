@@ -128,6 +128,15 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_UPGRADE_IN_PROGRESS: 409,
   // Plan C2 — nextly migrate phases.
   NEXTLY_MIGRATE_LOCK_BUSY: 409,
+  // A schema change waited for a table another database session holds, past
+  // its bounds, and stopped. 409 like the schema lock's refusal: another
+  // session holds what the change needs, and it can run once that ends.
+  NEXTLY_TABLE_BUSY: 409,
+  // A write made inside a schema change's own SQLite transaction, on another
+  // connection to the same database, waited for the write lock that
+  // transaction holds. 500, not 409: this process holds the lock, no other
+  // session does, so nothing can end that a retry would wait for.
+  NEXTLY_LOCK_HELD_BY_THIS_PROCESS: 500,
   NEXTLY_BASELINE_LOCK_NOT_HELD: 409,
   NEXTLY_RESOLVE_LOCK_NOT_HELD: 409,
   // Boot refused to serve: the migrate lock stayed held past the wait deadline,
@@ -137,7 +146,21 @@ export const NEXTLY_ERROR_STATUS = {
   NEXTLY_BOOT_MIGRATIONS_NOT_RUN: 503,
   // Still running rather than refused. 503 for the same reason: retry shortly.
   NEXTLY_BOOT_MIGRATIONS_PENDING: 503,
+  // A production start refused a database `nextly migrate` has not set up: it
+  // holds none of Nextly's tables, and the start creates none. 503 for the
+  // same reason as the two above: the instance serves once the deploy migrates.
+  NEXTLY_DATABASE_NOT_SET_UP: 503,
+  // A database with no Nextly tables, where the step that refuses sets up
+  // nothing. 503 like the two above: the instance cannot serve until the
+  // database is migrated, and running `nextly migrate` is the recovery.
+  NEXTLY_DATABASE_NOT_MIGRATED: 503,
   NEXTLY_CORE_DESTRUCTIVE_REFUSED: 409,
+  // A core upgrade drizzle-kit cannot plan from this database, refused
+  // before any statement: the database is as it was, and an earlier release
+  // takes it the first step.
+  NEXTLY_CORE_UPGRADE_UNSUPPORTED: 409,
+  // A core upgrade that ran and still left a declared column or table out.
+  NEXTLY_CORE_UPGRADE_INCOMPLETE: 500,
   NEXTLY_MIGRATION_DRIFT: 409,
   NEXTLY_MIGRATION_APPLY_FAILED: 500,
   // A SQLite migration unit would leave a row referencing a row that does
@@ -274,10 +297,11 @@ export const NEXTLY_ERROR_STATUS = {
   // implicit English alone, and its translations in other languages would read as gone. 500 for the
   // same reason: the remedy is the server's configuration.
   NEXTLY_PER_LANGUAGE_STORAGE_LANGUAGES_UNDECLARED: 500,
-  // `db.postgres.schema` names a schema other than `public`, which the schema
-  // push cannot yet create tables in. 500 for the same reason as the mismatch
-  // above: a boot-time refusal of the server's own configuration.
-  NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED: 500,
+  // `db.postgres.schema` names a schema holding no installation while another
+  // schema of the database holds one: the setting moved on an existing site.
+  // 500 for the same reason as the mismatch above: a boot-time refusal of the
+  // server's own configuration.
+  NEXTLY_POSTGRES_SCHEMA_MOVED: 500,
 } as const;
 
 export type NextlyErrorCode = keyof typeof NEXTLY_ERROR_STATUS;

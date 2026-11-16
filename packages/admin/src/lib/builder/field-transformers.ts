@@ -1,4 +1,5 @@
 import { arrayMove } from "@dnd-kit/sortable";
+import { neverTranslatable } from "nextly/config";
 // The shared readers preserve both reference spellings across the builder
 // round trip: a migrated definition loads with its references intact and
 // saves them back resolved, rather than losing them into pluginOptions.
@@ -203,28 +204,17 @@ export function reorderNestedFields(
 }
 
 /**
- * A field name the server accepts, verbatim: the pattern every field
- * identifier must match on the wire (`^[a-z][a-z0-9_]*$` — a leading letter,
- * then letters, digits or underscores, runs and trailing underscores
- * included). Mirrors the contract the server validates against rather than
- * inventing a local rule for what "stored" means.
- */
-const STORED_FIELD_NAME = /^[a-z][a-z0-9_]*$/;
-
-/**
  * Convert BuilderField (UI) to FieldDefinition (API payload).
  * Handles nested fields, blocks, and all field-type-specific properties.
  */
 export function convertToFieldDefinition(field: BuilderField): FieldDefinition {
   const definition: FieldDefinition = {
-    // A stored name is the field's identity, not a label: one already legal
-    // passes through untouched, because re-deriving it would collapse its
-    // legal `__` runs or trim a legal trailing `_` and silently rename the
-    // column and API key during an unrelated save. The derivation is only
-    // for a name the server would reject anyway.
-    name: STORED_FIELD_NAME.test(field.name)
-      ? field.name
-      : toSnakeName(field.name),
+    // A name is the field's identity, not a label, so it is sent as it is. Re-deriving one would
+    // rename the field's column and API key during an unrelated save: a plugin's camelCase
+    // `metaTitle`, which the save keeps, would arrive as a new `meta_title` beside a dropped
+    // `metaTitle`. A new name the save refuses is stopped where it is set, and the save names the
+    // field when it refuses one.
+    name: field.name,
     label: field.label || field.name,
     type: field.type,
     required: Boolean(field.validation?.required),
@@ -242,9 +232,13 @@ export function convertToFieldDefinition(field: BuilderField): FieldDefinition {
   // produces no column, so the flag is unbacked metadata — and a value saved
   // by the pre-gate editor must not keep riding every save now that the
   // switch no longer offers it.
+  //
+  // Nor does a password or virtual field, which is never translated: the server refuses
+  // `localized: true` on one, and a legacy definition may still carry it.
   if (
     typeof field.advanced?.localized === "boolean" &&
-    !isFieldGroupFieldType(field.type)
+    !isFieldGroupFieldType(field.type) &&
+    !neverTranslatable({ type: field.type })
   ) {
     definition.localized = field.advanced.localized;
   }

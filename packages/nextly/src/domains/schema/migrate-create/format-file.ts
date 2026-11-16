@@ -26,6 +26,11 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import {
+  consentToCover,
+  describeDeletion,
+  type Deletion,
+} from "../migrate/data-loss-consent";
 import { NO_TRANSACTION_MARKER } from "../migrate/split-sql";
 
 import { getDialectDisplayName } from "./dialect-name";
@@ -46,6 +51,48 @@ export const FIELD_GROUP_HEADER = "-- Field groups:";
 
 /** The header line naming one entity's settings changes (`-- Settings: posts: description`). */
 const SETTINGS_HEADER = "-- Settings:";
+
+/**
+ * The header line naming one app's or plugin's added and removed permissions
+ * (`-- Permissions: @nextlyhq/plugin-form-builder: + export-submissions`).
+ */
+const PERMISSIONS_HEADER = "-- Permissions:";
+
+/**
+ * The destructive mark: the line saying a file deletes data and which consent `nextly migrate`
+ * needs for it, and the line naming each deletion. Written second in the header, under the
+ * migration's name, so a reviewer reading the file in a diff sees it first. It is for that
+ * review: `nextly migrate` judges a file by its statements, marked or not.
+ */
+export const DESTRUCTIVE_HEADER = "-- Destructive:";
+export const DELETES_HEADER = "-- Deletes:";
+
+/** The destructive mark for `deletions`, or nothing for a file that deletes nothing. */
+function destructiveLines(deletions: readonly Deletion[]): string {
+  if (deletions.length === 0) return "";
+  const consent = consentToCover(deletions);
+  const each = deletions.map(deletion => {
+    // The count belongs to one database; the file runs against others.
+    const uncounted: Deletion =
+      deletion.kind === "unnamed"
+        ? deletion
+        : { ...deletion, count: undefined };
+    return `${DELETES_HEADER} ${oneLine(describeDeletion(uncounted))}\n`;
+  });
+  return (
+    `${DESTRUCTIVE_HEADER} this migration deletes data. nextly migrate needs consent: ${oneLine(consent)}\n` +
+    each.join("")
+  );
+}
+
+/**
+ * `text` on one line. A settings or permissions header names what a config or a plugin declares,
+ * which may hold a line break; one would end the comment and leave the rest of the line as a
+ * statement `nextly migrate` runs. Each break becomes a space.
+ */
+function oneLine(text: string): string {
+  return text.replace(/[\r\n\u2028\u2029]+/g, " ");
+}
 
 /**
  * Marks a file whose entity headers name what the migration CHANGES.
@@ -140,10 +187,24 @@ export interface FormatArgs {
    */
   settingsChanges?: readonly string[];
   /**
+   * Each app's or plugin's added and removed permissions, one line per owner,
+   * as `describePermissionChange` writes them. Kept apart from the entity
+   * headers for the same reason as the settings: no table changes with them.
+   */
+  permissionChanges?: readonly string[];
+  /**
    * Whether the file changes no table. Its UP may still hold statements: a
    * Builder entity's registry row travels with its settings.
    */
   changesNoTable?: boolean;
+  /**
+   * What the migration deletes (`plannedDeletions`). A file with any carries
+   * the destructive mark: a `-- Destructive:` line naming the consent `nextly
+   * migrate` needs, and one `-- Deletes:` line per deletion. Counts are left
+   * out: they are of the database `migrate:create` read, and the file runs
+   * against others.
+   */
+  deletions?: readonly Deletion[];
   /** Override generated-at timestamp for tests; default = `new Date()`. */
   now?: Date;
 }
@@ -167,7 +228,10 @@ export function formatMigrationFile(args: FormatArgs): string {
   const scopeLine =
     args.entitiesAreScoped === false ? "" : `${SCOPED_ENTITIES_MARKER}\n`;
   const settingsLines = (args.settingsChanges ?? [])
-    .map(change => `${SETTINGS_HEADER} ${change}\n`)
+    .map(change => `${SETTINGS_HEADER} ${oneLine(change)}\n`)
+    .join("");
+  const permissionLines = (args.permissionChanges ?? [])
+    .map(change => `${PERMISSIONS_HEADER} ${oneLine(change)}\n`)
     .join("");
   // Each statement gets a trailing `;`. splitSqlStatements in migrate.ts
   // splits on `;` so statements MUST be terminated.
@@ -178,16 +242,19 @@ export function formatMigrationFile(args: FormatArgs): string {
   // file must not stop a rollback reaching the migrations before it. So its
   // DOWN is one statement that changes nothing, valid on every dialect.
   const settingsOnly =
-    args.changesNoTable === true && (args.settingsChanges ?? []).length > 0;
+    args.changesNoTable === true &&
+    (args.settingsChanges ?? []).length +
+      (args.permissionChanges ?? []).length >
+      0;
   const downBody =
     args.downSqlStatements.length > 0
       ? args.downSqlStatements.map(s => `${s};`).join("\n\n")
       : settingsOnly
-        ? "-- No table statements to undo: this migration changes settings only.\nSELECT 1;"
+        ? "-- No table statements to undo: this migration changes settings or permissions only.\nSELECT 1;"
         : "-- (no automatic down — this migration is not reversible. Hand-write rollback SQL here)";
 
   return `-- Migration: ${args.name}
-${collectionLine}${singleLine}${componentLine}${userExtLine}${scopeLine}${settingsLines}-- Generated at: ${now}
+${destructiveLines(args.deletions ?? [])}${collectionLine}${singleLine}${componentLine}${userExtLine}${scopeLine}${settingsLines}${permissionLines}-- Generated at: ${now}
 -- Dialect: ${getDialectDisplayName(args.dialect)}
 
 -- UP

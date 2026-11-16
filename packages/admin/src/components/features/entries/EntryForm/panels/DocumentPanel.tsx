@@ -128,6 +128,10 @@ export function DocumentPanel({
     | Record<string, { translated: boolean; status?: string }>
     | undefined;
 
+  // Whether the document's shared fields hold unpublished changes, which the
+  // language section says.
+  const sharedChangesPending = entry?._sharedChangesPending === true;
+
   // Each built-in section by the name the server places it under.
   const builtIn = (name: string): React.ReactNode => {
     switch (name) {
@@ -152,6 +156,7 @@ export function DocumentPanel({
               actionsDisabled={actionsDisabled}
               navigationDisabled={navigationDisabled}
               publishAllDisabled={publishAllDisabled}
+              sharedChangesPending={sharedChangesPending}
             />
           </LanguageSection>
         );

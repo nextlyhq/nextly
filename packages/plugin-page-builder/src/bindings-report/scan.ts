@@ -97,6 +97,12 @@ export interface BindingReportDeps {
   readonly kick?: () => void;
   /** The site's named queries, whose rows a list's item bindings read. */
   readonly namedQueries?: NamedQuerySource;
+  /**
+   * Whether a document of `collection` may hold blocks at all, known
+   * without a read; absent, every collection may. A write to one that may
+   * not is not asked about its declaration.
+   */
+  readonly collectionMayHoldBlocks?: (collection: string) => boolean;
 }
 
 /** A document's entry, as its bindings read it; none for a component's own. */
@@ -341,6 +347,11 @@ async function mayHoldBlocks(
   deps: BindingReportDeps
 ): Promise<boolean> {
   if (holdsBlocks(written.data)) return true;
+  // A collection declaring no blocks field anywhere holds none, and its
+  // declaration is not read again to say so.
+  if (deps.collectionMayHoldBlocks?.(written.collection) === false) {
+    return false;
+  }
   const reading = deps.reading();
   if (reading === null) return false;
   return (await reading.hostsOf(written.at)).length > 0;

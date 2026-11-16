@@ -149,6 +149,12 @@ describe("the Count card", () => {
       ["published", "104"],
       ["draft", "24"],
     ]);
+    // Each part in its status's solid colour, a draft in the muted ink: no opacity mix.
+    const segment = (part: string) =>
+      bar.querySelector(`[data-part="${part}"]`) as HTMLElement;
+    expect(segment("published")).toHaveClass("bg-success-solid");
+    expect(segment("draft")).toHaveClass("bg-muted-foreground");
+    expect(segment("draft").className).not.toMatch(/\/\d/);
   });
 
   it("leaves scheduled out of the split where none is scheduled or it was not read", () => {

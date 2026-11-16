@@ -33,6 +33,7 @@ import type { ResolvedDevOptions } from "./db-sync";
 import { syncRefusalOf } from "./db-sync-registry";
 import { collectOrphanDeletions, publishExtensionSchema } from "./dev-build";
 import { desiredSchemaForSync, productionSyncRefusal } from "./dev-server";
+import { fieldsLeavingForSync } from "./sync-schema";
 
 /** What a sync's dry run does not show, and what its schema plan is made against. */
 const SYNC_DRY_RUN_NOTE =
@@ -126,6 +127,7 @@ export async function planDbSync(
         coreTablesPresent
       );
       changes.push(...push.changes);
+      if (push.refusals.length > 0) return { changes, refusals: push.refusals };
       return {
         changes,
         notes: [...push.notes, SYNC_DRY_RUN_NOTE],
@@ -174,19 +176,42 @@ async function planPush(
   options: ResolvedDevOptions,
   context: CommandContext,
   registriesPresent: boolean
-): Promise<{ changes: DryRunChange[]; notes: string[] }> {
+): Promise<{
+  changes: DryRunChange[];
+  notes: string[];
+  refusals: string[];
+}> {
   if (options.autoSync === false) {
     return {
       changes: [],
       notes: ["--no-auto-sync: a real run applies no schema change."],
+      refusals: [],
     };
+  }
+
+  // The fields leaving translation, found and judged as the real sync finds and judges them
+  // before it changes anything: a refusal there is the dry run's answer, in the same words.
+  const refusals: string[] = [];
+  const { mover, leaving } = await fieldsLeavingForSync(
+    configResult,
+    adapter,
+    options,
+    { warn: m => context.logger.warn(m), error: m => refusals.push(m) }
+  );
+  if (leaving.refused.length > 0) {
+    return { changes: [], notes: [], refusals };
   }
 
   // The tables plugins declare and the columns they contribute, which the push plans from, as the
   // real sync publishes them before its pushes.
   await publishExtensionSchema(configResult, adapter, context);
+  // The real push applies the leaving fields' Required and Unique only once their values are
+  // copied, so its first plan is made with them held, as here.
   const { desired } = await desiredSchemaForSync(
-    configResult.config,
+    mover?.configWithLeavingSettingsHeld(
+      configResult.config,
+      leaving.entries
+    ) ?? configResult.config,
     adapter,
     context.logger,
     { registriesPresent }
@@ -203,7 +228,12 @@ async function planPush(
       action: "run",
       target: describeOp(operation),
     })),
+    refusals: [],
     notes: [
+      ...leaving.entries.map(
+        entry =>
+          `A real run moves the values of ${[...entry.leaving].join(", ")} in ${entry.slug} out of its translations table: the other languages to the localization archive, the default language's onto the field, then applies any Required or Unique setting and drops the translated column.`
+      ),
       ...preview.candidates.map(
         candidate =>
           `A real run would ask whether ${candidate.tableName}.${candidate.fromColumn} was renamed to ${candidate.toColumn}.`

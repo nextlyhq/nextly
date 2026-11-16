@@ -1,5 +1,5 @@
 /**
- * The workflow keys, `_pendingChange` and `_inRelease`, as a filter carries
+ * The workflow keys, `_pendingChange`, `_inRelease` and `_strandedStage`, as a filter carries
  * them: which values are accepted, which are refused and how, and what the
  * query is handed once they are taken out.
  *
@@ -198,6 +198,32 @@ describe("every reserved top-level key", () => {
       ).toEqual(["FILTER_MISPLACED_KEY"]);
     }
   );
+});
+
+describe("_strandedStage", () => {
+  it("is read from JSON as true, and refuses false as an invalid operand", () => {
+    expect(parseWhereParam(JSON.stringify({ _strandedStage: true }))).toEqual({
+      _strandedStage: true,
+    });
+    expect(
+      refusal(fromJson({ _strandedStage: false })).map(p => [p.code, p.path])
+    ).toEqual([["FILTER_INVALID_OPERAND", "where._strandedStage"]]);
+  });
+
+  it("is taken out of the filter as its own condition, beside the others", () => {
+    const { filter, cleanedWhere, problems } = extractWorkflowFilter({
+      _strandedStage: true,
+      _pendingChange: true,
+      status: { equals: "draft" },
+    });
+    expect(problems).toEqual([]);
+    expect(filter).toEqual({
+      pendingChange: true,
+      inRelease: null,
+      strandedStage: true,
+    });
+    expect(cleanedWhere).toEqual({ status: { equals: "draft" } });
+  });
 });
 
 describe("extractWorkflowFilter", () => {

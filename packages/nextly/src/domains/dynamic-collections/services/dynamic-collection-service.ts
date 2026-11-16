@@ -8,6 +8,7 @@ import { randomBytes } from "crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import { assertTopLevelFieldsNamed } from "../../../api/fields-payload";
 import { NextlyError } from "../../../errors";
 import { resolveBuilderRevalidate } from "../../../revalidation/builder-revalidate";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
@@ -23,6 +24,7 @@ import { FieldGroupRegistryService } from "../../field-groups/services/field-gro
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { assertLocalizationConfigured } from "../../i18n/config/require-app-config";
+import { appLanguageOrder } from "../../i18n/configured-locales";
 import type { LiveLocalization } from "../../i18n/localization-source";
 import {
   archiveFieldsLeavingTranslation,
@@ -47,6 +49,7 @@ import {
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
 import { companionHasStatusColumn } from "../../i18n/runtime/companion-io";
+import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { normalizeType } from "../../schema/pipeline/diff/normalize-type";
 import type { ForeignKeySpec } from "../../schema/pipeline/diff/types";
 import { queryLiveColumnTypes } from "../../schema/pipeline/live-column-types";
@@ -67,10 +70,13 @@ import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
 import {
   columnsThatMayHoldNull,
   fieldProducesColumn,
+  fieldsStoredOnRow,
   getColumnDescriptor,
   systemColumnsForFields,
   toSnakeCase,
 } from "../../schema/services/field-column-descriptor";
+import { movedForeignKeyName } from "../../schema/services/index-name";
+import { relationshipTargetSlug } from "../../schema/services/relationship-key-target";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 import { buildCollectionMetadataUpsert } from "../../schema/ui-schema/metadata-sql";
@@ -314,6 +320,18 @@ export class DynamicCollectionService extends BaseService {
       : (source.current()?.defaultLocale ?? "en");
   }
 
+  /**
+   * The site's languages in its order as they are now, from the same source as the default
+   * language; where this service was handed only a default, the site's registry order
+   * (`appLanguageOrder`), so a migration file it writes keeps what this site's readers saw.
+   */
+  private get languageOrder(): string[] | undefined {
+    const source = this.defaultLocaleSource;
+    return typeof source === "string"
+      ? appLanguageOrder()
+      : source.current()?.locales.map(locale => locale.code);
+  }
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -378,7 +396,14 @@ export class DynamicCollectionService extends BaseService {
         // MySQL's restate to the legacy renderer, which would `MODIFY` a float the create had just
         // made `double` down to `decimal(10,2)`.
         liveColumnTypes: this.schemaService.plannedColumnTypes(pendingFields),
-        ...this.schemaService.plannedAttachments(tableName, pendingFields),
+        // Keyed as the pending create keys them, so a key it will install is predicted.
+        ...this.schemaService.plannedAttachments(
+          tableName,
+          pendingFields,
+          await collectionTablesBySlug(this.adapter, pendingFields, {
+            builder: true,
+          })
+        ),
       };
     }
 
@@ -458,7 +483,9 @@ export class DynamicCollectionService extends BaseService {
     fields: FieldDefinition[]
   ): Promise<ReadonlyMap<string, string>> {
     const slugs = new Set<string>();
-    for (const field of fields) {
+    // The field groups at this level, those inside a group with no name among them, as a rename
+    // pairs them (`fieldGroupRenamePairs`): a table left unresolved moves no rows.
+    for (const field of fieldsStoredOnRow(fields)) {
       for (const slug of fieldGroupSlugList(field)) slugs.add(slug);
     }
     if (slugs.size === 0) return new Map();
@@ -532,21 +559,8 @@ export class DynamicCollectionService extends BaseService {
     // Element shape matters too: the array is normalised with `f.name
     // .toLowerCase()` below, before field validation runs, so an element
     // without a string name throws the same untyped TypeError the checks
-    // above exist to prevent.
-    const malformed = data.fields.findIndex(
-      f => typeof (f as { name?: unknown })?.name !== "string"
-    );
-    if (malformed !== -1) {
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: `fields[${malformed}].name`,
-            code: "REQUIRED",
-            message: "Each field requires a name.",
-          },
-        ],
-      });
-    }
+    // above exist to prevent. The rule every entity API shares.
+    assertTopLevelFieldsNamed(data.fields);
 
     // `group` is lower-cased later without a type check; `?.` guards null and
     // undefined but not a number or object, which would throw an untyped
@@ -609,9 +623,12 @@ export class DynamicCollectionService extends BaseService {
         hasStatus: data.status === true,
         localized: storesPerLanguage(data),
         // A relationship to a renamed collection keys the table it kept.
+        // Read for this Builder collection's own keys, so a relationship the admin writes with
+        // `relationTo` is keyed too.
         targetTables: await collectionTablesBySlug(
           this.adapter,
-          userDefinedFields
+          userDefinedFields,
+          { builder: true }
         ),
       }
     );
@@ -738,38 +755,6 @@ export class DynamicCollectionService extends BaseService {
    * resolved form would resolve twice and could write a row `migrate:create`
    * would not.
    */
-  /**
-   * Refuse a junction move whose destination name the database already holds.
-   *
-   * @throws NextlyError (validation, `JUNCTION_TABLE_IN_USE`) naming the table
-   */
-  private async refuseJunctionMovesOntoLiveTables(
-    tableName: string,
-    oldFields: FieldDefinition[],
-    newFields: FieldDefinition[]
-  ): Promise<void> {
-    for (const move of this.schemaService.junctionMoves(
-      tableName,
-      oldFields,
-      newFields
-    )) {
-      if (!(await this.adapter.tableExists(move.to.table))) continue;
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: "fields",
-            code: "JUNCTION_TABLE_IN_USE",
-            message:
-              `Junction table "${move.from.table}" cannot move to ` +
-              `"${move.to.table}": a table of that name already exists in the ` +
-              `database. Choose another name, or drop that table first.`,
-          },
-        ],
-        logContext: { from: move.from.table, to: move.to.table },
-      });
-    }
-  }
-
   /**
    * The fields a save defines itself, validated: the reserved fields dropped,
    * every name checked by the column it becomes, and no two many-to-many fields
@@ -1232,6 +1217,8 @@ export class DynamicCollectionService extends BaseService {
       tableName: args.tableName,
       dialect: this.adapter.dialect,
       defaultLocale: this.defaultLocale,
+      // The file another database replays keeps the value this one keeps (`copyLiveness`).
+      languageOrder: this.languageOrder,
       status: args.status,
       wasLocalized: args.wasLocalized,
       isLocalized: args.isLocalized,
@@ -1336,21 +1323,9 @@ export class DynamicCollectionService extends BaseService {
       }
       // The array is normalised through `f.name.toLowerCase()` before field
       // validation runs, so an element without a string name throws an
-      // untyped TypeError rather than reporting the client error it is.
-      const malformedUpdate = updates.fields.findIndex(
-        f => typeof (f as { name?: unknown })?.name !== "string"
-      );
-      if (malformedUpdate !== -1) {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: `fields[${malformedUpdate}].name`,
-              code: "REQUIRED",
-              message: "Each field requires a name.",
-            },
-          ],
-        });
-      }
+      // untyped TypeError rather than reporting the client error it is. The
+      // rule every entity API shares.
+      assertTopLevelFieldsNamed(updates.fields);
     }
 
     const collection = (await this.registryService.getCollection(
@@ -1474,21 +1449,26 @@ export class DynamicCollectionService extends BaseService {
     const historyFacts = async () => {
       const live = await liveTable();
       const recorded = collection.fields ?? [];
+      // Where each relationship's target is stored, so a key this save adds or changes
+      // references the table a renamed target kept rather than one spelled from its new slug.
+      // Read for this Builder collection's own keys, `relationTo` relationships included.
+      const targetTables = await collectionTablesBySlug(
+        this.adapter,
+        [...recorded, ...(updates.fields ?? [])],
+        { builder: true }
+      );
       return {
         tableHasRows: live.tableHasRows,
         columnsContainingNull: live.columnsContainingNull,
         columnsAbsentFromTable: live.columnsAbsentFromTable,
         liveColumnTypes: this.schemaService.plannedColumnTypes(recorded),
+        // The recorded fields' keys as the tables they built carry them: a relationship naming its
+        // target by `relationTo` alone was created without one, so none is predicted for it.
         ...this.schemaService.plannedAttachments(
           collection.tableName,
           recorded
         ),
-        // Where each relationship's target is stored, so a key this save adds or changes
-        // references the table a renamed target kept rather than one spelled from its new slug.
-        targetTables: await collectionTablesBySlug(this.adapter, [
-          ...recorded,
-          ...(updates.fields ?? []),
-        ]),
+        targetTables,
       };
     };
 
@@ -1571,10 +1551,11 @@ export class DynamicCollectionService extends BaseService {
       // migration is invisible to it, and the rename would meet that table at
       // apply time — in production, where a migration can no longer be
       // refused and the registry has already recorded the new name.
-      await this.refuseJunctionMovesOntoLiveTables(
+      await this.schemaService.refuseJunctionMovesOntoLiveTables(
         collection.tableName,
         oldUserFields,
-        userDefinedFields
+        userDefinedFields,
+        table => this.adapter.tableExists(table)
       );
       // A field renamed onto a column that is already there is refused before anything here is
       // written: the archive write just below is the first.
@@ -1602,6 +1583,7 @@ export class DynamicCollectionService extends BaseService {
         builtBy: "collection",
         tableName: collection.tableName,
         defaultLocale: this.defaultLocale,
+        languageOrder: this.languageOrder,
         adapter: this.adapter,
         entity: collectionName,
         kind: "collection",
@@ -1916,6 +1898,7 @@ export class DynamicCollectionService extends BaseService {
         builtBy: "collection",
         tableName: collection.tableName,
         defaultLocale: this.defaultLocale,
+        languageOrder: this.languageOrder,
         adapter: this.adapter,
         entity: collectionName,
         kind: "collection",
@@ -2080,10 +2063,14 @@ export class DynamicCollectionService extends BaseService {
     junctions: { up: string[]; down: string[] };
     keys: { before: ForeignKeySpec[]; after: ForeignKeySpec[] };
   }> {
-    const targetTables = await collectionTablesBySlug(this.adapter, [
-      ...oldFields,
-      ...newFields,
-    ]);
+    // Read for this Builder collection's own keys, `relationTo` relationships included, those
+    // inside a group with no name among them: they hold keys on the row (`keysTheTableHolds`), so
+    // their targets are read from the registry as the ones beside the group are.
+    const targetTables = await collectionTablesBySlug(
+      this.adapter,
+      fieldsStoredOnRow([...oldFields, ...newFields]),
+      { builder: true }
+    );
     const junctions = this.junctionStatements(
       tableName,
       oldFields,
@@ -2110,14 +2097,174 @@ export class DynamicCollectionService extends BaseService {
         up: [...moved(oldFields, newFields), ...junctions.up],
         down: [...junctions.down, ...moved(newFields, oldFields)],
       },
-      keys: {
-        before: this.relationshipForeignKeys(
-          tableName,
-          oldFields,
-          targetTables
-        ),
-        after: this.relationshipForeignKeys(tableName, newFields, targetTables),
-      },
+      keys: await this.keysTheTableHolds(
+        tableName,
+        oldFields,
+        newFields,
+        targetTables
+      ),
+    };
+  }
+
+  /**
+   * The foreign keys `tableName` holds, as the database reports them: their names, columns,
+   * targets and actions. Which keys a Builder table holds depends on its history (a relationship
+   * made before the Builder keyed it has none, and an older key may point where its field no
+   * longer reads), so every reader of a table's keys reads them here rather than from its fields.
+   * With no table, none.
+   */
+  async heldRelationshipKeys(tableName: string): Promise<ForeignKeySpec[]> {
+    const live = await introspectLiveSnapshot(
+      this.adapter.getDrizzle(),
+      this.adapter.dialect,
+      [tableName]
+    );
+    return (
+      live.tables.find(
+        table => table.name.toLowerCase() === tableName.toLowerCase()
+      )?.foreignKeys ?? []
+    );
+  }
+
+  /**
+   * A save's relationship keys before and after, as the table holds them.
+   *
+   * `before` is each key the live table holds on one of the old fields' relationship columns,
+   * exactly as the database reports it. `after` is each new field's key as the schema service
+   * describes it where the table already holds a key on its column, under that key's name and to
+   * its target (so a changed delete or update action is the only thing a save changes about it),
+   * and where the save adds the column. A column the table holds no key on is never keyed by a save
+   * that leaves it in place, and a key the table does not hold is never dropped. A translated
+   * relationship keeps its column on the companion table, which carries no key, so none is
+   * described for the main table.
+   */
+  private async keysTheTableHolds(
+    tableName: string,
+    declaredOldFields: FieldDefinition[],
+    declaredNewFields: FieldDefinition[],
+    targetTables: CollectionTables | undefined
+  ): Promise<{ before: ForeignKeySpec[]; after: ForeignKeySpec[] }> {
+    // The fields with a column on the table before and after (`fieldsStoredOnRow`): those inside a
+    // group with no name too, whose relationships hold keys here as one beside the group does, on
+    // an entry's row and on a field group's alike. The group itself has no column, nor a name to
+    // spell one from.
+    const oldFields = fieldsStoredOnRow(declaredOldFields);
+    const newFields = fieldsStoredOnRow(declaredNewFields);
+    // Which fields are translated is read from the declared lists, as the creating SQL and the
+    // desired table read it: a field inside a group with no name stays on the row whatever it
+    // says, so its key is this table's. Each side is read from its own list, so a relationship the
+    // save makes translated keeps its key before and has none after, and the drop is written.
+    const onMainTableOf = (declared: FieldDefinition[]) => {
+      const translated = new Set(
+        declared
+          .filter(field => field.localized === true)
+          .map(field => field.name)
+      );
+      return (field: FieldDefinition) => !translated.has(field.name);
+    };
+    const onMainTableBefore = onMainTableOf(declaredOldFields);
+    const onMainTableAfter = onMainTableOf(declaredNewFields);
+    const described = this.relationshipForeignKeys(
+      tableName,
+      newFields.filter(onMainTableAfter),
+      targetTables
+    );
+    const lower = (name: string) => name.toLowerCase();
+    const oldRelationColumns = new Set(
+      oldFields
+        .filter(
+          field =>
+            field.type === "relationship" &&
+            onMainTableBefore(field) &&
+            fieldProducesColumn(field)
+        )
+        .map(field => lower(toSnakeCase(field.name)))
+    );
+    if (described.length === 0 && oldRelationColumns.size === 0) {
+      return { before: [], after: [] };
+    }
+    const live = (await this.heldRelationshipKeys(tableName)).filter(
+      key => key.columns.length === 1
+    );
+    const liveByColumn = new Map(
+      live.map(key => [lower(key.columns[0] ?? ""), key])
+    );
+    const oldColumns = new Set(
+      oldFields
+        .filter(field => fieldProducesColumn(field))
+        .map(field => lower(toSnakeCase(field.name)))
+    );
+    // A renamed field keeps its column under the new name, with the key its old column had or
+    // without one: it is an existing column, not one this save adds. Asked only when a key stands
+    // on a column the old fields had none of, the one case a rename decides.
+    const onNewColumn = described.some(
+      key => !oldColumns.has(lower(key.columns[0] ?? ""))
+    );
+    const rename = onNewColumn
+      ? this.schemaService.detectFieldRename(oldFields, newFields)
+      : null;
+    if (rename !== null) {
+      const from = lower(toSnakeCase(rename.from.name));
+      const to = lower(toSnakeCase(rename.to.name));
+      oldColumns.add(to);
+      const held = liveByColumn.get(from);
+      if (held !== undefined) liveByColumn.set(to, held);
+    }
+    // The target each old relationship named, by column: a held key whose relationship this save
+    // points at another collection moves there (`movedForeignKeyName` lets it be added before the
+    // old one is dropped); every other held key keeps the target the database records.
+    const oldTargets = new Map(
+      oldFields
+        .filter(field => field.type === "relationship")
+        .map(field => [
+          lower(toSnakeCase(field.name)),
+          relationshipTargetSlug(field),
+        ])
+    );
+    const newTargets = new Map(
+      newFields
+        .filter(field => field.type === "relationship")
+        .map(field => [
+          lower(toSnakeCase(field.name)),
+          relationshipTargetSlug(field),
+        ])
+    );
+    return {
+      before: live.filter(key =>
+        oldRelationColumns.has(lower(key.columns[0] ?? ""))
+      ),
+      after: described.flatMap(key => {
+        const column = lower(key.columns[0] ?? "");
+        const held = liveByColumn.get(column);
+        if (held === undefined) return oldColumns.has(column) ? [] : [key];
+        const moved =
+          oldTargets.has(column) &&
+          oldTargets.get(column) !== newTargets.get(column);
+        return [
+          moved
+            ? {
+                ...key,
+                name: movedForeignKeyName(
+                  tableName,
+                  key.columns[0] ?? "",
+                  held.name,
+                  key.referencesTable,
+                  // Every other key's name, held or described, which the moved one must not take.
+                  new Set(
+                    [...live, ...described]
+                      .filter(other => lower(other.columns[0] ?? "") !== column)
+                      .map(other => other.name)
+                  )
+                ),
+              }
+            : {
+                ...key,
+                name: held.name,
+                referencesTable: held.referencesTable,
+                referencesColumns: held.referencesColumns,
+              },
+        ];
+      }),
     };
   }
 

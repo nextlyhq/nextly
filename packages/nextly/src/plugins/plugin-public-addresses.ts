@@ -11,13 +11,18 @@
  * @module plugins/plugin-public-addresses
  * @experimental
  */
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  SupportedDialect,
+  TransactionContext,
+} from "@nextlyhq/adapter-drizzle/types";
 
+import { toDbError } from "../database/errors";
 import { whenServicesRegistered } from "../di/service-access";
 import type { HeldDocument } from "../domains/public-addresses/held-listing";
 import {
   addParticipant,
   firstHolder,
+  newSaveKey,
   recordEverywhere,
   removeParticipant,
   type AddressHolder,
@@ -29,6 +34,7 @@ import {
   siteTypes,
   type PublicAddressType,
 } from "../domains/public-addresses/public-address";
+import { NextlyError } from "../errors/nextly-error";
 import type { HookOwner } from "../hooks/types";
 
 import type { PluginTransaction } from "./database/plugin-database";
@@ -48,6 +54,24 @@ import {
 export interface ParticipantTransaction {
   db: PluginTransaction;
   transaction: PluginCollectionTransaction;
+  /**
+   * @experimental The same object for every call core makes about one
+   * question: each `holderOf` of one save, or of one `move`, and the
+   * `record` that follows. The next save or `move` gets a new one, even on
+   * the same transaction. It reaches nothing itself; a participant keeps by
+   * it what it has already done for the question, such as a lock row it has
+   * taken.
+   *
+   * Narrower than `InTransactionContext.transactionKey`, which is one object
+   * for the whole transaction. A transaction can roll back to a savepoint
+   * between two saves (one entry of a batch refused), and PostgreSQL then
+   * lets go of the row locks taken after the savepoint while MySQL keeps
+   * them, so what was done for an earlier save may not stand for the next.
+   * Within one question core opens no savepoint between the calls, so what a
+   * participant did earlier in it still stands; a participant that rolls
+   * back a savepoint of its own must forget what it did inside it.
+   */
+  saveKey: object;
 }
 
 /**
@@ -128,6 +152,19 @@ export interface PluginPublicAddresses {
    * with `held`. Waits for the boot to finish, as `held` does.
    */
   types(): Promise<PublicAddressType[]>;
+  /**
+   * The language an address is held in where a read names none: the site's
+   * default language as it is now, one chosen in Settings included, or
+   * `"en"` on a site with no languages.
+   */
+  defaultLanguage(): Promise<string>;
+  /**
+   * The languages an address is held in: the site's languages as they are
+   * now, a list set in Settings included, its default first; or, on a site
+   * with no languages, the one it serves (its default, `"en"` where none
+   * is named).
+   */
+  languages(): Promise<string[]>;
 }
 
 /** What the plugin context hands this surface. */
@@ -139,21 +176,44 @@ export interface PublicAddressesDeps {
   owner: HookOwner;
   /** Called with the undo of each `participate`, so teardown withdraws it. */
   onTeardown: (undo: () => void) => void;
+  /** The database's dialect, read when a participant's statement fails. */
+  dialect: () => SupportedDialect;
 }
 
-/** Run `work` with this plugin's handles on the save's transaction `tx`. */
-function withParticipantTransaction<T>(
+/**
+ * Run `work` with this plugin's handles on the save's transaction `tx`.
+ *
+ * A participant writing through `db` meets the database's own failures, and
+ * two saves of one address at once can deadlock on a row both make. Such a
+ * failure is reported as core reports its own: a deadlock or a serialization
+ * failure asks the editor to try again (`CONFLICT`) rather than surfacing as
+ * an internal error. Anything else is passed on as thrown.
+ */
+async function withParticipantTransaction<T>(
   deps: PublicAddressesDeps,
   tx: TransactionContext,
+  saveKey: object,
   work: (handles: ParticipantTransaction) => Promise<T>
 ): Promise<T> {
-  return deps.bindTo(tx, db =>
-    withWriteTransactionToken(
-      tx,
-      transaction => work({ db, transaction }),
-      "ctx.publicAddresses"
-    )
-  );
+  try {
+    return await deps.bindTo(tx, db =>
+      withWriteTransactionToken(
+        tx,
+        transaction => work({ db, transaction, saveKey }),
+        "ctx.publicAddresses"
+      )
+    );
+  } catch (error) {
+    if (NextlyError.is(error)) throw error;
+    const failure = toDbError(deps.dialect(), error);
+    if (
+      failure.kind === "deadlock" ||
+      failure.kind === "serialization-failure"
+    ) {
+      throw NextlyError.fromDatabaseError(failure);
+    }
+    throw error;
+  }
 }
 
 /** Build `ctx.publicAddresses` for one plugin. */
@@ -166,12 +226,12 @@ export function pluginPublicAddresses(
     const known = runners.get(participant);
     if (known) return known;
     const runner: ParticipantRunner = {
-      holderOf: (address, asker, batch, tx) =>
-        withParticipantTransaction(deps, tx, handles =>
+      holderOf: (address, asker, batch, tx, saveKey) =>
+        withParticipantTransaction(deps, tx, saveKey, handles =>
           participant.holderOf(address, asker, batch, handles)
         ),
-      record: (batch, tx) =>
-        withParticipantTransaction(deps, tx, handles =>
+      record: (batch, tx, saveKey) =>
+        withParticipantTransaction(deps, tx, saveKey, handles =>
           participant.record(batch, handles)
         ),
     };
@@ -210,6 +270,14 @@ export function pluginPublicAddresses(
       await whenServicesRegistered();
       return (await siteTypes()).map(({ type }) => type);
     },
+    defaultLanguage: async () =>
+      (await heldAddresses()).defaultAddressLanguage(),
+    languages: async () => {
+      const held = await heldAddresses();
+      const first = held.defaultAddressLanguage();
+      const all = held.addressLanguages();
+      return [first, ...all.filter(code => code !== first)];
+    },
   };
 }
 
@@ -223,6 +291,11 @@ function heldListing() {
   return import("../domains/public-addresses/held-listing");
 }
 
+/** The addresses each document holds, loaded when first asked, as above. */
+function heldAddresses() {
+  return import("../domains/public-addresses/held-addresses");
+}
+
 /**
  * Ask every participant about each of `updates`, the whole batch in view, and
  * record the ones nobody refused, returning the refused.
@@ -232,6 +305,9 @@ async function settleMoves(
   tx: TransactionContext
 ): Promise<{ refused: RefusedAddressUpdate[] }> {
   const refused: RefusedAddressUpdate[] = [];
+  // One question, however many rounds the refusals take: no round opens a
+  // savepoint, so what a participant did in an earlier one still stands.
+  const saveKey = newSaveKey();
   let standing = [...updates];
   // Asked again until nothing more is refused: an update judged against a
   // batch in which another lets an address go must not stand once that
@@ -239,7 +315,7 @@ async function settleMoves(
   for (;;) {
     const refusedNow: RefusedAddressUpdate[] = [];
     for (const update of standing) {
-      const clash = await firstHolder(update, standing, tx);
+      const clash = await firstHolder(update, standing, tx, saveKey);
       if (clash !== null) refusedNow.push({ update, ...clash });
     }
     if (refusedNow.length === 0) break;
@@ -248,6 +324,6 @@ async function settleMoves(
       update => !refusedNow.some(r => r.update === update)
     );
   }
-  if (standing.length > 0) await recordEverywhere(standing, tx);
+  if (standing.length > 0) await recordEverywhere(standing, tx, saveKey);
   return { refused };
 }

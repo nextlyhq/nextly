@@ -229,15 +229,23 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
     await expect(cell).toHaveText(DRAFT_TITLE);
     await expectReadable(page, cell);
 
+    // Scanned before the row menus are opened, and only the block and the
+    // draft's own cell. Opening a row's menu scrolls the list sideways to its
+    // row actions, and on a list long with other specs' posts axe then gave
+    // up the whole contrast rule on a fixture cell ("Element midpoint exceeds
+    // the grid bounds"), so it measured nothing at all.
+    const draftRow = await rowOf(page, DRAFT_TITLE).evaluate(row => row.id);
+    expect(draftRow).not.toBe("");
+    const draftRowSelector = `#${await page.evaluate(id => CSS.escape(id), draftRow)}`;
+    await expectNoAxeViolations(page, {
+      include: `${draftRowSelector} [aria-label='Fixture cell'], [aria-label='Fixture block']`,
+    });
+
     // The row action is offered where its rule holds, and only there.
     expect(await rowMenu(page, DRAFT_TITLE)).toContain("Fixture: inspect");
     expect(await rowMenu(page, PUBLISHED_TITLE)).not.toContain(
       "Fixture: inspect"
     );
-
-    await expectNoAxeViolations(page, {
-      include: "[aria-label='Fixture cell'], [aria-label='Fixture block']",
-    });
   });
 }
 
@@ -310,16 +318,19 @@ test("a block behind a permission is drawn for a viewer who holds it and not for
     [viewerB, false],
   ] as const) {
     const viewerPage = await viewer.context.newPage();
-    // What the server sent this reader: the evidence is its pruning, not an
-    // element the browser hid.
-    const workspace = viewerPage.waitForResponse(response =>
-      response.url().includes("/admin/api/admin-meta/workspace")
+    // What the server sends this reader: the evidence is its pruning, not an
+    // element the browser hid. Asked of the workspace route directly, as this
+    // reader: the admin now folds that read into its one startup request, so
+    // there is no separate response of its own to wait for.
+    const workspace = await viewer.context.request.get(
+      "/admin/api/admin-meta/workspace"
+    );
+    expect(workspace.ok(), "the workspace read").toBe(true);
+    const contributions = JSON.stringify(
+      ((await workspace.json()) as { contributions?: unknown }).contributions ??
+        {}
     );
     await gotoAdmin(viewerPage, `/collections/posts/${draftId}`);
-    const contributions = JSON.stringify(
-      ((await (await workspace).json()) as { contributions?: unknown })
-        .contributions ?? {}
-    );
     expect(contributions.includes("contributions-fixture.gated-block")).toBe(
       sent
     );

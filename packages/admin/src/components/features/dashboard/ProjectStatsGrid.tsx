@@ -146,8 +146,11 @@ export const ProjectStatsGrid: React.FC = () => {
         {isLoading ? (
           <LoadingSkeleton />
         ) : error ? (
-          <div className="flex items-center gap-3 py-10 text-xs font-bold uppercase tracking-widest text-danger-text justify-center bg-danger-surface rounded-md">
-            <AlertCircle className="h-4 w-4" />
+          <div className="flex items-center justify-center gap-3 rounded-md border border-danger-border bg-danger-surface py-10 text-xs font-bold uppercase tracking-widest text-foreground">
+            <AlertCircle
+              aria-hidden="true"
+              className="h-4 w-4 text-danger-text"
+            />
             <span>Resource index synchronization failed</span>
           </div>
         ) : (

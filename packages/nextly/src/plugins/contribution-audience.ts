@@ -42,10 +42,11 @@ export const NOBODY: ContributionAudience = Object.freeze({
  */
 async function listedCollections(): Promise<string[]> {
   try {
+    // The slugs alone, from the registry cache: asked on every admin request.
     const registry = container.get<{
-      getAllCollections: () => Promise<Array<{ slug: string }>>;
+      getAllSlugs: () => Promise<string[]>;
     }>("collectionRegistryService");
-    return (await registry.getAllCollections()).map(c => c.slug);
+    return await registry.getAllSlugs();
   } catch (error) {
     getNextlyLogger().error({
       kind: "admin-contribution-collections-unavailable",

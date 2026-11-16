@@ -43,6 +43,7 @@ import type {
   LocalizationConfig,
 } from "../domains/i18n/config/types";
 import { clearActiveExtensionSchema } from "../domains/schema/extension/active-schema";
+import type { SchemaHook } from "../domains/schema/extension/draft";
 import { clearFieldTypes } from "../domains/schema/field-types/field-type-registry";
 import {
   refreshEndpointPresence,
@@ -62,6 +63,7 @@ import {
   clearLiveSnapshots,
 } from "../init/schema-snapshot-cache";
 import { seedPermissionsAndRolePresets } from "../init/seed-permissions";
+import { companionReadinessWarmedForTests } from "../init/warm-companion-readiness";
 import { resetDispatcherForTests } from "../route-handler/auth-handler";
 import type { Logger } from "../services/shared";
 import { _resetEnvCache } from "../shared/lib/env";
@@ -280,6 +282,12 @@ export interface CreateTestNextlyOptions {
    * variable for `dialect`. The database named in it is only used to connect.
    */
   serverUrl?: string;
+  /**
+   * The PostgreSQL schema the installation lives in, as `db.postgres.schema`
+   * gives it: the provisioned adapter is built on it and the config names it.
+   * Only meaningful with `dialect: "postgresql"`.
+   */
+  postgresSchema?: string;
   /** Plugins to boot (their full lifecycle runs). */
   plugins?: PluginDefinition[];
   /**
@@ -312,7 +320,14 @@ export interface CreateTestNextlyOptions {
    * definition file and migrations go: both paths resolve below `basePath`.
    * Absent, the defaults (`./ui-schema.json`, `./migrations`).
    */
-  db?: { migrationsDir: string; uiSchemaFile: string };
+  db?: {
+    migrationsDir: string;
+    uiSchemaFile: string;
+    /** Apply pending migrations at a production start, as `db.runMigrationsOnBoot` does. */
+    runMigrationsOnBoot?: boolean;
+    /** The app's schema hooks, as `db.schema.extend` declares them. */
+    schema?: { extend?: SchemaHook[] };
+  };
   /**
    * Keep every translatable field per language from the start, as a config's
    * `experimental.perLanguageStorage` does. Off by default.
@@ -567,7 +582,8 @@ async function releaseActiveDatabase(): Promise<(() => void) | undefined> {
  */
 async function provisionDatabase(
   dialect: ProvisionableDialect,
-  serverUrl: string
+  serverUrl: string,
+  postgresSchema?: string
 ): Promise<ProvisionedDatabase> {
   // Random, not derived from the process id: containers routinely run node as
   // PID 1, so two runners sharing one server would pick the same name and
@@ -603,6 +619,7 @@ async function provisionDatabase(
     const adapter = await createAdapter({
       type: dialect,
       url: databaseUrl.toString(),
+      ...(postgresSchema === undefined ? {} : { schema: postgresSchema }),
     });
 
     // A handle destroyed twice — an explicit cleanup plus an `afterEach` — must
@@ -763,7 +780,8 @@ export async function createTestNextly(
     try {
       provisioned = await provisionDatabase(
         opts.dialect,
-        resolveServerUrl(opts.dialect, opts.serverUrl)
+        resolveServerUrl(opts.dialect, opts.serverUrl),
+        opts.postgresSchema
       );
     } catch (error) {
       // `provisionDatabase` restores its own snapshot; this is the abandoned
@@ -785,7 +803,7 @@ export async function createTestNextly(
     // so a boot that fails removes it with the database below.
     const dirs = await instanceDirs(opts.basePath);
     active.scratchDir = dirs.scratchDir;
-    return await bootServices(
+    const booted = await bootServices(
       adapter,
       logger,
       opts,
@@ -793,6 +811,12 @@ export async function createTestNextly(
       restoreEnv,
       dirs
     );
+    // The boot resolves each translation table in the background once it has taken its turn
+    // (`init/warm-companion-readiness`). Settled before the instance is handed over, so a test
+    // that counts or watches what follows the boot meets none of that warm-up's reads among its
+    // own, landing there or not by the machine's timing.
+    await companionReadinessWarmedForTests();
+    return booted;
   } catch (error) {
     // Two different failures reach here, and each needs a different half.
     //
@@ -899,7 +923,18 @@ async function bootServices(
         : {}),
       singles: opts.singles,
       fieldGroups: opts.fieldGroups,
-      ...(opts.db === undefined ? {} : { db: opts.db }),
+      ...(opts.db === undefined && opts.postgresSchema === undefined
+        ? {}
+        : {
+            db: {
+              migrationsDir: "./migrations",
+              uiSchemaFile: "./ui-schema.json",
+              ...opts.db,
+              ...(opts.postgresSchema === undefined
+                ? {}
+                : { postgres: { schema: opts.postgresSchema } }),
+            },
+          }),
       localization: opts.localization
         ? normalizeLocalization(opts.localization)
         : undefined,

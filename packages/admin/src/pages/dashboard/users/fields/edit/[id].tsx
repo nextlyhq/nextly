@@ -33,7 +33,9 @@ import { navigateTo } from "@admin/lib/navigation";
 import { settingsChangesAllowed } from "@admin/lib/permissions/settings-changes";
 import { validateUUID } from "@admin/lib/validation";
 
-export default function EditUserFieldPage(): JSX.Element {
+import { UserFieldsGuard } from "../user-fields-guard";
+
+function EditUserFieldPageContent(): JSX.Element {
   const { route } = useRouter();
   // A caller who may read settings opens a field to see it; only one who may
   // update them is offered the change, which the server refuses to the rest.
@@ -200,5 +202,14 @@ export default function EditUserFieldPage(): JSX.Element {
         </div>
       </PageContainer>
     </QueryErrorBoundary>
+  );
+}
+
+/** The page, opened only to a reader who may also see users (`UserFieldsGuard`). */
+export default function EditUserFieldPage(): JSX.Element {
+  return (
+    <UserFieldsGuard>
+      <EditUserFieldPageContent />
+    </UserFieldsGuard>
   );
 }

@@ -129,6 +129,58 @@ describe("buildComponentImportMap", () => {
     // as a full one does.
     expect(code).toContain("registerComponentMap(registered);");
   });
+
+  // An app without the admin has nothing to register into, and a static import of a package it
+  // never installed stops its type check (TS2307). The map still lists and checks every path, so
+  // the same file, regenerated once the admin is installed, registers them.
+  it("leaves the admin out of a map for an app that has not installed it", () => {
+    for (const plugins of [
+      [],
+      [plugin({ pages: [{ path: "a", component: "@acme/x/admin#A" }] })],
+    ]) {
+      const code = buildComponentImportMap(
+        plugins,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        false
+      );
+      expect(code).not.toContain('"@nextlyhq/admin"');
+      expect(code).not.toContain("registerComponentMap");
+      // And says why, and what registers it, where a developer reads the file.
+      expect(code).toContain("run `nextly generate:types` again");
+      expect(code).toContain("export const componentMapAgreesWithList");
+      expect(code).toContain("export const registeredComponentPaths = listed;");
+    }
+    const listed = buildComponentImportMap(
+      [plugin({ pages: [{ path: "a", component: "@acme/x/admin#A" }] })],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false
+    );
+    expect(listed).toContain('"@acme/x/admin#A": _p0.A,');
+    // Installed, the same map imports and registers, empty or not.
+    for (const plugins of [
+      [],
+      [plugin({ pages: [{ path: "a", component: "@acme/x/admin#A" }] })],
+    ]) {
+      const code = buildComponentImportMap(
+        plugins,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true
+      );
+      expect(code).toContain(
+        'import { registerComponentMap } from "@nextlyhq/admin";'
+      );
+      expect(code).toContain("registerComponentMap(registered);");
+    }
+  });
 });
 
 describe("the map's check against the site's config", () => {
@@ -592,6 +644,42 @@ describe("field-type and slot components", () => {
     expect(collectAdminComponentPaths(p)).toEqual(["@acme/x/admin#LegacySlot"]);
   });
 
+  it("collects the header slot by the place the plugin chose, as admin-meta reads it", () => {
+    const LEGACY = "@acme/x/admin#LegacySlot";
+    const CURRENT = "@acme/x/admin#Slot";
+    const item = { label: "Help", icon: "BookOpen", to: "/x" };
+    // The bar and the rail's foot mount the slot, in either spelling.
+    for (const place of [undefined, "bar", "rail-foot"]) {
+      expect(
+        collectAdminComponentPaths(plugin({ header: { slot: CURRENT, place } }))
+      ).toEqual([CURRENT]);
+      expect(
+        collectAdminComponentPaths(
+          plugin({ headerSlot: LEGACY, header: { place } })
+        )
+      ).toEqual([LEGACY]);
+    }
+    // The menu mounts none, so a deprecated slot it still carries is not
+    // imported: admin-meta never publishes it.
+    const menu = plugin({
+      headerSlot: LEGACY,
+      header: { place: "menu", item },
+    });
+    expect(collectAdminComponentPaths(menu)).toEqual([]);
+    expect(
+      buildPluginAdminMeta([menu], undefined)[0].headerSlot
+    ).toBeUndefined();
+  });
+
+  it("imports nothing for a menu item whose action is malformed", () => {
+    for (const action of [null, {}, { run: "x" }, { open: 5 }]) {
+      const p = plugin({
+        header: { place: "menu", item: { label: "X", icon: "I", action } },
+      });
+      expect(collectAdminComponentPaths(p)).toEqual([]);
+    }
+  });
+
   it("keeps a disabled plugin's field-type editors but drops its slots", () => {
     // admin-meta serializes fieldTypes regardless of enabled state — a
     // disabled plugin keeps its collections and their fields, so their
@@ -807,6 +895,10 @@ function exposedComponentPaths(meta: PluginAdminMeta): ExposedPaths {
     // browser is handed.
     meta.headerSlot,
     meta.header?.slot,
+    // The component a person's-menu item opens.
+    meta.header?.item?.action && "open" in meta.header.item.action
+      ? meta.header.item.action.open
+      : undefined,
     meta.schemaBuilderSlot,
     meta.entryFormToolbarSlot,
     ...(meta.fieldTypes ?? []).map(fieldType => fieldType.component),
@@ -918,6 +1010,33 @@ describe("parity with the admin-meta surface", () => {
     // reading it as one would demand an import for a module named `#0ea5e9`.
     expect(meta.clientConfig).toEqual({ accent: "#0ea5e9" });
     expect(collected.has("#0ea5e9")).toBe(false);
+  });
+
+  it("collects a rail-foot slot and the component a menu item opens", () => {
+    const at = (header: unknown) =>
+      ({
+        name: "@acme/x",
+        version: "1.0.0",
+        nextly: "*",
+        contributes: { admin: { header } },
+      }) as unknown as PluginDefinition;
+    for (const p of [
+      at({ slot: "@acme/x/admin#RailHelper", place: "rail-foot" }),
+      at({
+        place: "menu",
+        item: {
+          label: "Report",
+          icon: "BookOpen",
+          action: { open: "@acme/x/admin#ReportDialog" },
+        },
+      }),
+    ]) {
+      const meta = buildPluginAdminMeta([p], undefined)[0];
+      const exposed = exposedComponentPaths(meta);
+      expect(exposed.unclassified).toEqual([]);
+      expect(exposed.registered).toHaveLength(1);
+      expect(collectAdminComponentPaths(p)).toEqual(exposed.registered);
+    }
   });
 
   it("covers a disabled plugin too, whose meta keeps its field types", () => {
@@ -1480,5 +1599,57 @@ describe("parity with the contributions a reader is sent", () => {
     expect(
       componentImportMapEntries([p]).every(each => each.use === "contribution")
     ).toBe(true);
+  });
+});
+
+describe("a component path naming the admin's root entry", () => {
+  // A site or plugin may name `@nextlyhq/admin#<Name>`. The root now exports
+  // only what an application mounts; a name it no longer exports lives in
+  // `@nextlyhq/admin/kit`, and a namespace import of the root would read it
+  // as undefined.
+  const site = {
+    widgets: [
+      {
+        id: "site/media",
+        view: { component: "@nextlyhq/admin#MediaLibrary" },
+      },
+      {
+        id: "site/stats",
+        view: { component: "@nextlyhq/admin#useDashboardStats" },
+      },
+    ],
+  };
+  const pagePlugin = plugin({
+    pages: [{ path: "frame", component: "@nextlyhq/admin#RootLayout" }],
+  });
+
+  it("imports a name the root no longer exports from the kit entry", () => {
+    const map = buildComponentImportMap([pagePlugin], undefined, site);
+    expect(map).toMatch(
+      /import \* as (_p\d+) from "@nextlyhq\/admin\/kit";[\s\S]*"@nextlyhq\/admin#MediaLibrary": \1\.MediaLibrary,/
+    );
+  });
+
+  it("keeps a name the root exports on the root, and the registry key as declared", () => {
+    const map = buildComponentImportMap([pagePlugin], undefined, site);
+    expect(map).toMatch(
+      /import \* as (_p\d+) from "@nextlyhq\/admin";[\s\S]*"@nextlyhq\/admin#RootLayout": \1\.RootLayout,/
+    );
+    expect(map).toMatch(
+      /import \* as (_p\d+) from "@nextlyhq\/admin";[\s\S]*"@nextlyhq\/admin#useDashboardStats": \1\.useDashboardStats,/
+    );
+    // The registration call itself still comes from the root.
+    expect(map).toContain(
+      'import { registerComponentMap } from "@nextlyhq/admin";'
+    );
+  });
+
+  it("CONTROL: leaves every other package's path as written", () => {
+    const map = buildComponentImportMap(
+      [plugin({ pages: [{ path: "p", component: "@acme/x/admin#Kit" }] })],
+      undefined
+    );
+    expect(map).toContain('import * as _p0 from "@acme/x/admin";');
+    expect(map).not.toContain("@nextlyhq/admin/kit");
   });
 });

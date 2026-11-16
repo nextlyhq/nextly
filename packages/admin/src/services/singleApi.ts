@@ -55,6 +55,19 @@ const buildQuery = (params: TableParams): string => {
 };
 
 /**
+ * The path a list of singles is read from, for `params`: the one place it is
+ * spelled, shared by the list's own read and the admin's startup request,
+ * which must name exactly the path the read will ask for.
+ */
+export function singlesListPath(
+  params: TableParams,
+  owner?: ListOwner
+): string {
+  const query = withListOwner(buildQuery(params), owner);
+  return `/singles${query ? `?${query}` : ""}`;
+}
+
+/**
  * Fetch Singles with pagination and filters.
  */
 export const fetchSingles = async (
@@ -62,8 +75,7 @@ export const fetchSingles = async (
   // The site's Singles or the plugins'; none lists both.
   owner?: ListOwner
 ): Promise<ListResponse<ApiSingle>> => {
-  const query = withListOwner(buildQuery(params), owner);
-  const url = `/singles${query ? `?${query}` : ""}`;
+  const url = singlesListPath(params, owner);
   return fetcher<ListResponse<ApiSingle>>(url, {}, true);
 };
 
@@ -100,7 +112,8 @@ type SingleApiType = {
   readonly previewSchemaChanges: (
     slug: string,
     fields: unknown[],
-    localized?: boolean
+    localized?: boolean,
+    status?: boolean
   ) => Promise<SchemaPreviewResponse>;
   readonly applySchemaChanges: (
     slug: string,
@@ -108,7 +121,8 @@ type SingleApiType = {
     schemaVersion: number,
     resolutions?: Record<string, FieldResolution>,
     renameResolutions?: SchemaRenameResolution[],
-    localized?: boolean
+    localized?: boolean,
+    status?: boolean
   ) => Promise<SchemaApplyResponse>;
   readonly remove: (slug: string) => Promise<{ message: string }>;
   readonly getDocument: (
@@ -233,11 +247,19 @@ export const singleApi: SingleApiType = {
     // i18n: mirrors schemaApi.preview — the preview collects the resolutions
     // the apply runs with, so both have to diff against the same localization
     // state or the apply can need a prompt the preview never showed.
-    localized?: boolean
+    localized?: boolean,
+    // The pending Draft/Published toggle, so a field taking one of the lifecycle's own names is
+    // refused when the same save turns the lifecycle on. Judged with, never applied: the settings
+    // save that follows the fields sets it. Undefined leaves the stored flag alone in charge.
+    status?: boolean
   ): Promise<SchemaPreviewResponse> => {
     return protectedApi.post<SchemaPreviewResponse>(
       `/singles/schema/${slug}/preview`,
-      { fields, ...(localized !== undefined ? { localized } : {}) }
+      {
+        fields,
+        ...(localized !== undefined ? { localized } : {}),
+        ...(status !== undefined ? { status } : {}),
+      }
     );
   },
 
@@ -254,7 +276,9 @@ export const singleApi: SingleApiType = {
     // i18n: the current Internationalization toggle, so an apply that flips i18n AND changes
     // fields provisions the companion in the same request instead of reading a stale registry
     // flag. Undefined leaves the persisted value untouched.
-    localized?: boolean
+    localized?: boolean,
+    // The pending Draft/Published toggle, judged with as the preview is (see above).
+    status?: boolean
   ): Promise<SchemaApplyResponse> => {
     const result = await protectedApi.post<
       ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
@@ -265,6 +289,7 @@ export const singleApi: SingleApiType = {
       resolutions,
       renameResolutions,
       ...(localized !== undefined ? { localized } : {}),
+      ...(status !== undefined ? { status } : {}),
     });
     return {
       success: true,

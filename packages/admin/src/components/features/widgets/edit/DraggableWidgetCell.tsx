@@ -119,7 +119,8 @@ function DragHandle({
 
 /**
  * The card's right edge: a strip astride the gap beside the card, where the pointer resizes it,
- * marked with a bar while the pointer is over the card or the edge is held.
+ * marked with a bar while the pointer is over the card or the edge is held, and always on a
+ * screen that cannot hover (a touch screen), where nothing would ever show it.
  */
 function ResizeEdge({ edge }: { edge: CardEdge }) {
   return (
@@ -133,7 +134,7 @@ function ResizeEdge({ edge }: { edge: CardEdge }) {
       onPointerCancel={edge.onPointerCancel}
       className="absolute -right-3 bottom-2.5 top-2.5 z-20 flex w-6 cursor-ew-resize touch-none items-center justify-center"
     >
-      <span className="h-9 w-1 rounded-full bg-control-border opacity-0 transition-opacity group-hover/cell:opacity-100 group-data-[resizing]/cell:opacity-100 motion-reduce:transition-none" />
+      <span className="h-9 w-1 rounded-full bg-control-border opacity-0 transition-opacity group-hover/cell:opacity-100 group-data-[resizing]/cell:opacity-100 motion-reduce:transition-none [@media(hover:none)]:opacity-100" />
     </div>
   );
 }

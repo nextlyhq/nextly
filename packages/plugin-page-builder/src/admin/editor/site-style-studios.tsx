@@ -17,7 +17,6 @@ import {
   type FontFaceDef,
   type NamedClass,
   type SiteTokenSet,
-  type SpacingMode,
   type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -71,7 +70,6 @@ import {
   useFontCatalogueClient,
   useHeldSiteStyle,
   useSaveSiteStyle,
-  useSaveSpacingMode,
   type SiteStyleReplayed,
 } from "../site-style-client";
 import { useShown } from "../use-shown";
@@ -184,7 +182,6 @@ export function TokensStudio({
   merged,
   supplied,
   pending,
-  spacingMode,
   classes,
   opens,
   preview,
@@ -192,11 +189,6 @@ export function TokensStudio({
 }: {
   /** The site's tokens as the canvas compiles them: config under stored. */
   merged: SiteTokenSet | undefined;
-  /**
-   * The site's spacing model as the canvas compiles under it, or `undefined`
-   * while the style has not been read, when the choice is not offered.
-   */
-  spacingMode?: SpacingMode;
   /** What the site's own code supplies, which the stored tier layers over. */
   supplied: SiteTokenSet | undefined;
   /** Whether the read is still in flight, as against having failed. */
@@ -242,13 +234,11 @@ export function TokensStudio({
    * tier further down.
    */
   const { editable, baseline } = resolvedTiers(merged, supplied);
-  const { edits, shownNow, issue, setIssue, notice, commit } = useTokenCommits(
+  const { edits, shownNow, issue, notice, commit } = useTokenCommits(
     baseline,
     editable,
     supplied
   );
-  // The spacing choice reports a refusal on the same line an edit does.
-  const spacing = useSpacingModeChoice(spacingMode, setIssue);
 
   /*
    * The set as it is at the moment an import needs it, rather than the one
@@ -276,7 +266,6 @@ export function TokensStudio({
     currentTokens,
     header,
     ...usage.props,
-    ...spacing,
   };
 
   return (
@@ -347,7 +336,6 @@ function useTokenCommits(
   edits: SiteTokenSet | null;
   shownNow: () => SiteTokenSet | null;
   issue: string | undefined;
-  setIssue: (issue: string | undefined) => void;
   /** What the last save met of someone else's, with the way to read again. */
   notice: TokensPanelProps["notice"];
   commit: (next: SiteTokenSet) => void;
@@ -425,7 +413,7 @@ function useTokenCommits(
   };
   const notice =
     conflict === undefined ? undefined : { text: conflict, onReload: reload };
-  return { edits, shownNow, issue, setIssue, notice, commit };
+  return { edits, shownNow, issue, notice, commit };
 }
 
 /**
@@ -517,52 +505,6 @@ function useSharedStyleOpening(onShowSharedStyles: (() => void) | undefined): {
   const taken = useCallback(() => setId(undefined), []);
   const toOpen = useMemo(() => ({ id, taken }), [id, taken]);
   return { open, toOpen };
-}
-
-/**
- * The "Space between blocks" choice: what it shows and what choosing does.
- *
- * Shown as chosen at once, then saved; a refusal puts the stored answer back
- * and says why. The canvas follows once the save has landed and the style is
- * read again, so it never draws a model the site does not hold.
- */
-function useSpacingModeChoice(
-  stored: SpacingMode | undefined,
-  report: (issue: string | undefined) => void
-): Pick<TokensPanelProps, "spacing"> {
-  const { save } = useSaveSpacingMode();
-  const [chosen, setChosen] = useState<SpacingMode | null>(null);
-  // The latest choice, by number, and the saves in the order they were made.
-  // Saves run one after another, so the server stores them in that order and
-  // the last choice is the one left stored; a choice superseded before its
-  // turn is never sent, and the answer to a superseded one changes nothing.
-  const latest = useRef(0);
-  const queue = useRef<Promise<void>>(Promise.resolve());
-  if (stored === undefined) return {};
-  return {
-    spacing: {
-      mode: chosen ?? stored,
-      onChange: mode => {
-        latest.current += 1;
-        const submission = latest.current;
-        setChosen(mode);
-        report(undefined);
-        queue.current = queue.current.then(async () => {
-          if (submission !== latest.current) return;
-          const result = await save(mode);
-          if (submission !== latest.current) return;
-          if (result.saved && result.refreshed) {
-            setChosen(null);
-            return;
-          }
-          // Stored but not read back: the choice stays shown, since the store
-          // holds it, and the editor says it could not refresh.
-          if (!result.saved) setChosen(null);
-          report(result.issue);
-        });
-      },
-    },
-  };
 }
 
 /**

@@ -16,8 +16,11 @@
  * makes sure of it: a second writer waits at the row until the first commits,
  * then judges against what the first stored.
  *
- * A row of a table the plugin already has rather than a table of its own, so
- * the lock needs no migration. The row lock is the dialect's own and lasts
+ * A row of a table the plugin already has rather than a table of its own.
+ * The plugin's data migration puts the row in place once, on install and on
+ * `nextly migrate` for an existing install, so a start writes nothing for
+ * it; the first write finding it missing (on a database that migration has
+ * not run on) inserts it. The row lock is the dialect's own and lasts
  * exactly as long as the transaction: an `UPDATE` of the row on PostgreSQL
  * and MySQL, which locks it until commit or rollback. SQLite takes no row
  * lock and needs none: its transactions open with `BEGIN IMMEDIATE`, which
@@ -46,10 +49,9 @@
  */
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { and, eq } from "@nextlyhq/plugin-sdk/db";
-import {
+import type {
   isUniqueViolation,
-  type PluginDatabase,
-  type PluginTransaction,
+  PluginTransaction,
 } from "@nextlyhq/plugin-sdk/schema";
 
 import { siteOptions } from "./schema/tables";
@@ -110,10 +112,11 @@ type Dialect = Parameters<typeof isUniqueViolation>[0];
  * Lock the composition graph for the rest of `db`'s transaction: the write's
  * own, as an in-transaction handler is handed it.
  *
- * Where the row is not there yet (the start-up step below has not run, or
- * failed), it is inserted, which locks it as well. Two first writes inserting
- * it at once meet the unique index on `name`, and the one that loses fails
- * rather than going on unlocked. A transaction reading from a snapshot older
+ * Where the row is not there yet (the plugin's data migration has not run on
+ * this database), it is inserted, which locks it as well. It is read first,
+ * so a write inserts it only when it is missing: once, as a rule. Two first
+ * writes inserting it at once meet the unique index on `name`, and the one
+ * that loses fails rather than going on unlocked. A transaction reading from a snapshot older
  * than the last writer that held the lock is refused (see the module).
  */
 export async function holdCompositionGraph(
@@ -145,25 +148,5 @@ export async function holdCompositionGraph(
       });
     }
     seen = row.value;
-  }
-}
-
-/**
- * Put the lock row in place, if it is not there yet, so a write never has to
- * insert it. Run once at start, on the plugin's own connection; a row another
- * instance put there first is the row.
- */
-export async function seedCompositionGraphLock(
-  db: Pick<PluginDatabase, "insert">,
-  dialect: Dialect
-): Promise<void> {
-  if (dialect === "sqlite") return;
-  try {
-    await db.insert(siteOptions, {
-      name: COMPOSITION_GRAPH_LOCK,
-      value: globalThis.crypto.randomUUID(),
-    });
-  } catch (error) {
-    if (!isUniqueViolation(dialect, error)) throw error;
   }
 }

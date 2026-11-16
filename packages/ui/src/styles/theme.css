@@ -36,6 +36,9 @@
   --animate-slide-in-from-right-2: slide-in-from-right-2 0.2s ease-out;
   --animate-brand-orbit: brand-orbit 2.4s linear infinite;
   --animate-brand-pulse: brand-pulse 2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+  /* The thin line under the admin's bar while a screen's data is on its way:
+     a short segment crossing the full width, then again. */
+  --animate-loading-line: loading-line 1.4s ease-in-out infinite;
 
   /* ============================================
    * COLOR PALETTE (Tailwind v4.1)
@@ -641,6 +644,20 @@
   }
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* From fully off the left edge to fully off the right one, so the segment
+   never sits still at either end. Driven by `transform`, never by `left`: a
+   moving box counts as a layout shift, and a transform does not. The segment
+   is 30% of the line, so the line's far edge is 100 / 30 of its own widths
+   from its start. */
+@keyframes loading-line {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(333.34%);
   }
 }
 

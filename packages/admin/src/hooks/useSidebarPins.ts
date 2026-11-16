@@ -2,6 +2,11 @@
 
 import React from "react";
 
+import {
+  recallPreference,
+  rememberPreference,
+} from "@admin/lib/device-memory/device-memory";
+
 interface UseSidebarPinsOptions {
   storageKey: string;
 }
@@ -10,7 +15,8 @@ function loadPinnedItems(storageKey: string): string[] {
   if (typeof window === "undefined") return [];
 
   try {
-    const raw = window.localStorage.getItem(storageKey);
+    // Through the device memory, which reads storage that throws as nothing.
+    const raw = recallPreference(storageKey);
     if (!raw) return [];
 
     const parsed = JSON.parse(raw);
@@ -26,7 +32,9 @@ function savePinnedItems(storageKey: string, pinnedItems: string[]): void {
   if (typeof window === "undefined") return;
 
   try {
-    window.localStorage.setItem(storageKey, JSON.stringify(pinnedItems));
+    // Kept through the device memory, which keeps nothing where the site
+    // turned remembering off.
+    rememberPreference(storageKey, JSON.stringify(pinnedItems));
   } catch {
     // Ignore localStorage write errors (private mode, quota, etc.)
   }

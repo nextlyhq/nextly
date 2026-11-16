@@ -152,6 +152,34 @@ describe("the entries a page draws of its place", () => {
     ]);
   });
 
+  it("draws a contribution scoped to Singles only on the page of one of them", () => {
+    meta.contributions = {
+      "single.edit": {
+        tab: [
+          {
+            plugin: "@acme/a",
+            id: "acme-a.seo",
+            kind: "tab",
+            label: "SEO",
+            component: "@acme/a/admin#Seo",
+            singles: ["homepage"],
+          },
+        ],
+      },
+    } as AdminContributionsMeta;
+    const on = (single: string) =>
+      renderHook(() =>
+        usePlaceContributions("single.edit", "tab", {
+          context: { userId: "u1", single },
+        })
+      ).result.current.map((item: DeliveredAdminEntry) =>
+        "builtIn" in item ? item.builtIn : item.id
+      );
+
+    expect(on("homepage")).toEqual(["acme-a.seo"]);
+    expect(on("site-settings")).toEqual([]);
+  });
+
   it("draws no contribution scoped to collections on a page that names none", () => {
     expect(
       drawn(

@@ -14,6 +14,7 @@
 import { useMemo } from "react";
 
 import type { PlaceProps } from "@admin/components/shared/target-slot";
+import { usePlaceContributions } from "@admin/components/shared/target-slot/usePlaceContributions";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 import type {
@@ -26,6 +27,10 @@ import {
   type PanelOrderEntry,
   type PlacedPanelSection,
 } from "@admin/lib/plugins/document-surfaces";
+import {
+  fieldsTakenByTabs,
+  fieldsWithheldHere,
+} from "@admin/lib/plugins/place-entries";
 
 /** The place an edit page draws: a collection entry's, or a Single's. */
 export type DocumentPlace =
@@ -142,4 +147,74 @@ export function useDocumentPanelParts(
     sectionsAboveForm: aboveForm,
     placedSectionProps,
   };
+}
+
+/**
+ * The edit page's own content: its fields less the ones a plugin's tab drawn
+ * on this page edits (`fields` on the tab), which are drawn in that tab
+ * instead, and less the ones a plugin's switch keeps off this type
+ * (`withheldFields`), which are drawn nowhere. Only drawing changes: every field keeps its value in the form, and
+ * the bar's Save stores it. One hook for both editors, so a Single's page and
+ * a collection entry's cannot come to draw different fields.
+ */
+export function useContentFields<F extends { name?: unknown }>(
+  place: DocumentPlace,
+  fieldNames: readonly string[],
+  fields: F[]
+): F[] {
+  const tabs = usePlaceContributions(place.place, "tab", {
+    context: place.context,
+    ...(place.entry === undefined ? {} : { entry: place.entry }),
+  });
+  // The fields a plugin's switch keeps off this type's pages, drawn nowhere.
+  const { withheldFields } = useBranding();
+  // A key rather than the set, which is new on every render: what it holds
+  // decides whether the fields are filtered again.
+  const takenKey =
+    place.context === null
+      ? ""
+      : [
+          ...fieldsTakenByTabs(tabs, fieldNames),
+          ...fieldsWithheldHere(withheldFields, place.context),
+        ].join("\u0000");
+  return useMemo(() => {
+    if (takenKey === "") return fields;
+    const taken = new Set(takenKey.split("\u0000"));
+    return fields.filter(
+      field => typeof field.name !== "string" || !taken.has(field.name)
+    );
+  }, [fields, takenKey]);
+}
+
+/** A document's top-level field names, which the edit page's tabs are judged by. */
+export function topLevelFieldNames(
+  fields: readonly { name?: unknown }[]
+): string[] {
+  return fields.flatMap(field =>
+    typeof field.name === "string" ? [field.name] : []
+  );
+}
+
+/**
+ * `fields` less the ones a plugin's switch keeps off the type `context`
+ * names (`withheldFields`): the fields an editor lays out and draws, live,
+ * embedded or a past version, so a withheld field is drawn nowhere and
+ * never decides the layout. Their values stay in the form. `null` stays
+ * `null`, as when no past version is being viewed.
+ */
+export function useWithoutWithheldFields<F extends { name?: unknown }>(
+  context: unknown,
+  fields: F[] | null
+): F[] | null {
+  const { withheldFields } = useBranding();
+  const withheldKey = [...fieldsWithheldHere(withheldFields, context)].join(
+    "\u0000"
+  );
+  return useMemo(() => {
+    if (fields === null || withheldKey === "") return fields;
+    const withheld = new Set(withheldKey.split("\u0000"));
+    return fields.filter(
+      field => typeof field.name !== "string" || !withheld.has(field.name)
+    );
+  }, [fields, withheldKey]);
 }

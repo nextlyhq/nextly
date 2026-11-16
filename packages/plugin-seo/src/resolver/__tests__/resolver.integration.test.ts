@@ -2,7 +2,10 @@
  * The SEO plugin answers every page's head through the route helpers, on
  * every configured dialect: what a person typed beats the route's code field
  * by field, the canonical is the page's declared address, and a page hidden
- * from search is served `noindex`.
+ * from search is served `noindex`. The route's own robots are a floor and
+ * keep their other directives; a page whose type declares no address keeps
+ * the route's canonical; and a Single a site renders itself is answered as a
+ * Single route answers it, at the address it was served.
  */
 process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
@@ -14,8 +17,14 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, text } from "nextly";
-import { createPublicContentRoute, type ContentEntry } from "nextly/runtime";
+import { defineCollection, defineSingle, text } from "nextly";
+import {
+  contentPageMetadata,
+  createPublicContentRoute,
+  singlePageMetadata,
+  singlePageStructuredData,
+  type ContentEntry,
+} from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { seoPlugin } from "../../plugin";
@@ -30,7 +39,13 @@ afterEach(async () => {
 async function boot(dialect: TestDialect) {
   current = await createTestNextly({
     dialect,
-    plugins: [seoPlugin({ collections: ["pages"] })],
+    plugins: [
+      seoPlugin({
+        collections: ["pages", "features"],
+        singles: ["blog-page"],
+        baseUrl: "https://acme.example",
+      }),
+    ],
     collections: [
       defineCollection({
         slug: "pages",
@@ -38,6 +53,20 @@ async function boot(dialect: TestDialect) {
         access: { read: () => true },
         fields: [text({ name: "title" }), text({ name: "slug" })],
         publicAddress: "/{slug}",
+      }),
+      // No public address: the site's routes decide where its pages live.
+      defineCollection({
+        slug: "features",
+        access: { read: () => true },
+        fields: [text({ name: "title" }), text({ name: "slug" })],
+      }),
+    ],
+    singles: [
+      defineSingle({
+        slug: "blog-page",
+        label: { singular: "Blog" },
+        fields: [text({ name: "title" })],
+        publicAddress: "/blog",
       }),
     ],
   });
@@ -75,10 +104,53 @@ describe.each(getConfiguredTestDialects())(
 
       const head = await headOf(t, "about");
 
-      expect(head.title).toBe("About Acme");
+      // Typed for the page, so its whole title, past a layout's template.
+      expect(head.title).toEqual({ absolute: "About Acme" });
       expect(head.description).toBe("Described in code");
       expect(head.alternates?.canonical).toBe("/about");
       expect(head.robots).toMatchObject({ index: true, follow: true });
+    });
+
+    it("a typed title beats a route that copies its heading into the social card", async () => {
+      const t = await boot(dialect);
+      await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Pricing",
+          slug: "pricing",
+          status: "published",
+          seo: { metaTitle: "How we price our plans" },
+        },
+      });
+      await t.nextly.create({
+        collection: "pages",
+        data: { title: "Careers", slug: "careers", status: "published" },
+      });
+      // Most hand-written routes copy their heading into the card.
+      const headWithCard = (slug: string) =>
+        createPublicContentRoute({
+          collections: ["pages"],
+          nextly: t.nextly,
+          render: (entry: ContentEntry) => entry.title,
+          buildMetadata: () => ({
+            title: "Blog",
+            openGraph: { title: "Blog", description: "Every post." },
+          }),
+        }).generateMetadata({ params: { slug: [slug] } });
+
+      const typed = await headWithCard("pricing");
+      const untyped = await headWithCard("careers");
+
+      // Served whole, as every title the answer decides is.
+      expect(typed.openGraph).toMatchObject({
+        title: { absolute: "How we price our plans" },
+        description: "Every post.",
+      });
+      // Nothing typed for the page: the route's own card text still wins.
+      expect(untyped.openGraph).toMatchObject({
+        title: "Blog",
+        description: "Every post.",
+      });
     });
 
     it("a page hidden from search is served noindex", async () => {
@@ -96,7 +168,91 @@ describe.each(getConfiguredTestDialects())(
       const head = await headOf(t, "ideas");
 
       expect(head.robots).toMatchObject({ index: false, follow: true });
+      // The route's own title, served as the route gave it.
       expect(head.title).toBe("Set in code");
+    });
+
+    it("keeps a page the route hides hidden, with the preview limits the route sets", async () => {
+      const t = await boot(dialect);
+      const entry = (
+        await t.nextly.create({
+          collection: "pages",
+          data: { title: "Tag", slug: "tag", status: "published" },
+        })
+      ).item as ContentEntry;
+      const previews = {
+        "max-image-preview": "large",
+        "max-snippet": -1,
+      } as const;
+      const headWith = (robots: Record<string, unknown>) =>
+        contentPageMetadata(
+          { buildMetadata: () => ({ robots }) },
+          entry,
+          { collection: "pages", slug: "tag" },
+          "/tag"
+        );
+
+      expect(
+        (await headWith({ index: false, follow: true, ...previews })).robots
+      ).toEqual({ index: false, follow: true, ...previews });
+      expect(
+        (await headWith({ index: true, follow: true, ...previews })).robots
+      ).toEqual({ index: true, follow: true, ...previews });
+    });
+
+    it("keeps the route's canonical for a page whose type declares no address", async () => {
+      const t = await boot(dialect);
+      const entry = (
+        await t.nextly.create({
+          collection: "features",
+          data: { title: "Brand voice", slug: "brand-voice" },
+        })
+      ).item as ContentEntry;
+
+      const head = await contentPageMetadata(
+        {
+          buildMetadata: () => ({
+            alternates: { canonical: "/brand-voice" },
+            openGraph: { url: "/brand-voice" },
+          }),
+        },
+        entry,
+        { collection: "features", slug: "brand-voice" },
+        "/brand-voice"
+      );
+
+      expect(head.alternates?.canonical).toBe("/brand-voice");
+      expect(head.openGraph?.url).toBe("/brand-voice");
+    });
+
+    it("answers a Single a site renders itself at its address, and a later page of its list at its own", async () => {
+      const t = await boot(dialect);
+      await t.nextly.updateSingle({
+        slug: "blog-page",
+        data: { _overwrite: true, title: "Blog" },
+      });
+      const document = await t.nextly.findSingle({ slug: "blog-page" });
+      const own = { buildMetadata: () => ({ description: "Every post." }) };
+      const context = { slug: "blog-page" };
+
+      const first = await singlePageMetadata(own, document, context);
+      const later = await singlePageMetadata(
+        own,
+        document,
+        context,
+        "/blog/page/2"
+      );
+
+      expect(first.alternates?.canonical).toBe("/blog");
+      expect(first.description).toBe("Every post.");
+      expect(later.alternates?.canonical).toBe("/blog/page/2");
+      const text = await singlePageStructuredData(
+        own,
+        document,
+        context,
+        "/blog/page/2"
+      );
+      expect(text).toContain("https://acme.example/blog/page/2");
     });
   }
 );

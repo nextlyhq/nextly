@@ -50,11 +50,31 @@ function wrapAsync(proto, name, sqlOf) {
       setTimeout(() => original.apply(this, args), DELAY);
       return undefined;
     }
+    // mysql2's pool hands the connection a query command it built and reads
+    // the return value at once (to release the connection when the command
+    // ends), so the command itself is returned now and sent after the delay.
+    // A promise in its place made every delayed MySQL statement throw.
+    const [command] = args;
+    if (
+      command &&
+      typeof command === "object" &&
+      typeof command.once === "function"
+    ) {
+      setTimeout(() => original.apply(this, args), DELAY);
+      return command;
+    }
     return new Promise(resolve => setTimeout(resolve, DELAY)).then(() =>
       original.apply(this, args)
     );
   };
 }
+
+/**
+ * How deep in a wrapped synchronous call the thread is. better-sqlite3's
+ * `pragma()` runs its statement through the statement methods also wrapped
+ * here: that inner call is the same statement, logged and held once.
+ */
+let syncDepth = 0;
 
 /** A synchronous call (better-sqlite3), held by a blocking sleep. */
 function wrapSync(proto, name, sqlOf) {
@@ -62,9 +82,15 @@ function wrapSync(proto, name, sqlOf) {
   if (typeof original !== "function") return;
   const cell = new Int32Array(new SharedArrayBuffer(4));
   proto[name] = function (...args) {
+    if (syncDepth > 0) return original.apply(this, args);
     record(sqlOf(this, args));
     if (DELAY > 0) Atomics.wait(cell, 0, 0, DELAY);
-    return original.apply(this, args);
+    syncDepth += 1;
+    try {
+      return original.apply(this, args);
+    } finally {
+      syncDepth -= 1;
+    }
   };
 }
 

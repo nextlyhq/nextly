@@ -187,6 +187,8 @@ describe("version retention (integration)", () => {
       collections: [
         defineCollection({
           slug: "posts",
+          // Kept with working drafts, which a restore writes.
+          status: true,
           versions: { maxPerDoc: 2 },
           fields: [text({ name: "title" })],
         }),

@@ -3,14 +3,18 @@
 // What the schema change does to fields that stop being translated: how many values in which
 // languages move to the localization archive, which language becomes the shared value, and the
 // command that brings the others back. A field that cannot leave translation in one change shows
-// why instead, and the dialog does not offer Apply.
+// why instead, and the dialog does not offer Apply. Beside it, the fields that become translated:
+// how many values become the default language's, which the other languages then show.
 
 import { Badge, Button } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
 import { AlertTriangle, Check, Copy } from "@admin/components/icons";
 import { useCopyToClipboard } from "@admin/hooks/useCopyToClipboard";
-import type { SchemaPreviewLeavingTranslation } from "@admin/services/schemaApi";
+import type {
+  SchemaPreviewJoiningTranslation,
+  SchemaPreviewLeavingTranslation,
+} from "@admin/services/schemaApi";
 
 /** A language's name in English, or its code when the runtime cannot name it. */
 function languageName(code: string): string {
@@ -38,11 +42,27 @@ function movesSentence(field: SchemaPreviewLeavingTranslation): string {
 }
 
 /**
- * "English becomes the shared value." An entry with no English value keeps its first other
- * language's instead (by code, as the save chooses it), so the sentence says how many do.
+ * "English becomes the shared value." An entry whose readers saw another language's value takes
+ * that value instead, the first live language in the site's order, as the save chooses it; the
+ * sentence names those languages, which is what those entries' English readers will now see.
+ * Without that count, as from an older server, it says how many entries have no English value.
  */
 function sharedSentence(field: SchemaPreviewLeavingTranslation): string {
   const language = languageName(field.defaultLocale);
+  const from = Object.entries(field.sharedFrom ?? {}).filter(([, n]) => n > 0);
+  if (from.length > 0) {
+    const total = from.reduce((sum, [, n]) => sum + n, 0);
+    const list = new Intl.ListFormat("en", { type: "conjunction" }).format(
+      from
+        .sort(([, a], [, b]) => b - a)
+        .map(([locale, n]) => `${n.toLocaleString()} ${languageName(locale)}`)
+    );
+    const entries =
+      total === 1
+        ? `1 entry takes its value from another language, which its ${language} readers will see`
+        : `${total.toLocaleString()} entries take theirs from another language, which their ${language} readers will see`;
+    return `${language} becomes the shared value. ${entries}: ${list}.`;
+  }
   const without = field.entriesWithoutDefault ?? 0;
   if (without === 0) return `${language} becomes the shared value.`;
   const entries =
@@ -108,6 +128,46 @@ function RestoreCommand({ command }: { command: string }) {
           <Copy className="h-4 w-4" />
         )}
       </Button>
+    </div>
+  );
+}
+
+/** "2 values become the English value. Other languages show it until they are translated." */
+function joiningSentence(field: SchemaPreviewJoiningTranslation): string {
+  const language = languageName(field.defaultLocale);
+  const fallback = "Other languages show it until they are translated.";
+  // Not counted is not none: Apply still moves every value to the default language.
+  if (field.values === null) {
+    return `Its values become the ${language} value; they couldn't be counted. ${fallback}`;
+  }
+  if (field.values === 0) return `No entry has a value in it yet.`;
+  return field.values === 1
+    ? `1 value becomes the ${language} value. ${fallback}`
+    : `${field.values.toLocaleString()} values become the ${language} value. ${fallback}`;
+}
+
+/** The fields this change makes translated, and what becomes of the values they hold. */
+export function JoiningTranslationNotice({
+  fields,
+}: {
+  fields: readonly SchemaPreviewJoiningTranslation[];
+}): JSX.Element | null {
+  if (fields.length === 0) return null;
+  return (
+    <div className="space-y-3 rounded-md border border-border bg-primary/5 p-3">
+      {fields.map(field => (
+        <div
+          key={field.name}
+          className="space-y-1.5 text-sm [&+&]:border-t [&+&]:border-border [&+&]:pt-3"
+        >
+          <div className="flex items-center gap-2.5">
+            {/* The Builder's control is "Localized", as on the notice for a field leaving it. */}
+            <Badge variant="primary">now localized</Badge>
+            <strong>{field.name}</strong>
+          </div>
+          <p className="text-muted-foreground">{joiningSentence(field)}</p>
+        </div>
+      ))}
     </div>
   );
 }
