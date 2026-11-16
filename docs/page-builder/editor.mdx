@@ -15,7 +15,15 @@ The top bar runs across the editor in three parts.
 | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Left   | The way back to the entry, the page's title (choose it to switch to a recent page or to all pages), whether it's a draft or published, and **Undo** and **Redo**. |
 | Centre | The devices to edit and preview the page at, and the zoom. The device you choose is the breakpoint your style changes go to.                                      |
-| Right  | The buttons that hide or show the left panel and the inspector, **Search**, whether your work is saved, **Preview** where the admin offers one, and **Publish**.  |
+| Right  | The buttons that hide or show the left panel and the inspector, **Search**, whether your work is saved, **Preview** and its menu, and **Publish**.                |
+
+**Preview** shows this version of the page, where the admin offers a preview. With
+unsaved work, it saves a draft first (never publishing), so the preview shows what the
+canvas shows; if the save fails, the preview doesn't open and the error says why. If you
+can't save the page, it shows the saved version instead. Its arrow opens a menu:
+**Preview this version** does the same, and says "Saves a draft first" while there is
+unsaved work; **Preview as visitor** hides the blocks whose conditions don't match, on
+the canvas ([Previewing as a visitor](#previewing-as-a-visitor), below).
 
 **Publish** is the entry's own leading action: **Publish**, **Publish changes** or
 **Save**, as on the entry's page. Its arrow holds **Save draft**, **Schedule publish…**
@@ -492,21 +500,24 @@ again, rather than naming an entry the canvas isn't drawing.
 Which entry you preview is not saved with the template. When the template is saved, its
 lists and conditions are checked against the collection it draws.
 
-### Applying conditions
+### Previewing as a visitor
 
 While the canvas draws every block, a block with visibility conditions carries a
-**Conditional** badge, whoever the page would show it to. When a template holds such a
-block, the **Previewing** strip offers an **Apply conditions** switch after the entry.
-Turn it on to see the page as a visitor reading that entry would get it:
+**Conditional** badge, whoever the page would show it to. To see the page as a visitor
+gets it, open the arrow beside **Preview** in the top bar and choose **Preview as
+visitor**. On a template, it checks the conditions against the entry being previewed:
 
 - **A block a visitor would see** is drawn as usual, with the badge **Shown for this
   post** (named after the collection's entries).
 - **A block a visitor wouldn't see** is drawn as one dashed line in its place, naming
   it and why: "Members' worksheet · hidden for this post: Category is not Guides". It
   stays selectable, so you can change its conditions.
-- **The strip's far end** says what the conditions did: "1 block hidden for this post",
-  or "Every conditioned block shows for this post" ("Every block checked shows" while the
-  template also holds blocks it doesn't check, below).
+- **A strip above the canvas** reads "Previewing as a visitor", then what the
+  conditions did: "1 block hidden for this post", or "Every conditioned block shows for
+  this post" ("Every block checked shows" while the template also holds blocks it doesn't
+  check, below). On a template it sits under the **Previewing** strip. **Stop** turns
+  the visitor's view off, as choosing the menu item again does; the item shows a tick
+  while it's on.
 
 The conditions are checked against the entry as a visitor reads it: its published values
 and the fields visitors may read, not your unpublished changes. An entry that was never
@@ -515,42 +526,48 @@ checked, for example on a field visitors can't see, hides its block from every v
 and its line says so, with a warning sign.
 
 A block inside a list's entries is checked against each entry the list draws, as the
-published page checks it. While the switch is on, the canvas's lists show what a visitor
-would see: published entries only, with only the fields visitors may read, not the drafts
-you can see. An entry that hides the block draws its line in the block's place, saying why
-for that entry: "Premium badge · hidden for this entry: Price isn't more than 10". A list that
-shows a visitor fewer entries than you see says so above its entries: "Showing what
-visitors see: 4 of 6 entries". Turn the switch off to see your own entries again, drafts
-included. The switch is offered when only a list's blocks have conditions, too; the
-strip's count is of the page's own blocks, and says "Conditions checked for each entry in
-the list" when a list's blocks are all there is to check, adding "some blocks aren't
-checked" when a Layout region also holds conditions.
+published page checks it. While you preview as a visitor, the canvas's lists show what a
+visitor would see: published entries only, with only the fields visitors may read, not
+the drafts you can see. An entry that hides the block draws its line in the block's
+place, saying why for that entry: "Premium badge · hidden for this entry: Price isn't
+more than 10". A list that shows a visitor fewer entries than you see says so above its
+entries: "Showing what visitors see: 4 of 6 entries". Stop to see your own entries
+again, drafts included. The strip's count is of the page's own blocks, and says
+"Conditions checked for each entry in the list" when a list's blocks are all there is to
+check, adding "some blocks aren't checked" when a Layout region also holds conditions.
 
 Blocks inside a placed component are checked with the page's: a component's own block
 whose conditions don't hold is drawn as its line where it would be, "Members offer ·
 hidden for this page: Title doesn't contain Members", and the strip counts it, once for
 each place the component is drawn. A press on the line selects the placement, as a press
-on any of the component's blocks does. The switch is offered even when only a placed
-component's blocks have conditions.
+on any of the component's blocks does.
 
 Blocks inside a region of the page's Layout aren't checked yet: they keep their
-**Conditional** badge while conditions are applied, and the strip says some blocks aren't
-checked.
+**Conditional** badge while you preview as a visitor, and the strip says some blocks
+aren't checked.
 
 Blocks inside the entry's own content, drawn by **Entry content** (below), are checked
 with the template's: a hidden one is drawn as its line inside Entry content, and the
-strip counts it. The switch is offered even when only those blocks have conditions.
+strip counts it.
 
-On a page, the conditions read the page's own fields. When a page holds a block whose
-conditions read it, a strip above the canvas offers the same **Apply conditions** switch,
-with nothing to choose: the page is checked as a visitor reads it, its published values
-and the fields visitors may read. "1 block hidden for this page" says what the conditions
-did. A page that was never published hides every conditioned block.
+On a page, the conditions read the page's own fields. The page is checked as a visitor
+reads it, its published values and the fields visitors may read: "1 block hidden for
+this page" says what the conditions did. A page that was never published hides every
+conditioned block.
 
-Editing a component or a Layout that holds a conditioned block, the switch is shown but
-turned off: there's no entry to check against there. The published page checks them
-where the component or the Layout is placed. The switch is yours for this session and is
-never saved.
+**Preview as visitor** is always in the menu, but it can't be turned on everywhere. It
+is greyed out, with the reason under it:
+
+- "No block on this page has conditions", when nothing on the page, its placed
+  components included, has a condition;
+- "No entry to check here. The published page checks them where it's placed.", when
+  you edit a component or a Layout's header or footer: the published page checks them
+  where it is placed;
+- "Needs an entry to check its conditions against.", on a template with no entry to
+  preview, or on a Single, which is no entry of a collection.
+
+The visitor's view is yours for this session: nothing is saved, and it is off again
+when you reload the editor.
 
 ### Showing the entry's own content
 

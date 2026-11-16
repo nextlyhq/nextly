@@ -105,8 +105,9 @@ test.describe("the top bar's far end", () => {
       timeout: 60_000,
     });
 
-    // The panel buttons first, then search, the save state, Preview, and
-    // Publish with its arrow, the bar ending on the action that leads.
+    // The panel buttons first, then search, the save state, Preview with its
+    // arrow, and Publish with its arrow, the bar ending on the action that
+    // leads.
     await expect
       .poll(() => endButtons(page))
       .toEqual([
@@ -114,6 +115,7 @@ test.describe("the top bar's far end", () => {
         "Inspector",
         "Search and commands",
         "Preview",
+        "Preview options",
         "Publish",
         "More ways to publish",
       ]);
