@@ -175,14 +175,10 @@ export type {
   FindEmailDeliveryByIDArgs,
   ActivityPage,
   DeliveryActivity,
-  DeliveryAttempt,
   DeliveryDetail,
-  DeliveryOutcome,
-  DeliveryTemplateVersionRead,
   QueuedEmailActivity,
   QueuedEmailDetail,
   QueuedEmailOverdue,
-  TemplateLastSent,
   TemplatesLastSent,
 } from "./email";
 
