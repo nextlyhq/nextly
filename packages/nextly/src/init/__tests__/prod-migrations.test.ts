@@ -48,7 +48,9 @@ function args(over: Record<string, unknown> = {}) {
     adapter: {
       dialect: "postgresql" as const,
       getDrizzle: () => ({}),
-      tableExists: async () => true,
+      // No ledger and no registry: nothing for the reads before the run (the
+      // old Builder marks, the registry as it stood) to find.
+      tableExists: async () => false,
       executeQuery: async () => undefined,
     },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
