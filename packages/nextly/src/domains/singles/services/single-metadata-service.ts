@@ -1167,6 +1167,7 @@ export class SingleMetadataService {
       { DynamicCollectionSchemaService },
       { toSnakeCase },
       { offeredCompanionRename },
+      { getSingleRowColumnDescriptor },
     ] = await Promise.all([
       import("../../schema/builder-save/push-carries-values"),
       import("../../schema/pipeline/diff/introspect-live"),
@@ -1176,6 +1177,7 @@ export class SingleMetadataService {
       ),
       import("../../schema/field-rules"),
       import("../../i18n/migration/companion-rename"),
+      import("../../schema/services/field-column-descriptor"),
     ]);
     const schemaService = new DynamicCollectionSchemaService(
       undefined,
@@ -1209,6 +1211,14 @@ export class SingleMetadataService {
             tableName,
           ])
         ).tables[0],
+      // A kept field whose declared column changes is judged by the push over its stored value,
+      // so the rule reads each field's column as the Single's row declares it.
+      columnOf: field =>
+        getSingleRowColumnDescriptor(field, dialect, "collection"),
+      // The rename the service detected, by column: a renamed field is kept, not dropped and added.
+      renames: renamed
+        ? [{ from: toSnakeCase(renamed.from), to: toSnakeCase(renamed.to) }]
+        : [],
       // A Single's one row is filled in, in the service's own statements, for a field new to its
       // table that is required or states a default the row takes: a value the file does not carry.
       singleRow: {

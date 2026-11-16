@@ -326,6 +326,44 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
     }
   );
 
+  // MySQL only: a unique text field is kept in a bounded column, since MySQL cannot index a whole
+  // TEXT, so turning Unique on narrows the column. The rule sending a save to the push reads each
+  // kept field's declared column, and the push judges the stored value against the new width
+  // before any statement runs; the file alone would run the narrowing and stop on the value.
+  it.skipIf(dialect !== "mysql")(
+    "refuses turning Unique on for a text field whose value the bounded column cannot hold, changing nothing",
+    async () => {
+      const long = "x".repeat(300);
+      await heroWith([{ name: "heading", type: "text" }], { heading: long });
+      const fieldsBefore = await registeredFields();
+      const typeOf = async () =>
+        (
+          await query<{ type: string }>(
+            `SELECT COLUMN_TYPE AS type FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'single_hero' AND COLUMN_NAME = 'heading'`
+          )
+        )[0]?.type;
+      const typeBefore = await typeOf();
+
+      const refused = await refusal(
+        save([{ name: "heading", type: "text", unique: true }])
+      );
+
+      expect(refused).toMatchObject({
+        publicData: {
+          errors: [
+            expect.objectContaining({ code: "NARROWING_WOULD_TRUNCATE" }),
+          ],
+        },
+      });
+      expect(await registeredFields()).toEqual(fieldsBefore);
+      expect(await typeOf()).toBe(typeBefore);
+      const [row] = await query<{ heading: string }>(
+        `SELECT ${q("heading")} AS heading FROM ${q("single_hero")}`
+      );
+      expect(row?.heading).toBe(long);
+    }
+  );
+
   it("saves a field whose default holds the statement separator's text", async () => {
     // The separator is a line of its own between statements; the same text inside a quoted default
     // is part of the value, and a statement cut there is no longer valid SQL.
