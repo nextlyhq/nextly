@@ -2574,7 +2574,7 @@ describe("dragging a number field's label", () => {
   it("ends a drag unwritten when another block is selected under it", () => {
     // The drag's value came from the old block, so neither block is
     // written and the field shows the new one's, whether the row is drawn
-    // afresh for it (sections are keyed by block) or reused.
+    // afresh for it (section bodies are keyed by block) or reused.
     register({ spacing: true });
     const document = {
       formatVersion: 1,

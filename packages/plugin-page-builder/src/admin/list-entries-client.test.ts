@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
- * The canvas's data provider: each distinct read once, kept a short while,
- * and a refusal handed back in the shape the renderer recognises, so a sort
+ * The canvas's data provider: each distinct read once, kept until the
+ * canvas's sources change or the person signs out, and a refusal handed back in the shape the renderer recognises, so a sort
  * the reader refused falls back to id order on the canvas.
  */
 import {
@@ -15,11 +15,13 @@ import { createElement } from "react";
 import { renderToReadableStream } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({ writePluginRoute: vi.fn() }));
+const writePluginRoute = vi.hoisted(() => vi.fn());
+vi.mock("@nextlyhq/plugin-sdk/admin", () => ({ writePluginRoute }));
 
 const { canvasListCount, canvasListData, canvasListReadsIn } = await import(
   "./list-entries-client"
 );
+const { canvasSourcesChanged } = await import("./canvas-sources");
 
 const ANSWER = {
   items: [{ id: "p1" }],
@@ -34,19 +36,50 @@ const ANSWER = {
 };
 
 describe("the canvas's list data", () => {
-  it("reads each distinct query once while its answer is kept, and again after", async () => {
-    let clock = 0;
-    const read = vi.fn(async () => ANSWER);
-    const data = canvasListData(read, () => clock);
+  it("reads each distinct query once, and keeps its answer however long", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const read = vi.fn(async () => ANSWER);
+      const data = canvasListData(read);
+      const query = { collection: "posts", limit: 3 };
+      expect(await data.find(query)).toEqual({
+        items: ANSWER.items,
+        total: 1,
+      });
+      await data.find({ ...query });
+      expect(read).toHaveBeenCalledTimes(1);
+      await data.find({ collection: "posts", limit: 4 });
+      expect(read).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await data.find(query);
+      expect(read).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads afresh once the canvas's sources have changed", async () => {
+    writePluginRoute.mockReset();
+    writePluginRoute.mockResolvedValue(ANSWER);
     const query = { collection: "posts", limit: 3 };
-    expect(await data.find(query)).toEqual({ items: ANSWER.items, total: 1 });
-    await data.find({ ...query });
-    expect(read).toHaveBeenCalledTimes(1);
-    await data.find({ collection: "posts", limit: 4 });
-    expect(read).toHaveBeenCalledTimes(2);
-    clock = 60_000;
-    await data.find(query);
-    expect(read).toHaveBeenCalledTimes(3);
+    await canvasListReadsIn("en", "author-c").data.find(query);
+    await canvasListReadsIn("en", "author-c").data.find(query);
+    expect(writePluginRoute).toHaveBeenCalledTimes(1);
+    canvasSourcesChanged();
+    // The same query asked again: read, not answered from before the change.
+    await canvasListReadsIn("en", "author-c").data.find(query);
+    expect(writePluginRoute).toHaveBeenCalledTimes(2);
+  });
+
+  it("answers nothing kept to the same person signing back in", async () => {
+    writePluginRoute.mockReset();
+    writePluginRoute.mockResolvedValue(ANSWER);
+    const query = { collection: "posts", limit: 5 };
+    await canvasListReadsIn("en", "author-d").data.find(query);
+    // Signed out, then the same person again.
+    canvasListReadsIn("en", null);
+    await canvasListReadsIn("en", "author-d").data.find(query);
+    expect(writePluginRoute).toHaveBeenCalledTimes(2);
   });
 
   it("keeps no refusal, so the next draw asks again", async () => {

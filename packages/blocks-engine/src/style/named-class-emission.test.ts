@@ -279,8 +279,9 @@ describe("a node referencing a class that was never written", () => {
       path: "/nodes/0/classes/1",
       severity: "warning",
       message:
-        'This block uses a style this site doesn\'t have ("ghost"), so the page doesn\'t show it.',
-      suggestion: "Remove the style from this block, or choose one this site has.",
+        "This block uses a style this site doesn't have (\"ghost\"), so the page doesn't show it.",
+      suggestion:
+        "Remove the style from this block, or choose one this site has.",
     });
     // Neither the document's terms nor a page builder's screens, which a host without one lacks.
     // Nor "add one with that name": a new style gets a new id, so that would not settle it.
