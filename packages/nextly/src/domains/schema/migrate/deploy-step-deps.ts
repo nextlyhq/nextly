@@ -14,9 +14,10 @@ import type { CommandContext } from "../../../cli/program";
 import type { SupportedDialect } from "../../../cli/utils/adapter";
 import { withCommandServicesLent } from "../../../cli/utils/lend-command-services";
 import type { DeclaredNames } from "../../../cli/utils/migration-discovery";
+import { describeError } from "../../../errors/describe-error";
 import { PermissionSeedService } from "../../auth/services/permission-seed-service";
-import type { localizableConfigEntities } from "../../i18n/runtime/localizable-config-entities";
 import type { RecordedEntities } from "../../i18n/migration/recorded-before";
+import type { localizableConfigEntities } from "../../i18n/runtime/localizable-config-entities";
 
 import { pluginsRecordedNotInstalled } from "./command-access";
 import { configurationRegistryRows } from "./first-run";
@@ -79,12 +80,38 @@ async function markOrphansOnRunConnection(
   }
 }
 
+/**
+ * Every entity as the registry records it before the run's first file, so the translation tables
+ * after the migrations can tell a field newly translated from one translated before. A new
+ * database records nothing yet: nothing is judged, and its registry being absent is no fault to
+ * report. Read before the run, by the command and by the migrations at start alike.
+ */
+export async function recordedBeforeTheRun(
+  adapter: DrizzleAdapter,
+  config: DeployStepConfig,
+  logger: Pick<CommandContext["logger"], "warn">
+): Promise<RecordedEntities | undefined> {
+  if (!(await adapter.tableExists("dynamic_collections"))) return undefined;
+  const { readRecordedEntities } = await import(
+    "../../i18n/migration/recorded-before"
+  );
+  return readRecordedEntities(adapter, config, error =>
+    logger.warn(
+      `The registry could not be read, so no translations column is judged this run: ${describeError(error)}`
+    )
+  );
+}
+
+/** What `deployStepDeps` hands `migrateCore`. */
+export type DeployStepDeps = Required<
+  Pick<
+    MigrateCoreDeps,
+    "firstRun" | "markOrphanedPermissions" | "beforeMetadata"
+  >
+>;
+
 /** The three for `run`; see the module comment. */
-export function deployStepDeps(
-  run: DeployStepRun
-): Required<
-  Pick<MigrateCoreDeps, "firstRun" | "markOrphanedPermissions" | "beforeMetadata">
-> {
+export function deployStepDeps(run: DeployStepRun): DeployStepDeps {
   const { adapter, config, logger } = run;
   return {
     // A database with no registry record has its first run on this release: the record is
@@ -120,7 +147,7 @@ export function deployStepDeps(
           import("../../i18n/runtime/companion-io"),
         ]);
       const pending = await findPendingFiles(
-        adapter as never,
+        adapter,
         run.db,
         run.dialect,
         run.migrationsDir,

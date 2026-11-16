@@ -46,7 +46,6 @@ import {
 } from "../../domains/i18n/migration/migration-intent";
 import { refuseMigrationFilesLosingDefinition } from "../../domains/i18n/migration/move-keeps-definition";
 import { sharedFileRecoveryAdvice } from "../../domains/i18n/migration/plan-field-leaves-migration";
-import { readRecordedEntities } from "../../domains/i18n/migration/recorded-before";
 import {
   filesWithinStep,
   stepContinuedNotice,
@@ -80,7 +79,6 @@ import {
 } from "../../domains/schema/migrate/applied-checksums";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { seedAccessOnCommandConnection } from "../../domains/schema/migrate/command-access";
-import { deployStepDeps } from "../../domains/schema/migrate/deploy-step-deps";
 import {
   planCoreDeletions,
   planCoreReconcile,
@@ -93,6 +91,10 @@ import {
   type DataLossConsent,
   type Deletion,
 } from "../../domains/schema/migrate/data-loss-consent";
+import {
+  deployStepDeps,
+  recordedBeforeTheRun,
+} from "../../domains/schema/migrate/deploy-step-deps";
 import { addDocumentColumns } from "../../domains/schema/migrate/document-columns";
 import {
   assertNotPartiallyApplied,
@@ -660,13 +662,10 @@ export async function runMigrate(
 
     // Every entity as the registry records it before any file applies, so the companion pass
     // after the migrations can tell a field this run newly translates from one translated before.
-    const recordedBefore = await readRecordedEntities(
+    const recordedBefore = await recordedBeforeTheRun(
       adapter as unknown as DrizzleAdapter,
       configResult.config,
-      error =>
-        logger.warn(
-          `The registry could not be read, so no translations column is judged this run: ${describeError(error)}`
-        )
+      logger
     );
 
     // Delegate to the non-exiting core (Phase 1 + Phase 2 under the lock). The

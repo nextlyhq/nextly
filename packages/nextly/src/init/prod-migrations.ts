@@ -13,13 +13,14 @@
 
 import { resolve } from "node:path";
 
+import type { NextlyServiceConfig } from "../di/register";
+import type { RecordedEntities } from "../domains/i18n/migration/recorded-before";
 import {
   busyTableBounds,
   type BusyTableBounds,
 } from "../domains/schema/busy-table/bounds";
-import type { MigrateCoreDeps } from "../cli/commands/migrate";
-import type { RecordedEntities } from "../domains/i18n/migration/recorded-before";
 import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
+import type { DeployStepDeps } from "../domains/schema/migrate/deploy-step-deps";
 import {
   pluginMigrationArgs,
   type PluginMigrationSet,
@@ -87,11 +88,11 @@ interface MigrateCoreLike {
     /** See `MigrateCoreDeps.seedPermissions`. */
     seedPermissions?: () => Promise<void>;
     /** Spread in by `deployStepDeps`, checked here for the reason above. */
-    firstRun?: MigrateCoreDeps["firstRun"];
+    firstRun?: DeployStepDeps["firstRun"];
     /** Spread in by `deployStepDeps`, checked here for the reason above. */
-    markOrphanedPermissions?: MigrateCoreDeps["markOrphanedPermissions"];
+    markOrphanedPermissions?: DeployStepDeps["markOrphanedPermissions"];
     /** Spread in by `deployStepDeps`, checked here for the reason above. */
-    beforeMetadata?: MigrateCoreDeps["beforeMetadata"];
+    beforeMetadata?: DeployStepDeps["beforeMetadata"];
     /** See `MigrateCoreDeps.busyTable`. */
     busyTable?: { bounds: BusyTableBounds; notify: (line: string) => void };
   }): Promise<{ applied: number; coreChanged: boolean; ran: boolean }>;
@@ -132,7 +133,7 @@ export interface RunProdMigrationsArgs {
    * and the user fields are written for it, as `nextly migrate` writes them for
    * the configuration it loads.
    */
-  served: object;
+  served: NextlyServiceConfig;
   /** Plugin additions to Builder entities, when the caller has them. */
   deferredExtends?: readonly unknown[];
   /**
@@ -149,7 +150,9 @@ export interface RunProdMigrationsArgs {
    * migrations have applied (`afterStartMigrations`): the translation tables,
    * then the user fields' storage.
    */
-  afterMigrations?: (recordedBefore: RecordedEntities | undefined) => Promise<void>;
+  afterMigrations?: (
+    recordedBefore: RecordedEntities | undefined
+  ) => Promise<void>;
 }
 
 /**
@@ -248,7 +251,7 @@ function migrateCoreFor(args: RunProdMigrationsArgs): MigrateCoreLike {
  */
 function startAccessSeeder(
   adapter: AdapterLike,
-  served: object,
+  served: NextlyServiceConfig,
   logger: LoggerLike
 ): () => Promise<void> {
   return async (): Promise<void> => {
@@ -279,7 +282,7 @@ function startAccessSeeder(
  */
 async function afterStartMigrations(
   adapter: AdapterLike,
-  served: object,
+  served: NextlyServiceConfig,
   logger: ReturnType<typeof bootCoreLogger>,
   recordedBefore: RecordedEntities | undefined
 ): Promise<void> {
@@ -297,11 +300,7 @@ async function afterStartMigrations(
     "afterApply",
     { supervised: true, recordedBefore }
   );
-  await provisionUserFieldTables(
-    (served as { users?: never }).users,
-    adapter as never,
-    logger as never
-  );
+  await provisionUserFieldTables(served.users, adapter as never, logger);
 }
 
 /** What one boot-migration run is handed besides the caller's arguments. */
@@ -330,21 +329,6 @@ async function applyBootMigrations(
   // the start before anything is read or changed.
   const bounds = busyTableBounds({ env: process.env });
   logger.info("[Nextly] Running production migrations on boot...");
-  // Every entity as the registry records it before any file applies, as the
-  // command reads it, so the translation tables after the migrations can tell
-  // a field newly translated from one translated before. Nothing on a new
-  // database.
-  const { readRecordedEntities } = await import(
-    "../domains/i18n/migration/recorded-before"
-  );
-  const recordedBefore = await readRecordedEntities(
-    adapter as never,
-    args.served as never,
-    error =>
-      logger.warn(
-        `[Nextly] The registry could not be read, so no translations column is judged this run: ${error instanceof Error ? error.message : String(error)}`
-      )
-  );
   const resolvedSchema = await resolveDeclaredSchema({
     projectRoot: process.cwd(),
     config: args.config,
@@ -352,10 +336,39 @@ async function applyBootMigrations(
   });
   // Compiled from this call's config, as every migrate entry point
   // compiles it; see `MigrateCoreDeps.extensionSchema`.
-  const [{ compileExtensionSchema }, { deployStepDeps }] = await Promise.all([
+  const [
+    { compileExtensionSchema },
+    { deployStepDeps, recordedBeforeTheRun },
+    { withOldBuilderMarks },
+  ] = await Promise.all([
     import("../domains/schema/extension/publish"),
     import("../domains/schema/migrate/deploy-step-deps"),
+    import("../domains/schema/migrate/old-builder-ledger"),
   ]);
+  // Before any file applies, as the command reads them: the registry as it
+  // stands, which the translation tables after the migrations are judged
+  // against, and what the declared schema names, with the ledger's old
+  // Builder marks, which old Builder files are judged against.
+  // The served configuration as the command's loader hands it: a list of
+  // collections, empty where none is declared.
+  const deployConfig = {
+    ...args.served,
+    collections: args.served.collections ?? [],
+  };
+  const recordedBefore = await recordedBeforeTheRun(
+    adapter as never,
+    deployConfig,
+    run.coreLogger
+  );
+  const { declared } = await withOldBuilderMarks({
+    adapter,
+    db: adapter.getDrizzle() as never,
+    dialect: adapter.dialect,
+    declared: {
+      junctions: resolvedSchema.junctionsByEntity,
+      tables: resolvedSchema.declaredTables,
+    },
+  });
   const extensionSchema = await compileExtensionSchema({
     dialect: adapter.dialect,
     plugins: args.config.plugins ?? [],
@@ -386,10 +399,7 @@ async function applyBootMigrations(
     refuseUnrecognisedBuilderFiles: true,
     // What the declared schema names, which old Builder files are judged
     // against as `nextly migrate` judges them.
-    declared: {
-      junctions: resolvedSchema.junctionsByEntity,
-      tables: resolvedSchema.declaredTables,
-    },
+    declared,
     // The same sets the CLI applies, from the same config: a boot that
     // skipped them would serve against a schema missing every plugin
     // table while reporting a clean migrate.
@@ -406,12 +416,9 @@ async function applyBootMigrations(
       db: adapter.getDrizzle(),
       dialect: adapter.dialect,
       migrationsDir: run.migrationsDir,
-      logger: run.coreLogger as never,
-      declared: {
-        junctions: resolvedSchema.junctionsByEntity,
-        tables: resolvedSchema.declaredTables,
-      },
-      config: args.served as never,
+      logger: run.coreLogger,
+      declared,
+      config: deployConfig,
       recordedBefore,
     }),
   });

@@ -446,7 +446,10 @@ describe.each(getConfiguredTestDialects())(
             adapter,
             "SELECT r.slug AS role, p.slug AS permission FROM role_permissions rp JOIN roles r ON r.id = rp.role_id JOIN permissions p ON p.id = rp.permission_id ORDER BY r.slug, p.slug"
           )
-        ).map(row => `${String(field(row, "role"))}:${String(field(row, "permission"))}`);
+        ).map(
+          row =>
+            `${String(field(row, "role"))}:${String(field(row, "permission"))}`
+        );
         out["ledger"] = (
           await rowsOf(
             adapter,
@@ -656,7 +659,8 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(refused.refusal).toBeUndefined();
       expect(refused.warnings.join("\n")).toMatch(
-        /DATA_LOSS_CONSENT_REQUIRED/
+        // The refusal's reason, which the start logs with its context.
+        /data-loss-needs-consent/
       );
       expect(await tableThere(viaStart)).toBe(true);
 
@@ -689,7 +693,9 @@ describe.each(getConfiguredTestDialects())(
               localized: true,
               fields: [
                 { name: "title", type: "text", localized: true },
-                ...(code ? [{ name: "code", type: "text", localized: true }] : []),
+                ...(code
+                  ? [{ name: "code", type: "text", localized: true }]
+                  : []),
               ] as never,
             }),
           ],

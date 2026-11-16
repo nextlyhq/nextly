@@ -199,7 +199,9 @@ describe.each(getConfiguredTestDialects())(
      */
     async function migrateFor(
       plugins: PluginDefinition[],
-      after?: (handle: Awaited<ReturnType<typeof createTestNextly>>) => Promise<void>
+      after?: (
+        handle: Awaited<ReturnType<typeof createTestNextly>>
+      ) => Promise<void>
     ): Promise<void> {
       const setup = await adapterFor();
       const handle = await createTestNextly({

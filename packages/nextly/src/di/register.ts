@@ -360,7 +360,10 @@ import {
   type Container,
   type RestoredRegistrations,
 } from "./container";
-import { withDevelopmentStartSchemaLock } from "./development-start-schema-lock";
+import {
+  takesDevelopmentStartHold,
+  withDevelopmentStartSchemaLock,
+} from "./development-start-schema-lock";
 import { readLayoutScanEntities } from "./layout-scan-entities";
 import {
   type LoadedBuilderEntity,
@@ -1101,14 +1104,19 @@ async function registerServicesOnce(
   // Before any step that writes to the database or the registry, the
   // migrations at start included: they would otherwise apply a refused
   // plugin's modules, and the Builder reconcile and the code-first sync below
-  // would add its fields and tables before the refusal.
-  await assertBootPluginInstallStates(
-    transformedConfig,
-    adapter,
-    adapterDrizzleDb,
-    resolvedLogger,
-    bootExtensionSchema
-  );
+  // would add its fields and tables before the refusal. Here where no
+  // development hold is taken, which is wherever the migrations at start can
+  // run; inside that hold otherwise, below, so a development start judges the
+  // plugins after any install or uninstall holding the lock has finished.
+  if (!takesDevelopmentStartHold()) {
+    await assertBootPluginInstallStates(
+      transformedConfig,
+      adapter,
+      adapterDrizzleDb,
+      resolvedLogger,
+      bootExtensionSchema
+    );
+  }
 
   // Migrations at start, where the app turns them on: `nextly migrate` run by
   // the start, under the one schema lock, before anything of the registry is
@@ -1198,6 +1206,19 @@ async function registerServicesOnce(
       // `webhooks: false` collection (e.g. form submissions) would silently record
       // PII-bearing events despite the opt-out.
       publishWebhookRecordingPolicies(transformedConfig);
+
+      // Inside the hold, before the Builder reconcile and the code-first sync
+      // below, which would otherwise add a refused plugin's fields and tables
+      // before the refusal; outside it, above, before the migrations at start.
+      if (takesDevelopmentStartHold()) {
+        await assertBootPluginInstallStates(
+          transformedConfig,
+          adapter,
+          adapterDrizzleDb,
+          resolvedLogger,
+          bootExtensionSchema
+        );
+      }
 
       await publishStoredRecordingPolicies(adapter, transformedConfig);
 
@@ -1377,7 +1398,6 @@ async function registerServicesOnce(
           workflows
         );
       }
-
 
       // After the boot migrations, which store a new version where they run:
       // the database's schema version against the build's, read once.

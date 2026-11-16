@@ -162,7 +162,7 @@ describe.each(LOCK_DIALECTS)("a held schema lock on %s", dialect => {
               },
               collections: [],
             },
-            served: { collections: [] },
+            served: { collections: [] } as never,
             lockWaitMs: 1_000,
             adapter: Object.assign(adapter, { dialect }) as never,
             logger: serviceLogger,
