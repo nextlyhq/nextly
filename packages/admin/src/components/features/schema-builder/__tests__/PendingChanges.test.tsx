@@ -357,6 +357,23 @@ describe("pending changes controls", () => {
     expect(field("summary").label).toBe("Excerpt");
   });
 
+  // A discard during the move would let the entity go before the move renames
+  // it, and the move would then report its address as taken: it waits too.
+  it("discard all waits while the page holds it, and is offered once the hold ends", () => {
+    const { rerender } = render(<Harness held />, { wrapper: Providers });
+    act(() =>
+      builder.handleFieldUpdate({ ...field("summary"), label: "Excerpt" })
+    );
+    expect(
+      screen.getByRole("button", { name: "Discard all changes" })
+    ).toBeDisabled();
+
+    rerender(<Harness />);
+    expect(
+      screen.getByRole("button", { name: "Discard all changes" })
+    ).toBeEnabled();
+  });
+
   it("a read-only entity offers none of them", () => {
     setup(true);
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
