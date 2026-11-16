@@ -293,6 +293,33 @@ describe("moveDataStatements on PostgreSQL and MySQL", () => {
     );
   });
 
+  it("counts PostgreSQL's spelled-out timestamp without time zone as holding UTC, not as zoned", () => {
+    const date = (columnType: string): MoveColumn => ({
+      table: "dc_posts",
+      dialect: "postgresql",
+      kind: "timestamp",
+      columnType,
+    });
+    const into = { from: column("published"), to: key("meta", "published") };
+    const out = { from: key("meta", "published"), to: column("published") };
+    for (const plain of ["timestamp", "timestamp without time zone"]) {
+      expect(moveDataStatements(into, date(plain)).copy.at(-1)).toContain(
+        `to_jsonb(to_char("published", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))`
+      );
+      expect(moveDataStatements(out, date(plain)).copy[0]).toContain(
+        `::timestamptz AT TIME ZONE 'UTC')`
+      );
+    }
+    for (const zoned of ["timestamptz", "timestamp with time zone"]) {
+      expect(moveDataStatements(into, date(zoned)).copy.at(-1)).toContain(
+        `"published" AT TIME ZONE 'UTC'`
+      );
+      expect(moveDataStatements(out, date(zoned)).copy[0]).not.toContain(
+        "AT TIME ZONE"
+      );
+    }
+  });
+
   it("refuses a key a JSON path cannot spell safely", () => {
     expect(() =>
       moveDataStatements(
