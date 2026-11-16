@@ -102,6 +102,8 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   // A Columns block's arrangement of its columns.
   "columns-layout-field.tsx": ["A layout of its own, written as CSS below."],
   "columns-layout.ts": ["Not a layout."],
+  // The Style tab's Layout section, where a container's Content width is.
+  "core-block-placement.fixture.ts": ["Layout"],
   // The Add panel's group of layout blocks (Section, Columns, Grid).
   "inserter-palette.ts": ["Layout"],
   // The Style tab's Layout section.

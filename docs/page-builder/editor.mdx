@@ -288,13 +288,24 @@ the container holding them, set per container or by the spacing variables:
 - **Section** pads its content above, below and beside it. **Card** pads its content.
   Box and Column have no padding.
 
-A Section with **Constrain content width** on (the default) is a full-width band: its
-background reaches both edges of the page, and only its content is held to the site's
-content width (`content.width`), with at least `space.gutter` at each side. Box, Columns,
-Column, Card, Accordion and Gallery work the same way when the setting is on. Padding you
-set at a contained block's sides takes the gutter's place: more moves the content further
-in, and 0 removes the gutter, but the content never runs wider than the content width.
-A contained block you give its own width is centred at that width instead.
+Every container has **Content width** under **Style → Layout**: **Boxed** or **Full
+width**. A new Section starts Boxed, and every other container starts Full width.
+
+A Boxed Section is a full-width band: its background reaches both edges of the page, and
+only its content is held to the site's content width (`content.width`), with at least
+`space.gutter` at each side. Box, Columns, Column, Card, Accordion, Gallery, Collection
+list and Entry content work the same way when Boxed. Padding you set at a Boxed block's
+sides takes the gutter's place: more moves the content further in, and 0 removes the
+gutter, but the content never runs wider than the content width. A Boxed block you give
+its own width (under **Size**) is centred at that width instead. Full width lets the
+content run edge to edge.
+
+The line under the buttons says what is in force: "Boxed to 1152px · site default".
+**Change for this section** gives that one container a width of its own, typed (`1400px`,
+`90%`) or picked from the site's variables. It applies to that container only: a Boxed
+block inside it still boxes to the site's width. **Use site default** takes it away.
+Content width is one setting for every device and state, so it is held while you edit a
+shared style or a state other than Normal.
 
 Each value is a variable under **Design → Variables**, and most grow with the screen:
 
