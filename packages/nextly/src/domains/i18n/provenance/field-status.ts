@@ -52,6 +52,7 @@ const PROVENANCE = sql.identifier(TRANSLATION_PROVENANCE_TABLE);
 const SOURCE = sql.identifier("nx_provenance_source");
 const TARGET = sql.identifier("nx_provenance_target");
 const RECORDED = sql.identifier("nx_provenance_recorded");
+const UNKNOWN = sql.identifier("nx_provenance_unknown");
 
 /** One column of a row of the provenance table, under `alias`. */
 function column(alias: Alias, name: string): SQL {
@@ -96,8 +97,22 @@ function liveRowsOfSql(
 }
 
 /**
- * Whether one document's language is out of date: by its recorded values where it has any (any
- * one out of date), and by `byStamp`, the language-level stamp comparison, where it has none.
+ * A row whose source cannot be compared: made from another language (not written originally),
+ * but its source's value then or now has no recorded fingerprint, as when the source was written
+ * before origins were recorded. A row's own record in a structure per language is not a field's.
+ */
+function sourceUnknownSql(alias: Alias): SQL {
+  return sql`${column(alias, "origin")} <> ${"original"}
+    AND ${column(alias, "field_path")} NOT LIKE ${`%${TRANSLATION_PROVENANCE_ROW_SEPARATOR}%`}
+    AND NOT ${sourceValueComparedSql(alias, "differs")}
+    AND NOT ${sourceValueComparedSql(alias, "matches")}`;
+}
+
+/**
+ * Whether one document's language is out of date: when any of its recorded values is, and
+ * otherwise by `byStamp`, the language-level stamp comparison, wherever the recorded values
+ * cannot say: the language has none, or one of them was made from a source with no recorded
+ * value (`sourceUnknownSql`).
  */
 export function languageOutOfDateSql(args: {
   scope: ProvenanceScope;
@@ -112,10 +127,14 @@ export function languageOutOfDateSql(args: {
     SELECT 1 FROM ${PROVENANCE} ${TARGET}
     WHERE ${liveRowsOfSql(TARGET, scope, entryId, locale)}
     AND ${sourceValueComparedSql(TARGET, "differs")}
-  ) OR (NOT EXISTS (
+  ) OR (${args.byStamp} AND (NOT EXISTS (
     SELECT 1 FROM ${PROVENANCE} ${RECORDED}
     WHERE ${liveRowsOfSql(RECORDED, scope, entryId, locale)}
-  ) AND ${args.byStamp}))`;
+  ) OR EXISTS (
+    SELECT 1 FROM ${PROVENANCE} ${UNKNOWN}
+    WHERE ${liveRowsOfSql(UNKNOWN, scope, entryId, locale)}
+    AND ${sourceUnknownSql(UNKNOWN)}
+  ))))`;
 }
 
 /** The surface the per-field read is made through: a Drizzle database. */

@@ -37,6 +37,13 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           text({ name: "summary", localized: true }),
         ],
       }),
+      // Each language with its own draft or published status.
+      defineCollection({
+        slug: "articles",
+        localized: true,
+        status: true,
+        fields: [text({ name: "title", localized: true })],
+      }),
     ],
   });
   return t;
@@ -45,10 +52,15 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
 const handler = () => container.get<CollectionsHandler>("collectionsHandler");
 
 /** A save of `data` in `locale`, as a person. */
-async function save(id: string, locale: string, data: Record<string, unknown>) {
+async function save(
+  id: string,
+  locale: string,
+  data: Record<string, unknown>,
+  collectionName = "posts"
+) {
   const result = await handler().updateEntry(
     {
-      collectionName: "posts",
+      collectionName,
       entryId: id,
       overrideAccess: true,
       locale,
@@ -159,6 +171,57 @@ describe.each(getConfiguredTestDialects())(
       // The title's source did not change, but nothing records that: the
       // language-level stamp says the source moved after Spanish was written.
       expect(overview.es.stale).toBe(true);
+    });
+
+    it("judges a translation made from a source with no recorded value by the language-level stamp", async () => {
+      await boot(dialect);
+      const created = (await t!.nextly.create({
+        collection: "posts",
+        locale: "en",
+        data: { title: "Hi", summary: "Short" },
+      })) as unknown as { item: { id: string } };
+      const id = created.item.id;
+      // A source written before origins were recorded: no row for English.
+      await t!.adapter.delete("nextly_translation_provenance", {
+        and: [{ column: "locale", op: "=", value: "en" }],
+      });
+      // Spanish is recorded, but made from a source value nothing fingerprinted.
+      await save(id, "es", { title: "Hola", summary: "Corto" });
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      await save(id, "en", { title: "Hello" });
+
+      const overview = await overviewOf(id);
+      expect(overview.es.fields?.title?.outOfDate).toBeUndefined();
+      // Nothing records what Spanish was made from, so its stamp decides.
+      expect(overview.es.stale).toBe(true);
+    });
+
+    it("shows a published read no provenance for a language whose translation is only a draft", async () => {
+      await boot(dialect);
+      const created = (await t!.nextly.create({
+        collection: "articles",
+        locale: "en",
+        data: { title: "Hi", status: "published" },
+      })) as unknown as { item: { id: string } };
+      const id = created.item.id;
+      await save(id, "es", { title: "Hola", status: "draft" }, "articles");
+
+      const res = await handler().listEntries({
+        collectionName: "articles",
+        overrideAccess: true,
+        status: "published",
+        translationStatus: true,
+      } as never);
+      expect(res.success).toBe(true);
+      const docs = (res.data as { docs: Record<string, unknown>[] }).docs;
+      const overview = docs.find(doc => doc.id === id)?._translations as Record<
+        string,
+        LocaleTranslationMeta
+      >;
+      // The draft is hidden from this read, and so is what it records.
+      expect(overview.es.translated).toBe(false);
+      expect(overview.es.fields).toBeUndefined();
+      expect(overview.en.fields?.title).toMatchObject({ origin: "original" });
     });
   }
 );

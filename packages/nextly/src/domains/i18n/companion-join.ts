@@ -1466,7 +1466,9 @@ function buildLocaleMeta(args: {
   // same-second writes would make every source locale report itself stale — so the state the
   // guard asserts is spelled out rather than inferred. No test separates the two mechanisms, and
   // none can while both hold.
-  if (args.fields !== undefined) entry.fields = args.fields;
+  // Only beside a row this read may see: a language's provenance tells what its values are, so a
+  // row a status-scoped read hides (a draft on a published read) hides its provenance too.
+  if (args.fields !== undefined && companionRow) entry.fields = args.fields;
   if (code !== defaultLocale && hasContent && args.isStale(code)) {
     entry.stale = true;
   }
