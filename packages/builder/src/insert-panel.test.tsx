@@ -778,7 +778,8 @@ describe("InsertPanel", () => {
   it("adds a block that only belongs inside the selected container inside it, as its refusal says", () => {
     // "Select a Columns first" has to be true: with the Columns selected, a
     // Column goes inside it, while a block that fits beside it still goes
-    // after it.
+    // after it. The Column is a layout block, as the core one is: in the
+    // Layout group, holding blocks.
     registerBlocks(
       [
         {
@@ -791,7 +792,8 @@ describe("InsertPanel", () => {
           ...base,
           name: "acme/column",
           parent: ["acme/columns"],
-          editor: { label: "Column" },
+          editor: { label: "Column", category: "layout" },
+          slots: { children: {} },
         },
         { ...base, name: "acme/text", editor: { label: "Text" } },
       ] as never,
@@ -817,9 +819,13 @@ describe("InsertPanel", () => {
     );
     render(<InsertPanel editor={editor} />);
 
+    // At rest the line names where a content block goes: after the
+    // Columns, since they hold only Column blocks.
     expect(placementLine()).toBe("Adding after Columns");
     expect(tile("Column").getAttribute("data-refused")).toBeNull();
-    expect(describedBy(tile("Column"))).toContain("Goes inside Columns.");
+    expect(describedBy(tile("Column"))).toContain(
+      "Goes inside Columns, at the end."
+    );
 
     // The line names where the highlighted tile goes, before the click.
     const search = screen.getByRole("combobox", { name: "Insert a block" });
@@ -830,7 +836,7 @@ describe("InsertPanel", () => {
     expect(live()).toBe("polite");
     fireEvent.keyDown(search, { key: "Home" });
     expect(popoverName()).toBe("Column");
-    expect(placementLine()).toBe("Adding inside Columns");
+    expect(placementLine()).toBe("Adding inside Columns, at the end");
     // The tile's own description says it; the line is not announced twice.
     expect(live()).toBe("off");
     for (let step = 0; step < 6 && popoverName() !== "Text"; step++) {
@@ -907,12 +913,14 @@ describe("InsertPanel", () => {
     );
     render(<InsertPanel editor={editor} />);
 
-    expect(placementLine()).toBe("Adding after Text");
-    // The line names the first place only, so a tile that goes further says
-    // where, to a screen reader and in its popover. The Text, the control,
-    // goes where the line says and adds nothing to it.
+    expect(placementLine()).toBe("Adding after Text, inside Column");
+    // Every tile says where it goes to a screen reader; one that goes
+    // further than the line's place also says so in its popover. The Text,
+    // the control, goes where the line says.
     expect(describedBy(tile("Image"))).toContain("Goes after Columns.");
-    expect(describedBy(tile("Text"))).not.toContain("Goes");
+    expect(describedBy(tile("Text"))).toContain(
+      "Goes after Text, inside Column."
+    );
     const search = screen.getByRole("combobox", { name: "Insert a block" });
     for (let step = 0; step < 8 && popoverName() !== "Image"; step++) {
       fireEvent.keyDown(search, { key: "ArrowDown" });
@@ -1071,15 +1079,16 @@ describe("the line that says where the next block goes", () => {
     render(<InsertPanel editor={editor} />);
 
     expect(placementLine()).toBe("Adding after Hero title");
-    // Bold, as the name of a place rather than part of the sentence.
+    // Bold, as the place rather than part of the sentence.
     expect(
       document.querySelector(".nx-insert-panel__placement b")?.textContent
-    ).toBe("Hero title");
+    ).toBe("after Hero title");
   });
 
-  it("adds after a selected EMPTY container rather than inside it", () => {
-    // Inside is the explicit "+" gesture's alone. Selecting an empty Section
-    // and adding still builds the page downward, beside it.
+  it("adds inside a selected EMPTY container, at the end", () => {
+    // A content block goes inside a selected block that holds blocks, an
+    // empty one included: selecting an empty Section and adding a Heading
+    // fills it.
     registerBlocks(blocks as never, { source: "acme" });
     const editor = selecting(
       editorSpy(
@@ -1091,9 +1100,13 @@ describe("the line that says where the next block goes", () => {
     );
     render(<InsertPanel editor={editor} />);
 
-    expect(placementLine()).toBe("Adding after Section");
+    expect(placementLine()).toBe("Adding inside Section, at the end");
     fireEvent.click(tile("Heading"));
-    expect(editor.apply.mock.calls[0][0].at).toEqual({ index: 1 });
+    expect(editor.apply.mock.calls[0][0].at).toEqual({
+      parentId: "s",
+      slot: "children",
+      index: 0,
+    });
   });
 
   it("names the container a + chose to add inside, and inserts there", () => {
@@ -1108,7 +1121,7 @@ describe("the line that says where the next block goes", () => {
     );
     render(<InsertPanel editor={editor} inside="s" />);
 
-    expect(placementLine()).toBe("Adding inside Section");
+    expect(placementLine()).toBe("Adding inside Section, at the end");
     fireEvent.click(tile("Heading"));
     expect(editor.apply.mock.calls[0][0].at).toEqual({
       parentId: "s",
@@ -1154,14 +1167,14 @@ describe("the grid, and the popover that describes a tile", () => {
     render(<InsertPanel editor={editorSpy(documentOf())} />);
 
     const first = tile("B0");
-    const describedBy = first.getAttribute("aria-describedby");
-    expect(describedBy).toBeTruthy();
+    const ids = (first.getAttribute("aria-describedby") ?? "").split(" ");
     // Resolved rather than merely present: an id pointing at nothing is the
     // failure this is built to exclude, and it reads identically on the
-    // element itself.
-    const description =
-      describedBy === null ? null : document.getElementById(describedBy);
-    expect(description?.textContent).toBe("Block number 0.");
+    // element itself. Where the tile goes, then its sentence.
+    expect(ids.map(id => document.getElementById(id)?.textContent)).toEqual([
+      "Goes at the end of the page.",
+      "Block number 0.",
+    ]);
   });
 
   it("gives a description an id with no WHITESPACE in it", () => {
@@ -1195,14 +1208,15 @@ describe("the grid, and the popover that describes a tile", () => {
     render(<InsertPanel editor={editorSpy(documentOf())} />);
 
     const wide = tile("Wide card");
-    const id = wide.getAttribute("aria-describedby");
-    expect(id).toBeTruthy();
-    expect(id).not.toMatch(/\s/);
-    // A variation carries no sentence of its own, so this is the block's —
-    // which is what a description reference has to resolve to.
-    expect(document.getElementById(id ?? "")?.textContent).toBe(
-      "A card that clips."
-    );
+    const ids = (wide.getAttribute("aria-describedby") ?? "").split(" ");
+    // Two references, where it goes and what it is, each resolving whole:
+    // a space inside either id would split it into references to nothing.
+    // A variation carries no sentence of its own, so the second is the
+    // block's — which is what a description reference has to resolve to.
+    expect(ids.map(id => document.getElementById(id)?.textContent)).toEqual([
+      "Goes at the end of the page.",
+      "A card that clips.",
+    ]);
   });
 
   it("highlights nothing and opens no popover until the author moves through the tiles", () => {
@@ -1959,7 +1973,9 @@ describe("the component tier", () => {
     const header = tile("Header");
     expect(header.querySelector(".nx-block-icon svg")).not.toBeNull();
     expect(header.querySelector(".nx-insert-panel__tier")).toBeNull();
-    expect(describedBy(header)).toBe("The site header.");
+    expect(describedBy(header)).toBe(
+      "Goes at the end of the page. The site header."
+    );
   });
 
   it("finds a component by search, in the Blocks tab", () => {

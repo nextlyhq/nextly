@@ -30,6 +30,7 @@ import * as typographyDefaultsModule from "./blocks/typography-defaults";
 import * as containerRootModule from "./blocks/container-root";
 import * as componentSourceModule from "./component-source";
 import * as contextModule from "./context";
+import * as imageSlotModule from "./image-slot";
 import * as listCollectionsModule from "./list-collections";
 import * as richTextModule from "./rich-text";
 import * as pagePartsModule from "./page-parts";
@@ -113,6 +114,25 @@ const SOURCE_MODULES: ReadonlyArray<{
     // Its one value is the consumer surface: which element a Section or Box
     // renders as its root, asked by an editor.
     internal: [],
+  },
+  {
+    name: "image-slot",
+    module: imageSlotModule,
+    // The entry publishes only the copy types a host's `imageCopies` option
+    // is written against. Working out each device's slot is the renderer's
+    // own, asked by the route and the blocks that draw images.
+    internal: [
+      "childImageContext",
+      "copiesWantedUpTo",
+      "hasDefaultColumnGap",
+      "imageSizingFor",
+      "narrowForColumns",
+      "narrowForOwnSize",
+      "narrowToWidth",
+      "rootImageSlot",
+      "siteSizesBlocks",
+      "sizesFor",
+    ],
   },
   {
     name: "component-source",
@@ -214,7 +234,7 @@ const SOURCE_MODULES: ReadonlyArray<{
     module: listCollectionsModule,
     // The walk behind `listCollections`, shared with the route's other
     // questions about a page's lists; not a consumer surface.
-    internal: ["anyListWhere", "listCollectionsWhere", "listPropsAsBound"],
+    internal: ["anyListWhere", "listPropsAsBound"],
   },
   // Public whole: how a page and the regions of its Layout share one site
   // sheet and keep their styles apart, asked by the published route and the
@@ -618,6 +638,9 @@ describe("the root entry", () => {
       // The collections a page's lists draw: the published route and the
       // editor's canvas ask one walk which lists a page holds.
       "listCollections",
+      // The same walk with a binding run, so the editor's change check
+      // watches the collection a bound list draws.
+      "listCollectionsWhere",
       "migrationSourceFor",
       // Whether a recorded lookup found no field a visitor may read, so the
       // editor can say a whole source is hidden from visitors.

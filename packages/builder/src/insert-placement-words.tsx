@@ -1,8 +1,9 @@
 /**
- * Where a block added from the panel goes, said in words: "Adding after
- * Heading", "Adding inside Section", "Adding at the end of the page". One
- * place says it, so the Add panel, the Components panel and the editor's
- * search name a place the same way.
+ * Where a block added from the panel goes, said in words: "Adding inside
+ * Hero, at the end", "Adding after Heading, inside Hero", "Adding at the end
+ * of the page", "Adding between Hero and Pricing". One place says it, so the
+ * Add panel, the Components panel, the editor's search and the sentence an
+ * insert is announced with name a place the same way.
  *
  * @module insert-placement-words
  */
@@ -13,40 +14,91 @@ import type { InsertionCandidate } from "./inserter";
 import { layerLabel } from "./layers";
 
 /**
- * Where a place is, in words: "after", "inside" or "at the end of the page",
- * and the block it is beside or in, named as Layers names it.
+ * One piece of a place's words: a place named by a block ("after Heading",
+ * drawn bold), or the plain words between them.
  */
-export function placeParts(
-  document: BlockDocument,
-  candidate: InsertionCandidate
-): { where: string; name?: string } {
-  if (candidate.kind === "document-end") {
-    return { where: "at the end of the page" };
-  }
-  const inside = candidate.kind === "inside";
-  const id = inside ? candidate.insideId : candidate.afterId;
-  const node = id === undefined ? undefined : findNode(document.nodes, id);
-  // The guard is over an id the candidate was built from this same document,
-  // so it holds; the words still say something true if it ever does not.
-  return {
-    where: inside ? "inside" : "after",
-    name: node === undefined ? "the selected block" : layerLabel(node),
-  };
+interface PlacePart {
+  readonly text: string;
+  readonly named: boolean;
 }
 
-/** "Adding after Heading", say, with the block's name in bold. */
+/**
+ * A place's words, in pieces: where it is beside or in a block, named as
+ * Layers names it, then, where that place is itself inside a block, which.
+ */
+function placeParts(
+  document: BlockDocument,
+  candidate: InsertionCandidate
+): readonly PlacePart[] {
+  const named = (text: string): PlacePart => ({ text, named: true });
+  const plain = (text: string): PlacePart => ({ text, named: false });
+  const name = (id: string | undefined): string => {
+    const node = id === undefined ? undefined : findNode(document.nodes, id);
+    // The ids come from this same document, so the guard holds; the words
+    // still say something true if it ever does not.
+    return node === undefined ? "the selected block" : layerLabel(node);
+  };
+  if (candidate.kind === "document-end") {
+    return [plain("at the end of the page")];
+  }
+  if (candidate.kind === "inside") {
+    return [named(`inside ${name(candidate.insideId)}`), plain(", at the end")];
+  }
+  const beside =
+    candidate.kind !== "between"
+      ? `after ${name(candidate.afterId)}`
+      : candidate.afterId === undefined
+        ? `before ${name(candidate.beforeId)}`
+        : `between ${name(candidate.afterId)} and ${name(candidate.beforeId)}`;
+  const parentId = candidate.at.parentId;
+  return parentId === undefined
+    ? [named(beside)]
+    : [named(beside), plain(", "), named(`inside ${name(parentId)}`)];
+}
+
+/** A place in plain words: "inside Hero, at the end", "after Heading, inside Hero". */
+export function placeWords(
+  document: BlockDocument,
+  candidate: InsertionCandidate
+): string {
+  return placeParts(document, candidate)
+    .map(part => part.text)
+    .join("");
+}
+
+/** "Adding after Heading, inside Hero", say, with the places in bold. */
 export function placementWords(
   lead: string,
   document: BlockDocument,
   candidate: InsertionCandidate
 ): React.ReactNode {
-  const { where, name } = placeParts(document, candidate);
-  return name === undefined ? (
-    `${lead} ${where}`
-  ) : (
+  return (
     <>
-      {`${lead} ${where} `}
-      <b>{name}</b>
+      {`${lead} `}
+      {placeParts(document, candidate).map((part, index) =>
+        part.named ? <b key={index}>{part.text}</b> : part.text
+      )}
     </>
   );
+}
+
+/** The same place as one plain sentence, for a tile's description. */
+export function placementSentence(
+  lead: string,
+  document: BlockDocument,
+  candidate: InsertionCandidate
+): string {
+  return `${lead} ${placeWords(document, candidate)}.`;
+}
+
+/**
+ * What an insert is announced with: "Heading added inside Hero, at the end".
+ * Read from the page as it was before the insert, where the place was named.
+ */
+export function insertedAnnouncement(
+  label: string,
+  document: BlockDocument,
+  candidate: InsertionCandidate
+): string {
+  return `${label} added ${placeWords(document, candidate)}`;
 }

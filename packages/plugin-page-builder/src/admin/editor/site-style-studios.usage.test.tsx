@@ -199,7 +199,7 @@ function Studio({
   /** The editor's way to edit a look in the inspector. */
   look?: (look: { id: string; blockType: string }) => void;
 } = {}): React.JSX.Element {
-  const [current, choose] = React.useState<string | null>("variables");
+  const [current, choose] = React.useState<string | null>("colours");
   return (
     <DesignPanel
       view={{ current, choose }}
@@ -210,7 +210,7 @@ function Studio({
           pending={false}
           classes={[CARD, PRIMARY]}
           opens={{
-            sharedStyles: () => choose("classes"),
+            sharedStyles: () => choose("styles"),
             ...(look === undefined ? {} : { look }),
           }}
         >
@@ -218,8 +218,10 @@ function Studio({
         </TokensStudio>
       )}
       tabs={{
-        variables: () => <VariablesTab />,
-        classes: () => (
+        colours: () => <VariablesTab tab="colours" />,
+        type: () => <VariablesTab tab="type" />,
+        spacing: () => <VariablesTab tab="spacing" />,
+        styles: () => (
           <SharedStylesStudio
             classes={SURFACE}
             pageBlocks={{ counts: new Map(), complete: true }}
@@ -228,7 +230,6 @@ function Studio({
             tokens={TOKENS}
           />
         ),
-        fonts: () => <p>Fonts content</p>,
       }}
     />
   );
@@ -271,7 +272,7 @@ describe("the Variables studio's usage", () => {
     fireEvent.click(card);
 
     await waitFor(() =>
-      expect(tab("Shared styles").getAttribute("aria-selected")).toBe("true")
+      expect(tab("Styles").getAttribute("aria-selected")).toBe("true")
     );
     expect(await screen.findByRole("dialog", { name: "Card" })).toBeTruthy();
   });
@@ -288,11 +289,11 @@ describe("the Variables studio's usage", () => {
     );
     await screen.findByRole("dialog", { name: "Card" });
 
-    openTab("Variables");
+    openTab("Colours");
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Card" })).toBeNull()
     );
-    openTab("Shared styles");
+    openTab("Styles");
     // The style was taken once; the tab chosen again opens on its rows.
     await screen.findByRole("button", { name: /Card/ });
     expect(screen.queryByRole("dialog", { name: "Card" })).toBeNull();
@@ -313,7 +314,7 @@ describe("the Variables studio's usage", () => {
       id: "look-primary",
       blockType: "core/button",
     });
-    // The Variables tab stays: a look does not open in Shared styles.
-    expect(tab("Variables").getAttribute("aria-selected")).toBe("true");
+    // The Colours tab stays: a look does not open in Styles.
+    expect(tab("Colours").getAttribute("aria-selected")).toBe("true");
   });
 });

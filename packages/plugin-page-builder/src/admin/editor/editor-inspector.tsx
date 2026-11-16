@@ -148,7 +148,7 @@ export function editorInspector<TFieldValues extends FieldValues>(
           siteStyleError
         ),
         fromCode: configSiteStyle.fonts ?? [],
-        onManageFonts: () => requestPanel("design", "fonts"),
+        onManageFonts: () => requestPanel("design", "type"),
       }}
       // In a component's own view: the ids its live definition holds, which a
       // new field must never reuse, how far a removal reaches, and its name

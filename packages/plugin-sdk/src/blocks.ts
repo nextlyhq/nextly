@@ -85,8 +85,8 @@ export interface BlockSupportKeys {
   color: "text" | "link";
   /** Background colour, image and gradient. */
   background: "color" | "image" | "gradient";
-  /** Border lines and corner rounding. */
-  border: "line" | "radius";
+  /** Border lines, corner rounding and the outline. */
+  border: "line" | "radius" | "outline";
   /** Box and text shadows. */
   shadow: never;
   /** Opacity, filters and transforms. */
@@ -301,12 +301,16 @@ export function blockSupports<S extends BlockSupports>(
 
 /**
  * @experimental Carried by the same freeze as `defineBlock`: these describe the
- *   definition shape, so they change with it.
+ *   definition shape, so they change with it. `PropGroup` and
+ *   `StyleSectionKey` are added deliberately, as experimental, for the
+ *   `group` and `section` hints a prop already carries through `PropSchema`.
  */
 export type {
   AnyBlockDefinition,
   InferBlockProps,
+  PropGroup,
   PropSchema,
+  StyleSectionKey,
   SupportDefinition,
 } from "@nextlyhq/blocks-engine";
 

@@ -31,6 +31,7 @@ import {
   keywordWithheld,
   propertyWithheld,
 } from "./style-baseline";
+import { unitChoicesFor } from "./style-numeric";
 
 // The dataset types the status as `boolean`, though it only ever stores `false`.
 type BaselineStatus = "high" | "low" | boolean;
@@ -176,6 +177,38 @@ const describeEntry = (entry: Offerable) =>
     ? entry.cssProperty
     : `${entry.cssProperty}: ${entry.keyword}`;
 
+/**
+ * The compat key a length unit is tracked under, or `undefined` when the data
+ * has none for it.
+ *
+ * `px` is the one unit with no key of its own: it is what `<length>` itself
+ * is tracked as. The small, large and dynamic viewport units are tracked as
+ * three families (`svh` with `svw`, `svi` and the rest), so their key is
+ * derived from the prefix.
+ */
+function unitKey(unit: string): string | undefined {
+  if (unit === "%") return "css.types.percentage";
+  if (unit === "px") return "css.types.length";
+  const variant = /^([sld])v(?:h|w|i|b|min|max)$/.exec(unit);
+  const family = { s: "small", l: "large", d: "dynamic" }[variant?.[1] ?? ""];
+  const key =
+    family === undefined
+      ? `css.types.length.${unit}`
+      : `css.types.length.viewport_percentage_units_${family}`;
+  return STATUS.has(key) ? key : undefined;
+}
+
+/** Every unit the length fields' menus offer, on any catalog leaf. */
+function offeredUnits(): string[] {
+  const units = new Set<string>();
+  for (const entry of STYLE_CATALOG) {
+    for (const leaf of shapeLeaves(entry.shape)) {
+      for (const unit of unitChoicesFor(leaf)) units.add(unit);
+    }
+  }
+  return [...units];
+}
+
 describe("the Baseline gate", () => {
   it("reads the web-features release the package pins, exactly", () => {
     const here = dirname(fileURLToPath(import.meta.url));
@@ -259,6 +292,25 @@ describe("the Baseline gate", () => {
       entry => !declared.has(`${entry.cssProperty}:${entry.keyword ?? ""}`)
     ).map(describeEntry);
     expect(stale).toEqual([]);
+  });
+
+  it("finds every unit the menus offer in the data", () => {
+    const offered = offeredUnits();
+    // The screen-height variants are among them, so the cases below hold
+    // them to the data rather than passing over them.
+    expect(offered).toEqual(expect.arrayContaining(["svh", "dvh", "lvh"]));
+    expect(offered.filter(unit => unitKey(unit) === undefined)).toEqual([]);
+  });
+
+  it("offers only units Baseline marks widely available", () => {
+    // Positive and negative controls first, so a checker that answered
+    // "available" for every unit cannot pass.
+    expect(widelyAvailable([unitKey("dvh") ?? ""])).toBe(true);
+    expect(widelyAvailable([unitKey("rcap") ?? ""])).toBe(false);
+    const notWide = offeredUnits().filter(
+      unit => !widelyAvailable([unitKey(unit) ?? ""])
+    );
+    expect(notWide).toEqual([]);
   });
 
   it("withholds every keyword of a withheld property", () => {

@@ -29,6 +29,17 @@ export const CANVAS_BINDINGS_ROUTE_PATH = "/canvas-bindings";
 export const CANVAS_SOURCES_CHANGED_ROUTE_PATH = "/canvas-sources/changed";
 
 /**
+ * What the change check takes as a collection's or a Single's slug, and the
+ * editor asks it about only names that are: one name that is not would have
+ * the whole check refused, and every source on the page go unchecked.
+ */
+export function isSourceSlug(name: string): boolean {
+  return (
+    name.length >= 1 && name.length <= 128 && /^[A-Za-z0-9_-]+$/.test(name)
+  );
+}
+
+/**
  * What the change check asks about: the sources a bindings ask reads, by
  * name only. Derived from that ask ({@link sourcesChangedAskOf}), so the
  * check always names exactly what the canvas reads.
