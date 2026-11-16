@@ -40,6 +40,7 @@ import {
 import type { CollectionEntryService } from "../../../../services/collections/collection-entry-service";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
 import { discardWorkingDraft } from "../../../versions/discard-working-draft";
+import { VersionsRepository } from "../../../versions/versions-repository";
 
 const TRANSLATED = "partposts";
 const UNTRANSLATED = "partnotes";
@@ -668,6 +669,44 @@ describe.each(getConfiguredTestDialects())(
         }
       );
       expect(parts.map(row => row.part)).toEqual(["~shared"]);
+    }, 90_000);
+
+    // A shared-only discard throws away no language's work, so the author's unsaved work recorded
+    // in the default language (as no language, the way the editor records it) stays to be offered
+    // back. The plausible broken implementation reads the shared slot as that unnamed language.
+    it("keeps the author's recovery point in the default language when the shared draft is discarded", async () => {
+      const entries = await boot(dialect);
+      const id = await publishedInBoth(entries, TRANSLATED);
+      await save(entries, TRANSLATED, id, "es", { title: "es 2", views: 40 });
+      const repo = new VersionsRepository(
+        handle!.adapter as unknown as ConstructorParameters<
+          typeof VersionsRepository
+        >[0]
+      );
+      const ref = {
+        scopeKind: "collection" as const,
+        scopeSlug: TRANSLATED,
+        entryId: id,
+      };
+      await repo.upsertAutosave({
+        ref,
+        status: "draft",
+        snapshot: { title: "typed in English, never saved" },
+        locale: null,
+        createdBy: "editor",
+      });
+
+      await discardWorkingDraft({
+        scopeKind: "collection",
+        slug: TRANSLATED,
+        entryId: id,
+        user: { id: "editor" } as never,
+        shared: true,
+        version: { _overwrite: true },
+      });
+
+      expect(Object.keys(await drafts(id))).toEqual(["es"]);
+      expect(await repo.findAutosave(ref, "editor")).toBeDefined();
     }, 90_000);
 
     // While the entry is live, a shared edit is pending until the shared part is published,

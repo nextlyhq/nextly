@@ -6042,7 +6042,9 @@ export class CollectionMutationService extends BaseService {
         // away. Their work recorded in another language stays.
         // Only where a pending change was removed: a discard that found none
         // threw nothing away, and the point is then the only copy of the work.
-        if (removed > 0) {
+        // Nor for the shared part's draft: it is kept under no language, which is also how the
+        // default language's work is recorded, and discarding it throws no language's work away.
+        if (removed > 0 && params.shared !== true) {
           await forgetRecoveryPointIn(tx, {
             ref: discardedRef,
             author: params.user?.id,
