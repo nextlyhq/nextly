@@ -234,16 +234,20 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
 /**
  * A slot narrowed by the width and maximum width a block sets for itself,
  * read only where they hold on every device: set at the base, in its resting
- * state, and set at no other breakpoint. A width that changes by device is
- * left unjudged, since narrowing by the base value would size the image too
- * small on a device that draws it wider.
+ * state, set at no other breakpoint, and with no minimum width anywhere. A
+ * width that changes by device is left unjudged, since narrowing by the base
+ * value would size the image too small on a device that draws it wider, and
+ * so is one a minimum could widen.
  */
 export function narrowForOwnSize(slot: ImageSlot, styles: unknown): ImageSlot {
   const breakpoints = recordOf(recordOf(styles)?.base);
   if (breakpoints === undefined) return slot;
   for (const [id, values] of Object.entries(breakpoints)) {
-    if (id === "base") continue;
     const sized = recordOf(values);
+    // A minimum can draw the block wider than its width says, at any
+    // breakpoint, so a block with one is left unjudged.
+    if (sized?.minWidth !== undefined) return slot;
+    if (id === "base") continue;
     if (sized?.width !== undefined || sized?.maxWidth !== undefined) {
       return slot;
     }

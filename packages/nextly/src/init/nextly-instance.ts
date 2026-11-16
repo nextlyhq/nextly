@@ -76,6 +76,7 @@ import type {
   FindMediaByIDArgs,
   FindMediaByIDsArgs,
   MediaCopyArgs,
+  MediaCopiesArgs,
   FindPermissionByIDArgs,
   FindPermissionsArgs,
   FindRoleByIDArgs,
@@ -699,6 +700,13 @@ export interface Nextly {
      * @experimental
      */
     copyOf: (args: MediaCopyArgs) => Promise<MediaCopy | null>;
+    /**
+     * Every resized copy of an image up to `upTo` wide, narrowest first, or
+     * `[]` where no copy can be had. The item is read and checked once.
+     *
+     * @experimental
+     */
+    copiesOf: (args: MediaCopiesArgs) => Promise<MediaCopy[]>;
     update: (args: UpdateMediaArgs) => Promise<MutationResult<MediaFile>>;
     delete: (args: DeleteMediaArgs) => Promise<MutationResult<{ id: string }>>;
     bulkDelete: (args: BulkDeleteMediaArgs) => Promise<BulkOperationResult>;

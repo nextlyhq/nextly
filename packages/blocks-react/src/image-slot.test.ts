@@ -131,6 +131,16 @@ describe("a container's children", () => {
     expect(narrowForOwnSize(root, varies)).toBe(root);
   });
 
+  it("is not narrowed where a minimum width could widen the block", () => {
+    const root = rootImageSlot(BREAKPOINTS);
+    for (const styles of [
+      { base: { base: { width: "300px", minWidth: "100%" } } },
+      { base: { base: { maxWidth: "300px" }, mobile: { minWidth: "50%" } } },
+    ]) {
+      expect(narrowForOwnSize(root, styles)).toBe(root);
+    }
+  });
+
   it("resolves a width and a maximum width each against the container", () => {
     const root = rootImageSlot(BREAKPOINTS);
     // CSS draws `width: 50%; max-width: 50%` at half the container, not a

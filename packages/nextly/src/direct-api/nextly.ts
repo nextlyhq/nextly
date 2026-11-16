@@ -213,6 +213,7 @@ import type {
   FindMediaByIDArgs,
   FindMediaByIDsArgs,
   MediaCopyArgs,
+  MediaCopiesArgs,
   FindOneUserArgs,
   FindPermissionByIDArgs,
   FindPermissionsArgs,
@@ -1225,6 +1226,14 @@ export const nextly = {
      */
     copyOf: async (args: MediaCopyArgs) =>
       (await requireNextlyOnceStarted()).media.copyOf(args),
+    /**
+     * Every resized copy of an image up to a width, or `[]`, as the
+     * instance's `media.copiesOf` answers it.
+     *
+     * @experimental
+     */
+    copiesOf: async (args: MediaCopiesArgs) =>
+      (await requireNextlyOnceStarted()).media.copiesOf(args),
     update: async (args: UpdateMediaArgs) =>
       (await requireNextlyOnceStarted()).media.update(args),
     delete: async (args: DeleteMediaArgs) =>

@@ -50,7 +50,7 @@ const instance = () => getNextly({ config: nextlyConfig });
  * exists to be READ from, and forwarding `upload`/`update`/`delete` would offer
  * a public page route a write surface it has no reason to hold.
  */
-type MediaLookup = Pick<NextlyInstance["media"], "findByID" | "copyOf">;
+type MediaLookup = Pick<NextlyInstance["media"], "findByID" | "copiesOf">;
 
 /**
  * The reader every public content route on this site resolves through.
@@ -80,7 +80,7 @@ export const siteReader: NextlyContentReader &
     findByID: async args => (await instance()).media.findByID(args),
     // The resized copies a page's images are drawn from, asked of the same
     // instance (see `pageBuilderImageCopies`).
-    copyOf: async args => (await instance()).media.copyOf(args),
+    copiesOf: async args => (await instance()).media.copiesOf(args),
   },
 };
 

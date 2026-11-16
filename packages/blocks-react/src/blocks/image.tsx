@@ -322,6 +322,23 @@ function pictureAttributes(
   };
 }
 
+/**
+ * Add the original itself where it fits the bound and the copies stop short of
+ * it: copies are never wider than their original, so one 600px wide has none
+ * past 320, and a slot drawing it at 600 would otherwise stretch that.
+ */
+function withOriginal(
+  sources: { url: string; width: number }[],
+  picture: Picture,
+  upTo: number
+): void {
+  const own = picture.record?.width;
+  if (own === undefined || own > upTo) return;
+  if (own > (sources.at(-1)?.width ?? 0)) {
+    sources.push({ url: picture.src, width: own });
+  }
+}
+
 /** Whether a media record states the picture's width and height. */
 function hasDimensions(record: ResolvedMedia | null): boolean {
   return (
@@ -385,6 +402,7 @@ async function sizedPicture(
       return url === undefined ? [] : [{ url, width: copy.width }];
     })
     .sort((a, b) => a.width - b.width);
+  withOriginal(usable, picture, upTo);
   const widest = usable.at(-1);
   if (widest === undefined) return original;
   return {

@@ -1130,7 +1130,7 @@ export function PageRenderer({
       ) : null}
       <BlockList
         nodes={bound.nodes}
-        context={blockContextOf(pageContext, scope)}
+        context={blockContextOf(pageContext, scope, mayFetchUrl)}
         blocks={resolver}
         classes={classes}
         fallback={blockFallback}
@@ -1147,16 +1147,24 @@ export function PageRenderer({
 }
 
 /**
- * The context the page's blocks draw with: the page's own, plus the scope its
- * rules are anchored under where the page sizes images, so the first block's
- * background copies are written at the page's own anchor (`image-sources`).
+ * The context the page's blocks draw with: the page's own, plus, where the page
+ * sizes images, the scope its rules are anchored under and the fetch policy
+ * its stylesheet was compiled with, so the first block's background copies
+ * are written at the page's own anchor and under its own policy
+ * (`image-sources`).
  */
 function blockContextOf(
   pageContext: PageContext,
-  scope: string | undefined
+  scope: string | undefined,
+  mayFetchUrl: ((url: string) => boolean) | undefined
 ): PageContext {
-  if (pageContext.imageCopies === undefined || !scope) return pageContext;
-  return { ...pageContext, pageScope: scope };
+  if (pageContext.imageCopies === undefined) return pageContext;
+  if (!scope && mayFetchUrl === undefined) return pageContext;
+  return {
+    ...pageContext,
+    ...(scope ? { pageScope: scope } : {}),
+    ...(mayFetchUrl === undefined ? {} : { pageMayFetchUrl: mayFetchUrl }),
+  };
 }
 
 /** What a site sheet was compiled from, beyond what every draw shares. */

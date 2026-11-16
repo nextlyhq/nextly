@@ -223,7 +223,7 @@ export default route.ContentPage;
   stable.
 </Callout>
 
-Give the route's reader `media.copyOf` and pass `imageCopies` to the route, and a
+Give the route's reader `media.copiesOf` and pass `imageCopies` to the route, and a
 visitor downloads each image at about the size it is drawn, not at its upload size:
 
 ```tsx
@@ -241,13 +241,13 @@ const instance = () => getNextly({ config: nextlyConfig });
 
 // The reader above, whose media now also answers for an image's copies.
 const reader: NextlyContentReader & {
-  media: Pick<NextlyInstance["media"], "findByID" | "copyOf">;
+  media: Pick<NextlyInstance["media"], "findByID" | "copiesOf">;
 } = {
   find: async args => (await instance()).find(args),
   findByID: async args => (await instance()).findByID(args),
   media: {
     findByID: async args => (await instance()).media.findByID(args),
-    copyOf: async args => (await instance()).media.copyOf(args),
+    copiesOf: async args => (await instance()).media.copiesOf(args),
   },
 };
 

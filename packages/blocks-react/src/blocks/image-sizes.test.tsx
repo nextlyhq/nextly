@@ -66,7 +66,9 @@ async function render(
       resolveMedia: async (id: string) =>
         id === "photo"
           ? { url: "/media/photo.jpg", width: 3000, height: 2000, alt: "" }
-          : null,
+          : id === "small"
+            ? { url: "/media/small.png", width: 600, height: 400, alt: "" }
+            : null,
     }),
     ...imageSizingFor(
       options.copies === false
@@ -76,10 +78,14 @@ async function render(
             // Only this site's own media has copies; an address on another
             // host is drawn as it is.
             if (!("id" in source)) return [];
-            return KEPT.filter(width => width <= upTo).map(width => ({
-              url: `/media/photo-${width}.webp`,
-              width,
-            }));
+            // Never wider than the original: the small one's stop at 320.
+            const own = source.id === "small" ? 600 : 3000;
+            return KEPT.filter(width => width <= upTo && width <= own).map(
+              width => ({
+                url: `/media/${source.id}-${width}.webp`,
+                width,
+              })
+            );
           },
       BREAKPOINTS,
       nodes
@@ -157,6 +163,25 @@ describe("an Image block's sources", () => {
     expect(img.src).toBe(external);
     expect(img.srcset).toBeUndefined();
     expect(img.sizes).toBeUndefined();
+  });
+
+  it("keeps its original among the sources where its copies stop short of it", async () => {
+    // A 600px upload has copies only to 320; drawn at up to 1920 on a
+    // desktop, the original is the sharpest source there is.
+    const { html } = await render([
+      box("intro", []),
+      image("pic", { mediaId: "small" }),
+    ]);
+    const img = imgOf(html);
+    expect(img.srcset?.split(", ")).toEqual([
+      "/media/small-96.webp 96w",
+      "/media/small-160.webp 160w",
+      "/media/small-240.webp 240w",
+      "/media/small-320.webp 320w",
+      "/media/small.png 600w",
+    ]);
+    expect(img.src).toBe("/media/small.png");
+    expect(img.width).toBe("600");
   });
 
   it("is drawn from its original where its size is not known", async () => {

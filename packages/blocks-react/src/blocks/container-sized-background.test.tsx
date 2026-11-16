@@ -55,7 +55,11 @@ const withBackground = (url: string = PHOTO): BlockNode["styles"] => ({
 
 async function render(
   nodes: BlockNode[],
-  options: { copies?: boolean; scope?: string } = {}
+  options: {
+    copies?: boolean;
+    scope?: string;
+    mayFetchUrl?: (url: string) => boolean;
+  } = {}
 ): Promise<{ head: string; html: string; asked: unknown[] }> {
   const asked: unknown[] = [];
   const document: BlockDocument = {
@@ -93,6 +97,9 @@ async function render(
           styleContext={{
             breakpoints: BREAKPOINTS,
             ...(options.scope === undefined ? {} : { scope: options.scope }),
+            ...(options.mayFetchUrl === undefined
+              ? {}
+              : { mayFetchUrl: options.mayFetchUrl }),
           }}
           context={context}
         />
@@ -285,6 +292,22 @@ describe("the first section's background", () => {
     expect(first).toMatch(/^nx-pb-sized-background-/);
     expect(await hrefOf(PHOTO)).toBe(first);
     expect(await hrefOf("/media/hero-other.jpg")).not.toBe(first);
+  });
+
+  it("fetches nothing the page's own fetch policy refuses", async () => {
+    // A host predicate refusing the original: the page's stylesheet withholds
+    // it, and the sized rules and preloads must not bring it back.
+    const refused = await render([section("hero", withBackground())], {
+      mayFetchUrl: () => false,
+    });
+    expect(preloadsOf(refused.head)).toEqual([]);
+    expect(refused.head).not.toContain("background-image");
+    // One refusing only the copies: the original stays as the page draws it.
+    const copiesRefused = await render([section("hero", withBackground())], {
+      mayFetchUrl: url => !url.endsWith(".webp"),
+    });
+    expect(preloadsOf(copiesRefused.head)).toEqual([]);
+    expect(copiesRefused.html).toContain(`url("${PHOTO}")`);
   });
 
   it("is drawn as it is where no copy can be had", async () => {

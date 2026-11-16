@@ -888,6 +888,16 @@ export interface PageContext {
    */
   pageScope?: string;
   /**
+   * Which addresses the page's stylesheet may fetch, as the renderer settled
+   * it for this page, so a block writing a style rule of its own fetches no
+   * address the page's rules would refuse. Set by the renderer, only on a
+   * page that sizes images.
+   *
+   * @internal
+   * @experimental
+   */
+  pageMayFetchUrl?: (url: string) => boolean;
+  /**
    * The site's IANA time zone, in which a list's date filter compares whole
    * days for a field holding an instant. UTC when absent.
    *

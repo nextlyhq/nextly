@@ -81,6 +81,7 @@ export interface BackgroundPage {
   readonly imageSlot?: ImageSlot;
   readonly firstBlockId?: string;
   readonly pageScope?: string;
+  readonly pageMayFetchUrl?: (url: string) => boolean;
 }
 
 /** The style properties that write a block's `background-image`. */
@@ -385,7 +386,10 @@ export async function sizedFirstBackground(
 ): Promise<SizedBackground | undefined> {
   const original = firstBackgroundSource(page, node);
   const nodeClass = nodeClassOf(className);
-  const mayFetchUrl = mayFetchFor(patterns);
+  // The page's own policy where the renderer settled one, so these rules fetch
+  // nothing the page's rules would refuse; this site's addresses and the
+  // host's remote patterns otherwise.
+  const mayFetchUrl = page.pageMayFetchUrl ?? mayFetchFor(patterns);
   const { imageCopies, imageSlot } = page;
   if (original === undefined || nodeClass === undefined) return undefined;
   if (imageCopies === undefined || imageSlot === undefined) return undefined;
