@@ -694,7 +694,15 @@ describe("BuilderSchemaChangeDialogs: the settings a save changes", () => {
     renderWithSettings(
       preview({
         changes: {
-          added: [{ name: "subtitle", type: "text", required: false }],
+          added: [
+            {
+              name: "subtitle",
+              type: "text",
+              required: false,
+              hasDefault: false,
+              classification: "safe",
+            },
+          ],
           removed: [],
           changed: [],
           unchanged: [],
