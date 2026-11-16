@@ -216,6 +216,21 @@ const ROADS: Road[] = [
       dispatchSingles("updateSingleSchema", { slug: "hero" }, { fields }),
   },
   {
+    // A translated Single renaming a shared field: no companion value moves, so its own file runs.
+    name: "a translated Single's settings save (its migration file)",
+    table: "single_tale",
+    runsFile: true,
+    async create(_t, fields) {
+      await dispatchSingles(
+        "createSingle",
+        {},
+        { slug: "tale", label: "Tale", localized: true, fields }
+      );
+    },
+    save: (_t, fields) =>
+      dispatchSingles("updateSingleSchema", { slug: "tale" }, { fields }),
+  },
+  {
     name: "a field group (its migration file)",
     table: "comp_card",
     runsFile: true,
