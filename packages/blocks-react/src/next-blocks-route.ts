@@ -754,10 +754,13 @@ export function blocksRouteConfig(
           // Sized images: the site's copies, kept per image until a media
           // write expires them, the slot each device draws at the top of the
           // page, and the first top-level block, whose images load first.
+          // The first block as the page draws it: composed and gated, so
+          // a component's hero or a page whose first stored block is hidden
+          // still has its first drawn section found.
           ...imageSizingFor(
             cachedImageCopies(config, isPublic, listWindow, budget),
             siteBreakpoints,
-            document.nodes
+            (page.prepared?.presented ?? document).nodes
           ),
         },
         blocks: resolver,

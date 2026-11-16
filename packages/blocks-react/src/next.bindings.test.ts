@@ -1665,6 +1665,31 @@ describe("a page's blocks shown by their visibility conditions", () => {
     expect(html).not.toContain("Never shown");
   });
 
+  it("finds the first section the page draws, past a first block it hides", async () => {
+    // The stored first block is left out for this entry, so the section
+    // after it is the first a visitor sees, and its images load first.
+    const imageCopies = vi.fn(async () => []);
+    const { element } = await renderedPage(
+      createBlocksPage,
+      { ...base, imageCopies },
+      instance(
+        page(
+          shownWhen("hidden", "Never shown", [
+            [{ field: "title", op: "equals", value: "Elsewhere" }],
+          ]),
+          {
+            id: "hero",
+            type: "core/section",
+            version: 1,
+            props: {},
+            slots: { children: [] },
+          }
+        )
+      )
+    );
+    expect(element.props.context?.firstBlockId).toBe("hero");
+  });
+
   it("decides by the entry as the public reads it, never the route's own read", async () => {
     // The route's row says "Trusted"; the public's says "Public".
     const { html } = await renderedPage(

@@ -202,19 +202,59 @@ function nodeClassOf(className: string): string | undefined {
 
 /**
  * The selector the copies are set under: the page's anchor, with its scope
- * where the page has one, then the node's class twice, which is one notch
- * above the node's own resting rule and level with its hover and focus rules.
- * Those come later in the page, so they still win. `undefined` for a scope
- * that would need escaping, which this leaves to the page's own rules.
+ * where the page has one, then the node's class and the class naming this
+ * background, which is one notch above the node's own resting rule and level
+ * with its hover and focus rules. Those come later in the page, so they still
+ * win. `undefined` for a scope that would need escaping, which this leaves to
+ * the page's own rules.
  */
 function selectorFor(
   nodeClass: string,
+  revision: string,
   scope: string | undefined
 ): string | undefined {
   if (scope !== undefined && !PLAIN_CLASS.test(scope)) return undefined;
   const root =
     scope === undefined ? PAGE_ROOT_SELECTOR : `${PAGE_ROOT_SELECTOR}.${scope}`;
-  return `${root} .${nodeClass}.${nodeClass}`;
+  return `${root} .${nodeClass}.${revision}`;
+}
+
+/**
+ * A short key for a text. React keeps a hoisted stylesheet by its `href` and
+ * never replaces its contents, so a key that changes with what it names gives
+ * changed rules a stylesheet of their own.
+ */
+export function contentKey(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = Math.imul(hash ^ text.charCodeAt(index), 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+/**
+ * The class a first section wears while this page sizes its background, named
+ * by what the sizing is computed from: the background, the slot and the
+ * scope. Its rules name it too, and React keeps a hoisted stylesheet after the
+ * section that drew it is gone, so a page drawn again with another
+ * background, or none, leaves the old rules matching nothing.
+ */
+export function backgroundRevision(
+  page: BackgroundPage | undefined,
+  node: BackgroundNode | undefined
+): string | undefined {
+  const source = firstBackgroundSource(page, node);
+  if (source === undefined) return undefined;
+  const key = contentKey(
+    JSON.stringify([
+      source.url,
+      source.size,
+      page?.imageSlot,
+      page?.pageScope ?? null,
+      node?.styles,
+    ])
+  );
+  return `nx-pb-bg-${key}`;
 }
 
 /**
@@ -379,7 +419,13 @@ export function firstBackgroundSource(
   if (typeof node.customCss === "string" && node.customCss.trim() !== "") {
     return undefined;
   }
-  return soleBackground(node.styles);
+  const source = soleBackground(node.styles);
+  // Only a size the box sets: drawn at its own size, a narrower copy would
+  // draw it smaller.
+  if (source === undefined || drawnWidth(source.size, 1) === undefined) {
+    return undefined;
+  }
+  return source;
 }
 
 /**
@@ -417,7 +463,11 @@ export async function sizedFirstBackground(
     mayFetchUrl
   );
   const bands = bandsOf(slot, copies, original.url);
-  const selector = selectorFor(nodeClass, page.pageScope);
+  const revision = backgroundRevision(page, node);
+  const selector =
+    revision === undefined
+      ? undefined
+      : selectorFor(nodeClass, revision, page.pageScope);
   if (bands === undefined || selector === undefined) return undefined;
   const css = bandRules(bands, selector, mayFetchUrl);
   if (css === undefined) return undefined;

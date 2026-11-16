@@ -137,6 +137,11 @@ function preloadsOf(head: string): Record<string, string>[] {
     .filter(link => link.rel === "preload");
 }
 
+/** The class naming the sized background the section wears, or "". */
+function revisionIn(html: string): string {
+  return /class="[^"]*\b(nx-pb-bg-[a-z0-9]+)\b/.exec(html)?.[1] ?? "";
+}
+
 /** The section's own class: the first class on the element it draws. */
 function nodeClassIn(html: string): string {
   return /<div class="(nx-pb-(?!page)[a-z0-9]+) /.exec(html)?.[1] ?? "";
@@ -168,9 +173,11 @@ describe("the first section's background", () => {
   it("draws each device's copy, one notch above the block's own rule", async () => {
     const { head, html } = await render([section("hero", withBackground())]);
     const own = nodeClassIn(html);
-    const anchor = `.nx-pb-page.nx-pb-page .${own}.${own}`;
+    const revision = revisionIn(html);
+    const anchor = `.nx-pb-page.nx-pb-page .${own}.${revision}`;
     // The page's own rule still names the original, under the plain anchor.
     expect(own).not.toBe("");
+    expect(revision).not.toBe("");
     expect(html).toContain(`.nx-pb-page.nx-pb-page .${own} {`);
     expect(html).toContain(`url("${PHOTO}")`);
     const style = /<style[^>]*>([\s\S]*?)<\/style>/.exec(head)?.[1] ?? "";
@@ -188,8 +195,30 @@ describe("the first section's background", () => {
     const own = nodeClassIn(html);
     expect(html).toContain(`.nx-pb-page.nx-pb-page.nx-pb-part-page .${own} {`);
     expect(head).toContain(
-      `.nx-pb-page.nx-pb-page.nx-pb-part-page .${own}.${own}{`
+      `.nx-pb-page.nx-pb-page.nx-pb-part-page .${own}.${revisionIn(html)}{`
     );
+  });
+
+  it("names its rules by a class only this background's section wears", async () => {
+    // React keeps a hoisted stylesheet after the section that drew it is
+    // gone. A page drawn again with another background, or none, wears no
+    // class the old rules name, so they match nothing.
+    const first = revisionIn(
+      (await render([section("hero", withBackground())])).html
+    );
+    const other = await render([
+      section("hero", withBackground("/media/hero-other.jpg")),
+    ]);
+    expect(revisionIn(other.html)).not.toBe(first);
+    expect(other.head).not.toContain(first);
+    const none = await render([section("hero")]);
+    expect(revisionIn(none.html)).toBe("");
+    const unsized = await render([
+      section("hero", {
+        base: { base: { background: { url: PHOTO, size: "auto" } } },
+      }),
+    ]);
+    expect(revisionIn(unsized.html)).toBe("");
   });
 
   it("is left to the page's stylesheet where it is not stated once", async () => {

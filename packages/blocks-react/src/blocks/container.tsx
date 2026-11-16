@@ -32,7 +32,12 @@ import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 import { childImageContext } from "../image-slot";
-import { firstBackgroundSource, sizedFirstBackground } from "../image-sources";
+import {
+  backgroundRevision,
+  contentKey,
+  firstBackgroundSource,
+  sizedFirstBackground,
+} from "../image-sources";
 
 import { url } from "./props";
 
@@ -199,19 +204,6 @@ export function linkableContentModel(props: ContainerProps): ContentModel {
 export const LINKABLE_BASE_STYLE = { display: "block" } as const;
 
 /**
- * A short key for a stylesheet's text. React keeps a hoisted stylesheet by its
- * `href` and never replaces its contents, so the key changes whenever the
- * rules do: a page drawn again with another background gets its new rules.
- */
-function contentKey(css: string): string {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < css.length; index += 1) {
-    hash = Math.imul(hash ^ css.charCodeAt(index), 0x01000193);
-  }
-  return (hash >>> 0).toString(36);
-}
-
-/**
  * The first section's background as copies sized to each device, where the
  * page sizes it (`image-sources`): one rule per device and one preload per
  * copy, both hoisted by React into the page's head, so nothing is added among
@@ -253,6 +245,18 @@ async function SizedFirstBackground({
   );
 }
 
+/**
+ * The root's classes, with the one naming its sized background where the page
+ * sizes it: the rules for that background match only while the root wears it.
+ */
+function withRevision(
+  classes: string,
+  { ctx, node }: BlockRenderArgs<ContainerProps>
+): string {
+  const revision = backgroundRevision(ctx, node);
+  return revision === undefined ? classes : `${classes} ${revision}`;
+}
+
 /** The sized first background, or nothing where the page draws it as it is. */
 function firstBackground({
   ctx,
@@ -277,10 +281,12 @@ export function renderLinkableContainer(
 ): ReactElement {
   const href = linkOf(args.props);
   if (href === undefined) return renderContainer(args);
-  const classes =
+  const classes = withRevision(
     args.props.contained === true
       ? `${args.className} ${CONTENT_WIDTH_CLASS}`
-      : args.className;
+      : args.className,
+    args
+  );
   return (
     <a className={classes} href={href}>
       {firstBackground(args)}
@@ -307,10 +313,12 @@ export function renderContainer(
   // handed children and throw, taking the page with it, so an unknown tag falls
   // back to the one every container can safely be.
   const Tag = rootTagOf(props, false);
-  const classes =
+  const classes = withRevision(
     props.contained === true
       ? `${className} ${CONTENT_WIDTH_CLASS}`
-      : className;
+      : className,
+    args
+  );
   // The children's images are sized to the width this container leaves them.
   return (
     <Tag className={classes}>
