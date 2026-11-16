@@ -288,7 +288,13 @@ async function directSourcesChangedReads(
       nextly.findSingle({ slug, depth, ...asEditing }),
     site: async () => nextly.publicSiteSettings(),
     collection: async slug => {
-      const newestFirst = { sort: ["-updatedAt", "id"], depth: 0 as const };
+      // Only what a mark names: an entry's id and save time (its version
+      // comes with every read), so no field or component is loaded.
+      const newestFirst = {
+        sort: ["-updatedAt", "id"],
+        depth: 0 as const,
+        select: { id: true, updatedAt: true },
+      };
       const found = await nextly.find({
         collection: slug,
         limit: NEWEST_MARKED,

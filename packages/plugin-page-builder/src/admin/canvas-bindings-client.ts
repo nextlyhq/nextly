@@ -287,13 +287,19 @@ function sourcesCheckAskOf(
   request: CanvasBindingsRequest | undefined,
   drawn: readonly BlockDocument[],
   identity: DocumentIdentity | null,
-  namedQueries: NamedQueryLookup | undefined
+  namedQueries: NamedQueryLookup | undefined,
+  locale: string | undefined
 ): CanvasSourcesChangedRequest | undefined {
   if (request !== undefined) return sourcesChangedAskOf(request);
   if (identity === null) return undefined;
   const lists = [...listCollections(drawn, namedQueries)].sort();
   if (lists.length === 0) return undefined;
-  return { source: requestSourceOf(identity), singles: [], lists };
+  return {
+    source: requestSourceOf(identity),
+    singles: [],
+    lists,
+    ...(locale === undefined ? {} : { locale }),
+  };
 }
 
 /**
@@ -305,11 +311,12 @@ function useWatchedSources(
   drawn: readonly BlockDocument[],
   identity: DocumentIdentity | null,
   namedQueries: NamedQueryLookup | undefined,
+  locale: string | undefined,
   userId: string | null
 ): void {
   const asked = useMemo(
-    () => sourcesCheckAskOf(request, drawn, identity, namedQueries),
-    [request, drawn, identity, namedQueries]
+    () => sourcesCheckAskOf(request, drawn, identity, namedQueries, locale),
+    [request, drawn, identity, namedQueries, locale]
   );
   useCanvasSourceCheck(asked, userId);
 }
@@ -507,7 +514,7 @@ export function useCanvasBindings(
   const key = request === undefined ? "" : JSON.stringify(request);
   // Saves made elsewhere to what this reads: asked once a minute at most
   // while the builder is in sight, so a kept answer never outlives its data.
-  useWatchedSources(request, drawn, identity, namedQueries, userId);
+  useWatchedSources(request, drawn, identity, namedQueries, locale, userId);
   const [answer, setAnswer] = useState<{
     readonly key: string;
     readonly userId: string;
