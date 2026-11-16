@@ -1,6 +1,7 @@
 /**
  * Duplicate: the fields with a copy of one field right after it, in its own
- * container, under the first free name. A name is free when no sibling's
+ * container, under the first free name (for a nameless layout group, each
+ * field it carries under the first free name on the level holding it). A name is free when no sibling's
  * clashes with it by the server's own rule (the same, in other letter case,
  * or the same column), no pending delete there still holds one that does,
  * and it is not reserved there.
@@ -16,7 +17,12 @@ import { copyWithNewIds } from "./copy-field";
 import { freeDuplicateName } from "./duplicate-field-name";
 import { findFieldById, findParentContainerId } from "./field-transformers";
 import { insertField, positionAfter } from "./insert-field";
-import { namingSiblingsOf, sentName, type MoveContext } from "./move-rule";
+import {
+  isLayoutContainer,
+  namingSiblingsOf,
+  sentName,
+  type MoveContext,
+} from "./move-rule";
 
 /** What naming a copy needs beyond the fields: the move rule's view of names. */
 export type DuplicateNaming = Pick<
@@ -52,6 +58,34 @@ function nameTaken(
 }
 
 /**
+ * `copy` with every name it puts on its storage level free there: its own, or, for a nameless
+ * layout group, the names of the fields it carries, which are stored on that level too. Each is
+ * judged against the names given before it, so the copy's fields do not clash with each other.
+ */
+function withFreeNames(
+  copy: BuilderField,
+  level: { id: string | null; siblings: readonly BuilderField[] },
+  naming: DuplicateNaming | undefined
+): BuilderField {
+  const given: BuilderField[] = [];
+  const rename = (field: BuilderField): BuilderField => {
+    if (isLayoutContainer(field)) {
+      return { ...field, fields: (field.fields ?? []).map(rename) };
+    }
+    const seen = { id: level.id, siblings: [...level.siblings, ...given] };
+    const named = {
+      ...field,
+      name: freeDuplicateName(field.name, name =>
+        nameTaken(field, name, seen, naming)
+      ),
+    };
+    given.push(named);
+    return named;
+  };
+  return rename(copy);
+}
+
+/**
  * `fields` with a copy of `fieldId` right after it, or null when there is no
  * such field. The copy is new all the way down: it and every field inside it
  * get new ids, so editing inside the copy never reaches the original.
@@ -73,13 +107,7 @@ export function duplicatedFields(
     id: onLevel?.level?.id ?? null,
     siblings: onLevel?.siblings ?? siblings,
   };
-  const fresh = copyWithNewIds(source);
-  const copy: BuilderField = {
-    ...fresh,
-    name: freeDuplicateName(source.name, name =>
-      nameTaken(fresh, name, level, naming)
-    ),
-  };
+  const copy = withFreeNames(copyWithNewIds(source), level, naming);
   // Read from its own container's list: an id is not unique in the whole tree.
   const position = positionAfter(siblings, fieldId, containerId ?? undefined);
   return position ? insertField(fields, copy, position) : null;
