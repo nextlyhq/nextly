@@ -492,6 +492,46 @@ function FieldGroupStep({
   );
 }
 
+/**
+ * The name a label gives a new field, and whether it can be added: a label is needed, and the
+ * name it derives must be one the surface can save. Only a name the label gave is judged; with no
+ * label there is nothing to judge yet.
+ */
+function labelledName(
+  label: string,
+  deriveName: (label: string) => string,
+  nameProblem: ((name: string) => string | null) | undefined
+): { trimmed: string; name: string; problem: string | null; addable: boolean } {
+  const trimmed = label.trim();
+  const name = trimmed ? deriveName(trimmed) : "";
+  const problem = name && nameProblem ? nameProblem(name) : null;
+  return { trimmed, name, problem, addable: name !== "" && problem === null };
+}
+
+/** The name the label gives, and why it cannot be saved when it cannot. */
+function DerivedName({
+  name,
+  problem,
+  problemId,
+}: {
+  name: string;
+  problem: string | null;
+  problemId: string;
+}): React.JSX.Element {
+  return (
+    <>
+      <p className="text-xs text-muted-foreground">
+        Name: <code>{name || "—"}</code>
+      </p>
+      {problem !== null && (
+        <p id={problemId} role="alert" className="text-xs text-destructive">
+          {problem}
+        </p>
+      )}
+    </>
+  );
+}
+
 function LabelStep({
   type,
   fieldGroup,
@@ -513,11 +553,11 @@ function LabelStep({
 }) {
   const inputId = useId();
   const [label, setLabel] = useState(fieldGroup?.label ?? initialLabel ?? "");
-  const trimmed = label.trim();
-  const name = trimmed ? deriveName(trimmed) : "";
-  // Asked only of a name the label gave; with no label there is nothing to judge yet.
-  const problem = name ? (nameProblem?.(name) ?? null) : null;
-  const addable = name !== "" && problem === null;
+  const { trimmed, name, problem, addable } = labelledName(
+    label,
+    deriveName,
+    nameProblem
+  );
   const problemId = useId();
   const add = (addAnother: boolean) => {
     if (addable) onAdd(trimmed, name, addAnother);
@@ -549,14 +589,7 @@ function LabelStep({
             }
           }}
         />
-        <p className="text-xs text-muted-foreground">
-          Name: <code>{name || "—"}</code>
-        </p>
-        {problem !== null && (
-          <p id={problemId} role="alert" className="text-xs text-destructive">
-            {problem}
-          </p>
-        )}
+        <DerivedName name={name} problem={problem} problemId={problemId} />
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={onBack}>

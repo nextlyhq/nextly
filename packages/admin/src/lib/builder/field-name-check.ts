@@ -21,7 +21,7 @@ import {
 import type { BuilderKind } from "@admin/components/features/schema-builder/builder-config";
 
 /** How a refusal words each way two sibling names clash. */
-export const CLASH_WORDS: Record<SiblingClashKind, string> = {
+const CLASH_WORDS: Record<SiblingClashKind, string> = {
   "same-name": "the same name",
   "same-name-ignoring-case": "the same name in other letter case",
   "same-column": "a name that becomes the same column",

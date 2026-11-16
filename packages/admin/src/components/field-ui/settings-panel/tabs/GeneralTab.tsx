@@ -187,6 +187,27 @@ export function GeneralTab({
   );
 }
 
+/** The ids an input is described by, the ones not shown left out. */
+function idList(ids: readonly (string | false)[]): string {
+  return ids.filter(Boolean).join(" ");
+}
+
+/** Why the name cannot be saved, under it, when it cannot. */
+function NameProblem({
+  id,
+  problem,
+}: {
+  id: string;
+  problem: string | null;
+}): JSX.Element | null {
+  if (problem === null) return null;
+  return (
+    <p id={id} role="alert" className="text-xs text-destructive">
+      {problem}
+    </p>
+  );
+}
+
 /** The label, the name it gives, and the path the API returns the field by. */
 function LabelAndName({
   field,
@@ -215,12 +236,12 @@ function LabelAndName({
     readOnly || field.isSystem === true || nameFixedReason !== undefined;
   // A name the field cannot change is not the person's to fix, so it is not judged here. Every
   // other name is, typed or followed from the label, before the input is left.
-  const problem = nameDisabled ? null : (checkName?.(field.name) ?? null);
-  const describedBy = [
+  const problem = nameDisabled || !checkName ? null : checkName(field.name);
+  const describedBy = idList([
     nameHelpId,
-    ...(problem !== null ? [problemId] : []),
-    ...(apiPath ? [pathId] : []),
-  ].join(" ");
+    problem !== null && problemId,
+    Boolean(apiPath) && pathId,
+  ]);
 
   return (
     <>
@@ -261,11 +282,7 @@ function LabelAndName({
           <p id={nameHelpId} className="text-xs text-muted-foreground">
             {nameHelpText(saved, nameFixedReason)}
           </p>
-          {problem !== null && (
-            <p id={problemId} role="alert" className="text-xs text-destructive">
-              {problem}
-            </p>
-          )}
+          <NameProblem id={problemId} problem={problem} />
         </div>
       </div>
 

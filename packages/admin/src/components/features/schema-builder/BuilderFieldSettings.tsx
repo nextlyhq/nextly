@@ -192,6 +192,30 @@ function readOnlyReasonOf(
 }
 
 /**
+ * What the panel shows of a field's state: why it is read-only, if it is, whether it may be
+ * deleted (a system field never may), and the title it is called by.
+ */
+function panelStateOf(
+  placement: FieldPlacement,
+  given: ReadOnlyReason | null | undefined,
+  entityReadOnly: boolean
+): {
+  reason: ReadOnlyReason | null;
+  fieldReadOnly: boolean;
+  canDelete: boolean;
+  fieldTitle: string;
+} {
+  const reason = readOnlyReasonOf(placement, given, entityReadOnly);
+  const fieldReadOnly = reason !== null;
+  return {
+    reason,
+    fieldReadOnly,
+    canDelete: !fieldReadOnly && placement.field.isSystem !== true,
+    fieldTitle: placement.field.label || "Untitled field",
+  };
+}
+
+/**
  * Where a read-only field is defined, and for a field group's field, the way
  * to the editor where it can be changed.
  */
@@ -241,10 +265,11 @@ export function BuilderFieldSettings({
   if (!placement) return null;
 
   const { field, ancestors, siblings } = placement;
-  const reason = readOnlyReasonOf(placement, readOnlyReason, readOnly);
-  const fieldReadOnly = reason !== null;
-  const canDelete = !fieldReadOnly && field.isSystem !== true;
-  const fieldTitle = field.label || "Untitled field";
+  const { reason, fieldReadOnly, canDelete, fieldTitle } = panelStateOf(
+    placement,
+    readOnlyReason,
+    readOnly
+  );
 
   const definedAt = (
     <DefinedAt reason={reason} onOpenFieldGroup={onOpenFieldGroup} />
@@ -252,19 +277,21 @@ export function BuilderFieldSettings({
 
   const panel = (
     <FieldSettingsPanel
-      surface={BUILDER_SURFACES[kind]}
+      surface={{
+        ...BUILDER_SURFACES[kind],
+        checkName: nameCheckFor(
+          kind,
+          placement,
+          fields,
+          savedFields,
+          lifecycleEnabled
+        ),
+      }}
       field={field}
       ancestors={ancestors}
       siblings={siblings}
       saved={savedFieldIds.has(field.id)}
       readOnly={fieldReadOnly}
-      checkName={nameCheckFor(
-        kind,
-        placement,
-        fields,
-        savedFields,
-        lifecycleEnabled
-      )}
       onChange={onFieldChange}
       onClose={onClose}
       actions={

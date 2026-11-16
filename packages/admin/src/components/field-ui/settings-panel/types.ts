@@ -85,6 +85,13 @@ export interface FieldSettingsSurface {
   surface: FieldSurface;
   /** The name a label gives a field, followed while the field is unsaved. */
   deriveName: (label: string) => string;
+  /**
+   * @experimental Why a name the field is given cannot be saved on this surface, in words for the
+   * person, or `null` when it can. Asked of the name as it is typed and as the label derives it,
+   * and shown beside it. A surface whose rule depends on where the field sits builds this for the
+   * field it shows. Absent, names are not checked here.
+   */
+  checkName?: (name: string) => string | null;
   /** Settings the surface fixes. */
   fixed?: readonly FixedFieldSetting[];
   /** The surface's own settings, drawn after the panel's in the tab named. */
@@ -151,12 +158,6 @@ export interface FieldSettingsPanelProps {
   saved: boolean;
   /** Show every setting without letting any change. */
   readOnly?: boolean;
-  /**
-   * Why a name the field is given cannot be saved on this surface, in words for the person, or
-   * `null` when it can. Asked of the name as it is typed and as the label derives it, and shown
-   * beside it. Without it, names are not checked here.
-   */
-  checkName?: (name: string) => string | null;
   /** Called with the whole field after each change, at once. */
   onChange: (next: FieldSettingsField) => void;
   /** Closes the panel; a close button is shown only when it is given. */

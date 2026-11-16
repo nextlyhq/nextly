@@ -69,7 +69,6 @@ export function FieldSettingsPanel({
   siblings,
   saved,
   readOnly = false,
-  checkName,
   onChange,
   onClose,
   actions,
@@ -163,7 +162,7 @@ export function FieldSettingsPanel({
               readOnly={readOnly}
               onChange={onChange}
               saved={saved}
-              checkName={checkName}
+              checkName={surface.checkName}
               deriveName={surface.deriveName}
               nameFixedReason={fixedReason(surface.fixed, "name", saved)}
               apiPath={fieldApiPath(ancestors, field)}
