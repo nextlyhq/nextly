@@ -40,6 +40,14 @@
  * reports absence, and the caller draws four labelled rows instead, which name
  * their side in words and are true whichever way the element runs.
  *
+ * ## A look is edited for the site, so the site's direction answers for it
+ *
+ * A look (a block style) has no element of its own on the canvas: it is
+ * edited for every block that wears it. Its box is drawn in the site's own
+ * direction, read from the canvas root, which is the same box a block of that
+ * site shows. Only where the canvas cannot say does it fall back to left to
+ * right, the direction a site has when it states none. See `siteOrientationOf`.
+ *
  * @module side-orientation
  */
 import { markedElementOf } from "./style-subject";
@@ -102,4 +110,33 @@ export function orientationOfElement(
     display: style.display,
     flexDirection: style.flexDirection,
   };
+}
+
+/** The direction a site has when it states none: horizontal, left to right. */
+const LEFT_TO_RIGHT: SideOrientation = {
+  writingMode: "horizontal-tb",
+  direction: "ltr",
+};
+
+/**
+ * The site's own direction, read from the canvas root, for editing that has
+ * no element of its own on the canvas (a look).
+ *
+ * Only the axes are taken. The root's layout (`display`, `flex-direction`) is
+ * the page's, not the block a look styles, so alignment icons are left to
+ * draw as they do with no layout measured.
+ *
+ * Left to right where the root can't be read (not drawn yet, or no canvas):
+ * a look is edited for the whole site, and a site that states no direction
+ * runs left to right.
+ *
+ * @param root - the canvas root the page is drawn under
+ * @returns the site's writing mode and direction
+ */
+export function siteOrientationOf(
+  root: HTMLElement | null | undefined
+): SideOrientation {
+  const measured = orientationOfElement(root);
+  if (measured === undefined) return LEFT_TO_RIGHT;
+  return { writingMode: measured.writingMode, direction: measured.direction };
 }
