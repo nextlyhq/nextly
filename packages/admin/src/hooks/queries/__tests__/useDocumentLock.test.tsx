@@ -125,6 +125,42 @@ describe("useDocumentLock", () => {
     });
   });
 
+  it("does not render the editor again on a renewal that changes nothing it shows", async () => {
+    // An open editor renews every beat while its author is idle; a render
+    // per beat would redraw the editor around a page nobody is changing.
+    let renders = 0;
+    const { result } = renderHook(() => {
+      renders += 1;
+      return useDocumentLock(ref);
+    });
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    const settled = renders;
+
+    for (let beat = 0; beat < 4; beat += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+      });
+    }
+    expect(patch).toHaveBeenCalledTimes(4);
+    expect(renders).toBe(settled);
+
+    // CONTROL: a renewal that says someone is waiting renders, once.
+    patch.mockResolvedValue({
+      message: "",
+      item: { status: "renewed", waiting: true },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await waitFor(() =>
+      expect(result.current.state).toEqual({
+        status: "held-by-me",
+        someoneWaiting: true,
+      })
+    );
+    expect(renders).toBe(settled + 1);
+  });
+
   it("stops renewing once someone takes over, and says who", async () => {
     const { result } = renderHook(() => useDocumentLock(ref));
     await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
