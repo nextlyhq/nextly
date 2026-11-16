@@ -229,9 +229,12 @@ function HostedSaveAndPublish({
   const { options, danger } = compactRows(hosted.actions, bindingsOf(hosted), {
     withToolbar: false,
   });
+  // An arrow only where it has a row to hold: one that opens empty reads
+  // as broken.
+  const hasRows = options.length + danger.length > 0;
   const saveLeads = !withPublish;
   const saveArrow =
-    saveLeads && options.length + danger.length > 0 ? (
+    saveLeads && hasRows ? (
       <ActionOptionsMenu
         options={options}
         dangerOptions={danger}
@@ -254,7 +257,7 @@ function HostedSaveAndPublish({
         {offer !== null && hosted.dirty ? (
           // Changes from the last visit, after an edit since: Save stores
           // the edit, and the offer to put them back is here.
-          <RecoveryOfferChip label="Restore" offer={offer} />
+          <RecoveryOfferChip label="Earlier changes" offer={offer} />
         ) : null}
         <div className="flex items-center">
           {save.kind === "offered" && offer !== null ? (
@@ -298,14 +301,17 @@ function HostedSaveAndPublish({
                   void hosted.publishLatest?.();
                 }}
                 reason={publishReason(hosted)}
+                joined={hasRows}
               />
             </WithTooltip>
-            <ActionOptionsMenu
-              options={options}
-              dangerOptions={danger}
-              optionsLabel={PUBLISH_OPTIONS_LABEL}
-              menuClassName={COMPACT_MENU_CLASS}
-            />
+            {hasRows ? (
+              <ActionOptionsMenu
+                options={options}
+                dangerOptions={danger}
+                optionsLabel={PUBLISH_OPTIONS_LABEL}
+                menuClassName={COMPACT_MENU_CLASS}
+              />
+            ) : null}
           </div>
         )}
         <PairLiveRegions
@@ -484,8 +490,13 @@ const PublishButton = forwardRef<
     onPress: () => void;
     /** Why it can't run now, where it can't. */
     reason: string | undefined;
+    /** Whether its arrow is joined to it. */
+    joined: boolean;
   } & ComponentPropsWithoutRef<"button">
->(function PublishButton({ view, onPress, reason, onClick, ...trigger }, ref) {
+>(function PublishButton(
+  { view, onPress, reason, joined, onClick, ...trigger },
+  ref
+) {
   const acts = view.kind === "publish" || view.kind === "publish-changes";
   const held = acts && reason !== undefined;
   return (
@@ -500,7 +511,12 @@ const PublishButton = forwardRef<
       aria-disabled={!acts || held ? true : undefined}
       aria-busy={view.kind === "publishing" ? true : undefined}
       {...(held ? { "aria-description": reason } : {})}
-      className={cn("gap-1.5 rounded-r-none", INERT, trigger.className)}
+      className={cn(
+        "gap-1.5",
+        INERT,
+        joined && "rounded-r-none",
+        trigger.className
+      )}
       onClick={event => {
         if (!acts || held) {
           event.preventDefault();
