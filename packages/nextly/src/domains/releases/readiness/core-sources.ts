@@ -10,7 +10,9 @@
  *   core.permission      hard  the author may no longer perform the action
  *   core.exists          hard  the document is gone
  *   core.removed-from-code hard its collection or Single was removed from
- *                              code, so nothing may write to it
+ *                              code, so nothing may write to it; the checks
+ *                              that read a document's own tables are not
+ *                              asked about such a document
  *   core.lifecycle       hard  its collection or Single has no lifecycle now
  *   core.companion-status hard its translations have no per-language status
  *   core.held-drafts     hard  another language holds unreleased work
@@ -36,6 +38,7 @@ import {
 
 import {
   defineReleaseCheckSource,
+  membersInDeclaredScopes,
   registerReleaseCheckSource,
   releaseCheckSources,
   type ReleaseCheckContext,
@@ -162,11 +165,10 @@ export const CORE_PERMISSION_SOURCE = defineReleaseCheckSource({
   async check(batch, ctx) {
     const actingAs = identities(ctx);
     const findings: ReleaseCheckFinding<"AUTHOR_MAY_NOT_ACT">[] = [];
-    const groups = groupedBy(runnable(batch), member => [
-      member.createdBy,
-      scopeKey(member),
-      member.action,
-    ]);
+    const groups = groupedBy(
+      await membersInDeclaredScopes(runnable(batch), ctx),
+      member => [member.createdBy, scopeKey(member), member.action]
+    );
     for (const members of groups) {
       const [first] = members;
       const user = await actingAs(first.createdBy);
@@ -194,9 +196,10 @@ export const CORE_EXISTS_SOURCE = defineReleaseCheckSource({
   severity: "hard",
   codes: ["DOCUMENT_GONE"],
   async check(batch, ctx) {
-    if (batch.length === 0) return [];
-    const existing = await ctx.reads.existing(batch);
-    return batch
+    const members = await membersInDeclaredScopes(batch, ctx);
+    if (members.length === 0) return [];
+    const existing = await ctx.reads.existing(members);
+    return members
       .filter(member => !existing.has(documentRefKey(member)))
       .map(member => ({ memberId: member.id, code: "DOCUMENT_GONE" as const }));
   },
@@ -249,7 +252,10 @@ export const CORE_LIFECYCLE_SOURCE = defineReleaseCheckSource({
   codes: ["NO_LIFECYCLE"],
   async check(batch, ctx) {
     const findings: ReleaseCheckFinding<"NO_LIFECYCLE">[] = [];
-    for (const members of groupedBy(runnable(batch), scopeKey)) {
+    for (const members of groupedBy(
+      await membersInDeclaredScopes(runnable(batch), ctx),
+      scopeKey
+    )) {
       if (await ctx.reads.declaresLifecycle(members[0])) continue;
       const existing = await ctx.reads.existing(members);
       for (const member of members) {
@@ -273,7 +279,10 @@ export const CORE_COMPANION_STATUS_SOURCE = defineReleaseCheckSource({
   codes: ["COMPANION_WITHOUT_LIFECYCLE"],
   async check(batch, ctx) {
     const findings: ReleaseCheckFinding<"COMPANION_WITHOUT_LIFECYCLE">[] = [];
-    for (const members of groupedBy(runnable(batch), scopeKey)) {
+    for (const members of groupedBy(
+      await membersInDeclaredScopes(runnable(batch), ctx),
+      scopeKey
+    )) {
       if (!(await ctx.reads.companionLacksLifecycle(members[0]))) continue;
       for (const member of members) {
         findings.push({
@@ -298,7 +307,10 @@ export const CORE_HELD_DRAFTS_SOURCE = defineReleaseCheckSource({
   async check(batch, ctx) {
     const findings: ReleaseCheckFinding<"DRAFT_HELD_IN_LOCALE">[] = [];
     // One read per scope for every member of the batch in it.
-    for (const members of groupedBy(runnable(batch), scopeKey)) {
+    for (const members of groupedBy(
+      await membersInDeclaredScopes(runnable(batch), ctx),
+      scopeKey
+    )) {
       const held = await ctx.reads.heldDraftLocales(
         members[0],
         members.map(member => member.entryId)
@@ -355,11 +367,10 @@ export const CORE_REQUIRED_FIELDS_SOURCE = defineReleaseCheckSource({
     // One read per author, scope and action: a write is judged as its author
     // and for its action, and a scope's schema, rows and drafts are read once
     // for its members.
-    for (const members of groupedBy(runnable(batch), m => [
-      m.createdBy,
-      scopeKey(m),
-      m.action,
-    ])) {
+    for (const members of groupedBy(
+      await membersInDeclaredScopes(runnable(batch), ctx),
+      m => [m.createdBy, scopeKey(m), m.action]
+    )) {
       const user = await actingAs(members[0].createdBy);
       if (user === null) continue;
       const issues = await ctx.reads.publishProblems(

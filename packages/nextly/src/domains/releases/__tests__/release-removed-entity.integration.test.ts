@@ -530,6 +530,46 @@ describe.each(getConfiguredTestDialects())(
       ).toBe("scheduled");
     });
 
+    it("names only the removal, and is still stopped, once the removed entities' tables are gone", async () => {
+      // An entity removed from code whose tables are gone while its registry
+      // row is not: half-retired by an earlier release, or its table lost
+      // outside a migration. Its documents cannot be read, so no other check
+      // can be asked about them; the removal alone is the problem.
+      const tables = {
+        collection: (
+          await t()
+            .getService("collectionRegistryService")
+            .getCollectionBySlug(REMOVED.collection)
+        )?.tableName,
+        single: (
+          await t()
+            .getService("singleRegistryService")
+            .getSingleBySlug(REMOVED.single)
+        )?.tableName,
+      };
+      if (!tables.collection || !tables.single) {
+        throw new Error("the removed entities' registry rows are gone");
+      }
+      const quote = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      for (const table of [tables.collection, tables.single]) {
+        await caseDb().adapter.executeQuery(`DROP TABLE ${quote(table)}`);
+      }
+
+      const readiness = await t().nextly.releases.readiness({
+        releaseId: arranged.releaseId,
+      });
+      expect(
+        readiness.hard.map(f => ({ memberId: f.memberId, code: f.code }))
+      ).toEqual(removedProblems());
+
+      await runJobsPass(t().adapter, container.get<JobRegistry>("jobRegistry"));
+      expect(
+        (await t().nextly.releases.findByID({ id: arranged.releaseId }))?.state
+      ).toBe("blocked");
+      expect(await stopNotices(arranged.releaseId, arranged.owner)).toBe(1);
+    });
+
     it("reads as ready again once the entities are declared again", async () => {
       await boot(caseDb(), WITH_REMOVED);
       const readiness = await t().nextly.releases.readiness({

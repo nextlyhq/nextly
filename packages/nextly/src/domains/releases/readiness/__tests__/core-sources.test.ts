@@ -508,6 +508,70 @@ describe("core.removed-from-code", () => {
     expect(removedFromCode).toHaveBeenCalledTimes(5);
   });
 
+  it("is the only problem asked about a removed entity's documents, whose tables may be gone", async () => {
+    // Every read of a document's own tables fails for `old-posts`, as it does
+    // once its tables are dropped; `posts` is declared, and its document is
+    // gone, so `core.exists` still reports that one.
+    const gone = (scope: { scopeSlug: string }) => {
+      if (scope.scopeSlug === "old-posts") throw new Error("no such table");
+    };
+    const over = {
+      removedFromCode: async (scope: { scopeSlug: string }) =>
+        scope.scopeSlug === "old-posts",
+      existing: async (refs: readonly { scopeSlug: string }[]) => {
+        refs.forEach(gone);
+        return new Set<string>();
+      },
+      mayPerform: async (
+        _user: unknown,
+        scope: { scopeSlug: string },
+        _action: unknown,
+        entryIds: readonly string[]
+      ) => {
+        gone(scope);
+        return new Set(entryIds);
+      },
+      declaresLifecycle: async (scope: { scopeSlug: string }) => {
+        gone(scope);
+        return true;
+      },
+      companionLacksLifecycle: async (scope: { scopeSlug: string }) => {
+        gone(scope);
+        return false;
+      },
+      heldDraftLocales: async (
+        scope: { scopeSlug: string },
+        entryIds: readonly string[]
+      ) => {
+        gone(scope);
+        return new Map(entryIds.map(id => [id, [] as string[]]));
+      },
+      publishProblems: async (
+        scope: { scopeSlug: string },
+        entryIds: readonly string[]
+      ) => {
+        gone(scope);
+        return new Map(entryIds.map(id => [id, []]));
+      },
+    } as Parameters<typeof reads>[0];
+    const members = [
+      member("old", { scopeSlug: "old-posts" }),
+      member("post", { scopeSlug: "posts" }),
+    ];
+    for (const source of [
+      CORE_PERMISSION_SOURCE,
+      CORE_LIFECYCLE_SOURCE,
+      CORE_COMPANION_STATUS_SOURCE,
+      CORE_HELD_DRAFTS_SOURCE,
+      CORE_REQUIRED_FIELDS_SOURCE,
+    ]) {
+      expect(await run(source, members, over), source.key).toEqual([]);
+    }
+    expect(await run(CORE_EXISTS_SOURCE, members, over)).toEqual([
+      { memberId: "post", code: "DOCUMENT_GONE" },
+    ]);
+  });
+
   it("is a hard source of core's, checked after the document's existence", () => {
     const keys = CORE_RELEASE_CHECK_SOURCES.map(s => s.key);
     expect(CORE_REMOVED_FROM_CODE_SOURCE.severity).toBe("hard");

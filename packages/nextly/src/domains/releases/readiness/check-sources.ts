@@ -197,6 +197,48 @@ export interface ReleaseCheckSource<Code extends string = string> {
 }
 
 /**
+ * Whether each scope is removed from code, asked once per check: every
+ * source and every batch of one check share its context.
+ */
+const removedByCheck = new WeakMap<
+  ReleaseCheckContext,
+  Map<string, Promise<boolean>>
+>();
+
+/**
+ * The members whose collection or Single the configuration still declares:
+ * the only ones a check that reads a document's own tables may ask about.
+ *
+ * A removed entity's tables may already be gone (half-retired, or lost
+ * outside a migration), so asking about its documents would fail the whole
+ * check rather than answer, and nothing may write to them whatever such a
+ * check found. `core.removed-from-code` reports each such document, and is
+ * the one problem named for it.
+ */
+export async function membersInDeclaredScopes<M extends ReleaseMemberRow>(
+  members: readonly M[],
+  ctx: ReleaseCheckContext
+): Promise<M[]> {
+  let asked = removedByCheck.get(ctx);
+  if (asked === undefined) {
+    asked = new Map();
+    removedByCheck.set(ctx, asked);
+  }
+  const keyOf = (member: M) => `${member.scopeKind}:${member.scopeSlug}`;
+  const removed = new Set<string>();
+  for (const member of members) {
+    const key = keyOf(member);
+    let answer = asked.get(key);
+    if (answer === undefined) {
+      answer = ctx.reads.removedFromCode(member);
+      asked.set(key, answer);
+    }
+    if (await answer) removed.add(key);
+  }
+  return members.filter(member => !removed.has(keyOf(member)));
+}
+
+/**
  * How many members a source is handed at once. A release larger than this is
  * checked in several batches, and answered only once every batch is checked.
  */
