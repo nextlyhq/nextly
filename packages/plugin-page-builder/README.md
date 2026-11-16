@@ -61,8 +61,6 @@ npm install @nextlyhq/blocks-react
 
 ```tsx
 // app/(frontend)/[...slug]/page.tsx
-import { createBlockResolver } from "@nextlyhq/blocks-react";
-import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { getNextly } from "nextly";
 import type {
@@ -99,7 +97,6 @@ const { ContentPage, generateMetadata } = createBlocksPage({
   collections: ["pages"],
   field: "content",
   nextly: reader,
-  blocks: createBlockResolver(coreBlocks),
   // Without a breakpoint set the renderer emits class names with no CSS behind
   // them, and the page comes out structurally correct and visually bare.
   styleContext: {
@@ -230,15 +227,19 @@ export const pricingTable = defineBlock({
 });
 ```
 
-Hand it to the route beside the core set so the public page can draw it:
+Register it with the page builder by declaring it from a plugin, under
+`contributes.declarations["@nextlyhq/plugin-page-builder"].blocks` with an `editorEntry` so the
+editor offers it too ([Contributed blocks](../../docs/page-builder/contributed-blocks.mdx)).
+Calling the engine's `registerBlocks` yourself does not reach the site: it fills only the
+calling bundle's own registry. Once registered, every public route draws the block with nothing
+passed, even before anyone has opened the admin: a route given no `blocks` reads the blocks of
+the page builder the site runs. Each page builder holds its own blocks, and a process serving
+several sites binds each site's routes with `blocks: blocksOf(builder)`. A route that passes its
+own set draws exactly that set, so add the block to it:
 
 ```ts
 blocks: createBlockResolver([...coreBlocks, pricingTable]);
 ```
-
-Pass an explicit set rather than relying on the process-wide registry: that registry is
-populated by whatever booted the editor, so a public route depending on it renders the
-unknown-block placeholder whenever a visitor arrives before an admin does.
 
 Blocks may bump `version` and ship a pure `migrate(old, fromVersion)`, and unknown blocks
 are preserved rather than dropped. Migration runs when the **editor** loads a document, so

@@ -9,8 +9,7 @@
  * would bury the one that matters.
  */
 import {
-  clearBlocks,
-  getBlock,
+  createBlockRegistry,
   type AnyBlockDefinition,
 } from "@nextlyhq/blocks-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,12 +23,15 @@ import * as service from "../registration-service";
 
 type Service = typeof service;
 
+/** The site's block registry the blocks are registered in. */
+const blocks = createBlockRegistry();
+
 beforeEach(() => {
-  clearBlocks();
+  blocks.clear();
 });
 
 afterEach(() => {
-  clearBlocks();
+  blocks.clear();
   vi.unstubAllEnvs();
 });
 
@@ -47,7 +49,7 @@ function block(name: string): AnyBlockDefinition {
 /** A context as boot hands one to a contributing plugin. */
 function contextFor(plugins: unknown[] = []) {
   const warn = vi.fn();
-  const backend = service.createBlockRegistrationService();
+  const backend = service.createBlockRegistrationService(blocks);
   const ctx = {
     self: { name: "@acme/blocks" },
     logger: { warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -68,10 +70,10 @@ describe("a block registered in code but not declared", () => {
 
     service.blockRegistry(ctx).register(block("acme/ticker"));
     // A second boot in the same process registers it again.
-    clearBlocks();
+    blocks.clear();
     service.blockRegistry(ctx).register([block("acme/ticker")]);
 
-    expect(getBlock("acme/ticker")).toBeDefined();
+    expect(blocks.get("acme/ticker")).toBeDefined();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]?.[0])).toContain('"acme/ticker"');
     expect(String(warn.mock.calls[0]?.[0])).toContain("server only");
@@ -99,9 +101,9 @@ describe("a block registered in code but not declared", () => {
       },
     ]);
 
-    service.registerDeclaredBlocks(ctx);
+    service.registerDeclaredBlocks(ctx, blocks);
 
-    expect(getBlock("acme/hero")).toBeDefined();
+    expect(blocks.get("acme/hero")).toBeDefined();
     expect(warn).not.toHaveBeenCalled();
   });
 });
@@ -122,7 +124,7 @@ describe("a declared editor entry", () => {
       },
     ]);
 
-    expect(() => service.registerDeclaredBlocks(ctx)).toThrow(/editorEntry/);
+    expect(() => service.registerDeclaredBlocks(ctx, blocks)).toThrow(/editorEntry/);
   });
 });
 
@@ -149,15 +151,15 @@ describe("the blocks the editor can draw", () => {
         },
       },
     ]);
-    service.registerCoreBlocks(ctx);
-    service.registerDeclaredBlocks(ctx);
+    service.registerCoreBlocks(ctx, blocks);
+    service.registerDeclaredBlocks(ctx, blocks);
     service.blockRegistry(ctx).register(block("acme/in-code"));
 
-    const names = service.editorVisibleBlocks().map(each => each.name);
+    const names = service.editorVisibleBlocks(blocks).map(each => each.name);
     expect(names).toContain("acme/drawn");
     expect(names).toContain("core/heading");
     // Registered, yet never drawn by the editor.
-    expect(getBlock("acme/hidden")).toBeDefined();
+    expect(blocks.get("acme/hidden")).toBeDefined();
     expect(names).not.toContain("acme/hidden");
     expect(names).not.toContain("acme/in-code");
   });

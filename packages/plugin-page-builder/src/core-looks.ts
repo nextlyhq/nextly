@@ -17,7 +17,11 @@
  * @module core-looks
  */
 
-import { allBlocks, blockLooks, blockOwnLooks } from "@nextlyhq/blocks-engine";
+import {
+  blockLooks,
+  blockOwnLooks,
+  type AnyBlockDefinition,
+} from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 
 import type { SiteStyleData } from "./site-style";
@@ -58,9 +62,10 @@ export function withCoreLooks(
 }
 
 /**
- * The site's config style with the looks of every block this process knows:
- * each registered block, other plugins' among them, and the core blocks even
- * before anything has registered them.
+ * The site's config style with the looks of every block its registry holds
+ * (`registered`, other plugins' among them), and the core blocks even before
+ * anything has registered them. The server passes its site's registry, the
+ * canvas its bundle's.
  *
  * The core blocks lead, as the plugin registers them first, so a booted
  * process reads exactly its registry's order. They are kept when the registry
@@ -68,9 +73,9 @@ export function withCoreLooks(
  * page rendered then would otherwise lose every core look it wears.
  */
 export function withRegisteredLooks(
-  siteStyle: SiteStyleData | undefined
+  siteStyle: SiteStyleData | undefined,
+  registered: readonly AnyBlockDefinition[]
 ): SiteStyleData {
-  const registered = allBlocks();
   const names = new Set(registered.map(definition => definition.name));
   const unregisteredCore = coreBlocks.filter(
     definition => !names.has(definition.name)

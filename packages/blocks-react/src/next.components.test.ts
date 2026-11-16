@@ -117,6 +117,8 @@ async function renderWith(
   cached.mockClear();
   const r = reader(components, content);
   const route = createBlocksPage({
+    // No blocks registered, as the page needs none.
+    blocks: createBlockResolver([]),
     collections: ["pages"],
     field: "content",
     nextly: r.nextly,
@@ -455,6 +457,8 @@ describe("a component's pending edits in draft mode", () => {
       page(["hero"])
     );
     const route = createBlocksPage({
+      // No blocks registered, as the page needs none.
+      blocks: createBlockResolver([]),
       collections: ["pages"],
       field: "content",
       nextly: r.nextly,
@@ -506,6 +510,8 @@ describe("a component's pending edits in draft mode", () => {
       page(["hero"])
     );
     const route = createBlocksPage({
+      // No blocks registered, as the page needs none.
+      blocks: createBlockResolver([]),
       collections: ["pages"],
       field: "content",
       nextly: r.nextly,
@@ -537,6 +543,8 @@ describe("a component's pending edits in draft mode", () => {
       page(["hero"])
     );
     const route = createBlocksPage({
+      // No blocks registered, as the page needs none.
+      blocks: createBlockResolver([]),
       collections: ["pages"],
       field: "content",
       nextly: r.nextly,
@@ -559,6 +567,8 @@ describe("a component's pending edits in draft mode", () => {
       page(["hero", "footer"])
     );
     const route = createBlocksPage({
+      // No blocks registered, as the page needs none.
+      blocks: createBlockResolver([]),
       collections: ["pages"],
       field: "content",
       nextly: r.nextly,
@@ -582,6 +592,8 @@ describe("a component's pending edits in draft mode", () => {
       page(["hero"])
     );
     const route = createBlocksPage({
+      // No blocks registered, as the page needs none.
+      blocks: createBlockResolver([]),
       collections: ["pages"],
       field: "content",
       nextly: r.nextly,
@@ -612,6 +624,8 @@ describe("a component's pending edits in draft mode", () => {
       page(["hero"])
     );
     const route = createBlocksPage({
+      // No blocks registered, as the page needs none.
+      blocks: createBlockResolver([]),
       collections: ["pages"],
       field: "content",
       nextly: r.nextly,
@@ -639,6 +653,8 @@ describe("the lifecycle scope a draft-mode component read stays inside", () => {
       page(["hero"])
     );
     const route = createBlocksPage({
+      // No blocks registered, as the page needs none.
+      blocks: createBlockResolver([]),
       collections: ["pages"],
       field: "content",
       nextly: r.nextly,
