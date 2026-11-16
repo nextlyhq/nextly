@@ -103,6 +103,8 @@ import type { StylePolicy } from "./style-values";
 
 export { commitsFor, supersedes } from "./style-colour-field";
 export { pickedReference } from "./style-control-value";
+// Part of this module's exported names; no importer in the package reads it.
+// fallow-ignore-next-line unused-type
 export type { EditedAddress } from "./style-field-surroundings";
 export { describedWithUnit } from "./style-numeric-field";
 export {
