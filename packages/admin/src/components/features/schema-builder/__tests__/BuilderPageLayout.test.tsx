@@ -238,6 +238,26 @@ describe("BuilderPageLayout", () => {
     ).toBeVisible();
   });
 
+  // A status region inserted with its message already in it is not reliably
+  // announced, so the hold's region is there before the hold and only its text
+  // changes.
+  it("keeps the hold's status mounted, so its reason is announced when it arrives", () => {
+    const { rerender, props } = renderLayout({ unsavedCount: 2 });
+    const status = screen.getByTestId("save-held-status");
+    expect(status).toHaveTextContent("");
+
+    rerender(
+      <BuilderPageLayout
+        {...props}
+        saveHeld="Save waits while the new address is checked."
+      />
+    );
+    expect(screen.getByTestId("save-held-status")).toBe(status);
+    expect(status).toHaveTextContent(
+      "Save waits while the new address is checked."
+    );
+  });
+
   it("carries the lock through to the field list", () => {
     renderLayout({ locked: true });
     // Every editing affordance on a row is gone when the entity is code-first.
