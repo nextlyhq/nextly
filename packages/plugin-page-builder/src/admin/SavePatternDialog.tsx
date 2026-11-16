@@ -455,7 +455,7 @@ export function SavePatternDialog({
               // at the form.
               <Alert variant="destructive" role="alert">
                 <AlertDescription>
-                  {error ?? "The saved section could not be saved. Try again."}
+                  {error ?? "The section could not be saved. Try again."}
                 </AlertDescription>
               </Alert>
             ) : null}

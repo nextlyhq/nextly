@@ -180,8 +180,8 @@ function shippedSources(dir: string): string[] {
  * Texts that match a rule but name something else, by file. Each says why.
  */
 const ALLOWED: Readonly<Record<string, readonly string[]>> = {
-  // A stored title the seed gives a new set, not a label: renaming it would
-  // change what the seed writes.
+  // The name the seed gives a new site's first set: stored as its title, and
+  // chosen with the seed's own naming rule (the next free "Site layout N").
   "packages/plugin-page-builder/src/default-layout/seed-names.ts": [
     "Site layout",
   ],

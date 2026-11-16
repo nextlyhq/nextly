@@ -191,11 +191,13 @@ describe("the overview's libraries", () => {
     const said = ["layouts", "patterns", "components", "templates"].map(
       kind => {
         const card = screen.getByTestId(`overview-library-${kind}`);
-        // The card's first link is its name, and its one paragraph says
-        // what the library is.
+        // The card's first link is its name, its one paragraph says what
+        // the library is, and its last link makes a new one.
+        const links = within(card).getAllByRole("link");
         return [
-          within(card).getAllByRole("link")[0]?.textContent,
+          links[0]?.textContent,
           card.querySelector("p")?.textContent,
+          links.at(-1)?.textContent,
         ];
       }
     );
@@ -203,18 +205,22 @@ describe("the overview's libraries", () => {
       [
         "Header & footer",
         'The header and footer around your pages. A site can have more than one set, for example "Main" and "Landing".',
+        "New header & footer set",
       ],
       [
         "Saved sections",
         "Ready-made parts of a page. Insert one, then change it freely. Changes stay on that page.",
+        "New saved section",
       ],
       [
         "Components",
         "Built once, used on many pages. Edit it once and every page updates.",
+        "Components",
       ],
       [
         "Collection templates",
         "The design every blog post (or other entry) uses. Edit it once for all entries.",
+        "New collection template",
       ],
     ]);
   });

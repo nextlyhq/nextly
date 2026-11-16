@@ -22,7 +22,7 @@ function areaField(): Record<string, unknown> {
 }
 
 describe("a component's area hint", () => {
-  it('is labelled "Use as", with Header, Footer and Anywhere', () => {
+  it('is labelled "Use as", offering Header and Footer, and reads "Anywhere" when empty', () => {
     const field = areaField();
     expect(field.label).toBe("Use as");
     expect(

@@ -90,7 +90,7 @@ export function pageBuilderSettingsSingle(): SingleConfig {
     admin: {
       hidden: true,
       description:
-        "Which header & footer set pages are drawn inside when they name none. Set from the Header & footer list.",
+        "The header & footer set pages are drawn inside when they choose none of their own. Set from the Header & footer list.",
     },
     hooks: {
       beforeValidate: [refuseUnmarkedWrite],

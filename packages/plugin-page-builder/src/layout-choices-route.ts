@@ -514,7 +514,7 @@ export function parseChoicesQuery(url: string | URL): LayoutChoicesQuery {
       LAYOUT_CHOICES_SEARCH_PARAM,
     ],
     choicesQuery,
-    "Header & footer choices route"
+    "header & footer choices route"
   );
   return {
     selected: query[LAYOUT_CHOICES_SELECTED_PARAM] ?? null,
