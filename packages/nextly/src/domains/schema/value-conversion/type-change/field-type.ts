@@ -7,9 +7,13 @@
  *
  * @module domains/schema/value-conversion/type-change/field-type
  */
-import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
+import type {
+  DynamicFieldType,
+  FieldDefinition,
+} from "../../../../schemas/dynamic-collections";
 import { selectOptionValues } from "../../../../shared/lib/entry-validation";
 import { getFieldType } from "../../field-types/field-type-registry";
+import { parseColumnType } from "../column-type";
 import {
   type ColumnOrigin,
   DEFAULT_DECIMAL_PRECISION,
@@ -33,7 +37,9 @@ export type Family =
   | "container"
   | "password"
   /** A plugin's type that is not loaded: no rule can read its values. */
-  | "unloaded";
+  | "unloaded"
+  /** A built-in type no rule names a family for (an icon's id): no rule converts it. */
+  | "unlisted";
 
 /** How a number column stores a value. */
 export type NumberFormat =
@@ -93,7 +99,10 @@ export function fieldTypeOnDialect(
   dialect: SupportedDialect,
   builtBy: ColumnOrigin
 ): FieldTypeOnDialect {
-  const read = BY_TYPE[field.type] ?? pluginType;
+  // A built-in type is read by its own entry; any other is a plugin's.
+  const read = Object.hasOwn(BY_TYPE, field.type)
+    ? BY_TYPE[field.type]
+    : pluginType;
   return read(field, dialect, builtBy);
 }
 
@@ -124,8 +133,11 @@ const plain =
   (family: Family): TypeReader =>
   (field, dialect) => ({ ...baseOf(field, dialect), family });
 
-/** The built-in field types, each read as its family and what its column holds. */
-const BY_TYPE: Partial<Record<string, TypeReader>> = {
+/**
+ * The built-in field types, each read as its family and what its column holds. Every built-in type
+ * has an entry, so a type added to the union is read deliberately, never as a plugin's.
+ */
+const BY_TYPE: Record<DynamicFieldType, TypeReader> = {
   text: bounded("text"),
   textarea: bounded("text"),
   code: bounded("text"),
@@ -196,6 +208,8 @@ const BY_TYPE: Partial<Record<string, TypeReader>> = {
   group: plain("container"),
   repeater: plain("container"),
   component: plain("container"),
+  fieldGroup: plain("container"),
+  icon: plain("unlisted"),
 };
 
 /**
@@ -210,31 +224,27 @@ const DATE_COLUMNS: Record<SupportedDialect, DateColumn> = {
   sqlite: { fractionDigits: 0 },
 };
 
-/** A text-like field's bound, read from the column its creator makes for it. */
+/**
+ * A text-like field's bound, read from the column its creator makes for it, as the column judgement
+ * reads a column type (`parseColumnType`): a `varchar(n)` holds n characters on every database,
+ * and MySQL's `text`, the only text type the creator makes there, holds 65,535 bytes. PostgreSQL's
+ * and SQLite's `text` bound nothing.
+ */
 function textColumn(
   field: FieldDefinition,
   dialect: SupportedDialect,
   builtBy: ColumnOrigin
 ): { textBound?: TextBound } {
   const type = getColumnDescriptor(field, dialect, builtBy)?.dialectType;
-  const bound = type === undefined ? undefined : textBoundOf(type, dialect);
-  return bound === undefined ? {} : { textBound: bound };
-}
-
-/**
- * How much a text column of `type` holds: `varchar(n)` holds n characters on every database, and
- * MySQL's `text` holds 65,535 bytes. PostgreSQL's and SQLite's `text` bound nothing.
- */
-function textBoundOf(
-  type: string,
-  dialect: SupportedDialect
-): TextBound | undefined {
-  const varchar = /^varchar\((\d+)\)$/i.exec(type.trim());
-  if (varchar) return { unit: "characters", most: Number(varchar[1]) };
-  if (dialect === "mysql" && type.trim().toLowerCase() === "text") {
-    return { unit: "bytes", most: 65_535 };
+  if (type === undefined) return {};
+  const parsed = parseColumnType({ type, nullable: true });
+  if (parsed.family === "varchar" && parsed.length !== undefined) {
+    return { textBound: { unit: "characters", most: parsed.length } };
   }
-  return undefined;
+  if (parsed.family === "text" && dialect === "mysql") {
+    return { textBound: { unit: "bytes", most: 65_535 } };
+  }
+  return {};
 }
 
 function choiceColumn(

@@ -9,7 +9,7 @@ import {
   judgeValue,
   type OldValue,
   pairBlocked,
-  readIsoInstant,
+  readDateText,
   type ValueOutcome,
 } from "../judge";
 import { readNumber } from "../numbers";
@@ -39,7 +39,7 @@ const bool = (value: boolean): OldValue => ({ kind: "boolean", value });
 const json = (value: unknown): OldValue => ({ kind: "json", value });
 const list = (...items: OldValue[]): OldValue => ({ kind: "list", items });
 const date = (iso: string): OldValue => {
-  const instant = readIsoInstant(iso);
+  const instant = readDateText(iso);
   if (typeof instant === "string") throw new Error(`not an instant: ${iso}`);
   return { kind: "date", date: instant };
 };
@@ -213,6 +213,16 @@ const CASES: Case[] = [
     value: text(""),
     outcome: "lost",
   },
+  // A number is read as the column judgement reads one (`exactNumber`): blanks around it are not part
+  // of it.
+  {
+    name: "a number with blanks around it to a number",
+    from: ["text"],
+    to: ["number"],
+    value: text(" 1 "),
+    outcome: "changed",
+    readsAs: "1",
+  },
   {
     name: "a text beyond 32 bits to a whole number",
     from: ["text"],
@@ -304,6 +314,14 @@ const CASES: Case[] = [
     value: text("tomorrow"),
     outcome: "lost",
   },
+  // Read by the one exact ISO 8601 reader, whose separator between date and time is `T` alone.
+  {
+    name: "a date-time written with a space to a date",
+    from: ["text"],
+    to: ["date"],
+    value: text("2026-01-02 03:04:05Z"),
+    outcome: "lost",
+  },
   {
     name: "a day that does not exist",
     from: ["text"],
@@ -319,6 +337,14 @@ const CASES: Case[] = [
     to: ["json"],
     value: text("hello"),
     outcome: "kept",
+  },
+  // PostgreSQL's jsonb refuses a \u0000 escape, so it cannot hold the JSON string at all (rule 1).
+  {
+    name: "a text holding a NUL character to JSON",
+    from: ["text"],
+    to: ["json"],
+    value: text("a\u0000b"),
+    outcome: { postgresql: "lost", mysql: "kept", sqlite: "kept" },
   },
   {
     name: "a text to a list of text",
@@ -440,6 +466,56 @@ const CASES: Case[] = [
     to: ["number", { hasMany: true }],
     value: num("3"),
     outcome: "changed",
+    // A list of numbers holds JSON numbers, not their writing as text.
+    readsAs: "[3]",
+  },
+  {
+    name: "a text list to a list of numbers, written as JSON numbers",
+    from: ["chips"],
+    to: ["number", { hasMany: true }],
+    value: list(text("1"), text("2.5")),
+    outcome: "changed",
+    readsAs: "[1,2.5]",
+  },
+  // A number spelled with an exponent no column could hold is judged, never expanded.
+  {
+    name: "a text with a huge exponent to a number",
+    from: ["text"],
+    to: ["number", float],
+    value: text("1e1000000000"),
+    outcome: "blocked",
+  },
+  // A JSON field is read through a JavaScript number, so a number a double does not hold exactly
+  // reads back as another.
+  {
+    name: "a decimal no double holds exactly to JSON",
+    from: ["number", decimal],
+    to: ["json"],
+    value: num("9007199254740993"),
+    outcome: "blocked",
+  },
+  // A document whose writing is longer than MySQL's text column holds.
+  {
+    name: "a JSON document past 65,535 bytes to rich text",
+    from: ["json"],
+    to: ["richText"],
+    value: json({
+      root: {
+        type: "root",
+        children: [
+          { type: "paragraph", children: [], text: "x".repeat(70_000) },
+        ],
+      },
+    }),
+    outcome: { postgresql: "kept", mysql: "blocked", sqlite: "kept" },
+  },
+  // Only a document the editor reads is kept as one: its root's children are nodes.
+  {
+    name: "a JSON object whose root children are not nodes to rich text",
+    from: ["json"],
+    to: ["richText"],
+    value: json({ root: { type: "root", children: [42] } }),
+    outcome: "lost",
   },
 
   // Checkbox.
@@ -716,6 +792,23 @@ describe("pairs blocked whatever their values hold (rule 3, and the pairs no rul
     );
   });
 
+  it("tells two target sets apart that write alike once joined", () => {
+    const first = typeOf("postgresql", "relationship", {
+      relationTo: ["aa", "bcd"],
+    } as Partial<FieldDefinition>);
+    const second = typeOf("postgresql", "relationship", {
+      relationTo: ["aab", "cd"],
+    } as Partial<FieldDefinition>);
+    expect(pairBlocked(first, second)).toBe("relationship");
+  });
+
+  it("blocks a built-in type no rule names (an icon) as having no rule, and reads every built-in type", () => {
+    expect(
+      pairBlocked(typeOf("postgresql", "icon"), typeOf("postgresql", "text"))
+    ).toBe("no-rule");
+    expect(typeOf("postgresql", "fieldGroup").family).toBe("container");
+  });
+
   it("leaves JSON to any family to its values (rule 8), never blocking the pair", () => {
     for (const to of ["date", "number", "checkbox", "email", "chips"]) {
       expect(
@@ -736,7 +829,7 @@ describe("the class a change takes from its values", () => {
 
 describe("reading an ISO 8601 instant", () => {
   it("keeps every digit of a second and writes it back in UTC", () => {
-    const instant = readIsoInstant("2026-06-30T23:30:00.123456-01:00");
+    const instant = readDateText("2026-06-30T23:30:00.123456-01:00");
     expect(typeof instant).toBe("object");
     if (typeof instant === "object") {
       expect(instantWriting(instant)).toBe("2026-07-01T00:30:00.123456Z");

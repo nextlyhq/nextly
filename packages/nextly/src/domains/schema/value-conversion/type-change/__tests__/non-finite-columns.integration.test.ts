@@ -83,18 +83,24 @@ describe.each(LOCK_DIALECTS)(
 
     // The measurement's positive control: a finite number written the same way reads back, so a
     // non-finite one that does not is refused by the column, not by the write itself.
-    it("writes a finite number to both columns and reads it back", async () => {
-      for (const column of ["f", "d"] as const) {
+    // Every column measured below, the whole-number one included, takes a finite number of its own
+    // kind: a whole number where only a whole number fits.
+    it("writes a finite number to every column and reads it back", async () => {
+      for (const [column, value] of [
+        ["i", 2],
+        ["f", 1.5],
+        ["d", 1.5],
+      ] as const) {
         const id = `${column}-finite`;
         await adapter.executeQuery(
           `INSERT INTO ${q(TABLE)} (${q("id")}, ${q("title")}, ${q("slug")}, ${q(column)}) VALUES (${p(1)}, ${p(2)}, ${p(3)}, ${p(4)})`,
-          [id, id, id, 1.5]
+          [id, id, id, value]
         );
         const [row] = await adapter.executeQuery<{ v: unknown }>(
           `SELECT ${q(column)} AS v FROM ${q(TABLE)} WHERE ${q("id")} = ${p(1)}`,
           [id]
         );
-        expect(Number(row?.v)).toBe(1.5);
+        expect(Number(row?.v)).toBe(value);
       }
     }, 60_000);
 

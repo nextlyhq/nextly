@@ -23,7 +23,9 @@
  * @module domains/schema/value-conversion/type-change/judge
  */
 import { EMAIL_RE } from "../../../../shared/lib/entry-validation";
+import { readExactIsoInstant } from "../../../../shared/lib/iso-instant";
 import type { ConversionClass } from "../types";
+import { characterLength, readsAsPostgresJson } from "../value-readings";
 
 import { documentOfText, isEditorDocument } from "./document";
 import type {
@@ -79,7 +81,9 @@ export type OutcomeReason =
   /** A JSON value of a kind the new type could never hold. */
   | "kind-never-held"
   /** The pair of types is blocked whatever its values hold (`pairBlocked`). */
-  | "pair-blocked";
+  | "pair-blocked"
+  /** The new column refuses the value's writing outright, so it cannot hold it at all. */
+  | "column-refuses";
 
 /** The judgement of one value, and, where it is kept or changed, the value the new type reads. */
 export interface ValueVerdict {
@@ -138,6 +142,7 @@ export function pairBlocked(
   to: FieldTypeOnDialect
 ): PairBlockReason | null {
   if (from.family === "unloaded" || to.family === "unloaded") return "unloaded";
+  if (from.family === "unlisted" || to.family === "unlisted") return "no-rule";
   if (from.family === "password" || to.family === "password") return "password";
   if (from.family === "container" || to.family === "container")
     return "container";
@@ -165,7 +170,9 @@ function sameTargets(
     a !== undefined &&
     b !== undefined &&
     a.upload === b.upload &&
-    a.targets.join() === b.targets.join()
+    // Element by element: a joined writing could make two target sets read alike.
+    a.targets.length === b.targets.length &&
+    a.targets.every((target, i) => target === b.targets[i])
   );
 }
 
@@ -248,7 +255,7 @@ function judgeAs(
   if (value.kind === "empty") return { outcome: "kept", reason: "empty" };
   if (value.kind === "json") return judgeJson(to, value.value);
   // JSON holds every kind as it is, a list included, so it is asked before any list rule.
-  if (to.family === "json") return judgeIntoJson(value);
+  if (to.family === "json") return judgeIntoJson(to, value);
   if (to.family === "list") return judgeIntoList(to, value, fromJson);
   if (value.kind === "list") return judgeListIntoOne(to, value, fromJson);
   switch (to.family) {
@@ -283,11 +290,11 @@ function judgeJson(to: FieldTypeOnDialect, value: unknown): ValueVerdict {
   if (kind === null) return { outcome: "lost", reason: "kind-never-held" };
   if (kind.kind === "document") {
     if (to.family === "richText" && isEditorDocument(value)) {
-      return {
-        outcome: "kept",
-        reason: "same-value",
-        readsAs: stableJson(value),
-      };
+      const writing = stableJson(value);
+      // Kept only where the rich text column holds its writing whole (MySQL's text is bounded).
+      return holdsText(to.textBound, writing)
+        ? { outcome: "kept", reason: "same-value", readsAs: writing }
+        : { outcome: "blocked", reason: "too-long" };
     }
     if (to.family === "text") return textWriting(to, stableJson(value));
     return { outcome: "lost", reason: "object" };
@@ -329,7 +336,7 @@ function judgeIntoList(
     if (verdicts.some(v => v.outcome === "lost" || v.outcome === "blocked")) {
       return { outcome: "blocked", reason: "item-not-held" };
     }
-    const readsAs = JSON.stringify(verdicts.map(v => v.readsAs ?? null));
+    const readsAs = listWriting(item, verdicts);
     return verdicts.every(v => v.outcome === "kept")
       ? { outcome: "kept", reason: "same-value", readsAs }
       : { outcome: "changed", reason: "new-form", readsAs };
@@ -340,8 +347,26 @@ function judgeIntoList(
   return {
     outcome: "changed",
     reason: "new-form",
-    readsAs: JSON.stringify([one.readsAs ?? null]),
+    readsAs: listWriting(item, [one]),
   };
+}
+
+/**
+ * A list's writing as the new list holds it: a list of numbers holds JSON numbers, any other list
+ * JSON strings, each item as the item's verdict reads it.
+ */
+function listWriting(
+  item: FieldTypeOnDialect,
+  verdicts: readonly ValueVerdict[]
+): string {
+  const items = verdicts.map(v =>
+    v.readsAs === undefined
+      ? "null"
+      : item.family === "number"
+        ? v.readsAs
+        : JSON.stringify(v.readsAs)
+  );
+  return `[${items.join(",")}]`;
 }
 
 /** A list becoming one value: its only item, changed; several items blocked (rule 5). */
@@ -448,6 +473,12 @@ function numberInto(
   number: ReadNumber,
   fits: "kept" | "changed"
 ): ValueVerdict {
+  if (number.finite === "beyond") {
+    return {
+      outcome: "blocked",
+      reason: number.large ? "out-of-range" : "rounded",
+    };
+  }
   if (!number.finite) {
     return holdsNonFinite(format, dialect, number.value)
       ? {
@@ -543,7 +574,7 @@ function judgeIntoDate(
   const column = to.date ?? { fractionDigits: 6 };
   if (value.kind === "date") return instantInto(column, value.date, "kept");
   if (value.kind === "text") {
-    const read = readIsoInstant(value.text);
+    const read = readDateText(value.text);
     if (read === "not-a-date") return { outcome: "lost", reason: "not-a-date" };
     if (read === "no-time-or-offset") {
       return { outcome: "blocked", reason: "no-time-or-offset" };
@@ -577,8 +608,27 @@ function instantInto(
   };
 }
 
-/** Into JSON: a string, a finite number, a boolean or a list kept; a date written as text. */
-function judgeIntoJson(value: OldValue): ValueVerdict {
+/**
+ * Into JSON: a string, a finite number, a boolean or a list kept, a date written as text; and only
+ * where the database's JSON column takes the value's writing. PostgreSQL's `jsonb` refuses some
+ * JSON that parses (a `\u0000` escape, half a surrogate pair, a number past its numeric's range),
+ * so it cannot hold such a value at all, and it is lost (rule 1), as the column judgement reads it
+ * (`readsAsPostgresJson`).
+ */
+function judgeIntoJson(to: FieldTypeOnDialect, value: OldValue): ValueVerdict {
+  const verdict = jsonVerdict(value);
+  if (
+    to.dialect === "postgresql" &&
+    verdict.readsAs !== undefined &&
+    !readsAsPostgresJson(verdict.readsAs)
+  ) {
+    return { outcome: "lost", reason: "column-refuses" };
+  }
+  return verdict;
+}
+
+/** A value's verdict as JSON, before the column is asked whether it takes the writing. */
+function jsonVerdict(value: OldValue): ValueVerdict {
   switch (value.kind) {
     case "text":
       return {
@@ -587,13 +637,7 @@ function judgeIntoJson(value: OldValue): ValueVerdict {
         readsAs: JSON.stringify(value.text),
       };
     case "number":
-      return value.number.finite
-        ? {
-            outcome: "kept",
-            reason: "same-value",
-            readsAs: decimalWriting(value.number.value),
-          }
-        : { outcome: "lost", reason: "non-finite" };
+      return numberAsJson(value.number);
     case "boolean":
       return {
         outcome: "kept",
@@ -619,6 +663,28 @@ function judgeIntoJson(value: OldValue): ValueVerdict {
         readsAs: writingOf(value),
       };
   }
+}
+
+/**
+ * A number into JSON: kept where JSON's reader, a JavaScript number, reads it back as the same
+ * number; blocked where it reads it only rounded or out of range; lost where it is non-finite,
+ * which JSON cannot hold (rule 6).
+ */
+function numberAsJson(number: ReadNumber): ValueVerdict {
+  if (number.finite === "beyond") {
+    return {
+      outcome: "blocked",
+      reason: number.large ? "out-of-range" : "rounded",
+    };
+  }
+  if (!number.finite) return { outcome: "lost", reason: "non-finite" };
+  return fitsDouble(number.value)
+    ? {
+        outcome: "kept",
+        reason: "same-value",
+        readsAs: decimalWriting(number.value),
+      }
+    : { outcome: "blocked", reason: "rounded" };
 }
 
 /** A changed verdict where a judgement of the value's writing kept it. */
@@ -675,56 +741,32 @@ function stableJson(value: unknown): string {
 /** Whether a text column holds `text` whole: by its characters, or by its UTF-8 bytes. */
 function holdsText(bound: TextBound | undefined, text: string): boolean {
   if (bound === undefined) return true;
+  // Characters as a `varchar(N)` counts them, which the column judgement counts the same way.
   const size =
     bound.unit === "characters"
-      ? [...text].length
+      ? characterLength(text)
       : new TextEncoder().encode(text).length;
   return size <= bound.most;
 }
 
-const ISO =
-  /^(\d{4})-(\d{2})-(\d{2})(?:[Tt ](\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?(Z|z|[+-]\d{2}(?::?\d{2})?)?)?$/;
-
 /**
- * The instant an ISO 8601 text names, `no-time-or-offset` where it names no time or no offset from
- * UTC, or `not-a-date` where it is not an ISO 8601 date or date-time, or names a day or a time that
- * does not exist.
+ * The instant a date text names, read by the one exact ISO 8601 reader (`readExactIsoInstant`):
+ * `no-time-or-offset` where it names no time or no offset from UTC (blocked, rule 7), or
+ * `not-a-date` where it is not an ISO 8601 date or date-time, or names one that does not exist.
  */
-export function readIsoInstant(
+export function readDateText(
   text: string
 ): Instant | "no-time-or-offset" | "not-a-date" {
-  const match = ISO.exec(text);
-  if (!match) return "not-a-date";
-  const [, y, mo, d, h, mi, s = "0", fraction = "", offset] = match;
-  const year = Number(y);
-  const month = Number(mo);
-  const day = Number(d);
-  const days = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  if (month < 1 || month > 12 || day < 1 || day > days) return "not-a-date";
-  if (h === undefined) return "no-time-or-offset";
-  const hour = Number(h);
-  const minute = Number(mi);
-  const second = Number(s);
-  if (hour > 23 || minute > 59 || second > 59) return "not-a-date";
-  if (offset === undefined) return "no-time-or-offset";
-  const offsetMinutes = offsetOf(offset);
-  if (offsetMinutes === null) return "not-a-date";
-  const local = Date.UTC(year, month - 1, day, hour, minute, second) / 1000;
-  return {
-    seconds: local - offsetMinutes * 60,
-    fraction: fraction.replace(/0+$/, ""),
-  };
-}
-
-/** An offset's minutes east of UTC, or null where it names none that exists. */
-function offsetOf(offset: string): number | null {
-  if (offset === "Z" || offset === "z") return 0;
-  const match = /^([+-])(\d{2}):?(\d{2})?$/.exec(offset);
-  if (!match) return null;
-  const hours = Number(match[2]);
-  const minutes = Number(match[3] ?? "0");
-  if (hours > 23 || minutes > 59) return null;
-  return (match[1] === "-" ? -1 : 1) * (hours * 60 + minutes);
+  const read = readExactIsoInstant(text);
+  if (read.ok) {
+    return {
+      seconds: read.instant.seconds,
+      fraction: read.instant.fraction.replace(/0+$/, ""),
+    };
+  }
+  return read.problem === "no-time" || read.problem === "no-offset"
+    ? "no-time-or-offset"
+    : "not-a-date";
 }
 
 /** An instant's ISO 8601 writing in UTC, with `Z`, keeping every digit of its second. */

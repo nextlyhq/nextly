@@ -6,27 +6,14 @@
  *
  * @module domains/schema/value-conversion/type-change/document
  */
-
-/** A node of an editor document: a type, and children where it has any. */
-interface DocumentNode {
-  type?: unknown;
-  children?: unknown;
-}
+import { isEditorContent } from "../../../../collections/fields/block-props";
 
 /**
- * Whether `value` is a document the editor reads: an object whose `root` is a node of type `root`
- * holding a list of children. The editor reads nothing else as a document.
+ * Whether `value` is a document the editor reads, by the rule a field's editor content is validated
+ * by (`isEditorContent`): a `root` node whose children are nodes.
  */
 export function isEditorDocument(value: unknown): boolean {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const root = (value as { root?: unknown }).root;
-  if (root === null || typeof root !== "object" || Array.isArray(root)) {
-    return false;
-  }
-  const node = root as DocumentNode;
-  return node.type === "root" && Array.isArray(node.children);
+  return isEditorContent(value) === true;
 }
 
 /** A paragraph holding `line` as plain text, or nothing for an empty line. */

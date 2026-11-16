@@ -4,8 +4,12 @@
  * read as the digits they name, so whether a new column holds a value exactly is a question about
  * those digits.
  *
+ * A number's reading, and whether a double keeps it, are the column judgement's own
+ * (`exactNumber`, `keptByDouble`): a repair and a type change read one number the same way.
+ *
  * @module domains/schema/value-conversion/type-change/numbers
  */
+import { exactNumber, keptByDouble } from "../value-readings";
 
 /** A finite number as its sign and digits, with no leading or trailing zero. */
 export interface ExactDecimal {
@@ -19,37 +23,51 @@ export interface ExactDecimal {
 /** The non-finite numbers, as the rules name them. */
 export type NonFinite = "NaN" | "Infinity" | "-Infinity";
 
-/** A number the judgement reads: finite and exact, or one of the non-finite numbers. */
+/**
+ * A number the judgement reads: finite and exact, one of the non-finite numbers, or a finite number
+ * whose digits reach past every column (`beyond`), kept as its writing rather than expanded.
+ */
 export type ReadNumber =
   | { finite: true; value: ExactDecimal }
-  | { finite: false; value: NonFinite };
-
-const DECIMAL = /^([+-])?(\d+)?(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/;
+  | { finite: false; value: NonFinite }
+  | { finite: "beyond"; writing: string; large: boolean };
 
 /**
- * The number a text names, or null where it names none. Leading and trailing blanks are not part
- * of a number, a decimal point needs a digit beside it, and `NaN`, `Infinity` and `-Infinity` are
- * read in any letter case (`+Infinity` too).
+ * How far from the point a digit may sit and still be one a column could hold: a decimal's
+ * precision and scale stop at 1,000 digits (PostgreSQL's limit), and a double's range is far
+ * shorter. A number with digits past it is beyond every column, large or small.
+ */
+const FURTHEST_DIGIT = 1_000;
+
+/**
+ * The number a text names, or null where it names none. A finite number is read as the column
+ * judgement reads one (`exactNumber`), blanks around it not part of it; `NaN`, `Infinity` and
+ * `-Infinity` are read in any letter case (`+Infinity` too), with the same blanks allowed.
  */
 export function readNumber(text: string): ReadNumber | null {
-  const lower = text.toLowerCase();
+  const lower = text.trim().toLowerCase();
   if (lower === "nan") return { finite: false, value: "NaN" };
   if (lower === "infinity" || lower === "+infinity") {
     return { finite: false, value: "Infinity" };
   }
   if (lower === "-infinity") return { finite: false, value: "-Infinity" };
-  const match = DECIMAL.exec(text);
-  if (!match) return null;
-  const [, sign, wholeDigits = "", fractionDigits = "", exponent] = match;
-  if (wholeDigits === "" && fractionDigits === "") return null;
+  // `exactNumber` spells a number as its significant digits and an exponent: `-125e-2`.
+  const canonical = exactNumber(text);
+  const parts =
+    canonical === null ? null : /^(-)?(\d+)e(-?\d+)$/.exec(canonical);
+  if (parts === null || canonical === null) return null;
+  const digits = parts[2];
+  const exponent = Number(parts[3]);
+  // Judged without expanding: `1e1000000000` is a short text that would expand past any string.
+  if (digits.length + exponent > FURTHEST_DIGIT) {
+    return { finite: "beyond", writing: canonical, large: true };
+  }
+  if (exponent < -FURTHEST_DIGIT) {
+    return { finite: "beyond", writing: canonical, large: false };
+  }
   return {
     finite: true,
-    value: shifted(
-      sign === "-",
-      wholeDigits,
-      fractionDigits,
-      Number(exponent ?? "0")
-    ),
+    value: shifted(parts[1] === "-", digits, "", exponent),
   };
 }
 
@@ -91,6 +109,7 @@ export function decimalWriting(value: ExactDecimal): string {
 
 /** A number's writing as the rules give it: its plain decimal writing, or its non-finite name. */
 export function numberWriting(value: ReadNumber): string {
+  if (value.finite === "beyond") return value.writing;
   return value.finite ? decimalWriting(value.value) : value.value;
 }
 
@@ -108,14 +127,7 @@ export function fitsInteger(value: ExactDecimal, bits: 32 | 64): boolean {
  * digits than a double keeps, reads back as another number.
  */
 export function fitsDouble(value: ExactDecimal): boolean {
-  const double = Number(decimalWriting(value));
-  if (!Number.isFinite(double)) return false;
-  const back = readNumber(String(double));
-  return (
-    back !== null &&
-    back.finite &&
-    decimalWriting(back.value) === decimalWriting(value)
-  );
+  return keptByDouble(decimalWriting(value));
 }
 
 /** Whether a `decimal(precision, scale)` column holds the number exactly. */
