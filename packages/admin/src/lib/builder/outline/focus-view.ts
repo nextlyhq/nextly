@@ -6,11 +6,7 @@
  */
 import type { FieldInsertPosition } from "../insert-field";
 
-import {
-  flattenOutline,
-  type OutlineContainer,
-  type OutlineNode,
-} from "./outline-model";
+import type { OutlineContainer, OutlineNode } from "./outline-model";
 import { isPendingDelete } from "./pending-rows";
 
 /** What the outline draws while a container is focused, or the whole outline when none is. */
@@ -59,6 +55,18 @@ function blocksAllShown(node: OutlineNode): boolean {
   );
 }
 
+/**
+ * Whether the last row of `chain` may be focused where it stands: a container that may be focused,
+ * with no container above it whose delete is pending. Rows inside a deleted container carry no
+ * mark of their own, but they go with it at the save.
+ */
+function focusableChain(chain: readonly OutlineNode[]): boolean {
+  const focused = chain[chain.length - 1];
+  return (
+    focused !== undefined && canFocus(focused) && !chain.some(isPendingDelete)
+  );
+}
+
 /** The rows from the top level down to `id`, outermost first, or null when no row has it. */
 function chainTo(
   nodes: readonly OutlineNode[],
@@ -100,7 +108,7 @@ export function focusView(
   const chain = chainTo(nodes, focusedId);
   const focused = chain?.[chain.length - 1];
   // An id that names no row, or a row that may not be focused, draws the whole outline.
-  if (!chain || !focused || !canFocus(focused)) return whole;
+  if (!chain || !focused || !focusableChain(chain)) return whole;
   return {
     focused,
     crumbs: chain,
@@ -133,10 +141,9 @@ export function focusFallback(
   nodes: readonly OutlineNode[],
   crumbIds: readonly string[]
 ): string | null {
-  const byId = new Map(flattenOutline(nodes).map(node => [node.id, node]));
   for (let at = crumbIds.length - 1; at >= 0; at--) {
-    const node = byId.get(crumbIds[at]);
-    if (node && canFocus(node)) return node.id;
+    const chain = chainTo(nodes, crumbIds[at]);
+    if (chain && focusableChain(chain)) return crumbIds[at];
   }
   return null;
 }

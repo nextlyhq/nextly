@@ -316,6 +316,7 @@ export function Outline({
       {view.focus.view.focused && (
         <FocusCrumbs
           crumbs={view.focus.view.crumbs}
+          focusedError={errors.get(view.focus.view.focused.id)?.message}
           exitRef={view.exitRef}
           // Back with the selection kept: focus goes to the selected field if
           // that level draws it, else to the container that was focused.

@@ -32,6 +32,7 @@ import {
   entryKindChoices,
   hasStartingFieldChoice,
 } from "@admin/lib/builder/starting-field";
+import { useUnsavedAddresses } from "@admin/lib/builder/unsaved-entities";
 
 import { BUILDER_KIND_NOUN, type BuilderConfig } from "../builder-config";
 import {
@@ -130,8 +131,11 @@ export function NewEntityDialog({
   const hasIcon = config.basicsFields.includes("icon");
   const icon = pickedIcon ?? suggestIcon(values.singularName);
 
-  // The address as Create sends it, so the check judges what the create gets.
-  const check = useAddressCheck(kind, values.slug.trim());
+  // Entities created in this tab and not saved yet hold their addresses too,
+  // so the server counts them as used. The address is asked about as Create
+  // sends it, so the check judges what the create gets.
+  const unsaved = useUnsavedAddresses();
+  const check = useAddressCheck(kind, values.slug.trim(), unsaved);
   // Nothing typed yet is not a refusal to show.
   const typed = values.singularName !== "" || values.slug !== "";
   const blockedBy = createBlockedBy(values, hasPlural, check);

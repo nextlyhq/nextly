@@ -237,4 +237,37 @@ describe("BuilderToolbar", () => {
     await user.click(screen.getByRole("button", { name: /save/i }));
     expect(onSave).toHaveBeenCalledOnce();
   });
+
+  it("links to the Page Builder when given where it opens", () => {
+    const { rerender } = render(
+      <BuilderToolbar
+        config={collectionConfig}
+        name="Pages"
+        unsavedCount={0}
+        pending={noPending}
+        onAddField={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onSave={vi.fn()}
+        pageBuilderHref="/admin/collections/pages/create"
+      />
+    );
+    expect(
+      screen.getByRole("link", { name: "Open the Page Builder" })
+    ).toHaveAttribute("href", "/admin/collections/pages/create");
+
+    rerender(
+      <BuilderToolbar
+        config={collectionConfig}
+        name="Pages"
+        unsavedCount={0}
+        pending={noPending}
+        onAddField={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onSave={vi.fn()}
+      />
+    );
+    expect(
+      screen.queryByRole("link", { name: "Open the Page Builder" })
+    ).toBeNull();
+  });
 });

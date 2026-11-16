@@ -26,6 +26,7 @@ import {
 } from "@nextlyhq/ui";
 import { type JSX, useState } from "react";
 
+import { useLeaveWithoutWarning } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 import { Redo, RotateCcw, Undo } from "@admin/components/icons";
 import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
 import { useKeyboardShortcuts } from "@admin/hooks/useKeyboardShortcuts";
@@ -74,6 +75,9 @@ export function PendingChangesControls({
 }: Props): JSX.Element | null {
   const [announcement, setAnnouncement] = useState("");
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  // Inside the leave guard: a Discard all that leaves the editor has already
+  // answered the guard's question.
+  const leaveWithoutWarning = useLeaveWithoutWarning();
 
   // A message the same as the last one still changes the live region, by a
   // trailing space it alternates, or it would not be read again.
@@ -184,6 +188,7 @@ export function PendingChangesControls({
               variant="destructive"
               onClick={() => {
                 setConfirmingDiscard(false);
+                if (pending.discardLeaves) leaveWithoutWarning();
                 pending.discardAll();
                 announce(`Discarded ${changesWords(count)}`);
               }}
