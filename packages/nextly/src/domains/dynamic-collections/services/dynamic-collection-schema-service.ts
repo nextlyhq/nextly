@@ -61,7 +61,6 @@ import {
   fieldsStoredOnRow,
   getColumnDescriptor,
   getSystemColumnDescriptors,
-  relationHoldsReferenceList,
   relationshipStoresJson,
   relationStorageShape,
   renderSystemColumnSql,
@@ -73,7 +72,7 @@ import {
   indexNameForColumn,
   uniqueIndexNameForColumn,
   uniquenessCanBeAnIndex,
-  uniqueNotOnListError,
+  refuseUniqueOnList,
   uniquenessNotEnforceableError,
 } from "../../schema/services/index-name";
 import {
@@ -566,11 +565,6 @@ export class DynamicCollectionSchemaService {
     for (const { previous, field } of pairs) {
       // Unique by its mark or by a relationship being one-to-one, so a relationship becoming
       // one-to-one is made unique as a field marked unique is, and loses it when it stops.
-      // A list marked unique is refused, not quietly left without uniqueness: asked of the mark,
-      // since the list is never unique by the column rule.
-      if (field.unique === true && relationHoldsReferenceList(field)) {
-        throw uniqueNotOnListError(tableName, field.name, this.dialect);
-      }
       const wasUnique = this.columnIsUnique(previous);
       const isUnique = this.columnIsUnique(field);
       if (wasUnique === isUnique || !fieldProducesColumn(field)) continue;
@@ -1323,6 +1317,10 @@ export class DynamicCollectionSchemaService {
       targetTables?: CollectionTables;
     }
   ): string {
+    // A list marked unique is refused as declared, nested and translated ones included, before
+    // the fields are narrowed to those stored on this row and before any SQL is made: every road
+    // to this create, a save or not, meets the same refusal.
+    refuseUniqueOnList(tableName, fields, this.dialect);
     // The fields whose columns sit on this row, as its table stores them (`rowColumnFields`).
     const stored = this.rowColumnFields(tableName, fields, _options);
     // Refuse an unusable decimal shape before any of it becomes SQL.
@@ -1724,6 +1722,13 @@ ${allColumnDefs.join(",\n")}
       isSingle?: boolean;
     }
   ): string {
+    // A list marked unique is refused as declared, as at the create: the full list where the lists
+    // here are a localized collection's shared subset, and nested ones included.
+    refuseUniqueOnList(
+      tableName,
+      options?.junctionFields?.new ?? declaredNewFields,
+      this.dialect
+    );
     // The fields whose columns sit on the row before and after, those inside a group with no name
     // among them, as the creating SQL reads them (`fieldsStoredOnRow`): the group has no name to
     // pair or to name a column by, and the fields it holds are columns that stay where they are.
@@ -1973,11 +1978,6 @@ ${allColumnDefs.join(",\n")}
         // silently gone. There is no spelling that works here: MySQL refuses to key an unbounded
         // TEXT/BLOB either way, and cannot index JSON at all. Saying so is the only honest
         // outcome, and saying it first is what keeps the table untouched.
-        // A list marked unique is refused on every dialect, by the same rule and before any
-        // statement, rather than built without the uniqueness it asks for.
-        if (field.unique === true && relationHoldsReferenceList(field)) {
-          throw uniqueNotOnListError(tableName, field.name, this.dialect);
-        }
         if (this.columnIsUnique(field) && !this.uniquenessCanBeAnIndex(type)) {
           throw this.uniquenessNotEnforceable(tableName, field);
         }

@@ -133,3 +133,33 @@ export function uniqueNotOnListMessage(fieldName: string): string {
     `make it a single link.`
   );
 }
+
+/**
+ * The name of the first relation holding a list that is marked unique among `fields`, wherever it
+ * is declared: at the top level, inside a group or a repeater at any depth, translated or not.
+ * Undefined when there is none. Asked of the fields as declared, before any road filters them by
+ * where their values are stored, so no storage location lets the mark through unjudged.
+ */
+export function listMarkedUnique(
+  fields: readonly unknown[]
+): string | undefined {
+  for (const field of fields) {
+    if (typeof field !== "object" || field === null) continue;
+    const declared = field as {
+      name?: unknown;
+      type?: unknown;
+      unique?: unknown;
+      hasMany?: unknown;
+      options?: unknown;
+      fields?: unknown;
+    };
+    if (declared.unique === true && relationHoldsReferenceList(declared)) {
+      return typeof declared.name === "string" ? declared.name : "";
+    }
+    if (Array.isArray(declared.fields)) {
+      const nested = listMarkedUnique(declared.fields);
+      if (nested !== undefined) return nested;
+    }
+  }
+  return undefined;
+}

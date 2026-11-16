@@ -13,7 +13,7 @@
 // genuinely reachable; with letters outside ASCII it is reached sooner.
 
 import { NextlyError } from "../../../errors/nextly-error";
-import { uniqueNotOnListMessage } from "../field-rules";
+import { listMarkedUnique, uniqueNotOnListMessage } from "../field-rules";
 import { isMysqlTextOrBlobType } from "../pipeline/sql-templates/create-index";
 
 /**
@@ -291,6 +291,22 @@ export function uniquenessCanBeAnIndex(
   // The same TEXT/BLOB question the index renderer asks before keying a column by prefix, every
   // size of both included.
   return !isMysqlTextOrBlobType(columnType);
+}
+
+/**
+ * Refuses the first relation holding a list that `fields` marks unique, nested and translated ones
+ * included (`listMarkedUnique`). Each generator and the Builder's save ask it of the fields as
+ * declared, before anything is filtered by where it is stored or any statement is made.
+ */
+export function refuseUniqueOnList(
+  tableName: string,
+  fields: readonly unknown[],
+  dialect: string
+): void {
+  const listName = listMarkedUnique(fields);
+  if (listName !== undefined) {
+    throw uniqueNotOnListError(tableName, listName, dialect);
+  }
 }
 
 /**

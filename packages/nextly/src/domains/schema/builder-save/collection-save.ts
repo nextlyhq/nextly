@@ -105,13 +105,12 @@ import {
   classifyFieldKind,
   fieldsStoredOnRow,
   getColumnDescriptor,
-  relationHoldsReferenceList,
   toSnakeCase,
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
 import {
+  refuseUniqueOnList,
   uniquenessCanBeAnIndex,
-  uniqueNotOnListError,
   uniquenessNotEnforceableError,
 } from "../services/index-name";
 import { loadUiSchema } from "../ui-schema/loader";
@@ -786,6 +785,9 @@ function refuseUnenforceableUniques(
   const dialect = deps.adapter.getCapabilities().dialect;
   const entity = save.entity;
   if (entity === null) return;
+  // A list marked unique is refused as declared, before the fields are narrowed to the main
+  // table's: a translated one, or one inside a named group, asks the same of no index.
+  refuseUniqueOnList(table, entity.fields, dialect);
   // The row holds the fields inside a group with no name as columns (`fieldsStoredOnRow`), an
   // entry's and a field group's instance's alike, so a unique one among them is judged as one
   // beside the group is.
@@ -795,11 +797,6 @@ function refuseUnenforceableUniques(
     // A group with no name only lays fields out and has no column to key.
     const name = field.name;
     if (field.unique !== true || name === undefined) continue;
-    // A relationship holding a list is never unique, on any dialect: refused here before any
-    // statement, as at the create.
-    if (relationHoldsReferenceList(field)) {
-      throw uniqueNotOnListError(table, name, dialect);
-    }
     if (toSnakeCase(name) === "slug") continue;
     const column = getColumnDescriptor(
       field as FieldDefinition,

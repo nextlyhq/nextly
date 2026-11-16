@@ -80,7 +80,6 @@ import {
   componentRelationshipStoresJson,
   fieldsStoredOnRow,
   getComponentRowColumnDescriptor,
-  relationHoldsReferenceList,
   usesJunctionTable,
   type ColumnDescriptor,
   type ColumnOrigin,
@@ -89,7 +88,7 @@ import {
   MAX_INDEX_NAME_LENGTH,
   columnTypeIsIndexable,
   indexNameForColumn,
-  uniqueNotOnListError,
+  refuseUniqueOnList,
   uniquenessCanBeAnIndex,
 } from "../../schema/services/index-name";
 import {
@@ -268,6 +267,9 @@ export class FieldGroupSchemaService {
     fields: FieldConfig[],
     options: { localized?: boolean } = {}
   ): string {
+    // A list marked unique is refused as declared, nested and translated ones included, before the
+    // translated fields are set aside for the companion and before any SQL is made.
+    refuseUniqueOnList(tableName, fields, this.dialect);
     const types = STRUCTURAL_COLUMN_TYPES[this.dialect];
     const structuralDefaults = this.structuralColumnDefaults();
     // i18n: a localized component omits its translatable columns from the main comp_ CREATE
@@ -722,12 +724,6 @@ export class FieldGroupSchemaService {
     field: DataFieldConfig,
     tableName: string
   ): void {
-    // A relation holding a list is never unique, on any dialect (`relationHoldsReferenceList`
-    // says why): refused before any statement, as the field asks for something no index gives.
-    if (relationHoldsReferenceList(field)) {
-      const listName = "name" in field && field.name ? String(field.name) : "";
-      throw uniqueNotOnListError(tableName, listName, this.dialect);
-    }
     const columnType = this.columnTypeFor(field);
     if (columnType === null) return;
     if (uniquenessCanBeAnIndex(columnType, this.dialect)) return;

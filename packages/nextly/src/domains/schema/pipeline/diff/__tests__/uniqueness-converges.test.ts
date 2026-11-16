@@ -78,9 +78,9 @@ describe("what the desired schema declares and what the create path emits", () =
     }
   );
 
-  // A relation holding a list is never unique (`relationHoldsReferenceList`): the Builder's create
-  // and the desired schema both leave it without a unique index, named or inline, so the next diff
-  // plans nothing, and a long list still saves on PostgreSQL.
+  // A relation holding a list is never unique (`relationHoldsReferenceList`): the desired schema
+  // declares no unique index for it, and the create path refuses the mark rather than building a
+  // table without the uniqueness its definition records, so the two never disagree about an index.
   it.each(DIALECTS)(
     "agree that a unique relation holding a list has no unique index, on %s",
     dialect => {
@@ -94,14 +94,20 @@ describe("what the desired schema declares and what the create path emits", () =
         },
       ];
       expect(declaredUniqueIndexes(dialect, fields)).toEqual([]);
-      expect(emittedUniqueIndexes(dialect, fields)).toEqual([]);
-      const sql = new DynamicCollectionSchemaService(
-        undefined,
-        dialect
-      ).generateMigrationSQL("dc_widgets", fields as never, {
-        hasStatus: false,
-      });
-      expect(sql).not.toMatch(/["`]tags["`][^,\n]*UNIQUE/);
+      expect(() =>
+        new DynamicCollectionSchemaService(
+          undefined,
+          dialect
+        ).generateMigrationSQL("dc_widgets", fields as never, {
+          hasStatus: false,
+        })
+      ).toThrow(
+        expect.objectContaining({
+          publicData: {
+            errors: [expect.objectContaining({ code: "UNIQUE_NOT_ON_LIST" })],
+          },
+        })
+      );
     }
   );
 
