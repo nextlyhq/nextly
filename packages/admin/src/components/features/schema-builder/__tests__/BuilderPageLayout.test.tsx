@@ -218,6 +218,26 @@ describe("BuilderPageLayout", () => {
     ).toBeDisabled();
   });
 
+  // An unsaved entity's address being moved: a save then would create it under
+  // the address it is leaving, so Save waits and the page says why.
+  it("holds Save, saying why, while the page holds it", () => {
+    const { unmount } = renderLayout({ unsavedCount: 2 });
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(
+      screen.queryByText("Save waits while the new address is checked.")
+    ).not.toBeInTheDocument();
+    unmount();
+
+    renderLayout({
+      unsavedCount: 2,
+      saveHeld: "Save waits while the new address is checked.",
+    });
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(
+      screen.getByText("Save waits while the new address is checked.")
+    ).toBeVisible();
+  });
+
   it("carries the lock through to the field list", () => {
     renderLayout({ locked: true });
     // Every editing affordance on a row is gone when the entity is code-first.
