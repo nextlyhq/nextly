@@ -25,7 +25,7 @@ import {
 // is tested on its own, below.
 const ctx: MoveContext = {
   entityReadOnly: false,
-  topLevelReservesNames: true,
+  surface: "collection",
   containerChanges: true,
 };
 
@@ -228,7 +228,7 @@ describe("moves the rule refuses", () => {
   });
 
   it("into a field group, naming it and every place using it, for a collection, a Single and a field group as host", () => {
-    for (const host of ["collection", "single", "fieldGroup"]) {
+    for (const host of ["collection", "single", "fieldGroup"] as const) {
       const { reason, message } = refusal(
         judgeMove(
           nestedFixtureFields(),
@@ -236,7 +236,7 @@ describe("moves the rule refuses", () => {
           { parentFieldId: "f-seo" },
           {
             ...ctx,
-            topLevelReservesNames: host !== "fieldGroup",
+            surface: host,
             describeFieldGroup: () => ({
               label: "SEO",
               usedBy: ["Posts", "Pages", "Card"],
@@ -455,12 +455,11 @@ describe("names that clash where a field arrives", () => {
     plain("f-top", held === "title" ? "heading" : held),
   ];
 
-  // Judged on the names the save sends (`convertToFieldDefinition`): a name typed in other letter
-  // case, or with spaces, is sent as the stored name it becomes, which is then the same name.
+  // Judged on the names the save sends (`convertToFieldDefinition`), which is every name as it is:
+  // one typed in other letter case clashes with the held name as the save's own rule says.
   it.each([
     ["the same name", "subtitle", "subtitle"],
     ["a name typed in other letter case", "Subtitle", "subtitle"],
-    ["a name typed with spaces", "Sub Title", "sub_title"],
   ])("%s, at the top level and inside a group", (_case, incoming, held) => {
     const words = "the same name";
     // Out of its group, beside a top-level field of the held name.
@@ -507,29 +506,67 @@ describe("names that clash where a field arrives", () => {
     expect(message).toContain("until the delete is saved");
   });
 
-  it("a name reserved at the top level, though not inside a group", () => {
-    const fields = [
+  // A field leaving a group for the top level arrives with a name the save treats as new there, so
+  // the save's own field-name rule is asked of it, for the entity's kind and its Draft/Published.
+  describe("the save's field-name rule, for a name arriving at the top level", () => {
+    const out = (name: string) => [
       plain("f-group", "details", {
         type: "group",
-        fields: [plain("f-status", "status")],
+        fields: [plain("f-moved", name)],
       }),
     ];
-    expect(refusal(judgeMove(fields, "f-status", {}, ctx)).reason).toBe(
-      "reserved-name"
-    );
-    // A field group's own top level reserves no built-in names.
-    expect(
-      judgeMove(
-        fields,
-        "f-status",
-        {},
-        { ...ctx, topLevelReservesNames: false }
-      ).allowed
-    ).toBe(true);
-  });
-});
+    const verdict = (name: string, over: Partial<MoveContext> = {}) =>
+      judgeMove(out(name), "f-moved", {}, { ...ctx, ...over });
 
-describe("Move to…'s places", () => {
+    it("refuses a built-in column's name where the entity's table has that column", () => {
+      expect(refusal(verdict("created_at")).reason).toBe("reserved-name");
+      expect(refusal(verdict("created_at")).message).toContain(
+        "built-in column"
+      );
+      expect(refusal(verdict("updated_at", { surface: "single" })).reason).toBe(
+        "reserved-name"
+      );
+      // Every table has its timestamps, a field group's own included.
+      expect(
+        refusal(verdict("created_at", { surface: "fieldGroup" })).reason
+      ).toBe("reserved-name");
+      // A collection's owner column, which a Single and a field group do not have.
+      expect(refusal(verdict("created_by")).reason).toBe("reserved-name");
+      expect(verdict("created_by", { surface: "single" }).allowed).toBe(true);
+      expect(verdict("created_by", { surface: "fieldGroup" }).allowed).toBe(
+        true
+      );
+    });
+
+    it("refuses Draft/Published's own names only while it is on", () => {
+      const on = refusal(verdict("status", { lifecycleEnabled: true }));
+      expect(on.reason).toBe("reserved-name");
+      expect(on.message).toContain("Draft/Published");
+      expect(
+        refusal(verdict("first_published_at", { lifecycleEnabled: true }))
+          .reason
+      ).toBe("reserved-name");
+      expect(verdict("status").allowed).toBe(true);
+    });
+
+    it("refuses a name whose column would be longer than every database keeps", () => {
+      const long = refusal(verdict("a".repeat(64)));
+      expect(long.reason).toBe("name-invalid");
+      expect(long.message).toContain("63 characters");
+      expect(verdict("a".repeat(63)).allowed).toBe(true);
+    });
+
+    it("refuses a camelCase name, which the Builder never gives a field it places", () => {
+      expect(refusal(verdict("metaTitle")).reason).toBe("name-invalid");
+    });
+
+    it("lets names the save takes arrive, title and slug among them", () => {
+      for (const name of ["title", "slug", "order", "body"]) {
+        expect(verdict(name).allowed).toBe(true);
+      }
+    });
+  });
+
   it("lists every container with the rule's answer for each", () => {
     const places = moveDestinations(nestedFixtureFields(), "f-summary-a", ctx);
     const answers = new Map(
@@ -551,7 +588,7 @@ describe("while a save cannot keep values across containers", () => {
   // What the Builder asks today: the switch as it ships.
   const today: MoveContext = {
     entityReadOnly: false,
-    topLevelReservesNames: true,
+    surface: "collection",
   };
   const NOT_YET =
     "Moving a field into or out of a group or repeating rows is not available yet.";
@@ -680,17 +717,24 @@ describe("what a move takes with it, and where it arrives", () => {
 
 describe("names as the save sends them, and layout groups", () => {
   it("judges a draft name by the name the save sends", () => {
-    // The Builder keeps the name as typed; the save sends it normalised.
+    // The save sends a name as it is typed, not as a label would derive it, so `My Field!` takes
+    // nothing from `my_field`: it is refused for its spelling, as the save refuses it, wherever it
+    // goes.
     const fields = [
       plain("f-g", "group", {
         type: "group",
         fields: [plain("f-a", "My Field!")],
       }),
       plain("f-b", "my_field"),
+      plain("f-other", "other", { type: "group", fields: [] }),
     ];
     expect(refusal(judgeMove(fields, "f-a", {}, ctx)).reason).toBe(
-      "name-clash"
+      "name-invalid"
     );
+    expect(
+      refusal(judgeMove(fields, "f-a", { parentFieldId: "f-other" }, ctx))
+        .reason
+    ).toBe("name-invalid");
   });
 
   it("counts a nameless layout group's fields as siblings of the level holding it", () => {
@@ -730,14 +774,14 @@ describe("names as the save sends them, and layout groups", () => {
       refusal(judgeMove(fields, "f-layout", { parentFieldId: "f-g" }, ctx))
         .reason
     ).toBe("name-clash");
-    // A name reserved at the top level, carried there inside a layout group.
+    // A built-in column's name, carried to the top level inside a layout group.
     const nested = [
       plain("f-g", "group", {
         type: "group",
         fields: [
           plain("f-layout", "", {
             type: "group",
-            fields: [plain("f-status", "status")],
+            fields: [plain("f-created", "created_at")],
           }),
         ],
       }),
@@ -832,7 +876,7 @@ describe("which moves wait for a save that keeps values", () => {
   ];
   const today = (saved: Record<string, string[]>): MoveContext => ({
     entityReadOnly: false,
-    topLevelReservesNames: true,
+    surface: "collection",
     savedContainerIdsOf: id => saved[id] ?? null,
   });
   const saved = {

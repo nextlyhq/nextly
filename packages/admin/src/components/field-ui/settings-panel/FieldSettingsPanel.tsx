@@ -162,6 +162,7 @@ export function FieldSettingsPanel({
               readOnly={readOnly}
               onChange={onChange}
               saved={saved}
+              checkName={surface.checkName}
               deriveName={surface.deriveName}
               nameFixedReason={fixedReason(surface.fixed, "name", saved)}
               apiPath={fieldApiPath(ancestors, field)}

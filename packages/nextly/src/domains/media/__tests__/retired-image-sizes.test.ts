@@ -61,7 +61,11 @@ function usedIn(
   return async paths => {
     const used = new Set(
       store.table.flatMap(row =>
-        storedFilesOf({ ...row, sizes: undefined }).paths.map(keys.path)
+        // No type: these rows stand for items whose thumbnails and sizes
+        // are at issue, and the copies an image can have change neither.
+        storedFilesOf({ ...row, mimeType: "", sizes: undefined }).paths.map(
+          keys.path
+        )
       )
     );
     return new Set(paths.filter(path => used.has(keys.path(path))));

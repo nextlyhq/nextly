@@ -28,7 +28,6 @@ packages/blocks-engine/src/style/dtcg.ts 2362
 
 packages/blocks-engine/src/tree.ts 1944
 
-packages/blocks-engine/src/validation.ts 3573
 
 
 
@@ -63,14 +62,11 @@ packages/builder/src/shared-styles-panel.tsx 1643
 packages/builder/src/style-inspector-panel.tsx 7077
 
 
-packages/plugin-page-builder/src/address-claims/entry-claims-hook.ts 1576
 
 packages/plugin-page-builder/src/admin/editor/BlocksEditor.tsx 2099
 
 packages/plugin-page-builder/src/admin/editor/site-style-studios.tsx 2038
 
-packages/plugin-page-builder/src/fields/blocks-composition.ts 2427
 
-packages/plugin-page-builder/src/pages-search-route.ts 1561
 
 packages/plugin-page-builder/src/plugin.ts 4723

@@ -83,7 +83,10 @@ function makeBuilder() {
 // read in, and a counter types cleanly against the hook's callback signature.
 let loadCount = 0;
 
-function setup(entity: Entity | undefined) {
+function setup(
+  entity: Entity | undefined,
+  { unsaved = false }: { unsaved?: boolean } = {}
+) {
   const builder = makeBuilder();
   const rendered = renderHook(
     ({ e }: { e: Entity | undefined }) =>
@@ -97,6 +100,7 @@ function setup(entity: Entity | undefined) {
           loadCount += 1;
         },
         identity: (loaded: Entity) => loaded.slug,
+        unsaved,
       }),
     { initialProps: { e: entity } }
   );
@@ -259,5 +263,28 @@ describe("useBuilderEntityState", () => {
 
     act(() => result.current.pinFields());
     expect(result.current.unsavedCount).toBe(0);
+  });
+
+  // An entity created in the dialog and not saved yet: nothing of it is on the
+  // server, so its starting fields are pending additions and the create itself
+  // is one more pending change.
+  it("counts an entity not saved yet, and its starting fields, as pending", () => {
+    const { result } = setup(
+      { slug: "products", name: "Product", fields: [definition("body")] },
+      { unsaved: true }
+    );
+    expect(result.current.pending.saved).toEqual([]);
+    expect(result.current.pending.changes).toEqual([
+      expect.objectContaining({ kind: "added", name: "body" }),
+    ]);
+    expect(result.current.unsavedCount).toBe(2);
+  });
+
+  it("counts an entity not saved yet with no fields as one pending change", () => {
+    const { result } = setup(
+      { slug: "products", name: "Product", fields: [] },
+      { unsaved: true }
+    );
+    expect(result.current.unsavedCount).toBe(1);
   });
 });
