@@ -33,6 +33,7 @@ vi.mock("@admin/services/addressCheckApi", () => ({
   },
 }));
 
+import { ADVANCED_SWITCHES } from "../../builder-settings-modal/advanced-switches";
 import type { BuilderConfig } from "../../builder-config";
 import { NewEntityDialog } from "../NewEntityDialog";
 
@@ -241,6 +242,46 @@ describe("NewEntityDialog", () => {
       "More options, on: version history, cache revalidation"
     );
   });
+
+  it.each([
+    ["collection", COLLECTION_BUILDER_CONFIG],
+    ["Single", SINGLE_BUILDER_CONFIG],
+  ] as const)(
+    "names as on exactly the switches a %s's options draw on, as each is turned",
+    async (_kind, config) => {
+      const { user } = renderDialog(config);
+      await user.click(screen.getByRole("button", { name: /More options/ }));
+      // The switches as drawn, read from the page, against the fold's name.
+      const drawn = () =>
+        ADVANCED_SWITCHES.flatMap(entry => {
+          const control = screen.queryByRole("switch", {
+            name: entry.ariaLabel,
+          });
+          return control ? [{ entry, control }] : [];
+        });
+      const expectNamedAsDrawn = () => {
+        const on = drawn()
+          .filter(
+            ({ control }) => control.getAttribute("aria-checked") === "true"
+          )
+          .map(({ entry }) => entry.summary);
+        expect(
+          screen.getByRole("button", { name: /More options/ })
+        ).toHaveAccessibleName(
+          on.length === 0
+            ? "More options, none on"
+            : `More options, on: ${on.join(", ")}`
+        );
+      };
+      expect(drawn().length).toBeGreaterThan(2);
+      expectNamedAsDrawn();
+      for (const { control } of drawn()) {
+        if (control.hasAttribute("disabled")) continue;
+        await user.click(control);
+        expectNamedAsDrawn();
+      }
+    }
+  );
 
   it("a Single", async () => {
     const { user } = renderDialog(SINGLE_BUILDER_CONFIG);
