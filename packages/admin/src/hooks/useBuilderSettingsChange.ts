@@ -16,7 +16,10 @@ import { useCallback, useRef } from "react";
 
 import type { BuilderKind } from "@admin/components/features/schema-builder/builder-config";
 import type { BuilderSettingsValues } from "@admin/components/features/schema-builder/BuilderSettingsModal";
-import { checkAddressAgain } from "@admin/components/features/schema-builder/new-entity/useAddressCheck";
+import {
+  CHECK_TIMEOUT_MS,
+  checkAddressAgain,
+} from "@admin/components/features/schema-builder/new-entity/useAddressCheck";
 import { toast } from "@admin/components/ui";
 import { settingChanges } from "@admin/lib/builder/settings-changes";
 import {
@@ -99,14 +102,27 @@ export function useBuilderSettingsChange({
       leaveWithoutWarning?: () => void
     ): Promise<boolean> => {
       let refusal: string | null;
+      let limit: ReturnType<typeof setTimeout> | undefined;
       try {
-        refusal = await checkAddressAgain(kind, to, from);
+        // As long as the live check waits, and no longer: a request that never
+        // settles must not hold the move, and every change after it, forever.
+        refusal = await Promise.race([
+          checkAddressAgain(kind, to, from),
+          new Promise<never>((_, reject) => {
+            limit = setTimeout(
+              () => reject(new Error("address check timed out")),
+              CHECK_TIMEOUT_MS
+            );
+          }),
+        ]);
       } catch {
-        // Unanswered, the move is not made on a guess.
+        // Unanswered, in time or at all, the move is not made on a guess.
         toast.error(
           "The new address could not be checked, so it was not moved. The other settings are kept."
         );
         return false;
+      } finally {
+        clearTimeout(limit);
       }
       if (refusal !== null) {
         toast.error(refusal);
