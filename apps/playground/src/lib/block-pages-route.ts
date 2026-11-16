@@ -19,7 +19,7 @@ import {
 import { notFoundLogged } from "@nextlyhq/plugin-seo/next";
 
 import { pageBuilderPlugin } from "../../nextly.config";
-import { siteReader, SITE_STYLE_CONTEXT } from "./site-content";
+import { pageTitle, siteReader, SITE_STYLE_CONTEXT } from "./site-content";
 import { SITE_STYLE_DEFAULTS } from "./site-style-defaults";
 
 /**
@@ -81,7 +81,8 @@ export const blockPagesRoute: BlocksPageConfig = {
     singles: [SITE_STYLE_SLUG],
   },
   metadata: (entry, _context, derived) => ({
-    title: derived.title ?? (entry.title as string | undefined),
+    // The page's own title, never a heading its blocks offer: see `pageTitle`.
+    title: pageTitle(entry),
     description: derived.description,
     ...(derived.canonical
       ? { alternates: { canonical: canonicalFor(derived.canonical) } }
