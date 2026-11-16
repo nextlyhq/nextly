@@ -13,6 +13,7 @@ import { expect, type Page } from "@playwright/test";
 // once a run passes the token's lifetime.
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { expectNoAxeViolations } from "./support/axe";
 
 const NOTES = "/admin/api/collections/history-notes/entries";
 // A post, for the history that holds a draft: posts keep pending changes. A
@@ -98,6 +99,9 @@ test.describe("the history list tells what happened", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     const id = await postWithADraft(page);
     await openHistory(page, `/collections/posts/${id}`);
+    // The history list, as an assistive technology reads it: the panel alone,
+    // since the document's own editor beside it is not history's.
+    await expectNoAxeViolations(page, { include: "[data-history-panel]" });
 
     await expect(
       page.getByRole("button", { name: /Current draft/ })
@@ -141,6 +145,8 @@ test.describe("the history list tells what happened", () => {
 
     const languages = page.getByRole("combobox", { name: "Languages shown" });
     await expect(languages).toContainText("Spanish and shared fields");
+    // Spanish history, as an assistive technology reads it.
+    await expectNoAxeViolations(page, { include: "[data-history-panel]" });
 
     await languages.click();
     await page.getByRole("option", { name: "All languages" }).click();

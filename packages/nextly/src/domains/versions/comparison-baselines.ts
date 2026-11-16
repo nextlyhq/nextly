@@ -17,7 +17,6 @@
  * German version is never English's "previous".
  *
  * @module domains/versions/comparison-baselines
- * @experimental
  */
 
 import { getService } from "../../di";
@@ -87,8 +86,6 @@ export interface BaselineChoice {
 
 /**
  * A registered baseline.
- *
- * @experimental
  */
 export interface ComparisonBaseline {
   /** Its name in a comparison request (`?baseline=`): kebab-case, unique. */
@@ -132,8 +129,6 @@ const registry = new Map<string, ComparisonBaseline>();
  * Refuses a name that is not kebab-case, and a name already taken: two
  * features answering one name differently would make a comparison mean
  * whichever registered last.
- *
- * @experimental
  */
 export function registerComparisonBaseline(baseline: ComparisonBaseline): void {
   if (!BASELINE_NAME.test(baseline.name)) {

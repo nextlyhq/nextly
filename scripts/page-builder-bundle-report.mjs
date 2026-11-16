@@ -12,11 +12,12 @@
  *
  * - the sign-in page and the dashboard: the page builder's code there is its
  *   registration alone, at most `REGISTRATION_BUDGET_KB` gzipped, and holds no
- *   module of the builder editor or the block engine's CSS parser; the editor
- *   stylesheet is not among the stylesheets every admin screen links;
+ *   module of the builder editor, of the block engine beyond its narrow
+ *   entries (`NARROW_ENGINE_ENTRIES`), or of the engine's CSS parser; the editor stylesheet is not among the stylesheets
+ *   every admin screen links;
  * - the dashboard with the plugin's parts it draws without a click (the
  *   Bindings to fix card, the header's delete tools): held to the same
- *   budget, and no editor or CSS parser either;
+ *   budget, and none of those modules either;
  * - the builder, opened directly: the site's code section, the fonts panel
  *   and the icon set arrive when their panel or control opens, so none is in
  *   its set, and its chunks can fetch the editor stylesheet.
@@ -69,7 +70,7 @@ const ADMIN_PAGES = "packages/admin/src/";
  * The screens, each by the modules whose loaders run on the way to it: the
  * admin's route, then the plugin's parts on that route. An `editorFree`
  * screen is held to `REGISTRATION_BUDGET_KB` with no module of the builder
- * editor or the CSS parser.
+ * editor, of the block engine beyond its narrow entries, or of the CSS parser.
  */
 export const SCREENS = [
   {
@@ -119,9 +120,17 @@ export const GROUPS = [
       /^packages\/(plugin-page-builder|builder|blocks-react)\//.test(source),
   },
   {
-    // Measured, not budgeted: core imports it too (see `KNOWN_MISSES`).
+    // Measured, not budgeted: its narrow entries may be on any screen (see
+    // the next group, which is judged).
     name: "block engine",
     matches: source => source.startsWith("packages/blocks-engine/"),
+  },
+  {
+    // Judged on a screen that draws no part: the engine less what its narrow
+    // entries reach (`NARROW_ENGINE_ENTRIES`, `narrowEngineSources`).
+    name: "block engine beyond its narrow entries",
+    matches: source =>
+      source.startsWith(`${ENGINE}/`) && !NARROW_ENGINE_SOURCES.has(source),
   },
   {
     name: "builder editor",
@@ -160,33 +169,95 @@ export const GROUPS = [
   },
 ];
 
+/** The block engine's package, as the build's source maps name its files. */
+const ENGINE = "packages/blocks-engine";
+
+/**
+ * The engine's entries an admin screen that draws no builder part may load:
+ * the document format's vocabulary (core's field catalog), the contrast math
+ * (core's colour helpers) and named queries (a block-contributing plugin,
+ * through the plugin SDK). Named, so a new subpath export is not let through
+ * by being one.
+ */
+export const NARROW_ENGINE_ENTRIES = [
+  "./format",
+  "./contrast",
+  "./named-query",
+];
+
+/**
+ * Every source of the block engine its narrow entries reach, as the build's
+ * source maps name them, with their built files: each of
+ * `NARROW_ENGINE_ENTRIES`, walked through the engine build's own module graph (its
+ * metafile), so an entry's reach is read rather than listed and cannot drift.
+ * Empty when either is missing, so every engine module then counts as beyond
+ * them: the check fails rather than passing on nothing.
+ */
+export function narrowEngineSources(packageJson, metafile) {
+  const outputs = metafile?.outputs;
+  if (packageJson?.exports === undefined || outputs === undefined) {
+    return new Set();
+  }
+  const reached = reachedOutputs(
+    narrowEntryFiles(packageJson.exports, NARROW_ENGINE_ENTRIES),
+    outputs
+  );
+  return new Set(
+    [...reached].flatMap(file => [
+      `${ENGINE}/${file}`,
+      ...Object.keys(outputs[file]?.inputs ?? {}).map(
+        input => `${ENGINE}/${input}`
+      ),
+    ])
+  );
+}
+
+/** The built file of each of the `allowed` subpath exports. */
+function narrowEntryFiles(exports, allowed) {
+  return Object.entries(exports)
+    .filter(([subpath]) => allowed.includes(subpath))
+    .map(([, target]) => target?.import ?? target?.default)
+    .filter(target => typeof target === "string")
+    .map(target => target.replace(/^\.\//, ""));
+}
+
+/** Every built file the `entries` reach through the metafile's own edges. */
+function reachedOutputs(entries, outputs) {
+  const reached = new Set();
+  const queue = [...entries];
+  while (queue.length > 0) {
+    const file = queue.pop();
+    if (file === undefined || reached.has(file)) continue;
+    reached.add(file);
+    const local = (outputs[file]?.imports ?? []).filter(
+      edge => edge.external !== true
+    );
+    queue.push(...local.map(edge => edge.path));
+  }
+  return reached;
+}
+
+/** Reads the engine's package and its build's metafile, if there is one. */
+function readNarrowEngineSources(root = ROOT) {
+  const read = path =>
+    existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : undefined;
+  return narrowEngineSources(
+    read(join(root, ENGINE, "package.json")),
+    read(join(root, ENGINE, "dist", "metafile-esm.json"))
+  );
+}
+
+const NARROW_ENGINE_SOURCES = readNarrowEngineSources();
+
 /** The editor stylesheet, as the build's CSS source maps name it. */
 const EDITOR_STYLESHEET =
   /^packages\/plugin-page-builder\/(dist|src)\/styles\/editor\.css$/;
 
 /**
- * Breaches known today, each with why, by the start of its sentence.
- *
- * The block engine and its CSS parser reach every admin screen through core,
- * not the page builder: `packages/nextly/src/utils/color-utils.ts` imports
- * `checkContrast` from the engine's root, `nextly/config` imports it, and the
- * admin's routes import `nextly/config`. The engine ships as one module, so
- * that one function brings the whole of it.
+ * Breaches known today, each with why, by the start of its sentence. None:
+ * each breach fails the run.
  */
-export const KNOWN_MISSES = [
-  {
-    starts: "sign-in: holds the CSS parser",
-    why: "core's color-utils imports checkContrast from the block engine's root",
-  },
-  {
-    starts: "dashboard: holds the CSS parser",
-    why: "core's color-utils imports checkContrast from the block engine's root",
-  },
-  {
-    starts: "dashboard, parts drawn: holds the CSS parser",
-    why: "core's color-utils imports checkContrast from the block engine's root",
-  },
-];
+export const KNOWN_MISSES = [];
 
 /**
  * How much of a chunk's code each source accounts for, in characters: the
@@ -296,7 +367,11 @@ function editorFreeBreaches(screen) {
       `${screen.name}: the page builder's code is ${kb.toFixed(1)} KB gzipped, over its budget of ${REGISTRATION_BUDGET_KB} KB`
     );
   }
-  for (const group of ["builder editor", "CSS parser"]) {
+  for (const group of [
+    "builder editor",
+    "block engine beyond its narrow entries",
+    "CSS parser",
+  ]) {
     const sources = screen.groups[group].sources;
     if (sources.length > 0) {
       found.push(

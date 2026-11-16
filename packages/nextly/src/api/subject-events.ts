@@ -17,7 +17,6 @@
  * refusal would confirm the subject exists to a caller not allowed to know.
  *
  * @module api/subject-events
- * @experimental
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
