@@ -79,8 +79,9 @@ vi.mock("../pre-resolution/executor", async importOriginal => {
 });
 
 /**
- * Runs once the Single's column has been counted `afterCount.times` times: the classifier counts it
- * first and the pre-resolution pass again, so a write here on the second count is one neither saw.
+ * Runs once the Single's column has been counted `afterCount.times` times. `db:sync` judges the
+ * narrowing by reading the column's values (the repair command's rule), so the one count is the
+ * pre-resolution pass's: a write here is one neither saw.
  */
 let afterCount: { times: number; run: () => Promise<void> } | undefined;
 vi.mock("../classifier/count-helpers", async importOriginal => {
@@ -311,8 +312,9 @@ describeMysql("legacy MySQL TEXT columns on Singles and field groups", () => {
   it("db:sync refuses when a value is longer than the declared length, naming it, and changes nothing", async () => {
     await legacyTables(h, 300);
 
+    // Judged by the repair command's rule, and named in its words, with the row's id.
     await expect(dbSync(h)).rejects.toThrow(
-      /cannot become varchar\(255\): 1 row\(s\) hold a value longer than 255 characters/
+      /text -> varchar\(255\) is blocked: values longer than the new type holds would be cut \(1 row: id /
     );
 
     expect(await readBack(h)).toEqual({
@@ -423,12 +425,13 @@ describeMysql("legacy MySQL TEXT columns on Singles and field groups", () => {
     h = await makeHarness(2);
     await legacyTables(h, 255);
     await laxPool();
-    afterCount = { times: 2, run: writeLongTitle };
+    afterCount = { times: 1, run: writeLongTitle };
 
-    // The driver's error names the statement it refused; MySQL's reason, "Data too long", is its
-    // cause. What separates this from an unguarded apply is that the apply fails at all.
+    // Strict mode refuses the statement ("Data too long"); the apply names the column it was
+    // converting and the step that checks it again, rather than the driver's error. What separates
+    // this from an unguarded apply is that the apply fails at all.
     await expect(dbSync(h)).rejects.toThrow(
-      /MODIFY COLUMN `title` varchar\(255\)/
+      /title: text -> varchar\(255\) stopped at a value written after the column was checked/
     );
 
     expect((await readBack(h)).title).toEqual(["text", 300]);
