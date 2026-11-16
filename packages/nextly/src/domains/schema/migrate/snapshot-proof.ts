@@ -124,19 +124,69 @@ export async function proveStatements(args: {
 
 /**
  * For each statement, the nullable columns it fills with a default in every row its table holds:
- * `ALTER TABLE ... ADD [COLUMN] c ... DEFAULT <value>`. A SQLite rebuild fills none: its copy
- * carries every column of its twin (`rebuildCopyStatements`), and a twin with a column the copy
- * leaves out is no rebuild, so its rows are not shown at all. A NOT NULL column holds no NULL to
+ * `ALTER TABLE ... ADD [COLUMN] c ... DEFAULT <value>`, and a SQLite rebuild's copy, for each
+ * column of the twin it leaves to its default (`ownRowsCopy`). A NOT NULL column holds no NULL to
  * find, so it is not counted.
  */
 function columnsFilledBy(
   statements: readonly string[],
   dialect: SupportedDialect
 ): FilledColumn[][] {
-  return statements.map(statement =>
-    columnsAddedWithDefault(statement, dialect)
-  );
+  return statements.map(statement => {
+    const copy = ownRowsCopy(statement, dialect);
+    if (copy === undefined) return columnsAddedWithDefault(statement, dialect);
+    const create = statements.find(
+      other => createdTable(other, dialect) === copy.twin
+    );
+    return create === undefined
+      ? []
+      : twinColumnsLeftToDefault(create, copy, dialect);
+  });
 }
+
+/** The columns of a rebuild's twin with a default that its copy leaves out: filled by it. */
+function twinColumnsLeftToDefault(
+  create: string,
+  copy: { twin: string; columns: string[] },
+  dialect: SupportedDialect
+): FilledColumn[] {
+  const table = copy.twin.replace(/^__new_/, "");
+  return columnDefinitions(create, dialect)
+    .filter(
+      ([column, tail]) =>
+        !copy.columns.includes(column) && fillsWithDefault(tail)
+    )
+    .map(([column]) => ({ table, column }));
+}
+
+/** Each column a `CREATE TABLE` body defines, with the tokens after its name. */
+function columnDefinitions(
+  create: string,
+  dialect: SupportedDialect
+): Array<[string, StatementToken[]]> {
+  const cursor = cursorOf(create, dialect, EXACT);
+  cursor.accept("CREATE", "TABLE");
+  cursor.acceptCondition();
+  if (cursor.name() === undefined || !cursor.accept("(")) return [];
+  const body = cursor.rest();
+  return new StatementCursor(body.slice(0, body.lastIndexOf(")")))
+    .clauses()
+    .flatMap(tokens => {
+      const definition = new StatementCursor(tokens);
+      if (nextIn(definition, TABLE_CONSTRAINT_WORDS)) return [];
+      const column = definition.name();
+      return column === undefined ? [] : [[column, definition.rest()]];
+    });
+}
+
+/** Words opening a table constraint in a `CREATE TABLE` body, not a column. */
+const TABLE_CONSTRAINT_WORDS = new Set([
+  "CONSTRAINT",
+  "PRIMARY",
+  "UNIQUE",
+  "FOREIGN",
+  "CHECK",
+]);
 
 /** `ALTER TABLE t ADD [COLUMN] [IF NOT EXISTS] c ... DEFAULT <value>` clauses, nullable ones. */
 function columnsAddedWithDefault(
@@ -533,18 +583,50 @@ function dropTablesShown(cursor: StatementCursor, file: FileContext): boolean {
 }
 
 /**
- * Rows written into a table the file created and drops again: a rebuild's guard. A table renamed
- * into place keeps its rows, so rows written into one are not shown, unless they are a rebuild's
- * copy of the table's own (`rebuildCopyStatements`).
+ * Rows written into a table the file created: a rebuild's guard, dropped again by the end, or a
+ * rebuild's copy of a table's own rows into its twin, moved into place (`ownRowsCopy`). Rows of
+ * any other kind put into a table moved into place outlive the file, and are not shown.
  */
-function guardRowsShown(cursor: StatementCursor, file: FileContext): boolean {
+function guardRowsShown(
+  cursor: StatementCursor,
+  file: FileContext,
+  statement: string
+): boolean {
   const into = cursor.name();
+  if (into === undefined || !file.created.has(into)) return false;
+  if (file.objects.tables.has(into)) return false;
+  if (file.droppedLater.has(into)) return true;
   return (
-    into !== undefined &&
-    file.created.has(into) &&
-    !file.objects.tables.has(into) &&
-    file.droppedLater.has(into)
+    file.goneLater.has(into) &&
+    ownRowsCopy(statement, file.dialect)?.twin === into
   );
+}
+
+/**
+ * A rebuild's copy of a table's own rows into its twin: `INSERT INTO __new_t (a, b) SELECT a, b
+ * FROM t`, the same columns in both lists. The twin's other columns take their defaults
+ * (`columnsFilledBy`).
+ */
+function ownRowsCopy(
+  statement: string,
+  dialect: SupportedDialect
+): { twin: string; columns: string[] } | undefined {
+  const cursor = cursorOf(statement, dialect, EXACT);
+  if (!cursor.accept("INSERT", "INTO")) return undefined;
+  const twin = cursor.name();
+  if (twin === undefined || !cursor.accept("(")) return undefined;
+  const into = cursor.names();
+  if (into === undefined || !cursor.accept(")", "SELECT")) return undefined;
+  const selected = cursor.names();
+  if (!cursor.accept("FROM")) return undefined;
+  const table = cursor.name();
+  const same =
+    selected !== undefined &&
+    selected.length === into.length &&
+    selected.every((column, at) => column === into[at]);
+  return same && cursor.done() && twin === `__new_${table}`
+    ? { twin, columns: into }
+    : undefined;
 }
 
 /** `CREATE [UNIQUE] INDEX [CONCURRENTLY] [IF NOT EXISTS] n ON [ONLY] t ...`. */

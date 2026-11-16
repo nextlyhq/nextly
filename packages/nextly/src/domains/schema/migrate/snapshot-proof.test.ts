@@ -505,7 +505,7 @@ describe("proveStatements: rows a statement fills with its default", () => {
     ).toEqual({ statuses: ["shown", "shown", "shown"], counted: [] });
   });
 
-  it("never passes rows written into a table moved into place, unless a rebuild copies its own", async () => {
+  it("passes a rebuild's copy of the table's own rows, counting the columns it leaves to their defaults", async () => {
     // At the file's end the twin is gone and the table stands in its place.
     const live: LiveSchema = {
       ...everything,
@@ -517,28 +517,42 @@ describe("proveStatements: rows a statement fills with its default", () => {
       'DROP TABLE "dc_posts"',
       'ALTER TABLE "__new_dc_posts" RENAME TO "dc_posts"',
     ];
-    const statuses = async (statements: string[]) =>
+    const OWN_ROWS =
+      'INSERT INTO "__new_dc_posts" ("id", "title") SELECT "id", "title" FROM "dc_posts"';
+    const prove = async (statements: string[], nulls: number) => {
+      const counted: string[] = [];
+      const proofs = await proveStatements({
+        statements,
+        dialect: "sqlite",
+        sides,
+        live: {
+          schema: live,
+          nullsIn: (table, column) => {
+            counted.push(`${table}.${column}`);
+            return Promise.resolve(nulls);
+          },
+        },
+      });
+      return { statuses: proofs.map(proof => proof.status), counted };
+    };
+    expect(await prove(block(OWN_ROWS), 0)).toEqual({
+      statuses: ["shown", "shown", "shown", "shown"],
+      counted: ["dc_posts.note"],
+    });
+    expect((await prove(block(OWN_ROWS), 1)).statuses).toEqual([
+      "shown",
+      "unfilled",
+      "shown",
+      "shown",
+    ]);
+    // Rows of the file's own put into the twin outlive it once it is moved into place.
+    expect(
       (
-        await proveStatements({
-          statements,
-          dialect: "sqlite",
-          sides,
-          live: { schema: live, nullsIn: () => Promise.resolve(0) },
-        })
-      ).map(proof => proof.status);
-    // A copy that leaves `note` to its default is no rebuild: its rows are not shown.
-    expect(
-      await statuses(
-        block(
-          'INSERT INTO "__new_dc_posts" ("id", "title") SELECT "id", "title" FROM "dc_posts"'
+        await prove(
+          block(`INSERT INTO "__new_dc_posts" ("id") VALUES ('seeded')`),
+          0
         )
-      )
-    ).toEqual(["shown", "unshown", "shown", "shown"]);
-    // Nor are rows of its own the file puts in the twin.
-    expect(
-      await statuses(
-        block(`INSERT INTO "__new_dc_posts" ("id") VALUES ('seeded')`)
-      )
+      ).statuses
     ).toEqual(["shown", "unshown", "shown", "shown"]);
   });
 
