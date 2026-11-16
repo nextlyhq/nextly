@@ -20,7 +20,14 @@
  * because each runs whole commands.
  */
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -55,6 +62,7 @@ import {
 import { NextlyError } from "../../../errors/nextly-error";
 import { createLogger } from "../../utils/logger";
 import { assertAppHistoryHolds, migrateCore } from "../migrate";
+import { baselineCore } from "../migrate-baseline";
 import { downDatabaseDeps, migrateDownCore } from "../migrate-down";
 
 const CHILD = join(__dirname, "helpers", "migration-run-child.ts");
@@ -151,13 +159,18 @@ describe.each(LOCK_DIALECTS)(
     }
 
     /** `nextly migrate:resolve` on the file, as the command runs it. */
-    function resolveFile(mode: "applied" | "failed-cleanup") {
+    function resolveFile(
+      mode: "applied" | "failed-cleanup" | "rolled-back",
+      fileMissing = false
+    ) {
       return resolveMigration({
         mode,
         filename: FILE,
+        fileMissing,
         dialect,
         repo: new SchemaEventsRepository(adapter.getDrizzle(), dialect),
-        fileExists: () => Promise.resolve(true),
+        fileExists: () =>
+          Promise.resolve(existsSync(join(migrationsDir, FILE))),
         loadTargetSnapshot: () => Promise.resolve(null),
         marksNoTransaction: () =>
           Promise.resolve(
@@ -168,6 +181,17 @@ describe.each(LOCK_DIALECTS)(
             checksumOf(readFileSync(join(migrationsDir, FILE), "utf8"))
           ),
         introspectLive: () => Promise.resolve({ tables: [] }),
+      });
+    }
+
+    /** `migrate:baseline`'s core, as the command runs it. */
+    function baseline() {
+      return baselineCore({
+        adapter: adapter as never,
+        db: adapter.getDrizzle(),
+        dialect,
+        migrationsDir,
+        logger,
       });
     }
 
@@ -467,6 +491,39 @@ describe.each(LOCK_DIALECTS)(
           marked
         );
       });
+
+      it("refuses a baseline over the attempt a killed run left, changing nothing, until it is recorded rolled back", async () => {
+        // A table a baseline adopts once nothing stands in its way.
+        await adapter.executeQuery(
+          `CREATE TABLE dc_${P}_posts (id varchar(36) PRIMARY KEY)`
+        );
+        await kill(await runUntil("up", "after", firstStatement));
+        const settled = await databaseState();
+
+        // The lock lapses; the baseline stops on the attempt, naming the
+        // file, and writes nothing: no file, no ledger row, no table.
+        const refused = await baseline().then(
+          () => undefined,
+          (thrown: unknown) => thrown
+        );
+        expect(refused).toMatchObject({
+          code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+          publicMessage: expect.stringContaining(FILE),
+        });
+        expect(await databaseState()).toEqual(settled);
+        expect(readdirSync(migrationsDir)).toEqual([FILE]);
+
+        // The operator reverses what ran, takes the file out, and records it
+        // rolled back. The rolled-back migration is no history: the baseline
+        // adopts the database.
+        await adapter.executeQuery(`DROP TABLE ${one}`);
+        rmSync(join(migrationsDir, FILE));
+        await resolveFile("rolled-back", true);
+        expect(await baseline()).toMatchObject({
+          kind: "baselined",
+          tableCount: 1,
+        });
+      }, 180_000);
 
       it.each(["before", "after"] as const)(
         "records the attempt with no outcome when the process is killed %s the first statement",

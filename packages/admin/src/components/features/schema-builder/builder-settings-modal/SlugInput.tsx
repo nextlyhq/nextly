@@ -29,12 +29,15 @@ type Props = {
    * and is gone by the next load.
    */
   readOnly?: boolean;
+  /** The id of the note that says what the address is for, read with it. */
+  describedBy?: string;
 };
 
 export function SlugInput({
   value,
   onChange,
   readOnly = false,
+  describedBy,
 }: Props): JSX.Element {
   return (
     <Input
@@ -42,6 +45,7 @@ export function SlugInput({
       value={value}
       onChange={e => onChange(e.target.value)}
       readOnly={readOnly}
+      aria-describedby={describedBy}
       // `readOnly` rather than `disabled`: the value still has to be
       // selectable, copyable and reachable by a screen reader, and `disabled`
       // drops it out of the tab order entirely.

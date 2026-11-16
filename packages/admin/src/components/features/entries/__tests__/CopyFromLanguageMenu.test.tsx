@@ -13,6 +13,7 @@ import {
   EntryLocaleProvider,
   type EntryLocaleContextValue,
 } from "../EntryLocaleContext";
+import { copiedValuesFor } from "../copied-values";
 import { useCopyFromLanguage } from "../useCopyFromLanguage";
 
 const { useBranding, toast } = vi.hoisted(() => ({
@@ -67,6 +68,8 @@ const SINGLE_CTX: EntryLocaleContextValue = {
 };
 
 let seenValues: Record<string, unknown> = {};
+/** The form's control, which its copies are tracked by. */
+let seenControl: object = {};
 
 function Harness({
   ctx = CTX,
@@ -77,6 +80,7 @@ function Harness({
 }) {
   const form = useForm<Record<string, unknown>>({ defaultValues: defaults });
   seenValues = form.watch();
+  seenControl = form.control;
   return (
     <FormProvider {...form}>
       <EntryLocaleProvider value={ctx}>
@@ -233,5 +237,31 @@ describe("CopyFromLanguageMenu", () => {
       expect(seenValues.body).toBe("World");
     });
     expect(toast.success).toHaveBeenCalled();
+  });
+
+  it("records what it copied, so the save says each field was copied from that language", async () => {
+    useBranding.mockReturnValue({ locales: LOCALES });
+    fetchSourceValues.mockResolvedValue({ title: "Hello", body: "World" });
+    render(<Harness defaults={{ title: "", body: "" }} />);
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: /replace german from another language/i,
+      })
+    );
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "English" })
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: /^Copy from English$/ })
+    );
+
+    await waitFor(() => {
+      expect(seenValues.title).toBe("Hello");
+    });
+    expect(copiedValuesFor(seenControl).provenanceForSave(seenValues)).toEqual({
+      title: { origin: "copy", sourceLocale: "en" },
+      body: { origin: "copy", sourceLocale: "en" },
+    });
   });
 });

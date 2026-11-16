@@ -27,6 +27,7 @@ import { useMemo, useState } from "react";
 
 import { useFieldTypeLabel } from "@admin/lib/builder/field-type-label";
 import { reviewDeletesData } from "@admin/lib/builder/review-deletes-data";
+import type { SettingChange } from "@admin/lib/builder/settings-changes";
 import type {
   SchemaPreviewChange,
   SchemaPreviewJoiningTranslation,
@@ -42,6 +43,7 @@ import {
   JoiningTranslationNotice,
   LeavingTranslationNotice,
 } from "./LeavingTranslationNotice";
+import { SettingChangesList } from "./SettingChangesList";
 
 interface SchemaChangeDialogProps {
   open: boolean;
@@ -62,6 +64,8 @@ interface SchemaChangeDialogProps {
   leavingTranslation?: SchemaPreviewLeavingTranslation[];
   // Fields that become translated: how many values become the default language's.
   joiningTranslation?: SchemaPreviewJoiningTranslation[];
+  /** The entity's settings saved with the fields, each listed. */
+  settingChanges?: readonly SettingChange[];
   onConfirm: (
     resolutions: Record<string, FieldResolution>,
     renameResolutions: SchemaRenameResolution[]
@@ -82,6 +86,7 @@ export function SchemaChangeDialog({
   interactiveFields,
   leavingTranslation = [],
   joiningTranslation = [],
+  settingChanges = [],
   onConfirm,
   isApplying,
 }: SchemaChangeDialogProps): JSX.Element {
@@ -286,6 +291,9 @@ export function SchemaChangeDialog({
 
         <LeavingTranslationNotice fields={leavingTranslation} />
         <JoiningTranslationNotice fields={joiningTranslation} />
+        {/* The settings saved with these fields, translation turned off
+            among them beside what leaving it moves. */}
+        <SettingChangesList changes={settingChanges} />
 
         {/* Rename candidates - one section per dropped column with a list
             of "rename to X" radios + a "drop and add new" option.

@@ -21,6 +21,10 @@ const ROLE_INDEX =
 const FIELD_SOURCES =
   "A REST restore records, on the version it writes, which version each restored field came from. The column is new and nullable, so existing versions read as recording no sources.";
 
+/** Why the version history's changed-parts columns are safe. */
+const CHANGED_PARTS =
+  "A version now records which languages it changed and whether it changed the shared part. Both columns are new and nullable with no default, so existing versions read as unknown and keep every value they had.";
+
 /**
  * The form builder's own collections, which it declares and which upgrade with
  * it. Each is the plugin's declaration changing, as an app's config change
@@ -69,6 +73,36 @@ export const ALLOWED_OPERATIONS: readonly AllowedOperation[] = [
     operation: "add column nextly_versions.field_sources: json null",
     dialects: ["mysql"],
     reason: FIELD_SOURCES,
+  },
+  {
+    operation: "add column nextly_versions.changed_locales: text null",
+    dialects: ["sqlite"],
+    reason: CHANGED_PARTS,
+  },
+  {
+    operation: "add column nextly_versions.changed_locales: jsonb null",
+    dialects: ["postgresql"],
+    reason: CHANGED_PARTS,
+  },
+  {
+    operation: "add column nextly_versions.changed_locales: json null",
+    dialects: ["mysql"],
+    reason: CHANGED_PARTS,
+  },
+  {
+    operation: "add column nextly_versions.shared_changed: integer null",
+    dialects: ["sqlite"],
+    reason: CHANGED_PARTS,
+  },
+  {
+    operation: "add column nextly_versions.shared_changed: boolean null",
+    dialects: ["postgresql"],
+    reason: CHANGED_PARTS,
+  },
+  {
+    operation: "add column nextly_versions.shared_changed: tinyint(1) null",
+    dialects: ["mysql"],
+    reason: CHANGED_PARTS,
   },
   {
     operation: "create table dc_form_submission_sends",
