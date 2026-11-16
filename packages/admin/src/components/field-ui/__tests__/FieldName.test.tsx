@@ -44,22 +44,44 @@ const META = text("f-meta", "metaTitle", { label: "Meta title" });
 const TEASER = text("f-teaser", "teaser", { label: "Teaser" });
 const SAVED: BuilderField[] = [META, TEASER];
 
+/** A group with no name, which only lays fields out: they are named on the level holding it. */
+const layout = (id: string, fields: BuilderField[]) =>
+  ({ ...text(id, "", { label: "" }), type: "group", fields }) as BuilderField;
+
+/** The fields the panel is shown in, the new field placed as each case asks. */
+function fieldsAround(field: BuilderField, nestIn?: string, inLayout = false) {
+  if (inLayout) {
+    // Inside a named group, inside a layout group beside the group's own `headline`.
+    return [
+      META,
+      {
+        ...text("f-box", "box"),
+        type: "group",
+        fields: [text("f-headline", "headline"), layout("f-layout", [field])],
+      },
+    ];
+  }
+  return nestIn
+    ? [META, { ...text("f-box", nestIn), type: "group", fields: [field] }]
+    : [META, field];
+}
+
 /** The settings panel on a new field beside `META`, `TEASER` deleted but not yet saved. */
 function Panel({
   kind = "collection",
   drafts = false,
   initial = text("f-new", "", { label: "" }),
   nestIn,
+  inLayout = false,
 }: {
   kind?: BuilderKind;
   drafts?: boolean;
   initial?: BuilderField;
   nestIn?: string;
+  inLayout?: boolean;
 }) {
   const [field, setField] = useState(initial);
-  const fields = nestIn
-    ? [META, { ...text("f-box", nestIn), type: "group", fields: [field] }]
-    : [META, field];
+  const fields = fieldsAround(field, nestIn, inLayout);
   return (
     <BuilderFieldSettings
       kind={kind}
@@ -189,6 +211,19 @@ describe("a name typed in the settings panel", () => {
     });
   }
 
+  // A group with no name is part of the level holding it, so a field inside one is named beside
+  // the fields around it, here inside the named group `box`.
+  it("judges a field inside a layout group against the fields of the level holding it", async () => {
+    render(<Panel inLayout />);
+    await typeName("headline");
+    expect(problem()).toHaveTextContent(
+      /headline here already has the same name/
+    );
+    // Inside `box`, the collection's owner column is an ordinary key.
+    await typeName("created_by");
+    expect(problem()).toBeNull();
+  });
+
   // A saved field's own name is the save's to keep, whatever the rule says of a new one.
   it("says nothing of the name a saved field already has", () => {
     render(<Panel initial={META} />);
@@ -211,14 +246,24 @@ describe("a name the settings panel derives from the label", () => {
   });
 });
 
-/** The picker opened at the top level, beside `META`, with `TEASER` deleted but not yet saved. */
-function renderPicker(kind: BuilderKind = "collection", drafts = false) {
+/**
+ * The picker opened at the top level beside `META`, with `TEASER` deleted but not yet saved, or,
+ * with `fields` and `position`, wherever a case places it.
+ */
+function renderPicker(
+  kind: BuilderKind = "collection",
+  drafts = false,
+  at: { fields: BuilderField[]; position: { parentFieldId?: string } } = {
+    fields: [META],
+    position: {},
+  }
+) {
   const onAdded = vi.fn();
   render(
     <BuilderFieldPicker
       config={CONFIGS[kind]}
-      fields={[META]}
-      position={{}}
+      fields={at.fields}
+      position={at.position}
       onCancel={() => {}}
       onFieldsChange={() => {}}
       onAdded={onAdded}
@@ -268,6 +313,40 @@ describe("a name the picker derives from the label", () => {
       expect(screen.getByRole("button", { name: "Add field" })).toBeEnabled();
     });
   }
+
+  // A group with no name is part of the level holding it, so a field added inside one is named
+  // beside the fields around it.
+  it("names a field added inside a layout group against the level holding it", async () => {
+    renderPicker("collection", false, {
+      fields: [META, layout("f-layout-top", [])],
+      position: { parentFieldId: "f-layout-top" },
+    });
+    await labelInPicker("Meta title");
+    expect(pickedName()).toBe("meta_title_2");
+  });
+
+  it("names a field added inside a layout group inside a named group against that group's fields", async () => {
+    renderPicker("collection", false, {
+      fields: [
+        META,
+        {
+          ...text("f-box", "box"),
+          type: "group",
+          fields: [text("f-headline", "headline"), layout("f-layout", [])],
+        } as BuilderField,
+      ],
+      position: { parentFieldId: "f-layout" },
+    });
+    const user = await labelInPicker("Headline");
+    expect(pickedName()).toBe("headline_2");
+    // Inside `box`, the collection's owner column is an ordinary key.
+    await user.clear(screen.getByRole("textbox", { name: "Label" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Label" }),
+      "Created by"
+    );
+    expect(pickedName()).toBe("created_by");
+  });
 
   // A name refused for what it is, not for being taken, stays refused: the field cannot be added,
   // by button or by Enter.

@@ -41,6 +41,7 @@ import {
   insertField,
   type FieldInsertPosition,
 } from "@admin/lib/builder/insert-field";
+import { namingLevelFor } from "@admin/lib/builder/move-rule";
 import { fieldsWithDeleted } from "@admin/lib/builder/outline/pending-rows";
 import { UI_SCHEMA_FIELD_TYPES } from "@admin/lib/builder/ui-schema-mode";
 
@@ -79,13 +80,25 @@ type Props = {
   lifecycleEnabled?: boolean;
 };
 
-/** The fields a new field will sit beside at `position`. */
-function siblingsAt(
+/**
+ * Where a field added at `position` is named, by the save's own rules: the naming level it lands
+ * on (a layout container is part of the level holding it), and the names already there, with every
+ * pending delete put back where it was saved, since each still holds its name until the save.
+ */
+function namePlaceAt(
   fields: readonly BuilderField[],
-  position: FieldInsertPosition
-): readonly BuilderField[] {
-  if (!position.parentFieldId) return fields;
-  return findFieldById([...fields], position.parentFieldId)?.fields ?? [];
+  position: FieldInsertPosition,
+  savedFields: readonly BuilderField[] | undefined,
+  rules: Pick<BuilderNamePlace, "surface" | "lifecycleEnabled">
+): BuilderNamePlace {
+  const shown = savedFields ? fieldsWithDeleted(fields, savedFields) : fields;
+  const { level, siblings } = namingLevelFor(shown, position.parentFieldId);
+  return {
+    ...rules,
+    // Inside a named container the value is a key in that container's value.
+    nested: level !== null,
+    siblingNames: siblings.map(field => field.name),
+  };
 }
 
 export function BuilderFieldPicker({
@@ -109,18 +122,10 @@ export function BuilderFieldPicker({
   const parent = position.parentFieldId
     ? findFieldById(fields, position.parentFieldId)
     : undefined;
-  // The siblings with every pending delete put back where it was saved, since each still holds its
-  // name until the save.
-  const shown = savedFields ? fieldsWithDeleted(fields, savedFields) : fields;
-  const siblingNames = siblingsAt(shown, position).map(f => f.name);
-  // Where the new field's name is judged, by the save's own rules: inside a named container its
-  // value is a key in that container's value; a container with no name is part of the level.
-  const place: BuilderNamePlace = {
+  const place = namePlaceAt(fields, position, savedFields, {
     surface: nameSurfaceOf(config.kind),
-    nested: Boolean(parent?.name),
     lifecycleEnabled,
-    siblingNames,
-  };
+  });
 
   const fieldGroupOptions = useMemo(
     () =>
@@ -180,8 +185,10 @@ export function BuilderFieldPicker({
         // A derived name that is taken, by a sibling or as a built-in or Draft/Published name, gets
         // the next free suffix; one the rules refuse for its spelling or length is shown as refused.
         deriveName: label =>
-          nextDuplicateName(toSnakeName(label) || "field", siblingNames, name =>
-            nameIsTakenAt(name, { ...place, siblingNames: [] })
+          nextDuplicateName(
+            toSnakeName(label) || "field",
+            place.siblingNames,
+            name => nameIsTakenAt(name, { ...place, siblingNames: [] })
           ),
         nameProblem: name => builderNameProblem(name, place),
         fieldGroups: FIELD_GROUP_TYPE

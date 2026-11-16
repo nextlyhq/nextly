@@ -49,6 +49,7 @@ import {
   type FieldPlacement,
 } from "@admin/lib/builder/field-placement";
 import { isRepeatingContainer } from "@admin/lib/builder/is-inside-repeating-ancestor";
+import { namingLevelFor } from "@admin/lib/builder/move-rule";
 import {
   describeReadOnly,
   placementReadOnlyReason,
@@ -150,20 +151,24 @@ function nameCheckFor(
   savedFields: readonly BuilderField[] | undefined,
   lifecycleEnabled: boolean
 ): (name: string) => string | null {
-  const { field, ancestors, siblings } = placement;
+  const { field, ancestors } = placement;
   const saved = savedFields ? findFieldPlacement(savedFields, field.id) : null;
-  // A pending delete still holds its name, so the siblings are read with them put back.
-  const held = savedFields
-    ? (findFieldPlacement(fieldsWithDeleted(fields, savedFields), field.id)
-        ?.siblings ?? siblings)
-    : siblings;
+  // A pending delete still holds its name, so the level is read with them put back.
+  const shown = savedFields ? fieldsWithDeleted(fields, savedFields) : fields;
+  // The naming level the field sits on: a container without a name is part of the level holding
+  // it, so the field is named beside the fields around that container.
+  const { level, siblings } = namingLevelFor(
+    shown,
+    ancestors[ancestors.length - 1]?.id
+  );
   const place = {
     surface: nameSurfaceOf(kind),
-    // Inside a named container the field is a key in its value; a container without a name is part
-    // of the level holding it.
-    nested: ancestors.some(ancestor => Boolean(ancestor.name)),
+    // Inside a named container the field is a key in its value.
+    nested: level !== null,
     lifecycleEnabled,
-    siblingNames: held.map(other => other.name),
+    siblingNames: siblings
+      .filter(other => other.id !== field.id)
+      .map(other => other.name),
   };
   return name =>
     saved !== null && saved.field.name === name
