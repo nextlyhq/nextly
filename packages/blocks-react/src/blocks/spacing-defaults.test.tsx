@@ -241,7 +241,7 @@ describe("a sheet stored by the compiler before this spacing", () => {
     expect(served.css).toContain(
       `.${PAGE_ROOT_CLASS} :where(h2) { font-size: 1.75em; font-weight: 700; line-height: 1.2; margin-block-end: 0; margin-block-start: 0 }`
     );
-    expect(served.sharedInputsId?.startsWith("v5:")).toBe(true);
+    expect(served.sharedInputsId?.startsWith("v6:")).toBe(true);
     expect(Object.keys(served.classes)).toContain("t");
   });
 
@@ -289,7 +289,7 @@ describe("a sheet stored by the compiler before this spacing", () => {
         false,
         { fetchPolicyId: POLICY, mayFetchUrl }
       );
-      expect(served.sharedInputsId?.startsWith("v5:")).toBe(true);
+      expect(served.sharedInputsId?.startsWith("v6:")).toBe(true);
       expect(served.css).not.toContain("cdn.other.test");
     });
 
@@ -315,7 +315,7 @@ describe("a sheet stored by the compiler before this spacing", () => {
       resolver
     );
     expect(served.css).not.toContain("1.5em");
-    expect(served.sharedInputsId?.startsWith("v5:")).toBe(true);
+    expect(served.sharedInputsId?.startsWith("v6:")).toBe(true);
   });
 });
 
@@ -630,6 +630,23 @@ describe("a sheet stored for a classic site before one spacing model", () => {
     expect(served.css).toContain(
       `:where(.nx-bt-core--section.${CHILD_GAP_CLASS} > * + *) { margin-block-start: var(--site-space-stack) }`
     );
+  });
+
+  it("is recompiled with gaps on a read with no compile context", () => {
+    // Where no context exists the stamp's hash cannot be compared, only the
+    // encoding it was written under, so this read reaches a fresh compile
+    // only because the encoding moved past the one that stored the sheet.
+    const served = resolvePageStyles(
+      DOC,
+      STORED_UNDER_CLASSIC,
+      undefined,
+      resolver
+    );
+    expect(served.css).not.toContain("margin-block-start: 1.5em");
+    expect(served.css).toContain(
+      `:where(h2) { font-size: 1.75em; font-weight: 700; line-height: 1.2; margin-block-end: 0; margin-block-start: 0 }`
+    );
+    expect(Object.keys(served.classes)).toContain("title");
   });
 
   it("CONTROL: a sheet stored by the current compiler is served as it stands", () => {

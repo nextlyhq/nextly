@@ -151,8 +151,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * writes those declarations on the part, off the wrapper. A sheet stored
  * before wrote a wrapped image's corners and proportion on its root, which the
  * renderer now gives the image's look as well, so it is refused, not served.
+ *
+ * `v6`: one spacing model. A sheet stored for a site on the classic model
+ * carries the old heading and paragraph margins and no container gap, and a
+ * read with no compile context judges a stored sheet by this encoding alone,
+ * so only a new one keeps that sheet from being served on such a read.
  */
-const ENCODING = "v5";
+const ENCODING = "v6";
 
 /**
  * Whether a stored stamp was written under the current {@link ENCODING}.
