@@ -159,7 +159,7 @@ export function assertValidFieldsPayload(
  * definition already stored: one that holds a repeat still loads, and re-saving it is refused until
  * one value is changed.
  */
-function assertOptionValuesDistinct(fields: unknown): void {
+export function assertOptionValuesDistinct(fields: unknown): void {
   const errors: Array<{ path: string; code: string; message: string }> = [];
   const walk = (list: unknown, at: string): void => {
     if (!Array.isArray(list)) return;
@@ -188,7 +188,9 @@ function assertOptionValuesDistinct(fields: unknown): void {
           message: `Field "${String(name)}" has two options with the value "${repeated}"`,
         });
       }
-      walk(inner, `${path}.`);
+      // Only the container types hold nested fields: a plugin type may keep a `fields` option of
+      // its own as private configuration, which is no field list to judge.
+      if (type === "group" || type === "repeater") walk(inner, `${path}.`);
     }
   };
   walk(fields, "");

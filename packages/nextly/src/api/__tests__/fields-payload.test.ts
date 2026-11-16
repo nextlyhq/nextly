@@ -7,7 +7,10 @@
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../errors/nextly-error";
-import { assertValidFieldsPayload } from "../fields-payload";
+import {
+  assertOptionValuesDistinct,
+  assertValidFieldsPayload,
+} from "../fields-payload";
 import { parseUiSchema } from "../../schemas/_zod/ui-schema";
 
 describe("assertValidFieldsPayload", () => {
@@ -94,6 +97,31 @@ describe("assertValidFieldsPayload", () => {
         },
       ])
     ).not.toThrow();
+  });
+
+  // A plugin type may keep a `fields` option of its own as private configuration: only a group or
+  // a repeater holds nested fields, so only theirs are judged.
+  it("judges nested options only inside a group or a repeater", () => {
+    const repeated = [
+      {
+        name: "choice",
+        type: "select",
+        options: [
+          { label: "A", value: "a" },
+          { label: "B", value: "a" },
+        ],
+      },
+    ];
+    expect(() =>
+      assertOptionValuesDistinct([
+        { name: "picker", type: "acme-picker", fields: repeated },
+      ])
+    ).not.toThrow();
+    expect(() =>
+      assertOptionValuesDistinct([
+        { name: "box", type: "group", fields: repeated },
+      ])
+    ).toThrow(NextlyError);
   });
 
   it("does not mutate or strip the payload (validation-only)", () => {

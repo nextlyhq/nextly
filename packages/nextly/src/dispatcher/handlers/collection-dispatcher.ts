@@ -22,6 +22,7 @@ import { z } from "zod";
 
 import {
   assertBuilderFieldNames,
+  assertOptionValuesDistinct,
   assertValidFieldsPayload,
   assertValidPluginFieldOptions,
   readRequestedLifecycle,
@@ -582,6 +583,8 @@ const COLLECTIONS_METHODS: Record<
       const createdFields = (created as { fields?: unknown }).fields;
       if (createdFields !== undefined) {
         assertValidPluginFieldOptions(createdFields);
+        // Nor two options sharing one value, which the stored value could not tell apart.
+        assertOptionValuesDistinct(createdFields);
       }
       const result = await svc.createCollection(created);
       const collection = unwrapServiceResult(result);
@@ -723,6 +726,8 @@ const COLLECTIONS_METHODS: Record<
       const updatedFields = (body as { fields?: unknown }).fields;
       if (updatedFields !== undefined) {
         assertValidPluginFieldOptions(updatedFields);
+        // Nor two options sharing one value, which the stored value could not tell apart.
+        assertOptionValuesDistinct(updatedFields);
       }
       const result = await svc.updateCollection(
         { collectionName: p.collectionName },
