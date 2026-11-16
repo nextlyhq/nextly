@@ -9,9 +9,18 @@
  * requested, so a save naming `status: "published"` puts a language live past a gate that holds
  * it back.
  */
+// Set before the harness boots (env validation reads it once); the REST door's session is signed
+// with it.
+process.env.NEXTLY_SECRET =
+  process.env.NEXTLY_SECRET ??
+  "test-secret-must-be-at-least-32-characters-long!!";
+
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
+import { buildClaims } from "../../../auth/jwt/claims";
+import { signAccessToken } from "../../../auth/jwt/sign";
 import { defineSingle, text } from "../../../config";
 import { container } from "../../../di/container";
 import {
@@ -20,6 +29,8 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { createDynamicHandlers } from "../../../routeHandler";
+import { ServiceContainer } from "../../../services/index";
 import type {
   PublishGate,
   PublishGateQuestion,
@@ -144,6 +155,56 @@ async function bothLive(): Promise<void> {
     main: "published",
     languages: { en: "published", es: "published" },
   });
+}
+
+/**
+ * A signed-in person who may do everything, and their session's cookie, as a sign-in issues one:
+ * a session names its roles by id.
+ */
+async function signedInPerson(
+  id: string
+): Promise<{ userId: string; cookie: string }> {
+  const userId = await superAdminUser(app(), id);
+  const role = await new ServiceContainer(
+    app().adapter
+  ).roles.ensureSuperAdminRole();
+  const token = await signAccessToken(
+    buildClaims({
+      userId,
+      email: `${userId}@example.com`,
+      name: "Editor",
+      image: null,
+      roleIds: [role.id],
+      sessionEpoch: 0,
+    }),
+    process.env.NEXTLY_SECRET!
+  );
+  return { userId, cookie: `nextly_session=${token}` };
+}
+
+/** `PATCH /api/singles/notice?locale=…` as a signed-in session, answering its status and body. */
+async function patchAsSession(
+  cookie: string,
+  locale: string,
+  body: Record<string, unknown>
+): Promise<{ status: number; json: Record<string, unknown> }> {
+  const path = ["singles", NOTICE];
+  const response = await createDynamicHandlers().PATCH(
+    new Request(`http://localhost/api/${path.join("/")}?locale=${locale}`, {
+      method: "PATCH",
+      headers: {
+        origin: "http://localhost",
+        "content-type": "application/json",
+        cookie,
+      },
+      body: JSON.stringify(body),
+    }),
+    { params: Promise.resolve({ params: path }) }
+  );
+  return {
+    status: response.status,
+    json: (await response.json()) as Record<string, unknown>,
+  };
 }
 
 /** What a gate saw: each question early and under the lock, the order of events, and the tx. */
@@ -445,6 +506,52 @@ describe.each(getConfiguredTestDialects())(
           {}
         );
         expect(JSON.stringify(versions)).not.toContain("Correcting a date");
+      });
+
+      it("reaches the gate from a person's save over REST, which then publishes", async () => {
+        await boot(dialect);
+        await neverPublished();
+        const seen = gate({ early: true, locked: true });
+        const { userId, cookie } = await signedInPerson("user-notice-editor");
+
+        const answer = await patchAsSession(cookie, "es", {
+          status: "published",
+          withoutReview: { reason: "Correcting a date" },
+          _overwrite: true,
+        });
+
+        expect(answer.status, JSON.stringify(answer.json)).toBe(200);
+        expect(seen.early.map(question => question.caller)).toEqual([
+          { kind: "user", userId },
+        ]);
+        expect(seen.early.map(question => question.withoutReview)).toEqual([
+          { reason: "Correcting a date" },
+        ]);
+        expect(seen.judged.map(question => question.withoutReview)).toEqual([
+          { reason: "Correcting a date" },
+        ]);
+        expect(seen.settled).toBe(1);
+        expect((await stored()).languages.es).toBe("published");
+        expect((await published("es")).title).toBe("Hola");
+        expect(JSON.stringify(answer.json)).not.toContain("Correcting a date");
+      });
+
+      it("is refused over REST without it, by the gate that holds the part back", async () => {
+        await boot(dialect);
+        await neverPublished();
+        const seen = gate({ early: true, locked: true });
+        const { cookie } = await signedInPerson("user-notice-editor");
+
+        const answer = await patchAsSession(cookie, "es", {
+          status: "published",
+          _overwrite: true,
+        });
+
+        expect(answer.status, JSON.stringify(answer.json)).toBe(400);
+        expect(JSON.stringify(answer.json)).toContain("NOT_APPROVED");
+        expect(seen.early).toHaveLength(1);
+        expect(seen.settled).toBe(0);
+        expect((await stored()).languages.es).toBe("draft");
       });
 
       it("refuses a malformed one, asks nothing and writes nothing", async () => {
