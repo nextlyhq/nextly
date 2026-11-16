@@ -1023,9 +1023,11 @@ export class SingleMetadataService {
     // Where the save carries no values across its change, its own migration file applies it in
     // development, as the Builder dialog's save does: run as `nextly migrate` runs one, in tries over
     // a busy table and on SQLite with foreign keys off. A save that carries values keeps the
-    // service's own statements, which move them.
+    // service's own statements, which move them; so does a plan that builds the whole table again
+    // (its table missing, say), which a file written as a change to the table cannot do.
     if (
       deps.applies &&
+      plan?.describesWholeTable !== true &&
       !(await this.carriesValues(input, before, after, rename))
     ) {
       return this.writeUpdateByFile(deps, input, plan, save);
