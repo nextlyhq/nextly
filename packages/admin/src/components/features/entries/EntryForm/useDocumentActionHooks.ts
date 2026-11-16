@@ -14,11 +14,12 @@ import { useCallback, useEffect, useRef } from "react";
 import type { DocumentAction, EditorDocumentAction } from "./document-actions";
 import { reasonFor } from "./DocumentActionBar";
 import { useDocumentActionsContext } from "./DocumentActionsContext";
-import type {
-  BeforeDocumentAction,
-  DocumentActionBindings,
-  DocumentActionOutcome,
-  DocumentSaveState,
+import {
+  NOTHING_CHANGED_REASON,
+  type BeforeDocumentAction,
+  type DocumentActionBindings,
+  type DocumentActionOutcome,
+  type DocumentSaveState,
 } from "./useDocumentActionBindings";
 
 /** The document's actions as a surface inside the editor sees them. */
@@ -38,7 +39,9 @@ export interface DocumentActions {
   /**
    * Runs the Save action, as `run("save")` does, where that Save is offered
    * and keeps the work unpublished: a draft, or a working draft beside the
-   * live version. Undefined where it is not offered (someone who may not
+   * live version. Answers `{ ok: true }` without saving where Save is refused
+   * only because nothing has changed, since what is stored already is the
+   * work. Undefined where it is not offered (someone who may not
    * change the document) or where it would publish (a published document
    * whose collection keeps no drafts) or there is no draft to keep (a
    * collection with no status), so a surface that must never publish, such
@@ -77,6 +80,7 @@ export function useDocumentActions(): DocumentActions | null {
         : { ...published, disabledReason: reason },
     ];
   });
+  const save = offered.find(action => action.id === "save");
   return {
     actions: offered,
     primary: offered.find(action => action.placement === "primary"),
@@ -87,9 +91,16 @@ export function useDocumentActions(): DocumentActions | null {
     // whether that Save would leave the document unpublished. A plugin cannot
     // replace Save (`OVERRIDABLE_DOCUMENT_ACTIONS` is Delete and Unpublish),
     // so the Save asked about is the one `run` runs.
-    ...(offered.some(action => action.id === "save") &&
-    hosted.saveWithoutPublishing !== undefined
-      ? { saveWithoutPublishing: () => hosted.run("save") }
+    ...(save !== undefined && hosted.saveWithoutPublishing !== undefined
+      ? {
+          // Refused only because nothing has changed, the stored version
+          // already is the work, which is what a caller asks; every other
+          // refusal leaves work unstored and is answered as the Save answers.
+          saveWithoutPublishing: () =>
+            save.disabledReason === NOTHING_CHANGED_REASON
+              ? Promise.resolve<DocumentActionOutcome>({ ok: true })
+              : hosted.run("save"),
+        }
       : {}),
     storedAt: hosted.lastStoredAt,
   };

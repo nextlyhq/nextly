@@ -219,6 +219,52 @@ describe("useDocumentActions", () => {
       expect(onPublish).not.toHaveBeenCalled();
     });
 
+    it("answers stored without saving when the published page holds nothing new", async () => {
+      // A refused Publish leaves the save state failed with nothing edited;
+      // the stored draft already is the work, so a preview may open on it.
+      const onSaveWorkingDraft = vi.fn(() => Promise.resolve(saved));
+      const { result } = renderHook(() => useDocumentActions(), {
+        wrapper: hostedBy({
+          entry: published,
+          draftsEnabled: true,
+          isDirty: false,
+          onSaveWorkingDraft,
+          onPublish: () => Promise.resolve(saved),
+        }),
+      });
+      let outcome: unknown;
+      await act(async () => {
+        outcome = await result.current?.saveWithoutPublishing?.();
+      });
+      expect(outcome).toEqual({ ok: true });
+      expect(onSaveWorkingDraft).not.toHaveBeenCalled();
+    });
+
+    it("refuses while a colleague holds a published page with edits, saving nothing", async () => {
+      // Any refusal but "nothing has changed" leaves work unstored.
+      const onSaveWorkingDraft = vi.fn(() => Promise.resolve(saved));
+      const { result } = renderHook(() => useDocumentActions(), {
+        wrapper: hostedBy({
+          entry: published,
+          draftsEnabled: true,
+          isDirty: true,
+          documentLocked: true,
+          onSaveWorkingDraft,
+        }),
+      });
+      let outcome: unknown;
+      await act(async () => {
+        outcome = await result.current?.saveWithoutPublishing?.();
+      });
+      expect(outcome).toEqual(
+        expect.objectContaining({
+          ok: false,
+          message: "This document is being edited elsewhere",
+        })
+      );
+      expect(onSaveWorkingDraft).not.toHaveBeenCalled();
+    });
+
     it("is absent on a published page whose collection keeps no drafts, where Save would publish", () => {
       // Save there writes the live page; a preview must never publish.
       const { result } = renderHook(() => useDocumentActions(), {

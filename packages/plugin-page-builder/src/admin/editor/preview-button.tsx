@@ -70,15 +70,10 @@ export function PreviewButton(): React.JSX.Element | null {
 
   const saveState = actions?.saveState.kind;
   const save = actions?.saveWithoutPublishing;
-  // A failed save leaves the work unstored too, so it is saved first as well,
-  // but only where Save can run: a refused Publish with nothing edited also
-  // reads as failed, and there the stored draft already is what the canvas
-  // shows, while a Save would be refused for having nothing to store.
-  const saveAction = actions?.actions.find(action => action.id === "save");
-  const saveRuns =
-    saveAction !== undefined && saveAction.disabledReason === undefined;
-  const unstored =
-    saveState === "unsaved" || (saveState === "failed" && saveRuns);
+  // A failed save leaves the work unstored too, so it is saved first as well.
+  // Whether any is left is the save's to answer: with nothing new it answers
+  // stored at once, and a held Save closes the tab and says why.
+  const unstored = saveState === "unsaved" || saveState === "failed";
   const label =
     save === undefined
       ? "Preview the saved version"

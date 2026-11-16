@@ -134,19 +134,33 @@ describe("PreviewButton", () => {
       expect(saveWithoutPublishing).toHaveBeenCalledTimes(1);
     });
 
-    it("opens the saved version without saving after a failure that left nothing to save", () => {
-      // A refused Publish with no edits: the stored draft already is what the
-      // canvas shows, and a Save would only be refused for having nothing to
-      // store, closing the tab with nothing to show.
-      const saveWithoutPublishing = vi.fn(() => Promise.resolve({ ok: true }));
+    it("still saves first after a failure while Save is held, and says why it can't", async () => {
+      // A failed save, then a colleague takes the document: the edits are
+      // still unstored, so the stale saved version must not open as if it
+      // were the canvas. The save refuses, the tab closes, and the reason shows.
+      const saveWithoutPublishing = vi.fn(() =>
+        Promise.resolve({
+          ok: false as const,
+          reason: "refused",
+          message: "This document is being edited elsewhere",
+        })
+      );
       actions = {
         saveState: { kind: "failed" },
-        actions: [{ id: "save", disabledReason: "Nothing has changed yet." }],
+        actions: [
+          {
+            id: "save",
+            disabledReason: "This document is being edited elsewhere",
+          },
+        ],
         saveWithoutPublishing,
       };
-      const { open } = press("Preview");
-      expect(open.mock.calls[0]).toEqual([]);
-      expect(saveWithoutPublishing).not.toHaveBeenCalled();
+      const { open } = press("Save and preview");
+      expect(await runStep(open)).toBe(false);
+      expect(toastError).toHaveBeenCalledWith(
+        "Couldn't save, so the preview didn't open.",
+        { description: "This document is being edited elsewhere" }
+      );
     });
 
     it("stops the preview and says why when the save throws", async () => {
