@@ -672,6 +672,18 @@ function useOpenVariable({
     setFocusKey(null);
   }, [focusKey, tokens]);
 
+  // A variable just added is brought into view before its editor is placed
+  // beside it: added at the end of a long list, it would otherwise open its
+  // editor below the window, far from the "+" pressed.
+  React.useLayoutEffect(() => {
+    if (openKey === null || !fresh.current.has(openKey)) return;
+    root.current
+      ?.querySelector<HTMLElement>(
+        `[data-variable-key="${CSS.escape(openKey)}"]`
+      )
+      ?.scrollIntoView({ block: "nearest" });
+  }, [openKey, tokens]);
+
   const add = (what: NewVariable): void => {
     const made = addVariable(currentTokens() ?? tokens, what);
     const added = made.tokens.tokens[made.at];
@@ -1059,6 +1071,8 @@ function VariableRow({
           side="right"
           align="start"
           sideOffset={12}
+          // Kept inside the window, clear of its edges.
+          collisionPadding={8}
           className="nx-vars-editor"
           aria-label={`${readOnly ? "" : "Edit "}${entry.label}`}
         >

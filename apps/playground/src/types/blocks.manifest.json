@@ -43,6 +43,16 @@
       }
     },
     {
+      "name": "fixture/probe",
+      "version": 1,
+      "description": "Exists for the e2e suite: a contributed block that measures the window it is drawn in.",
+      "source": "block-fixture",
+      "example": {
+        "props": {}
+      },
+      "props": {}
+    },
+    {
       "name": "fixture/teaser",
       "version": 1,
       "description": "Exists for the e2e suite: a contributed block that points at one post.",
