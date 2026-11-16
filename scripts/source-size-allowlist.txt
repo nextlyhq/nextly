@@ -38,7 +38,6 @@ packages/builder/src/content-controls.tsx 1591
 
 
 
-packages/builder/src/insert-panel.tsx 1850
 
 packages/builder/src/inserter.ts 1559
 
