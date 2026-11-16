@@ -20,6 +20,8 @@
  */
 import { getStyleProperty } from "./catalog";
 import type { AppliesWhen, StyleProperty } from "./catalog-types";
+import { asciiLower, decodeIdentifier } from "./css-identifier";
+import { splitCssTokens } from "./css-value-syntax";
 import { CSS_WIDE_KEYWORDS } from "./css-value-vocabulary";
 
 /**
@@ -135,11 +137,12 @@ const CONDITIONS: Readonly<Record<AppliesWhen, (reading: Reading) => boolean>> =
 
 /** How a `display` value lays out children, or `undefined` when unreadable. */
 function layoutOf(display: string | undefined): Layout | undefined {
-  const value = readable(display);
-  if (value === undefined) return undefined;
+  const keywords = keywordsOf(display);
+  if (keywords === undefined) return undefined;
   // By keyword, so the inline and multi-keyword forms (`inline-flex`,
-  // `inline grid`) count as the container they are.
-  const keywords = value.split(/\s+/);
+  // `inline grid`) count as the container they are. An escaped space stays
+  // inside its keyword, so `inline\ grid` is one unknown keyword, as the
+  // browser reads it.
   if (keywords.some(word => word === "flex" || word === "inline-flex")) {
     return "flex";
   }
@@ -149,10 +152,28 @@ function layoutOf(display: string | undefined): Layout | undefined {
   return "flow";
 }
 
-/** A keyword trimmed and lowercased, or `undefined` when it names nothing. */
+/** A keyword as the browser reads it, or `undefined` when it names nothing. */
 function readable(value: string | undefined): string | undefined {
+  return keywordsOf(value)?.join(" ");
+}
+
+/**
+ * A value's keywords as the browser reads them, or `undefined` when it names
+ * nothing (empty, or a CSS-wide keyword).
+ *
+ * Read as validation reads a stored keyword: split into CSS tokens first,
+ * then each one unescaped and folded to ASCII lowercase, so `\66 lex`, a
+ * value the validator accepts as `flex`, is `flex` here too. Splitting
+ * before decoding keeps an escaped space inside its keyword.
+ */
+function keywordsOf(value: string | undefined): string[] | undefined {
   if (value === undefined) return undefined;
-  const keyword = value.trim().toLowerCase();
-  if (keyword === "" || CSS_WIDE_KEYWORDS.has(keyword)) return undefined;
-  return keyword;
+  const keywords = splitCssTokens(value).map(token =>
+    asciiLower(decodeIdentifier(token))
+  );
+  if (keywords.length === 0) return undefined;
+  if (keywords.length === 1 && CSS_WIDE_KEYWORDS.has(keywords[0] ?? "")) {
+    return undefined;
+  }
+  return keywords;
 }

@@ -406,18 +406,60 @@ describe("where the parent is read from", () => {
     );
   });
 
-  it("reads the parent at the base state, whatever state the child is edited in", () => {
+  it("reads the parent in the state the canvas puts it in", () => {
+    // Hover and active reach every ancestor on the canvas, so a parent that
+    // turns into a Row on hover lays its child out as a Row there. Focus
+    // stays on the block, so its parent is read at the base state.
     register();
     const document = nested("page", {
       outer: {
-        base: { [BASE_BREAKPOINT]: { display: "flex" } },
-        hover: { [BASE_BREAKPOINT]: { display: "block" } },
+        base: { [BASE_BREAKPOINT]: { display: "block" } },
+        hover: { [BASE_BREAKPOINT]: { display: "flex" } },
+        active: { [BASE_BREAKPOINT]: { display: "flex" } },
+        focus: { [BASE_BREAKPOINT]: { display: "flex" } },
       } as unknown as NodeStyles,
       inner: stored({ display: "block", flexWrap: "nowrap" }),
     });
-    expect(shown(document, "inner", "size", { state: "hover" })).toContain(
-      "flexGrow"
-    );
+    const at = (state: "base" | "hover" | "active" | "focus") =>
+      shown(document, "inner", "size", { state });
+    expect(at("hover")).toContain("flexGrow");
+    expect(at("active")).toContain("flexGrow");
+    expect(at("focus")).not.toContain("flexGrow");
+    expect(at("base")).not.toContain("flexGrow");
+  });
+
+  it("looks past a parent whose contents display is escaped", () => {
+    register();
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "row",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          styles: stored({ display: "flex" }),
+          slots: {
+            main: [
+              {
+                id: "wrapper",
+                type: "acme/box",
+                version: 1,
+                props: {},
+                styles: stored({ display: "\\63 ontents" }),
+                slots: {
+                  main: [
+                    { id: "leaf", type: "acme/box", version: 1, props: {} },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      ],
+    } as unknown as BlockDocument;
+    expect(shown(document, "leaf", "size")).toContain("flexGrow");
   });
 
   it("reads the parent at the edited breakpoint", () => {

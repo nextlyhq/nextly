@@ -252,6 +252,26 @@ describe("what cannot be read answers true", () => {
     ).toBe(true);
   });
 
+  it("reads an escaped keyword as the browser does", () => {
+    // Validation accepts `\66 lex` as `flex`, and the compiler writes it
+    // as stored, so the page lays the block out as a flex row.
+    expect(applies("flexGrow", { ...BLOCK, parentDisplay: "\\66 lex" })).toBe(
+      true
+    );
+    expect(applies("flexDirection", { ...BLOCK, display: "FLE\\X" })).toBe(
+      true
+    );
+    expect(
+      applies("gridTemplateColumns", { ...BLOCK, display: "inline\\ grid" })
+    ).toBe(false);
+    expect(
+      applies("flexGrow", { ...BLOCK, parentDisplay: "\\69 nherit" })
+    ).toBe(true);
+    expect(
+      applies("position", { ...BLOCK, position: "St\\61tic" }, "inset")
+    ).toBe(false);
+  });
+
   it("reads a CSS-wide keyword as unreadable, not as block flow", () => {
     expect(applies("flexDirection", { ...BLOCK, display: "inherit" })).toBe(
       true

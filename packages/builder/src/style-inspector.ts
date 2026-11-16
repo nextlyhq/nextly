@@ -43,6 +43,7 @@ import {
   getBlock,
   getStyleProperty,
   locateNode,
+  statePropagatesToAncestors,
   STYLE_CATALOG,
   stylePropertiesForSupports,
   trimCssWhitespace,
@@ -393,8 +394,8 @@ const PAGE_ROOTED: ReadonlySet<string> = new Set(["page", "template"]);
  * The display of the box that lays this block out: its parent's, or past a
  * `display: contents` parent, the nearest ancestor that draws a box.
  *
- * Read at the base state: a parent's interaction state is not the one being
- * edited. A top-level block of a page or a template sits in the page root,
+ * Read in the state the canvas puts the parent in: the edited one for a state
+ * that reaches ancestors (hover, active), the base state otherwise. A top-level block of a page or a template sits in the page root,
  * laid out as the page's settings say; one of a component or a pattern goes
  * wherever it is placed, so its parent is not known. Nor is it for a shared
  * style or a look, which many blocks wear wherever each one sits.
@@ -405,7 +406,11 @@ function parentDisplayOf(
   at: ReadAt,
   options: StyleInspectionOptions | undefined
 ): string | undefined {
-  const base: ReadAt = { ...at, state: "base" };
+  // The state the canvas forces up the chain while the child is edited in
+  // one: hover and active reach every ancestor, the others only the block.
+  const base: ReadAt = statePropagatesToAncestors(at.state)
+    ? at
+    : { ...at, state: "base" };
   // A shared style or a look is worn by many blocks, wherever each one sits:
   // the selected block's parent says nothing about the others.
   if (options?.styles !== undefined) return undefined;
@@ -444,7 +449,7 @@ function cascadedParentDisplay(
     const at = { ...base, cascade: { trace: cascade.trace, subject } };
     const display =
       cascadedKeyword(undefined, at, "display", "display") ?? IN_FLOW;
-    if (display !== "contents") return display;
+    if (keywordIdentity(display) !== "contents") return display;
   }
   return atRoot;
 }
@@ -461,7 +466,7 @@ function storedParentDisplay(
   while (parent !== undefined && !seen.has(parent.id)) {
     seen.add(parent.id);
     const display = cascadedKeyword(parent.styles, base, "display", "display");
-    if (display !== "contents") return display;
+    if (keywordIdentity(display) !== "contents") return display;
     parent = locateNode(nodes, parent.id)?.parent;
   }
   // Out of parents: the page's own flow, unless the walk met a node twice.
