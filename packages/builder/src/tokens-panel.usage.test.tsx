@@ -544,61 +544,36 @@ describe("removing a variable in use", () => {
 });
 
 describe("removing a variable not counted yet", () => {
-  it("says it may still be in use, and Count now counts, reads again, then confirms", async () => {
-    let counted = false;
+  it("takes the removal at once, and leaves the save to count and decide", async () => {
+    // The save counts the pages before it decides and refuses a use it
+    // finds, so the editor never refuses for want of a count: one press
+    // opens the confirm, with nothing read again and no count started.
+    const onChange = vi.fn();
     const usage = host({
-      reaches: () => ({ "color.text": reach(0, [], counted) }),
+      reaches: () => ({ "color.text": reach(0, [], false) }),
       mayCount: true,
-      count: async () => {
-        counted = true;
-        return { kind: "counted", whole: true, counting: false };
-      },
+      count: async () => ({ kind: "counted", whole: true, counting: false }),
     });
-    render(<Hosted usage={usage} />);
+    render(<Hosted usage={usage} onChange={onChange} />);
     const editor = await openEditor(/^Text.*No uses counted yet/);
-    expect(within(editor).getByText("Counting where it's used…")).toBeDefined();
-    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
-    const heading = await within(editor).findByRole("heading", {
-      name: "Text can't be removed yet.",
-    });
-    await waitFor(() => expect(document.activeElement).toBe(heading));
-    expect(
-      within(editor).getByText(
-        "Some pages haven’t been counted, so it may still be in use."
-      )
-    ).toBeDefined();
-    expect(within(editor).getByText(/usually a few seconds/)).toBeDefined();
+    // Nothing is counting, so the line does not say it is.
+    expect(within(editor).getByText("Not counted yet")).toBeDefined();
+    expect(within(editor).queryByText(/Counting where/)).toBeNull();
     const readsBefore = usage.asked.length;
-
-    fireEvent.click(within(editor).getByRole("button", { name: "Count now" }));
-    // Counted, read again, and now unused: the confirm the author asked for.
-    await within(editor).findByText(/Any block using it loses that style/);
-    expect(usage.counted.count).toBe(1);
-    expect(usage.asked.length).toBeGreaterThan(readsBefore);
+    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    expect(
+      within(editor).getByText(/Any block using it loses that style/)
+    ).toBeDefined();
     expect(
       within(editor).queryByRole("heading", { name: /can't be removed/ })
     ).toBeNull();
-  });
-
-  it("points at the site's background jobs where it cannot count now", async () => {
-    const usage = host({
-      reaches: () => ({ "color.text": reach(0, [], false) }),
-    });
-    render(<Hosted usage={usage} />);
-    const editor = await openEditor(/^Text.*No uses counted yet/);
-    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
-    // Answered once Remove has read the counts again.
-    expect(
-      await within(editor).findByText(
-        /Pages are counted by the site's background jobs/
-      )
-    ).toBeDefined();
-    expect(
-      within(editor).getByRole("link", { name: "How background jobs run" })
-    ).toBeDefined();
-    expect(
-      within(editor).queryByRole("button", { name: "Count now" })
-    ).toBeNull();
+    expect(usage.asked.length).toBe(readsBefore);
+    expect(usage.counted.count).toBe(0);
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Remove Text" })
+    );
+    const saved = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
+    expect(saved.tokens.map(token => token.name)).not.toContain("color.text");
   });
 });
 

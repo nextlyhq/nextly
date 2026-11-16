@@ -721,14 +721,14 @@ export type QueuedEmailChangeHandler = (
   change: QueuedEmailChange,
   context: { db: PluginTransaction; transaction: PluginCollectionTransaction }
 ) => void | Promise<void>;
-/** @experimental `ctx.services.versions`. */
+/** `ctx.services.versions`. */
 export type PluginVersionsService = Pick<
   VersionsService,
   (typeof PLUGIN_VERSIONS_READS)[number]
 > &
   PluginVersionWrites & {
     /**
-     * @experimental A subject's content events (a document's or a release's),
+     * A subject's content events (a document's or a release's),
      * filtered by kind and part, newest first, as `{ items, meta }`; the next
      * page passes the last item's id as `before`. Runs as the system unless
      * `opts` names a user (`as: "user"`), who is then judged as REST judges them.
@@ -883,7 +883,7 @@ export interface PluginContext {
     /** Email service for sending emails via templates and providers */
     email: PluginEmailService;
     /**
-     * @experimental Read-only content version history (list/get), and a
+     * Read-only content version history (list/get), and a
      * subject's content events (`listEvents`). Restore and diff arrive in
      * later stages.
      */

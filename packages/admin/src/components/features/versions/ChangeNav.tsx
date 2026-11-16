@@ -9,6 +9,7 @@
 
 import { ArrowDown, ArrowUp } from "lucide-react";
 import type { JSX } from "react";
+import { useState } from "react";
 
 import { Button } from "@admin/components/ui";
 import { cn } from "@admin/lib/utils";
@@ -22,18 +23,34 @@ export function ChangeNav({
   changed,
   position,
   onMove,
+  currentLabel,
   className,
 }: {
   changed: number;
   position: number;
   onMove: (delta: -1 | 1) => void;
+  /** The change the position is on, named as its field is ("SEO › Meta title"). */
+  currentLabel?: string;
   /** Where it shows: the editor's bar hides it on a phone, for instance. */
   className?: string;
 }): JSX.Element {
+  // Said only once the person moves: on arrival the page already says how
+  // many fields changed, and repeating it would talk over that.
+  const [moved, setMoved] = useState(false);
+  const move = (delta: -1 | 1): void => {
+    setMoved(true);
+    onMove(delta);
+  };
+  const where = `Change ${position + 1} of ${changed}`;
   return (
     <div className={cn("flex items-center gap-1.5", className)}>
       <span className="text-muted-foreground" aria-hidden="true">
-        Change {position + 1} of {changed}
+        {where}
+      </span>
+      {/* Where a move landed, told to assistive technology: focus moves to the
+          field silently, so this is how a screen reader hears the place. */}
+      <span role="status" aria-live="polite" className="sr-only">
+        {moved ? `${where}${currentLabel ? `: ${currentLabel}` : ""}` : ""}
       </span>
       <Button
         type="button"
@@ -43,7 +60,7 @@ export function ChangeNav({
         aria-label="Previous change"
         title="Previous change"
         disabled={changed < 2}
-        onClick={() => onMove(-1)}
+        onClick={() => move(-1)}
       >
         <ArrowUp className="h-4 w-4" aria-hidden="true" />
       </Button>
@@ -55,7 +72,7 @@ export function ChangeNav({
         aria-label="Next change"
         title="Next change"
         disabled={changed < 2}
-        onClick={() => onMove(1)}
+        onClick={() => move(1)}
       >
         <ArrowDown className="h-4 w-4" aria-hidden="true" />
       </Button>

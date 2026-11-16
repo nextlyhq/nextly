@@ -391,7 +391,10 @@ export type {
  * @experimental A collection list's custom source settles with the editor
  * that offers it.
  */
-export { defineNamedQuery, param } from "@nextlyhq/blocks-engine";
+// From the engine's narrow entry, not its root: a plugin importing this module
+// would otherwise bring the whole engine and its CSS parser to every admin
+// screen. The same module the root re-exports, so one registry either way.
+export { defineNamedQuery, param } from "@nextlyhq/blocks-engine/named-query";
 /** @experimental Settles with `defineNamedQuery`. */
 export type {
   BooleanParam,
