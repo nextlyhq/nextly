@@ -39,7 +39,6 @@ import {
   type DocumentReadStages,
   type PreparedDocument,
 } from "./prepare-document";
-import { registeredBlocks } from "./resolver";
 import type { BlockResolver } from "./resolver";
 import { conditionAllows } from "./visibility";
 
@@ -120,7 +119,7 @@ function metadataReadOf(
  */
 export async function derivePageSeo(
   document: BlockDocument,
-  blocks: BlockResolver | undefined,
+  blocks: BlockResolver,
   resolveMedia: (id: string) => Promise<ResolvedMedia | null>,
   slug: string,
   limits: DocumentLimits | undefined,
@@ -164,7 +163,7 @@ export async function derivePageSeo(
    */
   reportIssues?: BindingIssuesHandler
 ): Promise<DerivedPageSeo> {
-  const resolver = blocks ?? registeredBlocks();
+  const resolver = blocks;
   // Spread rather than assigned, so an unaddressable slug OMITS the key instead
   // of carrying `undefined`. The result is spread over a caller's own fallbacks,
   // where a present-but-undefined key erases a canonical they already knew.

@@ -589,6 +589,12 @@ describe("the root entry", () => {
       "RichText",
       // The container marker. Public so an editor asks whether a block declares
       // slots instead of keeping a hardcoded list of container type names.
+      // Where the page builder offers a site's blocks, which a route given no
+      // `blocks` reads.
+      "SITE_BLOCKS_SERVICE",
+      // Whether site-bound blocks or queries started in this module copy.
+      "SITE_COPY",
+      "SITE_NAMED_QUERIES_SERVICE",
       "SLOTS_ATTRIBUTE",
       "TYPOGRAPHY_DEFAULTS",
       "UNPREVIEWABLE_CONTAINER",
@@ -645,6 +651,8 @@ describe("the root entry", () => {
       // Whether a recorded lookup found no field a visitor may read, so the
       // editor can say a whole source is hidden from visitors.
       "noPublicFields",
+      // The one reading of the site's blocks an instance offers.
+      "offeredSiteBlocks",
       "pageBindingRun",
       "pageStyleTrace",
       "prepareDocumentAsDrawn",
@@ -667,6 +675,8 @@ describe("the root entry", () => {
       // so the editor judges conditions on the tree the renderer draws.
       "sanitizeDocument",
       "sharedStyleInputs",
+      // The mark a site-bound value carries, read by the routes.
+      "siteCopyOf",
       "styleTextForInjection",
       // The render's own discovery, asked from outside the render. Public so a
       // publish-time check reports the components a VISITOR will not see,

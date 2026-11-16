@@ -11,8 +11,6 @@
  */
 import {
   compositionFaults,
-  registryBlockSource,
-  registryNestingSource,
   type BlockDocument,
   type ComponentLookup,
   type CompositionFault,
@@ -66,12 +64,12 @@ export function faultsIn(
   return compositionFaults(host, composition, {
     ...measuredAgainst,
     limits: setup.limits,
-    // Read through to the live registry, as the field's own nesting rule is.
-    nesting: registryNestingSource(),
+    // Read through to the site's registry, as the field's own nesting rule is.
+    nesting: setup.blocks.nestingSource(),
     // The locks the blocks' slots declare hold in the composed page too: a
     // placement's values and slot content land inside the component's nodes,
     // which neither document shows on its own.
-    definitions: registryBlockSource(),
+    definitions: setup.blocks.blockSource(),
   });
 }
 
