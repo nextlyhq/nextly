@@ -331,3 +331,43 @@ describe("the palette's lock answers while the shell is narrowed away", () => {
     expect(asked).not.toHaveBeenCalled();
   });
 });
+
+describe("the palette's open state", () => {
+  it("closes on Escape, and asks no lock once closed", () => {
+    register();
+    const asked = vi.fn<EditorState["lockRefusalFor"]>(() => undefined);
+    const host = (selectedId: string) => {
+      const editor = {
+        ...editorSpy(page(), selectedId),
+        lockRefusalFor: asked,
+      };
+      return (
+        <ShortcutProvider>
+          <BlockKeyboardActions
+            onSaveAsPattern={() => undefined}
+            editor={editor}
+          >
+            <EditorCommandPalette editor={editor} insert={{}} />
+          </BlockKeyboardActions>
+        </ShortcutProvider>
+      );
+    };
+    const view = render(host("intro"));
+    fireEvent.keyDown(document, { key: "k", metaKey: true });
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    expect(screen.getByRole("combobox")).toBeTruthy();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("combobox")).toBeNull();
+    // Closed by the palette itself, the open state it is handed follows: a
+    // new selection asks the locks nothing.
+    asked.mockClear();
+    view.rerender(host("hero"));
+    expect(asked).not.toHaveBeenCalled();
+
+    // And it opens again.
+    fireEvent.keyDown(document, { key: "k", metaKey: true });
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    expect(screen.getByRole("combobox")).toBeTruthy();
+  });
+});

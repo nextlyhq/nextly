@@ -1649,6 +1649,39 @@ describe("the hovered block's mark", () => {
     expect(hoveredIn(container)).toHaveLength(0);
   });
 
+  it("follows the selection moving onto and off the block pointed at", async () => {
+    // The pointer stays on "b" while the selection moves: no hover change
+    // arrives, so the hover's mark is right only if a selection change still
+    // measures it again.
+    const drawn = (selectedId: string) => (
+      <HoveredBlockProvider>
+        <PointAt id="b" />
+        <Canvas
+          document={leaves}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          selectedId={selectedId}
+          overlay={<CanvasMarks />}
+        />
+      </HoveredBlockProvider>
+    );
+    const { container, rerender } = render(drawn("a"));
+    await act(async () => undefined);
+    await waitFor(() => expect(hoveredIn(container)).toHaveLength(1));
+    expect(halosIn(container)).toHaveLength(1);
+
+    // Selected under the pointer: the ring alone.
+    rerender(drawn("b"));
+    await act(async () => undefined);
+    await waitFor(() => expect(hoveredIn(container)).toHaveLength(0));
+    expect(halosIn(container)).toHaveLength(1);
+
+    // Selected away again: the hover's mark is back.
+    rerender(drawn("c"));
+    await act(async () => undefined);
+    await waitFor(() => expect(hoveredIn(container)).toHaveLength(1));
+    expect(halosIn(container)).toHaveLength(1);
+  });
+
   it("keeps the canvas's watchers, and measures only the block newly pointed at", async () => {
     // Every size watcher the canvas's overlays make, and every block they
     // ask to be told about.
