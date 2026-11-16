@@ -10,7 +10,8 @@
  * so nobody types a slug or a field name from memory.
  *
  * The collections, and each one's sortable fields, are read through the
- * host's `listLoopCollections`, once for both controls. Where the host lends
+ * host's `listLoopCollections`, once for both controls; an answer the host
+ * keeps is shown at once. Where the host lends
  * none, or the read fails, each prop falls back to the text field it always
  * had, so a loop is never left without a way to be set.
  *
@@ -53,16 +54,29 @@ export type LoopCollections =
   | { readonly kind: "ready"; readonly collections: readonly LoopCollection[] }
   | { readonly kind: "failed" };
 
+/** Shown while the host's read is on its way. */
+const LOADING: LoopCollections = { kind: "loading" };
+
 /**
- * The read in flight, per host function. Shared only while it is in flight,
- * so the collection and sort controls drawn together make one read, and
- * dropped the moment it settles. An answer is one signed-in author's, read
- * with their access: kept past that, it could be handed to whoever signs in
- * next on the same tab without the route judging them.
+ * The read in flight, per host function, shared while it runs so the
+ * collection and sort controls drawn together make one read. What happens to
+ * the answer after that is the host's to decide: the builder keeps nothing
+ * past it.
  */
 const inFlight = new WeakMap<
   ListLoopCollections,
   Promise<readonly LoopCollection[]>
+>();
+
+/**
+ * Each read's answer, by the read itself, once it has settled. A host that
+ * keeps an answer (for one signed-in author, while it holds) hands the same
+ * read again, and controls mounting then show its answer in their first
+ * frame; a host that reads again hands a new one, which is never found here.
+ */
+const settled = new WeakMap<
+  Promise<readonly LoopCollection[]>,
+  LoopCollections
 >();
 
 /** The host's collections, read once for every control asking while it runs. */
@@ -72,41 +86,61 @@ function readShared(
   const held = inFlight.get(list);
   if (held !== undefined) return held;
   const answer = list();
+  if (settled.has(answer)) return answer;
   inFlight.set(list, answer);
-  const settle = () => {
+  const settle = (outcome: LoopCollections) => {
+    settled.set(answer, outcome);
     if (inFlight.get(list) === answer) inFlight.delete(list);
   };
-  answer.then(settle, settle);
+  answer.then(
+    collections => settle({ kind: "ready", collections }),
+    () => settle({ kind: "failed" })
+  );
   return answer;
 }
 
-/** The collections, or `undefined` when the host lends no way to list them. */
+/**
+ * The collections, or `undefined` when the host lends no way to list them.
+ *
+ * Asked as the controls mount, so a block selected after the host's answer
+ * arrived shows its collections at once, with no "loading" frame and no
+ * request; the host decides whether the answer it hands is one it kept.
+ */
 export function useLoopCollections(
   list: ListLoopCollections | undefined
 ): LoopCollections | undefined {
+  // Asked while drawing rather than after, so a kept answer is known in the
+  // first frame; asking again hands the same read, so a repeat costs nothing.
+  const asked = React.useMemo(
+    () => (list === undefined ? undefined : readShared(list)),
+    [list]
+  );
   const [found, setFound] = React.useState<{
-    readonly list: ListLoopCollections;
+    readonly asked: Promise<readonly LoopCollection[]>;
     readonly answer: LoopCollections;
   }>();
+  // What this frame could show at once: a read that settles after the frame
+  // is still followed below, however soon it settles.
+  const shownAtOnce = asked === undefined ? undefined : settled.get(asked);
   React.useEffect(() => {
-    if (list === undefined) return;
+    if (asked === undefined || shownAtOnce !== undefined) return;
     let live = true;
-    readShared(list).then(
+    asked.then(
       collections => {
-        if (live) setFound({ list, answer: { kind: "ready", collections } });
+        if (live) setFound({ asked, answer: { kind: "ready", collections } });
       },
       () => {
-        if (live) setFound({ list, answer: { kind: "failed" } });
+        if (live) setFound({ asked, answer: { kind: "failed" } });
       }
     );
     return () => {
       live = false;
     };
-  }, [list]);
-  if (list === undefined) return undefined;
-  // The answer for THIS function only, so a host swapped mid-mount never
-  // shows the previous host's collections.
-  return found?.list === list ? found.answer : { kind: "loading" };
+  }, [asked, shownAtOnce]);
+  if (asked === undefined) return undefined;
+  // The answer for THIS read only, so a host swapped mid-mount never shows
+  // the previous host's collections.
+  return shownAtOnce ?? (found?.asked === asked ? found.answer : LOADING);
 }
 
 /** A stored text value, trimmed, or `undefined` for anything else or nothing. */

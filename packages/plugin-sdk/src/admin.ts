@@ -198,6 +198,20 @@ export {
 export { useCurrentUserId } from "@nextlyhq/admin/kit/core";
 
 /**
+ * The schema version this tab was last answered with, and a listener told
+ * each time it moves (@experimental).
+ *
+ * For a plugin that keeps an answer the schema decides, such as the
+ * collections an author may pick from: keep it with `schemaVersion()` as it
+ * was read, and read it again once the version differs. `onSchemaChange`
+ * tells of every move this tab learns of (its own Schema Builder apply,
+ * another tab's, a code-first change) and answers the call that stops it.
+ * `schemaVersion()` is `undefined` until an answer carried a version.
+ * Experimental while its first consumer settles.
+ */
+export { onSchemaChange, schemaVersion } from "@nextlyhq/admin/kit/core";
+
+/**
  * How the surrounding document stands (@experimental).
  *
  * For a field that covers the editor's own chrome — the page builder takes the
