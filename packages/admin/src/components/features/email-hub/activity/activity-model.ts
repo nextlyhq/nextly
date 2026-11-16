@@ -220,6 +220,21 @@ export function mergeNewestFirst(
     );
 }
 
+/** The queued states that can still change on their own, as the queue runs. */
+const UNSETTLED: ReadonlySet<QueuedEmailState> = new Set([
+  "waiting",
+  "retrying",
+  "sending",
+]);
+
+/**
+ * Whether any of these rows is a queued email that can still change by
+ * itself, so a list showing it has to be read again to stay true.
+ */
+export function holdsUnsettledQueued(rows: readonly ActivityRow[]): boolean {
+  return rows.some(row => row.source === "queued" && UNSETTLED.has(row.state));
+}
+
 /** What happened to a row, in one line, with a detail and a note when it has them. */
 export interface WhatHappened {
   title: string;

@@ -14,6 +14,7 @@ import type {
 
 import {
   deliveryRow,
+  holdsUnsettledQueued,
   mergeNewestFirst,
   queuedRow,
   sourcesFor,
@@ -267,5 +268,21 @@ describe("whatHappened", () => {
       title: "Cancelled",
       detail: "Last failure: Internal server error",
     });
+  });
+});
+
+describe("holdsUnsettledQueued", () => {
+  it("is true while a queued email can still change by itself, and not for settled rows", () => {
+    for (const state of ["waiting", "retrying", "sending"] as const) {
+      expect(holdsUnsettledQueued([queuedRow(queued({ state }))]), state).toBe(
+        true
+      );
+    }
+    for (const state of ["sent", "failed", "cancelled"] as const) {
+      expect(holdsUnsettledQueued([queuedRow(queued({ state }))]), state).toBe(
+        false
+      );
+    }
+    expect(holdsUnsettledQueued([deliveryRow(delivery())])).toBe(false);
   });
 });

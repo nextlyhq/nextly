@@ -51,7 +51,7 @@ const ROWS: ActivityRow[] = [
 ];
 
 describe("templateChoices", () => {
-  it("offers the hub's templates by name when the reader may read them", () => {
+  it("offers the hub's templates by name, and a template deleted since by the slug its rows name", () => {
     expect(
       templateChoices(
         [
@@ -62,6 +62,8 @@ describe("templateChoices", () => {
         undefined
       )
     ).toEqual([
+      // In no list any more: its deliveries still name it.
+      { slug: "order-shipped", label: "order-shipped" },
       { slug: "password-reset", label: "Password reset" },
       { slug: "welcome", label: "Welcome" },
     ]);

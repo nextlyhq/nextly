@@ -26,6 +26,7 @@ import { useMemo } from "react";
 
 import {
   deliveryRow,
+  holdsUnsettledQueued,
   mergeNewestFirst,
   queuedRow,
   sourcesFor,
@@ -42,6 +43,12 @@ import {
 
 /** How many records each list answers per page. */
 const ACTIVITY_PAGE_SIZE = 50;
+
+/**
+ * How often a list holding a queued email that can still change is read
+ * again, so its state, attempts and due time stay true while the tab is open.
+ */
+const UNSETTLED_POLL_MS = 30_000;
 
 /** How often the overdue check is asked again while the hub is open. */
 const OVERDUE_POLL_MS = 60_000;
@@ -146,6 +153,15 @@ export function useEmailActivity(
         ? undefined
         : last.next,
     enabled: options.enabled ?? true,
+    // Read again only while a loaded queued email can still change by itself;
+    // a list of settled rows has nothing new to show until something is sent.
+    refetchInterval: current =>
+      (current.state.data?.pages ?? []).some(page =>
+        holdsUnsettledQueued(page.queued)
+      )
+        ? UNSETTLED_POLL_MS
+        : false,
+    refetchOnWindowFocus: true,
   });
 
   const pages = query.data?.pages;

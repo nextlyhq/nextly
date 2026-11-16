@@ -39,8 +39,10 @@ function unnamedStoredLabel(type: string, id: string): string {
 }
 
 /**
- * The templates to offer: the hub's list, by name, when the reader may read
- * it, else every template slug the loaded rows name; the chosen one always.
+ * The templates to offer: every template slug the loaded rows name, and,
+ * when the reader may read the hub's list, every template in it, each named
+ * from the list where it is there; the chosen one always. A template deleted
+ * since is still named by its rows, by its slug.
  */
 export function templateChoices(
   list: ReadonlyArray<{ slug: string; name: string }> | undefined,
@@ -48,12 +50,11 @@ export function templateChoices(
   chosen: string | undefined
 ): TemplateOption[] {
   const options = new Map<string, string>();
-  if (list) {
-    for (const template of list) options.set(template.slug, template.name);
-  } else {
-    for (const row of rows) {
-      if (row.templateSlug) options.set(row.templateSlug, row.templateSlug);
-    }
+  for (const row of rows) {
+    if (row.templateSlug) options.set(row.templateSlug, row.templateSlug);
+  }
+  for (const template of list ?? []) {
+    options.set(template.slug, template.name);
   }
   if (chosen && !options.has(chosen)) options.set(chosen, chosen);
   return [...options]
