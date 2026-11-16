@@ -241,6 +241,25 @@ describe("the settings panel's work for a selection", () => {
     }).toEqual({ typography: 1, background: 0 });
   });
 
+  it("keeps a half-typed style value with its block, in the section kept open", () => {
+    render(<Host />);
+    act(() => editor().select("first"));
+    openTab("Style");
+    const typography = screen.getByRole("button", { name: /Typography/ });
+    if (typography.getAttribute("aria-expanded") !== "true") {
+      fireEvent.click(typography);
+    }
+    fireEvent.change(screen.getByLabelText("Line height"), {
+      target: { value: "1.7" },
+    });
+    act(() => editor().select("second"));
+    // The section stays open, with the second block's own (empty) value.
+    expect(typography.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      (screen.getByLabelText("Line height") as HTMLInputElement).value
+    ).toBe("");
+  });
+
   it("keeps a half-typed name with its block, and shows the next block's own", () => {
     render(<Host />);
     act(() => editor().select("first"));
