@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-A save now accepts only what the document has: its declared fields, its system columns, and `_rev`, `_overwrite` and `_restoredFrom`. Any other key in the body of a Single or collection update is refused with a `400 VALIDATION_ERROR` naming it (issue code `UNKNOWN_FIELD`), where it used to be passed on to the write, which usually failed as an internal error. A document read and sent back whole is still accepted.
+A save now accepts only what the document has: its declared fields under their declared names, its system columns, `_rev`, `_overwrite` and `_restoredFrom`, and the keys a read adds (which are not stored). Any other key in the body of a Single or collection update is refused with a `400 VALIDATION_ERROR` naming it (issue code `UNKNOWN_FIELD`), where it used to be passed on to the write, which usually failed as an internal error. A document read and sent back whole is still accepted.

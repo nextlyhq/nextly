@@ -147,7 +147,7 @@ describeEachDialect("a save accepts only what it may carry", dialect => {
       collection: "posts",
       data: { title: "Hello" },
     } as never);
-    const id = String((created as { item: { id: unknown } }).item.id);
+    const id = String(created.item.id);
 
     const refusal = await refusalOf(
       t!.nextly.update({
@@ -217,7 +217,7 @@ describeEachDialect("a save accepts only what it may carry", dialect => {
       locale: "en",
       data: { title: "Hello", status: "published" },
     } as never);
-    const id = String((created as { item: { id: unknown } }).item.id);
+    const id = String(created.item.id);
     await t!.nextly.update({
       collection: "notes",
       id,
