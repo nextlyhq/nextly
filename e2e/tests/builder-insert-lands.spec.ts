@@ -149,7 +149,11 @@ async function createComponent(
 async function shape(request: APIRequestContext, id: string) {
   const name = (node: StoredNode): string =>
     node.type === INSTANCE ? `component:${node.props?.componentId}` : node.type;
-  const nodes = (await storedPageNodes(request, PAGES, id)) as StoredNode[];
+  const nodes = (await storedPageNodes(
+    request,
+    PAGES,
+    id
+  )) as unknown as StoredNode[];
   return nodes.map(node =>
     node.slots?.children === undefined || node.slots.children.length === 0
       ? name(node)
