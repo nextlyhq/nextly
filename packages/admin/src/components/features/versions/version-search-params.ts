@@ -49,10 +49,12 @@ function isServerBaseline(value: string): boolean {
 /**
  * Whether a comparison's start is a baseline only the server resolves, which
  * it can pair with a version of its own choosing when the address names none.
+ *
+ * A plain answer rather than a type guard: every baseline name is a string,
+ * the word for the version before `to` included, so a guard would claim that
+ * word impossible wherever it answered false.
  */
-export function namesServerBaseline(
-  from: ComparisonFrom
-): from is ServerBaseline {
+export function namesServerBaseline(from: ComparisonFrom): boolean {
   return typeof from === "string" && from !== PREVIOUS_VERSION;
 }
 
@@ -129,7 +131,7 @@ export function resolvePair(
   hasMore: boolean
 ): PairResolution {
   // Only the server knows what is published, drafted or last looked at.
-  if (from !== undefined && namesServerBaseline(from)) {
+  if (typeof from === "string" && namesServerBaseline(from)) {
     return to === undefined
       ? { kind: "baseline", baseline: from }
       : { kind: "baseline", baseline: from, to };
