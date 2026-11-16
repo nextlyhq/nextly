@@ -276,6 +276,56 @@ describe.each(getConfiguredTestDialects())(
       );
     }
 
+    /**
+     * Each entry's values in the group, read as an entry written into the group directly with the
+     * values read `before` reads: every kind of value in the form the API keeps it.
+     */
+    async function expectEachInTheGroup(
+      t: TestNextly,
+      before: Map<string, Item>
+    ): Promise<void> {
+      const columns = await columnsOf(t);
+      for (const name of MOVED) expect(columns).not.toContain(name);
+      for (const entry of ENTRIES) {
+        await t.nextly.create({
+          collection: SLUG,
+          data: {
+            title: `${entry.title} direct`,
+            slug: `${entry.slug}-direct`,
+            meta: movedValues(before.get(entry.slug)),
+          },
+        });
+      }
+      const inside = await readAll(t);
+      for (const entry of ENTRIES) {
+        const moved = movedValues(inside.get(entry.slug)?.meta);
+        expect(moved, `${entry.slug} in the group`).toEqual(
+          movedValues(inside.get(`${entry.slug}-direct`)?.meta)
+        );
+        expect(moved).toEqual(asJson(movedValues(before.get(entry.slug))));
+      }
+    }
+
+    /** Each entry's values back on the row as read `before`, and gone from the group: moved, not copied. */
+    async function expectEachOutOfTheGroup(
+      t: TestNextly,
+      before: Map<string, Item>
+    ): Promise<void> {
+      const columns = await columnsOf(t);
+      for (const name of MOVED) expect(columns).toContain(name);
+      const outside = await readAll(t);
+      for (const entry of ENTRIES) {
+        const read = outside.get(entry.slug);
+        expect(movedValues(read), entry.slug).toEqual(
+          movedValues(before.get(entry.slug))
+        );
+        const left = Object.keys((read?.meta ?? {}) as Record<string, unknown>);
+        expect(left.filter(key => MOVED.some(name => name === key))).toEqual(
+          []
+        );
+      }
+    }
+
     it("through the Builder's schema dialog: in, then back out", async () => {
       const t = await boot(dialect);
       await createPosts(t);
@@ -283,49 +333,10 @@ describe.each(getConfiguredTestDialects())(
       const before = await readAll(t);
 
       await save(t, INSIDE, INTO);
-
-      const columns = await columnsOf(t);
-      for (const name of MOVED) expect(columns).not.toContain(name);
-      // An entry written into the group directly, with each entry's values as read before: the
-      // moved entry reads as that one does, every kind of value in the form the API keeps it.
-      for (const entry of ENTRIES) {
-        const read = before.get(entry.slug);
-        await t.nextly.create({
-          collection: SLUG,
-          data: {
-            title: `${entry.title} direct`,
-            slug: `${entry.slug}-direct`,
-            meta: movedValues(read),
-          },
-        });
-      }
-      const inside = await readAll(t);
-      for (const entry of ENTRIES) {
-        expect(
-          movedValues(inside.get(entry.slug)?.meta),
-          `${entry.slug} in the group`
-        ).toEqual(movedValues(inside.get(`${entry.slug}-direct`)?.meta));
-        expect(movedValues(inside.get(entry.slug)?.meta)).toEqual(
-          asJson(movedValues(before.get(entry.slug)))
-        );
-      }
+      await expectEachInTheGroup(t, before);
 
       await save(t, OUTSIDE, OUT);
-
-      const back = await columnsOf(t);
-      for (const name of MOVED) expect(back).toContain(name);
-      const outside = await readAll(t);
-      for (const entry of ENTRIES) {
-        expect(movedValues(outside.get(entry.slug)), entry.slug).toEqual(
-          movedValues(before.get(entry.slug))
-        );
-        // Moved, not copied: the group no longer holds them.
-        expect(
-          Object.keys(
-            (outside.get(entry.slug)?.meta ?? {}) as Record<string, unknown>
-          ).filter(key => (MOVED as readonly string[]).includes(key))
-        ).toEqual([]);
-      }
+      await expectEachOutOfTheGroup(t, before);
     });
 
     it("through nextly migrate, replaying the dialog's files into a second database", async () => {
@@ -372,17 +383,11 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
-    it("names what the moved column had that the group does not carry, in the review and the file", async () => {
-      const t = await boot(dialect);
-      const summary: Field = {
-        name: "summary",
-        type: "text",
-        required: true,
-        index: true,
-      };
-      await createPosts(t, SLUG, { fields: [summary, group("meta", [NOTE])] });
-      // What a database may give a column besides what Nextly writes: a comment, and on MySQL a
-      // collation of its own. SQLite keeps neither.
+    /**
+     * What a database may give a column besides what Nextly writes: a comment, and on MySQL a
+     * collation of its own. SQLite keeps neither.
+     */
+    async function giveSummaryExtras(t: TestNextly): Promise<void> {
       if (dialect === "postgresql") {
         await run(
           t,
@@ -398,6 +403,48 @@ describe.each(getConfiguredTestDialects())(
           `ALTER TABLE ${q(TABLE)} MODIFY COLUMN ${q("summary")} ${column?.type ?? ""} CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT 'Shown in lists'`
         );
       }
+    }
+
+    /** The review's sentence for the moved summary column, naming each property it had. */
+    function expectNamesEachProperty(sentence: string | undefined): void {
+      expect(sentence).toContain("constraint NOT NULL");
+      expect(sentence).toMatch(/: type \S+/);
+      expect(sentence).toMatch(/index \S*summary\S*/);
+      if (dialect !== "sqlite") {
+        expect(sentence).toContain("comment Shown in lists");
+      }
+      if (dialect === "mysql") {
+        expect(sentence).toContain("collation utf8mb4_bin");
+        // The table's own character set is every column's; only one of the column's own is named.
+        expect(sentence).not.toContain("character set");
+      }
+    }
+
+    /** The `-- Deletes:` lines of the newest migration file the saves wrote. */
+    async function newestDeletesLines(): Promise<string> {
+      const files = (await readdir(join(basePath, "migrations")))
+        .filter(f => f.endsWith(".sql"))
+        .sort();
+      const written = await readFile(
+        join(basePath, "migrations", files.at(-1) ?? ""),
+        "utf-8"
+      );
+      return written
+        .split("\n")
+        .filter(line => line.startsWith("-- Deletes:"))
+        .join("\n");
+    }
+
+    it("names what the moved column had that the group does not carry, in the review and the file", async () => {
+      const t = await boot(dialect);
+      const summary: Field = {
+        name: "summary",
+        type: "text",
+        required: true,
+        index: true,
+      };
+      await createPosts(t, SLUG, { fields: [summary, group("meta", [NOTE])] });
+      await giveSummaryExtras(t);
       for (const [title, text] of [
         ["One", "First"],
         ["Two", "Second"],
@@ -426,33 +473,11 @@ describe.each(getConfiguredTestDialects())(
         notice.startsWith("Moving summary into meta keeps every value")
       );
       expect(sentence, reviewed.notices.join("\n")).toBeDefined();
-      expect(sentence).toContain("constraint NOT NULL");
-      expect(sentence).toMatch(/: type \S+/);
-      expect(sentence).toMatch(/index \S*summary\S*/);
-      if (dialect !== "sqlite") {
-        expect(sentence).toContain("comment Shown in lists");
-      }
-      if (dialect === "mysql") {
-        expect(sentence).toContain("collation utf8mb4_bin");
-        // The table's own character set is every column's; only one of the column's own is named.
-        expect(sentence).not.toContain("character set");
-      }
+      expectNamesEachProperty(sentence);
 
       await save(t, fields, into);
 
-      const files = (await readdir(join(basePath, "migrations")))
-        .filter(f => f.endsWith(".sql"))
-        .sort();
-      const written = await readFile(
-        join(basePath, "migrations", files.at(-1) ?? ""),
-        "utf-8"
-      );
-      expect(
-        written
-          .split("\n")
-          .filter(line => line.startsWith("-- Deletes:"))
-          .join("\n")
-      ).toContain(sentence);
+      expect(await newestDeletesLines()).toContain(sentence);
       // Applied to no other column: every other column stands as it was.
       expect(await definitionOf()).toEqual(others);
       const read = await readAll(t);

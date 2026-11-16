@@ -49,7 +49,9 @@ export interface EntityMoves {
 /** The refusal of a move, as the save reports it. */
 function refused(request: FieldMoveRequest, message: string): NextlyError {
   return NextlyError.validation({
-    errors: [{ path: request.to.join("."), code: "FIELD_MOVE_REFUSED", message }],
+    errors: [
+      { path: request.to.join("."), code: "FIELD_MOVE_REFUSED", message },
+    ],
     logContext: { from: request.from, to: request.to },
   });
 }
@@ -93,6 +95,45 @@ function placed(
 }
 
 /**
+ * Refuses a move with no place in the file: into a group the same save creates, whose column the
+ * file adds after it drops the field's, or out of one it deletes, whose column goes first.
+ */
+function refuseUnplaceable(
+  request: FieldMoveRequest,
+  move: PlannedMove,
+  columns: { before: Set<string>; after: Set<string> }
+): void {
+  if (move.to.kind === "json" && !columns.before.has(move.to.column)) {
+    throw refused(
+      request,
+      "The group this field moves into is new in this save. Save the new group first, then move the field into it."
+    );
+  }
+  if (move.from.kind === "json" && !columns.after.has(move.from.column)) {
+    throw refused(
+      request,
+      "The group this field moves out of is deleted in this save. Move the field out first, then delete the group."
+    );
+  }
+}
+
+/** The moved field's column on `table`: its kind, and its type as the dialect declares it. */
+function moveColumn(
+  move: PlannedMove,
+  table: string,
+  dialect: SupportedDialect
+): MoveColumn {
+  return {
+    table,
+    dialect,
+    kind: classifyFieldKind(move.field, "collection"),
+    columnType:
+      getColumnDescriptor(move.field, dialect, "collection")?.dialectType ??
+      "text",
+  };
+}
+
+/**
  * The statements a save's `moves` need, or the refusal of the first that cannot keep its values,
  * thrown before anything is written.
  */
@@ -110,41 +151,24 @@ export function planEntityMoves(args: {
     down: { first: [], last: [] },
     movedColumns: [],
   };
-  const columnsBefore = rowColumns(args.before);
-  const columnsAfter = rowColumns(args.after);
+  const columns = {
+    before: rowColumns(args.before),
+    after: rowColumns(args.after),
+  };
   for (const request of args.moves) {
     const checked = checkMove(args.before, args.after, request, {
       localized: args.localized,
     });
     if (!checked.ok) throw refused(request, checked.message);
     const { move } = checked;
-    if (move.to.kind === "json" && !columnsBefore.has(move.to.column)) {
-      throw refused(
-        request,
-        "The group this field moves into is new in this save. Save the new group first, then move the field into it."
-      );
-    }
-    if (move.from.kind === "json" && !columnsAfter.has(move.from.column)) {
-      throw refused(
-        request,
-        "The group this field moves out of is deleted in this save. Move the field out first, then delete the group."
-      );
-    }
+    refuseUnplaceable(request, move, columns);
     // A field moving between places on one level (a group with no name) keeps its column.
     if (move.from.kind === "column" && move.to.kind === "column") continue;
-    const target: MoveColumn = {
-      table: args.table,
-      dialect: args.dialect,
-      kind: classifyFieldKind(move.field, "collection"),
-      columnType:
-        getColumnDescriptor(move.field, args.dialect, "collection")
-          ?.dialectType ?? "text",
-    };
-    const statements = placed(move, target);
-    result.up.first.push(...statements.up.first);
-    result.up.last.push(...statements.up.last);
-    result.down.first.push(...statements.down.first);
-    result.down.last.push(...statements.down.last);
+    const statements = placed(move, moveColumn(move, args.table, args.dialect));
+    for (const way of ["up", "down"] as const) {
+      result[way].first.push(...statements[way].first);
+      result[way].last.push(...statements[way].last);
+    }
     if (move.from.kind === "column" && move.to.kind === "json") {
       result.movedColumns.push({
         table: args.table,
