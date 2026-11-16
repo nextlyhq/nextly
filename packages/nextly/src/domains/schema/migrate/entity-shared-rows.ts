@@ -188,6 +188,10 @@ export async function withEntityCoverage(
   perUnit: readonly (readonly Deletion[])[],
   reader: SharedRowsReader
 ): Promise<Deletion[][]> {
+  // A run that deletes nothing has nothing to cover: the registry is not read.
+  if (perUnit.every(list => list.length === 0)) {
+    return perUnit.map(list => [...list]);
+  }
   const entities = await readCoveredEntities(reader.db, reader.dialect);
   if (entities.length === 0) return perUnit.map(list => [...list]);
   const owners = entityOwners(entities);

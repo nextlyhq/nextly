@@ -240,6 +240,58 @@ describe("generateMigration's deletions", () => {
     ]);
   });
 
+  it("knows a removed collection's main table by its recorded dbName", async () => {
+    // Named through `dbName`, so its table is `dc_tales`, not `dc_stories`.
+    const stories: MinimalConfigEntity = {
+      slug: "stories",
+      tableName: "dc_tales",
+      fields: [{ name: "body", type: "text" }],
+      settings: {
+        source: "code",
+        settings: {
+          slug: "stories",
+          dbName: "tales",
+          fields: [{ name: "body", type: "text" }],
+        },
+      },
+    };
+    await generateMigration({
+      name: "initial",
+      dialect: "sqlite",
+      migrationsDir,
+      collections: [stories, PAGES],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: new Date("2026-01-01T00:00:00.000Z"),
+    });
+    let judged: readonly Deletion[] = [];
+    await generateMigration({
+      name: "remove_stories",
+      dialect: "sqlite",
+      migrationsDir,
+      collections: [PAGES],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: NOW,
+      judgeDeletions: deletions => {
+        judged = deletions;
+        return Promise.resolve();
+      },
+    });
+    // Its rows in shared tables are listed with the drop of its main table, under that table: the
+    // one its recorded `dbName` names, not one derived from its slug.
+    expect(judged).toContainEqual(
+      expect.objectContaining({
+        kind: "rows",
+        table: "nextly_versions",
+        owner: "dc_tales",
+        of: { kind: "collection", slug: "stories" },
+      })
+    );
+  });
+
   it("asks nothing and marks nothing when nothing is deleted", async () => {
     await snapshotOf([POSTS]);
     let asked = false;

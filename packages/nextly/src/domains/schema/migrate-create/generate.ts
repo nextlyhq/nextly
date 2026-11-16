@@ -3695,54 +3695,62 @@ function removedEntitiesOf(
 /**
  * The collections and Singles a migration is planned against, each with every table it owns
  * (`coveredEntity`): those the config declares, by the table it gives them, and those the latest
- * snapshot records and the config no longer declares, by the table their name gives them, as
- * `removedEntitiesOf` names them. A declared entity's fields are the config's and the snapshot's
- * together, so a junction whose field the config just removed is still known as the entity's.
+ * snapshot records, by the table their recorded declaration names (its `dbName`, else its slug).
+ * A declared entity's fields are the config's and the snapshot's together, so a junction whose
+ * field the config just removed is still known as the entity's; and one whose recorded table
+ * differs from its declared one is also known by the recorded table, which the migration drops.
  */
 function coveredEntitiesOf(
   args: GenerateArgs,
   recorded: EntitySettingsRecord | undefined
 ): CoveredEntity[] {
-  const recordedFields = (
-    record: Record<string, RecordedEntitySettings> | undefined,
-    slug: string
-  ): unknown[] => {
-    const fields = record?.[slug]?.settings.fields;
-    return Array.isArray(fields) ? fields : [];
-  };
   const of = (
     kind: CoveredEntity["kind"],
     declared: readonly MinimalConfigEntity[],
     record: Record<string, RecordedEntitySettings> | undefined,
-    tableOf: (slug: string) => string
-  ): CoveredEntity[] =>
-    [
-      ...declared.map(entity =>
+    tableOf: (slug: string, dbName: string | undefined) => string
+  ): CoveredEntity[] => {
+    const fieldsOf = (entry: RecordedEntitySettings | undefined): unknown[] =>
+      Array.isArray(entry?.settings.fields) ? entry.settings.fields : [];
+    const recordedTable = (slug: string, entry: RecordedEntitySettings) => {
+      const dbName = entry.settings.dbName;
+      return tableOf(slug, typeof dbName === "string" ? dbName : undefined);
+    };
+    const entities = declared.map(entity =>
+      coveredEntity({
+        kind,
+        slug: entity.slug,
+        tableName: entity.tableName,
+        fields: [...entity.fields, ...fieldsOf(record?.[entity.slug])],
+      })
+    );
+    for (const [slug, entry] of Object.entries(record ?? {})) {
+      const table = recordedTable(slug, entry);
+      const current = declared.find(entity => entity.slug === slug);
+      if (current?.tableName.toLowerCase() === table.toLowerCase()) continue;
+      entities.push(
         coveredEntity({
           kind,
-          slug: entity.slug,
-          tableName: entity.tableName,
-          fields: [...entity.fields, ...recordedFields(record, entity.slug)],
+          slug,
+          tableName: table,
+          fields: fieldsOf(entry),
+          source: entry.source,
         })
-      ),
-      ...Object.entries(record ?? {})
-        .filter(([slug]) => !declared.some(entity => entity.slug === slug))
-        .map(([slug, entry]) =>
-          coveredEntity({
-            kind,
-            slug,
-            tableName: tableOf(slug),
-            fields: recordedFields(record, slug),
-            source: entry.source,
-          })
-        ),
-    ].filter((entity): entity is CoveredEntity => entity !== undefined);
+      );
+    }
+    return entities.filter(
+      (entity): entity is CoveredEntity => entity !== undefined
+    );
+  };
   return [
-    ...of("collection", args.collections, recorded?.collections, slug =>
-      resolveCollectionTableName(slug)
+    ...of(
+      "collection",
+      args.collections,
+      recorded?.collections,
+      (slug, dbName) => resolveCollectionTableName(slug, dbName)
     ),
-    ...of("single", args.singles, recorded?.singles, slug =>
-      resolveSingleTableName({ slug })
+    ...of("single", args.singles, recorded?.singles, (slug, dbName) =>
+      resolveSingleTableName({ slug, dbName })
     ),
   ];
 }
