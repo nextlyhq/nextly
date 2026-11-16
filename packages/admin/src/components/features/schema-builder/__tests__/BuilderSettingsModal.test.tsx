@@ -440,12 +440,13 @@ describe("BuilderSettingsModal — the address", () => {
   it("keeps a saved entity's address when its name changes", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
+    // An address that is what the name derives, the one that would follow it.
     render(
       <BuilderSettingsModal
         open
         mode="edit"
         config={collectionConfig}
-        initialValues={SAVED}
+        initialValues={{ ...SAVED, slug: "post" }}
         onCancel={vi.fn()}
         onSubmit={onSubmit}
       />
@@ -453,10 +454,10 @@ describe("BuilderSettingsModal — the address", () => {
     const name = screen.getByLabelText("Singular name");
     await user.clear(name);
     await user.type(name, "Article");
-    expect(screen.getByLabelText("Slug")).toHaveValue("posts");
+    expect(screen.getByLabelText("Slug")).toHaveValue("post");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(onSubmit.mock.calls[0][0]).toEqual(
-      expect.objectContaining({ singularName: "Article", slug: "posts" })
+      expect.objectContaining({ singularName: "Article", slug: "post" })
     );
   });
 
@@ -520,7 +521,8 @@ describe("BuilderSettingsModal — the address", () => {
     ]) {
       expect(control).toBeDisabled();
     }
+    // Nothing to save or cancel: the footer only closes.
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
   });
 });
