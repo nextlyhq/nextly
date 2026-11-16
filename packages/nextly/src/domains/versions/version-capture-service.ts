@@ -18,6 +18,7 @@ import {
 } from "../content-events/core-kinds";
 import { recordContentEvent } from "../content-events/record";
 
+import type { ChangedParts } from "./changed-parts";
 import type { VersionsDbApi } from "./db-api";
 import type { RecordedVersionStatus } from "./recorded-status";
 import { selectVersionsToPrune } from "./retention";
@@ -37,6 +38,8 @@ export interface CaptureInput {
   sourceVersionNo?: number | null;
   /** The version each restored field came from; see `restored-from`. */
   fieldSources?: Readonly<Record<string, number>> | null;
+  /** The parts this version changed; null or absent records them as unknown. */
+  changedParts?: ChangedParts | null;
   /**
    * Durable versions retained for this document; `false` or omitted leaves
    * history unbounded. Applied in the caller's transaction right after the
@@ -207,6 +210,7 @@ async function insertWithRetry(
           locale: input.locale ?? null,
           sourceVersionNo: input.sourceVersionNo ?? null,
           fieldSources: input.fieldSources ?? null,
+          changedParts: input.changedParts ?? null,
           createdBy: input.createdBy ?? null,
         })
       );

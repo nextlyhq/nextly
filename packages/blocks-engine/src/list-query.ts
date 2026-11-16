@@ -138,13 +138,13 @@ export type {
 export { listItemRef, namedQueryHiddenReads } from "./list-query-named";
 export type { NamedQueryHiddenRead } from "./list-query-named";
 
-/** Where each kind of shared document shows, for the words of a refusal. */
-const SHOWN_ON_MANY: Readonly<Record<string, string>> = {
-  component:
-    "This list is in a component, which can be placed on many pages, so it can't be split into pages.",
-  region:
-    "This list is in a Layout region, which shows on every page using the Layout, so it can't be split into pages.",
-};
+/**
+ * The words of the refusal for a list in a component. A component is the one
+ * kind of document shown on many pages (a Layout's header and footer are
+ * components too), so it is the one kind refused here.
+ */
+const SHOWN_ON_MANY =
+  "This list is in a component, which can be placed on many pages, so it can't be split into pages.";
 
 /**
  * Why a list split into pages may not be: it sits where nothing has an
@@ -163,14 +163,12 @@ function pageFindings(
   const refused = (code: ListPageCode, message: string): Finding[] => [
     { path: at("paginate"), nodeId, code, message },
   ];
-  const shared =
-    judgement.documentKind === undefined
-      ? undefined
-      : SHOWN_ON_MANY[judgement.documentKind];
-  if (shared !== undefined) {
+  // Compared as a value rather than looked up by key, so a stored kind
+  // spelled like an inherited name (`constructor`) finds nothing.
+  if (judgement.documentKind === "component") {
     return refused(
       "list-paginate-shared",
-      `${shared} Turn off Split into pages.`
+      `${SHOWN_ON_MANY} Turn off Split into pages.`
     );
   }
   // Inside another list in any slot: drawn once per outer entry, or, in its
