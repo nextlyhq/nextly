@@ -1,9 +1,16 @@
-import { allBlocks, clearBlocks, registerBlocks } from "@nextlyhq/blocks-engine";
+import {
+  allBlocks,
+  clearBlocks,
+  registerBlocks,
+} from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { withRegisteredLooks } from "./core-looks";
-import { adminClientConfig, refreshCodeTier } from "./plugin-definition/options";
+import {
+  adminClientConfig,
+  refreshCodeTier,
+} from "./plugin-definition/options";
 import { resolveSiteStyle, type SiteStyleData } from "./site-style";
 import { loadSiteStyle } from "./site-style-load";
 import type { SiteStyleReader } from "./site-style-storage";

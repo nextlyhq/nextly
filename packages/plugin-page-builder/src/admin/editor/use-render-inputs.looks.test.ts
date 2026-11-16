@@ -155,8 +155,6 @@ describe("the looks the canvas draws with", () => {
       useSiteStyleInputs(publishedClientConfig())
     );
 
-    expect(looksOf(result.current.canvasSiteStyle)).toEqual(
-      looksOf(published)
-    );
+    expect(looksOf(result.current.canvasSiteStyle)).toEqual(looksOf(published));
   });
 });
