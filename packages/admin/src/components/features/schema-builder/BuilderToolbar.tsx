@@ -34,6 +34,8 @@ type Props = {
   onAddField: () => void;
   onOpenSettings: () => void;
   onSave: () => void;
+  /** Why Save waits, while it does: Save is held and the reason shown beside it. */
+  saveHeld?: string;
   /**
    * Where the Page Builder opens for this entity, for one laid out from blocks
    * and saved; absent, nothing is offered.
@@ -73,9 +75,10 @@ export function BuilderToolbar({
   onAddField,
   onOpenSettings,
   onSave,
+  saveHeld,
   pageBuilderHref,
 }: Props): JSX.Element {
-  const saveDisabled = unsavedCount === 0 || locked;
+  const saveDisabled = unsavedCount === 0 || locked || saveHeld !== undefined;
   const lockedSaveTitle = locked
     ? `This ${BUILDER_KIND_NOUN[config.kind]} is managed in code. Update its definition in code to make changes.`
     : undefined;
@@ -153,6 +156,13 @@ export function BuilderToolbar({
         >
           <Settings className="h-4 w-4" />
         </Button>
+        {/* Said where Save is, so a held Save is never a button that does
+            nothing without a reason. */}
+        {saveHeld !== undefined && (
+          <span role="status" className="text-xs text-muted-foreground">
+            {saveHeld}
+          </span>
+        )}
         <Button
           size="sm"
           disabled={saveDisabled}
