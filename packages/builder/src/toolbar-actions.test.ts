@@ -29,6 +29,7 @@ import { selectionDuplication } from "./selection-ops";
 import {
   depthMoveActions,
   TOOLBAR_GAP_PX,
+  TOOLBAR_INSET_PX,
   toolbarActions,
   turnIntoChoice,
   toolbarPlacement,
@@ -820,32 +821,52 @@ describe("toolbarPlacement", () => {
     ).toBe(40);
   });
 
-  it("flips below when there is no room above", () => {
-    // The first block on a page. Clamping to the canvas top instead would draw
-    // the bar ON the block rather than beside it.
+  it("draws inside the block's top-left corner when there is no room above", () => {
+    // The first block on a page with no header. Below it the bar would cover
+    // the next block, and clamped to the canvas top it would sit on the block
+    // with no inset; inside the corner it covers only the block it names.
     const at = toolbarPlacement(
       { x: 0, y: 10, width: 500, height: 100 },
       bar,
       canvas
     );
 
-    expect(at.side).toBe("below");
-    expect(at.y).toBe(10 + 100 + TOOLBAR_GAP_PX);
+    expect(at.side).toBe("inside");
+    expect(at.x).toBe(TOOLBAR_INSET_PX);
+    expect(at.y).toBe(10 + TOOLBAR_INSET_PX);
+    expect(TOOLBAR_INSET_PX).toBe(4);
   });
 
-  it("flips below at the top of what is on screen, not only of the page", () => {
+  it("draws inside at the top of what is on screen, not only of the page", () => {
     // Scrolled 600px down: a block 10px below the screen's top has no room
     // above it on screen, though the page has plenty.
     const screen = { top: 600, bottom: 1400 };
     const at = toolbarPlacement(
-      { x: 0, y: 610, width: 500, height: 100 },
+      { x: 40, y: 610, width: 500, height: 100 },
       bar,
       canvas,
       TOOLBAR_GAP_PX,
       screen
     );
-    expect(at.side).toBe("below");
-    expect(at.y).toBe(610 + 100 + TOOLBAR_GAP_PX);
+    expect(at.side).toBe("inside");
+    expect(at.x).toBe(40 + TOOLBAR_INSET_PX);
+    expect(at.y).toBe(610 + TOOLBAR_INSET_PX);
+  });
+
+  it("counts a Layout header above the first block as room above, and sits over it", () => {
+    // The header is drawn in the canvas above the page's first block, so
+    // the bar goes above that block, over the header, and not inside it.
+    const header = 80;
+    const at = toolbarPlacement(
+      { x: 0, y: header, width: 1000, height: 60 },
+      bar,
+      canvas,
+      TOOLBAR_GAP_PX,
+      { top: 0, bottom: 800 }
+    );
+    expect(at.side).toBe("above");
+    expect(at.y).toBe(header - 32 - TOOLBAR_GAP_PX);
+    expect(at.y).toBeGreaterThanOrEqual(0);
   });
 
   it("stays at the top of the screen for a tall block whose top is scrolled away", () => {
@@ -863,9 +884,9 @@ describe("toolbarPlacement", () => {
     expect(at.y).toBe(600 + TOOLBAR_GAP_PX);
   });
 
-  it("stays at the top of the screen for a tall block just under it, with no room below on screen", () => {
-    // Below a block taller than the rest of the screen is off it: the bar goes
-    // to the screen's top, over the block, rather than out of reach.
+  it("draws inside a tall block at the top, whose own top is on screen", () => {
+    // A Section taller than the screen, at the very top of the page: inside
+    // its own corner, where it covers nothing but the Section.
     const screen = { top: 600, bottom: 1400 };
     const at = toolbarPlacement(
       { x: 0, y: 610, width: 500, height: 1000 },
@@ -874,23 +895,35 @@ describe("toolbarPlacement", () => {
       TOOLBAR_GAP_PX,
       screen
     );
-    expect(at.side).toBe("pinned");
-    expect(at.y).toBe(600 + TOOLBAR_GAP_PX);
+    expect(at.side).toBe("inside");
+    expect(at.y).toBe(610 + TOOLBAR_INSET_PX);
   });
 
-  it("goes below a short block whose top is just above the screen, where that fits", () => {
-    // 20px of the block is on screen: too little to pin the bar over, and
-    // above it is off screen. Below it there is room.
+  it("never goes below a block, where it would sit over the next one", () => {
+    // A short block whose top is just above the screen: 20px of it is on
+    // screen, too little to pin the bar over. Below it is the next block, so
+    // the bar stays above, out of view with the block's top.
     const screen = { top: 600, bottom: 1400 };
-    const at = toolbarPlacement(
-      { x: 0, y: 580, width: 500, height: 40 },
-      bar,
-      canvas,
-      TOOLBAR_GAP_PX,
-      screen
-    );
-    expect(at.side).toBe("below");
-    expect(at.y).toBe(580 + 40 + TOOLBAR_GAP_PX);
+    expect(
+      toolbarPlacement(
+        { x: 0, y: 580, width: 500, height: 40 },
+        bar,
+        canvas,
+        TOOLBAR_GAP_PX,
+        screen
+      ).side
+    ).toBe("above");
+
+    // And across every place a block can be on screen, the bar's top is never
+    // past the block's bottom.
+    for (let y = 0; y <= 1600; y += 20) {
+      for (const height of [20, 40, 100, 400, 1200]) {
+        const block = { x: 0, y, width: 500, height };
+        const at = toolbarPlacement(block, bar, canvas, TOOLBAR_GAP_PX, screen);
+        expect(at.side).not.toBe("below");
+        expect(at.y).toBeLessThan(y + height);
+      }
+    }
   });
 
   it("keeps to the screen's left and right edges in a canvas scrolled sideways", () => {
