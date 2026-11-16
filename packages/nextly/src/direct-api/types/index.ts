@@ -178,6 +178,7 @@ export type {
   QueuedEmailActivity,
   QueuedEmailOverdue,
   TemplateLastSent,
+  TemplatesLastSent,
 } from "./email";
 
 export type {

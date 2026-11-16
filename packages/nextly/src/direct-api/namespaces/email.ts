@@ -85,7 +85,7 @@ import type {
   SendEmailResult,
   SendTemplateEmailArgs,
   SetDefaultProviderArgs,
-  TemplateLastSent,
+  TemplatesLastSent,
   TestEmailProviderArgs,
   UpdateEmailProviderArgs,
   UpdateEmailTemplateArgs,
@@ -273,7 +273,7 @@ export interface EmailDeliveriesNamespace {
     args?: FindQueuedEmailsArgs
   ): Promise<ActivityPage<QueuedEmailActivity>>;
   /** When each template was last sent. */
-  lastSent(args?: EmailLastSentArgs): Promise<TemplateLastSent[]>;
+  lastSent(args?: EmailLastSentArgs): Promise<TemplatesLastSent>;
   /** Whether queued email is overdue because the jobs trigger is not running. */
   overdue(args?: EmailOverdueArgs): Promise<QueuedEmailOverdue>;
 }

@@ -649,6 +649,7 @@ export type {
   QueuedEmailActivity,
   QueuedEmailOverdue,
   TemplateLastSent,
+  TemplatesLastSent,
 } from "../../domains/email/delivery-activity";
 
 export type {

@@ -26,13 +26,21 @@ const QUEUE_INDEXES = {
 const DELIVERY_ID = "00000000-0000-4000-8000-0000000000d1";
 const QUEUED_ID = "00000000-0000-4000-8000-0000000000q1";
 
+/** The delivery log's indexes this change adds, with their columns. */
+const DELIVERY_INDEXES = {
+  [TEMPLATE_INDEX]: ["template_slug", "status", "created_at"],
+  email_deliveries_provider_type_idx: ["provider_type", "created_at"],
+};
+
 /** The two tables as an installation before the Activity reads has them. */
 async function removeActivitySchema(fresh: FreshDatabase): Promise<void> {
-  await fresh.exec(
-    fresh.dialect === "mysql"
-      ? `DROP INDEX ${TEMPLATE_INDEX} ON email_deliveries`
-      : `DROP INDEX ${TEMPLATE_INDEX}`
-  );
+  for (const index of Object.keys(DELIVERY_INDEXES)) {
+    await fresh.exec(
+      fresh.dialect === "mysql"
+        ? `DROP INDEX ${index} ON email_deliveries`
+        : `DROP INDEX ${index}`
+    );
+  }
   for (const index of Object.keys(QUEUE_INDEXES)) {
     await fresh.exec(
       fresh.dialect === "mysql"
@@ -82,6 +90,11 @@ describe.each(availableDialects())(
           await fresh.indexColumnsOf("email_deliveries", TEMPLATE_INDEX)
         ).toEqual(["template_slug", "status", "created_at"]);
         expect(await fresh.columnsOf("email_queue")).toContain("template_slug");
+        for (const [index, columns] of Object.entries(DELIVERY_INDEXES)) {
+          expect(await fresh.indexColumnsOf("email_deliveries", index)).toEqual(
+            columns
+          );
+        }
         for (const [index, columns] of Object.entries(QUEUE_INDEXES)) {
           expect(await fresh.indexColumnsOf("email_queue", index)).toEqual(
             columns
