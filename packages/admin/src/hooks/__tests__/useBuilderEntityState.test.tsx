@@ -47,9 +47,20 @@ function isDirty(
  */
 function makeBuilder() {
   let current: BuilderField[] = [];
+  // The settings share the builder's history, so the stand-in holds them too.
+  let settings: BuilderSettingsValues | null = null;
   const api: BuilderFieldsApi = {
     get fields() {
       return current;
+    },
+    get settings() {
+      return settings;
+    },
+    setSettings: vi.fn((next: BuilderSettingsValues) => {
+      settings = next;
+    }),
+    get snapshot() {
+      return { fields: current, settings };
     },
     setFields: vi.fn(next => {
       current = typeof next === "function" ? next(current) : next;
@@ -61,9 +72,12 @@ function makeBuilder() {
     handleFieldUpdate: vi.fn(),
     handleNestedFieldAdd: vi.fn(),
     validateFields: vi.fn(() => ({ valid: true })),
-    resetFields: vi.fn((next: BuilderField[]) => {
-      current = next;
-    }),
+    resetFields: vi.fn(
+      (next: BuilderField[], nextSettings?: BuilderSettingsValues | null) => {
+        current = next;
+        if (nextSettings !== undefined) settings = nextSettings;
+      }
+    ),
     clearHistory: vi.fn(),
     historyStep: 0,
     canUndo: false,
@@ -195,7 +209,7 @@ describe("useBuilderEntityState", () => {
   // A settings-only edit has to enable Save; counting field changes alone left
   // the button disabled and the edit unreachable.
   it("counts a settings-only edit", () => {
-    const { result } = setup({
+    const { result, rerender } = setup({
       slug: "posts",
       name: "Post",
       fields: [definition("body")],
@@ -205,6 +219,9 @@ describe("useBuilderEntityState", () => {
         ...settingsOf({ slug: "posts", name: "Article", fields: [] }),
       })
     );
+    // The stand-in builder holds the settings outside React, as it does the
+    // fields, so the page is drawn again to read them.
+    rerender({ e: undefined });
     expect(result.current.unsavedCount).toBe(1);
   });
 
@@ -230,13 +247,15 @@ describe("useBuilderEntityState", () => {
   // The baseline moves when the write lands, which is what makes a change and
   // a change-back both read as clean.
   it("goes clean again once the saved settings are pinned", () => {
-    const { result } = setup({
+    const { result, rerender } = setup({
       slug: "posts",
       name: "Post",
       fields: [definition("body")],
     });
     const renamed = settingsOf({ slug: "posts", name: "Article", fields: [] });
     act(() => result.current.setSettings(renamed));
+    // Drawn again to read the stand-in builder's settings, held outside React.
+    rerender({ e: undefined });
     expect(result.current.unsavedCount).toBe(1);
 
     act(() => result.current.pinSettings(renamed));
