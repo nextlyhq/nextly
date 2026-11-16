@@ -1184,7 +1184,13 @@ export async function readColumnExtras(
       sql`SELECT name FROM pragma_table_info(${table}) WHERE name IN (${names})`
     )
   )) as { name: string }[];
-  const declared = /\bcollate\b/i.test(statement ?? "") ? "declared" : null;
+  // Quoted text is left out first: a column named "collate", or a default literal holding the
+  // word, names no collation.
+  const unquoted = (statement ?? "").replace(
+    /'(?:[^']|'')*'|"(?:[^"]|"")*"|`(?:[^`]|``)*`|\[[^\]]*\]/g,
+    " "
+  );
+  const declared = /\bcollate\b/i.test(unquoted) ? "declared" : null;
   for (const { name } of live) {
     found.set(name, { comment: null, charset: null, collation: declared });
   }

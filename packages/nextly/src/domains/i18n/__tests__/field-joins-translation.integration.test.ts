@@ -859,6 +859,95 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     expect(await columnsOf("comp_mkd_banner_locales")).not.toContain("heading");
   });
 
+  /** The default `table`'s `column` has, as the database's catalog reports it. */
+  async function columnDefault(
+    table: string,
+    column: string
+  ): Promise<string | null> {
+    const [row] = await query<{ d: string | null }>(
+      dialect === "mysql"
+        ? `SELECT COLUMN_DEFAULT AS d FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}' AND COLUMN_NAME = '${column}'`
+        : `SELECT column_default AS d FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${table}' AND column_name = '${column}'`
+    );
+    return row?.d ?? null;
+  }
+
+  // SQLite cannot give an existing column a default without rebuilding its table.
+  it.skipIf(dialect === "sqlite")(
+    "gives the companion column the main column's default as a code-first apply moves its values, or refuses where it cannot take it",
+    async () => {
+      const id = await seedCollection();
+      await query(
+        dialect === "mysql"
+          ? `ALTER TABLE ${quote(dialect, "dc_posts")} MODIFY COLUMN ${quote(dialect, "heading")} VARCHAR(255) NULL DEFAULT 'none'`
+          : `ALTER TABLE ${quote(dialect, "dc_posts")} ALTER COLUMN ${quote(dialect, "heading")} SET DEFAULT 'none'`
+      );
+
+      const applied = await applyCodeFirst([
+        { name: "heading", type: "text", localized: true },
+        { name: "views", type: "number" },
+      ]);
+
+      // MySQL gives a TEXT column no literal default, and the field's companion column is TEXT, so
+      // there the move is refused before anything runs and the value stays where it was.
+      if (dialect === "mysql") {
+        expect(applied.success).toBe(false);
+        expect(JSON.stringify(applied)).toMatch(
+          /TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own default/
+        );
+        expect(await mainHeading("dc_posts", id)).toBe("Hello");
+        return;
+      }
+      expect(applied.success, JSON.stringify(applied)).toBe(true);
+      expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
+      expect(
+        String(await columnDefault("dc_posts_locales", "heading"))
+      ).toMatch(/none/);
+    }
+  );
+
+  // SQLite keeps a collation only in a table's statement; a quoted name holding the word is none.
+  it.runIf(dialect === "sqlite")(
+    "moves a field's values on SQLite beside a column named collate, which declares no collation",
+    async () => {
+      const id = await seedCollection();
+      await query(
+        `ALTER TABLE ${quote(dialect, "dc_posts")} ADD COLUMN ${quote(dialect, "collate")} TEXT`
+      );
+
+      const applied = await applyCodeFirst([
+        { name: "heading", type: "text", localized: true },
+        { name: "views", type: "number" },
+      ]);
+
+      expect(applied.success, JSON.stringify(applied)).toBe(true);
+      expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
+    }
+  );
+
+  // MySQL reports an expression default holding a string literal in a form no statement accepts
+  // back, so a move that would need it is refused before the main column is dropped.
+  it.runIf(dialect === "mysql")(
+    "refuses a code-first apply whose move would lose a default MySQL cannot restate, and changes nothing",
+    async () => {
+      const id = await seedCollection();
+      await query(
+        `ALTER TABLE ${quote(dialect, "dc_posts")} MODIFY COLUMN ${quote(dialect, "heading")} VARCHAR(255) NULL DEFAULT (lower('X'))`
+      );
+
+      const applied = await applyCodeFirst([
+        { name: "heading", type: "text", localized: true },
+        { name: "views", type: "number" },
+      ]);
+
+      expect(applied.success).toBe(false);
+      expect(JSON.stringify(applied)).toMatch(
+        /TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own default/
+      );
+      expect(await mainHeading("dc_posts", id)).toBe("Hello");
+    }
+  );
+
   it("refuses a code-first apply that makes a float an integer as it becomes translated, and changes nothing", async () => {
     // SQLite would keep 1.5 as it is in an INTEGER column, a value the whole-number field refuses;
     // PostgreSQL and MySQL would round it.

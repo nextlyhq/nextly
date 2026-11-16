@@ -999,7 +999,11 @@ export async function refuseTranslationMovesLosingDefinition(args: {
     const column = fieldToLocalizedColumnSpec(f, dialect, args.builtBy);
     return column ? [{ field: f.name, column }] : [];
   });
-  const moved = specs.map(m => ({ field: m.field, column: m.column.name }));
+  const moved = specs.map(m => ({
+    field: m.field,
+    column: m.column.name,
+    spec: m.column,
+  }));
   const companion = `${args.tableName}_locales`;
   const [from, to] = turningOn
     ? [args.tableName, companion]

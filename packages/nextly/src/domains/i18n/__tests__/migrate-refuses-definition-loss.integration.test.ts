@@ -26,6 +26,7 @@ import {
   generateMigration,
   type MinimalConfigEntity,
 } from "../../schema/migrate-create/generate";
+import { ensureCompanionTable } from "../runtime/companion-io";
 
 let current: TestNextly | undefined;
 let dir: string | undefined;
@@ -292,6 +293,133 @@ describe.each(getConfiguredTestDialects())(
             (refused as { publicData?: unknown }).publicData ?? refused
           )
         ).toMatch(/TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own default/);
+      },
+      120_000
+    );
+
+    /**
+     * A folder holding `entity` shared, then translated, with the first run's files applied; the
+     * companion made as a development start or `db:sync` makes it, before the file turning
+     * translation on runs.
+     */
+    async function enableOverRuntimeCompanion(
+      entity: (localized: boolean) => MinimalConfigEntity
+    ) {
+      current = await createTestNextly({ dialect });
+      const adapter = current.adapter as unknown as DrizzleAdapter;
+      dir = await mkdtemp(join(tmpdir(), "nextly-definition-loss-"));
+      const migrationsDir = dir;
+      const generate = (localized: boolean, name: string, at: string) =>
+        generateMigration({
+          name,
+          dialect,
+          migrationsDir,
+          defaultLocale: "en",
+          collections: [entity(localized)],
+          singles: [],
+          components: [],
+          nonInteractive: true,
+          now: new Date(at),
+        });
+      const sqlFiles = async () =>
+        (await readdir(migrationsDir)).filter(f => f.endsWith(".sql"));
+      const migrate = (step?: number) =>
+        migrateCore({
+          ...(step === undefined ? {} : { step }),
+          extensionSchema: undefined,
+          dialect,
+          db: adapter.getDrizzle(),
+          adapter: adapter as never,
+          migrationsDir,
+          logger: createLogger({ quiet: true }),
+          lockMode: "fail-fast",
+          consent: NO_CONSENT,
+          interactive: false,
+        } as never);
+      await generate(false, "one", "2026-11-13T10:00:00.000Z");
+      const first = (await sqlFiles()).length;
+      await generate(true, "two", "2026-11-13T11:00:00.000Z");
+      await migrate(first);
+      const translated = entity(true);
+      expect(
+        await ensureCompanionTable(
+          adapter as unknown as Parameters<typeof ensureCompanionTable>[0],
+          {
+            builtBy: "codeFirst",
+            slug: translated.slug,
+            tableName: translated.tableName,
+            fields: translated.fields as never,
+            dialect,
+            sourceLocale: "en",
+          }
+        )
+      ).toBe(true);
+      return {
+        query: (statement: string) => adapter.executeQuery(statement),
+        migrate,
+      };
+    }
+
+    // SQLite cannot give an existing column a default without rebuilding its table.
+    it.skipIf(dialect === "sqlite")(
+      "refuses a file turning translation on over a companion already there without the main column's default",
+      async () => {
+        const { query, migrate } = await enableOverRuntimeCompanion(docs);
+        // The main column given a default after its companion column was made.
+        await query(
+          dialect === "mysql"
+            ? `ALTER TABLE ${q("dc_mkd_docs")} MODIFY COLUMN ${q("heading")} VARCHAR(255) NULL DEFAULT 'none'`
+            : `ALTER TABLE ${q("dc_mkd_docs")} ALTER COLUMN ${q("heading")} SET DEFAULT 'none'`
+        );
+
+        const refused = await migrate().then(
+          () => undefined,
+          (error: unknown) => error
+        );
+
+        expect(
+          JSON.stringify(
+            (refused as { publicData?: unknown } | undefined)?.publicData ??
+              refused
+          )
+        ).toMatch(/TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own default/);
+      },
+      120_000
+    );
+
+    // The companion a development start makes spells some types otherwise than the main table
+    // (PostgreSQL's TIMESTAMPTZ beside timestamp, BOOLEAN beside bool), which hold each other's
+    // values: an ordinary file turning translation on over it is not refused for them.
+    it.runIf(dialect === "postgresql")(
+      "does not refuse an ordinary file turning translation on over a companion a development start made",
+      async () => {
+        const typed = (localized: boolean): MinimalConfigEntity => ({
+          slug: "mkd_typed",
+          tableName: "dc_mkd_typed",
+          localized,
+          fields: [
+            { name: "published", type: "date", localized },
+            { name: "featured", type: "checkbox", localized },
+            {
+              name: "score",
+              type: "number",
+              options: { format: "float" },
+              localized,
+            },
+          ],
+        });
+        const { migrate } = await enableOverRuntimeCompanion(typed);
+
+        const outcome = await migrate().then(
+          () => "applied",
+          (error: unknown) => error
+        );
+
+        expect(
+          JSON.stringify(
+            (outcome as { publicData?: unknown }).publicData ?? outcome
+          )
+        ).not.toMatch(/TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION/);
       },
       120_000
     );

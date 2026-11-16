@@ -8,8 +8,10 @@ import { describe, expect, it } from "vitest";
 import type { ColumnSpec } from "../../schema/pipeline/diff/types";
 
 import {
+  carriableDefault,
   carriedDefinition,
   receivingColumnDefinition,
+  typeCarried,
 } from "./carried-definition";
 import type { LocalizedColumnSpec } from "./types";
 
@@ -130,5 +132,27 @@ describe("carriedDefinition", () => {
       carriedDefinition(source("text"), column("text"), "postgresql")
     ).toBeUndefined();
     expect(receivingColumnDefinition(column("longText"), "mysql")).toBe("TEXT");
+  });
+});
+
+describe("typeCarried for MySQL integers the type rules cannot read", () => {
+  it.each([
+    ["int unsigned", "INT", true],
+    ["int unsigned", "BIGINT", false],
+    ["int unsigned", "INT UNSIGNED", false],
+    ["bigint unsigned", "BIGINT", true],
+    ["tinyint unsigned", "SMALLINT", false],
+    ["int zerofill", "INT", true],
+  ] as const)("%s over %s: %s", (source, own, carried) => {
+    expect(typeCarried(source, own, "mysql")).toBe(carried);
+  });
+});
+
+describe("carriableDefault", () => {
+  it("does not carry a MySQL default in the catalog's escaped form, which no statement accepts", () => {
+    expect(carriableDefault("lower(_utf8mb4\\'X\\')", "mysql")).toBe(false);
+    expect(carriableDefault("'none'", "mysql")).toBe(true);
+    expect(carriableDefault("'none'::text", "postgresql")).toBe(true);
+    expect(carriableDefault(undefined, "mysql")).toBe(false);
   });
 });

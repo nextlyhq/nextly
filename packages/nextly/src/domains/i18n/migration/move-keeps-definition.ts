@@ -22,8 +22,15 @@ import {
   readReceivingDefaults,
   type ReceivingDefaults,
 } from "../../schema/pipeline/live-table-facts";
+import { renderedType } from "../../schema/pipeline/sql-templates/create-table-body";
 
-import { carriedDefinition } from "./carried-definition";
+import {
+  carriableDefault,
+  carriedDefinition,
+  defaultFitsType,
+  receivingType,
+  typeCarried,
+} from "./carried-definition";
 import {
   type LeavingTranslationRefusal,
   refusal,
@@ -82,21 +89,48 @@ export async function lossesOnMove(
   db: unknown,
   dialect: SupportedDialect,
   move: {
-    moved: readonly { field: string; column: string }[];
+    /**
+     * The fields moved, each with its column's name and, where the caller knows the field, its
+     * column (`spec`), which decides the type the receiving column is created with.
+     */
+    moved: readonly {
+      field: string;
+      column: string;
+      spec?: LocalizedColumnSpec;
+    }[];
     from: string;
     to: string;
   }
 ): Promise<ColumnMoveLoss[]> {
   if (move.moved.length === 0) return [];
-  return lostOnMove(
-    move.moved,
-    await readColumnExtras(
-      db,
-      dialect,
-      move.from,
-      move.moved.map(m => m.column)
+  const source = (
+    await introspectLiveSnapshot(db, dialect, [move.from])
+  ).tables.find(t => t.name === move.from);
+  // A default the receiving column cannot be given would be lost: one no statement accepts back
+  // (`carriableDefault`), or one its type cannot take (`defaultFitsType`).
+  const uncarriable: ColumnMoveLoss[] = move.moved.flatMap(m => {
+    const live = source?.columns.find(c => c.name === m.column);
+    const value = live?.default;
+    if (live === undefined || value === undefined) return [];
+    const fits =
+      m.spec === undefined ||
+      defaultFitsType(value, receivingType(live, m.spec, dialect), dialect);
+    return !carriableDefault(value, dialect) || !fits
+      ? [{ field: m.field, column: m.column, lost: ["default"] }]
+      : [];
+  });
+  return mergeLosses(
+    lostOnMove(
+      move.moved,
+      await readColumnExtras(
+        db,
+        dialect,
+        move.from,
+        move.moved.map(m => m.column)
+      ),
+      await readReceivingDefaults(db, dialect, move.to)
     ),
-    await readReceivingDefaults(db, dialect, move.to)
+    uncarriable
   );
 }
 
@@ -268,14 +302,14 @@ async function fileRefusals(
   const onMain = spec.columnsOnMain && new Set(spec.columnsOnMain);
   const moved = spec.columns
     .filter(c => !turningOn || onMain === undefined || onMain.has(c.name))
-    .map(c => ({ field: c.name, column: c.name }));
+    .map(c => ({ field: c.name, column: c.name, spec: c }));
   const [from, to] = turningOn
     ? [spec.mainTable, spec.companionTable]
     : [spec.companionTable, spec.mainTable];
   const losses = mergeLosses(
     await lossesOnMove(db, dialect, { moved, from, to }),
     turningOn
-      ? []
+      ? await unreceivedOnEnable(db, dialect, spec, moved)
       : await uncarriedOnDisable(db, dialect, spec, companionCreatedEarlier)
   );
   return refusalsForMovesLosingDefinition({
@@ -283,5 +317,44 @@ async function fileRefusals(
     table: from,
     translation: turningOn ? "on" : "off",
     surface: "code",
+  });
+}
+
+/**
+ * What a file turning translation on would not give a companion that is already there: its
+ * `CREATE TABLE IF NOT EXISTS` leaves an existing companion as it is, so a companion column made
+ * before the file runs (by a development start or `db:sync`) keeps its own type and default. Each
+ * moved main column is judged against it by the carry's own rule: a type it carries over the
+ * companion column's (`typeCarried`), and a default the companion column does not have.
+ */
+async function unreceivedOnEnable(
+  db: unknown,
+  dialect: SupportedDialect,
+  spec: LocalizationMigrationIntent["spec"],
+  moved: readonly { field: string; column: string }[]
+): Promise<ColumnMoveLoss[]> {
+  const tables = (
+    await introspectLiveSnapshot(db, dialect, [
+      spec.companionTable,
+      spec.mainTable,
+    ])
+  ).tables;
+  const companion = tables.find(t => t.name === spec.companionTable);
+  const main = tables.find(t => t.name === spec.mainTable);
+  if (companion === undefined || main === undefined) return [];
+  return moved.flatMap(m => {
+    const source = main.columns.find(c => c.name === m.column);
+    const receiving = companion.columns.find(c => c.name === m.column);
+    if (source === undefined || receiving === undefined) return [];
+    const lost: CarriedProperty[] = [
+      ...(typeCarried(renderedType(source), renderedType(receiving), dialect)
+        ? (["type"] as const)
+        : []),
+      ...(carriableDefault(source.default, dialect) &&
+      source.default !== receiving.default
+        ? (["default"] as const)
+        : []),
+    ];
+    return lost.length > 0 ? [{ field: m.field, column: m.column, lost }] : [];
   });
 }
