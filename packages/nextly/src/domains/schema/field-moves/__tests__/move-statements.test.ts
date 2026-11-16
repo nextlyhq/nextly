@@ -35,7 +35,7 @@ describe("moveDataStatements on SQLite", () => {
     return db;
   }
 
-  it("copies a text column into the group, leaves entries without a value alone, and back out", () => {
+  it("copies a text column into the group, an empty one as JSON null, and back out", () => {
     const db = table("title text");
     db.exec(
       `INSERT INTO dc_posts (id, title, meta) VALUES (1, 'Hello ''there''', '{"summary":"s"}'), (2, NULL, NULL), (3, 'Bare', NULL);`
@@ -47,7 +47,8 @@ describe("moveDataStatements on SQLite", () => {
     run(db, into.copy);
     expect(db.prepare("SELECT id, meta FROM dc_posts ORDER BY id").all()).toEqual([
       { id: 1, meta: '{"summary":"s","title":"Hello \'there\'"}' },
-      { id: 2, meta: null },
+      // SQL NULL, which the entry read as null, is a JSON null in the group: not a missing key.
+      { id: 2, meta: '{"title":null}' },
       { id: 3, meta: '{"title":"Bare"}' },
     ]);
     expect(into.clearSource).toEqual([]);
@@ -61,7 +62,7 @@ describe("moveDataStatements on SQLite", () => {
     run(db, out.clearSource);
     expect(db.prepare("SELECT id, title, meta FROM dc_posts ORDER BY id").all()).toEqual([
       { id: 1, title: "Hello 'there'", meta: '{"summary":"s"}' },
-      { id: 2, title: null, meta: null },
+      { id: 2, title: null, meta: "{}" },
       { id: 3, title: "Bare", meta: "{}" },
     ]);
   });
@@ -235,8 +236,8 @@ describe("moveDataStatements on PostgreSQL and MySQL", () => {
       moveDataStatements({ from: column("views"), to: key("meta", "views") }, pg)
         .copy
     ).toEqual([
-      // A key left in the group from a field it once had is cleared where there is nothing to carry.
-      `UPDATE "dc_posts" SET "meta" = "meta" #- '{"views"}' WHERE NOT ("views" IS NOT NULL) AND ("meta" #> '{"views"}') IS NOT NULL;`,
+      // An empty column is a JSON null in the group, over any key the group kept from before.
+      `UPDATE "dc_posts" SET "meta" = jsonb_set(COALESCE("meta", '{}'::jsonb), '{"views"}', 'null'::jsonb, true) WHERE "views" IS NULL;`,
       `UPDATE "dc_posts" SET "meta" = jsonb_set(COALESCE("meta", '{}'::jsonb), '{"views"}', to_jsonb("views"), true) WHERE "views" IS NOT NULL;`,
     ]);
     const out = moveDataStatements(
@@ -262,7 +263,7 @@ describe("moveDataStatements on PostgreSQL and MySQL", () => {
       moveDataStatements({ from: column("title"), to: key("meta", "title") }, mysql)
         .copy
     ).toEqual([
-      "UPDATE `dc_posts` SET `meta` = JSON_REMOVE(`meta`, '$.\"title\"') WHERE NOT (`title` IS NOT NULL) AND JSON_CONTAINS_PATH(`meta`, 'one', '$.\"title\"');",
+      "UPDATE `dc_posts` SET `meta` = JSON_SET(COALESCE(`meta`, JSON_OBJECT()), '$.\"title\"', CAST('null' AS JSON)) WHERE `title` IS NULL;",
       "UPDATE `dc_posts` SET `meta` = JSON_SET(COALESCE(`meta`, JSON_OBJECT()), '$.\"title\"', `title`) WHERE `title` IS NOT NULL;",
     ]);
     const out = moveDataStatements(

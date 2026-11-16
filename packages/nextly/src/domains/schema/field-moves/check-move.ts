@@ -218,12 +218,28 @@ export function checkMove(
   };
 }
 
+/** What a relationship relates to, as its definition names it; undefined for any other field. */
+function relationTargetOf(field: FieldDefinition): unknown {
+  return (field as { relationTo?: unknown }).relationTo;
+}
+
 /** The refusal of a field whose storage changes with the move, or that has no column to move. */
 function storageRefusal(from: PlacedField, to: PlacedField): MoveCheck | null {
   if (from.field.type !== to.field.type || !sameStorage(from.field, to.field)) {
     return refuse(
       "type-changed",
       `${label(to.field)} is moved and changes type, or how its values are stored, in the same save. Move it and make that change in separate saves.`
+    );
+  }
+  // A relationship's stored ids name entries of the collection it relates to: moved while that
+  // changes, each would name an entry of a collection it was never chosen from.
+  if (
+    JSON.stringify(relationTargetOf(from.field)) !==
+    JSON.stringify(relationTargetOf(to.field))
+  ) {
+    return refuse(
+      "type-changed",
+      `${label(to.field)} is moved and changes what it relates to in the same save. Move it and change what it relates to in separate saves.`
     );
   }
   if (!fieldProducesColumn(from.field) || !fieldProducesColumn(to.field)) {

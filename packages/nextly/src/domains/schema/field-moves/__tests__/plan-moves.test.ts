@@ -27,9 +27,9 @@ describe("planEntityMoves", () => {
       after: [group("meta", [text("title")])],
       moves: [{ from: ["title"], to: ["meta", "title"] }],
     });
-    // The stale key cleared where there is nothing to carry, then the copy.
+    // An empty column carried as JSON null (over any stale key), then the copy.
     expect(planned.up.first).toHaveLength(2);
-    expect(planned.up.first[0]).toContain(`json_remove`);
+    expect(planned.up.first[0]).toContain(`json('null')`);
     expect(planned.up.first[1]).toContain(
       `UPDATE "dc_posts" SET "meta" = json_set`
     );
@@ -210,6 +210,56 @@ describe("planEntityMoves", () => {
           errors: [
             expect.objectContaining({
               message: expect.stringContaining("Save the new group first"),
+            }),
+          ],
+        },
+      })
+    );
+  });
+
+  it("refuses a move out onto a column a deleted field of another name still holds", () => {
+    // `fooBar` and `foo_bar` share the column `foo_bar`: deleted beside the move, its values
+    // would stay on every entry the move has nothing to carry for.
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before: [text("fooBar"), group("meta", [text("foo_bar")])],
+        after: [text("foo_bar"), group("meta", [])],
+        moves: [{ from: ["meta", "foo_bar"], to: ["foo_bar"] }],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "FIELD_MOVE_REFUSED",
+              message: expect.stringContaining(
+                "still holds another field before this save"
+              ),
+            }),
+          ],
+        },
+      })
+    );
+  });
+
+  it("refuses a move into a group whose old column another field takes in the same save", () => {
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before: [text("foo_bar"), group("meta", [])],
+        after: [text("fooBar"), group("meta", [text("foo_bar")])],
+        moves: [{ from: ["foo_bar"], to: ["meta", "foo_bar"] }],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "FIELD_MOVE_REFUSED",
+              message: expect.stringContaining(
+                "is taken by another field in this save"
+              ),
             }),
           ],
         },

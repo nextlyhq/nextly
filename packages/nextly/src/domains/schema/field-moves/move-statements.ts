@@ -72,6 +72,8 @@ interface JsonDialect {
   set(column: string, keys: readonly string[], value: string): string;
   remove(column: string, keys: readonly string[]): string;
   emptyObject: string;
+  /** JSON null, as a value to set at a key. */
+  jsonNull: string;
   /** Whether the value at `keys` is an object, so a key can be set inside it. */
   isObject(column: string, keys: readonly string[]): string;
   /** A column's value as the JSON a group holds for it. */
@@ -105,6 +107,7 @@ const POSTGRES: JsonDialect = {
     `jsonb_set(COALESCE(${c}, '{}'::jsonb), ${pgPath(k)}, ${v}, true)`,
   remove: (c, k) => `${c} #- ${pgPath(k)}`,
   emptyObject: "'{}'::jsonb",
+  jsonNull: "'null'::jsonb",
   isObject: (c, k) => `jsonb_typeof(${c} #> ${pgPath(k)}) = 'object'`,
   toJson: (c, target) => {
     if (target.kind === "json") return c;
@@ -139,6 +142,7 @@ const MYSQL: JsonDialect = {
     `JSON_SET(COALESCE(${c}, JSON_OBJECT()), ${dollarPath(k)}, ${v})`,
   remove: (c, k) => `JSON_REMOVE(${c}, ${dollarPath(k)})`,
   emptyObject: "JSON_OBJECT()",
+  jsonNull: "CAST('null' AS JSON)",
   isObject: (c, k) =>
     `JSON_TYPE(JSON_EXTRACT(${c}, ${dollarPath(k)})) = 'OBJECT'`,
   toJson: (c, target) => {
@@ -193,6 +197,7 @@ const SQLITE: JsonDialect = {
   set: (c, k, v) => `json_set(COALESCE(${c}, '{}'), ${dollarPath(k)}, ${v})`,
   remove: (c, k) => `json_remove(${c}, ${dollarPath(k)})`,
   emptyObject: "json('{}')",
+  jsonNull: "json('null')",
   isObject: (c, k) => `json_type(${c}, ${dollarPath(k)}) = 'object'`,
   toJson: (c, target) => {
     switch (target.kind) {
@@ -246,6 +251,33 @@ function containersFor(
 }
 
 /**
+ * What a key in a group becomes on an entry with no value to carry there. A column's empty value
+ * is SQL NULL, which an entry reads as null, so the key holds JSON null: left out, it would read
+ * as missing, which a default fills. From another group, a missing key stays missing. Either way
+ * a key the group still holds from a field it once had does not show again as the moved field's.
+ */
+function emptyAtDestination(
+  json: JsonDialect,
+  table: string,
+  from: StoragePlace,
+  to: Extract<StoragePlace, { kind: "json" }>,
+  holds: string,
+  q: (name: string) => string
+): string[] {
+  const column = q(to.column);
+  if (from.kind === "column") {
+    const empty = `${q(from.column)} IS NULL`;
+    return [
+      ...containersFor(json, table, column, to.keys, empty),
+      `UPDATE ${table} SET ${column} = ${json.set(column, to.keys, json.jsonNull)} WHERE ${empty};`,
+    ];
+  }
+  return [
+    `UPDATE ${table} SET ${column} = ${json.remove(column, to.keys)} WHERE NOT (${holds}) AND ${json.hasKey(column, to.keys)};`,
+  ];
+}
+
+/**
  * The data statements moving a field's values from `move.from` to `move.to` on `target`'s table:
  * a column into a key of a group's JSON, a key back out to a column, or a key from one group to
  * another.
@@ -286,9 +318,7 @@ export function moveDataStatements(
           } WHERE ${source.holds};`,
         ]
       : [
-          // A key the group still holds from a field it once had, on an entry with nothing to
-          // carry: cleared, so it does not show again as the moved field's value.
-          `UPDATE ${table} SET ${q(to.column)} = ${json.remove(q(to.column), to.keys)} WHERE NOT (${source.holds}) AND ${json.hasKey(q(to.column), to.keys)};`,
+          ...emptyAtDestination(json, table, from, to, source.holds, q),
           ...containersFor(json, table, q(to.column), to.keys, source.holds),
           `UPDATE ${table} SET ${q(to.column)} = ${json.set(q(to.column), to.keys, source.asJson)} WHERE ${source.holds};`,
         ];

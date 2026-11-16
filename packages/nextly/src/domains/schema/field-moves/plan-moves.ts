@@ -112,6 +112,21 @@ function refuseUnplaceable(
       "The group this field moves into is new in this save. Save the new group first, then move the field into it."
     );
   }
+  // A column another field holds on the far side: the field deleted beside a move out onto its
+  // column, whose values the copy would leave on every entry without one to carry, or one added
+  // beside a move in, which would show the moved field's values as its own.
+  if (move.to.kind === "column" && columns.before.has(move.to.column)) {
+    throw refused(
+      request,
+      "The column this field moves to still holds another field before this save. Save that change first, then move the field."
+    );
+  }
+  if (move.from.kind === "column" && columns.after.has(move.from.column)) {
+    throw refused(
+      request,
+      "The column this field moves from is taken by another field in this save. Move the field first, then add the other one."
+    );
+  }
   if (move.from.kind === "json" && !columns.after.has(move.from.column)) {
     throw refused(
       request,

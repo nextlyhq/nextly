@@ -372,6 +372,12 @@ describe.each(getConfiguredTestDialects())(
       const before = await readAll(t);
 
       await save(t, INSIDE, INTO);
+      // An entry with no value holds each moved field as JSON null, as its column read: not a
+      // missing key, which reads differently and which a default fills.
+      const stored = (await storedGroups(t)).two as Record<string, unknown>;
+      for (const name of MOVED) expect(stored).toHaveProperty(name);
+      expect(stored.summary).toBeNull();
+      expect(stored.published).toBeNull();
       await expectEachInTheGroup(t, before);
 
       await save(t, OUTSIDE, OUT);

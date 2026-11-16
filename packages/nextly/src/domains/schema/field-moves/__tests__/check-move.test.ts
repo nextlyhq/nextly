@@ -221,6 +221,20 @@ describe("checkMove", () => {
     ).toMatchObject({ ok: false });
   });
 
+  it("refuses a relationship moved while what it relates to changes", () => {
+    const author = (relationTo: string) =>
+      ({ name: "author", label: "Author", type: "relationship", relationTo }) as FieldDefinition;
+    const checked = checkMove(
+      [author("users"), group("meta", [])],
+      [group("meta", [author("editors")])],
+      { from: ["author"], to: ["meta", "author"] }
+    );
+    expect(checked).toMatchObject({ ok: false, reason: "type-changed" });
+    expect((checked as { message: string }).message).toMatch(
+      /changes what it relates to in the same save/
+    );
+  });
+
   it("refuses a move out of a group into a unique field, whose values would arrive after the uniqueness", () => {
     const checked = checkMove(
       [group("meta", [text("slug")])],
