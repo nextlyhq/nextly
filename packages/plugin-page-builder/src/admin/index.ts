@@ -236,6 +236,9 @@ export {
  * plugin to call: the map is what knows every declared path.
  */
 export { registerBlockEditorModules } from "./block-editor-modules";
+// The card's data, named so an app's generated component map, which holds the
+// registered card, can name its props when the app emits declarations.
+export type { BindingsToFixCardData } from "./bindings-report/BindingsToFixCard";
 export type { BlockEditorModules } from "./block-editor-modules";
 export type { BlocksFieldProps } from "./BlocksField";
 export type { BlocksSummaryProps } from "./BlocksSummary";
