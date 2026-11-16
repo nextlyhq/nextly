@@ -23,6 +23,7 @@ import { parseColor } from "./contrast";
 import {
   dtcgToTokens,
   exportNamingRefusal,
+  largestPixels,
   readFamilyList,
   tokensToDtcg,
   type DtcgNode,
@@ -73,6 +74,10 @@ export function tokensToResolver(
   }
   const dark = tokensToDtcg({ tokens: darkTokens });
   stripExtensions(dark.document);
+  // The document's own extension too: it carries the variables the format
+  // cannot type, whose dark values the token file's extension already holds
+  // exactly, so the theme file states only what a reader of the standard can use.
+  delete dark.document.$extensions;
   return {
     resolver: {
       version: RESOLVER_VERSION,
@@ -313,7 +318,15 @@ function combineModes(
   const tokens = lightRead.tokens.map(token => {
     const other = darkByName.get(token.name);
     darkByName.delete(token.name);
-    if (other === undefined || other.values.light === token.values.light) {
+    // A dark value the light file already states came from this system's own
+    // extension, exactly as the author wrote it; the dark file's is that value
+    // converted to what the format can hold (a fluid size's px, a colour's hex),
+    // so it never replaces the exact one.
+    if (
+      other === undefined ||
+      token.values.dark !== undefined ||
+      other.values.light === token.values.light
+    ) {
       return token;
     }
     // A dark value of another kind would make a token the site refuses to
@@ -414,11 +427,17 @@ function figmaPair(
   return { light, dark };
 }
 
-/** A dimension in px, which is the one unit Figma's import takes. */
+/**
+ * A dimension in px, which is the one unit Figma's import takes: a px or rem
+ * value, or a fluid size's largest value, as the DTCG export writes it.
+ */
 function figmaDimension(text: string): FigmaValue {
-  const px = pixelsOf(text);
+  const px = largestPixels(text);
   return px === undefined
-    ? { refused: "is a size Figma cannot read: it takes px and rem only." }
+    ? {
+        refused:
+          "is a size Figma cannot read: it takes px, rem and fluid sizes that end in px or rem.",
+      }
     : { type: "dimension", value: { value: px, unit: "px" } };
 }
 
@@ -461,7 +480,7 @@ function figmaDuration(text: string): FigmaValue {
   };
 }
 
-/** How each kind is written for Figma; shadows and custom values are not. */
+/** How each kind is written for Figma; shadows are not. */
 const FIGMA_CONVERTERS: Readonly<
   Record<SiteToken["kind"], (text: string) => FigmaValue>
 > = {
@@ -472,11 +491,12 @@ const FIGMA_CONVERTERS: Readonly<
   number: figmaNumber,
   duration: figmaDuration,
   shadow: () => ({
-    refused: "is a shadow, which Figma variables cannot hold.",
+    refused:
+      "is a shadow. Figma keeps shadows as effect styles, not variables.",
   }),
-  custom: () => ({
-    refused: "is a custom value, which Figma variables cannot hold.",
-  }),
+  // Figma's import takes a string variable, which holds a custom value as the
+  // text the author wrote.
+  custom: text => ({ type: "string", value: text }),
 };
 
 const WEIGHT_WORDS: Readonly<Record<string, number>> = {
@@ -505,15 +525,6 @@ function figmaColour(text: string): FigmaValue {
       hex: `#${hex}`,
     },
   };
-}
-
-/** A length in px, from px or rem (16px each), or `undefined`. */
-function pixelsOf(text: string): number | undefined {
-  if (text === "0") return 0;
-  const match = /^(-?\d*\.?\d+)(px|rem)$/.exec(text);
-  if (match === null) return undefined;
-  const amount = Number(match[1]);
-  return match[2] === "rem" ? amount * 16 : amount;
 }
 
 /**

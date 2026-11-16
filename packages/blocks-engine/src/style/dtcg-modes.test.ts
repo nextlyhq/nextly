@@ -321,3 +321,83 @@ function stripNextly(node: unknown): void {
     if (!key.startsWith("$")) stripNextly(child);
   }
 }
+
+describe("every variable through the theme file and the Figma files", () => {
+  const FLUID = "clamp(1rem, 0.5rem + 2vw, 2rem)";
+  const FLUID_DARK = "clamp(1rem, 0.5rem + 3vw, 3rem)";
+  const WIDE: SiteTokenSet = {
+    tokens: [
+      {
+        name: "space.hero",
+        kind: "dimension",
+        values: { light: FLUID, dark: FLUID_DARK },
+      },
+      {
+        name: "shadow.card",
+        kind: "shadow",
+        values: {
+          light: "0 1px 2px rgb(0 0 0 / 0.1)",
+          dark: "0 1px 2px rgb(0 0 0 / 0.6)",
+        },
+      },
+      { name: "misc.ratio", kind: "custom", values: { light: "16 / 9" } },
+      {
+        name: "color.brand",
+        kind: "color",
+        values: { light: "rgb(29 43 107)", dark: "rgb(143 167 255)" },
+      },
+    ],
+  };
+
+  it("restores every exact value, light and dark, from the token file and its theme", () => {
+    const base = JSON.parse(
+      JSON.stringify(tokensToDtcg(WIDE).document)
+    ) as Record<string, unknown>;
+    const { resolver } = tokensToResolver(WIDE, "variables.tokens.json");
+    const back = resolverToTokens(
+      JSON.parse(JSON.stringify(resolver)),
+      new Map([["variables.tokens.json", base]])
+    );
+    expect(back.issues).toEqual([]);
+    // The theme file holds the dark values the format can type, converted; the
+    // token file's extension holds every one exactly, and that one is kept.
+    const sorted = (list: readonly { name: string }[]) =>
+      [...list].sort((a, b) => a.name.localeCompare(b.name));
+    expect(sorted(back.tokens)).toEqual(sorted(WIDE.tokens));
+  });
+
+  it("keeps the theme file to what a reader of the standard can use", () => {
+    const { resolver } = tokensToResolver(WIDE, "variables.tokens.json");
+    const text = JSON.stringify(resolver);
+    expect(text).not.toContain("com.nextlyhq.nextly");
+    expect(text).not.toContain("16 / 9");
+  });
+
+  it("writes a custom value as a Figma string variable", () => {
+    const light = tokensToFigma(WIDE, "light").document as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(light.misc?.ratio).toEqual({ $type: "string", $value: "16 / 9" });
+  });
+
+  it("writes a fluid size as its largest px value in each mode", () => {
+    const value = (mode: "light" | "dark") =>
+      (
+        tokensToFigma(WIDE, mode).document as Record<
+          string,
+          Record<string, Record<string, unknown>>
+        >
+      ).space?.hero?.$value;
+    expect(value("light")).toEqual({ value: 32, unit: "px" });
+    expect(value("dark")).toEqual({ value: 48, unit: "px" });
+  });
+
+  it("says Figma keeps shadows as effect styles, not variables", () => {
+    const light = tokensToFigma(WIDE, "light");
+    expect(paths(light.document)).not.toContain("shadow.card");
+    expect(light.issues.map(i => i.message).join(" ")).toContain(
+      "Figma keeps shadows as effect styles, not variables"
+    );
+  });
+});
