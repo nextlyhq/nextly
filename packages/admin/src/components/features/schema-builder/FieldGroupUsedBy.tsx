@@ -28,6 +28,17 @@ const HOLDERS: Record<
   fieldGroup: { noun: "Field group", route: ROUTES.BUILDER_FIELD_GROUPS_EDIT },
 };
 
+/**
+ * How many places use the field group, as this view counts them: the holders
+ * the reader can read, each counted once however many of its fields place it.
+ * The settings say it beside the field group's fixed address.
+ */
+export function fieldGroupPlaceCount(
+  placements: readonly FieldGroupPlacement[]
+): number {
+  return byHolder(placements).length;
+}
+
 /** The placements by holder, in the order first met, each with its fields. */
 function byHolder(
   placements: readonly FieldGroupPlacement[]
@@ -59,7 +70,7 @@ function summary(
     // read, so "used nowhere" would claim more than it knows.
     return "Not used in any collection, Single or field group you can read.";
   }
-  const holders = byHolder(placements).length;
+  const holders = fieldGroupPlaceCount(placements);
   // Only the places this reader may read are listed, so the sentence claims
   // no more than that.
   return `Used by ${holders} ${holders === 1 ? "place" : "places"} you can read. A change here reaches each of them.`;

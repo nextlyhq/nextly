@@ -46,9 +46,16 @@ vi.mock("@admin/hooks/queries/useFieldGroups", async importOriginal => ({
 }));
 
 // Who uses the field group is asked of the server on its own; not this test's.
-vi.mock("@admin/components/features/schema-builder/FieldGroupUsedBy", () => ({
-  FieldGroupUsedBy: () => null,
-}));
+vi.mock(
+  "@admin/components/features/schema-builder/FieldGroupUsedBy",
+  async importOriginal => ({
+    // The page counts places by the module's own rule; only the view is stood in for.
+    ...(await importOriginal<
+      typeof import("@admin/components/features/schema-builder/FieldGroupUsedBy")
+    >()),
+    FieldGroupUsedBy: () => null,
+  })
+);
 
 vi.mock("@admin/services/schemaFileApi", () => ({
   schemaFileApi: { writeFieldGroup: vi.fn(async () => undefined) },

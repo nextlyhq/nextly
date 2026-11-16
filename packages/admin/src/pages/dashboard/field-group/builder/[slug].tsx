@@ -29,7 +29,10 @@ import {
   type ActiveOverlay,
   type BuilderSettingsValues,
 } from "@admin/components/features/schema-builder";
-import { FieldGroupUsedBy } from "@admin/components/features/schema-builder/FieldGroupUsedBy";
+import {
+  FieldGroupUsedBy,
+  fieldGroupPlaceCount,
+} from "@admin/components/features/schema-builder/FieldGroupUsedBy";
 import { checkAddressAgain } from "@admin/components/features/schema-builder/new-entity/useAddressCheck";
 import { AlertTriangle, RefreshCw } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
@@ -438,7 +441,7 @@ export default function FieldGroupBuilderEditPage({
       settings={settings}
       onSettingsChange={onSettingsChange}
       unsavedAddress={unsavedAddress}
-      usedByCount={usedBy.data?.length}
+      usedByCount={usedBy.data ? fieldGroupPlaceCount(usedBy.data) : undefined}
       active={active}
       onActiveChange={setActive}
       onDuplicateField={handleDuplicateField}

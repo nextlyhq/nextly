@@ -128,7 +128,10 @@ type Props = {
    * entity's in this tab (its own left out, so it is not used against itself).
    */
   unsavedAddress?: { otherAddresses: readonly PendingAddress[] };
-  /** How many places use this field group, said beside its fixed address. */
+  /**
+   * How many places use this field group that the reader can read, counted as
+   * its used-by view counts them, said beside its fixed address.
+   */
   usedByCount?: number;
   onCancel: () => void;
   onSubmit: (values: BuilderSettingsValues) => void;
@@ -146,7 +149,7 @@ function fixedAddressNote(kind: BuilderKind, usedByCount?: number): string {
   const used =
     usedByCount === undefined
       ? ""
-      : ` Used in ${usedByCount} ${usedByCount === 1 ? "place" : "places"}.`;
+      : ` Used in ${usedByCount} ${usedByCount === 1 ? "place" : "places"} you can read.`;
   return `Fixed once saved: the fields that use this field group refer to it by this address.${used}`;
 }
 
@@ -249,7 +252,13 @@ function UnsavedAddressCheck({
 export function normalizedSettings(
   values: BuilderSettingsValues
 ): BuilderSettingsValues {
-  return { ...values, description: values.description?.trim() };
+  return {
+    ...values,
+    description: values.description?.trim(),
+    // The address as it is checked: the check asks about it trimmed, so the
+    // one that moves the entity, names its route and creates it is the same.
+    slug: values.slug.trim(),
+  };
 }
 
 const EMPTY_VALUES: BuilderSettingsValues = {
