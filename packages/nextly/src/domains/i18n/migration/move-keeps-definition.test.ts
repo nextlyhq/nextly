@@ -72,6 +72,35 @@ describe("lostOnMove", () => {
   });
 });
 
+describe("lostOnMove over a receiving column already there", () => {
+  const existing = (facts: Partial<ColumnExtras>) =>
+    new Map<string, ColumnExtras>([
+      ["summary", { comment: null, charset: null, collation: null, ...facts }],
+    ]);
+
+  it("loses a collation the existing column does not share, though the source has the table's", () => {
+    expect(
+      lostOnMove(
+        moved,
+        extras({ charset: "utf8mb4", collation: "utf8mb4_0900_ai_ci" }),
+        UTF8MB4,
+        existing({ charset: "utf8mb4", collation: "utf8mb4_bin" })
+      )
+    ).toEqual([{ field: "summary", column: "summary", lost: ["collation"] }]);
+  });
+
+  it("loses nothing an existing column already has, though it is not the table's", () => {
+    expect(
+      lostOnMove(
+        moved,
+        extras({ collation: "pg_catalog.C", comment: "kept" }),
+        NONE,
+        existing({ collation: "pg_catalog.C", comment: "kept" })
+      )
+    ).toEqual([]);
+  });
+});
+
 describe("refusalsForMovesLosingDefinition", () => {
   it("names the field, its column, what it would lose and the way on", () => {
     const [refused] = refusalsForMovesLosingDefinition({

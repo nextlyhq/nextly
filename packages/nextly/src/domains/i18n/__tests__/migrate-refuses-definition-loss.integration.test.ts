@@ -423,5 +423,53 @@ describe.each(getConfiguredTestDialects())(
       },
       120_000
     );
+
+    // An existing receiving column is judged as it is, not by its table's defaults.
+    it.runIf(dialect === "postgresql")(
+      "refuses a file turning translation on over a companion column whose collation was changed by hand",
+      async () => {
+        const { query, migrate } = await enableOverRuntimeCompanion(docs);
+        await query(
+          `ALTER TABLE ${q("dc_mkd_docs_locales")} ALTER COLUMN ${q("heading")} TYPE text COLLATE "C"`
+        );
+
+        const refused = await migrate().then(
+          () => undefined,
+          (error: unknown) => error
+        );
+
+        expect(
+          JSON.stringify(
+            (refused as { publicData?: unknown } | undefined)?.publicData ??
+              refused
+          )
+        ).toMatch(/TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own collation/);
+      },
+      120_000
+    );
+
+    it.runIf(dialect === "postgresql")(
+      "does not refuse a file turning translation on over a companion column that already has the main column's collation",
+      async () => {
+        const { query, migrate } = await enableOverRuntimeCompanion(docs);
+        for (const table of ["dc_mkd_docs", "dc_mkd_docs_locales"]) {
+          await query(
+            `ALTER TABLE ${q(table)} ALTER COLUMN ${q("heading")} TYPE text COLLATE "C"`
+          );
+        }
+
+        const outcome = await migrate().then(
+          () => "applied",
+          (error: unknown) => error
+        );
+
+        expect(
+          JSON.stringify(
+            (outcome as { publicData?: unknown }).publicData ?? outcome
+          )
+        ).not.toMatch(/TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION/);
+      },
+      120_000
+    );
   }
 );

@@ -55,26 +55,36 @@ export interface ColumnMoveLoss {
 }
 
 /**
- * The moved fields whose source column (`extras`, by column) has a comment, or a character set or
- * collation other than the one a column created in the receiving table takes (`receiving`). A
- * column `extras` does not describe is not there to lose anything.
+ * The moved fields whose source column (`extras`, by column) has part of a definition the column
+ * receiving its values would not. A receiving column already there (`existing`, by column) is
+ * judged as it is: a comment of the source's it lacks, or a character set or collation other than
+ * the source's, either way. One the move will add takes its table's defaults (`receiving`): a
+ * comment is lost, and a character set or collation other than the table's. A column `extras` does
+ * not describe is not there to lose anything.
  */
 export function lostOnMove(
   moved: readonly { field: string; column: string }[],
   extras: ReadonlyMap<string, ColumnExtras>,
-  receiving: ReceivingDefaults
+  receiving: ReceivingDefaults,
+  existing: ReadonlyMap<string, ColumnExtras> = new Map()
 ): ColumnMoveLoss[] {
   return moved.flatMap(({ field, column }) => {
     const source = extras.get(column);
     if (source === undefined) return [];
+    const there = existing.get(column);
+    // What the receiving column has: its own definition where it is there, else its table's.
+    const target = there ?? { comment: null, ...receiving };
+    // A part the source does not state is lost only from a column already there, whose own one
+    // the move would keep in place of the source's.
+    const differs = (part: "charset" | "collation") =>
+      source[part] !== target[part] &&
+      (there !== undefined || source[part] !== null);
     const lost: CarriedProperty[] = [
-      ...(source.comment !== null ? (["comment"] as const) : []),
-      ...(source.charset !== null && source.charset !== receiving.charset
-        ? (["character set"] as const)
+      ...(source.comment !== null && source.comment !== target.comment
+        ? (["comment"] as const)
         : []),
-      ...(source.collation !== null && source.collation !== receiving.collation
-        ? (["collation"] as const)
-        : []),
+      ...(differs("charset") ? (["character set"] as const) : []),
+      ...(differs("collation") ? (["collation"] as const) : []),
     ];
     return lost.length > 0 ? [{ field, column, lost }] : [];
   });
@@ -103,6 +113,7 @@ export async function lossesOnMove(
   }
 ): Promise<ColumnMoveLoss[]> {
   if (move.moved.length === 0) return [];
+  const columns = move.moved.map(m => m.column);
   const source = (
     await introspectLiveSnapshot(db, dialect, [move.from])
   ).tables.find(t => t.name === move.from);
@@ -122,13 +133,10 @@ export async function lossesOnMove(
   return mergeLosses(
     lostOnMove(
       move.moved,
-      await readColumnExtras(
-        db,
-        dialect,
-        move.from,
-        move.moved.map(m => m.column)
-      ),
-      await readReceivingDefaults(db, dialect, move.to)
+      await readColumnExtras(db, dialect, move.from, columns),
+      await readReceivingDefaults(db, dialect, move.to),
+      // A receiving column already there is judged as it is, not by its table's defaults.
+      await readColumnExtras(db, dialect, move.to, columns)
     ),
     uncarriable
   );
