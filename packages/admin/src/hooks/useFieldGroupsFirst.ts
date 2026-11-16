@@ -12,7 +12,7 @@
  * editor asks this one hook, so the three kinds cannot differ about which
  * groups a save creates.
  */
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 
 import type { FieldGroupCreate } from "@admin/components/features/schema-builder/FieldGroupCreatesList";
 import {
@@ -21,15 +21,18 @@ import {
   type FieldGroupHost,
   type FieldNamingGroups,
 } from "@admin/lib/builder/field-groups-first";
+import { fieldGroupEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import {
   releaseUnsavedFieldGroupsOf,
   removeUnsavedEntity,
+  type UnsavedEntity,
   useUnsavedEntitiesOf,
 } from "@admin/lib/builder/unsaved-entities";
+import { schemaFileApi } from "@admin/services/schemaFileApi";
 
 import { useCreateFieldGroup } from "./queries";
 import type { BuilderPendingChanges } from "./useBuilderEntityState";
-import type { UseSchemaSaveOptions } from "./useSchemaSave";
+import { mirrorSchemaFile, type UseSchemaSaveOptions } from "./useSchemaSave";
 
 export interface UseFieldGroupsFirstReturn {
   /** The ones the fields use, as the review lists them, in the order created. */
@@ -104,6 +107,28 @@ export function useFieldGroupsFirst(
     if (host) releaseUnsavedFieldGroupsOf(host);
   }, [host]);
 
+  // However the editor is left, with a pending change or none (a picker cancelled after a
+  // group was made leaves none), the groups its picker made stay as unsaved field groups of
+  // their own, which no other host's picker would otherwise offer.
+  useEffect(() => release, [release]);
+
+  // As a field group's own first save writes its definition to the schema file.
+  const writeDefinition = useCallback(
+    (group: UnsavedEntity) =>
+      mirrorSchemaFile(
+        () =>
+          schemaFileApi.writeFieldGroup(
+            fieldGroupEntityFromSettings(
+              group.address,
+              group.settings,
+              group.fields
+            )
+          ),
+        "Field group created"
+      ),
+    []
+  );
+
   // Absent when the save has nothing to create and nothing to let go.
   const fieldGroupsFirst = useMemo(
     () =>
@@ -111,10 +136,14 @@ export function useFieldGroupsFirst(
         ? undefined
         : {
             creates,
-            create: () => createFieldGroupsFirst(used, createFieldGroup),
+            create: () =>
+              createFieldGroupsFirst(used, {
+                create: createFieldGroup,
+                mirror: writeDefinition,
+              }),
             letGoUnused,
           },
-    [used, unused, creates, createFieldGroup, letGoUnused]
+    [used, unused, creates, createFieldGroup, writeDefinition, letGoUnused]
   );
 
   return { creates, fieldGroupsFirst, letGoUnused, letGoOwned, release };

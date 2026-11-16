@@ -122,7 +122,7 @@ describe("createFieldGroupsFirst", () => {
 
     const refused = await createFieldGroupsFirst(
       [group("hero", POSTS), group("banner", POSTS)],
-      create
+      { create, mirror: async () => {} }
     );
 
     expect(refused).toBeNull();
@@ -137,6 +137,40 @@ describe("createFieldGroupsFirst", () => {
     expect(unsavedEntity("field-group", "banner")).toBeUndefined();
   });
 
+  it("writes each created group's definition to the schema file, then lets its draft go", async () => {
+    addUnsavedEntity(group("hero", POSTS));
+    const order: string[] = [];
+    const create = vi.fn(async (payload: CreateComponentPayload) => {
+      order.push(`create ${payload.slug}`);
+      return {};
+    });
+    const mirror = vi.fn(async (made: UnsavedEntity) => {
+      order.push(`write ${made.address}`);
+      // Still held while its definition is written.
+      expect(unsavedEntity("field-group", made.address)).toBeDefined();
+    });
+
+    await createFieldGroupsFirst([group("hero", POSTS)], { create, mirror });
+
+    expect(order).toEqual(["create hero", "write hero"]);
+    expect(unsavedEntity("field-group", "hero")).toBeUndefined();
+  });
+
+  it("writes no definition for a group refused before its create", async () => {
+    addUnsavedEntity(group("hero", POSTS));
+    refusals = {
+      hero: { code: "DUPLICATE", message: "Resource already exists." },
+    };
+    const mirror = vi.fn(async () => {});
+
+    await createFieldGroupsFirst([group("hero", POSTS)], {
+      create: vi.fn(async () => ({})),
+      mirror,
+    });
+
+    expect(mirror).not.toHaveBeenCalled();
+  });
+
   it("stops at a refused address, creating none after it and keeping it unsaved", async () => {
     addUnsavedEntity(group("hero", POSTS));
     addUnsavedEntity(group("banner", POSTS));
@@ -147,7 +181,7 @@ describe("createFieldGroupsFirst", () => {
 
     const refused = await createFieldGroupsFirst(
       [group("hero", POSTS), group("banner", POSTS)],
-      create
+      { create, mirror: async () => {} }
     );
 
     expect(refused).toBe(
@@ -164,10 +198,10 @@ describe("createFieldGroupsFirst", () => {
       throw new Error("The server is unavailable.");
     });
 
-    const refused = await createFieldGroupsFirst(
-      [group("hero", POSTS)],
-      create
-    );
+    const refused = await createFieldGroupsFirst([group("hero", POSTS)], {
+      create,
+      mirror: async () => {},
+    });
 
     expect(refused).toBe(
       "The field group “Hero” was not created: The server is unavailable."

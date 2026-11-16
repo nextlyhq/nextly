@@ -676,7 +676,7 @@ describe("field groups not saved yet", () => {
     expect(letGoUnused).not.toHaveBeenCalled();
   });
 
-  it("lets go of them when the save has nothing to review", async () => {
+  it("keeps them through a save with nothing to review, whose write lands later", async () => {
     const letGoUnused = vi.fn();
     const { result, onNoChanges } = setup({
       previewFn: vi.fn(() => Promise.resolve(preview({ hasChanges: false }))),
@@ -690,7 +690,7 @@ describe("field groups not saved yet", () => {
     await act(async () => result.current.handleSave());
 
     expect(onNoChanges).toHaveBeenCalledTimes(1);
-    expect(letGoUnused).toHaveBeenCalledTimes(1);
+    expect(letGoUnused).not.toHaveBeenCalled();
   });
 });
 

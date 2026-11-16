@@ -20,6 +20,12 @@ vi.mock("@admin/services/fieldGroupApi", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/services/fieldGroupApi")>()),
   fieldGroupApi: { create: createGroup },
 }));
+const { writeFieldGroup } = vi.hoisted(() => ({
+  writeFieldGroup: vi.fn(async () => ({})),
+}));
+vi.mock("@admin/services/schemaFileApi", () => ({
+  schemaFileApi: { writeFieldGroup },
+}));
 vi.mock("@admin/services/addressCheckApi", () => ({
   addressCheckApi: {
     check: async (kind: string, address: string) => ({
@@ -112,6 +118,10 @@ describe("useFieldGroupsFirst", () => {
     expect(createGroup.mock.calls.map(([payload]) => payload.slug)).toEqual([
       "hero",
     ]);
+    // Written to the schema file, as a field group's own first save writes it.
+    expect(writeFieldGroup).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: "hero" })
+    );
     expect(unsavedEntity("field-group", "hero")).toBeUndefined();
     expect(unsavedEntity("field-group", "promo")).toBeDefined();
   });
@@ -133,6 +143,17 @@ describe("useFieldGroupsFirst", () => {
     expect(result.current.fieldGroupsFirst?.creates).toEqual([]);
     act(() => result.current.fieldGroupsFirst?.letGoUnused?.());
     expect(unsavedEntity("field-group", "promo")).toBeUndefined();
+  });
+
+  it("releases the host's ones when its editor goes, however it is left", () => {
+    addUnsavedEntity(group("hero", "Hero", POSTS));
+    const { unmount } = renderHook(() =>
+      useFieldGroupsFirst(POSTS.kind, POSTS.address, [])
+    );
+
+    unmount();
+
+    expect(unsavedEntity("field-group", "hero")?.ownedBy).toBeUndefined();
   });
 
   it("releases the host's ones when it is left, each kept as one of its own", () => {

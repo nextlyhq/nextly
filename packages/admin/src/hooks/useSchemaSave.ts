@@ -141,8 +141,10 @@ export interface UseSchemaSaveOptions {
    * before the entity: listed in the review, and created by `create` once it
    * is confirmed, so cancelling the review creates nothing. `create` answers
    * why one was refused, which stops the save before the entity; null when
-   * every one was created. `letGoUnused` runs once a save has landed, for the
-   * ones the entity's picker made that no field uses any more.
+   * every one was created. `letGoUnused` runs once a schema apply has landed,
+   * for the ones the entity's picker made that no field uses any more; a save
+   * that changes no schema writes later, so it keeps them, and leaving the
+   * editor releases them.
    */
   fieldGroupsFirst?: {
     creates: readonly { address: string; label: string }[];
@@ -232,7 +234,6 @@ export function useSchemaSave({
           !createsAny
         ) {
           onNoChanges(fields);
-          fieldGroupsFirst?.letGoUnused?.();
           return;
         }
         previewedFields.current.set(
@@ -258,7 +259,6 @@ export function useSchemaSave({
     settingChanges,
     createsAny,
     creates,
-    fieldGroupsFirst,
   ]);
 
   const confirmApply = useCallback(
@@ -296,7 +296,6 @@ export function useSchemaSave({
             }
             confirmation.settle();
             onNoChanges(fields);
-            fieldGroupsFirst?.letGoUnused?.();
           } catch (err) {
             toast.error(apiErrorMessage(err, "Failed to save the changes"));
           } finally {

@@ -26,7 +26,11 @@ export function FieldGroupCreatesList({
       <p id={headingId} className="text-sm font-medium text-foreground">
         Field groups created first
       </p>
-      <ul aria-labelledby={headingId} className="space-y-1 text-sm">
+      {/* Bounded, so a long list never pushes the review's buttons off a short screen. */}
+      <ul
+        aria-labelledby={headingId}
+        className="max-h-40 space-y-1 overflow-y-auto text-sm"
+      >
         {groups.map(group => (
           <li key={group.address} className="text-muted-foreground">
             {`Create the field group ${group.label}`}

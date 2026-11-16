@@ -76,14 +76,19 @@ export function fieldGroupsFirst(
 
 /**
  * Creates each of `groups` in turn: its address checked once more (another tab
- * may have saved one under it), then created with what the dialog set, and let
- * go from the unsaved ones. Stops at the first refusal, which it returns in
- * words naming the group, so the host is not saved and every group not yet
- * created stays unsaved; null when all were created.
+ * may have saved one under it), then created with what the dialog set, its
+ * definition written where a field group's own first save writes it (`mirror`),
+ * and let go from the unsaved ones. Stops at the first refusal, which it
+ * returns in words naming the group, so the host is not saved and every group
+ * not yet created stays unsaved; null when all were created.
  */
 export async function createFieldGroupsFirst(
   groups: readonly UnsavedEntity[],
-  create: (payload: CreateComponentPayload) => Promise<unknown>
+  steps: {
+    create: (payload: CreateComponentPayload) => Promise<unknown>;
+    /** Best-effort, as for any create: the group stands once `create` has answered. */
+    mirror: (group: UnsavedEntity) => Promise<void>;
+  }
 ): Promise<string | null> {
   for (const group of groups) {
     const refusedAs = (reason: string) =>
@@ -91,12 +96,13 @@ export async function createFieldGroupsFirst(
     const refused = await checkAddressAgain("field-group", group.address);
     if (refused !== null) return refusedAs(refused);
     try {
-      await create(
+      await steps.create(
         fieldGroupCreatePayload(group.address, group.settings, group.fields)
       );
     } catch (err) {
       return refusedAs(apiErrorMessage(err, "The server refused it."));
     }
+    await steps.mirror(group);
     removeUnsavedEntity("field-group", group.address);
   }
   return null;
