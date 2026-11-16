@@ -799,7 +799,16 @@ async function runUnitStatements(
           if (dialect === "mysql" && commitsOnMysql(statement)) {
             bound?.onStatement?.(index + 1);
             await bound?.beforeStatement?.();
-            await tx.execute("START TRANSACTION");
+            // Only where statements of the unit follow, for them to roll back together. After the
+            // unit's last statement the session stays in autocommit, so each ledger write after it
+            // commits on its own: a rollback row, which names the applied row it retires in its own
+            // insert, lands before that row is retired, and a stop between the two still leaves
+            // the migration rolled back, as the DOWN's statements, committed already, left it.
+            // Opened again here, the two would commit together at the end, and a stop between them
+            // would lose the rollback row over a DOWN that ran.
+            if (index < statements.length - 1) {
+              await tx.execute("START TRANSACTION");
+            }
           }
         }
         bound?.onStatement?.(statements.length);
