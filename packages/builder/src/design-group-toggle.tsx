@@ -86,13 +86,19 @@ export const OwnSearch: React.ForwardRefExoticComponent<
  * What the view searches for: the host's search where it keeps one, else
  * the view's own, with the needle both are matched by.
  */
-export function useViewSearch(hostSearch: string | undefined): {
+export function useViewSearch(
+  hostSearch: string | undefined,
+  onHostSearch: ((query: string) => void) | undefined
+): {
   query: string;
   needle: string;
   /** Whether a search is on. */
   searching: boolean;
   setQuery: (query: string) => void;
-  /** Empties the view's own search, as adding a variable does. */
+  /**
+   * Empties the search, as adding a variable does, so its row is drawn: the
+   * host's, where it keeps the search, else the view's own.
+   */
   clear: () => void;
   /** Whether the view draws its own search box. */
   own: boolean;
@@ -105,7 +111,10 @@ export function useViewSearch(hostSearch: string | undefined): {
     needle,
     searching: needle !== "",
     setQuery,
-    clear: React.useCallback(() => setQuery(""), []),
+    clear: React.useCallback(() => {
+      if (hostSearch === undefined) setQuery("");
+      else onHostSearch?.("");
+    }, [hostSearch, onHostSearch]),
     own: hostSearch === undefined,
   };
 }
@@ -136,10 +145,13 @@ export function markOf(flag: boolean): "" | undefined {
 export function ViewBody({
   notes,
   overlays,
+  adds,
   children,
 }: {
   notes: React.ReactNode;
   overlays: React.ReactNode;
+  /** The adds of groups hidden while empty, after the groups. */
+  adds: React.ReactNode;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
@@ -147,6 +159,7 @@ export function ViewBody({
       {notes}
       {overlays}
       {children}
+      {adds}
     </div>
   );
 }

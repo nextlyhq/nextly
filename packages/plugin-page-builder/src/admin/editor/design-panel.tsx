@@ -67,12 +67,14 @@ type DesignMatches = Partial<Record<DesignView, number>>;
  */
 interface DesignBrowse {
   readonly search: string;
+  readonly setSearch: (search: string) => void;
   readonly folds: GroupFolds | undefined;
   readonly reportMatches: (matches: DesignMatches) => void;
 }
 
 const DesignBrowseContext = React.createContext<DesignBrowse>({
   search: "",
+  setSearch: () => undefined,
   folds: undefined,
   reportMatches: () => undefined,
 });
@@ -181,7 +183,7 @@ export function DesignPanel({
     );
   }, []);
   const browse = React.useMemo(
-    () => ({ search, folds, reportMatches }),
+    () => ({ search, setSearch, folds, reportMatches }),
     [search, folds, reportMatches]
   );
   const searching = search.trim() !== "";

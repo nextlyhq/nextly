@@ -37,21 +37,11 @@ import {
   type TokenKind,
   type TokenMode,
 } from "@nextlyhq/blocks-engine";
-import {
-  Button,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@nextlyhq/ui";
+import { Button, Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
 import {
   Braces,
   Bold,
   Hash,
-  Plus,
   Ruler,
   SquareRoundCorner,
   Timer,
@@ -82,6 +72,7 @@ import {
   type VariableEntry,
   type VariableGroup,
 } from "./tokens-studio";
+import { ADDS, AddButton, EmptyGroup } from "./variable-adds";
 import { VariableEditor } from "./variable-editor";
 import { ColourPair, swatchStyle } from "./variable-swatch";
 import {
@@ -198,6 +189,11 @@ export interface TokensPanelProps {
    * search box of its own.
    */
   search?: string;
+  /**
+   * The way to change the host's search: emptied when a variable is added,
+   * so its row and editor are drawn.
+   */
+  onSearch?: (query: string) => void;
   /** Which groups are folded, and the way to fold one. Absent: none fold. */
   folds?: GroupFolds;
 }
@@ -332,7 +328,8 @@ function VariablesView({
 }): React.JSX.Element {
   const { mode } = header;
   const { query, needle, searching, setQuery, clear, own } = useViewSearch(
-    hosted.search
+    hosted.search,
+    hosted.onSearch
   );
   const { root, openKey, toggle, add, forget, commitFrom } = useOpenVariable({
     tokens,
@@ -363,6 +360,14 @@ function VariablesView({
       <PlacedControls placed={placed} slot={headerActions} header={header} />
       <OwnSearch ref={search} shown={own} query={query} onQuery={setQuery} />
       <ViewBody
+        adds={
+          <HiddenGroupAdds
+            groups={groups}
+            searching={searching}
+            readOnly={readOnly}
+            onAdd={add}
+          />
+        }
         notes={
           <PanelNotes
             readOnly={readOnly}
@@ -830,6 +835,40 @@ function namedAfterLabel(
   return { tokens: named, key: tokenIdentity(renamed) };
 }
 
+/**
+ * The adds of the groups hidden while they hold nothing, as a worded line at
+ * the end of the view: hidden, their own "+" would go with them, and the
+ * first variable of such a group could not be made.
+ */
+function HiddenGroupAdds({
+  groups,
+  searching,
+  readOnly,
+  onAdd,
+}: {
+  groups: readonly { group: VariableGroup; entries: readonly unknown[] }[];
+  searching: boolean;
+  readOnly: boolean;
+  onAdd: (what: NewVariable) => void;
+}): React.JSX.Element | null {
+  const hidden = groups.filter(
+    group => SHOWN_WHEN_FILLED.has(group.group) && group.entries.length === 0
+  );
+  if (readOnly || searching || hidden.length === 0) return null;
+  return (
+    <p className="nx-vars__hidden-adds">
+      {hidden.map(group => (
+        <AddButton
+          key={group.group}
+          adds={ADDS[group.group]}
+          onAdd={onAdd}
+          worded
+        />
+      ))}
+    </p>
+  );
+}
+
 /** The groups that list only what they hold, hidden while they hold none. */
 const SHOWN_WHEN_FILLED: ReadonlySet<VariableGroup> = new Set<VariableGroup>([
   "fonts",
@@ -894,52 +933,6 @@ function PreviewSwitch({
   );
 }
 
-/** What each group's "+" offers: one variable, or a short menu of kinds. */
-const ADDS: Readonly<
-  Record<
-    VariableGroup,
-    { label: string; empty: string; options: readonly [NewVariable, string][] }
-  >
-> = {
-  colours: {
-    label: "Add colour",
-    empty: "No colours yet.",
-    options: [["colour", "Colour"]],
-  },
-  type: {
-    label: "Add type size",
-    empty: "No type sizes yet.",
-    options: [["type size", "Type size"]],
-  },
-  spacing: {
-    label: "Add spacing, radius or shadow",
-    empty: "No spacing, radii or shadows yet.",
-    options: [
-      ["spacing", "Spacing"],
-      ["radius", "Radius"],
-      ["shadow", "Shadow"],
-    ],
-  },
-  fonts: {
-    label: "Add font or weight variable",
-    empty: "No font or weight variables yet.",
-    options: [
-      ["fontFamily", "Font"],
-      ["fontWeight", "Font weight"],
-    ],
-  },
-  other: {
-    label: "Add another variable",
-    empty: "",
-    options: [
-      ["dimension", "Size"],
-      ["number", "Number"],
-      ["duration", "Duration"],
-      ["custom", "Custom value"],
-    ],
-  },
-};
-
 /** One group: its heading, its "+", and its rows, a page at a time. */
 function Group({
   group,
@@ -995,7 +988,15 @@ function Group({
         ) : null}
         {/* An empty type scale offers its add in the line below instead. */}
         {readOnly || (group === "type" && entries.length === 0) ? null : (
-          <AddButton adds={ADDS[group]} onAdd={onAdd} />
+          <AddButton
+            adds={ADDS[group]}
+            // A folded group opens for what is added to it, so the new row
+            // and its editor are drawn.
+            onAdd={what => {
+              if (folded) folds?.onFold(group, false);
+              onAdd(what);
+            }}
+          />
         )}
       </div>
       {folded ? null : (
@@ -1086,82 +1087,6 @@ function GroupRows({
         onMore={() => setPages(count => count + 1)}
       />
     </>
-  );
-}
-
-/** An empty group's one line; an empty type scale offers its add here. */
-function EmptyGroup({
-  group,
-  text,
-  readOnly,
-  onAdd,
-}: {
-  group: VariableGroup;
-  text: string;
-  readOnly: boolean;
-  onAdd: (what: NewVariable) => void;
-}): React.JSX.Element {
-  return (
-    <p className="nx-vars__empty">
-      {text}
-      {group === "type" && !readOnly ? (
-        <button
-          type="button"
-          className="nx-vars__link"
-          onClick={() => onAdd("type size")}
-        >
-          Add type size
-        </button>
-      ) : null}
-    </p>
-  );
-}
-
-/** A group's "+": a button for one kind, a menu for several. */
-function AddButton({
-  adds,
-  onAdd,
-}: {
-  adds: (typeof ADDS)[VariableGroup];
-  onAdd: (what: NewVariable) => void;
-}): React.JSX.Element {
-  const icon = <Plus aria-hidden="true" size={14} />;
-  const [only] = adds.options;
-  if (adds.options.length === 1 && only !== undefined) {
-    return (
-      <button
-        type="button"
-        className="nx-vars__icon-button nx-vars__add"
-        aria-label={adds.label}
-        title={adds.label}
-        onClick={() => onAdd(only[0])}
-      >
-        {icon}
-      </button>
-    );
-  }
-  return (
-    // Not modal: a modal menu marks the editor around it aria-hidden while
-    // its controls stay focusable (axe: aria-hidden-focus).
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="nx-vars__icon-button nx-vars__add"
-          aria-label={adds.label}
-          title={adds.label}
-        >
-          {icon}
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="nx-vars__menu">
-        {adds.options.map(([what, label]) => (
-          <DropdownMenuItem key={what} onSelect={() => onAdd(what)}>
-            {label}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 

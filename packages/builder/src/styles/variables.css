@@ -757,3 +757,18 @@
     transition: none;
   }
 }
+
+/* The adds of groups hidden while they hold nothing, worded, at the end of
+   a tab, so the first such variable can still be made. */
+.nx-vars__hidden-adds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+  padding: 0.5rem 0;
+}
+.nx-vars__worded-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}

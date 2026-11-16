@@ -1611,9 +1611,11 @@ describe("a Design tab's view of the variables", () => {
   function Folding({
     search,
     groups,
+    onSearch,
   }: {
     search?: string;
     groups?: readonly VariableGroup[];
+    onSearch?: (query: string) => void;
   }): React.JSX.Element {
     const [folded, setFolded] = React.useState<ReadonlySet<string>>(new Set());
     return (
@@ -1621,6 +1623,7 @@ describe("a Design tab's view of the variables", () => {
         tokens={SITE}
         {...(search === undefined ? {} : { search })}
         {...(groups === undefined ? {} : { groups })}
+        {...(onSearch === undefined ? {} : { onSearch })}
         folds={{
           folded,
           onFold: (group, fold) =>
@@ -1673,5 +1676,44 @@ describe("a Design tab's view of the variables", () => {
     rerender(<Folding search="" />);
     expect(screen.queryByRole("button", { name: /^Brand/ })).toBeNull();
     expect(row(/^Space 4/)).toBeTruthy();
+  });
+
+  it("offers the add of a group hidden while empty, so its first variable can be made", async () => {
+    // Spacing lists "Other values" only once it holds something; its add is
+    // a worded line at the end of the tab meanwhile.
+    render(<Folding groups={["spacing", "other"]} />);
+    expect(screen.queryByRole("button", { name: /^Other values/ })).toBeNull();
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Add another variable" }),
+      { button: 0, ctrlKey: false }
+    );
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Size" }));
+    // The group appears with its first variable, its editor open (which
+    // hides the rest of the page from the accessibility tree).
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /^Other values, 1$/, hidden: true })
+    ).toBeTruthy();
+  });
+
+  it("opens a folded group for what is added to it", async () => {
+    render(<Folding />);
+    const toggle = screen.getByRole("button", { name: "Colours, 2" });
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: "Colours, 3", hidden: true })
+        .getAttribute("aria-expanded")
+    ).toBe("true");
+  });
+
+  it("empties the host's search when a variable is added, so its row is drawn", () => {
+    const onSearch = vi.fn();
+    render(<Folding search="brand" onSearch={onSearch} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
+    expect(onSearch).toHaveBeenCalledWith("");
   });
 });

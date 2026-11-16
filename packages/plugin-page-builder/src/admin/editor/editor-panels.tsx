@@ -48,7 +48,7 @@ import {
   useCanvasPreviewMode,
   type CanvasPreviewMode,
 } from "./canvas-preview-mode";
-import { DesignGroup, DesignPanel } from "./design-panel";
+import { DesignGroup, DesignPanel, type DesignView } from "./design-panel";
 import {
   checklistStoreFor,
   designFoldsStoreFor,
@@ -279,7 +279,7 @@ type PanelRequests = {
   openPanelRequest:
     | { panel: LeftPanel; view?: string; count: number }
     | undefined;
-  requestPanel: (panel: LeftPanel, view?: string) => void;
+  requestPanel: RequestPanel;
   /**
    * Open Add; given a container, add inside it (its empty-container "+"),
    * which is never implied by selecting it.
@@ -297,6 +297,17 @@ type PanelRequests = {
   /** Told by Add each press it has answered. */
   onAddSummoned: (count: number) => void;
 };
+
+/**
+ * Asks the shell for a panel, and for Design names one of its own tabs, so
+ * a request naming a tab Design does not have is refused when compiled
+ * rather than opening the first tab.
+ */
+interface RequestPanel {
+  (panel: LeftPanel): void;
+  (panel: "design", view?: DesignView): void;
+  (panel: Exclude<LeftPanel, "design">, view?: string): void;
+}
 
 /** Requests to open a panel from the canvas. */
 function usePanelRequests(selectedId: string | null): PanelRequests {

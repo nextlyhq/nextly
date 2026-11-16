@@ -561,12 +561,13 @@ export function VariablesTab({
   tab: Exclude<DesignTab, "styles">;
 }): React.JSX.Element | null {
   const studio = useContext(VariablesStudio);
-  const { search, folds } = useDesignBrowse();
+  const { search, setSearch, folds } = useDesignBrowse();
   return studio === null ? null : (
     <TokensPanel
       {...studio}
       groups={DESIGN_TAB_GROUPS[tab]}
       search={search}
+      onSearch={setSearch}
       {...(folds === undefined ? {} : { folds })}
     />
   );
