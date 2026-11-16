@@ -62,6 +62,7 @@ import {
 import * as React from "react";
 import { createPortal } from "react-dom";
 
+import { isHTMLElement } from "./dom-kind";
 import { ShowMore, withOpenRow } from "./panel-actions";
 import { useCanvasTokenModeAt } from "./prefers-dark";
 import { colourHexOf, colourPairOf } from "./style-colour";
@@ -733,7 +734,7 @@ function useOpenVariable({
  */
 function commitFocusedField(document: Document | undefined): void {
   const active = document?.activeElement;
-  if (active instanceof HTMLElement && active.closest(".nx-vars-editor")) {
+  if (isHTMLElement(active) && active.closest(".nx-vars-editor")) {
     active.blur();
   }
 }
