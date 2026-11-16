@@ -8,12 +8,22 @@ import {
   DOCUMENT_FORMAT_VERSION,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
-import type { PluginFieldWrite, PluginStoredValue } from "@nextlyhq/plugin-sdk";
+import {
+  NextlyError,
+  type PluginFieldWrite,
+  type PluginStoredValue,
+} from "@nextlyhq/plugin-sdk";
 import { describe, expect, it } from "vitest";
+
+import {
+  GRAPH_SNAPSHOT_RACED,
+  isGraphSnapshotRefusal,
+} from "../composition-graph-lock";
 
 import {
   COMPONENT_BEING_DELETED,
   fenceIssues,
+  fenceStore,
   type FencedComponents,
 } from "./fence";
 
@@ -216,5 +226,68 @@ describe("the fence on every write", () => {
     const issues = await judge(page("card"), write, fencing("card"));
 
     expect(issues.map(issue => issue.code)).toEqual([COMPONENT_BEING_DELETED]);
+  });
+});
+
+describe("moving a run to its component's delete", () => {
+  /** The refusal the composition graph lock raises for an old snapshot. */
+  const snapshotRefusal = () =>
+    NextlyError.conflict({
+      reason: "state",
+      message: "This save raced another change. Save it again.",
+      logContext: { cause: GRAPH_SNAPSHOT_RACED },
+    });
+
+  /**
+   * The run table over a database whose transactions refuse as an old
+   * snapshot `refusals` times, then move the run. Counts the transactions.
+   */
+  function storeRefusing(refusals: number) {
+    let opened = 0;
+    const columns = { id: {}, phase: {} };
+    const tx = {
+      table: () => columns,
+      update: () => ({ where: async () => 1 }),
+    };
+    const db = {
+      table: () => columns,
+      select: () => {
+        throw new Error("the move reads nothing outside its transaction");
+      },
+      update: () => {
+        throw new Error("the move to deleting writes inside a transaction");
+      },
+      transaction: async (work: (t: typeof tx) => Promise<unknown>) => {
+        opened += 1;
+        if (opened <= refusals) throw snapshotRefusal();
+        return work(tx);
+      },
+    } as unknown as Parameters<typeof fenceStore>[0];
+    // SQLite takes no lock row, so a transaction let through only moves.
+    return { store: fenceStore(db, "sqlite"), opened: () => opened };
+  }
+
+  it("tries again in a fresh transaction after an old-snapshot refusal", async () => {
+    const s = storeRefusing(2);
+
+    await expect(s.store.advance("r1", "done", "deleting", null)).resolves.toBe(
+      true
+    );
+    expect(s.opened()).toBe(3);
+  });
+
+  it("gives up after three transactions with the refusal itself, never a silent pass", async () => {
+    const s = storeRefusing(Number.POSITIVE_INFINITY);
+
+    const refused = await s.store.advance("r1", "done", "deleting", null).then(
+      moved => ({ moved }),
+      (error: unknown) => ({ error })
+    );
+
+    expect(refused).toEqual({ error: expect.any(NextlyError) });
+    expect(isGraphSnapshotRefusal((refused as { error: unknown }).error)).toBe(
+      true
+    );
+    expect(s.opened()).toBe(3);
   });
 });

@@ -60,6 +60,11 @@ import { inArray } from "@nextlyhq/plugin-sdk/db";
 
 import type { ClassUsageDirectApi } from "./class-usage-runtime";
 import { holdCompositionGraph } from "./composition-graph-lock";
+import {
+  areaRowsOf,
+  referenceIdOf,
+  type AreaRow,
+} from "./layout-component-usage";
 import { componentDeletions } from "./schema/tables";
 
 /** The issue code a refused area carries. */
@@ -113,37 +118,6 @@ export function registerLayoutAreaGuard(args: LayoutAreaGuardArgs): void {
   args.ctx.hooks.onInTransaction(args.layoutsCollection, write =>
     checkInTransaction(args, write)
   );
-}
-
-/** One row of `areas`: where it sits, its area, and the component it names. */
-export interface AreaRow {
-  readonly index: number;
-  readonly area: string;
-  readonly componentId: string;
-}
-
-/**
- * The rows of a stored or written `areas` value that name a component.
- *
- * Read defensively: `areas` is JSON nothing guarantees was validated, so a
- * row this cannot read names nothing. A relationship arrives as the bare id
- * at depth 0 and as the populated row above it; both are read.
- */
-export function areaRowsOf(areas: unknown): AreaRow[] {
-  const rows = typeof areas === "string" ? parsed(areas) : areas;
-  if (!Array.isArray(rows)) return [];
-  const named: AreaRow[] = [];
-  rows.forEach((row: unknown, index) => {
-    if (!isRecord(row)) return;
-    const componentId = idOf(row.component);
-    if (componentId === null) return;
-    named.push({
-      index,
-      area: typeof row.area === "string" ? row.area : "",
-      componentId,
-    });
-  });
-  return named;
 }
 
 /** The refusal of an area whose component does not exist. */
@@ -220,7 +194,7 @@ async function componentsHeldBefore(
   for (const row of areaRowsOf(hook.originalData.areas)) {
     held.add(row.componentId);
   }
-  const id = idOf(hook.originalData.id);
+  const id = referenceIdOf(hook.originalData.id);
   if (id === null) return held;
   // A published Layout edited since keeps the edit apart from its row; the
   // author saving the edit sends what the edit names.
@@ -256,7 +230,7 @@ async function existingComponents(
       overrideAccess: true,
     })) as { items?: readonly unknown[] };
     for (const item of answered.items ?? []) {
-      const id = isRecord(item) ? idOf(item.id) : null;
+      const id = isRecord(item) ? referenceIdOf(item.id) : null;
       if (id !== null) found.add(id);
     }
   }
@@ -356,23 +330,6 @@ function directApiOf(hook: BeforeChangeContext): ClassUsageDirectApi | null {
     : null;
 }
 
-/** A relationship value's id: the bare id, or the populated row's. */
-function idOf(value: unknown): string | null {
-  if (typeof value === "string") return value === "" ? null : value;
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  if (isRecord(value)) return idOf(value.id);
-  return null;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** Stored JSON text, or `null` when it does not parse. */
-function parsed(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
 }

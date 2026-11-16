@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 
 import type { ClassUsageDirectApi } from "./class-usage-runtime";
 import {
-  areaRowsOf,
   LAYOUT_COMPONENT_BEING_DELETED,
   LAYOUT_COMPONENT_MISSING,
   registerLayoutAreaGuard,
 } from "./layout-area-guard";
+import { areaRowsOf } from "./layout-component-usage";
 
 const COMPONENTS = "nx_pb_components";
 const LAYOUTS = "nx_pb_layouts";
