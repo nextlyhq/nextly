@@ -19,7 +19,6 @@ import {
   type SiteStyleRouteContext,
 } from "./site-style-route";
 import { SITE_STYLE_SLUG } from "./site-style-storage";
-import { SPACING_MODE_SERVICE } from "./spacing-mode-reader";
 
 const blocks = (name: string) => ({ name, type: "blocks" });
 
@@ -293,9 +292,6 @@ describe("what the editor's route answers", () => {
       fonts: null,
       classes: [],
       breakpoints: null,
-      // The model lives outside the Single; a reader offering no plugin
-      // services records none.
-      spacingMode: null,
     });
     expect(reads).toEqual([{ slug: SITE_STYLE_SLUG, overrideAccess: true }]);
   });
@@ -312,20 +308,28 @@ describe("what the editor's route answers", () => {
     expect(answer.tokens).toEqual({ tokens: [] });
   });
 
-  it("answers the site's recorded spacing model beside the sections", async () => {
-    const answer = await readSiteStyleForEditor(
-      context([`update-${PAGES_SLUG}`]),
-      {
-        findSingle: async () => ({}),
-        plugins: {
-          [PAGE_BUILDER_PLUGIN_NAME]: {
-            [SPACING_MODE_SERVICE]: { read: async () => "classic" },
-          },
+  it("answers no spacing model, whatever a stored document or a service still holds", async () => {
+    // Blocks are always spaced by their container's gap: a `classic` left in
+    // a document, or a service an older release answered, reaches nobody.
+    const reader = {
+      findSingle: async () => ({ tokens: null, spacingMode: "classic" }),
+      plugins: {
+        [PAGE_BUILDER_PLUGIN_NAME]: {
+          "spacing-mode": { read: async () => "classic" },
         },
       },
+    };
+    const answer = await readSiteStyleForEditor(
+      context([`update-${PAGES_SLUG}`]),
+      reader,
       {}
     );
-    expect(answer.spacingMode).toBe("classic");
+    expect(Object.keys(answer).sort()).toEqual([
+      "breakpoints",
+      "classes",
+      "fonts",
+      "tokens",
+    ]);
   });
 
   it("refuses before reading anything", async () => {

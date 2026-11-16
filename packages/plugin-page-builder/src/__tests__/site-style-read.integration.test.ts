@@ -195,7 +195,6 @@ describe.each(getConfiguredTestDialects())(
         "breakpoints",
         "classes",
         "fonts",
-        "spacingMode",
         "tokens",
       ]);
       // A section the Single does not hold reads as empty, not as missing.
