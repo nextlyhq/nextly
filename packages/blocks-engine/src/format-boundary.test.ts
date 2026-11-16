@@ -493,6 +493,20 @@ describe("the module graph the build recorded", () => {
     }
   );
 
+  it("CONTROL: the same walk finds the root's dependency", () => {
+    // A walk that followed nothing would report an empty external set for every
+    // entry point, including one that demonstrably bundles a parser. Matched by
+    // package, because the compiler imports `css-tree/parser` and
+    // `css-tree/walker` by subpath and an equality check against the bare name
+    // finds neither.
+    const outputs = buildGraph();
+    const packages = buildExternals(outputs, emitted(ROOT_ENTRY)).map(
+      specifier => specifier.split("/")[0]
+    );
+
+    expect(packages).toContain("css-tree");
+  });
+
   it.each(NARROW_ENTRIES)(
     "keeps %s a small fraction of the package root",
     entry => {

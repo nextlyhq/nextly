@@ -13,9 +13,7 @@
  * - the sign-in page and the dashboard: the page builder's code there is its
  *   registration alone, at most `REGISTRATION_BUDGET_KB` gzipped, and holds no
  *   module of the builder editor, of the block engine beyond its narrow
- *   entries (core checks colours with `./contrast` on every screen, and a
- *   block-contributing plugin reaches `./named-query` through the plugin
- *   SDK), or of the engine's CSS parser; the editor stylesheet is not among the stylesheets
+ *   entries (`NARROW_ENGINE_ENTRIES`), or of the engine's CSS parser; the editor stylesheet is not among the stylesheets
  *   every admin screen links;
  * - the dashboard with the plugin's parts it draws without a click (the
  *   Bindings to fix card, the header's delete tools): held to the same
@@ -122,16 +120,14 @@ export const GROUPS = [
       /^packages\/(plugin-page-builder|builder|blocks-react)\//.test(source),
   },
   {
-    // Measured, not budgeted: its narrow entries may be on every screen (see
+    // Measured, not budgeted: its narrow entries may be on any screen (see
     // the next group, which is judged).
     name: "block engine",
     matches: source => source.startsWith("packages/blocks-engine/"),
   },
   {
     // Judged on a screen that draws no part: the engine less what its narrow
-    // entries reach (`narrowEngineSources`). Core reads `./format` and checks
-    // colours with `./contrast` on every screen, and a plugin that
-    // contributes blocks reaches `./named-query` through the plugin SDK.
+    // entries reach (`NARROW_ENGINE_ENTRIES`, `narrowEngineSources`).
     name: "block engine beyond its narrow entries",
     matches: source =>
       source.startsWith(`${ENGINE}/`) && !NARROW_ENGINE_SOURCES.has(source),
@@ -177,9 +173,22 @@ export const GROUPS = [
 const ENGINE = "packages/blocks-engine";
 
 /**
+ * The engine's entries an admin screen that draws no builder part may load:
+ * the document format's vocabulary (core's field catalog), the contrast math
+ * (core's colour helpers) and named queries (a block-contributing plugin,
+ * through the plugin SDK). Named, so a new subpath export is not let through
+ * by being one.
+ */
+export const NARROW_ENGINE_ENTRIES = [
+  "./format",
+  "./contrast",
+  "./named-query",
+];
+
+/**
  * Every source of the block engine its narrow entries reach, as the build's
- * source maps name them, with their built files: each subpath export other
- * than the root, walked through the engine build's own module graph (its
+ * source maps name them, with their built files: each of
+ * `NARROW_ENGINE_ENTRIES`, walked through the engine build's own module graph (its
  * metafile), so an entry's reach is read rather than listed and cannot drift.
  * Empty when either is missing, so every engine module then counts as beyond
  * them: the check fails rather than passing on nothing.
@@ -190,7 +199,7 @@ export function narrowEngineSources(packageJson, metafile) {
     return new Set();
   }
   const reached = reachedOutputs(
-    narrowEntryFiles(packageJson.exports),
+    narrowEntryFiles(packageJson.exports, NARROW_ENGINE_ENTRIES),
     outputs
   );
   return new Set(
@@ -203,10 +212,10 @@ export function narrowEngineSources(packageJson, metafile) {
   );
 }
 
-/** The built file of each subpath export other than the root. */
-function narrowEntryFiles(exports) {
+/** The built file of each of the `allowed` subpath exports. */
+function narrowEntryFiles(exports, allowed) {
   return Object.entries(exports)
-    .filter(([subpath]) => subpath !== ".")
+    .filter(([subpath]) => allowed.includes(subpath))
     .map(([, target]) => target?.import ?? target?.default)
     .filter(target => typeof target === "string")
     .map(target => target.replace(/^\.\//, ""));

@@ -29,13 +29,13 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-The admin's sign-in page, dashboard and every other screen no longer download
-the block engine and its CSS parser. Two routes brought them there, and both now
-reach the engine through new, experimental narrow entries instead of its root:
+The admin's sign-in page and dashboard no longer download the block engine's
+style compiler and CSS parser. They reach the engine only through its narrow
+entries, two of them new and experimental:
 
-- `@nextlyhq/blocks-engine/contrast`, the contrast math alone, which core's
-  colour helpers use;
-- `@nextlyhq/blocks-engine/named-query`, `defineNamedQuery` and `param`, which
-  `@nextlyhq/plugin-sdk/blocks` re-exports, so a plugin that contributes blocks
-  no longer brings the engine to every admin screen. The SDK's names and types
-  are unchanged.
+- `@nextlyhq/blocks-engine/named-query`: `defineNamedQuery` and `param`,
+  which `@nextlyhq/plugin-sdk/blocks` re-exports. A plugin that contributes
+  blocks no longer brings the whole engine to every admin screen. The SDK's
+  names and types are unchanged.
+- `@nextlyhq/blocks-engine/contrast`: the contrast math alone, which core's
+  colour helpers now import instead of the engine's root.

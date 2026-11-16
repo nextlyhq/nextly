@@ -2,9 +2,9 @@
  * Colour contrast, with nothing behind it.
  *
  * The package root re-exports the whole engine, and its style compiler carries
- * a CSS parser. Core checks the contrast of a colour on every admin screen, the
- * sign-in page included, and reaching `checkContrast` through the root put the
- * whole engine and the parser on each of those screens for one function.
+ * a CSS parser. Core's colour helpers check contrast, and `nextly/config`,
+ * which the admin imports, imports them: reached through the root, that one
+ * function could bring the whole engine and the parser to an admin screen.
  *
  * This entry point is that function and the math under it, from the same
  * module the root re-exports, so there is one contrast implementation however

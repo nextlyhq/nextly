@@ -18,9 +18,15 @@ import { describe, expect, it } from "vitest";
 const DIST = resolve(dirname(fileURLToPath(import.meta.url)), "../../dist");
 const ENGINE_ROOT = "@nextlyhq/blocks-engine";
 
-/** The specifiers a built module imports or re-exports from. */
+/**
+ * The specifiers a built module imports or re-exports from: `from "…"`, a
+ * side-effect `import "…"`, and a dynamic `import("…")`, each of which brings
+ * the module it names.
+ */
 function specifiersOf(code: string): string[] {
-  return [...code.matchAll(/\bfrom\s*"([^"]+)"/g)].map(match => match[1]);
+  return [...code.matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*)"([^"]+)"/g)].map(
+    match => match[1]
+  );
 }
 
 /** Every package specifier the built `entry` reaches, through its own chunks. */

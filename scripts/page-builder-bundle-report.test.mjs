@@ -119,14 +119,14 @@ describe("breaches", () => {
           screen("dashboard", {
             "block engine beyond its narrow entries": {
               gzippedBytes: 1,
-              sources: ["packages/blocks-engine/src/document.ts"],
+              sources: ["packages/blocks-engine/src/style/compile-page.ts"],
             },
           }),
         ],
         []
       )
     ).toEqual([
-      "dashboard: holds the block engine beyond its narrow entries (1 modules, e.g. packages/blocks-engine/src/document.ts)",
+      "dashboard: holds the block engine beyond its narrow entries (1 modules, e.g. packages/blocks-engine/src/style/compile-page.ts)",
     ]);
   });
 
@@ -346,6 +346,20 @@ describe("the block engine's narrow entries", () => {
     expect(sources.has("packages/blocks-engine/dist/compile-b2.mjs")).toBe(
       false
     );
+  });
+
+  it("lets through only the named entries, not every subpath export", () => {
+    const withAnother = {
+      exports: {
+        ...packageJson.exports,
+        "./style": { import: "./dist/compile-b2.mjs" },
+      },
+    };
+    expect(
+      narrowEngineSources(withAnother, metafile).has(
+        "packages/blocks-engine/src/style/compile-page.ts"
+      )
+    ).toBe(false);
   });
 
   it("is empty without a build graph, so every engine module counts against a screen", () => {
