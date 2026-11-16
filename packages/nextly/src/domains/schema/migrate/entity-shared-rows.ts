@@ -13,8 +13,9 @@
  *
  * A run reads the entities from the registry (`readCoveredEntities`), and
  * lists, in the file that drops an entity's main table, one entry for each
- * kind of shared row (`entityRowsOf`). Where the database can be read the
- * entries are counted (`countEntityRows`): a table without the entity's rows,
+ * kind of shared row (`entityRowsOf`). Where the database can be read, each of
+ * the entity's own tables is listed with its rows, and the shared entries are
+ * counted (`countEntityRows`): a table without the entity's rows,
  * or absent, is left out, and one that cannot be counted is listed without a
  * count rather than failing the run.
  *
@@ -30,7 +31,11 @@ import {
 import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import { introspectTableNames } from "../pipeline/diff/introspect-live";
 
-import type { Deletion, EntityRef } from "./data-loss-consent";
+import {
+  countDeletions,
+  type Deletion,
+  type EntityRef,
+} from "./data-loss-consent";
 import {
   entityOwners,
   readCoveredEntities,
@@ -185,9 +190,27 @@ export async function withEntityCoverage(
 ): Promise<Deletion[][]> {
   const entities = await readCoveredEntities(reader.db, reader.dialect);
   if (entities.length === 0) return perUnit.map(list => [...list]);
-  const covered = coverRunDeletions(perUnit, entityOwners(entities));
+  const owners = entityOwners(entities);
+  const covered = coverRunDeletions(perUnit, owners);
   const counted: Deletion[][] = [];
-  for (const list of covered) counted.push(await countEntityRows(list, reader));
+  for (const list of covered) {
+    // Each of the entity's own tables is listed with its rows: the main table and every table it
+    // owns. Another deletion keeps what its reading gave it.
+    const tablesCounted: Deletion[] = [];
+    for (const deletion of list) {
+      const ofEntity =
+        deletion.kind === "table" &&
+        (deletion.owner !== undefined ||
+          owners.mainOf(deletion.table) !== undefined);
+      tablesCounted.push(
+        ofEntity
+          ? ((await countDeletions([deletion], reader.db, reader.dialect))[0] ??
+              deletion)
+          : deletion
+      );
+    }
+    counted.push(await countEntityRows(tablesCounted, reader));
+  }
   return counted;
 }
 

@@ -633,6 +633,39 @@ describe("what naming an entity's main table covers", () => {
   });
 });
 
+describe("what an agreement to drop an entity's main table covers", () => {
+  const archived: Deletion = {
+    kind: "rows",
+    table: "nextly_i18n_archive",
+    owner: "dc_posts",
+    of: { kind: "collection", slug: "posts" },
+  };
+  const locales: Deletion = {
+    kind: "table",
+    table: "dc_posts_locales",
+    owner: "dc_posts",
+  };
+  const judge = (approved: Deletion[]) =>
+    judgeDataLoss({
+      deletions: [table("dc_posts"), locales, archived],
+      consent: NO_CONSENT,
+      interactive: false,
+      ask: () => Promise.resolve(false),
+      print: () => {},
+      approved,
+    });
+
+  it("covers the entity's other tables and its rows in shared tables, as naming it does", async () => {
+    expect(await judge([table("dc_posts")])).toEqual({ kind: "proceed" });
+  });
+
+  it("covers none of it when another table was agreed to", async () => {
+    const verdict = await judge([table("nextly_i18n_archive")]);
+    if (verdict.kind !== "refused") throw new Error("expected a refusal");
+    expect(verdict.uncovered).toEqual([table("dc_posts"), locales, archived]);
+  });
+});
+
 describe("listing what an entity's removal takes", () => {
   it("counts a table the entity owns, and names its owner", () => {
     expect(

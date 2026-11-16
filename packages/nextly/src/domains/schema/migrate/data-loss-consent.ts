@@ -533,8 +533,16 @@ export async function judgeDataLoss(args: {
   const { deletions, consent } = args;
   if (deletions.length === 0) return { kind: "proceed" };
   const approved = new Set((args.approved ?? []).map(deletionKey));
+  // Agreeing to drop an entity's main table agrees to what that table owns,
+  // as a consent naming it covers it: the entity's other tables and its rows
+  // in shared tables.
+  const isApproved = (d: Deletion) =>
+    approved.has(deletionKey(d)) ||
+    (d.kind !== "unnamed" &&
+      d.owner !== undefined &&
+      approved.has(deletionKey({ kind: "table", table: d.owner })));
   const uncovered = deletions.filter(
-    d => !consentCovers(consent, d) && !approved.has(deletionKey(d))
+    d => !consentCovers(consent, d) && !isApproved(d)
   );
   const lines = (list: readonly Deletion[]) => {
     const out: string[] = [];
