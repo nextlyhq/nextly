@@ -21,11 +21,11 @@ vi.mock("@admin/hooks/queries/useEmailActivity", () => ({
 }));
 vi.mock("@admin/lib/navigation", () => ({ navigateTo: vi.fn() }));
 
-function holding(slugs: string[]) {
+function holding(slugs: string[], hasAnswer = true) {
   vi.mocked(useCurrentUserPermissions).mockReturnValue({
     hasPermission: (slug: string) => holdsPermission(new Set(slugs), slug),
-    isLoading: false,
-    hasAnswer: true,
+    isLoading: !hasAnswer,
+    hasAnswer,
     error: null,
   } as unknown as ReturnType<typeof useCurrentUserPermissions>);
 }
@@ -77,6 +77,13 @@ describe("the Activity tab", () => {
     holding(["read-email-templates", "read-email-providers"]);
     renderHub();
     expect(tabs()).not.toContain("Activity");
+    expect(useQueuedEmailOverdue).not.toHaveBeenCalled();
+  });
+
+  it("asks nothing of the queue while the grants are loading, when every tab shows", () => {
+    holding([], false);
+    renderHub();
+    expect(tabs()).toContain("Activity");
     expect(useQueuedEmailOverdue).not.toHaveBeenCalled();
   });
 

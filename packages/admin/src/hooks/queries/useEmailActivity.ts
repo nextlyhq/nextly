@@ -19,6 +19,7 @@
 import {
   useInfiniteQuery,
   useQuery,
+  type InfiniteData,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import { useMemo } from "react";
@@ -101,12 +102,19 @@ export function useEmailActivity(
     [filterKey]
   );
 
-  const query = useInfiniteQuery({
+  const firstPage: ActivityCursor = {
+    deliveries: sources.deliveries ? undefined : null,
+    queued: sources.queued ? undefined : null,
+  };
+  const query = useInfiniteQuery<
+    ActivityPage,
+    Error,
+    InfiniteData<ActivityPage, ActivityCursor>,
+    ReturnType<typeof emailActivityKeys.list>,
+    ActivityCursor
+  >({
     queryKey: emailActivityKeys.list(sources),
-    initialPageParam: {
-      deliveries: sources.deliveries ? undefined : null,
-      queued: sources.queued ? undefined : null,
-    },
+    initialPageParam: firstPage,
     queryFn: async ({ pageParam }): Promise<ActivityPage> => {
       const [deliveries, queued] = await Promise.all([
         pageParam.deliveries === null || sources.deliveries === null
