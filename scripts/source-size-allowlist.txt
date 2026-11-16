@@ -26,7 +26,6 @@ packages/blocks-engine/src/style/css-value.ts 1803
 
 packages/blocks-engine/src/style/dtcg.ts 2362
 
-packages/blocks-engine/src/tree.ts 1944
 
 
 
@@ -68,6 +67,5 @@ packages/plugin-page-builder/src/admin/editor/BlocksEditor.tsx 2099
 packages/plugin-page-builder/src/admin/editor/site-style-studios.tsx 2038
 
 
-packages/plugin-page-builder/src/pages-search-route.ts 1561
 
 packages/plugin-page-builder/src/plugin.ts 4723
