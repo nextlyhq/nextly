@@ -428,6 +428,9 @@ export default function CollectionBuilderEditPage({
     onNoChanges: saveSettingsOnly,
     onApplied: unsaved ? onCreated : onSchemaApplied,
     previewedWith: { localized },
+    // Each changed setting is reviewed with the save, and a save of the
+    // settings alone is reviewed too.
+    settingChanges: pending.settingChanges,
   });
 
   // Discard all on an unsaved collection discards the collection itself: it
@@ -519,6 +522,7 @@ export default function CollectionBuilderEditPage({
         entityName={slug}
         onConfirm={confirmApply}
         creating={unsaved !== undefined}
+        settingChanges={pending.settingChanges}
       />
     </BuilderPageLayout>
   );

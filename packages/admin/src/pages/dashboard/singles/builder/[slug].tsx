@@ -383,6 +383,9 @@ export default function SingleBuilderEditPage({
     onNoChanges: saveSettingsOnly,
     onApplied: unsaved ? onCreated : onSchemaApplied,
     previewedWith: { localized },
+    // Each changed setting is reviewed with the save, and a save of the
+    // settings alone is reviewed too.
+    settingChanges: pending.settingChanges,
   });
 
   // Discard all on an unsaved Single discards the Single itself: it leaves
@@ -467,6 +470,7 @@ export default function SingleBuilderEditPage({
         entityName={slug}
         onConfirm={confirmApply}
         creating={unsaved !== undefined}
+        settingChanges={pending.settingChanges}
       />
     </BuilderPageLayout>
   );
