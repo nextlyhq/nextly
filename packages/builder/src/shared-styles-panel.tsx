@@ -120,6 +120,8 @@ export { USAGE_RECOUNT_IDLE_MAX, USAGE_RECOUNT_MS } from "./usage-reads";
 export interface HostSearch {
   readonly query: string;
   readonly onQuery: (query: string) => void;
+  /** The host's search box, where focus goes once a style is removed. */
+  readonly searchRef?: React.RefObject<HTMLInputElement | null>;
 }
 
 /**
@@ -132,17 +134,24 @@ export const SharedStylesHostSearch: React.Context<HostSearch | undefined> =
 
 /**
  * What the tab searches for: the host's search where it keeps one, changed
- * through the host, else the tab's own.
+ * through the host, else the tab's own. With it, the box focus goes back to
+ * once a style is removed: the host's, since the tab then draws none.
  */
 function usePanelSearch(): {
   query: string;
   setQuery: (query: string) => void;
+  box: React.RefObject<HTMLInputElement | null>;
 } {
   const host = React.useContext(SharedStylesHostSearch);
   const [own, setOwn] = React.useState("");
+  const ownBox = React.useRef<HTMLInputElement>(null);
   return host === undefined
-    ? { query: own, setQuery: setOwn }
-    : { query: host.query, setQuery: host.onQuery };
+    ? { query: own, setQuery: setOwn, box: ownBox }
+    : {
+        query: host.query,
+        setQuery: host.onQuery,
+        box: host.searchRef ?? ownBox,
+      };
 }
 
 /** The filter bar, drawn only while there are styles to filter. */
@@ -331,7 +340,7 @@ export function SharedStylesPanel({
   looks,
   initialOpenId,
 }: SharedStylesPanelProps): React.JSX.Element {
-  const { query, setQuery } = usePanelSearch();
+  const { query, setQuery, box: search } = usePanelSearch();
   const [filter, setFilter] = React.useState<SharedStyleFilter>("all");
   const [pages, setPages] = React.useState(1);
   const [issue, setIssue] = React.useState<Issue | null>(null);
@@ -366,8 +375,6 @@ export function SharedStylesPanel({
     pendingNames,
     setIssue,
   });
-  const search = React.useRef<HTMLInputElement>(null);
-
   if (library === undefined) return <Unread absence={absence} />;
 
   const blocksOf = (id: string): BlocksOnThisPage =>
