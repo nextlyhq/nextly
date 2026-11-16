@@ -493,6 +493,36 @@ describe("emitTokenBlocks", () => {
     expect(css).toContain("--brand-space-4:1rem");
   });
 
+  it("writes a length token's unitless zero as 0px", () => {
+    // A bare `0` is a length where a property takes one, but a token is also
+    // read inside `max()`, where it is a number and makes the declaration
+    // invalid: a contained block's padding would then fall to nothing.
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "space.gutter",
+            kind: "dimension",
+            values: { light: "0", dark: " -0.0 " },
+          },
+          { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+          { name: "line.height", kind: "number", values: { light: "0" } },
+          { name: "time.fast", kind: "duration", values: { light: "0" } },
+        ],
+      },
+      SCOPE
+    );
+    expect(css).toContain("--site-space-gutter:0px");
+    expect(css).not.toContain("--site-space-gutter:0;");
+    expect(css).not.toMatch(/--site-space-gutter: -0\.0 /);
+    expect(css).toContain("--site-space-4:1rem");
+    // Only lengths: a number and a duration keep their unitless zero, which
+    // is what those take.
+    expect(css).toContain("--site-line-height:0");
+    expect(css).toContain("--site-time-fast:0");
+    expect(css).not.toMatch(/--site-(line-height|time-fast):0px/);
+  });
+
   it("writes a dark block behind an attribute the host controls", () => {
     // The host owns the document and may already have a toggle, so the values
     // are emitted under a switch rather than under a decision about when to

@@ -1298,6 +1298,25 @@ export function tokenNamingProblem(token: {
   return identityProblem(token.name, "name");
 }
 
+/** `0`, `-0`, `0.0`, `.0` and the like: a zero with no unit. */
+const UNITLESS_ZERO = /^[+-]?(?:0+(?:\.0*)?|\.0+)$/;
+
+/**
+ * A token's value as it is written into its custom property.
+ *
+ * A length token's unitless zero is written as `0px`. On its own a bare `0` is
+ * a length wherever a property takes one, but a token is also read inside
+ * `max()` (a contained block's padding is one), where it is a number, and a
+ * number beside a length makes the whole declaration invalid. Every other
+ * value, and every other kind, is written as given: a number or a duration
+ * takes a unitless zero, and a `0px` there would be the wrong quantity.
+ */
+function writtenTokenValue(kind: TokenKind, value: string): string {
+  return kind === "dimension" && UNITLESS_ZERO.test(value.trim())
+    ? "0px"
+    : value;
+}
+
 /** The emitter's wording for {@link tokenNamingProblem}. */
 function tokenNamingRefusal(token: SiteToken): string | undefined {
   const problem = tokenNamingProblem(token);
@@ -1431,10 +1450,13 @@ export function emitTokenBlocks(
       }
     }
 
-    light.push(`${property}:${token.values.light}`);
+    const lightValue = writtenTokenValue(token.kind, token.values.light);
+    light.push(`${property}:${lightValue}`);
     if (token.values.dark !== undefined) {
-      dark.push(`${property}:${token.values.dark}`);
-      undoDark.push(`${property}:${token.values.light}`);
+      dark.push(
+        `${property}:${writtenTokenValue(token.kind, token.values.dark)}`
+      );
+      undoDark.push(`${property}:${lightValue}`);
     }
   }
 

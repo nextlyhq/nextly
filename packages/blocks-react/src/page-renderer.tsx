@@ -300,9 +300,6 @@ export function pruneRenderedPlaceholders(
  *   site's predicate, or the reconciliation is over a value it never saw.
  * - `fonts` and `tokens` are the sheet's alone: it emits `@font-face` and the
  *   token blocks, and the page compile emits neither and reads neither.
- * - `spacingMode` is read by neither. Every page compiles with container gaps,
- *   so a site style still stating one changes nothing: it is never reconciled
- *   onto the page context, and the sheet writes nothing for it.
  */
 interface SiteInputRoles {
   breakpoints: "reconciled-here";
@@ -311,7 +308,6 @@ interface SiteInputRoles {
   tokenPrefix: "reconciled-here";
   previewContainer: "reconciled-here";
   previewStates: "reconciled-here";
-  spacingMode: "read-by-neither";
   mayFetchUrl: "reconciled-elsewhere";
   fonts: "sheet-only";
   tokens: "sheet-only";

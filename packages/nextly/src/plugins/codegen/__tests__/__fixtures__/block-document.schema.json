@@ -8,7 +8,7 @@
     },
     "kind": {
       "type": "string",
-      "enum": ["page", "pattern", "component", "region", "template"]
+      "enum": ["page", "pattern", "component", "template"]
     },
     "nodes": {
       "type": "array",

@@ -86,7 +86,7 @@ const POSTS: PreviewedCollection = {
 describe("which documents are offered Entry content", () => {
   it("offers it in a template, and nowhere else", () => {
     expect(offeredIn("template", ENTRY_CONTENT_TYPE)).toBe(true);
-    for (const kind of ["page", "component", "pattern", "region"]) {
+    for (const kind of ["page", "component", "pattern"]) {
       expect(offeredIn(kind, ENTRY_CONTENT_TYPE), kind).toBe(false);
     }
     // Every other block is offered everywhere (the control).

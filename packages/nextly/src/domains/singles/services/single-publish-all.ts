@@ -85,7 +85,11 @@ import {
   publishValueIssues,
 } from "../../collections/services/publish-parts";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
-import { recordTransitionEvents } from "../../content-events/write-event";
+import {
+  partsMovesRecord,
+  recordTransitionEvents,
+  type StatusMove,
+} from "../../content-events/write-event";
 import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import {
   readComponentSubtrees,
@@ -128,6 +132,7 @@ import {
   isCompanionReady,
 } from "../../i18n/runtime/companion-readiness";
 import { captureInTx } from "../../versions/capture-in-tx";
+import { partsTogether, type ChangedParts } from "../../versions/changed-parts";
 import {
   bumpDocumentRevision,
   documentVersionOn,
@@ -140,6 +145,7 @@ import {
 import { draftComponentValues } from "../../versions/draft-components";
 import { schemaDraftSplit } from "../../versions/draft-split-eligibility";
 import { recordOverwriteIfAsked } from "../../versions/overwrite-record";
+import { draftSlotParts } from "../../versions/part-drafts";
 import {
   draftsKeptByPart,
   SHARED_DRAFT_SLOT,
@@ -226,6 +232,7 @@ import {
   runSingleStatusMoveBeforeHooks,
   type SingleBeforeHookCall,
 } from "./single-before-update";
+import { recordSingleProvenance } from "./single-provenance";
 import {
   checkSingleAccess,
   getSingleHookCollection,
@@ -1103,6 +1110,14 @@ export class SinglePublishAllService extends BaseService {
         where: this.whereEq("id", existingDoc.id),
       })) ?? lockedRow;
 
+    // The moves the unpublish's history event names, decided before its version is recorded, so
+    // the version names the same parts it took down.
+    const historyMoves = this.publishMoves(
+      plan,
+      lockedRow.status as string | null,
+      priorCompanionStatuses,
+      "draft"
+    );
     const versionNo = singleMeta.versions?.enabled
       ? await this.capturePublishSnapshot(
           tx,
@@ -1113,15 +1128,14 @@ export class SinglePublishAllService extends BaseService {
           plan.fieldConfigs,
           options.user,
           singleMeta.versions.maxPerDoc,
+          partsMovesRecord(historyMoves),
           "draft"
         )
       : null;
     await this.recordPublishHistory(tx, plan, {
       user: options.user,
-      mainFrom: lockedRow.status as string | null,
-      priorCompanionStatuses,
+      moves: historyMoves,
       versionNo,
-      to: "draft",
     });
     // Each moved part that was live before is what this took down.
     const takenDown = [...priorCompanionStatuses].filter(
@@ -2141,6 +2155,19 @@ export class SinglePublishAllService extends BaseService {
       fieldGroupWriteAccessOf(options, this.fieldRuleVisitor)
     );
 
+    // The moves the publish's history event names, decided before its
+    // version is recorded, so the version names the same parts. The event
+    // names status moves only; what the publish put live is those, with each
+    // pending change it promoted, in the part its draft holds.
+    const historyMoves = this.publishMoves(
+      plan,
+      lockedRow.status as string | null,
+      priorCompanionStatuses
+    );
+    const putLive = partsTogether([
+      partsMovesRecord(historyMoves),
+      ...pending.map(change => draftSlotParts(change.locale)),
+    ]);
     let publishVersionNo: number | null = null;
     if (singleMeta.versions?.enabled) {
       publishVersionNo = await this.capturePublishSnapshot(
@@ -2151,7 +2178,8 @@ export class SinglePublishAllService extends BaseService {
         written.publishedRow,
         plan.fieldConfigs,
         options.user,
-        singleMeta.versions.maxPerDoc
+        singleMeta.versions.maxPerDoc,
+        putLive
       );
     }
 
@@ -2177,8 +2205,7 @@ export class SinglePublishAllService extends BaseService {
     );
     await this.recordPublishHistory(tx, plan, {
       user: options.user,
-      mainFrom: lockedRow.status as string | null,
-      priorCompanionStatuses,
+      moves: historyMoves,
       versionNo: publishVersionNo,
     });
 
@@ -2581,6 +2608,25 @@ export class SinglePublishAllService extends BaseService {
           values: companionValues,
           savedBy: plan.actor,
         });
+        // The held draft's record of where its values came from goes live
+        // with them.
+        await recordSingleProvenance(
+          {
+            adapter: this.adapter,
+            logger: this.logger,
+            defaultLocale: this.localization?.defaultLocale,
+          },
+          tx,
+          {
+            slug: singleMeta.slug,
+            entryId: existingDoc.id,
+            locale: draft.locale,
+            values: companionValues,
+            localizedFields: companion.localizedFields,
+            savedBy: plan.actor,
+            promotesDraft: true,
+          }
+        );
       }
       await this.promoteComponents(
         tx,
@@ -3171,6 +3217,8 @@ export class SinglePublishAllService extends BaseService {
     fieldConfigs: FieldConfig[],
     user: UserContext | undefined,
     maxPerDoc: number | false | undefined,
+    // The parts the move changed: put live by a publish, taken down by an unpublish.
+    changedParts: ChangedParts,
     // The status the move left the Single's content in: draft for an unpublish.
     contentStatus: "published" | "draft" = "published"
   ): Promise<number | null> {
@@ -3214,31 +3262,56 @@ export class SinglePublishAllService extends BaseService {
       },
       createdBy: user?.id ?? null,
       locale: null,
+      changedParts,
       maxPerDoc,
     });
     return versionNo;
   }
 
   /**
-   * One history event for the whole publish, naming the languages it moved
-   * (the app's own; a locale it no longer configures names nothing it
-   * exposes), whatever the Single's webhook settings.
+   * The moves a publish (or unpublish) makes, as its one history event names
+   * them: of the parts it moves, the Single's own status where it keeps one
+   * and the shared part moves, and each moved language the app configures (a
+   * locale it no longer configures names nothing it exposes), from the status
+   * each held. A move of every language moves every part. Its version records
+   * the parts they name (`partsMovesRecord`).
+   */
+  private publishMoves(
+    plan: PublishPlan,
+    mainFrom: string | null,
+    priorCompanionStatuses: Map<string, string | null>,
+    to: "published" | "draft" = "published"
+  ): StatusMove[] {
+    const configuredLocales = new Set(
+      this.localization?.locales.map(locale => locale.code) ?? []
+    );
+    return [
+      ...(plan.hasMainStatus && movesShared(plan.parts)
+        ? [{ from: mainFrom, to }]
+        : []),
+      ...[...priorCompanionStatuses]
+        .filter(
+          ([locale]) =>
+            (configuredLocales.size === 0 || configuredLocales.has(locale)) &&
+            movesLanguage(plan.parts, locale)
+        )
+        .map(([locale, from]) => ({ locale, from, to })),
+    ];
+  }
+
+  /**
+   * One history event for the whole publish, naming the moves
+   * {@link publishMoves} decided, whatever the Single's webhook settings.
    */
   private async recordPublishHistory(
     tx: TransactionContext,
     plan: PublishPlan,
     publish: {
       user: UserContext | undefined;
-      mainFrom: string | null;
-      priorCompanionStatuses: Map<string, string | null>;
+      moves: readonly StatusMove[];
       versionNo: number | null;
-      /** The status the parts moved to: published, where absent. */
-      to?: "published" | "draft";
     }
   ): Promise<void> {
-    const configuredLocales = new Set(
-      this.localization?.locales.map(locale => locale.code) ?? []
-    );
     await recordTransitionEvents(
       tx,
       { adapter: this.adapter },
@@ -3248,24 +3321,7 @@ export class SinglePublishAllService extends BaseService {
         personName: publish.user?.name ?? null,
         versionNo: publish.versionNo,
       },
-      // Of the parts it moved: the Single's own status only where the shared part moved, and
-      // each moved language's.
-      [
-        ...(plan.hasMainStatus && movesShared(plan.parts)
-          ? [{ from: publish.mainFrom, to: publish.to ?? "published" }]
-          : []),
-        ...[...publish.priorCompanionStatuses]
-          .filter(
-            ([locale]) =>
-              (configuredLocales.size === 0 || configuredLocales.has(locale)) &&
-              movesLanguage(plan.parts, locale)
-          )
-          .map(([locale, from]) => ({
-            locale,
-            from,
-            to: publish.to ?? "published",
-          })),
-      ]
+      publish.moves
     );
   }
 
