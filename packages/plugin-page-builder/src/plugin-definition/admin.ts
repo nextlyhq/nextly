@@ -25,6 +25,7 @@ import {
 } from "../overview/admin-panel";
 import { PAGE_BUILDER_SETTINGS_PLACE } from "../settings-place-contract";
 import { ENTRY_DESIGN_STARTUP_PATH } from "../templates/entry-designs-contract";
+
 import {
   adminClientConfig,
   componentStoreOf,

@@ -9,11 +9,7 @@
  * Asked of the real server: the preview is the tab the button opened, and the
  * live page is read by a visitor with no session.
  */
-import {
-  expect,
-  type APIRequestContext,
-  type Page,
-} from "@playwright/test";
+import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
 import { canvasBlock } from "./support/canvas-frame";
