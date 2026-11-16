@@ -3773,12 +3773,13 @@
 }
 
 /*
- * The page's frame, while the keyboard has brought focus to it: Escape from a
- * panel control returns there, and F6 lands there. Drawn as the region's own
- * focus is, inside the edge, and for keyboard focus only, so a click into the
- * page shows nothing new.
+ * The page's frame, while Escape from a panel control has brought focus back
+ * to it. Drawn as the region's own focus is, inside the edge. Marked by the
+ * editor rather than matched by `:focus-visible`, which never matches a frame
+ * whose page holds focus; the mark goes on a pointer press in the page or
+ * when focus leaves it, so a click into the page shows nothing new.
  */
-.nx-canvas-frame__page:focus-visible {
+.nx-canvas-frame__page[data-nx-keyboard-focus] {
   outline: 2px solid var(--nx-builder-accent);
   outline-offset: -2px;
 }

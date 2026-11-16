@@ -34,6 +34,7 @@ import {
   escapeOutcome,
   modalIsOpen,
   pressOrigin,
+  returnFocusToCanvas,
 } from "./canvas-escape";
 import { useCanvasFrame } from "./canvas-frame-context";
 import type { EditorState } from "./editor-state";
@@ -1132,10 +1133,9 @@ export function useBlockKeyboardActions({
           if (outcome === "return-to-canvas") {
             // The frame, where the page's own keys land: the selected block
             // is still outlined in it, and Delete, Alt+F10, Enter and Escape
-            // act on it from there. Without scrolling, because an author who
-            // has scrolled the canvas to the block they are styling would
-            // otherwise be thrown back to the frame's top edge.
-            latestFrame.current?.focus({ preventScroll: true });
+            // act on it from there.
+            const frame = latestFrame.current;
+            if (frame !== null) returnFocusToCanvas(frame);
             return;
           }
           if (outcome !== "navigate-selection") return;

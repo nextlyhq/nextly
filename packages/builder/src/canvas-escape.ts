@@ -284,3 +284,41 @@ export function escapeOutcome(
   // leaves the control, and the selection stays for the next one.
   return "return-to-canvas";
 }
+
+/**
+ * The attribute the canvas's frame carries while focus has been brought back
+ * to it from the keyboard, which the editor's stylesheet draws as a focus
+ * outline.
+ *
+ * An attribute rather than `:focus-visible` because, while focus is inside a
+ * frame, the browser matches the frame element only with `:focus-within`, and
+ * that holds after a click into the page just as much: drawn from it, every
+ * click on a block would show a keyboard outline.
+ */
+export const CANVAS_KEYBOARD_FOCUS_ATTRIBUTE = "data-nx-keyboard-focus";
+
+/**
+ * Send focus back to the canvas's frame, and show that it went there.
+ *
+ * Without scrolling, because an author who has scrolled the canvas to the
+ * block they are styling would otherwise be thrown back to the frame's top
+ * edge. The outline stays while the keyboard works the canvas and goes when
+ * focus leaves the frame or a pointer is pressed in it, which is when
+ * `:focus-visible` would stop matching too.
+ */
+export function returnFocusToCanvas(canvasFrame: HTMLIFrameElement): void {
+  canvasFrame.focus({ preventScroll: true });
+  // Marked only once focus has really landed: an outline with no focus behind
+  // it would never see the blur that clears it.
+  if (canvasFrame.ownerDocument.activeElement !== canvasFrame) return;
+  if (canvasFrame.hasAttribute(CANVAS_KEYBOARD_FOCUS_ATTRIBUTE)) return;
+  canvasFrame.setAttribute(CANVAS_KEYBOARD_FOCUS_ATTRIBUTE, "");
+  const page = canvasFrame.contentDocument;
+  const clear = (): void => {
+    canvasFrame.removeAttribute(CANVAS_KEYBOARD_FOCUS_ATTRIBUTE);
+    canvasFrame.removeEventListener("blur", clear);
+    page?.removeEventListener("pointerdown", clear, true);
+  };
+  canvasFrame.addEventListener("blur", clear);
+  page?.addEventListener("pointerdown", clear, true);
+}

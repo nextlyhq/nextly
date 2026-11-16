@@ -40,6 +40,7 @@ import {
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { CANVAS_KEYBOARD_FOCUS_ATTRIBUTE } from "./canvas-escape";
 import {
   CanvasFrameProvider,
   CanvasFrameShortcuts,
@@ -250,6 +251,9 @@ describe("Escape after picking a colour variable", () => {
 
     expect(selected()).toBe("inner");
     expect(document.activeElement).toBe(frame);
+    // Shown, not only moved: the frame carries the mark its outline is drawn
+    // from.
+    expect(frame.hasAttribute(CANVAS_KEYBOARD_FOCUS_ATTRIBUTE)).toBe(true);
     // Consumed, so the entry form's cancel behind the editor never ran.
     expect(event.defaultPrevented).toBe(true);
     expect(hostCancel).not.toHaveBeenCalled();

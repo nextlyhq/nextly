@@ -18,6 +18,8 @@ import {
   isTextEntry,
   modalIsOpen,
   pressOrigin,
+  returnFocusToCanvas,
+  CANVAS_KEYBOARD_FOCUS_ATTRIBUTE,
 } from "./canvas-escape";
 import { CANVAS_FRAME_BOX_ATTRIBUTE } from "./geometry-dom";
 
@@ -359,5 +361,43 @@ describe("pressOrigin", () => {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
 
     expect(origin).toBeNull();
+  });
+});
+
+describe("returnFocusToCanvas", () => {
+  it("focuses the frame and marks it, until focus leaves the frame", () => {
+    const frame = canvasFrame();
+    const elsewhere = document.createElement("button");
+    document.body.append(elsewhere);
+
+    returnFocusToCanvas(frame);
+
+    expect(document.activeElement).toBe(frame);
+    expect(frame.hasAttribute(CANVAS_KEYBOARD_FOCUS_ATTRIBUTE)).toBe(true);
+    elsewhere.focus();
+    expect(frame.hasAttribute(CANVAS_KEYBOARD_FOCUS_ATTRIBUTE)).toBe(false);
+  });
+
+  it("drops the mark on a pointer press in the page, which is no keyboard focus", () => {
+    const frame = canvasFrame();
+    const page = frame.contentDocument;
+    if (page === null) throw new Error("the frame has no document");
+
+    returnFocusToCanvas(frame);
+    page.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+
+    expect(document.activeElement).toBe(frame);
+    expect(frame.hasAttribute(CANVAS_KEYBOARD_FOCUS_ATTRIBUTE)).toBe(false);
+  });
+
+  it("does not mark a frame that focus did not reach", () => {
+    // A frame no longer in the page cannot take focus, and a mark left on it
+    // would wait for a blur that never comes.
+    const frame = canvasFrame();
+    frame.parentElement?.remove();
+
+    returnFocusToCanvas(frame);
+
+    expect(frame.hasAttribute(CANVAS_KEYBOARD_FOCUS_ATTRIBUTE)).toBe(false);
   });
 });
