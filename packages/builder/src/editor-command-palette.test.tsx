@@ -8,6 +8,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { ShortcutProvider } from "@nextlyhq/ui";
@@ -160,6 +161,21 @@ describe("the editor's search", () => {
     // After the selected paragraph, the second block on the page.
     expect(op.at).toEqual({ index: 2 });
     expect(editor.select).toHaveBeenCalledWith(op.node.id);
+  });
+
+  it("announces what a search row added and where, outside the closing dialog", async () => {
+    register();
+    const editor = editorSpy(page(), "intro");
+    mount(editor);
+    search("head");
+    fireEvent.click(rowsUnder("Add")[0] as HTMLElement);
+
+    const region = document.querySelector("[data-insert-announcement]");
+    expect(region?.getAttribute("aria-live")).toBe("polite");
+    expect(region?.closest("[role=dialog]")).toBeNull();
+    await waitFor(() =>
+      expect(region?.textContent).toBe("Heading added after Text")
+    );
   });
 
   it("lists blocks whose name the search begins first, before a match in a description", () => {

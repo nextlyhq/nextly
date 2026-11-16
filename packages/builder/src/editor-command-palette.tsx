@@ -182,7 +182,7 @@ export function EditorCommandPalette({
     <>
       {/* Outside the dialog, which closes as a row runs, so the sentence an
           insert from search is announced with is still there to be read. */}
-      <InsertAnnouncement text={offers.announcement} />
+      <InsertAnnouncement text={offers.announcement} afterClose />
       <CommandPalette
         commands={found}
         groups={[

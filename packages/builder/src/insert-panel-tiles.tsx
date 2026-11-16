@@ -315,12 +315,27 @@ export function PlacementLine({
  */
 export function InsertAnnouncement({
   text,
+  afterClose = false,
 }: {
   text: string;
+  /**
+   * Whether the insert closes a modal dialog this region sits outside (the
+   * editor's search). The dialog hides the rest of the page from a screen
+   * reader while open, and the insert changes the text in the update that
+   * closes it, so the text is set a moment later, once the page is
+   * readable again.
+   */
+  afterClose?: boolean;
 }): React.JSX.Element {
+  const [shown, setShown] = React.useState(afterClose ? "" : text);
+  React.useEffect(() => {
+    if (!afterClose) return;
+    const timer = setTimeout(() => setShown(text), 0);
+    return () => clearTimeout(timer);
+  }, [afterClose, text]);
   return (
     <p className="nx-sr-only" aria-live="polite" data-insert-announcement="">
-      {text}
+      {afterClose ? shown : text}
     </p>
   );
 }

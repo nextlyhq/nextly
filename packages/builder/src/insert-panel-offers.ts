@@ -244,21 +244,12 @@ export function useInsertOffers({
     ...(inside === undefined ? {} : { inside }),
     ...(after === undefined ? {} : { after }),
   };
-  const places: Readonly<Record<EntryRole, InsertionCandidate[]>> = {
-    content: insertionCandidates(editor.document, editor.selectedId, {
+  const placesFor = (role: EntryRole): InsertionCandidate[] =>
+    insertionCandidates(editor.document, editor.selectedId, {
       ...placeOptions,
-      role: "content",
-    }),
-    layout: insertionCandidates(editor.document, editor.selectedId, {
-      ...placeOptions,
-      role: "layout",
-    }),
-    band: insertionCandidates(editor.document, editor.selectedId, {
-      ...placeOptions,
-      role: "band",
-    }),
-  };
-  const candidates = places.content;
+      role,
+    });
+  const candidates = placesFor("content");
 
   // Remembered by what the verdicts depend on — the document, the places, the
   // catalog, the rule's sources and the locks — and not by the query, so a
@@ -269,7 +260,13 @@ export function useInsertOffers({
     ? { offers: NO_OFFERS, rest: candidates[0] }
     : cachedOffers(offerCache, {
         document: editor.document,
-        places,
+        // The other kinds' places only while the offers are judged: the
+        // closed search reads the content block's first place alone.
+        places: {
+          content: candidates,
+          layout: placesFor("layout"),
+          band: placesFor("band"),
+        },
         roles,
         catalog,
         source,
