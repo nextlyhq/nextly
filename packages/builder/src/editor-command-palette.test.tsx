@@ -301,14 +301,14 @@ describe("the palette's lock answers while the shell is narrowed away", () => {
   /** An editor on `selectedId` whose lock questions are counted by `asked`. */
   function editorAsking(
     selectedId: string,
-    asked: ReturnType<typeof vi.fn>
+    asked: EditorState["lockRefusalFor"]
   ): EditorState {
     return { ...editorSpy(page(), selectedId), lockRefusalFor: asked };
   }
 
   it("asks no lock for a selection once the shell closed the open palette", () => {
     register();
-    const asked = vi.fn(() => undefined);
+    const asked = vi.fn<EditorState["lockRefusalFor"]>(() => undefined);
     const view = render(
       <Host editor={editorAsking("intro", asked)} shellActive />
     );

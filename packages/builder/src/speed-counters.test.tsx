@@ -332,7 +332,7 @@ function InspectorHost(): React.JSX.Element {
       <InspectorPanel
         editor={state}
         styleState={{
-          value: styleState.value,
+          state: styleState.value,
           onChange: value => setStyleState({ value }),
         }}
       />
