@@ -18,7 +18,6 @@ packages/blocks-engine/src/index.ts 1533
 
 packages/blocks-engine/src/list-query.ts 1933
 
-packages/blocks-engine/src/ops.ts 3953
 
 
 packages/blocks-engine/src/style/compile-page.ts 2761
