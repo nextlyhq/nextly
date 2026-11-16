@@ -239,7 +239,8 @@ function judgeRelation(
   return {
     outcome: "changed",
     reason: "new-form",
-    readsAs: JSON.stringify([writingOf(value)]),
+    // A one-item list of the reference itself: an id, or a `{ relationTo, value }` object.
+    readsAs: `[${jsonWritingOf(value)}]`,
   };
 }
 
@@ -404,7 +405,13 @@ function judgeIntoText(to: FieldTypeOnDialect, value: OldValue): ValueVerdict {
       if (to.family === "email" && !EMAIL_RE.test(value.text)) {
         return { outcome: "lost", reason: "not-an-email" };
       }
-      if (to.family === "choice" && !(to.options ?? []).includes(value.text)) {
+      // Membership is asked only where options are declared, as the field's validator asks it.
+      const options = to.options ?? [];
+      if (
+        to.family === "choice" &&
+        options.length > 0 &&
+        !options.includes(value.text)
+      ) {
         return { outcome: "lost", reason: "not-an-option" };
       }
       return { outcome: "kept", reason: "same-value", readsAs: value.text };

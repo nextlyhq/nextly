@@ -151,6 +151,14 @@ const CASES: Case[] = [
     value: text("red"),
     outcome: "kept",
   },
+  // A choice with no options declared holds any value, as its validator enforces no membership.
+  {
+    name: "a text to a choice with no options declared",
+    from: ["text"],
+    to: ["radio"],
+    value: text("green"),
+    outcome: "kept",
+  },
   {
     name: "a text that is no option",
     from: ["text"],
@@ -868,6 +876,20 @@ describe("pairs blocked whatever their values hold (rule 3, and the pairs no rul
       judgeValue(one, several, json({ relationTo: "people", value: "p1" }))
         .outcome
     ).toBe("changed");
+  });
+
+  it("writes a polymorphic reference wrapped into a list as the reference itself", () => {
+    const one = typeOf("postgresql", "relationship", {
+      relationTo: ["people", "teams"],
+    } as Partial<FieldDefinition>);
+    const several = typeOf("postgresql", "relationship", {
+      relationTo: ["people", "teams"],
+      hasMany: true,
+    } as Partial<FieldDefinition>);
+    expect(
+      judgeValue(one, several, json({ value: "p1", relationTo: "people" }))
+        .readsAs
+    ).toBe('[{"relationTo":"people","value":"p1"}]');
   });
 
   it("tells two target sets apart that write alike once joined", () => {

@@ -87,11 +87,13 @@ export function readExactIsoInstant(raw: string): ExactIsoReading {
   if (parts === null) return { ok: false, problem: "shape" };
   const [, year, month, day, hour, minute, second, fraction, offset] = parts;
   const date = `${year}-${month}-${day}`;
-  // Validity does not depend on the digits of a second, so the instant is checked without them.
+  // Checked with the first three digits of its second, the most a Date reads, so a time the
+  // fraction makes invalid (an hour of 24 past midnight) is refused as `ISO_INSTANT`'s reader did.
   const time =
     hour === undefined ? "00:00:00" : `${hour}:${minute}:${second ?? "00"}`;
+  const millis = fraction === undefined ? "" : `.${fraction.slice(0, 3)}`;
   const zone = offset ?? "Z";
-  const whole = `${date}T${time}${zone}`;
+  const whole = `${date}T${time}${millis}${zone}`;
   const at = new Date(whole);
   if (Number.isNaN(at.getTime())) return { ok: false, problem: "invalid" };
   if (!statesTheSameDay(whole, at, zone)) {
@@ -101,7 +103,11 @@ export function readExactIsoInstant(raw: string): ExactIsoReading {
   if (offset === undefined) return { ok: false, problem: "no-offset" };
   return {
     ok: true,
-    instant: { seconds: at.getTime() / 1000, fraction: fraction ?? "" },
+    // Whole seconds: the digits of the second are the fraction's, as written.
+    instant: {
+      seconds: Math.floor(at.getTime() / 1000),
+      fraction: fraction ?? "",
+    },
   };
 }
 

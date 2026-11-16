@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { readExactIsoInstant } from "../iso-instant";
+import { readExactIsoInstant, readIsoInstant } from "../iso-instant";
 
 describe("readExactIsoInstant", () => {
   it("keeps every digit of a second up to microseconds, at its offset", () => {
@@ -60,5 +60,14 @@ describe("readExactIsoInstant", () => {
         problem: "shape",
       });
     }
+  });
+});
+
+describe("readIsoInstant, read through the exact reader", () => {
+  it("keeps an hour of 24 with a fraction of a second an invalid time, not a missing day", () => {
+    expect(readIsoInstant("2026-01-01T24:00:00.001Z")).toEqual({
+      ok: false,
+      problem: "invalid",
+    });
   });
 });
