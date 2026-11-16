@@ -49,19 +49,16 @@ test("an edit saved to a published page waits as a draft until it is published",
       .getByRole("textbox", { name: "Title", exact: true })
       .fill(published);
     await page.getByRole("button", { name: "Publish", exact: true }).click();
-    await page.waitForURL(/\/collections\/pages$/, { timeout: 30_000 });
+    // The first save stays on the new page, at its own address.
+    await page.waitForURL(/\/collections\/pages\/(?!create$)[^/]+$/, {
+      timeout: 30_000,
+    });
 
     // The control for both readings below: the page IS served, under the
     // title it was published with, so they are about what the site serves and
     // not about a page that never went live.
     expect(await servedTitle(visitor, slug)).toBe(published);
 
-    // The row's link rather than the title's text: this screen shows the same
-    // title in a heading as well, and the link is what opens the page.
-    await page.getByRole("link", { name: published }).click();
-    await page.waitForURL(/\/collections\/pages\/(?!create$)[^/]+$/, {
-      timeout: 30_000,
-    });
     const title = page.getByRole("textbox", { name: "Title", exact: true });
     await expect(title).toHaveValue(published, { timeout: 30_000 });
 

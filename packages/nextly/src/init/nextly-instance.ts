@@ -1088,8 +1088,6 @@ export interface Nextly {
    *   kinds: ["published"],
    * });
    * ```
-   *
-   * @experimental
    */
   contentEvents: ContentEventsNamespace;
 

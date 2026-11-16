@@ -26,6 +26,16 @@
       "types": "./dist/format.d.ts",
       "import": "./dist/format.mjs",
       "default": "./dist/format.mjs"
+    },
+    "./contrast": {
+      "types": "./dist/contrast.d.ts",
+      "import": "./dist/contrast.mjs",
+      "default": "./dist/contrast.mjs"
+    },
+    "./named-query": {
+      "types": "./dist/named-query.d.ts",
+      "import": "./dist/named-query.mjs",
+      "default": "./dist/named-query.mjs"
     }
   },
   "files": [

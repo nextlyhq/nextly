@@ -325,6 +325,33 @@ export {
 } from "@nextlyhq/admin/kit/document";
 
 /**
+ * The document's Save and Publish as one builder-density pair whose controls
+ * say the document's state themselves (@experimental), for a full-window
+ * view that replaces the header.
+ *
+ * - `<DocumentSaveAndPublish />`: Save reads "Save", "Saving…", "Retry save"
+ *   or a quiet "✓ Saved" (when, in its tooltip); beside it, where the
+ *   collection keeps drafts and the person may publish, Publish reads
+ *   "Publish", "Publish changes", "Publishing…", "Published" or
+ *   "Scheduled", with its arrow keeping Schedule, Add to release and
+ *   Unpublish. Elsewhere Save leads alone. Inert states stay focusable, so
+ *   their tooltips can be read by keyboard; failures are announced
+ *   assertively with their reason and shown in a notice with Retry.
+ * - `useDocumentLifeStage()`: where the document is in its life (Draft,
+ *   Published or Scheduled), never "Changed" or "Modified", for a pill
+ *   beside the pair; null outside a document editor or where the
+ *   collection has no lifecycle.
+ *
+ * Drawn by the admin from the same model as the entry header, so the two
+ * can't disagree. Nothing outside a document editor.
+ */
+export {
+  DocumentSaveAndPublish,
+  useDocumentLifeStage,
+  type DocumentLifeStage,
+} from "@nextlyhq/admin/kit/document";
+
+/**
  * How a document view restores its own field from a recovery point
  * (@experimental).
  *

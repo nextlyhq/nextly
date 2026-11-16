@@ -91,13 +91,15 @@ indexes every page and Single again, and until it has finished, counts read as "
 least" rather than as exact.
 
 Last, run `npx nextly generate:types`. It writes the file that registers the builder's
-screen with the admin, and that file also loads the editor's styles, so there is nothing
-to import by hand. In a project created before that file existed, import the generated
-file in your admin page, `src/app/admin/[[...params]]/page.tsx`; see
-[Admin UI](/docs/plugins/admin-ui).
+screen with the admin. The builder fetches its own stylesheet when one of its screens or
+fields opens, so there is nothing to import by hand. In a project created before that file
+existed, import the generated file in your admin page,
+`src/app/admin/[[...params]]/page.tsx`; see [Admin UI](/docs/plugins/admin-ui).
 
-An admin page that still imports `@nextlyhq/plugin-page-builder/styles/editor.css` by hand
-keeps working: it loads the same stylesheet, once. You can remove the import.
+If your admin page still imports `@nextlyhq/plugin-page-builder/styles/editor.css` by hand,
+remove the import. The builder keeps working with it, but the import puts the editor's
+stylesheet on every admin screen, the sign-in page included, instead of only where the
+builder opens.
 
 ## In the admin
 
