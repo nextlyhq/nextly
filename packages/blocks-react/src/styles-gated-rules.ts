@@ -21,6 +21,26 @@ import {
 } from "./styles-stored-trust";
 import { pruneNodes } from "./visibility";
 
+/**
+ * A stored sheet with the gated rules of the nodes that SURVIVED appended.
+ *
+ * The stored `css` is always incomplete when `gated` is present, so this is
+ * delivery rather than repair: the survivors are appended whether or not
+ * anything about the document was repaired. Making it conditional on repair
+ * would work only for as long as every conditioned node is pruned — the moment
+ * one survives, nothing is repaired, the incomplete sheet ships unchanged and
+ * that node renders unstyled.
+ *
+ * The set is taken from the document being RENDERED, never from re-reading
+ * `visibility.conditions`. Walking the surviving nodes means the rules appended
+ * are definitionally the rules of the nodes that rendered; a second derivation
+ * of the pruning rule is exactly how a sheet and its markup come apart.
+ *
+ * Appending AFTER the main sheet is safe. Each node's local rules are written
+ * against its own hashed class, so two nodes' entries can never target the same
+ * element; only tier order matters, and each entry preserves its own tiers
+ * internally.
+ */
 export function withGatedRules(
   styles: PageStyles,
   document: BlockDocument,

@@ -47,7 +47,6 @@ export {
   UNIDENTIFIED_FETCH_POLICY,
   effectiveCompile,
 } from "./styles-effective-compile";
-export type { EffectiveCompile } from "./styles-effective-compile";
 
 /** Caller-supplied policy for one style resolution. */
 export interface ResolveStyleOptions {
@@ -475,9 +474,9 @@ function compileToStyles(
  *
  * DERIVED from {@link resolvePageStylesWithTrace} rather than computed beside
  * it. The two answers would otherwise be two resolutions of one question, and
- * this file already carries several reasons why a second answer about the same
- * document drifts from the first — every staleness test above exists because a
- * stored sheet and a fresh compile disagreed.
+ * these modules already carry several reasons why a second answer about the same
+ * document drifts from the first — every staleness check in `styles-stored-trust`
+ * exists because a stored sheet and a fresh compile disagreed.
  */
 export function resolvePageStyles(
   document: BlockDocument,

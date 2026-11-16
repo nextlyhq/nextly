@@ -118,40 +118,6 @@ export function normalizeStoredStyles(
 }
 
 /**
- * A stored sheet with the gated rules of the nodes that SURVIVED appended.
- *
- * The stored `css` is always incomplete when `gated` is present, so this is
- * delivery rather than repair: the survivors are appended whether or not
- * anything about the document was repaired. Making it conditional on repair
- * would work only for as long as every conditioned node is pruned — the moment
- * one survives, nothing is repaired, the incomplete sheet ships unchanged and
- * that node renders unstyled.
- *
- * The set is taken from the document being RENDERED, never from re-reading
- * `visibility.conditions`. Walking the surviving nodes means the rules appended
- * are definitionally the rules of the nodes that rendered; a second derivation
- * of the pruning rule is exactly how a sheet and its markup come apart.
- *
- * Appending AFTER the main sheet is safe. Each node's local rules are written
- * against its own hashed class, so two nodes' entries can never target the same
- * element; only tier order matters, and each entry preserves its own tiers
- * internally.
- */
-/**
- * The gated rules a stored artifact carries, or `undefined` when it carries none it can be read.
- *
- * ONE definition, because two places ask this question: the renderer, deciding whether the artifact
- * covers gating well enough to skip the repair, and the delivery (`withGatedRules`), deciding whether
- * to append.
- * When they disagreed the artifact counted as coverage while its map went unread, so the repair was
- * skipped and the stale sheet shipped with the hidden node's rules still in it — the leak, arrived
- * at through two readings of one fact.
- *
- * The artifact is a database record, so `gated` can be null, an array, or a string. Anything not a
- * plain record is treated as ABSENT, which is the safe direction: absent means the sheet predates
- * the split, and gating then forces the recompile-or-withhold path.
- */
-/**
  * Whether the compiler RECORDED this node — the coverage question.
  *
  * An empty string is a legitimate record, not a missing one. A gated node with no node-local or
@@ -180,6 +146,19 @@ export function isUsableGatedEntry(value: unknown): value is string {
   return typeof value === "string" && value !== "";
 }
 
+/**
+ * The gated rules a stored artifact carries, or `undefined` when it carries none it can be read.
+ *
+ * ONE definition, because two places ask this question: the renderer, deciding whether the artifact
+ * covers gating well enough to skip the repair, and the delivery (`withGatedRules`), deciding whether
+ * to append. When they disagreed the artifact counted as coverage while its map went unread, so the
+ * repair was skipped and the stale sheet shipped with the hidden node's rules still in it — the leak,
+ * arrived at through two readings of one fact.
+ *
+ * The artifact is a database record, so `gated` can be null, an array, or a string. Anything not a
+ * plain record is treated as ABSENT, which is the safe direction: absent means the sheet predates
+ * the split, and gating then forces the recompile-or-withhold path.
+ */
 export function readableGatedRules(
   styles: PageStyles | undefined
 ): Readonly<Record<string, unknown>> | undefined {
