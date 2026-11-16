@@ -30,12 +30,6 @@ import { cappedLimit, optionalText, parseRouteQuery } from "./route-query";
  */
 export const EXCLUDE_PART_MAX = 200;
 
-/**
- * The column core keeps a Draft/Published collection's state in, which a
- * collection with `status: true` has and every other collection lacks.
- */
-export const STATUS_COLUMN = "status";
-
 /** A search the route will make, once its query has been checked. */
 export interface PagesSearchRequest {
   /** Trimmed, non-empty, at most {@link PAGES_SEARCH_MAX} characters. */

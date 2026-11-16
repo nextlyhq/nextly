@@ -15,7 +15,6 @@ import { documentVersionOf } from "./document-version";
 import { entryOf } from "./entry-reads";
 import type { PageCollection } from "./pages-search-collections";
 import type { PageItem, PageState, PageStatus } from "./pages-search-contract";
-import { STATUS_COLUMN } from "./pages-search-request";
 
 /** The refusal codes core answers a filter or an order on an unreadable field with. */
 const FIELD_REFUSALS: ReadonlySet<string> = new Set([
@@ -137,6 +136,12 @@ function holdsField(row: unknown, path: string): boolean {
     Object.hasOwn(row, topKeyOf(path))
   );
 }
+
+/**
+ * The column core keeps a Draft/Published collection's state in, which a
+ * collection with `status: true` has and every other collection lacks.
+ */
+export const STATUS_COLUMN = "status";
 
 /** A row's stored status, when it is one the lifecycle holds. */
 function statusOf(row: unknown): PageStatus | undefined {
