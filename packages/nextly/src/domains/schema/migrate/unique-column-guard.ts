@@ -92,7 +92,16 @@ export interface RegisteredEntity {
   builtBy: ColumnOrigin;
   /** Who defines it, as the registry records it: `ui` (the Schema Builder), `code` or `plugin`. */
   source: string;
+  /**
+   * Whether its recorded definition has reached the database (`applied`, or `synced` by a
+   * development push). A Builder save records its definition before its migration runs, so a
+   * pending one may describe a column that still holds what it held before.
+   */
+  definitionApplied: boolean;
 }
+
+/** The registry statuses whose definition the database already has. */
+const DEFINITION_APPLIED = new Set(["applied", "synced"]);
 
 /** A stored field list, as the registry holds it: JSON text or a parsed list. */
 function fieldsOf(raw: unknown): FieldDefinition[] {
@@ -128,10 +137,11 @@ export async function registeredEntities(
       fields: unknown;
       localized: unknown;
       source: unknown;
+      migration_status: unknown;
     }>(
       db,
       dialect,
-      sql`SELECT ${sql.identifier("slug")} AS slug, ${sql.identifier("table_name")} AS table_name, ${sql.identifier("fields")} AS fields, ${sql.identifier("localized")} AS localized, ${sql.identifier("source")} AS source FROM ${sql.identifier(registry)}`
+      sql`SELECT ${sql.identifier("slug")} AS slug, ${sql.identifier("table_name")} AS table_name, ${sql.identifier("fields")} AS fields, ${sql.identifier("localized")} AS localized, ${sql.identifier("source")} AS source, ${sql.identifier("migration_status")} AS migration_status FROM ${sql.identifier(registry)}`
     );
     for (const row of rows) {
       entities.push({
@@ -144,6 +154,7 @@ export async function registeredEntities(
         builtBy: row.source === "code" ? "codeFirst" : "collection",
         // Text on every driver; anything else names no source or status.
         source: typeof row.source === "string" ? row.source : "",
+        definitionApplied: DEFINITION_APPLIED.has(String(row.migration_status)),
       });
     }
   }
@@ -543,7 +554,11 @@ async function ownedLiveTable(
   };
 }
 
-/** Whether the registry describes `field` of the entity whose table is `table` as a relationship. */
+/**
+ * Whether the registry describes `field` of the entity whose table is `table` as a relationship,
+ * in a definition the database already has: one still awaiting its migration may name as a
+ * relationship a column holding the values of the field it was before, which may be anything.
+ */
 async function isRelationship(
   db: unknown,
   dialect: SupportedDialect,
@@ -551,10 +566,11 @@ async function isRelationship(
   field: string | undefined
 ): Promise<boolean> {
   if (field === undefined) return false;
-  const definition = (await registeredEntities(db, dialect))
-    .find(e => e.table.toLowerCase() === table.toLowerCase())
-    ?.fields.find(f => f.name === field);
-  return definition?.type === "relationship";
+  const entity = (await registeredEntities(db, dialect)).find(
+    e => e.table.toLowerCase() === table.toLowerCase()
+  );
+  if (entity?.definitionApplied !== true) return false;
+  return entity.fields.find(f => f.name === field)?.type === "relationship";
 }
 
 /**
