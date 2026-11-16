@@ -449,21 +449,29 @@ for (const dialect of getConfiguredTestDialects()) {
       ).toEqual(["sent:null", "failed:password-reset"]);
     });
 
-    it("pages deliveries by cursor, without repeating or skipping one", async () => {
+    it("pages deliveries by cursor in the list's canonical meta, without repeating or skipping one", async () => {
       const seen: string[] = [];
-      let cursor: string | null = null;
+      let before: string | undefined;
+      let pages = 0;
       do {
-        const query: string = cursor
-          ? `limit=2&cursor=${encodeURIComponent(cursor)}`
+        const query: string = before
+          ? `limit=2&before=${encodeURIComponent(before)}`
           : "limit=2";
         const { body } = await read(`email-deliveries?${query}`, reader);
         const items = itemsOf(body);
+        const meta = body.meta as Item;
+        expect(meta).toMatchObject({
+          limit: 2,
+          total: items.length,
+          hasPrev: pages > 0,
+          hasNext: meta.nextBefore !== undefined,
+        });
         expect(items.length).toBeLessThanOrEqual(2);
         seen.push(...items.map(item => String(item.id)));
-        cursor = (body.nextCursor ??
-          (body.data as Item)?.nextCursor ??
-          null) as string | null;
-      } while (cursor);
+        before = meta.nextBefore as string | undefined;
+        pages += 1;
+      } while (before);
+      expect(pages).toBeGreaterThan(1);
       const all = itemsOf(
         (await read("email-deliveries?limit=100", reader)).body
       ).map(item => String(item.id));
@@ -476,7 +484,11 @@ for (const dialect of getConfiguredTestDialects()) {
         "from=yesterday",
         "limit=0",
         "limit=1000",
-        "cursor=not-a-cursor",
+        "before=not-a-cursor",
+        // PostgreSQL holds a provider's id as a UUID: anything else is
+        // refused alike on every dialect, not a database error on one.
+        "providerId=not-a-uuid",
+        `before=${Buffer.from(JSON.stringify([1, "not-a-uuid"])).toString("base64url")}`,
       ]) {
         expect(
           (await get(`email-deliveries?${query}`, reader)).status,

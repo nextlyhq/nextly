@@ -10,6 +10,12 @@
  * message, only whether one is still held. Neither table holds a subject or
  * a body to return.
  *
+ * Delivery records are read through `EmailDeliveryService.list`, the one
+ * reader of the delivery log, and projected here.
+ *
+ * Lists answer `{ items, meta }`, walked by cursor: `meta.nextBefore` is the
+ * `before` that reads the next page.
+ *
  * Who may read is decided before any of this runs: `read-email-deliveries`,
  * asked by the REST routes and by a checked Direct API call alike
  * (`SYSTEM_READ_POLICY.emailDeliveries`).
@@ -34,14 +40,15 @@ import {
 } from "drizzle-orm";
 import { z } from "zod";
 
+import type { PaginationMeta } from "../../api/response-shapes";
 import { loadedDialect } from "../../database/dialect-tables";
 import { toDbError } from "../../database/errors";
 import { NextlyError } from "../../errors";
 
 import { deliveriesTableFor } from "./deliveries-table";
-import {
-  isErasedRecipientHash,
-  type EmailDeliveryRecipientKind,
+import type {
+  EmailDeliveryRecipientKind,
+  EmailDeliveryStatus,
 } from "./delivery-record";
 import type { EmailFailure } from "./failure";
 import {
@@ -55,9 +62,13 @@ import {
   type QueueDialect,
   type QueuedEmailStanding,
 } from "./queued-send-read";
+import type {
+  EmailDeliveryRecord,
+  EmailDeliveryService,
+} from "./services/email-delivery-service";
 
 /** @experimental What happened to one recipient of one send. */
-export type DeliveryOutcome = "sent" | "failed";
+export type DeliveryOutcome = EmailDeliveryStatus;
 
 /** @experimental One delivery record, as Activity lists it. */
 export interface DeliveryActivity {
@@ -105,11 +116,13 @@ export interface QueuedEmailActivity {
   queuedBy: string;
 }
 
-/** @experimental One page of a list, and where the next one starts. */
+/**
+ * @experimental One page of a list, as every list answers: `meta.nextBefore`
+ * is the `before` that reads the next page, when there is one.
+ */
 export interface ActivityPage<T> {
   items: T[];
-  /** Pass back as `cursor` for the next page; null on the last one. */
-  nextCursor: string | null;
+  meta: PaginationMeta;
 }
 
 /** @experimental When one template was last sent. */
@@ -146,13 +159,15 @@ const common = {
   template: z.string().min(1).max(255).optional(),
   from: instant.optional(),
   to: instant.optional(),
-  cursor: z.string().min(1).max(200).optional(),
+  before: z.string().min(1).max(200).optional(),
   limit: z.coerce.number().int().min(1).max(MAX_LIMIT).optional(),
 };
 
 const DELIVERY_FILTER = z.object({
   outcome: z.enum(["sent", "failed"]).optional(),
-  providerId: z.string().min(1).max(36).optional(),
+  // A stored provider's id is a UUID, and PostgreSQL refuses anything else
+  // in that column rather than matching nothing, as the other dialects do.
+  providerId: z.string().uuid().optional(),
   providerType: z.string().min(1).max(50).optional(),
   ...common,
 });
@@ -178,7 +193,8 @@ export interface DeliveryActivityFilter {
   from?: Date | string;
   /** Sent at or before; a `Date` or an ISO 8601 instant. */
   to?: Date | string;
-  cursor?: string;
+  /** The `meta.nextBefore` of the page before. */
+  before?: string;
   /** At most 100; 50 when not given. */
   limit?: number | string;
 }
@@ -191,7 +207,8 @@ export interface QueuedEmailActivityFilter {
   from?: Date | string;
   /** Queued at or before; a `Date` or an ISO 8601 instant. */
   to?: Date | string;
-  cursor?: string;
+  /** The `meta.nextBefore` of the page before. */
+  before?: string;
   /** At most 100; 50 when not given. */
   limit?: number | string;
 }
@@ -221,7 +238,8 @@ function encodeCursor(cursor: Cursor): string {
   );
 }
 
-const CURSOR = z.tuple([z.number().int().nonnegative(), z.string().min(1)]);
+// Every record's id is a UUID, which PostgreSQL's columns hold as one.
+const CURSOR = z.tuple([z.number().int().nonnegative(), z.string().uuid()]);
 
 function decodeCursor(text: string | undefined): Cursor | undefined {
   if (text === undefined) return undefined;
@@ -236,14 +254,46 @@ function decodeCursor(text: string | undefined): Cursor | undefined {
     throw NextlyError.validation({
       errors: [
         {
-          path: "cursor",
+          path: "before",
           code: "INVALID",
-          message: "Pass back the cursor a page answered with.",
+          message: "Pass back the nextBefore a page answered with.",
         },
       ],
     });
   }
   return { at: read.data[0], id: read.data[1] };
+}
+
+/**
+ * One page of `rows`, read one past `limit` to know whether more follow,
+ * with the meta every list answers: a cursor walk, so `page` and `total`
+ * describe this window, and `nextBefore` reads the next.
+ */
+function pageOf<R, T>(
+  rows: R[],
+  limit: number,
+  walked: boolean,
+  cursorOf: (row: R) => Cursor,
+  item: (row: R) => T
+): ActivityPage<T> {
+  const page = rows.slice(0, limit);
+  const last = page.at(-1);
+  const nextBefore =
+    rows.length > limit && last !== undefined
+      ? encodeCursor(cursorOf(last))
+      : undefined;
+  return {
+    items: page.map(item),
+    meta: {
+      total: page.length,
+      page: 1,
+      limit,
+      totalPages: 1,
+      hasNext: nextBefore !== undefined,
+      hasPrev: walked,
+      ...(nextBefore !== undefined ? { nextBefore } : {}),
+    },
+  };
 }
 
 /** The select chain these reads use, over any dialect's tables. */
@@ -255,19 +305,6 @@ interface Chain extends PromiseLike<unknown[]> {
 }
 interface ActivityDb {
   select(fields: Record<string, unknown>): { from(table: unknown): Chain };
-}
-
-interface DeliveryRow {
-  id: string;
-  createdAt: Date;
-  status: string;
-  templateSlug: string | null;
-  providerId: string | null;
-  providerType: string;
-  recipientKind: string;
-  error: string | null;
-  principalKind: string | null;
-  recipientHash: string;
 }
 
 interface QueueRow {
@@ -295,13 +332,17 @@ interface JobRow {
 const epoch = (value: number | string): Date => new Date(Number(value));
 
 /**
- * The Activity reads over one database. Built per call from the adapter, as
- * the routes and the Direct API each have one.
+ * The Activity reads over one database: the delivery log through its
+ * service's reader, queued email and its jobs directly. Built per call, as
+ * the routes and the Direct API each have both.
  */
 export class EmailDeliveryActivity {
   private readonly dialect: QueueDialect;
 
-  constructor(private readonly adapter: DrizzleAdapter) {
+  constructor(
+    private readonly adapter: DrizzleAdapter,
+    private readonly deliveries: EmailDeliveryService
+  ) {
     this.dialect = adapter.getCapabilities().dialect;
   }
 
@@ -328,56 +369,27 @@ export class EmailDeliveryActivity {
     filter: DeliveryActivityFilter = {}
   ): Promise<ActivityPage<DeliveryActivity>> {
     const options = parsed(DELIVERY_FILTER, filter);
-    const after = decodeCursor(options.cursor);
+    const after = decodeCursor(options.before);
     const limit = options.limit ?? DEFAULT_LIMIT;
-    const table = deliveriesTableFor(this.dialect);
-    const conditions = [
-      options.outcome ? eq(table.status, options.outcome) : undefined,
-      options.template ? eq(table.templateSlug, options.template) : undefined,
-      options.providerId ? eq(table.providerId, options.providerId) : undefined,
-      options.providerType
-        ? eq(table.providerType, options.providerType)
+    const records = await this.deliveries.list({
+      status: options.outcome,
+      templateSlug: options.template,
+      providerId: options.providerId,
+      providerType: options.providerType,
+      from: options.from,
+      to: options.to,
+      before: after
+        ? { createdAt: new Date(after.at), id: after.id }
         : undefined,
-      options.from ? gte(table.createdAt, options.from) : undefined,
-      options.to ? lte(table.createdAt, options.to) : undefined,
-      after
-        ? or(
-            lt(table.createdAt, new Date(after.at)),
-            and(eq(table.createdAt, new Date(after.at)), lt(table.id, after.id))
-          )
-        : undefined,
-    ].filter(condition => condition !== undefined);
-
-    const rows = (await this.run(() =>
-      this.db
-        .select({
-          id: table.id,
-          createdAt: table.createdAt,
-          status: table.status,
-          templateSlug: table.templateSlug,
-          providerId: table.providerId,
-          providerType: table.providerType,
-          recipientKind: table.recipientKind,
-          error: table.error,
-          principalKind: table.principalKind,
-          // Read to say whether it was erased, and never returned.
-          recipientHash: table.recipientHash,
-        })
-        .from(table)
-        .where(conditions.length > 0 ? and(...conditions) : undefined)
-        .orderBy(desc(table.createdAt), desc(table.id))
-        .limit(limit + 1)
-    )) as DeliveryRow[];
-
-    const page = rows.slice(0, limit);
-    const last = page.at(-1);
-    return {
-      items: page.map(deliveryOf),
-      nextCursor:
-        rows.length > limit && last
-          ? encodeCursor({ at: last.createdAt.getTime(), id: last.id })
-          : null,
-    };
+      limit: limit + 1,
+    });
+    return pageOf(
+      records,
+      limit,
+      after !== undefined,
+      record => ({ at: record.createdAt.getTime(), id: record.id }),
+      deliveryOf
+    );
   }
 
   /**
@@ -389,7 +401,7 @@ export class EmailDeliveryActivity {
     filter: QueuedEmailActivityFilter = {}
   ): Promise<ActivityPage<QueuedEmailActivity>> {
     const options = parsed(QUEUED_FILTER, filter);
-    const after = decodeCursor(options.cursor);
+    const after = decodeCursor(options.before);
     const limit = options.limit ?? DEFAULT_LIMIT;
     const queue = loadedDialect(this.dialect).tables.emailQueue;
     const conditions = [
@@ -426,20 +438,16 @@ export class EmailDeliveryActivity {
         .limit(limit + 1)
     )) as QueueRow[];
 
-    const page = rows.slice(0, limit);
     const jobs = await this.jobsOf(
-      page.flatMap(row => (row.jobId ? [row.jobId] : []))
+      rows.slice(0, limit).flatMap(row => (row.jobId ? [row.jobId] : []))
     );
-    const last = page.at(-1);
-    return {
-      items: page.map(row =>
-        queuedOf(row, row.jobId ? jobs.get(row.jobId) : undefined)
-      ),
-      nextCursor:
-        rows.length > limit && last
-          ? encodeCursor({ at: Number(last.createdAt), id: last.id })
-          : null,
-    };
+    return pageOf(
+      rows,
+      limit,
+      after !== undefined,
+      row => ({ at: Number(row.createdAt), id: row.id }),
+      row => queuedOf(row, row.jobId ? jobs.get(row.jobId) : undefined)
+    );
   }
 
   /** The attempt counts and due times of the jobs `ids`, by id. */
@@ -517,18 +525,22 @@ export class EmailDeliveryActivity {
   }
 }
 
-/** A delivery row as Activity lists it: each field named, nothing personal. */
-function deliveryOf(row: DeliveryRow): DeliveryActivity {
+/**
+ * A delivery record as Activity lists it: each field named, and nothing
+ * personal. Its digest is read only to say whether it was erased.
+ */
+function deliveryOf(record: EmailDeliveryRecord): DeliveryActivity {
   return {
-    id: row.id,
-    createdAt: row.createdAt,
-    outcome: row.status === "sent" ? "sent" : "failed",
-    templateSlug: row.templateSlug,
-    provider: { id: row.providerId, type: row.providerType },
-    recipientKind: row.recipientKind as EmailDeliveryRecipientKind,
-    failureReason: row.status === "sent" ? null : row.error,
-    namedPerson: row.principalKind !== null,
-    erased: isErasedRecipientHash(row.recipientHash),
+    id: record.id,
+    createdAt: record.createdAt,
+    outcome: record.status,
+    templateSlug: record.templateSlug,
+    provider: { id: record.providerId, type: record.providerType },
+    recipientKind: record.recipientKind,
+    failureReason: record.status === "sent" ? null : record.error,
+    namedPerson: record.namedPerson,
+    // The reader gives an erased recipient's digest as null.
+    erased: record.recipientHash === null,
   };
 }
 

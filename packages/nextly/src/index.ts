@@ -343,6 +343,18 @@ export type {
   QueuedEmail,
   QueuedEmailState,
   CancelQueuedEmailArgs,
+  // The Email hub's Activity reads, `nextly.emailDeliveries.*`
+  // (experimental).
+  FindEmailDeliveriesArgs,
+  FindQueuedEmailsArgs,
+  EmailLastSentArgs,
+  EmailOverdueArgs,
+  ActivityPage,
+  DeliveryActivity,
+  DeliveryOutcome,
+  QueuedEmailActivity,
+  QueuedEmailOverdue,
+  TemplateLastSent,
 } from "./direct-api/types";
 
 // Email templates (experimental). Template data takes lists and objects;

@@ -62,6 +62,7 @@ import type { RBACAccessControlService } from "../domains/auth/services/rbac-acc
 import { RolePermissionService } from "../domains/auth/services/role-permission-service";
 import { RoleService } from "../domains/auth/services/role-service";
 import { EmailDeliveryActivity } from "../domains/email/delivery-activity";
+import type { EmailDeliveryService } from "../domains/email/services/email-delivery-service";
 import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
 import type { FieldRewriteResult } from "../domains/versions/field-rewrite";
 import { NextlyError } from "../errors/nextly-error";
@@ -521,7 +522,10 @@ export class Nextly implements NextlyContext {
 
   /** @internal The Activity reads, over the adapter registered when called. */
   public get emailDeliveryActivity(): EmailDeliveryActivity {
-    return new EmailDeliveryActivity(container.get<DrizzleAdapter>("adapter"));
+    return new EmailDeliveryActivity(
+      container.get<DrizzleAdapter>("adapter"),
+      container.get<EmailDeliveryService>("emailDeliveryService")
+    );
   }
 
   /** Cached RoleService — not registered in the DI container. */
