@@ -106,6 +106,7 @@ import {
 } from "./inspector";
 import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
+import { keptWhileHidden, ownBlockChanged } from "./kept-while-hidden";
 import { commitLinkChanges } from "./link-control";
 import { LookInspector, type LookEditing } from "./look-inspector";
 import { NeverQuote } from "./never-quote";
@@ -845,12 +846,10 @@ function SelectionInspector({
         </TabsList>
 
         {/*
-          FORCE-MOUNTED, because Content holds Advanced, and Advanced holds a
-          draft: unmounting it threw away what the author had typed and the
-          reason a refused row was not saved. HIDDEN here rather than left to
-          Radix, which ties mounting and visibility together — `forceMount`
-          alone would draw Content under Style as well — and `hidden` takes it
-          out of the accessibility tree exactly as an unmounted panel was.
+          FORCE-MOUNTED: Advanced inside holds a draft, and unmounting it
+          threw away what the author typed and why a refused row was not
+          saved. HIDDEN here, not by Radix, which ties mounting to showing;
+          `hidden` takes it out of the accessibility tree as unmounting did.
         */}
         <TabsContent value="content" forceMount hidden={tab !== "content"}>
           <ContentTab
@@ -891,10 +890,11 @@ function SelectionInspector({
 }
 
 /**
- * The Content tab: the block's own fields, then its Advanced section with the
- * CSS id and custom attributes.
+ * The Content tab: the block's own fields, then Advanced (CSS id, attributes).
+ * Hidden, it is drawn again only when its own block changes.
  */
-function ContentTab({
+const ContentTab = keptWhileHidden(DrawnContentTab, ownBlockChanged);
+function DrawnContentTab({
   block,
   editor,
   onCommit: commit,

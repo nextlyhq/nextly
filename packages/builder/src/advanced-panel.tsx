@@ -342,13 +342,16 @@ export function AdvancedPanel({
   }, [active]);
 
   /*
-   * Selecting another block still DESTROYS this panel, through the key on it,
-   * and so does closing the inspector. Neither passes through the effect above,
-   * so the draft is committed here as well.
+   * Selecting another block DESTROYS this panel, through the key on it, and
+   * so does closing the inspector. Neither passes through the effect above,
+   * so a panel still on screen commits its draft here as well. One that was
+   * not has already settled it on leaving the screen, and nothing can be
+   * typed in it since: written again from the props it was last drawn with,
+   * it would put back what an undo made since then took away.
    */
   React.useEffect(
     () => () => {
-      write.current(latest.current);
+      if (shown.current) write.current(latest.current);
     },
     []
   );

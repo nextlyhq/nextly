@@ -1198,7 +1198,7 @@ export async function hydrateVersionSnapshot(
 export interface ComparisonQuery {
   from?: number;
   to?: number;
-  /** @experimental A registered comparison baseline's name. */
+  /** A registered comparison baseline's name. */
   baseline?: string;
   /** The part to open on when no `to` is named. */
   locale?: string;

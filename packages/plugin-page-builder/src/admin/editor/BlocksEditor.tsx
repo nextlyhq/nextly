@@ -50,6 +50,7 @@ import { valueAtPath } from "../snapshot-merge";
 import type { OpenAt } from "./builder-address";
 import { useCanvasEntryIdentity } from "./canvas-entry";
 import { listEntryCollectionOf } from "./canvas-page-context";
+import { useDropKeptReadsOnSave } from "./canvas-source-check";
 import { useConditionedPage } from "./conditioned-page";
 import { editorCanvasRegion } from "./editor-canvas-region";
 import {
@@ -361,6 +362,9 @@ function EditorBody<TFieldValues extends FieldValues>({
    * form's own dirtiness, which is what a reading of the whole document needs.
    */
   const savePoint = useSavePoint(editor);
+  // A store made here drops what the canvas kept at once: the page's own
+  // entry is among what it reads.
+  useDropKeptReadsOnSave();
   const documentDirty = useDocumentDirty(
     control,
     hasUnsavedWork(editor, inline, savePoint.savedAt)

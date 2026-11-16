@@ -15783,8 +15783,6 @@ export class CollectionMutationService extends BaseService {
        * The fields this write restored, and the version each came from, as
        * server code states it. A client states it as `_restoredFrom` in the
        * body, read below when this is absent.
-       *
-       * @experimental
        */
       restoredFrom?: FieldSources;
       /**
