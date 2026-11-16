@@ -32,8 +32,8 @@ const WORDS = {
 
 /**
  * Which words each kind of document speaks. Only a page is built of sections;
- * a pattern, a component, a Layout region and a collection template hold
- * blocks at their top level (a section among them, where the rules allow).
+ * a pattern, a component and a collection template hold blocks at their top
+ * level (a section among them, where the rules allow).
  * Every kind is named, so a kind the engine adds fails to type-check here
  * rather than quietly reading as a page.
  */
@@ -41,7 +41,6 @@ const WORDS_OF_KIND: Record<BlockDocument["kind"], keyof typeof WORDS> = {
   page: "sections",
   pattern: "blocks",
   component: "blocks",
-  region: "blocks",
   template: "blocks",
 };
 
