@@ -19,6 +19,7 @@ import type {
 } from "../../schemas/versions/types";
 import { VERSIONS_TABLE } from "../../schemas/versions/types";
 
+import type { ChangedParts } from "./changed-parts";
 import type {
   VersionsDbApi,
   VersionsWhere,
@@ -72,6 +73,10 @@ const DELETE_CHUNK_SIZE = 500;
 // Every column except `snapshot`, so metadata reads (history lists) can project
 // away the potentially large JSON payload instead of transferring then dropping
 // it. Keep in sync with VersionRow when adding a metadata column.
+//
+// The parts a version changed (`changed_locales`, `shared_changed`) are left
+// out: a history list hands these rows out whole, and no read of the parts is
+// offered yet, so listing them here would publish them unasked.
 const VERSION_META_COLUMNS = [
   "id",
   "scopeKind",
@@ -221,6 +226,23 @@ function orderClause(
   ];
 }
 
+/**
+ * The parts a version changed, as their two columns store them. The language
+ * codes are pre-stringified, as `snapshot` is in `insertVersion` and for the
+ * same reason; absent parts store NULL in both, which reads as unknown.
+ */
+function storedParts(parts: ChangedParts | null | undefined): {
+  changedLocales: string | null;
+  sharedChanged: boolean | null;
+} {
+  return parts
+    ? {
+        changedLocales: JSON.stringify(parts.locales),
+        sharedChanged: parts.shared,
+      }
+    : { changedLocales: null, sharedChanged: null };
+}
+
 /** Identifies the document a version belongs to. */
 export interface VersionRef {
   scopeKind: VersionScopeKind;
@@ -241,6 +263,8 @@ export interface InsertVersionInput {
   sourceVersionNo?: number | null;
   /** The version each restored field came from; see `restored-from`. */
   fieldSources?: Readonly<Record<string, number>> | null;
+  /** The parts this version changed; see `changed-parts`. Null: unknown. */
+  changedParts?: ChangedParts | null;
   createdBy?: string | null;
 }
 
@@ -390,6 +414,7 @@ export class VersionsRepository {
         fieldSources: input.fieldSources
           ? JSON.stringify(input.fieldSources)
           : null,
+        ...storedParts(input.changedParts),
         createdBy: input.createdBy ?? null,
         createdAt: now,
         updatedAt: now,
@@ -555,6 +580,11 @@ export class VersionsRepository {
     locale: string | null;
     snapshot: unknown;
     createdBy?: string | null;
+    /**
+     * The parts this draft holds (`draftSlotParts`), recorded on its row.
+     * Absent leaves a rewritten row's as they were, and a new row's unknown.
+     */
+    parts?: ChangedParts;
   }): Promise<void> {
     const now = new Date();
     const serializedSnapshot = this.serializeSnapshot(input.snapshot);
@@ -579,6 +609,7 @@ export class VersionsRepository {
           // Advanced on every rewrite, so a recovery point's base can tell the
           // draft was written after it began.
           revision: existing[0].revision + 1,
+          ...(input.parts ? storedParts(input.parts) : {}),
         },
         where
       );
@@ -604,6 +635,7 @@ export class VersionsRepository {
       // holds the one-per-document-per-locale rule the read above cannot.
       draftKey: workingDraftKey(input.ref, input.locale ?? null),
       sourceVersionNo: null,
+      ...storedParts(input.parts),
       createdBy: input.createdBy ?? null,
       createdAt: now,
       updatedAt: now,

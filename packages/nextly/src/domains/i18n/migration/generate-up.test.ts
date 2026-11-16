@@ -6,6 +6,7 @@ import {
   buildCompanionCreateOnlySql,
   buildLocalizationUpSql,
   buildLocalizationUpStatements,
+  companionUpdatedAtDdl,
 } from "./generate-up";
 import type { CompanionMigrationSpec } from "./types";
 
@@ -269,5 +270,17 @@ describe("guarding the seed, and only where a transition record exists", () => {
         `SELECT "id", 'en', "title", "body" FROM "dc_pages"`
     );
     expect(sql).toContain(`ALTER TABLE "dc_pages" DROP COLUMN "title"`);
+  });
+});
+
+// `_updated_at` is an instant compared with `nextly_versions.created_at`, which has a time zone on
+// PostgreSQL, so it keeps one though a date field's column no longer does.
+describe("a translation table's _updated_at", () => {
+  it("keeps the type nextly_versions.created_at has", () => {
+    expect(companionUpdatedAtDdl("postgresql")).toBe(
+      `"_updated_at" TIMESTAMPTZ`
+    );
+    expect(companionUpdatedAtDdl("mysql")).toBe("`_updated_at` DATETIME(3)");
+    expect(companionUpdatedAtDdl("sqlite")).toBe(`"_updated_at" INTEGER`);
   });
 });

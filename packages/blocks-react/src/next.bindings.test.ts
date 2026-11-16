@@ -171,6 +171,28 @@ function boundPage(binding: Record<string, unknown>): BlockDocument {
   ) as BlockDocument;
 }
 
+/**
+ * A page of one line of prose whose text is bound: what a page's metadata is
+ * described by, since a heading never offers the page's title.
+ */
+function boundProse(binding: Record<string, unknown>): BlockDocument {
+  return JSON.parse(
+    JSON.stringify({
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "p",
+          type: "core/text",
+          version: 1,
+          props: { text: "Own" },
+          bindings: { text: { fallback: "Fallback", ...binding } },
+        },
+      ],
+    })
+  ) as BlockDocument;
+}
+
 /** Whether a Direct API read is the public reader's: its fixed options. */
 function isPublicRead(args: Record<string, unknown>): boolean {
   return (
@@ -393,19 +415,19 @@ describe("a routed page's bindings", () => {
   });
 
   it("metadata derives from bound props", async () => {
-    let title: string | undefined;
+    let description: string | undefined;
     const route = createBlocksPage({
       collections: ["pages"],
       field: "content",
       blocks,
-      nextly: instance(boundPage({ $bind: "title" })) as never,
+      nextly: instance(boundProse({ $bind: "title" })) as never,
       metadata: (_entry, _context, derived) => {
-        title = derived.title;
+        description = derived.description;
         return {};
       },
     });
     await route.generateMetadata({ params: { slug: ["about"] } });
-    expect(title).toBe("Public");
+    expect(description).toBe("Public");
   });
 
   it("offers a list item's bound image outside any list as the page draws it: its fallback, never its own", async () => {
@@ -1123,7 +1145,7 @@ describe("a routed page's bindings", () => {
       nodes: [
         {
           id: "hb",
-          type: "core/text",
+          type: "core/heading",
           version: 1,
           props: { text: "Header" },
         },
@@ -1134,7 +1156,7 @@ describe("a routed page's bindings", () => {
       layouts: { main: [{ area: "header", component: "hdr" }] },
     };
     for (let maxQueries = 0; maxQueries <= 4; maxQueries += 1) {
-      let title: string | undefined;
+      let description: string | undefined;
       const config = {
         collections: ["pages"],
         field: "content",
@@ -1147,23 +1169,24 @@ describe("a routed page's bindings", () => {
         metadata: (
           _entry: unknown,
           _context: unknown,
-          derived: { title?: string }
+          derived: { description?: string }
         ) => {
-          title = derived.title;
+          description = derived.description;
           return {};
         },
       };
       const route = createBlocksPage({
         ...config,
-        nextly: instance(boundPage({ $bind: "title" }), extras) as never,
+        nextly: instance(boundProse({ $bind: "title" }), extras) as never,
       } as Parameters<typeof createBlocksPage>[0]);
       await route.generateMetadata({ params: { slug: ["about"] } });
       const element = await throughBoundary<PageRendererProps>(
         route.ContentPage({ params: { slug: ["about"] } })
       );
       const html = await renderToHtml(element);
-      const shown = /<h1[^>]*>(.*?)<\/h1>/.exec(html)?.[1];
-      expect(shown, `maxQueries ${String(maxQueries)}`).toBe(title);
+      // The page's one line of prose; the header draws a heading.
+      const shown = /<p[^>]*>(.*?)<\/p>/.exec(html)?.[1];
+      expect(shown, `maxQueries ${String(maxQueries)}`).toBe(description);
     }
   });
 
@@ -1762,16 +1785,16 @@ describe("a page's blocks shown by their visibility conditions", () => {
   });
 
   it("describes the page in its metadata by the blocks it draws", async () => {
-    let title: string | undefined;
+    let description: string | undefined;
     const route = createBlocksPage({
       ...base,
       nextly: instance(
         page(
           {
             id: "h1",
-            type: "core/heading",
+            type: "core/text",
             version: 1,
-            props: { text: "Members area", level: "h1" },
+            props: { text: "Members area" },
             visibility: {
               conditions: [
                 [{ field: "title", op: "equals", value: "Elsewhere" }],
@@ -1780,9 +1803,9 @@ describe("a page's blocks shown by their visibility conditions", () => {
           },
           {
             id: "h2",
-            type: "core/heading",
+            type: "core/text",
             version: 1,
-            props: { text: "Public area", level: "h1" },
+            props: { text: "Public area" },
             visibility: {
               conditions: [[{ field: "title", op: "equals", value: "Public" }]],
             },
@@ -1790,12 +1813,12 @@ describe("a page's blocks shown by their visibility conditions", () => {
         )
       ) as never,
       metadata: (_entry, _context, derived) => {
-        title = derived.title;
+        description = derived.description;
         return {};
       },
     });
     await route.generateMetadata({ params: { slug: ["about"] } });
-    expect(title).toBe("Public area");
+    expect(description).toBe("Public area");
   });
 });
 

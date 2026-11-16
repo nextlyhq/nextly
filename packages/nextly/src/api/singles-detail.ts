@@ -20,7 +20,12 @@
 import { apiKeyScopeFrom } from "../auth/authenticated-scope";
 import { actorFromAuthContext } from "../auth/request-actor";
 import { getService } from "../di";
-import { parseRichTextStyles } from "../dispatcher/helpers/validation";
+import {
+  isTruthyParam,
+  parseFallbackParam,
+  parseRichTextStyles,
+  parseTranslationsParam,
+} from "../dispatcher/helpers/validation";
 import type { SingleResult } from "../domains/singles/types";
 import { errorFromServiceEnvelope } from "../errors/from-service-envelope";
 import { NextlyError } from "../errors/nextly-error";
@@ -153,6 +158,20 @@ export const GET = withErrorHandler(
     // `_translations` overview for the language pills. Both no-op for non-localized singles.
     const fallbackLocale = searchParams.get("fallback-locale") || undefined;
     const translationStatus = searchParams.get("translation-status") === "1";
+    // `?fallback=document`: answer in the first published language of the
+    // chain where the Single is not published in the requested one.
+    const wholeDocumentFallback = parseFallbackParam(
+      searchParams.get("fallback") ?? undefined
+    );
+    // `?source-locales=1` attaches `_sources`, each translatable value's
+    // language; `?translations=all` attaches every language's values
+    // (`_allLocales`), as an entry's read does.
+    const sourceLocales = isTruthyParam(
+      searchParams.get("source-locales") ?? undefined
+    );
+    const translations = parseTranslationsParam(
+      searchParams.get("translations") ?? undefined
+    );
     const richTextFormat = parseRichTextFormat(
       searchParams.get("richTextFormat")
     );
@@ -165,6 +184,9 @@ export const GET = withErrorHandler(
       locale,
       fallbackLocale,
       translationStatus,
+      wholeDocumentFallback,
+      sourceLocales,
+      translations,
     });
 
     if (!result.success) {

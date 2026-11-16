@@ -123,6 +123,10 @@
   min-height: 0;
   padding: 0.5rem 0.75rem 0.75rem;
   overflow-y: auto;
+  /* The scrollbar's room is kept whether a list scrolls or not, so the rows
+     keep their width as a tab's list grows past the panel or a classic
+     scrollbar comes and goes. */
+  scrollbar-gutter: stable;
 }
 
 .nx-vars__note {
@@ -191,62 +195,6 @@
   font-weight: 600;
   letter-spacing: 0.07em;
   text-transform: uppercase;
-  color: var(--nx-muted-foreground);
-}
-
-/* "Space between blocks": two answers, each a radio with its one-line hint. */
-.nx-vars-spacing__options {
-  display: grid;
-  gap: 2px;
-}
-
-.nx-vars-spacing__option {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
-  gap: 0.5rem;
-  padding: 0.375rem 0.5rem;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-
-.nx-vars-spacing__option:hover {
-  background: var(--nx-accent);
-}
-
-.nx-vars-spacing__option[data-chosen] {
-  border-color: var(--nx-border);
-  background: var(--nx-muted);
-}
-
-.nx-vars-spacing__option:has(input:disabled) {
-  cursor: default;
-}
-
-.nx-vars-spacing__option input {
-  margin: 0.125rem 0 0;
-  accent-color: var(--nx-primary);
-}
-
-.nx-vars-spacing__option:has(input:focus-visible) {
-  outline: 2px solid var(--nx-ring);
-  outline-offset: 1px;
-}
-
-.nx-vars-spacing__words {
-  display: grid;
-  gap: 2px;
-}
-
-.nx-vars-spacing__label {
-  font-size: 13px;
-  color: var(--nx-foreground);
-}
-
-.nx-vars-spacing__hint {
-  font-size: var(--text-xs);
-  line-height: 1.4;
   color: var(--nx-muted-foreground);
 }
 
@@ -572,9 +520,12 @@
   line-height: 1.5;
 }
 
-/* A row whose usage is read takes a fourth column, its count. */
+/* A row whose usage is read takes a fourth column, its count, held at least
+   as wide as a count of three figures: the counts arrive after the rows, and
+   a column sized only to them would move every value beside it when they do.
+   Words wider than that ("Not counted yet") still get their room. */
 .nx-vars__row[data-counted] {
-  grid-template-columns: 22px minmax(0, 1fr) auto auto;
+  grid-template-columns: 22px minmax(0, 1fr) auto minmax(2rem, max-content);
 }
 
 /* The count of places: a bare number, right-aligned in figures of one
@@ -747,4 +698,17 @@
   padding-left: 1rem;
   font-size: var(--text-xs);
   color: var(--nx-muted-foreground);
+}
+
+/* A colour field holding text that is not a colour: an empty swatch crossed
+   by a line in the destructive colour, never a colour it does not hold. */
+.nx-vars__swatch[data-invalid] {
+  border-color: var(--nx-destructive);
+  background: linear-gradient(
+    to top right,
+    transparent calc(50% - 1px),
+    var(--nx-destructive) calc(50% - 1px),
+    var(--nx-destructive) calc(50% + 1px),
+    transparent calc(50% + 1px)
+  );
 }

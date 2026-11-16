@@ -113,3 +113,36 @@ test("leaving an unsaved new collection asks first, and leaves nothing behind", 
     await removeRuntimeCollection(api, slug);
   }
 });
+
+test("creates, saves, and finds the address fixed", async ({ page }) => {
+  const slug = `new_entity_fixed_${Date.now()}`;
+  const api = page.context().request;
+  try {
+    await createInDialog(page, slug);
+    // Before the first save the address can still change.
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    let settings = page.getByRole("dialog");
+    await expect(settings.getByLabel("Slug")).toBeEditable();
+    await settings.getByRole("button", { name: "Cancel" }).click();
+
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    const review = page.getByRole("alertdialog");
+    await review.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(page.getByText("No unsaved changes")).toBeVisible({
+      timeout: 60_000,
+    });
+    expect(await serverHas(api, slug)).toBe(true);
+
+    // Saved, the address is fixed, saying what changing it would break.
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    settings = page.getByRole("dialog");
+    const address = settings.getByLabel("Slug");
+    await expect(address).toHaveValue(slug);
+    await expect(address).not.toBeEditable();
+    await expect(address).toHaveAccessibleDescription(
+      "Fixed once saved: its API routes, and every client that calls them, use this address."
+    );
+  } finally {
+    await removeRuntimeCollection(api, slug);
+  }
+});

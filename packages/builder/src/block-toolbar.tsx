@@ -643,6 +643,7 @@ export function BlockToolbar({
       })}
       {menu.length === 0 ? null : (
         <MoreMenu
+          editor={editor}
           actions={menu}
           index={buttons.length}
           activeIndex={activeIndex}
@@ -658,14 +659,19 @@ export function BlockToolbar({
  * The bar's last stop: the verbs kept behind "More", each with its reason
  * when it may not run. The reason is visible text, as in the context menu,
  * since a disabled menu item takes no focus and a tooltip would reach nobody.
+ *
+ * `actions` are the bar's, which ask the locks nothing; the items are drawn
+ * from the same verbs with the locks asked, once the menu opens.
  */
 function MoreMenu({
+  editor,
   actions,
   index,
   activeIndex,
   onFocus,
   run,
 }: {
+  editor: EditorState;
   actions: readonly ToolbarAction[];
   index: number;
   activeIndex: number;
@@ -694,28 +700,54 @@ function MoreMenu({
         // Chrome, so a press inside is not read as a click on the page.
         {...{ [CHROME_ATTRIBUTE]: "" }}
       >
-        {actions.map(action => {
-          const Icon = ICONS[action.id];
-          return (
-            <DropdownMenuItem
-              key={action.id}
-              disabled={!action.enabled}
-              className="nx-block-toolbar__menu-item"
-              onSelect={() => run(action)}
-            >
-              <Icon size={16} aria-hidden="true" />
-              <span className="nx-block-toolbar__menu-text">
-                <span>{action.label}</span>
-                {action.reason === undefined ? null : (
-                  <span className="nx-block-toolbar__menu-reason">
-                    {action.reason}
-                  </span>
-                )}
-              </span>
-            </DropdownMenuItem>
-          );
-        })}
+        <MoreMenuItems editor={editor} shown={actions} run={run} />
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/**
+ * The "More" menu's items, drawn only while it is open: each of the bar's
+ * menu verbs as the locks answer it, so a lock is asked when the author can
+ * act on its answer and not on every selection.
+ */
+function MoreMenuItems({
+  editor,
+  shown,
+  run,
+}: {
+  editor: EditorState;
+  shown: readonly ToolbarAction[];
+  run: (action: ToolbarAction) => void;
+}): React.JSX.Element {
+  const asked = useSelectionActions(editor, true);
+  const items = React.useMemo(
+    () => asked.filter(action => shown.some(each => each.id === action.id)),
+    [asked, shown]
+  );
+  return (
+    <>
+      {items.map(action => {
+        const Icon = ICONS[action.id];
+        return (
+          <DropdownMenuItem
+            key={action.id}
+            disabled={!action.enabled}
+            className="nx-block-toolbar__menu-item"
+            onSelect={() => run(action)}
+          >
+            <Icon size={16} aria-hidden="true" />
+            <span className="nx-block-toolbar__menu-text">
+              <span>{action.label}</span>
+              {action.reason === undefined ? null : (
+                <span className="nx-block-toolbar__menu-reason">
+                  {action.reason}
+                </span>
+              )}
+            </span>
+          </DropdownMenuItem>
+        );
+      })}
+    </>
   );
 }

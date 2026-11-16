@@ -804,6 +804,9 @@ describe("the blocks entry", () => {
       "namedQueryFailureLine",
       "paragraph",
       "quote",
+      // Added deliberately: a list's entries read as the list block reads
+      // them, for the editor's binding picker to show the first one's values.
+      "readList",
       "readNamedList",
       "renderContainer",
       "richText",

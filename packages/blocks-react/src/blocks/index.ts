@@ -125,7 +125,13 @@ export {
   listEntryCount,
   listShownCount,
   namedListBase,
+  // A list's entries read as the list block reads them, for an editor that
+  // shows one of them (the binding picker's samples) without a second query.
+  readList,
+  type ListDiagnostic,
   type ListEntryCount,
+  type ListOutcome,
+  type ListReads,
 } from "./list-read";
 // A list's named query run where it is asked for, the editor's canvas route
 // among them, with the outcome the renderer draws: one run for every host.

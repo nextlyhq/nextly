@@ -1691,6 +1691,39 @@ describe.each([
         ["applied", checksumOf(await readFile(adopted.sqlPath, "utf-8"))],
       ]);
     });
+
+    it.runIf(run)(
+      "at the one instant its run is stamped with, ending no earlier than it started",
+      async () => {
+        await runDbSync(h, configV1);
+        // The run's clock, which names the file: the row is stamped from it
+        // too, start and end alike, as nothing runs between them.
+        const now = new Date("2026-01-02T03:04:05.678Z");
+        const adopted = await baselineCore({
+          adapter: h.adapter,
+          db: h.db,
+          dialect: h.dialect,
+          migrationsDir: h.migrationsDir,
+          logger,
+          now,
+        });
+        if (adopted.kind !== "baselined") {
+          throw new Error("expected a baseline");
+        }
+        const recorded = await new SchemaEventsRepository(
+          h.db,
+          h.dialect
+        ).listFileApplies();
+        expect(
+          recorded
+            .filter(r => r.filename === basename(adopted.sqlPath))
+            .map(r => [
+              new Date(r.startedAt).getTime(),
+              r.endedAt === null ? null : new Date(r.endedAt).getTime(),
+            ])
+        ).toEqual([[now.getTime(), now.getTime()]]);
+      }
+    );
   }
 );
 
