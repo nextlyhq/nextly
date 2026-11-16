@@ -67,6 +67,21 @@ const module = (name: string, tables: TableSpec[]): PluginMigration => {
   return { ...content, checksum: migrationChecksum(content) };
 };
 
+/** The refusal message, or "" when the chain resolves. */
+const messageOf = (
+  modules: PluginMigration[],
+  options?: Parameters<typeof assertModuleForeignKeysResolve>[2]
+): string => {
+  try {
+    assertModuleForeignKeysResolve("fx", modules, options);
+    return "";
+  } catch (error) {
+    if (!(error instanceof NextlyError)) throw error;
+    const data = error.publicData as { errors?: { message: string }[] };
+    return data.errors?.[0]?.message ?? "";
+  }
+};
+
 /**
  * The dependency's `dep__products`, carrying its owner's key and the key
  * `fk_dep__products_fx` this plugin contributes to `fx__items`.
@@ -128,18 +143,6 @@ const contributing = (
         }),
   };
   return { ...content, checksum: migrationChecksum(content) };
-};
-
-/** The refusal message, or "" when the chain resolves. */
-const messageOf = (modules: PluginMigration[]): string => {
-  try {
-    assertModuleForeignKeysResolve("fx", modules);
-    return "";
-  } catch (error) {
-    if (!(error instanceof NextlyError)) throw error;
-    const data = error.publicData as { errors?: { message: string }[] };
-    return data.errors?.[0]?.message ?? "";
-  }
 };
 
 describe("assertModuleForeignKeysResolve", () => {
@@ -243,6 +246,60 @@ describe("assertModuleForeignKeysResolve", () => {
     ]);
     expect(message).toContain("003_dangling");
     expect(message).toContain("fx__parents");
+  });
+
+  it("refuses an external target absent from availableTables under run-wide stream validation", () => {
+    const message = messageOf(
+      [module("001_init", [keying("fx__child", "app_posts")])],
+      { availableTables: new Set(["users"]) }
+    );
+    expect(message).toContain("001_init");
+    expect(message).toContain("app_posts");
+    expect(message).toContain("neither exists before the run");
+  });
+
+  it("accepts an external target present in availableTables under run-wide stream validation", () => {
+    expect(
+      messageOf([module("001_init", [keying("fx__child", "users")])], {
+        availableTables: new Set(["users"]),
+      })
+    ).toBe("");
+  });
+
+  it("validates foreign keys placed on contributed tables", () => {
+    const content = {
+      name: "001_contrib",
+      schemaVersion: 1,
+      dialects: {
+        postgresql: { up: [], down: [] },
+        mysql: { up: [], down: [] },
+        sqlite: { up: [], down: [] },
+      },
+      snapshot: {
+        postgresql: { tables: [] },
+        mysql: { tables: [] },
+        sqlite: { tables: [] },
+      },
+      before: {
+        postgresql: { tables: [] },
+        mysql: { tables: [] },
+        sqlite: { tables: [] },
+      },
+      contributed: {
+        postgresql: { tables: [keying("users", "fx__future")] },
+        mysql: { tables: [keying("users", "fx__future")] },
+        sqlite: { tables: [keying("users", "fx__future")] },
+      },
+    };
+    const mod1: PluginMigration = {
+      ...content,
+      checksum: migrationChecksum(content),
+    };
+    const mod2 = module("002_future", [plain("fx__future")]);
+    const message = messageOf([mod1, mod2]);
+    expect(message).toContain("001_contrib");
+    expect(message).toContain("fx__future");
+    expect(message).toContain("002_future");
   });
 
   it("refuses a key the plugin contributes to another owner's table before its own later module creates the target", () => {

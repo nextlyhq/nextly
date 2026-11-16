@@ -84,6 +84,33 @@ export interface TransactionOptions {
 }
 
 /**
+ * Server-side bounds on the transactions opened inside
+ * `withTransactionBounds`, for work that may run on after the process stops
+ * running it: a serverless platform freezes a function once its response is
+ * sent, and a transaction background work had open then would otherwise stay
+ * open, idle, holding its locks, until the function runs again.
+ *
+ * PostgreSQL applies both to each outermost transaction it opens in the
+ * scope (`SET LOCAL lock_timeout` and `idle_in_transaction_session_timeout`).
+ * MySQL and SQLite run the transactions as before.
+ *
+ * @experimental
+ */
+export interface TransactionBounds {
+  /**
+   * How long a statement waits for a lock another transaction holds before
+   * it fails, in milliseconds.
+   */
+  lockWaitMs?: number;
+  /**
+   * How long the transaction may stay open with no statement running before
+   * the server ends its session, rolling it back and releasing its locks, in
+   * milliseconds. The transaction's next statement then fails.
+   */
+  idleMs?: number;
+}
+
+/**
  * Options for a session run outside a transaction (`withSession`).
  *
  * @public

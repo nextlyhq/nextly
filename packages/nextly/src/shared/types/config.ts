@@ -13,6 +13,7 @@
 import {
   DEFAULT_MIN_PASSWORD_LENGTH,
   MAX_MIN_PASSWORD_LENGTH,
+  type PasswordHasher,
 } from "../../auth/password/policy";
 import type { AuthStrategy } from "../../auth/pipeline/types";
 import type { CollectionConfig } from "../../collections/config/define-collection";
@@ -852,6 +853,30 @@ export interface AuthConfig {
    * ```
    */
   loginPlugins?: readonly string[];
+
+  /**
+   * Your own password hasher, for every account password: creating an
+   * account, setting, changing and resetting one, an invite, the first
+   * password, and every sign-in. Without one, core hashes with bcrypt.
+   *
+   * Set here, every way Nextly starts uses it: `getNextly`, the first request
+   * to the route handler, and the CLI. Accounts that hold a bcrypt password
+   * keep signing in, and the first sign-in stores the password again with
+   * this hasher.
+   *
+   * @example
+   * ```ts
+   * auth: {
+   *   passwordHasher: {
+   *     hash: password => argon2.hash(password),
+   *     verify: (password, stored) => argon2.verify(stored, password),
+   *     reach: "unbounded",
+   *     isHash: stored => stored.startsWith("$argon2"),
+   *   },
+   * }
+   * ```
+   */
+  passwordHasher?: PasswordHasher;
 }
 
 /**
@@ -872,6 +897,8 @@ export interface SanitizedAuthConfig {
    * sanitization always fills it, defaulting to `[]`.
    */
   loginPlugins?: readonly string[];
+  /** The app's password hasher (`auth.passwordHasher`), when it brings one. */
+  passwordHasher?: PasswordHasher;
 }
 
 /**
@@ -1495,6 +1522,11 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
       // the app's login grants from here, and plugin code that could add a
       // name to this list would grant itself on the next read.
       loginPlugins: Object.freeze([...(config.auth?.loginPlugins ?? [])]),
+      // Passed through as given: its contract is asserted where the services
+      // register it, the one place every start path meets.
+      ...(config.auth?.passwordHasher
+        ? { passwordHasher: config.auth.passwordHasher }
+        : {}),
     },
     storage: config.storage ?? [],
     plugins: config.plugins ?? [],

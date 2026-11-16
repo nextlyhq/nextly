@@ -58,6 +58,7 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
 }));
 
 import {
+  siteCopiesWriter,
   singleToWalk,
   siteHostReader,
   siteHostSource,
@@ -463,5 +464,261 @@ describe("who a host write is made as", () => {
     await systemHostWriter(siteWith({ fields: [] }))(write);
 
     expect(stored.identities).toEqual([{ overrideAccess: true }]);
+  });
+});
+
+describe("the copies writer", () => {
+  type Request = Parameters<
+    Parameters<typeof siteCopiesWriter>[0]["rewriteField"]
+  >[0];
+
+  /** Whether core's rewrite is inside its transaction, asking `set.from`. */
+  const transaction = { open: false };
+
+  /**
+   * A rewrite over stored copies, as core's: each copy from its own value,
+   * every answer taken before any is written, all or none. A copy it is
+   * handed whose value is rewritten by a structural copy, as a version
+   * snapshot hands it.
+   */
+  function rewriteOver(copies: Record<string, unknown>, fail?: unknown) {
+    const asked: { request: Request; opts: unknown }[] = [];
+    const rewriteField = async (request: Request, opts?: unknown) => {
+      asked.push({ request, opts });
+      if (fail !== undefined) throw fail;
+      if (!("from" in request.set)) throw new Error("expected set.from");
+      const { from } = request.set;
+      const next: Record<string, unknown> = {};
+      transaction.open = true;
+      try {
+        for (const [name, value] of Object.entries(copies)) {
+          next[name] = await from(structuredClone(value), {
+            form: name === "live" ? "live" : "draft",
+            locale: name === "live" || name === "draft" ? null : name,
+          });
+        }
+      } finally {
+        transaction.open = false;
+      }
+      Object.assign(copies, next);
+      return { version: "8", copies: [] };
+    };
+    return { asked, rewriteField };
+  }
+
+  const host = {
+    kind: "collection" as const,
+    slug: "pages",
+    id: "p1",
+    path: ["content"],
+  };
+
+  /** Every value the step was asked about while a transaction was open. */
+  const askedInside: unknown[] = [];
+
+  /** Converts a value holding `copy`; refuses one marked so. */
+  const step = (doc: unknown, form: { form: string }) => {
+    if (transaction.open) askedInside.push(doc);
+    const value = doc as { copy?: boolean; refuse?: boolean };
+    if (value.refuse === true) return { kind: "refuse" as const, reason: "no" };
+    return value.copy === true
+      ? {
+          kind: "rewritten" as const,
+          value: { copy: false, judgedAs: form.form },
+        }
+      : { kind: "unchanged" as const };
+  };
+
+  it("rewrites each copy from its own value, from the version read, as the person, then brings the indexes in line", async () => {
+    const copies = { live: { copy: true }, draft: { copy: true, own: 1 } };
+    const { asked, rewriteField } = rewriteOver(copies);
+    const after: unknown[] = [];
+
+    const result = await siteCopiesWriter({
+      rewriteField,
+      as: async () => ({ as: "user", user: { id: "u1" } }),
+      reason: "A component it used was deleted.",
+      afterRewrite: async document => {
+        after.push(document);
+      },
+    })({
+      host,
+      rev: "7",
+      liveForm: "published",
+      step,
+      seeds: [
+        { value: { copy: true }, form: "published" },
+        { value: { own: 1, copy: true }, form: "draft" },
+      ],
+    });
+
+    expect(result).toEqual({ kind: "written" });
+    expect(asked).toHaveLength(1);
+    expect(asked[0]?.request).toMatchObject({
+      collection: "pages",
+      id: "p1",
+      field: "content",
+      expectedVersion: "7",
+      reason: "A component it used was deleted.",
+    });
+    expect(asked[0]?.opts).toEqual({ as: "user", user: { id: "u1" } });
+    // The live copy is judged in the state it was read in, a draft as one.
+    expect(copies).toEqual({
+      live: { copy: false, judgedAs: "published" },
+      draft: { copy: false, judgedAs: "draft" },
+    });
+    expect(after).toEqual([{ slug: "pages", id: "p1" }]);
+    // The step was asked nothing inside the rewrite's transaction, where its
+    // reads would wait on the connection the transaction holds.
+    expect(askedInside).toEqual([]);
+  });
+
+  it("judges a copy it did not read outside the transaction, and makes the rewrite again", async () => {
+    // A draft in another language, which the walk did not read.
+    const copies = {
+      live: { copy: true },
+      draft: { copy: true },
+      es: { copy: true, es: 1 },
+    };
+    const { asked, rewriteField } = rewriteOver(copies);
+
+    const result = await siteCopiesWriter({
+      rewriteField,
+      as: async () => undefined,
+      reason: "r",
+    })({
+      host,
+      rev: "7",
+      liveForm: "published",
+      step,
+      seeds: [
+        { value: { copy: true }, form: "published" },
+        { value: { copy: true }, form: "draft" },
+      ],
+    });
+
+    expect(result).toEqual({ kind: "written" });
+    // The first rewrite stopped at the copy it had no answer for, wrote
+    // nothing, and the second, from the same version, wrote every copy.
+    expect(asked.map(call => call.request.expectedVersion)).toEqual(["7", "7"]);
+    expect(copies.es).toEqual({ copy: false, judgedAs: "draft" });
+    expect(askedInside).toEqual([]);
+  });
+
+  it("converges on a document with many drafts it did not read, with no edit between", async () => {
+    // Six languages' drafts, none of them read by the walk.
+    const copies: Record<string, unknown> = { live: { copy: true } };
+    for (const locale of ["es", "fr", "de", "it", "pt", "nl"]) {
+      copies[locale] = { copy: true, locale };
+    }
+    const { asked, rewriteField } = rewriteOver(copies);
+
+    const result = await siteCopiesWriter({
+      rewriteField,
+      as: async () => undefined,
+      reason: "r",
+    })({
+      host,
+      rev: "7",
+      liveForm: "published",
+      step,
+      seeds: [{ value: { copy: true }, form: "published" }],
+    });
+
+    expect(result).toEqual({ kind: "written" });
+    // One rewrite stopped for each draft it met unjudged, then one wrote all.
+    expect(asked).toHaveLength(7);
+    expect(Object.values(copies)).toEqual(
+      Object.values(copies).map(() => expect.objectContaining({ copy: false }))
+    );
+    expect(askedInside).toEqual([]);
+  });
+
+  it("makes the rewrite inside its scope, naming each copy as it is decided", async () => {
+    const copies = { live: { copy: true }, draft: { copy: true, own: 2 } };
+    const { rewriteField } = rewriteOver(copies);
+    const decided: unknown[] = [];
+    const scoped: string[] = [];
+    let inScope = false;
+
+    const result = await siteCopiesWriter({
+      rewriteField,
+      as: async () => undefined,
+      reason: "r",
+      scope: async (field, run) => {
+        scoped.push(field);
+        inScope = true;
+        try {
+          return await run(stored => {
+            // Told inside the scope, as core asks for the copy.
+            decided.push({ stored, inScope });
+          });
+        } finally {
+          inScope = false;
+        }
+      },
+    })({
+      host,
+      rev: "7",
+      liveForm: "published",
+      step,
+      seeds: [
+        { value: { copy: true }, form: "published" },
+        { value: { copy: true, own: 2 }, form: "draft" },
+      ],
+    });
+
+    expect(result).toEqual({ kind: "written" });
+    expect(scoped).toEqual(["content"]);
+    expect(decided).toEqual([
+      { stored: { copy: true }, inScope: true },
+      { stored: { copy: true, own: 2 }, inScope: true },
+    ]);
+  });
+
+  it("answers a copy the step refuses, and brings nothing in line", async () => {
+    const copies = { live: { copy: true }, draft: { refuse: true } };
+    const { rewriteField } = rewriteOver(copies);
+    const seeds = [
+      { value: { copy: true }, form: "published" as const },
+      { value: { refuse: true }, form: "draft" as const },
+    ];
+    const after: unknown[] = [];
+
+    const result = await siteCopiesWriter({
+      rewriteField,
+      as: async () => undefined,
+      reason: "r",
+      afterRewrite: async document => {
+        after.push(document);
+      },
+    })({ host, rev: "7", liveForm: "published", step, seeds });
+
+    expect(result).toEqual({ kind: "step-refused", detail: "no" });
+    expect(copies.live).toEqual({ copy: true });
+    expect(after).toEqual([]);
+  });
+
+  it("answers a person's refusal as forbidden, and a save since the read as changed", async () => {
+    const forbidden = await siteCopiesWriter({
+      ...rewriteOver({ live: null, draft: null }, NextlyError.forbidden()),
+      as: async () => undefined,
+      reason: "r",
+    })({ host, rev: "7", liveForm: "published", step, seeds: [] });
+    const stale = await siteCopiesWriter({
+      ...rewriteOver(
+        { live: null, draft: null },
+        new NextlyError({
+          code: "STALE_VERSION",
+          publicMessage: "Saved since.",
+          logContext: { reason: "test" },
+        })
+      ),
+      as: async () => undefined,
+      reason: "r",
+    })({ host, rev: "7", liveForm: "published", step, seeds: [] });
+
+    expect(forbidden).toEqual({ kind: "forbidden" });
+    expect(stale).toEqual({ kind: "changed" });
   });
 });

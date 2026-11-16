@@ -239,6 +239,7 @@ function directCanvasBindingsReads(
  */
 export function canvasBindingsRoute(): {
   method: "POST";
+  checksAccess: true;
   path: string;
   noStore: true;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
@@ -246,6 +247,7 @@ export function canvasBindingsRoute(): {
   return {
     method: "POST",
     path: CANVAS_BINDINGS_ROUTE_PATH,
+    checksAccess: true, // The handler judges each caller.
     noStore: true,
     handler: async (req, ctx) => {
       const body = await readBodyWith(

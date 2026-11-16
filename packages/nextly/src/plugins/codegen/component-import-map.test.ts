@@ -129,6 +129,58 @@ describe("buildComponentImportMap", () => {
     // as a full one does.
     expect(code).toContain("registerComponentMap(registered);");
   });
+
+  // An app without the admin has nothing to register into, and a static import of a package it
+  // never installed stops its type check (TS2307). The map still lists and checks every path, so
+  // the same file, regenerated once the admin is installed, registers them.
+  it("leaves the admin out of a map for an app that has not installed it", () => {
+    for (const plugins of [
+      [],
+      [plugin({ pages: [{ path: "a", component: "@acme/x/admin#A" }] })],
+    ]) {
+      const code = buildComponentImportMap(
+        plugins,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        false
+      );
+      expect(code).not.toContain('"@nextlyhq/admin"');
+      expect(code).not.toContain("registerComponentMap");
+      // And says why, and what registers it, where a developer reads the file.
+      expect(code).toContain("run `nextly generate:types` again");
+      expect(code).toContain("export const componentMapAgreesWithList");
+      expect(code).toContain("export const registeredComponentPaths = listed;");
+    }
+    const listed = buildComponentImportMap(
+      [plugin({ pages: [{ path: "a", component: "@acme/x/admin#A" }] })],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false
+    );
+    expect(listed).toContain('"@acme/x/admin#A": _p0.A,');
+    // Installed, the same map imports and registers, empty or not.
+    for (const plugins of [
+      [],
+      [plugin({ pages: [{ path: "a", component: "@acme/x/admin#A" }] })],
+    ]) {
+      const code = buildComponentImportMap(
+        plugins,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true
+      );
+      expect(code).toContain(
+        'import { registerComponentMap } from "@nextlyhq/admin";'
+      );
+      expect(code).toContain("registerComponentMap(registered);");
+    }
+  });
 });
 
 describe("the map's check against the site's config", () => {

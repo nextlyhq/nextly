@@ -694,6 +694,7 @@ export function bulkRoutes(setup: BulkSetup): PluginRoute[] {
     {
       method: "GET",
       path: BULK_TYPES_PATH,
+      checksAccess: true, // The handler judges each caller.
       noStore: true,
       handler: async (req, ctx) => {
         const locale = await defaultLanguageOnly(ctx, queryOf(req).locale);
@@ -706,6 +707,7 @@ export function bulkRoutes(setup: BulkSetup): PluginRoute[] {
     {
       method: "GET",
       path: BULK_ROWS_PATH,
+      checksAccess: true, // The handler judges each caller.
       noStore: true,
       handler: async (req, ctx) => {
         const query = queryOf(req);
@@ -743,6 +745,7 @@ export function bulkRoutes(setup: BulkSetup): PluginRoute[] {
     {
       method: "POST",
       path: BULK_SAVE_PATH,
+      checksAccess: true, // The handler judges each caller.
       handler: async (req, ctx) => {
         const body = await saveBodyOf(req);
         const saved = await save(ctx, setup, body);

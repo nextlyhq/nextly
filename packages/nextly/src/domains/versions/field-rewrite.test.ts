@@ -11,6 +11,8 @@ import {
   copyLabel,
   draftSlotsHolding,
   parseFieldRewrite,
+  rewriteCallerOf,
+  rewritesSingle,
   rewrittenValue,
   type DraftSlot,
   type RewritableFieldShape,
@@ -19,6 +21,15 @@ import {
 const REQUEST = {
   collection: "pages",
   id: "p1",
+  field: "layout",
+  expectedVersion: "7",
+  set: { value: null },
+  reason: "Layout 'Wide' was deleted",
+};
+
+/** The same rewrite, of a Single, which names no id. */
+const SINGLE_REQUEST = {
+  single: "site",
   field: "layout",
   expectedVersion: "7",
   set: { value: null },
@@ -66,6 +77,22 @@ describe("parseFieldRewrite", () => {
     );
   });
 
+  it("takes a Single by its slug, through the same shape", () => {
+    const request = parseFieldRewrite(SINGLE_REQUEST);
+    expect(request).toMatchObject({ single: "site", field: "layout" });
+    expect(rewritesSingle(request)).toBe(true);
+    expect(rewritesSingle(parseFieldRewrite(REQUEST))).toBe(false);
+  });
+
+  it.each([
+    ["a Single named beside an entry", { ...REQUEST, single: "site" }],
+    ["a Single given an id", { ...SINGLE_REQUEST, id: "p1" }],
+    ["a blank Single", { ...SINGLE_REQUEST, single: " " }],
+    ["a Single with no reason", { ...SINGLE_REQUEST, reason: " " }],
+  ])("refuses %s with INVALID_INPUT", (_name, request) => {
+    expect(codeOf(() => parseFieldRewrite(request))).toBe("INVALID_INPUT");
+  });
+
   it("refuses a field inside a group, which rewrites only part of a value", () => {
     expect(
       codeOf(() => parseFieldRewrite({ ...REQUEST, field: "hero.title" }))
@@ -87,9 +114,22 @@ describe("assertRewritableField", () => {
       type: "relationship",
       options: { relationType: "manyToMany" },
     },
+    { name: "login", type: "group" },
+    {
+      name: "box",
+      type: "group",
+      fields: [
+        {
+          name: "rows",
+          type: "repeater",
+          fields: [{ name: "hero", type: "component" }],
+        },
+      ],
+    },
   ];
   const separately = (f: RewritableFieldShape) =>
     f.type === "component" || f.options?.relationType === "manyToMany";
+  const holdsPassword = (f: RewritableFieldShape) => f.name === "login";
 
   it("takes a field stored on the document's own row", () => {
     expect(assertRewritableField(fields, "layout", separately).name).toBe(
@@ -112,11 +152,13 @@ describe("assertRewritableField", () => {
     ["a password", "secret"],
     ["a field group", "seo"],
     ["a many-to-many relationship", "tags"],
+    ["a group holding a password", "login"],
+    ["a group holding a field group, at any depth", "box"],
   ])("refuses %s, naming it", (_name, field) => {
     let message = "";
     const code = codeOf(() => {
       try {
-        assertRewritableField(fields, field, separately);
+        assertRewritableField(fields, field, separately, holdsPassword);
       } catch (error) {
         message = error instanceof NextlyError ? error.publicMessage : "";
         throw error;
@@ -196,5 +238,29 @@ describe("copyLabel", () => {
     expect(copyLabel({ form: "live", locale: null })).toBe("live");
     expect(copyLabel({ form: "draft", locale: null })).toBe("draft");
     expect(copyLabel({ form: "draft", locale: "es" })).toBe("draft:es");
+  });
+});
+
+describe("rewriteCallerOf", () => {
+  it("names who the rewrite is made as, and the plugin making it", () => {
+    expect(
+      rewriteCallerOf(
+        { user: { id: "u1" }, overrideAccess: false, actor: undefined },
+        "seo"
+      )
+    ).toEqual({
+      user: { id: "u1" },
+      overrideAccess: false,
+      authenticatedScope: undefined,
+      plugin: "seo",
+    });
+  });
+
+  it("refuses a language named in the call's options, not the request", () => {
+    expect(
+      codeOf(() =>
+        rewriteCallerOf({ locale: "de", overrideAccess: true }, undefined)
+      )
+    ).toBe("INVALID_INPUT");
   });
 });

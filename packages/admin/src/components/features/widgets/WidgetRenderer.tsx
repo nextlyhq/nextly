@@ -92,6 +92,19 @@ function skeletonFieldsFor(definition: DashboardWidget): number | undefined {
   return display === "list" ? 0 : undefined;
 }
 
+/**
+ * Whether a card loads as a checklist of steps: core's setup card, whose body is one. Its
+ * declaration says only that it loads as a list (the shapes a declaration may state), and five
+ * list rows are taller than the four steps it usually draws, so the frame draws its own loading
+ * shape for it, as tall as its checklist.
+ */
+function loadsAsChecklist(definition: DashboardWidget): boolean {
+  return definition.id === SETUP_WIDGET_ID;
+}
+
+/** Core's setup card's id, as the dashboard's other core cards are named here. */
+const SETUP_WIDGET_ID = "core/setup";
+
 function skeletonFor(archetype: string): SkeletonShape {
   switch (archetype) {
     case "metric":
@@ -309,8 +322,12 @@ function sharedCardProps(
     ...(placement?.size === undefined ? {} : { h: placement.size.h }),
     // The display the widget says it looks like, else its archetype's: a
     // declared card's `skeleton`, published as its `sketch`.
-    skeleton: skeletonFor(skeletonDisplayOf(definition)),
-    skeletonItems: skeletonItemsFor(definition, placement?.settings),
+    skeleton: loadsAsChecklist(definition)
+      ? "checklist"
+      : skeletonFor(skeletonDisplayOf(definition)),
+    skeletonItems: loadsAsChecklist(definition)
+      ? undefined
+      : skeletonItemsFor(definition, placement?.settings),
     // The density the card's list rows, and the skeleton holding their place, are drawn at.
     listDensity: listDensityOf(placement?.settings),
     skeletonFields: skeletonFieldsFor(definition),

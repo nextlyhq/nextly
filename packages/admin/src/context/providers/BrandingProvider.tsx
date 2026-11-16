@@ -340,6 +340,25 @@ function placesOfBothHalves(
   };
 }
 
+/**
+ * Whether the workspace half is still to come, and whether it is unavailable.
+ * Signed out it is never asked for, and reports unavailable, as the refusal
+ * it is no longer sent for would have made it: a reader concludes nothing
+ * from its absence.
+ */
+function workspaceStatus(state: {
+  sessionPending: boolean;
+  signedIn: boolean;
+  queryPending: boolean;
+  refused: boolean;
+}): { pending: boolean; unavailable: boolean } {
+  const signedOut = !state.sessionPending && !state.signedIn;
+  return {
+    pending: !signedOut && state.queryPending,
+    unavailable: signedOut || state.refused,
+  };
+}
+
 export function BrandingProvider({
   children,
 }: BrandingProviderProps): React.JSX.Element {
@@ -379,27 +398,37 @@ export function BrandingProvider({
    * with nothing left to trigger it. A key cannot lose that race, because the
    * new key has no result yet whenever it appears.
    *
-   * `enabled` waits for the session query to SETTLE rather than to succeed. It
-   * stops the anonymous 401 being fired speculatively on every load, and a
-   * session query that itself failed still releases this one — reporting
-   * unavailable, which is true, instead of holding every reader on a skeleton
-   * for a fact that will never arrive.
+   * `enabled` waits for the session query to SETTLE, and then asks only of a
+   * signed-in session. A visitor's request could only be refused, and a
+   * refused query is asked again by every reader that mounts after the
+   * refusal arrived (`retryOnMount`), which the sign-in screen's own
+   * re-renders do. Signed out, or with a session query that itself failed,
+   * the half reports unavailable, which is true, instead of holding every
+   * reader on a skeleton for a fact that will never arrive.
    */
   const { data: session, isPending: sessionPending } = useAuthSession();
   const signedIn = session?.isAuthenticated === true;
 
   const {
     data: workspaceData,
-    isPending: workspacePending,
-    isLoadingError: workspaceUnavailable,
+    isPending: workspaceQueryPending,
+    isLoadingError: workspaceRefused,
     refetch: refetchWorkspace,
   } = useQuery<AdminBranding>({
     queryKey: [...ADMIN_WORKSPACE_KEY, signedIn],
     queryFn: () => protectedApi.get<AdminBranding>("/admin-meta/workspace"),
     staleTime: 5 * 60 * 1000,
     retry: false,
-    enabled: !sessionPending,
+    // A visitor's screen draws the public half alone; see above.
+    enabled: !sessionPending && signedIn,
   });
+  const { pending: workspacePending, unavailable: workspaceUnavailable } =
+    workspaceStatus({
+      sessionPending,
+      signedIn,
+      queryPending: workspaceQueryPending,
+      refused: workspaceRefused,
+    });
 
   // What `nextly.config` sets, as the page's first HTML carries it: read once,
   // before any request answers, so a configured logo is drawn from the first

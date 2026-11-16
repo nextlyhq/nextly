@@ -284,9 +284,59 @@ function announceRedirectsChanged(
   }
 }
 
+/** One lock row a question takes: its key, and the update that takes it. */
+interface LockStep {
+  key: string;
+  take: (db: PluginTransaction) => Promise<void>;
+}
+
+/**
+ * The lock rows `batch` takes, in the order every caller takes them: each
+ * page's own first, so a write holding a page's lock never waits on one
+ * holding a path's for it, then every path at or above each address. Both in
+ * plain code-unit order, the same in every process whatever its locale.
+ */
+function lockOrder(
+  ctx: PluginContext,
+  batch: readonly HeldAddressUpdate[]
+): LockStep[] {
+  const steps: LockStep[] = [];
+  const holders = new Map(
+    batch.map(update => [holderLockKey(update.holder), update.holder])
+  );
+  for (const key of [...holders.keys()].sort()) {
+    const holder = holders.get(key);
+    if (holder === undefined) continue;
+    steps.push({ key, take: db => holdHolderLock(ctx, db, holder) });
+  }
+  const paths = new Map<string, { locale: string; path: string }>();
+  for (const update of batch) {
+    for (const held of update.holds) {
+      for (const path of [...pathsAbove(held.path), held.path]) {
+        paths.set(`${held.locale}|${path}`, { locale: held.locale, path });
+      }
+    }
+  }
+  for (const at of [...paths.keys()].sort().map(key => paths.get(key))) {
+    if (at === undefined) continue;
+    const key = claimKey("lock", at.locale, at.path);
+    steps.push({ key, take: db => holdLock(ctx, db, key, at) });
+  }
+  return steps;
+}
+
 /** The participant, bound to the SEO plugin's context. */
 export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
   const redirects = redirectsSlug(ctx);
+  /**
+   * The lock rows each question core asks has taken, by its `saveKey`: a
+   * save asks `holderOf` once for each address and then `record`, every call
+   * about the same batch, and the rows a call took stay held until the
+   * transaction ends (core opens no savepoint within one question), so a
+   * later call of the question takes each one no more. Forgotten with the
+   * key.
+   */
+  const lockedFor = new WeakMap<object, Set<string>>();
   /** Whether `holder` is a redirect, holding its From address. */
   const isRedirect = (holder: AddressHolder) => holder.collection === redirects;
 
@@ -374,36 +424,24 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
 
   /**
    * Take the lock rows of every address in `batch` and every path above each,
-   * in one sorted order, before any of them is read.
+   * in one sorted order, before any of them is read: each once in the
+   * question `saveKey` names. A later call of the question takes only rows
+   * an earlier one did not, which never happens for one save, whose batch
+   * stays the same, nor for one move, whose batch only shrinks; so the
+   * order every caller takes them in stands.
    */
   async function holdLocks(
     db: PluginTransaction,
-    batch: readonly HeldAddressUpdate[]
+    batch: readonly HeldAddressUpdate[],
+    saveKey: object
   ): Promise<void> {
     if (ctx.dialect === "sqlite") return;
-    // Each page's own lock first, every caller in the same order, so a write
-    // holding a page's lock never waits on one holding a path's for it.
-    const holders = new Map(
-      batch.map(update => [holderLockKey(update.holder), update.holder])
-    );
-    for (const key of [...holders.keys()].sort()) {
-      const holder = holders.get(key);
-      if (holder !== undefined) await holdHolderLock(ctx, db, holder);
-    }
-    const keys = new Map<string, { locale: string; path: string }>();
-    for (const update of batch) {
-      for (const held of update.holds) {
-        for (const path of [...pathsAbove(held.path), held.path]) {
-          keys.set(`${held.locale}|${path}`, { locale: held.locale, path });
-        }
-      }
-    }
-    // Plain code-unit order, the same in every process, whatever its locale.
-    for (const key of [...keys.keys()].sort()) {
-      const at = keys.get(key);
-      if (at !== undefined) {
-        await holdLock(ctx, db, claimKey("lock", at.locale, at.path), at);
-      }
+    const taken = lockedFor.get(saveKey) ?? new Set<string>();
+    lockedFor.set(saveKey, taken);
+    for (const { key, take } of lockOrder(ctx, batch)) {
+      if (taken.has(key)) continue;
+      await take(db);
+      taken.add(key);
     }
   }
 
@@ -518,9 +556,9 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
   }
 
   return {
-    async holderOf(asked, asker, batch, { db }) {
+    async holderOf(asked, asker, batch, { db, saveKey }) {
       await recordReady(ctx);
-      await holdLocks(db, batch);
+      await holdLocks(db, batch, saveKey);
       // The batch's holders are judged by what they will hold, not their rows.
       const moving = batch.map(update => update.holder);
       const stored = (await rowsMeeting(db, asked)).flatMap(row =>
@@ -541,9 +579,9 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
       return found?.holder ?? null;
     },
 
-    async record(batch, { db, transaction }) {
+    async record(batch, { db, transaction, saveKey }) {
       await recordReady(ctx);
-      await holdLocks(db, batch);
+      await holdLocks(db, batch, saveKey);
       // Every release first, so an address passing between holders in one
       // batch is free by the time it is claimed.
       const letGo = new Map<

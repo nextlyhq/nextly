@@ -101,3 +101,42 @@ describe("buildServiceConfig — retention carry-through", () => {
     expect(result).not.toHaveProperty("runMigrationsOnBoot");
   });
 });
+
+describe("buildServiceConfig — the app's password hasher", () => {
+  const hasher = {
+    hash: (password: string) => Promise.resolve(`h:${password}`),
+    verify: (password: string, stored: string) =>
+      Promise.resolve(stored === `h:${password}`),
+    reach: "unbounded" as const,
+  };
+  const configWithHasher = {
+    auth: {
+      revealRegistrationConflict: false,
+      allowRegistration: false,
+      minPasswordLength: 8,
+      passwordHasher: hasher,
+    },
+  } as unknown as SanitizedNextlyConfig;
+
+  it("takes the hasher named in the config, so every start uses it", () => {
+    expect(
+      buildServiceConfig({ config: configWithHasher }).passwordHasher
+    ).toBe(hasher);
+  });
+
+  it("accepts the same hasher passed to getNextly too", () => {
+    expect(
+      buildServiceConfig({ config: configWithHasher, passwordHasher: hasher })
+        .passwordHasher
+    ).toBe(hasher);
+  });
+
+  it("refuses two different hashers, which would leave the scheme to whichever start came first", () => {
+    expect(() =>
+      buildServiceConfig({
+        config: configWithHasher,
+        passwordHasher: { ...hasher },
+      })
+    ).toThrow();
+  });
+});

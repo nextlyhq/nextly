@@ -183,6 +183,9 @@ export function pluginsStillDeclaring<T extends { name: string }>(
  * plugin recorded uninstalled keeps its marks. A plugin's install passes
  * `pluginsAsGiven`: it declares the plugin it is installing, whose record it
  * writes in the same transaction, and a reinstall is what clears the marks.
+ * Its configuration then names that plugin alone, so the Public role is given
+ * the plugin's grants and none is taken back: every other enabled plugin's
+ * grant would read as one no plugin declares any longer.
  */
 export async function seedAccessOnCommandConnection(
   pooled: DrizzleAdapter,
@@ -234,6 +237,7 @@ export async function seedAccessOnCommandConnection(
           adapter,
           config: declaring,
           logger: seedLogger,
+          takeBackUndeclared: options.pluginsAsGiven !== true,
         })
       );
       if (leftTo !== undefined) {

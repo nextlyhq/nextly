@@ -49,6 +49,10 @@ vi.mock("../../next-api", () => ({
   }),
   requireNextApi: (module: Record<string, unknown>, _: string, name: string) =>
     module[name],
+  // Next.js's control-flow rethrow, which the head asks for an error from a
+  // start that could not be made, as these pages' starts are: nothing here
+  // throws one of Next.js's signals.
+  requireNextNavigation: () => ({ unstable_rethrow: () => undefined }),
 }));
 
 /** A reader that starts Nextly on its first read, recording each read. */

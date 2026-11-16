@@ -37,6 +37,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
+import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import { getColumnDescriptor } from "../services/field-column-descriptor";
@@ -883,6 +884,59 @@ describeEachDialect(
           index => index.unique && index.columns.join() === "person"
         )
       ).toHaveLength(1);
+    }, 120_000);
+
+    // Each language of a translated Single is its own row, unique within its language: two
+    // languages pointing at one person are not repeats, so the edit into a one-to-one saves.
+    it("makes a translated Single's many-to-one a one-to-one while two of its languages point at one person", async () => {
+      const t = await boot(dialect, "manyToOne", { localized: true });
+      const ada = await aPerson(t, "Ada");
+      const title = { name: "title", type: "text" };
+      vi.stubEnv("NODE_ENV", "development");
+      try {
+        await dispatchSingles(
+          "createSingle",
+          {},
+          {
+            slug: "o2o_page",
+            label: "Page",
+            localized: true,
+            fields: [title, storedPerson("manyToOne", true)],
+          }
+        );
+        const singles: SingleEntryService =
+          t.getService("singleEntryService");
+        for (const locale of ["en", "de"]) {
+          const written = await singles.update(
+            "o2o_page",
+            { person: ada, _overwrite: true },
+            { locale, overrideAccess: true }
+          );
+          expect(written.success, JSON.stringify(written)).toBe(true);
+        }
+
+        await dispatchSingles(
+          "updateSingleSchema",
+          { slug: "o2o_page" },
+          { fields: [title, storedPerson("oneToOne", true)] }
+        );
+      } finally {
+        vi.unstubAllEnvs();
+      }
+
+      const [stored] = await t.adapter.executeQuery<{ fields: unknown }>(
+        t.adapter.dialect === "mysql"
+          ? "SELECT `fields` FROM `dynamic_singles` WHERE `slug` = 'o2o_page'"
+          : `SELECT "fields" FROM "dynamic_singles" WHERE "slug" = 'o2o_page'`
+      );
+      const fields = (
+        typeof stored?.fields === "string"
+          ? JSON.parse(stored.fields)
+          : stored?.fields
+      ) as { name: string; options?: { relationType?: string } }[];
+      expect(
+        fields.find(field => field.name === "person")?.options?.relationType
+      ).toBe("oneToOne");
     }, 120_000);
 
     it("opens a Single's one-to-one the earlier Builder stored with its target and Unique", async () => {

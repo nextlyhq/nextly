@@ -72,6 +72,7 @@ import { visitorReadsSystemResource } from "../auth/resource-readable";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import { getService } from "../di";
 import { SYSTEM_READ_POLICY } from "../domains/auth/system-write-policy";
+import { afterDeleteWindow } from "../domains/media/delete-window-timers";
 import { MEDIA_DELETE_LIMIT } from "../domains/media/media-delete-limit";
 import type { PendingMediaDeletes } from "../domains/media/pending-delete";
 import { NextlyError } from "../errors/nextly-error";
@@ -863,37 +864,45 @@ async function pendingDeletes(): Promise<PendingMediaDeletes> {
  * at their own deadline by a timer set again. A moment after the deadline,
  * so the marks are due when it runs. The fast path, on a server still
  * running then: the job each delete queues finishes it durably on one that
- * is not, and the library's reads sweep what is left. Unref'd: a waiting
- * delete never keeps a process alive.
+ * is not, and the library's reads sweep what is left. The timer stops with
+ * the services (`afterDeleteWindow`), so it never runs through a container
+ * released or since filled by another registration.
  */
 function finishDeletesAt(ids: readonly string[], deadline: number): void {
   const delay = Math.max(0, deadline - Date.now()) + 500;
-  setTimeout(() => {
-    void (async () => {
-      await sweepPendingDeletes(ids);
-      try {
-        const pending = await pendingDeletes();
-        const next = await pending.nextDeadline(ids);
-        if (next) finishDeletesAt(ids, next.getTime());
-      } catch (error) {
-        getNextlyLogger().warn({
-          kind: "media-delete-sweep-failed",
-          message:
-            "Deleted media items could not be scheduled; the next read finishes them.",
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    })();
-  }, delay).unref?.();
+  afterDeleteWindow(delay, async released => {
+    await sweepPendingDeletes(ids, released);
+    // Released while it swept: the next timer would be another
+    // registration's, and the job queued with the marks finishes them.
+    if (released()) return;
+    try {
+      const pending = await pendingDeletes();
+      const next = await pending.nextDeadline(ids);
+      if (next && !released()) finishDeletesAt(ids, next.getTime());
+    } catch (error) {
+      if (released()) return;
+      getNextlyLogger().warn({
+        kind: "media-delete-sweep-failed",
+        message:
+          "Deleted media items could not be scheduled; the next read finishes them.",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
 }
 
 /**
  * Finish the deletes whose window has ended: every one of `ids` when a
  * delete's timer names the items it marked, however many, else one bounded
  * sweep of any that are due. Never fails its caller: what is left is tried
- * again by the next library read.
+ * again by the next library read. A timer's sweep that fails once the
+ * services were `released` under it says nothing: the release is what failed
+ * it, after the services, and whatever logs them, have gone.
  */
-async function sweepPendingDeletes(ids?: readonly string[]): Promise<void> {
+async function sweepPendingDeletes(
+  ids?: readonly string[],
+  released: () => boolean = () => false
+): Promise<void> {
   try {
     const pending = await pendingDeletes();
     if (ids) {
@@ -902,6 +911,7 @@ async function sweepPendingDeletes(ids?: readonly string[]): Promise<void> {
       await pending.finalizeDue();
     }
   } catch (error) {
+    if (released()) return;
     getNextlyLogger().warn({
       kind: "media-delete-sweep-failed",
       message:
