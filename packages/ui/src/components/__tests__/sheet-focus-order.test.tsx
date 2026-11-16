@@ -10,7 +10,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "../sheet";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  document.getElementById("after-the-sheet")?.remove();
+});
 
 function renderBesidePage(modal: boolean) {
   render(
@@ -21,26 +24,36 @@ function renderBesidePage(modal: boolean) {
         <SheetContent side="right">
           <SheetTitle>History</SheetTitle>
           <SheetDescription>Versions</SheetDescription>
+          {/* Not drawn at this width: no stop for the keyboard, nor an edge. */}
+          <button type="button" style={{ display: "none" }}>
+            Only on a phone
+          </button>
           <button type="button">First in the sheet</button>
           <button type="button">Last in the sheet</button>
         </SheetContent>
       </Sheet>
     </>
   );
+  // Something drawn after the sheet in the document, as another popup's portal is.
+  const after = document.createElement("button");
+  after.id = "after-the-sheet";
+  after.type = "button";
+  after.textContent = "After the sheet";
+  document.body.appendChild(after);
 }
 
 const button = (name: string) => screen.getByRole("button", { name });
 
 describe("a sheet that is not modal", () => {
-  it("lets Tab leave from its last control", () => {
+  it("lets Tab leave from its last control, to what follows the sheet", () => {
     renderBesidePage(false);
     const last = button("Last in the sheet");
     last.focus();
     fireEvent.keyDown(last, { key: "Tab" });
-    expect(document.activeElement).toBe(button("In the page"));
+    expect(document.activeElement).toBe(button("After the sheet"));
   });
 
-  it("lets Shift+Tab go back into the page from its first control", () => {
+  it("lets Shift+Tab go back from its first control, to what comes before the sheet", () => {
     renderBesidePage(false);
     const first = button("First in the sheet");
     first.focus();

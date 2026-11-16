@@ -304,6 +304,22 @@ function SheetDragHandle({ onDismiss }: { onDismiss: () => void }) {
 const TABBABLE =
   'a[href], area[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex], [contenteditable="true"]';
 
+/**
+ * Whether an element is drawn: neither it nor a container it sits in is `display: none` or
+ * `visibility: hidden`. One that is not is no stop for the keyboard, and no edge of a sheet.
+ */
+function isRendered(element: HTMLElement): boolean {
+  for (
+    let node: HTMLElement | null = element;
+    node !== null;
+    node = node.parentElement
+  ) {
+    const style = getComputedStyle(node);
+    if (style.display === "none" || style.visibility === "hidden") return false;
+  }
+  return true;
+}
+
 function tabbablesIn(root: ParentNode): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>(TABBABLE)).filter(
     element =>
@@ -311,7 +327,8 @@ function tabbablesIn(root: ParentNode): HTMLElement[] {
       !element.hidden &&
       // Radix's focus guards sit in the tab order at the page's edges, and are no control.
       !element.hasAttribute("data-radix-focus-guard") &&
-      element.closest('[aria-hidden="true"], [inert]') === null
+      element.closest('[aria-hidden="true"], [inert]') === null &&
+      isRendered(element)
   );
 }
 
@@ -321,8 +338,8 @@ function tabbablesIn(root: ParentNode): HTMLElement[] {
  * Radix's dialog keeps its focus scope looping even when it is not modal, so Tab from the
  * sheet's last control would go round to its first, and Shift+Tab from its first to its last:
  * a keyboard reader could not get from the sheet back to the page beside it. At those two edges
- * this sends focus where the browser would: forward to the page's first control (the sheet is
- * drawn after the page), back to the page's last. Anywhere else, Tab is left to the browser.
+ * this sends focus where the browser would: forward to the nearest control after the sheet in
+ * the document, back to the nearest before it. Anywhere else, Tab is left to the browser.
  * Runs before the focus scope's own handler on the same element, which then finds focus already
  * outside and does nothing.
  */
@@ -338,7 +355,19 @@ function leaveNonModalAtEdge(event: React.KeyboardEvent<HTMLElement>): void {
   const page = tabbablesIn(sheet.ownerDocument.body).filter(
     element => !sheet.contains(element)
   );
-  const next = event.shiftKey ? page[page.length - 1] : page[0];
+  // The nearest stop on that side of the sheet in the document, as the browser would take:
+  // other popups' portals can follow the sheet, so "the page's last" is not "before the sheet".
+  // Round to the far end when nothing lies that way, as Tab goes round the page.
+  const before = page.filter(
+    element =>
+      (sheet.compareDocumentPosition(element) &
+        Node.DOCUMENT_POSITION_PRECEDING) !==
+      0
+  );
+  const after = page.filter(element => !before.includes(element));
+  const next = event.shiftKey
+    ? (before[before.length - 1] ?? page[page.length - 1])
+    : (after[0] ?? page[0]);
   if (next === undefined) return;
   event.preventDefault();
   next.focus();
