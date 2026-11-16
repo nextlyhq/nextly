@@ -19,7 +19,9 @@ import { resolveUserRoles } from "../../services/lib/permissions";
 import { configuredLocales } from "../i18n/configured-locales";
 
 import { livePartsOf, partStage, pendingPartsOn } from "./implicit-stage";
+import { lastMovesOn, type LastMove } from "./last-moves";
 import { documentTableOn, partVersionOn } from "./part-versions";
+import { partsWaitingFor, type PartWaitingFor } from "./part-waits-for";
 import {
   registeredWorkflows,
   workflowAttachedTo,
@@ -82,6 +84,13 @@ export interface PartReview {
   version: string | null;
   /** The steps that leave from its stage. Whether the caller may take one is asked when taken. */
   steps: AvailableStep[];
+  /**
+   * Who it waits for: its assignee; else its stage's default reviewer, where they may take the
+   * stage's primary step; else the roles that may. Null in a stage with no step out of it.
+   */
+  waitingFor: PartWaitingFor | null;
+  /** Its latest workflow event other than an assignment; null for a part that never moved. */
+  lastMove: LastMove | null;
 }
 
 /** A document's review state, part by part. @experimental */
@@ -128,7 +137,9 @@ function stepsFrom(workflow: Workflow, stage: string | null): AvailableStep[] {
 /**
  * A document's review state, each part where it stands: its review state's stage, or for a part
  * with none, where its content puts it (`partStage`). Read in one transaction, so every part is
- * read as of one moment. The caller has already been allowed to read the document.
+ * read as of one moment, its last move included. Who each part waits for is asked after, on the
+ * pool, as every question of who holds a permission is. The caller has already been allowed to
+ * read the document.
  *
  * @experimental
  */
@@ -144,10 +155,11 @@ export async function reviewStateOf(
     : [null];
   const live = await livePartsOf(adapter, document, parts);
   const dialect = adapter.getCapabilities().dialect;
-  return adapter.transaction(async tx => {
+  const read = await adapter.transaction(async tx => {
     const states = await readDocumentReviewStates(tx, document);
     const pending = await pendingPartsOn(tx, document);
-    const read: PartReview[] = [];
+    const moves = await lastMovesOn(tx, dialect, document);
+    const read: Omit<PartReview, "waitingFor">[] = [];
     for (const part of parts) {
       const state = states.find(candidate => candidate.part === part) ?? null;
       const stage = partStage(workflow, state, {
@@ -179,13 +191,24 @@ export async function reviewStateOf(
           (await partVersionOn(tx, dialect, table, document.entryId, part)) ??
           null,
         steps: stepsFrom(workflow, stage),
+        lastMove: moves.get(part) ?? null,
       });
     }
-    return {
-      workflow: { slug: workflow.slug, label: workflow.label },
-      parts: read,
-    };
+    return read;
   });
+  const waiting = await partsWaitingFor(
+    adapter,
+    registered,
+    document.scopeSlug,
+    read
+  );
+  return {
+    workflow: { slug: workflow.slug, label: workflow.label },
+    parts: read.map((part, index) => ({
+      ...part,
+      waitingFor: waiting[index] ?? null,
+    })),
+  };
 }
 
 /** A part waiting for a caller, as the list names it. @experimental */

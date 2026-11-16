@@ -49,12 +49,16 @@ const drafts = { status: true, versions: { drafts: true } } as const;
  * Boots the install every case uses, with `plugins` beside it: a case that reads what the install
  * emails boots it with a provider's plugin. `tablePrefix` stores each collection's and Single's
  * table under a name of the file's own, its slug unchanged, so files sharing these slugs never
- * share a table.
+ * share a table. `collections` are booted beside the install's own, for a case that needs a
+ * workflow none of them has.
  */
 export function bootSteps(
   dialect: TestDialect,
   plugins?: CreateTestNextlyOptions["plugins"],
-  options: { tablePrefix?: string } = {}
+  options: {
+    tablePrefix?: string;
+    collections?: NonNullable<CreateTestNextlyOptions["collections"]>;
+  } = {}
 ): Promise<TestNextly> {
   const table = (slug: string) =>
     options.tablePrefix === undefined
@@ -161,6 +165,7 @@ export function bootSteps(
         workflow: reviewWorkflow(),
         fields: [text({ name: "title" })],
       }),
+      ...(options.collections ?? []),
     ],
     singles: [
       defineSingle({
