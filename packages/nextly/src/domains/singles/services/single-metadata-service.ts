@@ -1164,6 +1164,7 @@ export class SingleMetadataService {
       { tableHasRows },
       { DynamicCollectionSchemaService },
       { toSnakeCase },
+      { offeredCompanionRename },
     ] = await Promise.all([
       import("../../schema/builder-save/push-carries-values"),
       import("../../schema/pipeline/diff/introspect-live"),
@@ -1172,12 +1173,26 @@ export class SingleMetadataService {
         "../../dynamic-collections/services/dynamic-collection-schema-service"
       ),
       import("../../schema/field-rules"),
+      import("../../i18n/migration/companion-rename"),
     ]);
     const schemaService = new DynamicCollectionSchemaService(
       undefined,
       this.dialect
     );
     const dialect = adapter.getCapabilities().dialect;
+    const tableName = input.existing.tableName;
+    // Only a translated field's rename moves a value, on the companion: the rename the Builder
+    // dialog offers there (`offeredCompanionRename`). A shared field's rename is the file's.
+    const companion = await offeredCompanionRename({
+      tableName,
+      oldFields: before,
+      newFields: after,
+      wasLocalized: input.wasLocalized,
+      isLocalized: input.isLocalized,
+      dialect,
+      // A Single's table is built by the collection's generator.
+      builtBy: "collection",
+    });
     return pushCarriesValues({
       oldFields: before,
       newFields: after,
@@ -1185,11 +1200,11 @@ export class SingleMetadataService {
       isStored: input.isLocalized,
       wasStatus: input.layout?.wasPublishedPerLanguage ?? input.wasStatus,
       status: input.layout?.isPublishedPerLanguage ?? input.hasStatus,
-      renamed,
+      renamed: companion?.rename,
       liveTable: async () =>
         (
           await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [
-            input.existing.tableName,
+            tableName,
           ])
         ).tables[0],
       // A Single's one row is filled in, in the service's own statements, for a field new to its
@@ -1199,8 +1214,10 @@ export class SingleMetadataService {
         fills: field =>
           field.required === true ||
           schemaService.singleRowFillValue(field) !== undefined,
-        holdsRow: () =>
-          tableHasRows(adapter.getDrizzle(), dialect, input.existing.tableName),
+        // A table that is not there holds no row: a save rebuilding a missing table fills nothing.
+        holdsRow: async () =>
+          (await adapter.tableExists(tableName)) &&
+          tableHasRows(adapter.getDrizzle(), dialect, tableName),
       },
     });
   }
