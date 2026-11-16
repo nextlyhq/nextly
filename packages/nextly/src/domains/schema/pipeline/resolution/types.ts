@@ -12,7 +12,11 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { KeyedBy } from "../../value-conversion/read-values";
-import type { ConversionJudgement, RowKey } from "../../value-conversion/types";
+import type {
+  ColumnConversion,
+  ConversionJudgement,
+  RowKey,
+} from "../../value-conversion/types";
 import type { ClassificationLevel } from "../pushschema-pipeline-interfaces";
 
 export type ResolutionKind =
@@ -84,6 +88,8 @@ export interface TypeChangeEvent extends BaseEvent {
     judgement: ConversionJudgement;
     keyedBy: KeyedBy;
     cleared: RowKey[];
+    /** The conversion judged, which the apply judges again before it clears anything. */
+    conversion: ColumnConversion;
   };
 }
 

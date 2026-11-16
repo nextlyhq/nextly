@@ -62,6 +62,12 @@ const lossy: TypeChangeEvent = {
     },
     keyedBy: "id",
     cleared: [{ id: "p1" }],
+    conversion: {
+      dialect: "postgresql",
+      from: { type: "text", nullable: true },
+      to: { type: "jsonb", nullable: true },
+      compareAs: "json",
+    },
   },
 };
 

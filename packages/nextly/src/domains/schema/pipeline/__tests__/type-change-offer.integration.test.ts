@@ -14,6 +14,8 @@
  *
  * Every refused case asserts the table's definition and values are as they were.
  */
+import mysql from "mysql2/promise";
+import { Client } from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { clearCachedSnapshot } from "../../../../init/schema-snapshot-cache";
@@ -43,6 +45,27 @@ import { RegexRenameDetector } from "../rename-detector";
 
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 
+/**
+ * Runs just before the apply's pre-resolution step, after the conversion was judged and agreed
+ * to: a write here is one the judgement did not see. Unset, the step runs as it is.
+ */
+let beforePreResolution: (() => Promise<unknown>) | undefined;
+vi.mock("../pre-resolution/executor", async importOriginal => {
+  const original =
+    await importOriginal<typeof import("../pre-resolution/executor")>();
+  return {
+    ...original,
+    executePreResolutionOps: async (
+      ...args: Parameters<typeof original.executePreResolutionOps>
+    ) => {
+      const hook = beforePreResolution;
+      beforePreResolution = undefined;
+      await hook?.();
+      return original.executePreResolutionOps(...args);
+    },
+  };
+});
+
 const TABLE = "dc_tco_posts";
 const TITLE = f({ name: "title", type: "text" });
 const SEO = f({
@@ -56,6 +79,7 @@ const PRICE = f({
   options: { format: "float" },
 });
 const WHOLE_PRICE = f({ name: "price", type: "number" });
+const REQUIRED_SEO = f({ ...SEO, required: true });
 const CONSENT = "NEXTLY_ACCEPT_DATA_LOSS";
 
 describe.each(getConfiguredTestDialects())(
@@ -68,6 +92,31 @@ describe.each(getConfiguredTestDialects())(
     const printed: string[] = [];
     /** MySQL's apply names its database, as `db:sync` reads it from the connection URL. */
     let databaseName: string | undefined;
+    /** The database the test's instance uses, for a connection of the test's own. */
+    let ownDatabase = "";
+
+    /**
+     * Runs `statement` on a connection of the test's own, as another request would: a write the
+     * apply's transaction does not make, committed while that transaction is open.
+     */
+    async function writeElsewhere(statement: string): Promise<void> {
+      const server = new URL(
+        (dialect === "mysql"
+          ? process.env.TEST_MYSQL_URL
+          : process.env.TEST_POSTGRES_URL) ?? ""
+      );
+      server.pathname = `/${ownDatabase}`;
+      if (dialect === "mysql") {
+        const connection = await mysql.createConnection(server.toString());
+        await connection.query(statement);
+        await connection.end();
+        return;
+      }
+      const client = new Client({ connectionString: server.toString() });
+      await client.connect();
+      await client.query(statement);
+      await client.end();
+    }
 
     /** One code-first apply of the collection with `fields`, as `db:sync` makes it. */
     const sync = (fields: FieldDefinition[]) =>
@@ -106,6 +155,18 @@ describe.each(getConfiguredTestDialects())(
 
     beforeEach(async () => {
       handle = await createTestNextly(dialect === "sqlite" ? {} : { dialect });
+      ownDatabase =
+        dialect === "sqlite"
+          ? ""
+          : String(
+              (
+                (await run(
+                  dialect === "mysql"
+                    ? "SELECT DATABASE() AS db"
+                    : "SELECT current_database() AS db"
+                )) as Array<{ db: unknown }>
+              )[0]?.db
+            );
       databaseName =
         dialect === "mysql"
           ? String(
@@ -121,6 +182,7 @@ describe.each(getConfiguredTestDialects())(
 
     afterEach(async () => {
       delete process.env[CONSENT];
+      beforePreResolution = undefined;
       vi.restoreAllMocks();
       await run(`DROP TABLE IF EXISTS ${q(TABLE)}`);
       await handle?.destroy();
@@ -189,6 +251,36 @@ describe.each(getConfiguredTestDialects())(
           "without a list does not cover a type change"
         );
         expect(await state("seo")).toEqual(before);
+      });
+
+      it("a value it would clear in a field made required is blocked before any statement, consent or not", async () => {
+        await groupAsText({ p0: '{"title":"a"}', p1: "" });
+        const before = await state("seo");
+        process.env[CONSENT] = `${TABLE}.seo`;
+
+        const result = await sync([TITLE, REQUIRED_SEO]);
+
+        expect(result.success).toBe(false);
+        expect(result.error?.message).toContain(
+          `${TABLE}.seo: text -> ${dialect === "postgresql" ? "jsonb" : "json"} is blocked: values that do not parse as JSON would be cleared (1 row: id p1); values that would be cleared, where the column does not allow a null, so a value would have to be invented (1 row: id p1).`
+        );
+        expect(await state("seo")).toEqual(before);
+      });
+
+      it("keeps a value corrected after the check, clearing only the named rows still unreadable", async () => {
+        await groupAsText({ p0: '{"title":"a"}', p1: "", p2: "not json" });
+        process.env[CONSENT] = `${TABLE}.seo`;
+        beforePreResolution = () =>
+          writeElsewhere(
+            `UPDATE ${q(TABLE)} SET ${q("seo")} = '{"title":"fixed"}' WHERE ${q("id")} = 'p1'`
+          );
+
+        const result = await sync([TITLE, SEO]);
+
+        expect(result.success).toBe(true);
+        const values = await tools.values(TABLE, "seo");
+        expect(asJson(values.p1)).toEqual({ title: "fixed" });
+        expect(values.p2).toBeNull();
       });
 
       it("under the consent naming the column, clears exactly the named row and converts", async () => {

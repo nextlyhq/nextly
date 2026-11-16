@@ -46,6 +46,8 @@ export interface JudgedTypeChange {
    * a consented conversion clears, read from the same pass that classed it.
    */
   cleared: RowKey[];
+  /** The conversion judged: the apply judges it again, on the rows as they are, before clearing. */
+  conversion: ColumnConversion;
 }
 
 /** Judges one offered type change; null where the live or expected column cannot be found. */
@@ -94,10 +96,11 @@ const stateOf = (
 });
 
 /**
- * The conversion an offered type change asks for. The new column keeps the live nullability: a
- * consented clearing runs before the type change and before any change to the column's NOT NULL,
- * so a value it clears must be one the column as it stands can hold as a null. A change to the
- * nullability is judged on its own (`add_not_null_with_nulls`).
+ * The conversion an offered type change asks for. The new column allows a null only where it does
+ * both now and once the apply is done: a value cleared must be one the column holds as a null
+ * before the type change (the clearing runs first) and after it. A column the apply also makes
+ * NOT NULL therefore judges a value it would clear as one a value would have to be invented for
+ * (`cleared-under-not-null`), and a null it already holds the same way, as the repair rule does.
  */
 function conversionOf(
   op: ChangeColumnTypeOp,
@@ -106,7 +109,7 @@ function conversionOf(
   field: FieldDefinition | undefined,
   dialect: SupportedDialect
 ): ColumnConversion {
-  const to = stateOf(expected, live.nullable);
+  const to = stateOf(expected, live.nullable && expected.nullable);
   return {
     dialect,
     from: stateOf(live),
@@ -140,15 +143,16 @@ export function typeChangeJudge(args: {
 
     const keyedBy = keyedByOf(liveTable.columns);
     const cleared: RowKey[] = [];
+    const conversion = conversionOf(
+      op,
+      live,
+      expected,
+      fieldOf(args.schema, op.tableName, op.columnName, args.dialect),
+      args.dialect
+    );
     const judgement = await judgeStoredColumn(
       args.db,
-      conversionOf(
-        op,
-        live,
-        expected,
-        fieldOf(args.schema, op.tableName, op.columnName, args.dialect),
-        args.dialect
-      ),
+      conversion,
       { table: liveTable.name, column: live.name, keyedBy },
       {
         noteRow: (kind, key) => {
@@ -156,6 +160,6 @@ export function typeChangeJudge(args: {
         },
       }
     );
-    return { judgement, keyedBy, cleared };
+    return { judgement, keyedBy, cleared, conversion };
   };
 }

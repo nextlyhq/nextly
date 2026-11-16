@@ -162,6 +162,7 @@ import { pushInActiveSchema } from "./pg-active-schema-push";
 import {
   assertLiveCounts,
   assertPreCleanupAccepted,
+  clearConsentedValues,
   withAddedColumnsLeftToTighten,
 } from "./pre-cleanup/executor";
 import { applyMakeOptionalToOperations } from "./pre-cleanup/snapshot-patch";
@@ -2063,6 +2064,17 @@ export class PushSchemaPipeline {
           // lock while its last statement ran changes nothing. MySQL's DDL has
           // committed as it ran, and SQLite runs without a transaction, so there
           // a refusal here would report an apply that already landed.
+          // SQLite applies without a transaction, so a lossy type change's consented clearing waits
+          // for its rebuild to succeed (`clearConsentedValues`): the values are only cleared in a
+          // column that was converted.
+          if (dialect === "sqlite") {
+            await clearConsentedValues({
+              tx,
+              dialect,
+              events: classificationResult.events,
+              clearing: dispatchResult.clearing,
+            });
+          }
           if (dialect === "postgresql") await assertSchemaLockHeld();
           return (
             safe.length +

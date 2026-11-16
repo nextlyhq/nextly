@@ -408,6 +408,7 @@ export class RealClassifier implements Classifier {
             judgement,
             keyedBy: judged.keyedBy,
             cleared: judged.cleared,
+            conversion: judged.conversion,
           },
         },
       };

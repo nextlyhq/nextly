@@ -23,8 +23,11 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../../errors";
-import { clearingStatements } from "../../repair-columns/clearing";
+import { clearingStatements, rowKeyText } from "../../repair-columns/clearing";
 import { toSnakeCase } from "../../services/field-column-descriptor";
+import { reasonClass } from "../../value-conversion/judge-column";
+import { judgeStoredColumn } from "../../value-conversion/read-values";
+import type { RowKey } from "../../value-conversion/types";
 import { runStatement } from "../_internal/run-statement";
 import { countRowsBreakingNotNull } from "../classifier/count-helpers";
 import type {
@@ -310,6 +313,50 @@ function clearedTypeChanges(args: {
   });
 }
 
+/**
+ * Clears the values of each lossy type change consented to (`clearing`), so the conversion meets
+ * only values the new type holds. The column is judged again first, by the same conversion, on the
+ * rows as they are now (inside the apply's transaction where there is one), and only a row the
+ * consent named that still gives a reason to clear is cleared, by its key: a row corrected since
+ * keeps its value, and a value written since is never cleared under a consent given for others
+ * (the conversion then refuses it, naming the column).
+ */
+export async function clearConsentedValues(args: {
+  tx: unknown;
+  dialect: SupportedDialect;
+  events: ClassifierEvent[];
+  clearing?: readonly string[];
+}): Promise<void> {
+  for (const event of clearedTypeChanges(args)) {
+    const consented = new Set(event.lossy.cleared.map(rowKeyText));
+    const still: RowKey[] = [];
+    await judgeStoredColumn(
+      args.tx,
+      event.lossy.conversion,
+      {
+        table: event.tableName,
+        column: event.columnName,
+        keyedBy: event.lossy.keyedBy,
+      },
+      {
+        noteRow: (kind, key) => {
+          if (reasonClass(kind) === "lossy" && consented.has(rowKeyText(key))) {
+            still.push(key);
+          }
+        },
+      }
+    );
+    for (const statement of clearingStatements({
+      table: event.tableName,
+      column: event.columnName,
+      keyedBy: event.lossy.keyedBy,
+      keys: still,
+    })) {
+      await runStatement(args.tx, args.dialect, statement);
+    }
+  }
+}
+
 function sideEffectResolutions(args: {
   resolutions: Resolution[];
   events: ClassifierEvent[];
@@ -547,19 +594,10 @@ export class RealPreCleanupExecutor implements PreCleanupExecutor {
           : sql`DELETE FROM ${sql.identifier(event.tableName)} WHERE ${sql.identifier(event.columnName)} IS NULL`;
       await runStatement(args.tx, args.dialect, stmt);
     }
-    // A lossy type change consented to: the values its judgement named are cleared, by key, so
-    // the conversion that follows meets only values the new type holds. Never by a predicate, so
-    // a value written since is not cleared under a consent given for the rows named.
-    for (const event of clearedTypeChanges(args)) {
-      for (const statement of clearingStatements({
-        table: event.tableName,
-        column: event.columnName,
-        keyedBy: event.lossy.keyedBy,
-        keys: event.lossy.cleared,
-      })) {
-        await runStatement(args.tx, args.dialect, statement);
-      }
-    }
+    // A lossy type change consented to, cleared ahead of the conversion (`clearConsentedValues`).
+    // SQLite applies without a transaction, so there the clearing waits until its rebuild has
+    // succeeded: a rebuild that fails then leaves every value as it was.
+    if (args.dialect !== "sqlite") await clearConsentedValues(args);
     // make_optional is handled via snapshot patching below.
 
     // Apply make_optional snapshot patching (returns input unchanged when
