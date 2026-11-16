@@ -41,6 +41,7 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../../services";
 import { _resetEnvCache } from "../../../../shared/lib/env";
+import { SingleRegistryService } from "../../../singles/services/single-registry-service";
 import { readTableDefinition } from "../../__tests__/helpers/table-definition";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { setNonInteractive } from "../../migrate/can-prompt";
@@ -460,9 +461,9 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot();
         const kind = KINDS[1];
         await kind.create([text("heading")]);
-        const registry = t.getService("singleRegistryService");
+        // The first registry write after the file is the settings save's own row.
         const failOnce = vi
-          .spyOn(registry, "updateSingle")
+          .spyOn(SingleRegistryService.prototype, "updateSingle")
           .mockRejectedValueOnce(new Error("the row write was refused"));
 
         await expect(
