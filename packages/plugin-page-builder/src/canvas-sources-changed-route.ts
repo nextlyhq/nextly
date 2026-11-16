@@ -80,12 +80,16 @@ const UNREAD = "-";
 /** How the check reads each source, as the caller. */
 export interface SourcesChangedReads {
   /**
-   * A collection entry, or nothing; at `depth` 1 with the entries its
-   * relations name read in place of their ids.
+   * A collection entry's id, save time and the relations `followed`, with
+   * the entries those name read in place of their ids; or nothing.
    */
-  entry(collection: string, id: string, depth: 0 | 1): Promise<unknown>;
-  /** A Single's document, or nothing; `depth` as for an entry. */
-  single(slug: string, depth: 0 | 1): Promise<unknown>;
+  entry(
+    collection: string,
+    id: string,
+    followed: readonly string[]
+  ): Promise<unknown>;
+  /** A Single's document, read as an entry is. */
+  single(slug: string, followed: readonly string[]): Promise<unknown>;
   /**
    * The site's public settings (its name, address, logo and time zone):
    * the same for every reader, and holding nothing private.
@@ -174,15 +178,13 @@ export async function sourcesChangedStamp(
   const { source } = ask;
   const entryFollows = ask.follows?.entry ?? [];
   const followsOf = (slug: string) => ask.follows?.singles[slug] ?? [];
-  const depthFor = (followed: readonly string[]) =>
-    followed.length === 0 ? 0 : 1;
   const sourceFollows =
     source.kind === "single" ? followsOf(source.slug) : entryFollows;
   const own =
     source.kind === "single"
       ? markOf(async () =>
           documentMark(
-            await reads.single(source.slug, depthFor(sourceFollows)),
+            await reads.single(source.slug, sourceFollows),
             sourceFollows
           )
         )
@@ -193,7 +195,7 @@ export async function sourcesChangedStamp(
               await reads.entry(
                 source.slug,
                 source.id as string,
-                depthFor(sourceFollows)
+                sourceFollows
               ),
               sourceFollows
             )
@@ -205,7 +207,7 @@ export async function sourcesChangedStamp(
       .map(slug =>
         markOf(async () =>
           documentMark(
-            await reads.single(slug, depthFor(followsOf(slug))),
+            await reads.single(slug, followsOf(slug)),
             followsOf(slug)
           )
         ).then(mark => `single:${slug}=${mark}`)
@@ -257,6 +259,26 @@ function idOf(found: unknown): string {
  */
 const MOST_TIED = 200;
 
+/**
+ * What a document's mark is read with: only its id, its save time and the
+ * relations `followed` (its version comes with every read), and those
+ * relations' entries in place of their ids, so no other field, component or
+ * relation is loaded on each check.
+ */
+function markedOnly(followed: readonly string[]): {
+  depth: 0 | 1;
+  select: Record<string, boolean>;
+} {
+  return {
+    depth: followed.length === 0 ? 0 : 1,
+    select: Object.fromEntries([
+      ["id", true],
+      ["updatedAt", true],
+      ...followed.map(field => [field, true] as const),
+    ]),
+  };
+}
+
 /** A save time as a filter value. */
 function asFilterValue(value: unknown): unknown {
   return value instanceof Date ? value.toISOString() : value;
@@ -282,10 +304,15 @@ async function directSourcesChangedReads(
     ...(locale === undefined ? {} : { locale }),
   };
   return {
-    entry: async (collection, id, depth) =>
-      nextly.findByID({ collection, id, depth, ...asEditing }),
-    single: async (slug, depth) =>
-      nextly.findSingle({ slug, depth, ...asEditing }),
+    entry: async (collection, id, followed) =>
+      nextly.findByID({
+        collection,
+        id,
+        ...markedOnly(followed),
+        ...asEditing,
+      }),
+    single: async (slug, followed) =>
+      nextly.findSingle({ slug, ...markedOnly(followed), ...asEditing }),
     site: async () => nextly.publicSiteSettings(),
     collection: async slug => {
       // Only what a mark names: an entry's id and save time (its version

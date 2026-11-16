@@ -48,13 +48,15 @@ function readsOf(stored: Stored): SourcesChangedReads {
     if (stored.broken.has(name)) throw new Error("connection reset");
   };
   return {
-    entry: async (collection, id, depth) => {
+    entry: async (collection, id, followed) => {
       guard(collection);
+      const depth = followed.length === 0 ? 0 : 1;
       depths.push(depth);
       return atDepth(stored.entries[`${collection}/${id}`], depth);
     },
-    single: async (slug, depth) => {
+    single: async (slug, followed) => {
       guard(slug);
+      const depth = followed.length === 0 ? 0 : 1;
       depths.push(depth);
       return atDepth(stored.singles[slug], depth);
     },
@@ -215,7 +217,7 @@ describe("the change check's mark", () => {
     // Unread, the relation comes back as the id it stores.
     const unread = (s: Stored): SourcesChangedReads => {
       const reads = readsOf(s);
-      return { ...reads, entry: (c, id) => reads.entry(c, id, 0) };
+      return { ...reads, entry: (c, id) => reads.entry(c, id, []) };
     };
     const before = await sourcesChangedStamp(following, unread(stored()));
     const edited = stored();
@@ -232,9 +234,9 @@ describe("the change check's mark", () => {
       { source: { kind: "single", slug: "home" }, singles: [], lists: [] },
       {
         ...reads,
-        single: async slug => {
+        single: async (slug, followed) => {
           asked.push(slug);
-          return reads.single(slug);
+          return reads.single(slug, followed);
         },
       }
     );
