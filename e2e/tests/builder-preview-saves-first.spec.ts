@@ -16,7 +16,7 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 import { gotoAdmin } from "./support/admin";
 import { canvasBlock } from "./support/canvas-frame";
 import { storedPageNodes } from "./support/stored-page";
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 
 const ENTRIES = "/admin/api/collections/pages/entries";
 const HEADING = "00000000-0000-4000-8000-00000000c641";
@@ -156,7 +156,9 @@ for (const start of ["the press", "the menu"] as const) {
     await expect(
       page.getByRole("menuitem", { name: "Preview this version" })
     ).toBeVisible();
-    await expect(page.getByText("Saves a draft first")).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByText("Saves a draft first")
+    ).toHaveCount(0);
     await page.keyboard.press("Escape");
   });
 }

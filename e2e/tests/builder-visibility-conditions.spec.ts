@@ -37,7 +37,7 @@ import {
 } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { storedPageNodes } from "./support/stored-page";
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 
 const PAGES = "/admin/api/collections/pages/entries";
 const COMPONENTS = "/admin/api/collections/components/entries";
@@ -250,7 +250,9 @@ test.describe("a block's visibility conditions in the editor", () => {
     await expect(
       page.getByRole("switch", { name: "Apply conditions" })
     ).toHaveCount(0);
-    await expect(page.getByText("Apply conditions")).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByText("Apply conditions")
+    ).toHaveCount(0);
     // No strip at all above a page's canvas while the view is off, where
     // the switch's own strip used to sit.
     await expect(page.locator(".nx-preview-strip")).toHaveCount(0);
