@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-Selecting or hovering a block no longer redraws the page on the builder's canvas. A hover keeps the canvas's size watchers in place and measures only the block pointed at, rather than observing every block again. The command search no longer checks block locks on every selection after a narrow window has closed it.
+Selecting or hovering a block no longer redraws the page on the builder's canvas. A hover keeps the canvas's size watchers in place rather than observing every block again, and a hover from Layers measures only the block pointed at. The marks also follow a canvas mounted again under a new root inside its frame. The command search no longer checks block locks on every selection after a narrow window has closed it.

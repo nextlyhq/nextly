@@ -1253,6 +1253,12 @@ export function CanvasMarks({
   }, []);
   const postTabs = useTabPost("at-rest", placeTabs);
 
+  // The canvas root the last measure found, which the watchers are put on:
+  // a new root moves them, or they would go on hearing a root since removed.
+  const [watchedRoot, setWatchedRoot] = React.useState<HTMLElement | null>(
+    null
+  );
+
   const measure = React.useCallback(() => {
     const element = layer.current;
     const now = inputs.current;
@@ -1266,14 +1272,27 @@ export function CanvasMarks({
             shownLabel: now.shownLabel,
           });
     const { root, atRest } = measured.current;
+    setWatchedRoot(root);
     postTabs(root, { tabs: atRest.map(({ tab }) => tab), taken: [] });
     placeTabs();
   }, [postTabs, placeTabs]);
 
-  // Measured in full when the canvas or what the marks say changes.
+  // Measured in full when the canvas or what the marks say changes, and when
+  // the watchers move to a new root: what the old ones had not yet reported
+  // goes with them.
   React.useLayoutEffect(() => {
     measure();
-  }, [measure, canvasFrame, revealedKey, hiddenLabel, shownLabel]);
+  }, [measure, canvasFrame, watchedRoot, revealedKey, hiddenLabel, shownLabel]);
+
+  // Measured again whenever the layer finds itself over another canvas root:
+  // the page in a frame can mount the canvas again under a new root while
+  // this layer stays. Checked on every render, as nothing else reports it.
+  React.useLayoutEffect(() => {
+    const element = layer.current;
+    if (element === null) return;
+    const root = overlaySpaceOf(element, CANVAS_ROOT_CLASS)?.root ?? null;
+    if (root !== measured.current.root) measure();
+  });
 
   // A hover change measures the block pointed at alone. Every other mark is
   // as the last full measure left it, which the watchers keep current.
@@ -1294,7 +1313,7 @@ export function CanvasMarks({
 
   React.useEffect(
     () => watchCanvasFor(() => layer.current, measure),
-    [measure, canvasFrame]
+    [measure, canvasFrame, watchedRoot]
   );
 
   // And the scrolls that move what of the canvas is on screen, which the tags
@@ -1306,7 +1325,7 @@ export function CanvasMarks({
       element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
     if (space === null) return;
     return watchScreenBand(space.root, space.frame, measure);
-  }, [measure, canvasFrame]);
+  }, [measure, canvasFrame, watchedRoot]);
 
   return (
     // Hidden from assistive technology: the selection is announced by the

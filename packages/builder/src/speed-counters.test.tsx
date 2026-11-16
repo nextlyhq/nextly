@@ -352,7 +352,11 @@ describe("the work one selection, hover or insert costs on the canvas", () => {
  * wires them: the panel's interaction state held by the editor, which a
  * change of tab sets. Each set re-renders the editor around the canvas.
  */
+/** How many times the editor around the canvas rendered. */
+let hostRenders = 0;
+
 function InspectorHost(): React.JSX.Element {
+  hostRenders += 1;
   const state = useEditorState({ initialDocument: PAGE });
   editorRef = state;
   // A new holder on every set, so each tab change re-renders this editor
@@ -388,6 +392,7 @@ describe("the page drawn again while the editor around it re-renders", () => {
     const view = render(<InspectorHost />);
     act(() => editor().select("block-3"));
     resetCounts();
+    hostRenders = 0;
     for (const name of ["Style", "Content", "Style", "Content"]) {
       fireEvent.mouseDown(view.getByRole("tab", { name }));
       // The control: the tab opened.
@@ -395,6 +400,8 @@ describe("the page drawn again while the editor around it re-renders", () => {
         view.getByRole("tab", { name }).getAttribute("aria-selected")
       ).toBe("true");
     }
+    // The control: the editor around the canvas rendered again.
+    expect(hostRenders).toBeGreaterThan(0);
     expectWithinBudget(counted.pageDraws);
   });
 });

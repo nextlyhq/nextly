@@ -4,8 +4,8 @@
  * How often the page is drawn again when the author selects a block, counted
  * through the page builder's own editor rather than timed. The budget is none:
  * a selection changes the marks and the panel, not the page. A hover's count
- * is held in the builder's own `speed-counters.test`, under the real shell
- * that shares the hovered block.
+ * is held in the builder's own `speed-counters.test`, with the canvas under
+ * the provider that shares the hovered block.
  *
  * The editor is the plugin's real one, its state included; only its
  * surroundings (the admin's hooks, the panels around the canvas) are stood in
