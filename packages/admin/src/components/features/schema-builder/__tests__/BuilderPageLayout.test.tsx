@@ -274,6 +274,31 @@ describe("BuilderPageLayout", () => {
     );
   });
 
+  it("holds Undo and Redo with Save while the page holds Save", () => {
+    const pending = {
+      changes: [],
+      marks: new Map(),
+      settingChanges: [],
+      saved: [],
+      canUndo: true,
+      canRedo: true,
+      undo: () => null,
+      redo: () => null,
+      discardAll: () => {},
+    };
+    const { unmount } = renderLayout({ unsavedCount: 2, pending });
+    expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
+    unmount();
+
+    renderLayout({
+      unsavedCount: 2,
+      pending,
+      saveHeld: "Save waits while the new address is checked.",
+    });
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Redo" })).toBeDisabled();
+  });
+
   it("carries the lock through to the field list", () => {
     renderLayout({ locked: true });
     // Every editing affordance on a row is gone when the entity is code-first.

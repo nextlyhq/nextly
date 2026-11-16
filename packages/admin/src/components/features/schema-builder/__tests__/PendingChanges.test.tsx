@@ -81,7 +81,13 @@ let builder: ReturnType<typeof useFieldBuilder>;
 let activeChanges: unknown[] = [];
 let setSettings: (next: BuilderSettingsValues) => void;
 
-function Harness({ locked = false }: { locked?: boolean }) {
+function Harness({
+  locked = false,
+  held = false,
+}: {
+  locked?: boolean;
+  held?: boolean;
+}) {
   const fieldBuilder = useFieldBuilder({
     resolver: async values => ({ values, errors: {} }),
     defaultValues: {},
@@ -102,6 +108,7 @@ function Harness({ locked = false }: { locked?: boolean }) {
         pending={state.pending}
         count={state.unsavedCount}
         locked={locked}
+        held={held}
       />
       <label>
         Notes
@@ -119,8 +126,8 @@ function Providers({ children }: { children: ReactNode }) {
   );
 }
 
-function setup(locked = false) {
-  render(<Harness locked={locked} />, { wrapper: Providers });
+function setup(locked = false, held = false) {
+  render(<Harness locked={locked} held={held} />, { wrapper: Providers });
   return userEvent.setup();
 }
 
@@ -334,6 +341,20 @@ describe("pending changes controls", () => {
     }
     await user.keyboard("{Control>}z{/Control}");
     expect(field("summary").label).toBe("Summary");
+  });
+
+  // An unsaved entity's address move, still being checked, records its
+  // settings when it ends: an undo or a redo made meanwhile would be written
+  // over by it, so both wait.
+  it("undo and redo wait, by button and by key, while the page holds them", async () => {
+    const user = setup(false, true);
+    act(() =>
+      builder.handleFieldUpdate({ ...field("summary"), label: "Excerpt" })
+    );
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Redo" })).toBeDisabled();
+    await user.keyboard("{Control>}z{/Control}");
+    expect(field("summary").label).toBe("Excerpt");
   });
 
   it("a read-only entity offers none of them", () => {
