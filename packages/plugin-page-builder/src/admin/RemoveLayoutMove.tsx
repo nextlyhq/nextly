@@ -276,7 +276,7 @@ function RefusedBody({
       ) : null}
       <p className="text-sm text-muted-foreground">
         {phase.complete
-          ? `Ask someone who can edit ${left === 1 ? "it" : "them"} to choose another Layout, then try again.`
+          ? `Ask someone who can edit ${left === 1 ? "it" : "them"} to choose another header & footer set, then try again.`
           : "Not every page could be checked. Try again in a moment."}
       </p>
     </div>
@@ -360,12 +360,12 @@ const FACES: {
   ) => Face;
 } = {
   idle: (_phase, { check, published, total }) => ({
-    title: "Remove Layout",
+    title: "Remove header & footer set",
     sentence: (
       <>
-        {`${pages(total)} ${uses(total)} this Layout. Move ${them(total)} to `}
+        {`${pages(total)} ${uses(total)} this header & footer set. Move ${them(total)} to `}
         <SiteDefault name={check.siteDefault} />
-        {`, and then ${published ? "delete or unpublish" : "delete"} it, or close and choose another Layout for ${them(total)} yourself.`}
+        {`, and then ${published ? "delete or unpublish" : "delete"} it, or close and choose another header & footer set for ${them(total)} yourself.`}
       </>
     ),
     body: <IdleBody check={check} />,
@@ -376,7 +376,7 @@ const FACES: {
       <>
         {"Moving pages to "}
         <SiteDefault name={check.siteDefault} />
-        {`. Keep this open; the Layout is ${removed(phase.action)} when every page has moved. If you close this, moving stops; pages already moved stay on ${check.siteDefault ?? "the site default"}.`}
+        {`. Keep this open; the header & footer set is ${removed(phase.action)} when every page has moved. If you close this, moving stops; pages already moved stay on ${check.siteDefault ?? "the site default"}.`}
       </>
     ),
     body: <MoveBar moved={moved} total={total} running />,
@@ -387,7 +387,7 @@ const FACES: {
       <>
         {`${pages(moved)} now ${uses(moved)} `}
         <SiteDefault name={check.siteDefault} />
-        {`. ${String(total - moved)} still ${uses(total - moved)} this Layout, so it was not ${removed(phase.action)}.`}
+        {`. ${String(total - moved)} still ${uses(total - moved)} this header & footer set, so it was not ${removed(phase.action)}.`}
       </>
     ),
     body: <MoveBar moved={moved} total={total} running={false} />,
@@ -396,9 +396,11 @@ const FACES: {
     const left = liveLeftCount(phase.liveLeft);
     return {
       title:
-        phase.action === "delete" ? "Layout deleted" : "Layout unpublished",
+        phase.action === "delete"
+          ? "Header & footer set deleted"
+          : "Header & footer set unpublished",
       succeeded: true,
-      sentence: `${pages(Math.max(total - left, 0))} moved to the site default${check.siteDefault === null ? "" : `, ${check.siteDefault}`}, and the Layout was ${removed(phase.action)}.`,
+      sentence: `${pages(Math.max(total - left, 0))} moved to the site default${check.siteDefault === null ? "" : `, ${check.siteDefault}`}, and the header & footer set was ${removed(phase.action)}.`,
       body:
         phase.liveLeft === undefined || left === 0 ? null : (
           <LiveLeftBody
@@ -418,7 +420,7 @@ const FACES: {
         <>
           {`${String(moved)} of ${pages(total)} moved to `}
           <SiteDefault name={check.siteDefault} />
-          {`. The Layout was not ${removed(phase.action)}, because ${still} it:`}
+          {`. The header & footer set was not ${removed(phase.action)}, because ${still} it:`}
         </>
       ),
       body: (
@@ -431,8 +433,8 @@ const FACES: {
     };
   },
   failed: (phase, { moved }) => ({
-    title: "Remove Layout",
-    sentence: `${pages(moved)} moved to the site default. The Layout was not ${removed(phase.action)}.`,
+    title: "Remove header & footer set",
+    sentence: `${pages(moved)} moved to the site default. The header & footer set was not ${removed(phase.action)}.`,
     body: (
       <Alert variant="destructive">
         <AlertDescription>{phase.message}</AlertDescription>

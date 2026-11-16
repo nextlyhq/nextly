@@ -265,7 +265,7 @@ describe("updating a pattern from the editor", () => {
     expect(screen.getByText(/keep their own copies/)).toBeTruthy();
     expect(
       screen
-        .getByRole("button", { name: "Update pattern" })
+        .getByRole("button", { name: "Update saved section" })
         .hasAttribute("disabled")
     ).toBe(true);
     expect(routes.update).not.toHaveBeenCalled();

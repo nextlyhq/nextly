@@ -130,7 +130,7 @@ describe("deleting a component a Layout still uses", () => {
     const { nextly } = api({ layouts: [layout("l1", "Marketing", "cmp")] });
 
     await expect(c.run(deleting("cmp", nextly))).rejects.toThrow(
-      /the Layout "Marketing" uses it/
+      /the header & footer set "Marketing" uses it/
     );
   });
 
@@ -223,7 +223,7 @@ describe("deleting a component a Layout still uses", () => {
     );
 
     expect(refused).toMatch(
-      /the Layout "Marketing" uses it.*Remove it from that Layout first/s
+      /the header & footer set "Marketing" uses it.*Remove it from that header & footer set first/s
     );
   });
 
@@ -245,7 +245,7 @@ describe("deleting a component a Layout still uses", () => {
     );
 
     expect(refused).toMatch(
-      /2 Layouts use it: "Marketing", "Careers".*Remove it from those Layouts first/s
+      /2 header & footer sets use it: "Marketing", "Careers".*Remove it from those header & footer sets first/s
     );
   });
 
@@ -267,7 +267,7 @@ describe("deleting a component a Layout still uses", () => {
     });
 
     await expect(c.run(deleting("cmp", nextly))).rejects.toThrow(
-      /the Layout "Marketing \(draft\)" uses it/
+      /the header & footer set "Marketing \(draft\)" uses it/
     );
   });
 
@@ -286,7 +286,7 @@ describe("deleting a component a Layout still uses", () => {
     });
 
     await expect(c.run(deleting("cmp", nextly))).rejects.toThrow(
-      /the Layout "Marketing" uses it/
+      /the header & footer set "Marketing" uses it/
     );
   });
 
@@ -386,7 +386,7 @@ describe("unpublishing a component a Layout still uses", () => {
     await expect(
       c.update(updating({ status: "draft" }, nextly))
     ).rejects.toThrow(
-      /cannot be unpublished because the Layout "Marketing" uses it/
+      /cannot be unpublished because the header & footer set "Marketing" uses it/
     );
   });
 
@@ -468,7 +468,7 @@ describe("unpublishing a component a Layout still uses", () => {
 
     await expect(
       c.update(updating({ status: "draft" }, nextly, "cmp"))
-    ).rejects.toThrow(/the Layout "Marketing" uses it/);
+    ).rejects.toThrow(/the header & footer set "Marketing" uses it/);
   });
 
   it("refuses inside a caller's transaction rather than reading from it", async () => {

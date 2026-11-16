@@ -84,7 +84,7 @@ async function readBody(req: Request): Promise<z.infer<typeof RemoveBody>> {
       {
         path: "body",
         code: "INVALID_TYPE",
-        message: "The request is not a Remove Layout request.",
+        message: "The request is not a Remove header & footer set request.",
       },
     ],
   });

@@ -146,7 +146,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // mock that omitted it would fail the import rather than the assertion.
   usePluginRouteMutation: () => ({
     write: async () => ({
-      message: "Pattern created.",
+      message: "Saved section created.",
       item: { id: "p1" },
       ...(saveWarnings.length === 0 ? {} : { warnings: saveWarnings }),
     }),
@@ -255,7 +255,7 @@ describe("reaching the save-as-pattern form", () => {
     });
 
     expect(
-      screen.getByRole("heading", { name: /save as pattern/i })
+      screen.getByRole("heading", { name: /save as section/i })
     ).toBeTruthy();
   });
 
@@ -271,7 +271,7 @@ describe("reaching the save-as-pattern form", () => {
     fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
 
     expect(
-      screen.queryByRole("heading", { name: /save as pattern/i })
+      screen.queryByRole("heading", { name: /save as section/i })
     ).toBeNull();
   });
 });
@@ -286,10 +286,10 @@ describe("a save that committed and then partly failed", () => {
       target: { value: name },
     });
     fireEvent.click(screen.getByRole("radio", { name: "Section" }));
-    fireEvent.click(screen.getByRole("button", { name: /save pattern/i }));
+    fireEvent.click(screen.getByRole("button", { name: /save section/i }));
     await vi.waitFor(() =>
       expect(
-        screen.queryByRole("heading", { name: /save as pattern/i })
+        screen.queryByRole("heading", { name: /save as section/i })
       ).toBeNull()
     );
   }

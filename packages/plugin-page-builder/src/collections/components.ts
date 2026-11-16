@@ -71,7 +71,14 @@ export function componentsCollection(
       // be placed inline on a page that wants its navigation baked in, and one
       // marked for nothing is an ordinary in-page component offered
       // everywhere.
-      select({ name: "area", options: layoutAreaOptions() }),
+      // Read as what the component is used as. Empty is "Anywhere": no hint,
+      // offered everywhere, and the stored values stay as they are.
+      select({
+        name: "area",
+        label: "Use as",
+        options: layoutAreaOptions(),
+        admin: { placeholder: "Anywhere", isClearable: true },
+      }),
       blocks({
         name: "content",
         label: "Component",

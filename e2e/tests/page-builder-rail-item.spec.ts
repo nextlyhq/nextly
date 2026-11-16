@@ -4,8 +4,11 @@
  * their counts and the bindings report under its own headings, and the
  * Plugins panel no longer lists any of them.
  *
+ * Each library goes by one name, the same in the panel and on the overview,
+ * and the overview says what each one is in one line.
+ *
  * Reads only: nothing here is written, and no number is asserted exactly, so
- * another test adding a pattern meanwhile changes nothing it checks.
+ * another test adding a saved section meanwhile changes nothing it checks.
  */
 import { expect, type Locator, type Page } from "@playwright/test";
 
@@ -15,7 +18,39 @@ import { test } from "./support/test";
 /** The overview's address under the admin, as the rail item opens it. */
 const OVERVIEW = "/plugins/nextlyhq-plugin-page-builder/overview";
 
-const LIBRARIES = ["Patterns", "Components", "Layouts", "Templates"];
+const LIBRARIES = [
+  "Saved sections",
+  "Components",
+  "Header & footer",
+  "Collection templates",
+];
+
+/** Each library's card on the overview: its name and its one line. */
+const OVERVIEW_LINES: ReadonlyArray<readonly [string, string, string]> = [
+  [
+    "layouts",
+    "Header & footer",
+    'The header and footer around your pages. A site can have more than one set, for example "Main" and "Landing".',
+  ],
+  [
+    "patterns",
+    "Saved sections",
+    "Ready-made parts of a page. Insert one, then change it freely. Changes stay on that page.",
+  ],
+  [
+    "components",
+    "Components",
+    "Built once, used on many pages. Edit it once and every page updates.",
+  ],
+  [
+    "templates",
+    "Collection templates",
+    "The design every blog post (or other entry) uses. Edit it once for all entries.",
+  ],
+];
+
+/** The names the libraries no longer go by, anywhere an author reads them. */
+const OLD_NAMES = /\b(?:Layouts?|Patterns?|Templates)\b/;
 
 /** The rail's entries, each named by its label. */
 function rail(page: Page): Locator {
@@ -86,6 +121,26 @@ test("sits right after Forms, and opens the overview and its panel", async ({
       .getByRole("group", { name: "Checks" })
       .getByRole("link", { name: /^Bindings to fix(: \d+.*)?$/ })
   ).toBeVisible();
+});
+
+test("names each library once, in the panel and on the overview", async ({
+  page,
+}) => {
+  await gotoAdmin(page, OVERVIEW);
+  const library = page.getByRole("region", { name: "Library" });
+  for (const [kind, name, line] of OVERVIEW_LINES) {
+    const card = library.getByTestId(`overview-library-${kind}`);
+    await expect(card.getByRole("link", { name, exact: true })).toBeVisible();
+    await expect(card.locator("p")).toHaveText(line);
+  }
+  await expect(library).not.toContainText(OLD_NAMES);
+
+  const libraryGroup = page
+    .getByTestId("sub-sidebar")
+    .getByRole("group", { name: "Library" });
+  // The control: the group draws its links, so the check below reads them.
+  await expect(libraryGroup.getByRole("link")).toHaveCount(LIBRARIES.length);
+  await expect(libraryGroup).not.toContainText(OLD_NAMES);
 });
 
 test("leaves the Plugins panel without the Page Builder's items", async ({

@@ -545,7 +545,7 @@ test.describe("the composition exit tests", () => {
 
     // Chosen on the page's form, then published, as an author does.
     await gotoAdmin(page, `/collections/pages/${switching}`);
-    const picker = page.getByRole("combobox", { name: "Layout" });
+    const picker = page.getByRole("combobox", { name: "Header & footer" });
     await expect(picker).toBeVisible({ timeout: 30_000 });
     await expect(picker).toContainText(`Site default · main ${STAMP}`);
     await picker.click();

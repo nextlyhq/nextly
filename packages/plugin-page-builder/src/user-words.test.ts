@@ -18,9 +18,14 @@
  * - log lines: a string starting "[page-builder]", and any argument of a
  *   `warn`, `error`, `info`, `debug` or `log` call on anything but `toast`.
  *
- * Every other hit must be listed in {@link ALLOWED} with why it is not one
+ * Every other hit must be listed in {@link ALLOWED} (the text, or the part of
+ * a docs paragraph that names something else) with why it is not one
  * of the four libraries, and a listed text that no longer appears fails too,
  * so the list cannot outlive what it excuses.
+ *
+ * ⚠️ Bounded: a lone lower-case word ("pattern") reads as a code name, so a
+ * word table that builds a sentence from it is not seen here; those tables
+ * are held by their own tests.
  *
  * @module user-words.test
  */
@@ -35,34 +40,28 @@ import { describe, expect, it } from "vitest";
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 const DOCS_DIR = join(SRC_DIR, "../../../docs/page-builder");
 
-/** One old or mixed-up name, and what to say instead. */
-interface WordRule {
-  readonly test: RegExp;
-  readonly instead: string;
-}
-
-const RULES: readonly WordRule[] = [
-  {
-    test: /\blayouts?\b/i,
-    instead: '"Header & footer", or "header & footer set" for a named one',
-  },
-  { test: /\bpatterns?\b/i, instead: '"Saved sections", or "saved section"' },
-  {
-    // A bare "Template(s)" as a name; "a collection's template" in a sentence
-    // is the linked design, which is what "template" means.
-    test: /(?<![Cc]ollection )\bTemplates?\b/,
-    instead: '"Collection templates", or "collection template"',
-  },
-  {
-    test: /\b(?:starter|page|site)s? templates?\b/i,
-    instead: '"Starter …": a copied design is never a template',
-  },
-  {
-    test: /\bstarters?\b(?! (?:header|footer|pages?|sites?)\b)/i,
-    instead:
-      '"Starter header", "Starter footer", "Starter pages" or "Starter sites"',
-  },
+/**
+ * The old and mixed-up names: "Layout(s)" for a set (say "Header & footer",
+ * or "header & footer set" for a named one), "Pattern(s)" (say "Saved
+ * sections"), a bare "Template(s)" (say "Collection templates"), and a
+ * copied design called a template, or anything but a header, footer, page or
+ * site called a starter.
+ */
+const RULES: readonly RegExp[] = [
+  /\blayouts?\b/i,
+  /\bpatterns?\b/i,
+  // A bare "Template(s)" as a name; "a collection's template" in a sentence
+  // is the linked design, which is what "template" means.
+  /(?<![Cc]ollection )\bTemplates?\b/,
+  /\b(?:starter|page|site)s? templates?\b/i,
+  /\bstarters?\b(?! (?:header|footer|pages?|sites?)\b)/i,
 ];
+
+/**
+ * The docs' rules. In prose a lower-case layout is the site's own (a Next.js
+ * layout, a CSS layout), so only the capitalised name is the old library's.
+ */
+const DOCS_RULES: readonly RegExp[] = [/\bLayouts?\b/, ...RULES.slice(1)];
 
 /** A text that breaks a rule, and where. */
 interface WordFinding {
@@ -149,8 +148,11 @@ function shownTexts(source: string, fileName: string): string[] {
 }
 
 /** The texts that break a rule. */
-function brokenRules(texts: readonly string[]): string[] {
-  return texts.filter(text => RULES.some(rule => rule.test.test(text)));
+function brokenRules(
+  texts: readonly string[],
+  rules: readonly RegExp[] = RULES
+): string[] {
+  return texts.filter(text => rules.some(rule => rule.test(text)));
 }
 
 /** The prose of an `.mdx` page: no code, no link targets, no tag attributes. */
@@ -177,28 +179,48 @@ function shippedSources(dir: string): string[] {
 /**
  * Texts that match a rule but name something else, by file. Each says why.
  */
-const ALLOWED: Readonly<Record<string, readonly string[]>> = {};
+const ALLOWED: Readonly<Record<string, readonly string[]>> = {
+  // A stored title the seed gives a new set, not a label: renaming it would
+  // change what the seed writes.
+  "packages/plugin-page-builder/src/default-layout/seed-names.ts": [
+    "Site layout",
+  ],
+  // A Next.js layout file, in a message to the site's developer.
+  "packages/plugin-page-builder/src/site/index.tsx": [
+    "(its Cache Components version), then import it from the layout that",
+  ],
+  // The Add panel's group of layout blocks, by its heading there.
+  "docs/page-builder/index.mdx": ["Layout (section, box, columns"],
+};
 
 function findingsIn(
   files: readonly string[],
-  read: (file: string) => readonly string[]
+  read: (file: string) => readonly string[],
+  rules: readonly RegExp[] = RULES
 ): WordFinding[] {
   return files.flatMap(file =>
-    brokenRules(read(file)).map(text => ({
+    brokenRules(read(file), rules).map(text => ({
       file: relative(join(SRC_DIR, "../../.."), file),
       text,
     }))
   );
 }
 
+/** Whether a listed text excuses a finding: it is the text, or part of it. */
+function excuses(listed: string, f: WordFinding): boolean {
+  return f.text.includes(listed);
+}
+
 function notAllowed(findings: readonly WordFinding[]): WordFinding[] {
-  return findings.filter(f => !(ALLOWED[f.file] ?? []).includes(f.text));
+  return findings.filter(
+    f => !(ALLOWED[f.file] ?? []).some(listed => excuses(listed, f))
+  );
 }
 
 function staleAllowances(findings: readonly WordFinding[]): string[] {
   return Object.entries(ALLOWED).flatMap(([file, texts]) =>
     texts
-      .filter(text => !findings.some(f => f.file === file && f.text === text))
+      .filter(text => !findings.some(f => f.file === file && excuses(text, f)))
       .map(text => `${file}: ${text}`)
   );
 }
@@ -209,9 +231,10 @@ describe("the words an author reads", () => {
   );
   const docs = findingsIn(
     readdirSync(DOCS_DIR)
-      .filter(name => name.endsWith(".mdx") || name === "meta.json")
+      .filter(name => name.endsWith(".mdx"))
       .map(name => join(DOCS_DIR, name)),
-    file => docsProse(readFileSync(file, "utf8"))
+    file => docsProse(readFileSync(file, "utf8")),
+    DOCS_RULES
   );
 
   it("reads the files it claims to", () => {
