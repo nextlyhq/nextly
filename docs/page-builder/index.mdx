@@ -213,6 +213,56 @@ export default route.ContentPage;
   least a `base` breakpoint.
 </Callout>
 
+### Images sized to where they appear
+
+<Callout type="info">
+  The `imageCopies` route option and `pageBuilderImageCopies()` are
+  **experimental**: their names and shape may change before they are marked
+  stable.
+</Callout>
+
+Pass the page builder's `imageCopies` to the route, and a visitor downloads each image
+at about the size it is drawn, not at its upload size:
+
+```ts
+// app/[...slug]/page.tsx
+import { createPublicBlocksPage } from "@nextlyhq/blocks-react/next";
+import { pageBuilderImageCopies } from "@nextlyhq/plugin-page-builder";
+
+import { builder } from "../../nextly.config";
+
+const route = createPublicBlocksPage({
+  collections: ["pages"],
+  field: "content",
+  imageCopies: pageBuilderImageCopies(builder),
+});
+```
+
+The copies are the resized versions your site's media already keeps, from 96 to 1920
+pixels wide and never wider than the upload. With the option set:
+
+- **An Image block offers its copies with `srcset` and `sizes`.** How wide it is drawn on
+  each device comes from your breakpoints: the whole width at the top of the page,
+  shared out across a row of Columns, and narrowed by a width or maximum width the block
+  sets for itself on every device. No copy more than twice the widest of those is sent.
+- **The page's first block loads first.** The images in the first top-level block load at
+  once and with high priority. Every other image keeps its lazy loading.
+- **The first section's background image is sized and found early.** Where the first
+  top-level block sets a background image once, for every device and in its resting
+  state, each device draws a copy about twice its width. The page's `<head>` preloads
+  each copy for the viewports it is drawn at, so the browser starts on it before the
+  stylesheet arrives.
+- **Each image's copies are looked up once,** then kept until the image or its copies
+  change.
+
+The original is drawn as it always was when:
+
+- the route has no `imageCopies`;
+- the image is an address on another site, or your storage keeps no resized copies;
+- the upload is narrower than the smallest copy, or the lookup fails;
+- for the background, it changes by device or on hover, it is layered with a gradient,
+  or the block has custom CSS.
+
 ### One process, several sites
 
 A page reads everything through the `nextly` it is given: its entry, the lists and Singles it
