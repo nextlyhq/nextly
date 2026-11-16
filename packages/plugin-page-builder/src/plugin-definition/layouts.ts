@@ -21,7 +21,11 @@ import type { InitContext } from "./install-context";
 import { componentStoreOf } from "./options";
 import type { Definition } from "./state";
 
-/** The guard refusing to delete a component a Layout still names. */
+/**
+ * Both ends of a Layout's component references: a component a Layout still
+ * names can't be deleted or unpublished, and a Layout can't be saved naming a
+ * component that is missing or being deleted (`layout-area-guard.ts`).
+ */
 export function installLayoutComponentGuard(ctx: InitContext): void {
   registerLayoutComponentGuard({
     ctx,

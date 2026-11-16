@@ -5,7 +5,11 @@ import {
   type LayoutGuardDirectApi,
 } from "./layout-component-guard";
 
-/** A plugin context that captures each handler by the phase it was given. */
+/**
+ * A plugin context that captures each components handler by the phase it was
+ * given. The Layout side this registers too is judged in
+ * `layout-area-guard.test.ts`; here it is only listed.
+ */
 function context() {
   const registered: { type: string; collection: string }[] = [];
   const handlers = new Map<string, (context: unknown) => unknown>();
@@ -13,8 +17,15 @@ function context() {
     hooks: {
       on(type: string, collection: string, h: (context: unknown) => unknown) {
         registered.push({ type, collection });
-        handlers.set(type, h);
+        if (collection === "nx_pb_components") handlers.set(type, h);
       },
+      onInTransaction(collection: string) {
+        registered.push({ type: "inTransaction", collection });
+      },
+    },
+    dialect: "sqlite" as const,
+    services: {
+      collections: { holdEntryInTransaction: async () => true },
     },
   };
   return {
@@ -112,7 +123,7 @@ const register = (ctx: ReturnType<typeof context>["ctx"]) =>
   });
 
 describe("deleting a component a Layout still uses", () => {
-  it("registers on beforeDelete and beforeChange, for the components collection only", () => {
+  it("registers on beforeDelete and beforeChange of the components, and the Layout side on the Layouts", () => {
     // Named rather than the wildcard: a wildcard registration would run a
     // Layout scan on every delete the site performs.
     const c = context();
@@ -120,6 +131,9 @@ describe("deleting a component a Layout still uses", () => {
 
     expect(c.registered).toEqual([
       { type: "beforeDelete", collection: "nx_pb_components" },
+      // The Layout side of the same reference, on the Layouts alone.
+      { type: "beforeChange", collection: "nx_pb_layouts" },
+      { type: "inTransaction", collection: "nx_pb_layouts" },
       { type: "beforeChange", collection: "nx_pb_components" },
     ]);
   });
