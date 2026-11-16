@@ -120,7 +120,9 @@ describe("a Single's settings saved with a field change", () => {
     await user.click(screen.getByRole("button", { name: "Settings" }));
     const settings = await screen.findByRole("dialog");
     await user.click(
-      within(settings).getByRole("button", { name: /select icon/i })
+      // The icon picker, named by the icon it holds (a Single's default,
+      // "Document").
+      within(settings).getByRole("button", { name: "Document" })
     );
     await user.type(screen.getByPlaceholderText(/search icons/i), "Star");
     await user.click(screen.getByTitle("Star"));

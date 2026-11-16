@@ -136,7 +136,9 @@ describe("a field group's settings saved with a field change", () => {
     await user.type(name, "Banner");
     await user.type(within(settings).getByLabelText("Description"), "Top");
     await user.click(
-      within(settings).getByRole("button", { name: /select icon/i })
+      // The icon picker, named by the icon it holds (a field group's
+      // default, "Puzzle").
+      within(settings).getByRole("button", { name: "Puzzle" })
     );
     await user.type(screen.getByPlaceholderText(/search icons/i), "Star");
     await user.click(screen.getByTitle("Star"));
