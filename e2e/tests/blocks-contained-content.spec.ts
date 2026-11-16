@@ -339,7 +339,7 @@ test("a contained block its author sized is centred at that size, its content wh
   near(atStart.band.width, 600);
 });
 
-test("a contained block laid out in a row or a grid is not inset from the row", async ({
+test("a contained flex item is not inset from the row, nor a grid item from the grid", async ({
   page,
 }) => {
   // A padding's `100%` is the row's width, not the item's own, so an item

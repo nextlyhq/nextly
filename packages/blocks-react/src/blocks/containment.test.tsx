@@ -167,7 +167,7 @@ describe("a sheet stored before contained blocks were padded in", () => {
 /**
  * A page stylesheet stored before a row's items were flagged.
  *
- * That compiler wrote no flag on a flex or grid block's children, so a
+ * That compiler wrote no flag on a flex block's children, so a
  * contained item in a row was inset from the whole row's width. The stamp's
  * encoding moved, so such a sheet is recompiled on its next read.
  */

@@ -6,7 +6,7 @@
  * (`emitContentWidth`). An author's or a default's own side padding outweighs
  * that rule, so the page compile writes each inline padding as at least the
  * inset, and it flags the blocks whose own box is narrower than the one the
- * inset is measured from: one an author sized, a flex or grid item, and one
+ * inset is measured from: one an author sized, a flex item, and one
  * taken out of the flow. The site sheet reads the flags.
  *
  * @module style/contain-inset
@@ -125,11 +125,13 @@ export const SIZED_FLAG_PROPERTIES: Readonly<Record<string, string>> = {
 
 /**
  * The flag a block's layout sets on its children: `1` while it lays them out
- * as flex or grid items, `0` otherwise.
+ * as flex items, `0` otherwise.
  *
  * A padding's `100%` is the width of the box a block is laid out in, which for
- * a flex or grid item is the whole row, not the item's own share of it, so a
- * contained item would be inset from a box far wider than its own. The rule
+ * a flex item is the whole flex container, not the item's own share of it, so
+ * a contained item would be inset from a box far wider than its own. A grid
+ * item is not flagged: its percentages resolve against its own grid area, so
+ * its inset is already measured from its own width. The rule
  * that sets the parent's `display` also writes this on its children, at the
  * same breakpoint and state, and the site sheet treats a flagged contained
  * child as it does a sized block: centred, not inset. `initial`, `unset` and
@@ -142,7 +144,7 @@ export const SIZED_ITEM_PROPERTY = "--nx-sized-item";
  * The flag a block's own `position` sets: `1` while it is absolutely or fixed
  * positioned, `0` otherwise.
  *
- * A child taken out of the flow is not a flex or grid item, whatever its
+ * A child taken out of the flow is not a flex item, whatever its
  * parent's layout, so the site sheet reads the item flag only where this one
  * is 0. A flag of its own, set in the rule that sets the position, so each
  * follows its own property through the cascade and neither depends on which
@@ -174,8 +176,11 @@ function flowFlag(declaration: Declaration): Declaration[] {
  */
 export const COLUMN_FLOW_PROPERTY = "--nx-column-flow";
 
-/** The layouts whose children are flex or grid items. */
-const ROW_LAYOUTS = new Set(["flex", "inline-flex", "grid", "inline-grid"]);
+/**
+ * The layouts whose children are flex items. A grid is not one of them: a
+ * grid item's percentages resolve against its own grid area.
+ */
+const ROW_LAYOUTS = new Set(["flex", "inline-flex"]);
 
 /** The flag a block's own `display` sets on its children, if it sets one. */
 function itemFlag(declarations: readonly Declaration[]): Declaration[] {

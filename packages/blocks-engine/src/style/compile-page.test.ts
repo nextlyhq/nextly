@@ -2470,25 +2470,31 @@ describe("inline padding and a contained container's inset", () => {
     ).not.toContain("--nx-sized-width");
   });
 
-  it("flags the children of a block that lays them out in a row or a grid", () => {
-    // A padding's `100%` is the row's width, not the item's, so a contained
-    // block laid out as a flex or grid item would be inset from a box far
-    // wider than its own. The rule that makes its parent a row or a grid
+  it("flags the children of a block that lays them out in a flex row", () => {
+    // A padding's `100%` is the flex container's width, not the item's, so a
+    // contained block laid out as a flex item would be inset from a box far
+    // wider than its own. The rule that makes its parent a flex container
     // flags the parent's children; the site sheet then treats a contained one
     // as a sized block: centred, not inset.
     const ITEM = "--nx-sized-item";
-    for (const display of ["flex", "inline-flex", "grid", "inline-grid"]) {
+    for (const display of ["flex", "inline-flex"]) {
       const out = css(doc([node("n1", { base: { base: { display } } })]));
       expect(out).toMatch(
         new RegExp(`\\.nx-pb-[a-z0-9]+ > \\* \\{ ${ITEM}: 1 \\}`)
       );
+    }
+    // A grid item's percentages resolve against its own grid area, so its
+    // inset is already measured from its own width: no flag.
+    for (const display of ["grid", "inline-grid"]) {
+      const out = css(doc([node("n1", { base: { base: { display } } })]));
+      expect(out).toMatch(new RegExp(`> \\* \\{ ${ITEM}: 0 \\}`));
     }
     // Any other layout clears it, so an override back to block brings the
     // inset back to the children it applies to.
     const block = css(
       doc([
         node("n1", {
-          base: { base: { display: "grid" }, mobile: { display: "block" } },
+          base: { base: { display: "flex" }, mobile: { display: "block" } },
         }),
       ])
     );
@@ -2548,7 +2554,7 @@ describe("inline padding and a contained container's inset", () => {
   });
 
   it("flags a block taken out of the flow by its own position", () => {
-    // An absolutely or fixed positioned child of a row is not a flex or grid
+    // An absolutely or fixed positioned child of a row is not a flex
     // item, so the item flag must not hold for it. Its own position sets a
     // flag of its own, in the rule that sets the position; the site sheet
     // reads the item flag only where this one is 0.

@@ -162,7 +162,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * author's side padding as the bare value, which outweighs the containment and
  * lets the content run past the content width, so it is refused, not served.
  *
- * `v8`: a flex or grid item, and a block taken out of the flow, carry flags
+ * `v8`: a flex item, and a block taken out of the flow, carry flags
  * the containment inset reads. A sheet stored before has neither, so a
  * contained item in a row is inset from the whole row: refused, not served.
  */
