@@ -66,12 +66,18 @@ export function componentsCollection(
       text({ name: "slug", required: true, unique: true }),
       textarea({ name: "description" }),
       text({ name: "category" }),
-      // Which Layout position this component suits, if any. It orders the
-      // pickers and does not gate them: a component marked `header` can still
-      // be placed inline on a page that wants its navigation baked in, and one
-      // marked for nothing is an ordinary in-page component offered
-      // everywhere.
-      select({ name: "area", options: layoutAreaOptions() }),
+      // Which area of a header & footer set this component suits, if any,
+      // read as what it is used as. It orders the pickers and does not gate
+      // them: a component used as the header can still be placed inline on a
+      // page that wants its navigation baked in. Empty is "Anywhere": no hint,
+      // an ordinary in-page component offered everywhere. The stored values
+      // stay `header`, `footer` and empty.
+      select({
+        name: "area",
+        label: "Use as",
+        options: layoutAreaOptions(),
+        admin: { placeholder: "Anywhere", isClearable: true },
+      }),
       blocks({
         name: "content",
         label: "Component",

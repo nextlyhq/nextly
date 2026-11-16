@@ -335,7 +335,8 @@ async function createSeed(
       if (attempt >= SEED_SLUG_ATTEMPTS) {
         throw NextlyError.conflict({
           reason: "state",
-          message: "The default Layout could not be given a free address.",
+          message:
+            "The default header & footer set could not be given a free address.",
           logContext: {
             reason: "default-layout-seed-slug-exhausted",
             attempts: attempt,
@@ -409,7 +410,7 @@ async function createNamed(
     throw new NextlyError({
       code: "INTERNAL_ERROR",
       publicMessage:
-        "The default Layout was created but could not be identified.",
+        "The default header & footer set was created but could not be identified.",
       logMessage: "create returned no usable id for the seeded default Layout",
       logContext: { reason: "default-layout-seed-no-id" },
     });

@@ -39,8 +39,8 @@ import { boundTo, visitorsSee, whatChanged, whereBound } from "./words";
 const PLACES: readonly { readonly value: string; readonly label: string }[] = [
   { value: "pages", label: "Pages" },
   { value: "components", label: "Components" },
-  { value: "patterns", label: "Patterns" },
-  { value: "layouts", label: "Layouts" },
+  { value: "patterns", label: "Saved sections" },
+  { value: "layouts", label: "Header & footer" },
   { value: "entries", label: "Entries" },
   { value: "singles", label: "Singles" },
 ];
@@ -49,8 +49,8 @@ const PLACES: readonly { readonly value: string; readonly label: string }[] = [
 const PLACE_LABEL: Readonly<Record<string, string>> = {
   pages: "Page",
   components: "Component",
-  patterns: "Pattern",
-  layouts: "Layout",
+  patterns: "Saved section",
+  layouts: "Header & footer set",
   entries: "Entry",
   singles: "Single",
 };

@@ -199,7 +199,7 @@ describe("the publish-readiness notice", () => {
       entryId: "l1",
     });
     expect((recorded[0] as { message: string }).message).toBe(
-      "This Layout embeds 1 component that is not published, so it will not appear for visitors."
+      "This header & footer set embeds 1 component that is not published, so it will not appear for visitors."
     );
   });
 
