@@ -18,6 +18,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { z } from "zod";
 
 import {
   assertBuilderFieldNames,
@@ -38,6 +39,7 @@ import {
   assertComparisonRequest,
   resolveSingleDocumentId,
 } from "../../api/versions-access";
+import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
@@ -149,6 +151,7 @@ import type { MethodHandler, Params } from "../types";
 import { respondAddressCheck } from "./address-check-route";
 import { readListOffset } from "./list-offset";
 import { readListOwner, slugListsForOwner } from "./list-owner";
+import { PublishPartsBody } from "./publish-parts-body";
 import { readAccessCallerForDispatch } from "./read-access-caller";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import { assertSingleTablesUnowned } from "./single-table-family";
@@ -506,6 +509,53 @@ async function requireLiveSingleId(slug: string): Promise<string> {
     });
   }
   return id;
+}
+
+/**
+ * Publishing or unpublishing the parts of a Single the body chooses (@experimental): the Single's
+ * counterpart of a collection entry's, read from the same body and forwarded the same way, with
+ * the caller's identity and scope, `routeAuthorized` false, and the version the move was made
+ * from.
+ */
+function singlePartsLifecycle(
+  direction: "publish" | "unpublish",
+  successMessage: string
+): MethodHandler<SinglesServices> {
+  return {
+    execute: async (svc, p, body, request) => {
+      const slug = requireParam(p, "slug", "Single slug");
+      let parts: z.infer<typeof PublishPartsBody>;
+      try {
+        parts = PublishPartsBody.parse(body ?? {});
+      } catch (error) {
+        if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
+        throw error;
+      }
+      const result = await svc.entry.publishParts(
+        {
+          slug,
+          user: readAuthenticatedUser(),
+          request,
+          actor: readAuthenticatedActor(),
+          overrideAccess: false,
+          routeAuthorized: false,
+          authenticatedScope: readAuthenticatedScope(),
+          data: versionInputOf(body),
+          ...(parts.withoutReview === undefined
+            ? {}
+            : { withoutReview: parts.withoutReview }),
+        },
+        {
+          direction,
+          locales: parts.locales,
+          shared: parts.shared,
+          describe: parts.describe,
+        }
+      );
+      const answer = unwrapServiceResult(result, { slug });
+      return respondMutation(result.message ?? successMessage, answer);
+    },
+  };
 }
 
 const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
@@ -876,6 +926,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       });
     },
   },
+
+  publishSingleParts: singlePartsLifecycle("publish", "Published."),
+  unpublishSingleParts: singlePartsLifecycle("unpublish", "Unpublished."),
 
   previewPublishAllSingleLocales: {
     // What publishing every language would do, language by language, without
