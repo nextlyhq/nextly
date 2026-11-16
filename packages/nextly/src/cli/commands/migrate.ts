@@ -1208,6 +1208,16 @@ export interface MigrateCoreDeps {
    */
   firstRun?: { configurationRows: () => EntitySettingsRecord };
   /**
+   * Whether the first run writes the permissions, roles and preset grants
+   * inside the transaction that writes the registry rows and the record.
+   * Absent, it does wherever no instance is registered in this process, as for
+   * `nextly migrate`. The migrations at start pass true: they run before the
+   * start registers any service a grants change reaches, so nothing waits
+   * behind that transaction's locks, though the start has registered its
+   * adapter.
+   */
+  firstRunSeedsInside?: boolean;
+  /**
    * Refuse, before anything changes, a pending file with a Schema Builder
    * name and no snapshot that is not recognised as an earlier Builder's
    * (`refuseUnrecognisedBuilderFiles`), rather than run it as written.
@@ -2770,7 +2780,7 @@ export async function migrateCore(
     // permissions and grants are written just before the commit, as an
     // ordinary run writes them; `nextly migrate` starts none, and writes them
     // inside it.
-    const seedInside = !container.has("adapter");
+    const seedInside = deps.firstRunSeedsInside ?? !container.has("adapter");
     if (!seedInside) await seedAccess();
     const committed = await writeRegistryRows(
       dz,

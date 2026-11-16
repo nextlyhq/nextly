@@ -97,6 +97,8 @@ interface MigrateCoreLike {
     markOrphanedPermissions?: DeployStepDeps["markOrphanedPermissions"];
     /** Spread in by `deployStepDeps`, checked here for the reason above. */
     beforeMetadata?: DeployStepDeps["beforeMetadata"];
+    /** See `MigrateCoreDeps.firstRunSeedsInside`. */
+    firstRunSeedsInside?: boolean;
     /** See `MigrateCoreDeps.busyTable`. */
     busyTable?: { bounds: BusyTableBounds; notify: (line: string) => void };
   }): Promise<{ applied: number; coreChanged: boolean; ran: boolean }>;
@@ -446,6 +448,10 @@ async function applyBootMigrations(
     // The access `nextly migrate` adds once the registry rows are written:
     // a production start adds none, so these migrations are the deploy step.
     seedPermissions: startAccessSeeder(adapter, args.served, run.coreLogger),
+    // A first run's access in its one transaction, as `nextly migrate` writes
+    // it: the start has registered its adapter, but no service a grants change
+    // reaches, so the run is told rather than left to infer it.
+    firstRunSeedsInside: true,
     // The first run's record, the orphan marks an applied migration sets, and
     // the refusal of a translations column that cannot hold a newly translated
     // field, as `nextly migrate` hands them (`deployStepDeps`).
@@ -496,9 +502,10 @@ async function applyBootMigrations(
  * `NEXTLY_MIGRATE_LOCK_BUSY`, which it throws on every dialect when the wait
  * ends with the lock still held; a busy table waited out
  * (`NEXTLY_TABLE_BUSY`), and a busy-table bound set out of its range. Each
- * means this process would serve a schema it cannot account for. An older
- * build's `MIGRATION_MISSING` is not among them: see
- * {@link isOlderBuildStop}.
+ * means this process would serve a schema it cannot account for. So is
+ * `MIGRATION_MISSING` where a missing migration has an unresolved attempt: the
+ * database may hold part of it. An older build's plain stop is not among them:
+ * see {@link isOlderBuildStop}, which is asked first.
  */
 /** The refusals `nextly migrate` gives a schema no migration records, which refuse a start too. */
 const UNMIGRATED_SCHEMA_CODES: ReadonlySet<string> = new Set([
@@ -510,6 +517,8 @@ const UNMIGRATED_SCHEMA_CODES: ReadonlySet<string> = new Set([
 function fatalBootMigrationError(err: unknown): NextlyError | undefined {
   if (!(err instanceof NextlyError)) return undefined;
   if (err.code === "NEXTLY_BOOT_MIGRATIONS_NOT_RUN") return err;
+  // Refused as itself: its message names each missing migration and what to do.
+  if (err.code === "MIGRATION_MISSING") return err;
   if (err.code === "NEXTLY_MIGRATE_LOCK_BUSY") {
     return bootMigrationsNotRun(err);
   }
@@ -538,11 +547,20 @@ function fatalBootMigrationError(err: unknown): NextlyError | undefined {
  *
  * The stop comes before the run writes anything, so the newer build's state
  * is already as it left it. The start then goes on and serves what the
- * database holds, as a start without migrations at start does (D8); only a
+ * database holds, as a start without migrations at start does; only a
  * warning names the migrations.
+ *
+ * Only where every missing migration is applied: one with an unresolved
+ * attempt (`logContext.unresolved`) may have stopped part-way, so the database
+ * may hold part of it, and that stop still refuses the start.
  */
 function isOlderBuildStop(err: unknown): err is NextlyError {
-  return err instanceof NextlyError && err.code === "MIGRATION_MISSING";
+  if (!(err instanceof NextlyError) || err.code !== "MIGRATION_MISSING") {
+    return false;
+  }
+  const unresolved = (err.logContext as { unresolved?: unknown } | undefined)
+    ?.unresolved;
+  return !Array.isArray(unresolved) || unresolved.length === 0;
 }
 
 /**

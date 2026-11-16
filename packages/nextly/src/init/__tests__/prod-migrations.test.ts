@@ -125,6 +125,7 @@ describe("runProdMigrationsIfEnabled", () => {
       code: "MIGRATION_MISSING",
       publicMessage:
         "The ledger records 1 applied migration this build's migrations folder lacks (`20261102_000002_added.sql`).",
+      logContext: { files: ["20261102_000002_added.sql"], unresolved: [] },
     });
     const warnings: string[] = [];
     const a = args({
@@ -144,6 +145,27 @@ describe("runProdMigrationsIfEnabled", () => {
     // Serving is allowed, and no refusal stands for a later start.
     await expect(awaitBootMigrations()).resolves.toBeUndefined();
     await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(false);
+  });
+
+  it("still refuses a missing migration with an unresolved attempt: the database may hold part of it", async () => {
+    process.env.NODE_ENV = "production";
+    const partly = new NextlyError({
+      code: "MIGRATION_MISSING",
+      publicMessage:
+        "1 migration this build's folder lacks has an unresolved attempt (`20261102_000002_added.sql`).",
+      logContext: { files: [], unresolved: ["20261102_000002_added.sql"] },
+    });
+    const a = args({
+      migrateCore: vi.fn(async () => {
+        throw partly;
+      }),
+    });
+
+    await expect(runProdMigrationsIfEnabled(a as never)).rejects.toBe(partly);
+    // The refusal stands for every later start in this process.
+    await expect(runProdMigrationsIfEnabled(a as never)).rejects.toMatchObject({
+      code: "MIGRATION_MISSING",
+    });
   });
 
   it("refuses when the lock was busy on a dialect that throws instead", async () => {

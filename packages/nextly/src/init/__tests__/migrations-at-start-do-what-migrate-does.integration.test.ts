@@ -806,6 +806,41 @@ describe.each(getConfiguredTestDialects())(
       ).toHaveLength(1);
       expect(later.code, later.said).toBeUndefined();
       expect(later.said).not.toMatch(notice);
+      // As `nextly migrate` does, the first run writes the permissions, roles
+      // and preset grants in the one transaction that writes the registry rows
+      // and the record, so a stop anywhere before it commits keeps none.
+      const calls = started.calls;
+      const recordAt = calls.findIndex(
+        call =>
+          writtenTable(call) === "nextly_meta" &&
+          [call.text, ...call.values.map(String)].some(part =>
+            part.includes("registry_record")
+          )
+      );
+      expect(recordAt, "the record was written").toBeGreaterThan(-1);
+      const isBegin = (call: RecordedStatement) =>
+        /^\s*(begin|start transaction)\b/i.test(call.text);
+      const isCommit = (call: RecordedStatement) =>
+        /^\s*commit\b/i.test(call.text);
+      let begun = recordAt;
+      while (begun >= 0 && !isBegin(calls[begun]!)) begun -= 1;
+      let committed = recordAt;
+      while (committed < calls.length && !isCommit(calls[committed]!)) {
+        committed += 1;
+      }
+      const accessWrites = calls
+        .map((call, at) => ({ call, table: writtenTable(call), at }))
+        // Rows, not the core schema's own tables being made.
+        .filter(
+          ({ call, table }) =>
+            /^\s*(insert|update|delete)\b/i.test(call.text) &&
+            ["permissions", "roles", "role_permissions"].includes(table ?? "")
+        )
+        .map(({ table, at }) => ({ table, at }));
+      expect(accessWrites.length, "the access was written").toBeGreaterThan(0);
+      expect(
+        accessWrites.filter(({ at }) => at < begun || at > committed)
+      ).toEqual([]);
     }, 600_000);
 
     it("refuses a permission no migration records, as nextly migrate does", async () => {
