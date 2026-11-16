@@ -1651,8 +1651,21 @@ export class SingleMetadataService {
         .filter(f => isFieldLocalized(f, change.wasLocalized))
         .map(f => f.name)
     );
+    // Not unique by either rule (`builderColumnIsUnique`): neither its mark nor a one-to-one's
+    // cardinality, so a translated relationship made one-to-one is not grouped by its column alone
+    // when its index is per language.
+    const notUnique = (f: FieldDefinition): FieldDefinition => {
+      const options = f.options as { relationType?: unknown } | undefined;
+      return f.type === "relationship" && options?.relationType === "oneToOne"
+        ? {
+            ...f,
+            unique: false,
+            options: { ...options, relationType: "manyToOne" },
+          }
+        : { ...f, unique: false };
+    };
     const lengthOnly = (f: FieldDefinition): FieldDefinition =>
-      isFieldLocalized(f, change.isLocalized) ? { ...f, unique: false } : f;
+      isFieldLocalized(f, change.isLocalized) ? notUnique(f) : f;
     return {
       main: {
         oldFields: change.previousFields.filter(
@@ -1668,7 +1681,7 @@ export class SingleMetadataService {
         ),
         newFields: change.fields
           .filter(f => translatedBefore.has(f.name))
-          .map(f => ({ ...f, unique: false })),
+          .map(notUnique),
       },
     };
   }

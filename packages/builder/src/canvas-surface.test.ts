@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { CANVAS_FRAME_SHEET } from "./canvas-frame-sheet";
 import { EMPTY_CONTAINER_SELECTOR } from "./empty-slot";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
+import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
 
 /**
  * The canvas is drawn on the PAGE's surface, not on the editor's.
@@ -27,9 +28,8 @@ import { CANVAS_ROOT_CLASS } from "./shell-state";
  *
  * @module canvas-surface.test
  */
-const CHROME = readFileSync(
-  fileURLToPath(new URL("./styles/builder-chrome.css", import.meta.url)),
-  "utf8"
+const CHROME = chromeStylesheetSource(url =>
+  readFileSync(fileURLToPath(url), "utf8")
 );
 
 /**

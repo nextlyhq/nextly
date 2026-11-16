@@ -91,15 +91,22 @@ describe("buildDesiredTableFromFields — indexes", () => {
         { name: "title", type: "text" },
         builderRelation("oneToOne"),
       ];
-      // The creator's own DDL makes the column unique by the relation's cardinality...
+      // The creator's own DDL makes the column unique by the relation's cardinality, with a named
+      // unique index beside the plain one every relationship gets...
       const emitted = new DynamicCollectionSchemaService(
         undefined,
         dialect
       ).generateMigrationSQL("dc_posts", fields as never);
-      expect(emitted).toMatch(/[`"]profile[`"][^,\n]*UNIQUE/i);
+      expect(emitted).toMatch(
+        /CREATE UNIQUE INDEX[^\n]*[`"]uq_dc_posts_profile[`"][^\n]*[`"]profile[`"]/i
+      );
+      expect(emitted).toMatch(
+        /CREATE INDEX[^\n]*[`"]idx_dc_posts_profile[`"]/i
+      );
 
-      // ...so the desired schema a migration is written from says so too, or the migration
-      // creates the column without it and the table takes two rows naming one entry.
+      // ...so the desired schema a migration is written from declares the same two, or the
+      // migration creates the column without its uniqueness and the table takes two rows naming
+      // one entry.
       const t = buildDesiredTableFromFields(
         "dc_posts",
         fields as never,
@@ -109,7 +116,7 @@ describe("buildDesiredTableFromFields — indexes", () => {
         }
       );
       expect(idxNames(t)).toContain("uq_dc_posts_profile:u");
-      expect(idxNames(t)).not.toContain("idx_dc_posts_profile:n");
+      expect(idxNames(t)).toContain("idx_dc_posts_profile:n");
     }
   );
 

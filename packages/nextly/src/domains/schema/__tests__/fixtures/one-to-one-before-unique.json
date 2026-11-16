@@ -1,0 +1,65 @@
+{
+  "capturedFrom": "nextly dev @ 9d9611b70c: DynamicCollectionSchemaService.generateMigrationSQL",
+  "people": {
+    "table": "dc_o2o_people",
+    "fields": [
+      {
+        "name": "name",
+        "type": "text"
+      }
+    ]
+  },
+  "profiles": {
+    "table": "dc_o2o_profiles",
+    "fields": [
+      {
+        "name": "title",
+        "type": "text"
+      },
+      {
+        "name": "person",
+        "type": "relationship",
+        "options": {
+          "target": "o2o_people",
+          "relationType": "oneToOne",
+          "onDelete": "set null"
+        }
+      }
+    ]
+  },
+  "statements": {
+    "postgresql": [
+      "CREATE TABLE IF NOT EXISTS \"dc_o2o_people\" (\n  \"id\" text PRIMARY KEY NOT NULL,\n  \"title\" text NOT NULL,\n  \"slug\" text NOT NULL,\n  \"created_at\" timestamp DEFAULT now(),\n  \"updated_at\" timestamp DEFAULT now(),\n  \"created_by\" text,\n  \"_revision\" int4 DEFAULT 1 NOT NULL,\n  \"_changed_by_kind\" varchar(16),\n  \"_changed_by_id\" text,\n  \"_changed_by_principal_kind\" varchar(64),\n  \"_changed_at\" timestamp,\n\"name\" text\n);",
+      "CREATE INDEX IF NOT EXISTS \"idx_dc_o2o_people_created_at\" ON \"dc_o2o_people\"(\"created_at\" DESC);",
+      "CREATE INDEX IF NOT EXISTS \"idx_dc_o2o_people_created_by\" ON \"dc_o2o_people\"(\"created_by\");",
+      "CREATE UNIQUE INDEX IF NOT EXISTS \"idx_dc_o2o_people_slug\" ON \"dc_o2o_people\"(\"slug\");",
+      "CREATE TABLE IF NOT EXISTS \"dc_o2o_profiles\" (\n  \"id\" text PRIMARY KEY NOT NULL,\n  \"slug\" text NOT NULL,\n  \"created_at\" timestamp DEFAULT now(),\n  \"updated_at\" timestamp DEFAULT now(),\n  \"created_by\" text,\n  \"_revision\" int4 DEFAULT 1 NOT NULL,\n  \"_changed_by_kind\" varchar(16),\n  \"_changed_by_id\" text,\n  \"_changed_by_principal_kind\" varchar(64),\n  \"_changed_at\" timestamp,\n\"title\" text,\n\"person\" text  UNIQUE,\n  CONSTRAINT \"fk_dc_o2o_profiles_person\" FOREIGN KEY (\"person\") REFERENCES \"dc_o2o_people\"(\"id\") ON DELETE SET NULL ON UPDATE NO ACTION\n);",
+      "CREATE INDEX IF NOT EXISTS \"idx_dc_o2o_profiles_person\" ON \"dc_o2o_profiles\" (\"person\");",
+      "CREATE INDEX IF NOT EXISTS \"idx_dc_o2o_profiles_created_at\" ON \"dc_o2o_profiles\"(\"created_at\" DESC);",
+      "CREATE INDEX IF NOT EXISTS \"idx_dc_o2o_profiles_created_by\" ON \"dc_o2o_profiles\"(\"created_by\");",
+      "CREATE UNIQUE INDEX IF NOT EXISTS \"idx_dc_o2o_profiles_slug\" ON \"dc_o2o_profiles\"(\"slug\");"
+    ],
+    "mysql": [
+      "CREATE TABLE IF NOT EXISTS `dc_o2o_people` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `title` varchar(255) NOT NULL,\n  `slug` varchar(255) NOT NULL,\n  `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP,\n  `created_by` varchar(191),\n  `_revision` int DEFAULT 1 NOT NULL,\n  `_changed_by_kind` varchar(16),\n  `_changed_by_id` varchar(255),\n  `_changed_by_principal_kind` varchar(64),\n  `_changed_at` timestamp,\n`name` text\n);",
+      "CREATE INDEX `idx_dc_o2o_people_created_at` ON `dc_o2o_people`(`created_at` DESC);",
+      "CREATE INDEX `idx_dc_o2o_people_created_by` ON `dc_o2o_people`(`created_by`);",
+      "CREATE UNIQUE INDEX `idx_dc_o2o_people_slug` ON `dc_o2o_people`(`slug`);",
+      "CREATE TABLE IF NOT EXISTS `dc_o2o_profiles` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `slug` varchar(255) NOT NULL,\n  `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP,\n  `created_by` varchar(191),\n  `_revision` int DEFAULT 1 NOT NULL,\n  `_changed_by_kind` varchar(16),\n  `_changed_by_id` varchar(255),\n  `_changed_by_principal_kind` varchar(64),\n  `_changed_at` timestamp,\n`title` text,\n`person` varchar(36)  UNIQUE,\n  CONSTRAINT `fk_dc_o2o_profiles_person` FOREIGN KEY (`person`) REFERENCES `dc_o2o_people`(`id`) ON DELETE SET NULL ON UPDATE NO ACTION\n);",
+      "CREATE INDEX `idx_dc_o2o_profiles_person` ON `dc_o2o_profiles` (`person`);",
+      "CREATE INDEX `idx_dc_o2o_profiles_created_at` ON `dc_o2o_profiles`(`created_at` DESC);",
+      "CREATE INDEX `idx_dc_o2o_profiles_created_by` ON `dc_o2o_profiles`(`created_by`);",
+      "CREATE UNIQUE INDEX `idx_dc_o2o_profiles_slug` ON `dc_o2o_profiles`(`slug`);"
+    ],
+    "sqlite": [
+      "CREATE TABLE IF NOT EXISTS \"dc_o2o_people\" (\n  \"id\" text PRIMARY KEY NOT NULL,\n  \"title\" text NOT NULL,\n  \"slug\" text NOT NULL,\n  \"created_at\" integer DEFAULT (strftime('%s', 'now')),\n  \"updated_at\" integer DEFAULT (strftime('%s', 'now')),\n  \"created_by\" text,\n  \"_revision\" integer DEFAULT 1 NOT NULL,\n  \"_changed_by_kind\" text,\n  \"_changed_by_id\" text,\n  \"_changed_by_principal_kind\" text,\n  \"_changed_at\" integer,\n\"name\" text\n);",
+      "CREATE INDEX IF NOT EXISTS \"idx_dc_o2o_people_created_at\" ON \"dc_o2o_people\"(\"created_at\");",
+      "CREATE INDEX IF NOT EXISTS \"idx_dc_o2o_people_created_by\" ON \"dc_o2o_people\"(\"created_by\");",
+      "CREATE UNIQUE INDEX IF NOT EXISTS \"idx_dc_o2o_people_slug\" ON \"dc_o2o_people\"(\"slug\");",
+      "CREATE TABLE IF NOT EXISTS \"dc_o2o_profiles\" (\n  \"id\" text PRIMARY KEY NOT NULL,\n  \"slug\" text NOT NULL,\n  \"created_at\" integer DEFAULT (strftime('%s', 'now')),\n  \"updated_at\" integer DEFAULT (strftime('%s', 'now')),\n  \"created_by\" text,\n  \"_revision\" integer DEFAULT 1 NOT NULL,\n  \"_changed_by_kind\" text,\n  \"_changed_by_id\" text,\n  \"_changed_by_principal_kind\" text,\n  \"_changed_at\" integer,\n\"title\" text,\n\"person\" text  UNIQUE,\n  CONSTRAINT \"fk_dc_o2o_profiles_person\" FOREIGN KEY (\"person\") REFERENCES \"dc_o2o_people\"(\"id\") ON DELETE SET NULL ON UPDATE NO ACTION\n);",
+      "CREATE INDEX IF NOT EXISTS \"idx_dc_o2o_profiles_person\" ON \"dc_o2o_profiles\" (\"person\");",
+      "CREATE INDEX IF NOT EXISTS \"idx_dc_o2o_profiles_created_at\" ON \"dc_o2o_profiles\"(\"created_at\");",
+      "CREATE INDEX IF NOT EXISTS \"idx_dc_o2o_profiles_created_by\" ON \"dc_o2o_profiles\"(\"created_by\");",
+      "CREATE UNIQUE INDEX IF NOT EXISTS \"idx_dc_o2o_profiles_slug\" ON \"dc_o2o_profiles\"(\"slug\");"
+    ]
+  }
+}

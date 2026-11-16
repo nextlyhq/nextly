@@ -17,6 +17,7 @@ import type {
   FieldCondition,
 } from "@admin/components/features/schema-builder/types";
 import * as Icons from "@admin/components/icons";
+import { isConditionSourceType } from "@admin/lib/builder/condition-identity";
 import { distinguishFieldAt } from "@admin/lib/builder/distinguishing-label";
 import { useFieldTypeLabel } from "@admin/lib/builder/field-type-label";
 import { isLayoutContainer } from "@admin/lib/builder/move-rule";
@@ -36,26 +37,6 @@ type Props = {
   readOnly?: boolean;
   onChange: (next: FieldCondition | undefined) => void;
 };
-
-// Field types eligible to be a condition source: boolean, text-style, number,
-// date, select and radio. A relationship or media field has no scalar the
-// evaluator can compare, so offering it would build a condition that never
-// matches.
-const ELIGIBLE_SOURCE_TYPES = new Set([
-  "checkbox",
-  "text",
-  "textarea",
-  "richText",
-  "email",
-  "code",
-  "password",
-  // An icon id compares as text: "is set", or "equals lucide:star".
-  "icon",
-  "number",
-  "date",
-  "select",
-  "radio",
-]);
 
 const PICKER_TYPES = new Set(["select", "radio"]);
 
@@ -127,7 +108,9 @@ export function ConditionBuilder({
   // The sources sit on the field's level, so the containers naming that level
   // are theirs too; one with no name stores nothing and names nothing.
   const path = ancestors.filter(each => !isLayoutContainer(each));
-  const eligible = siblingFields.filter(f => ELIGIBLE_SOURCE_TYPES.has(f.type));
+  // The types a condition can compare, as the broken-condition check judges
+  // them, so a source offered here is never one it then marks broken.
+  const eligible = siblingFields.filter(f => isConditionSourceType(f.type));
   const c = normalizeIncoming(condition);
 
   if (!c) {
