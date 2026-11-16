@@ -581,6 +581,46 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("keeps a field group change's files, recorded nowhere, when its companion fails after the push", async () => {
+      const t = await boot({ translated: true });
+      await dispatchComponents(
+        "createComponent",
+        {},
+        {
+          slug: "meta",
+          label: "Meta",
+          fields: [{ name: "note", type: "text" }],
+        }
+      );
+      const component = await t
+        .getService("fieldGroupRegistryService")
+        .getComponent("meta");
+
+      companionFails.component = true;
+      // Translation turned on: the save carries values to the companion, so the push applies it.
+      await expect(
+        dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug: "meta" },
+          {
+            fields: [
+              { name: "note", type: "text" },
+              { name: "byline", type: "text" },
+            ],
+            localized: true,
+            confirmed: true,
+            schemaVersion: component.schemaVersion,
+          }
+        )
+      ).rejects.toBeDefined();
+
+      // The push changed the table: its file stays, for `nextly migrate` to
+      // name, and is recorded applied nowhere.
+      const update = migrationFiles(t).find(f => /_meta_update\.sql$/.test(f));
+      expect(update).toBeDefined();
+      expect(await appliedFiles(t)).not.toContain(update);
+    });
+
+    it("records a field group change's file applied, and fails, when its companion fails after the file ran", async () => {
       const t = await boot();
       await dispatchComponents(
         "createComponent",
@@ -596,6 +636,7 @@ describe.each(getConfiguredTestDialects())(
         .getComponent("meta");
 
       companionFails.component = true;
+      // A save that moves no values runs its own file, then the companion step.
       await expect(
         dispatchComponents(
           "applyComponentSchemaChanges",
@@ -611,11 +652,10 @@ describe.each(getConfiguredTestDialects())(
         )
       ).rejects.toBeDefined();
 
-      // The push changed the table: its file stays, for `nextly migrate` to
-      // name, and is recorded applied nowhere.
+      // The file ran whole, so it is recorded applied; the companion's failure is still reported.
       const update = migrationFiles(t).find(f => /_meta_update\.sql$/.test(f));
       expect(update).toBeDefined();
-      expect(await appliedFiles(t)).not.toContain(update);
+      expect(await appliedFiles(t)).toContain(update);
     });
 
     /** A translated Single whose heading leaves translation as Required. */
