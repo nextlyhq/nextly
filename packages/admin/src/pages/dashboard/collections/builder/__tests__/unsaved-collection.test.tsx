@@ -42,6 +42,7 @@ vi.mock("@admin/services/schemaFileApi", () => ({
 
 // Watched, and still made: the leave guard sees the navigation as it would.
 const navigate = vi.fn();
+const replaced = vi.fn();
 vi.mock("@admin/lib/navigation", async importOriginal => {
   const actual = await importOriginal<typeof import("@admin/lib/navigation")>();
   return {
@@ -49,6 +50,10 @@ vi.mock("@admin/lib/navigation", async importOriginal => {
     navigateTo: (path: string) => {
       navigate(path);
       actual.navigateTo(path);
+    },
+    replaceTo: (path: string) => {
+      replaced(path);
+      actual.replaceTo(path);
     },
   };
 });
@@ -265,7 +270,10 @@ describe("an unsaved collection's address", () => {
     await waitFor(() => expect(save).toBeEnabled());
     await user.click(save);
 
-    expect(navigate).toHaveBeenCalledWith("/admin/builder/collections/items");
+    // The same collection corrected, not a new place: the route is replaced,
+    // so Back does not return to an address that holds nothing.
+    expect(replaced).toHaveBeenCalledWith("/admin/builder/collections/items");
+    expect(navigate).not.toHaveBeenCalled();
     // The same collection under a new address: no leave to ask about, and the
     // route has moved.
     expect(
@@ -292,5 +300,82 @@ describe("an unsaved collection's address", () => {
         name: "Create the collection items?",
       })
     ).toBeInTheDocument();
+  });
+});
+
+describe("an unsaved collection's address, moved onto one in use", () => {
+  async function moveTo(user: ReturnType<typeof userEvent.setup>, to: string) {
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    const settings = await screen.findByRole("dialog");
+    const address = within(settings).getByLabelText("Slug");
+    await user.clear(address);
+    await user.type(address, to);
+    const save = within(settings).getByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).toBeEnabled());
+    await user.click(save);
+  }
+
+  it("stays where it is when the server's rule refuses the new address at the move", async () => {
+    const user = userEvent.setup();
+    render(
+      <RestartProvider>
+        <CollectionBuilderEditPage params={{ slug: "products" }} />
+        <Toaster />
+      </RestartProvider>
+    );
+    await screen.findByTestId("field-row-headline");
+    // Free while typed; taken by the time of the move (a Single took it).
+    let asks = 0;
+    check.mockImplementation(async (kind: string, address: string) => ({
+      kind,
+      address,
+      refusal:
+        address === "items" && ++asks > 1
+          ? { code: "DUPLICATE", message: "Resource already exists." }
+          : null,
+    }));
+    await moveTo(user, "items");
+
+    expect(
+      await screen.findByText(
+        "A collection or Single already uses this address."
+      )
+    ).toBeInTheDocument();
+    expect(unsavedEntity("collection", "items")).toBeUndefined();
+    expect(unsavedEntity("collection", "products")).toBeDefined();
+    expect(replaced).not.toHaveBeenCalled();
+  });
+
+  it("stays where it is while its first save is on its way", async () => {
+    const user = userEvent.setup();
+    render(
+      <RestartProvider>
+        <CollectionBuilderEditPage params={{ slug: "products" }} />
+        <Toaster />
+      </RestartProvider>
+    );
+    await screen.findByTestId("field-row-headline");
+    check.mockImplementation(async (kind: string, address: string) => ({
+      kind,
+      address,
+      refusal: null,
+    }));
+    // The create holds until released, so the save is on its way.
+    let release: (value: unknown) => void = () => {};
+    mockCreate.mockImplementation(
+      () => new Promise(resolve => (release = resolve))
+    );
+    await saveAndConfirm(user);
+    await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
+
+    await moveTo(user, "items");
+    expect(
+      await screen.findByText(
+        "This collection is being saved. Change its address once the save ends."
+      )
+    ).toBeInTheDocument();
+    expect(unsavedEntity("collection", "items")).toBeUndefined();
+    expect(replaced).not.toHaveBeenCalled();
+    release({ message: "Collection created" });
   });
 });
