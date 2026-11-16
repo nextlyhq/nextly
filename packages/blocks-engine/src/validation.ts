@@ -1569,11 +1569,10 @@ function checkLimits(survey: DocumentSurvey, issues: ValidationIssue[]): void {
   // by deleting blocks, and reporting it as "too large" sends its author to
   // work that cannot help.
   //
-  // Read off the SAME survey that answered depth and node count, rather than
-  // from a second measurement. Over-limit is reported ahead of unwritable when
-  // a document is both: the byte issue is what gates the precise walk
-  // downstream, so losing it to the other cause is what lets an unbounded
-  // traversal run.
+  // Read off the SAME survey that answered depth and node count, not a second
+  // measurement. Over-limit is reported ahead of unwritable for a document that
+  // is both: the byte issue gates the precise walk downstream, so losing it to
+  // the other cause is what lets an unbounded traversal run.
   const { bytes } = survey;
   if (survey.tooLarge) {
     issues.push({

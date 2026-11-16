@@ -90,6 +90,7 @@ import type { NestingSource } from "./nesting";
 import { isPlainRecord } from "./plain-record";
 import { isUsableSlotName } from "./registry";
 import { defineEntry, ownEntry } from "./safe-record";
+import { assembleSlots } from "./structural-sharing";
 import { isConditionGated } from "./visibility";
 
 /** Stable unique node id. `crypto.randomUUID` exists in Node ≥ 20 and browsers. */
@@ -836,50 +837,6 @@ function isSlotsRecord(slots: unknown): slots is Record<string, BlockNode[]> {
   // `Array.isArray` separately, because `typeof [] === "object"` and an array
   // of slots is malformed rather than empty.
   return typeof slots === "object" && slots !== null && !Array.isArray(slots);
-}
-
-/**
- * Put the rebuilt slots back on a node, keeping any slot that was not rebuilt.
- *
- * What did not change keeps its identity. A rebuilt child list holding exactly
- * the children it held before is the original list, and a node `fn` left alone
- * whose lists all came back unchanged is the original node. Documents are
- * immutable values, so an edit then shares every part it did not touch with
- * the document before it: only the path from the edit to the root is new, and
- * anything kept against a part (a measured size) still holds for it.
- */
-function assembleSlots(
-  source: unknown,
-  mapped: BlockNode,
-  built: Map<string, BlockNode[]>
-): BlockNode {
-  const slots: Record<string, BlockNode[]> = {};
-  let changed = mapped !== source;
-  for (const [name, original] of Object.entries(mapped.slots ?? {})) {
-    // A slot absent from `built` held something this rebuild could not walk.
-    // Keeping the stored value is the point: an unrelated edit must not be the
-    // thing that destroys it.
-    const rebuilt = built.get(name);
-    const value =
-      rebuilt === undefined || sameEntries(rebuilt, original)
-        ? original
-        : rebuilt;
-    if (value !== original) changed = true;
-    // DEFINED rather than assigned — the write-side twin of reading through a
-    // `Map` above. `safe-record` carries why; it is shared because fixing this
-    // one site left three others in the package with the plain-assignment form.
-    defineEntry(slots, name, value);
-  }
-  return changed ? { ...mapped, slots } : mapped;
-}
-
-/** Whether two lists hold the same entries, by identity, in the same order. */
-function sameEntries(a: readonly unknown[], b: unknown): boolean {
-  return (
-    Array.isArray(b) &&
-    a.length === b.length &&
-    a.every((entry, index) => entry === b[index])
-  );
 }
 
 /** Clamp an insertion index into a list's valid range. */

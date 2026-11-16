@@ -44,6 +44,7 @@
  * @module ops
  */
 
+import { byteCapRefusal } from "./byte-cap";
 import {
   type BlockDocument,
   type BlockNode,
@@ -54,7 +55,6 @@ import {
   isBlockOrigin,
   isComponentDocument,
 } from "./document";
-import { keptJsonBytes } from "./kept-sizes";
 import {
   layersLockBreak,
   lockedWithin,
@@ -63,15 +63,14 @@ import {
 import {
   countNodes,
   DEFAULT_LIMITS,
-  documentTooLargeMessage,
   ForestTooLargeError,
   MAX_VALUE_PARTS,
   treeDepth,
   type DocumentLimits,
 } from "./limits";
-import { measureBytes } from "./measure-bytes";
 import { isPlainRecord } from "./plain-record";
 import { isUsableSlotName } from "./registry";
+import { keptList } from "./structural-sharing";
 // The engine's own predicate, so a slot name is judged the same way at a
 // block's declaration and on every op that carries one. Two gates answering
 // differently is how a name a position could not use gets in through a subtree.
@@ -2046,71 +2045,10 @@ function assertFitsCaps(
         `apply and then fail to save.`
     );
   }
-  // Size as well as count. A single large string passes a node count and still
-  // puts the document past what the engine will store, with the same result:
-  // the edit applies, enters history, and every save afterwards is refused.
-  //
-  // COUNTED rather than produced. `documentBytes` answers by building the JSON
-  // string and then a UTF-8 buffer of it, so deciding "is this too big" would
-  // first allocate two copies of the thing being called too big — and an op
-  // carrying a value far past the cap could exhaust the editor before the
-  // refusal it earns. The engine's `measureBytes` walks and counts, stopping
-  // as soon as the answer is settled, and the validator already decides this
-  // question with it.
-  //
-  // The ceiling is what makes one bounded pass decisive. The rule is that an
-  // edit is refused when it crosses the cap or worsens an existing overage —
-  // equivalently, when the result is larger than both the cap and the document
-  // it started from. So the ceiling is the larger of the two, and the common
-  // case never pays for measuring `before` in full: a document already inside
-  // the cap settles it, and only one already over the cap needs its exact size,
-  // which is the repair case a site creates by lowering its own limit.
-  //
-  // From the sizes KEPT against each part when both documents are plain data,
-  // which is every document the editor builds from its own operations: the
-  // starting document was measured once, on its first check, and the result
-  // shares every part it did not change, so only the edited path is measured.
-  // The answer is the full measurement's; a document that is not plain data
-  // has no kept size and takes the full measurement below, which probes every
-  // object for a value the writer refuses.
-  const keptResult = keptJsonBytes(result);
-  const keptBefore =
-    keptResult === undefined ? undefined : keptJsonBytes(before);
-  if (keptResult !== undefined && keptBefore !== undefined) {
-    const keptCeiling =
-      keptBefore > limits.maxBytes ? keptBefore : limits.maxBytes;
-    if (keptResult > keptCeiling) {
-      throw new OpError(documentTooLargeMessage(limits.maxBytes));
-    }
-    return;
-  }
-  const startingSize = measureBytes(before, limits.maxBytes);
-  const ceiling = startingSize.exceeded
-    ? measureBytes(before, Number.POSITIVE_INFINITY).bytes
-    : limits.maxBytes;
-  const size = measureBytes(result, ceiling);
-  // Unstorable and too large are different verdicts, and the message says which.
-  // A cyclic document, or one holding `undefined`, a function or a `Date`,
-  // cannot be written at any size — reporting that as an overage would tell an
-  // author their two-node page had outgrown a two-megabyte cap and send them
-  // deleting content that was never the problem.
-  //
-  // `exceeded` covers BOTH, which is why the refusal is one branch rather than
-  // two: a caller asking only whether the document fits still refuses one that
-  // has no stored form. Reading a separate flag for that is fail-open, and was
-  // measured to be — it silently stopped this guard refusing cyclic documents
-  // until a second check was added by hand.
-  if (size.exceeded) {
-    throw new OpError(
-      size.reason === "unwritable"
-        ? `${verb}: this would leave the document holding a value that cannot ` +
-          `be stored — a cycle, or something JSON does not preserve. The ` +
-          `edit would apply and then fail to save.`
-        : // The server's words for an over-size document, so an author
-          // refused here reads the reason a save would have given.
-          documentTooLargeMessage(limits.maxBytes)
-    );
-  }
+  // Size as well as count, asked of `byte-cap`, which answers from the sizes
+  // kept for each part and falls back to the full measurement.
+  const bytes = byteCapRefusal(before, result, limits.maxBytes, verb);
+  if (bytes !== undefined) throw new OpError(bytes);
 }
 
 /**
@@ -2264,18 +2202,12 @@ function rebuild(
   return nodes.map(node => {
     const mapped = fn(node);
     if (mapped.slots === undefined) return mapped;
-    // A node `fn` left alone whose child lists all came back unchanged is the
-    // original node, so an edit shares what it did not touch with the document
-    // before it and only the path to the edit is new (see `kept-sizes`).
+    // What did not change keeps its identity (see `structural-sharing`).
     let changed = mapped !== node;
     const slots: Record<string, BlockNode[]> = {};
     for (const [name, children] of Object.entries(mapped.slots)) {
-      const rebuilt = rebuild(children, fn);
-      const same =
-        rebuilt.length === children.length &&
-        rebuilt.every((child, index) => child === children[index]);
-      slots[name] = same ? children : rebuilt;
-      if (!same) changed = true;
+      slots[name] = keptList(rebuild(children, fn), children);
+      if (slots[name] !== children) changed = true;
     }
     return changed ? { ...mapped, slots } : mapped;
   });
