@@ -17,6 +17,8 @@
 import { z } from "zod";
 
 import { brandSettingsUpdateSchema } from "./brand-settings";
+import type { RenderedTemplate } from "./services/render-template";
+import { formatMismatch, writtenDocumentSchema } from "./written/document";
 
 /**
  * The fields a render needs, and nothing else.
@@ -25,26 +27,52 @@ import { brandSettingsUpdateSchema } from "./brand-settings";
  * accepting a name, a slug or an id would take input it has no use for.
  */
 export const draftPreviewSchema = z.object({
-  template: z.object({
-    subject: z.string(),
-    htmlContent: z.string(),
-    plainTextContent: z.string().nullable().default(null),
-    preheader: z.string().nullable().default(null),
-    useLayout: z.boolean(),
-    kind: z.enum(["template", "layout", "partial"]),
-    layoutId: z.string().nullable().default(null),
-    /**
-     * The saved template these fields are a draft of, if any. Without
-     * `legacy`, its engine decides the preview's: one kept on the old engine
-     * previews as it sends.
-     */
-    id: z.string().optional(),
-    /**
-     * Preview with the old `{{variable}}` engine (true) or Liquid (false),
-     * whatever the saved template uses.
-     */
-    legacy: z.boolean().optional(),
-  }),
+  template: z
+    .object({
+      subject: z.string(),
+      htmlContent: z.string(),
+      plainTextContent: z.string().nullable().default(null),
+      preheader: z.string().nullable().default(null),
+      useLayout: z.boolean(),
+      kind: z.enum(["template", "layout", "partial"]),
+      layoutId: z.string().nullable().default(null),
+      /**
+       * The From line as written. Its rendered form comes back with the
+       * preview, so an inbox-style view can show the sender a reader sees.
+       */
+      fromOverride: z.string().nullable().optional(),
+      /**
+       * The saved template these fields are a draft of, if any. Without
+       * `legacy`, its engine decides the preview's: one kept on the old engine
+       * previews as it sends.
+       */
+      id: z.string().optional(),
+      /**
+       * Preview with the old `{{variable}}` engine (true) or Liquid (false),
+       * whatever the saved template uses.
+       */
+      legacy: z.boolean().optional(),
+      /**
+       * A written draft's blocks, previewed from the blocks as they are typed.
+       * Checked by the same rules a save of them is.
+       */
+      format: z.enum(["code", "written"]).optional(),
+      blocks: writtenDocumentSchema.nullable().optional(),
+    })
+    // The rule a save applies to the same fields, so a preview never shows
+    // a draft that can't be saved.
+    .superRefine((template, ctx) => {
+      const mismatch = formatMismatch(template);
+      if (mismatch) {
+        ctx.addIssue({
+          code: "custom",
+          path: [
+            mismatch.reason === "written-not-a-template" ? "kind" : "blocks",
+          ],
+          message: mismatch.message,
+        });
+      }
+    }),
   data: z.record(z.string(), z.unknown()),
   /**
    * Brand settings to preview with instead of the saved ones, for this render
@@ -73,3 +101,18 @@ export type DraftPreviewRequest = z.input<typeof draftPreviewSchema>;
  * `template.preheader` needs the guarantee that the caller's type cannot give.
  */
 export type DraftPreviewParsed = z.output<typeof draftPreviewSchema>;
+
+/**
+ * A draft's preview: the rendered email, plus the two lines an inbox shows
+ * beside the subject, rendered as a reader sees them.
+ */
+export type DraftPreview = RenderedTemplate & {
+  /** The preview text, rendered as plain text; empty when there is none. */
+  preheader: string;
+  /**
+   * The From line with its name rendered, or null when the draft sets none.
+   * A From whose address uses a variable, which a save refuses, comes back
+   * as written.
+   */
+  from: string | null;
+};

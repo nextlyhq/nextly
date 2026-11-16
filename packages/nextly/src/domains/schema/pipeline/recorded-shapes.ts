@@ -17,6 +17,7 @@ import {
   relationStorageShape,
   toSnakeCase,
 } from "../services/field-column-descriptor";
+import { relationshipTargetSlug } from "../services/relationship-key-target";
 
 import type { NextlySchemaSnapshot, TableSpec } from "./diff/types";
 import type {
@@ -103,8 +104,10 @@ function recordedShapes(
  * before anything runs, converts the values and repairs an older column, and SQLite drops a key
  * only by rebuilding the table. A Schema Builder save that writes its migration from the newest
  * snapshot sees none of that, so a save this answers true for is applied by the push and its file
- * recorded once it has run, as a translated collection's is. `liveTable` is read only where a
- * field stores a list or a reference naming its collection.
+ * recorded once it has run, as a translated collection's is. So is a relationship pointed at
+ * another collection while its live column holds a key: the push judges the key against the live
+ * table before anything runs. `liveTable` is read only where a field stores a list or a reference
+ * naming its collection, or a relationship's target changes.
  */
 export async function reachesRelationStorage(args: {
   before: readonly RecordedField[];
@@ -138,10 +141,29 @@ export async function reachesRelationStorage(args: {
       ? [column]
       : [];
   });
-  if (keyless.length === 0) return false;
+  // The columns of relationships this change points at another collection, as reads name it.
+  const targetBefore = new Map(
+    args.before.flatMap(field => {
+      const column = columnOf(field);
+      return column !== undefined && field.type === "relationship"
+        ? [[column, relationshipTargetSlug(field)] as const]
+        : [];
+    })
+  );
+  const retargeted = args.after.flatMap(field => {
+    const column = columnOf(field);
+    return column !== undefined &&
+      field.type === "relationship" &&
+      targetBefore.has(column) &&
+      targetBefore.get(column) !== relationshipTargetSlug(field)
+      ? [column]
+      : [];
+  });
+  const watched = [...keyless, ...retargeted];
+  if (watched.length === 0) return false;
   const table = await args.liveTable();
   return (table?.foreignKeys ?? []).some(key =>
-    key.columns.some(column => keyless.includes(column.toLowerCase()))
+    key.columns.some(column => watched.includes(column.toLowerCase()))
   );
 }
 

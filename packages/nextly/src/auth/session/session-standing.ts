@@ -5,7 +5,8 @@
  * issued it. Deactivating the account, or an administrator setting its
  * password, has to end the sessions the account already holds, and a token
  * outlives either change by up to its whole lifetime: fifteen minutes from the
- * login endpoint, thirty days from the Direct API's `nextly.login()`. So every
+ * login endpoint, a day from the Direct API's `nextly.login()` (thirty days
+ * for one signed before that lifetime was shortened). So every
  * place a session is read also asks the account's row two things: is it
  * active, and is its session epoch the one the token was signed at?
  *

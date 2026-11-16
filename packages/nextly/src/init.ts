@@ -40,7 +40,11 @@ import {
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { checkConsumerDrizzleVersion } from "./database/drizzle-version";
 import { recordRegisteredLocalization } from "./di/registered-localization";
-import { getService, isServicesRegistered } from "./di/service-access";
+import {
+  getService,
+  isServicesRegistered,
+  registrationInFlight,
+} from "./di/service-access";
 import { installLegacyFieldGroupsNamespaceGuard } from "./direct-api/legacy-field-groups-namespace";
 import { requireNextly as getDirectAPI } from "./direct-api/nextly";
 import { recordBuildSchemaVersion } from "./domains/schema/build-schema-version";
@@ -74,6 +78,7 @@ import {
   holdBootSeeding,
   seedPermissionsAndRolePresets,
 } from "./init/seed-permissions";
+import { markStartFailure } from "./init/start-failure";
 import {
   awaitStartInFlight,
   clearStart,
@@ -195,6 +200,9 @@ function buildNextlyInstance(
     findByID: directAPI.findByID.bind(directAPI),
     create: directAPI.create.bind(directAPI),
     update: directAPI.update.bind(directAPI),
+    rewriteField: directAPI.rewriteField.bind(directAPI),
+    publish: directAPI.publish.bind(directAPI),
+    unpublish: directAPI.unpublish.bind(directAPI),
     delete: directAPI.delete.bind(directAPI),
     count: directAPI.count.bind(directAPI),
     group: directAPI.group.bind(directAPI),
@@ -746,6 +754,41 @@ export function registerNextlyStart(start: () => Promise<Nextly>): void {
  * @public
  */
 export async function getCachedNextly(): Promise<Nextly> {
+  let instance: Nextly | undefined;
+  try {
+    instance = await startedOrStarting();
+  } catch (error) {
+    // Recorded, so a reader can tell later that Nextly could not be started
+    // (`errors/unavailable`), whatever the error's own shape says. A value
+    // that is not an object cannot be recorded, so it is made an error
+    // carrying it first.
+    if (typeof error === "object" && error !== null) {
+      markStartFailure(error);
+      throw error;
+    }
+    const failure = NextlyError.internal({ logContext: { rejection: error } });
+    markStartFailure(failure);
+    throw failure;
+  }
+  if (instance !== undefined) return instance;
+
+  // Nothing has started and nothing can be: no start was made, so this is
+  // not recorded as a start that failed.
+  throw NextlyError.configuration({
+    logMessage:
+      "getCachedNextly() called before initialization. Ensure " +
+      "`getNextly({ config })` (or `createRegister(config)` from " +
+      "instrumentation.ts) has run at least once before any internal " +
+      "handler executes. See https://nextlyhq.com/docs/getting-started.",
+  });
+}
+
+/**
+ * The started Nextly, waiting for a start in flight or making one where one
+ * can be made; undefined where nothing has started and nothing can start it.
+ * Rejects with the start's own error when a start fails.
+ */
+async function startedOrStarting(): Promise<Nextly | undefined> {
   // Before ANY return, including the cached one. Everything below keys off
   // `isServicesRegistered()`, which says nothing about whether this process's
   // boot migrations allowed it to serve. Awaiting rather than testing means a
@@ -760,6 +803,19 @@ export async function getCachedNextly(): Promise<Nextly> {
   const inFlight = startInFlight();
   if (inFlight) {
     return inFlight;
+  }
+
+  // A registration begun without `getNextly` (a route's request-path boot, or
+  // `createTestNextly`) is still running: work a plugin started during it
+  // without awaiting it, such as a seed begun in `onReady`, waits for it here
+  // as it would for `getNextly`'s start, and reads the instance once it is
+  // done. A registration that fails rejects, with its own error.
+  const registering = registrationInFlight();
+  if (registering !== undefined && !isServicesRegistered()) {
+    await registering;
+    if (globalForInit.__nextly_cachedInstance) {
+      return globalForInit.__nextly_cachedInstance;
+    }
   }
 
   // Fallback path: services may have been registered via
@@ -800,13 +856,7 @@ export async function getCachedNextly(): Promise<Nextly> {
     return start();
   }
 
-  throw NextlyError.configuration({
-    logMessage:
-      "getCachedNextly() called before initialization. Ensure " +
-      "`getNextly({ config })` (or `createRegister(config)` from " +
-      "instrumentation.ts) has run at least once before any internal " +
-      "handler executes. See https://nextlyhq.com/docs/getting-started.",
-  });
+  return undefined;
 }
 
 /**

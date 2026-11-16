@@ -38,6 +38,12 @@ export interface CliCodeDefinition {
   readonly cause: string;
   /** The errors from below the CLI that end a command as this code. */
   readonly from?: readonly FromError[];
+  /**
+   * Set when a released code's cause can no longer happen. The code keeps its cause and its docs
+   * page, so a script or log search that names it still reads correctly, but nothing raises it
+   * and it maps no error. `why` is what removed the cause, as the docs page says it.
+   */
+  readonly retired?: { readonly why: string };
 }
 
 /** Declares an area's codes, keeping each key a literal so the registry can type them. */

@@ -88,16 +88,27 @@ export {
   PAGE_METADATA_SERVICE,
   type PageMetadataAnswer,
   type PageMetadataImage,
+  type PageImagePreview,
   type PageMetadataInput,
   type PageMetadataResolver,
   type PageMetadataSource,
   type PageMetadataValues,
   type PageListItem,
   type PageQuestion,
+  type PageRobots,
   type PageStructuredDataHints,
   type StructuredDataNode,
   type StructuredDataValue,
 } from "./runtime/seo";
+
+// Whether a failure means Nextly is unavailable, and what a page render does
+// about it: in production it fails rather than serving the page without what
+// Nextly gives it (the page's SEO head, say). The route helpers' head follows
+// it; a route asking Nextly for its page itself can too. `@experimental`.
+export {
+  failRenderWhenUnavailable,
+  isNextlyUnavailable,
+} from "./errors/unavailable";
 
 // Draft previews — the route that turns a scoped preview link into a draft
 // session, and the reader a read path asks what that session may see. `next` is
@@ -185,6 +196,9 @@ export type {
 // reader.
 export { isReadRefusal } from "./runtime/routing/miss-or-denied";
 export { deferToRequest } from "./runtime/routing/defer-to-request";
+// Whether the request is in Next's draft mode, the one check a public content
+// route asks before its draft gate. `@experimental` with the content routes.
+export { isDraftModeRequest } from "./runtime/routing/draft-mode";
 
 // The frame a page builder named query's `run` executes in: inside it, the
 // Direct API refuses every call, and only the reader handed to the query

@@ -34,6 +34,11 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../domains/i18n/per-language-storage";
+import {
+  busyTableBounds,
+  type BusyTableBounds,
+} from "../../domains/schema/busy-table/bounds";
+import { runStatementsInTries } from "../../domains/schema/busy-table/run-on-session";
 import type { Deletion } from "../../domains/schema/migrate/data-loss-consent";
 import { refuseFieldGroupSwitches } from "../../domains/schema/pipeline/companion-shape-switches";
 import { registryRows } from "../../domains/schema/pipeline/recorded-fields";
@@ -98,6 +103,60 @@ interface OrphanRecord {
 }
 
 // ============================================================================
+// Schema statements and a busy table
+// ============================================================================
+
+/** How a sync's own schema statements wait for a busy table, and how a report names them. */
+interface SyncStatementsRun {
+  /** What runs them, as a report names it: "the removal of orphaned singles". */
+  change: string;
+  bounds: BusyTableBounds;
+  logger: CommandContext["logger"];
+  /** What this pass applied before these statements, as a report names it. */
+  appliedBefore: readonly string[];
+  /** What a report calls the statement at `index`, never its text; by default its position. */
+  name?: (index: number) => string;
+}
+
+/**
+ * Runs a sync's own schema statements (the `user_ext` table's, the drop of an orphan's table) in
+ * order and returns what a report calls each one that ran. Each waits for a table another session
+ * is using in its own tries on one connection (`runStatementsInTries`), bounded by
+ * `NEXTLY_LOCK_TIMEOUT` / `NEXTLY_LOCK_TIMEOUT_TOTAL` (which `db:sync`'s `--lock-timeout` flags
+ * set), each try's notice through the logger's warning; one that stays busy throws
+ * `NEXTLY_TABLE_BUSY`, naming the statements before it, which stay. The command's adapter is typed
+ * as the CLI's narrower one, so an adapter offering no session runs each statement once, as before.
+ */
+async function runSyncStatements(
+  adapter: DrizzleAdapter,
+  statements: readonly string[],
+  run: SyncStatementsRun
+): Promise<readonly string[]> {
+  const nameOf =
+    run.name ??
+    ((index: number) =>
+      `statement ${String(index + 1)} of ${String(statements.length)}`);
+  const sessionCapable = [
+    "withSession",
+    "executeQuery",
+    "queryStatement",
+  ].every(method => typeof Reflect.get(adapter, method) === "function");
+  if (!sessionCapable) {
+    for (const statement of statements) {
+      await adapter.executeQuery(statement);
+    }
+    return statements.map((_, index) => `${run.change}: ${nameOf(index)}`);
+  }
+  return runStatementsInTries(adapter, statements, {
+    change: run.change,
+    bounds: run.bounds,
+    notify: line => run.logger.warn(line),
+    appliedBefore: run.appliedBefore,
+    name: nameOf,
+  });
+}
+
+// ============================================================================
 // Extension schema
 // ============================================================================
 
@@ -121,10 +180,14 @@ export async function publishExtensionSchema(
   const { compileAndPublishExtensionSchema } = await import(
     "../../domains/schema/extension/publish"
   );
+  const capabilities = (adapter as unknown as DrizzleAdapter).getCapabilities();
   await compileAndPublishExtensionSchema({
-    dialect: (adapter as unknown as DrizzleAdapter).getCapabilities().dialect,
+    dialect: capabilities.dialect,
     plugins: configResult.config.plugins ?? [],
     config: configResult.config,
+    // The connected server's limits: a push that declares a check or
+    // expression index the server cannot hold is refused before applying.
+    server: capabilities,
     logger: {
       warn: m => context.logger.warn(m),
       debug: m => context.logger.debug(m),
@@ -567,20 +630,26 @@ export async function syncUserFields(
   const statements = migrationSQL
     .split("--> statement-breakpoint")
     .map((s: string) => s.trim())
-    .filter((s: string) => s.length > 0);
-
-  try {
-    for (const statement of statements) {
-      const cleanStatement = statement
+    .filter((s: string) => s.length > 0)
+    .map((statement: string) =>
+      statement
         .split("\n")
         .filter((line: string) => !line.trim().startsWith("--"))
         .join("\n")
-        .trim();
+        .trim()
+    )
+    .filter((statement: string) => statement.length > 0);
 
-      if (cleanStatement) {
-        await drizzleAdapter.executeQuery(cleanStatement);
-      }
-    }
+  // Read before anything runs, so a bound outside its range is refused with nothing changed.
+  const bounds = busyTableBounds({ env: process.env });
+  try {
+    // The statements in order, each waiting for a busy table in tries (`runSyncStatements`).
+    await runSyncStatements(drizzleAdapter, statements, {
+      change: "the user_ext table's sync",
+      bounds,
+      logger,
+      appliedBefore: [],
+    });
 
     // Verify table actually exists
     const tableExists = await drizzleAdapter.tableExists("user_ext");
@@ -590,6 +659,9 @@ export async function syncUserFields(
       logger.warn("user_ext table creation SQL executed but table not found");
     }
   } catch (error) {
+    // A table that stayed busy past its tries stops the sync, rather than being reported as a
+    // warning the run then passes over.
+    if (NextlyError.isCode(error, "NEXTLY_TABLE_BUSY")) throw error;
     // Table already exists is expected with CREATE TABLE IF NOT EXISTS.
     // Match the immediate message only, so a wrapped failure carrying those
     // words deeper in its cause chain is still reported rather than skipped.
@@ -898,7 +970,7 @@ async function detectRemovedSingles(
 }
 
 /**
- * Delete orphaned singles: remove registry entry and drop data table.
+ * Delete orphaned singles: drop the data table, then remove the registry entry.
  * Uses raw delete to avoid re-fetch issues with getSingle/updateSingle.
  */
 async function handleRemovedSingles(
@@ -908,6 +980,11 @@ async function handleRemovedSingles(
 ): Promise<void> {
   const dialect = adapter.getCapabilities().dialect;
   const q = dialect === "mysql" ? "`" : '"';
+  // Read before anything is deleted, so a bound outside its range is refused with nothing changed.
+  const bounds = busyTableBounds({ env: process.env });
+  const change = "the removal of orphaned singles";
+  // What a busy-table report names as done before the drop that stopped.
+  const applied: string[] = [];
 
   for (const { slug, tableName } of removed) {
     try {
@@ -918,6 +995,23 @@ async function handleRemovedSingles(
       await teardownEntityComponentData({ adapter, parentTable: tableName });
       await teardownEntityI18n({ adapter, slug, tableName, kind: "single" });
 
+      // Drop the data table, waiting for it in tries where another session is using it. Before
+      // the registry delete: a drop that stops leaves the entry, so the next sync still finds
+      // the orphan and drops it then.
+      const sql =
+        dialect === "postgresql"
+          ? `DROP TABLE IF EXISTS ${q}${tableName}${q} CASCADE`
+          : `DROP TABLE IF EXISTS ${q}${tableName}${q}`;
+      applied.push(
+        ...(await runSyncStatements(adapter, [sql], {
+          change,
+          bounds,
+          logger,
+          appliedBefore: applied,
+          name: () => `the drop of table ${JSON.stringify(tableName)}`,
+        }))
+      );
+
       // Delete the registry entry directly, then the Single's autosaves and
       // version pins, in one transaction and in that order, as the
       // registry's own delete does: see `deleteEntityRegistryRow`.
@@ -927,18 +1021,17 @@ async function handleRemovedSingles(
         mediaUsagePresent: await mediaUsageTablePresent(adapter),
       };
       await adapter.transaction(tx =>
-        deleteEntityRegistryRow(tx, "single", slug, tables)
+        deleteEntityRegistryRow(tx, "single", slug, tables, dialect)
       );
-
-      // Drop the data table
-      const sql =
-        dialect === "postgresql"
-          ? `DROP TABLE IF EXISTS ${q}${tableName}${q} CASCADE`
-          : `DROP TABLE IF EXISTS ${q}${tableName}${q}`;
-      await adapter.executeQuery(sql);
+      applied.push(
+        `${change}: the registry entry of single ${JSON.stringify(slug)}`
+      );
 
       logger.success(`Deleted orphaned single: ${slug} (table: ${tableName})`);
     } catch (error) {
+      // A table that stayed busy past its tries stops the sync, rather than being logged as one
+      // more failed deletion the run then passes over.
+      if (NextlyError.isCode(error, "NEXTLY_TABLE_BUSY")) throw error;
       logger.error(
         `Failed to delete single "${slug}": ${describeError(error)}`
       );
@@ -962,7 +1055,7 @@ async function detectRemovedComponents(
 }
 
 /**
- * Delete orphaned components: remove registry entry and drop data table.
+ * Delete orphaned components: drop the data table, then remove the registry entry.
  * Uses raw delete to avoid re-fetch issues with getComponent/updateComponent.
  */
 /**
@@ -1011,6 +1104,11 @@ async function deleteOrphanedComponents(
 ): Promise<void> {
   const dialect = adapter.getCapabilities().dialect;
   const q = dialect === "mysql" ? "`" : '"';
+  // Read before anything is deleted, so a bound outside its range is refused with nothing changed.
+  const bounds = busyTableBounds({ env: process.env });
+  const change = "the removal of orphaned field groups";
+  // What a busy-table report names as done before the drop that stopped.
+  const applied: string[] = [];
 
   for (const { slug, tableName } of removed) {
     try {
@@ -1026,6 +1124,23 @@ async function deleteOrphanedComponents(
         kind: "fieldGroup",
       });
 
+      // Drop the data table, waiting for it in tries where another session is using it. Before
+      // the registry delete: a drop that stops leaves the entry, so the next sync still finds
+      // the orphan and drops it then.
+      const sql =
+        dialect === "postgresql"
+          ? `DROP TABLE IF EXISTS ${q}${tableName}${q} CASCADE`
+          : `DROP TABLE IF EXISTS ${q}${tableName}${q}`;
+      applied.push(
+        ...(await runSyncStatements(adapter, [sql], {
+          change,
+          bounds,
+          logger,
+          appliedBefore: applied,
+          name: () => `the drop of table ${JSON.stringify(tableName)}`,
+        }))
+      );
+
       // Delete registry entry directly
       // Resolved: this delete runs AFTER the nested instances and localized
       // data are torn down, so addressing a registry that is not there fails
@@ -1033,18 +1148,17 @@ async function deleteOrphanedComponents(
       await adapter.delete(await resolveFieldGroupRegistryName(adapter), {
         and: [{ column: "slug", op: "=", value: slug }],
       });
-
-      // Drop the data table
-      const sql =
-        dialect === "postgresql"
-          ? `DROP TABLE IF EXISTS ${q}${tableName}${q} CASCADE`
-          : `DROP TABLE IF EXISTS ${q}${tableName}${q}`;
-      await adapter.executeQuery(sql);
+      applied.push(
+        `${change}: the registry entry of field group ${JSON.stringify(slug)}`
+      );
 
       logger.success(
         `Deleted orphaned component: ${slug} (table: ${tableName})`
       );
     } catch (error) {
+      // A table that stayed busy past its tries stops the sync, rather than being logged as one
+      // more failed deletion the run then passes over.
+      if (NextlyError.isCode(error, "NEXTLY_TABLE_BUSY")) throw error;
       logger.error(
         `Failed to delete component "${slug}": ${describeError(error)}`
       );
@@ -1380,6 +1494,22 @@ export async function ensureLocalizedCompanions(
         cause: "companion-provisioning-failed",
         entities: failures,
       },
+    });
+  }
+  // Each translated date column an earlier release made with a time zone, of every entity the
+  // registry holds, Builder-made ones included, once nothing above was refused. The development
+  // sync converts it, no earlier instance writing beside it. `nextly migrate` (`supervised`) runs
+  // while instances of the earlier release may still write, which would store a date in a
+  // non-default language shifted into a converted column, so it only names each, and `nextly
+  // upgrade`, which converts them once the release serves every instance.
+  if (phase === "afterApply") {
+    const { convertZonedDateCompanions } = await import(
+      "../../domains/i18n/runtime/zoned-date-companions"
+    );
+    await convertZonedDateCompanions(adapter as unknown as DrizzleAdapter, {
+      convert: options.supervised !== true,
+      onNotice: message => logger.info(message),
+      onWarning: message => logger.warn(message),
     });
   }
 }

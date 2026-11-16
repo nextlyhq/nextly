@@ -222,6 +222,12 @@ export {
   adminStartupScreensJson,
 } from "./plugins/startup-reads";
 export { MAX_STARTUP_PATHS } from "./route-handler/startup-path";
+// The ids a place contribution's startup reads may name, and their filling:
+// the boot check and the admin page that starts the reads fill a path alike.
+export {
+  fillPlaceStartupPath,
+  PLACE_STARTUP_IDS,
+} from "./plugins/place-startup-reads";
 // The admin places, for the same reason: the catalogue the server checks a
 // plugin's contributions against is the one the admin renders them from.
 export {
@@ -253,6 +259,15 @@ export {
 // because a plugin's own UI calling its own route has to address it, and the
 // dispatcher is the only thing that knows where that is.
 export { pluginRouteFullPath } from "./plugins/routes/route-path";
+// Whether two sibling names clash, and whether a field's column is unique, by
+// the rules a save refuses by (@experimental). The Builder refuses a move or
+// names a copy by them: a copy of either rule would let the outline offer a
+// move the save then refuses.
+export {
+  builderColumnIsUnique,
+  siblingNameClash,
+  type SiblingClashKind,
+} from "./domains/schema/field-rules";
 // The mount travels with the path builder, so a client that resolves a route
 // names the same union the server declared it with.
 export type { PluginRouteMount } from "./plugins/routes/route-types";
@@ -559,3 +574,16 @@ export {
   apiKeyPermissionSlugsFor,
   type ApiKeyOperation,
 } from "./domains/auth/api-key-policy";
+
+// The Schema Builder's field-name rule, for the same reason the upload formats
+// are here: the admin checks a name in the BROWSER as it is typed, and a copy of
+// the rule kept there agrees with the save until one of them changes. The save
+// refuses a name through this function, so the panel accepts exactly what the
+// save takes. Its module reaches no database code.
+export {
+  fieldNameProblem,
+  type FieldNamePlace,
+  type FieldNameProblem,
+  type FieldNameProblemKind,
+  type FieldNameSurface,
+} from "./domains/dynamic-collections/field-name-rule";

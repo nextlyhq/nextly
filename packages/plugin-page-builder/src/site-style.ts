@@ -45,7 +45,6 @@ import type {
   SiteSheetInput,
   SiteToken,
   SiteTokenSet,
-  SpacingMode,
 } from "@nextlyhq/blocks-engine";
 
 /**
@@ -67,12 +66,20 @@ export interface SiteStyleData {
   classes?: readonly NamedClass[];
   /** The site's breakpoints, on both axes. */
   breakpoints?: BreakpointSet;
-  /**
-   * The site's spacing model: blocks spaced by their own margins (`classic`)
-   * or by the gap of the container holding them (`gaps`). Absent means the
-   * engine's default, `gaps`.
-   */
-  spacingMode?: SpacingMode;
+}
+
+/**
+ * What the server log says when a host still passes `siteStyle.spacingMode`,
+ * or nothing when it does not. The option was removed: blocks are always
+ * spaced by the gap of the container holding them. It is no longer in the
+ * option's type, so only an untyped host reaches this, and it still starts:
+ * the value is ignored rather than refused, since refusing would take a site
+ * down over a setting that no longer does anything.
+ */
+export function removedSiteStyleOption(siteStyle: unknown): string | undefined {
+  if (typeof siteStyle !== "object" || siteStyle === null) return undefined;
+  if (!Object.hasOwn(siteStyle, "spacingMode")) return undefined;
+  return "[page-builder] `siteStyle.spacingMode` was removed and is ignored: blocks are always spaced by the gap of the container holding them. Remove it from the pageBuilder() options.";
 }
 
 /**
@@ -117,8 +124,6 @@ export function resolveSiteStyle(
     breakpoints: hasBreakpoints(stored?.breakpoints)
       ? stored?.breakpoints
       : defaults?.breakpoints,
-    // One site-wide choice, so the stored one wins when there is one.
-    spacingMode: stored?.spacingMode ?? defaults?.spacingMode,
   });
 }
 
@@ -296,9 +301,6 @@ export function siteStyleOf(sections: SiteStyleData): SiteStyleData {
     ...(sections.breakpoints === undefined
       ? {}
       : { breakpoints: sections.breakpoints }),
-    ...(sections.spacingMode === undefined
-      ? {}
-      : { spacingMode: sections.spacingMode }),
   };
 }
 
@@ -395,16 +397,35 @@ export function siteBreakpoints(style?: SiteStyleData): BreakpointSet {
  * block defaults: a wrong preview is trusted, an unstyled one is questioned.
  * `blockBases` is never part of site style — a block type's default look
  * belongs to the block's definition, not to a site's stored edits.
+ *
+ * The same style answers the same sheet object. The canvas, the Layout's
+ * header and footer around it and the entry page's small preview each keep
+ * what they drew while their inputs keep their identity, and the renderer
+ * keeps the compiled site sheet the same way; a new sheet object per render
+ * made every one of them draw and compile again for a selection or a
+ * keystroke. A style is read as a value: a new style is a new object.
  */
 export function siteSheet(style?: SiteStyleData): SiteSheetInput {
+  if (style === undefined) return NO_STYLE_SHEET;
+  const kept = SHEETS.get(style);
+  if (kept !== undefined) return kept;
+  const sheet = sheetOf(style);
+  SHEETS.set(style, sheet);
+  return sheet;
+}
+
+/** The sheets answered, per style, weakly: a sheet goes with its style. */
+const SHEETS = new WeakMap<SiteStyleData, SiteSheetInput>();
+
+/** {@link siteSheet}'s answer, made. */
+function sheetOf(style?: SiteStyleData): SiteSheetInput {
   return {
     ...(style?.tokens === undefined ? {} : { tokens: style.tokens }),
     ...(style?.fonts === undefined ? {} : { fonts: style.fonts }),
     ...(style?.classes === undefined ? {} : { classes: style.classes }),
     breakpoints: siteBreakpoints(style),
-    // Carried to the renderer, which compiles the page under it.
-    ...(style?.spacingMode === undefined
-      ? {}
-      : { spacingMode: style.spacingMode }),
   };
 }
+
+/** The sheet for no style: breakpoints alone, the empty set. */
+const NO_STYLE_SHEET: SiteSheetInput = sheetOf();

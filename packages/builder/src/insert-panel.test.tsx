@@ -17,7 +17,7 @@
  * @module insert-panel.test
  */
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   act,
@@ -34,14 +34,17 @@ import {
   DEFAULT_LIMITS,
   type DocumentLimits,
   registerBlocks,
+  registryBlockSource,
   type BlockDocument,
   type ComponentDocument,
 } from "@nextlyhq/blocks-engine";
 
 import { NoticeSinkProvider } from "./builder-notices";
 import { InsertPanel } from "./insert-panel";
+import { besidePanel } from "./insert-panel-summon";
 import type { EditorState } from "./editor-state";
 import { EMPTY_SELECTION } from "./selection";
+import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
 
 // The command primitives observe their list box to size it, and jsdom
 // implements no ResizeObserver. Without this every case dies at render with a
@@ -213,27 +216,41 @@ describe("InsertPanel", () => {
     // A locked slot already missing its heading: inserting the heading repairs
     // it, inserting anything else breaks it further. One block's answer is
     // not every block's, whichever comes first in the list. The refused one
-    // stays in view, saying why, and its click inserts nothing.
+    // stays in view, saying why, and its click inserts nothing. Answered from
+    // the slot's lock, without asking the editor to try any insert.
     registerBlocks(
       [
         { ...base, name: "acme/heading", editor: { label: "Heading" } },
         { ...base, name: "acme/text", editor: { label: "Text" } },
+        {
+          ...base,
+          name: "acme/row",
+          editor: { label: "Row" },
+          slots: {
+            items: { defaultBlock: [{ type: "acme/heading" }], lock: "all" },
+          },
+        },
       ] as never,
       { source: "acme" }
     );
+    const lockRefusalFor = vi.fn(() => undefined);
     const editor = {
-      ...editorSpy(documentOf()),
-      lockRefusalFor: (ops: readonly { node?: { type: string } }[]) =>
-        ops[0]?.node?.type === "acme/heading"
-          ? undefined
-          : {
-              code: "locked-slot-altered" as const,
-              holderType: "acme/row",
-              lock: "all" as const,
-            },
+      ...editorSpy(
+        documentOf([
+          {
+            id: "row",
+            type: "acme/row",
+            version: 1,
+            props: {},
+            slots: { items: [] },
+          },
+        ])
+      ),
+      lockDefinitions: registryBlockSource(),
+      lockRefusalFor,
     } as unknown as ReturnType<typeof editorSpy>;
     const apply = vi.fn(() => editor.document);
-    render(<InsertPanel editor={{ ...editor, apply }} />);
+    render(<InsertPanel editor={{ ...editor, apply }} inside="row" />);
 
     const text = tile("Text");
     expect(text.getAttribute("data-refused")).toBe("true");
@@ -245,6 +262,143 @@ describe("InsertPanel", () => {
     expect(tile("Heading").getAttribute("data-refused")).toBeNull();
     fireEvent.click(tile("Heading"));
     expect(apply).toHaveBeenCalledTimes(1);
+    expect(lockRefusalFor).not.toHaveBeenCalled();
+  });
+
+  it("refuses every block where a Layers lock holds the place, without a trial insert", () => {
+    registerBlocks(
+      [
+        { ...base, name: "acme/text", editor: { label: "Text" } },
+        {
+          ...base,
+          name: "acme/box",
+          editor: { label: "Box" },
+          slots: { items: {} },
+        },
+      ] as never,
+      { source: "acme" }
+    );
+    const lockRefusalFor = vi.fn(() => undefined);
+    const editor = {
+      ...editorSpy(
+        documentOf([
+          {
+            id: "box",
+            type: "acme/box",
+            version: 1,
+            props: {},
+            locked: true,
+            slots: { items: [] },
+          },
+        ])
+      ),
+      lockDefinitions: registryBlockSource(),
+      lockRefusalFor,
+    } as unknown as ReturnType<typeof editorSpy>;
+    render(<InsertPanel editor={editor} inside="box" />);
+
+    const text = tile("Text");
+    expect(text.getAttribute("data-refused")).toBe("true");
+    expect(describedBy(text)).toContain("is locked");
+    expect(lockRefusalFor).not.toHaveBeenCalled();
+  });
+
+  it("refuses a block inside a container whose region a lock around it holds", () => {
+    // The box declares no lock of its own; the row it sits in locks its
+    // slot, and a lock holds all the way down. Read along the path, so a
+    // check of the box alone would offer the block.
+    const lockedRow = (lock: "all" | false) =>
+      registerBlocks(
+        [
+          { ...base, name: "acme/text", editor: { label: "Text" } },
+          {
+            ...base,
+            name: "acme/box",
+            editor: { label: "Box" },
+            slots: { items: {} },
+          },
+          {
+            ...base,
+            name: "acme/row",
+            editor: { label: "Row" },
+            slots: { items: { defaultBlock: [{ type: "acme/box" }], lock } },
+          },
+        ] as never,
+        { source: "acme" }
+      );
+    const panelInsideBox = () => {
+      const editor = {
+        ...editorSpy(
+          documentOf([
+            {
+              id: "row",
+              type: "acme/row",
+              version: 1,
+              props: {},
+              slots: {
+                items: [
+                  {
+                    id: "box",
+                    type: "acme/box",
+                    version: 1,
+                    props: {},
+                    slots: { items: [] },
+                  },
+                ],
+              },
+            },
+          ])
+        ),
+        lockDefinitions: registryBlockSource(),
+      } as unknown as ReturnType<typeof editorSpy>;
+      return render(<InsertPanel editor={editor} inside="box" />);
+    };
+
+    lockedRow("all");
+    const view = panelInsideBox();
+    expect(tile("Text").getAttribute("data-refused")).toBe("true");
+    expect(describedBy(tile("Text"))).toContain("locked");
+    view.unmount();
+
+    // The control: the same page with the row unlocked offers it.
+    clearBlocks();
+    lockedRow(false);
+    panelInsideBox();
+    expect(tile("Text").getAttribute("data-refused")).toBeNull();
+  });
+
+  it("asks the editor's own lock question inside a placed component", () => {
+    // A component may lock the content a page puts inside it, which only the
+    // composed page shows, so a place inside a placement is asked in full.
+    registerBlocks(
+      [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
+      { source: "acme" }
+    );
+    const lockRefusalFor = vi.fn(() => ({
+      code: "layers-locked" as const,
+      label: "Card",
+      relation: "component" as const,
+      verb: "change" as const,
+    }));
+    const editor = {
+      ...editorSpy(
+        documentOf([
+          {
+            id: "placed",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "card" },
+            slots: { body: [] },
+          },
+        ])
+      ),
+      lockDefinitions: registryBlockSource(),
+      lockRefusalFor,
+    } as unknown as ReturnType<typeof editorSpy>;
+    render(<InsertPanel editor={editor} inside="placed" />);
+
+    expect(lockRefusalFor).toHaveBeenCalled();
+    expect(describedBy(tile("Text"))).toContain("Set by the component Card");
   });
 
   it("offers a row as a drag, carrying the block it names", () => {
@@ -344,9 +498,8 @@ describe("InsertPanel", () => {
      * as the drag being withdrawn. So the drag abandons itself part-way, only
      * on touch, and nothing in CI is capable of noticing.
      */
-    const css = readFileSync(
-      join(process.cwd(), "src/styles/builder-chrome.css"),
-      "utf8"
+    const css = chromeStylesheetSource(url =>
+      readFileSync(fileURLToPath(url), "utf8")
     );
     const rule = css.slice(css.indexOf(".nx-insert-panel [cmdk-item] {"));
     const firstBlock = rule.slice(0, rule.indexOf("}"));
@@ -1079,9 +1232,8 @@ describe("the grid, and the popover that describes a tile", () => {
      * Comments stripped, because a comment naming the selector would satisfy
      * a search of the raw text.
      */
-    const css = readFileSync(
-      join(process.cwd(), "src/styles/builder-chrome.css"),
-      "utf8"
+    const css = chromeStylesheetSource(url =>
+      readFileSync(fileURLToPath(url), "utf8")
     ).replace(/\/\*[\s\S]*?\*\//g, "");
     const painted = css.match(
       /([^{}]*)\[cmdk-item\]\[data-selected="true"\]\s*\{[^}]*border-color:\s*var\(--nx-primary\)/
@@ -2262,5 +2414,125 @@ describe("the offer under the one placement rule", () => {
     // The query did narrow the rows, so the renders really happened.
     expect(screen.queryByRole("option", { name: "Button" })).toBeNull();
     expect(asked).toBe(before);
+  });
+});
+
+/*
+ * A press of an add control on the canvas: the panel shows that it heard,
+ * whether it just opened or was already open. Its search takes focus, its
+ * list goes back to the top, and the line naming the place is highlighted.
+ */
+describe("the panel answering an add control", () => {
+  /** The panel with one block, answering presses counted by `summoned`. */
+  function mountSummoned(summoned: number | undefined) {
+    registerBlocks(
+      [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
+      { source: "acme" }
+    );
+    const onSummoned = vi.fn();
+    const editor = editorSpy(documentOf());
+    const view = render(
+      <InsertPanel
+        editor={editor}
+        summoned={summoned}
+        onSummoned={onSummoned}
+      />
+    );
+    const rerender = (next: number | undefined) =>
+      view.rerender(
+        <InsertPanel editor={editor} summoned={next} onSummoned={onSummoned} />
+      );
+    return { onSummoned, rerender };
+  }
+
+  const search = () => screen.getByRole("combobox");
+  const list = () =>
+    document.querySelector<HTMLElement>(".nx-insert-panel__list");
+  const placement = () =>
+    document.querySelector<HTMLElement>(".nx-insert-panel__placement");
+
+  it("answers the press it opened for: search focused, list at the top, the place highlighted", () => {
+    const { onSummoned } = mountSummoned(1);
+    expect(document.activeElement).toBe(search());
+    expect(list()?.scrollTop).toBe(0);
+    expect(placement()?.hasAttribute("data-flash")).toBe(true);
+    // Said back, so the host does not answer the same press again.
+    expect(onSummoned).toHaveBeenCalledWith(1);
+  });
+
+  it("answers a press while it is already open, and only a new one", () => {
+    const { onSummoned, rerender } = mountSummoned(undefined);
+    // Opened from the rail: nothing to answer, focus left where it was.
+    expect(onSummoned).not.toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(search());
+    expect(placement()?.hasAttribute("data-flash")).toBe(false);
+
+    const scrolled = list();
+    if (scrolled !== null) scrolled.scrollTop = 240;
+    rerender(2);
+    expect(document.activeElement).toBe(search());
+    expect(list()?.scrollTop).toBe(0);
+    expect(placement()?.hasAttribute("data-flash")).toBe(true);
+    expect(onSummoned).toHaveBeenLastCalledWith(2);
+
+    // The same press drawn again is not a new one.
+    rerender(2);
+    expect(onSummoned).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the same line through the highlight, so it fades and is announced once", () => {
+    const { rerender } = mountSummoned(undefined);
+    const before = placement();
+    rerender(1);
+    // One element throughout: a rebuilt one would snap on and off with no
+    // fade, and a rebuilt live region drops what it was about to say.
+    expect(placement()).toBe(before);
+    expect(placement()?.hasAttribute("data-flash")).toBe(true);
+  });
+
+  it("answers a press even with nowhere to add, so it cannot replay later", () => {
+    registerBlocks(
+      [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
+      { source: "acme" }
+    );
+    const onSummoned = vi.fn();
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        inside="gone-container"
+        summoned={3}
+        onSummoned={onSummoned}
+      />
+    );
+    expect(document.querySelector('[data-empty="unplaceable"]')).not.toBeNull();
+    expect(onSummoned).toHaveBeenCalledWith(3);
+  });
+
+  it("lets the highlight go after a moment", () => {
+    vi.useFakeTimers();
+    try {
+      mountSummoned(1);
+      expect(placement()?.hasAttribute("data-flash")).toBe(true);
+      act(() => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(placement()?.hasAttribute("data-flash")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("where a tile's card sits", () => {
+  it("is against the panel's right edge, level with the tile", () => {
+    const panel = new DOMRect(0, 40, 320, 900);
+    const tile = new DOMRect(16, 300, 140, 64);
+    const at = besidePanel(panel, tile);
+    // A point on the panel's edge, as tall as the tile: the card placed to
+    // its right sits outside the panel, never over the tiles beside it.
+    expect(at.left).toBe(320);
+    expect(at.width).toBe(0);
+    expect(at.top).toBe(300);
+    expect(at.height).toBe(64);
   });
 });

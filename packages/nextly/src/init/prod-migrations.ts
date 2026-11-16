@@ -9,6 +9,10 @@
 
 import { resolve } from "node:path";
 
+import {
+  busyTableBounds,
+  type BusyTableBounds,
+} from "../domains/schema/busy-table/bounds";
 import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import {
   pluginMigrationArgs,
@@ -58,6 +62,10 @@ interface MigrateCoreLike {
     knownJunctions?: ReadonlySet<string>;
     /** See `MigrateCoreDeps.refuseUnrecognisedBuilderFiles`. */
     refuseUnrecognisedBuilderFiles?: boolean;
+    /** See `MigrateCoreDeps.refuseUnwrittenChanges`. */
+    refuseUnwrittenChanges?: () => Promise<void>;
+    /** See `MigrateCoreDeps.refuseDatabaseBehind`. */
+    refuseDatabaseBehind?: boolean;
     /** See `MigrateCoreDeps.declared`. */
     declared?: {
       junctions?: ReadonlyMap<string, ReadonlySet<string>>;
@@ -75,6 +83,8 @@ interface MigrateCoreLike {
     declaredPlugins?: ReadonlySet<string>;
     /** See `MigrateCoreDeps.seedPermissions`. */
     seedPermissions?: () => Promise<void>;
+    /** See `MigrateCoreDeps.busyTable`. */
+    busyTable?: { bounds: BusyTableBounds; notify: (line: string) => void };
   }): Promise<{ applied: number; coreChanged: boolean; ran: boolean }>;
 }
 
@@ -282,6 +292,9 @@ async function applyBootMigrations(
   run: BootMigrationRun
 ): Promise<void> {
   const { adapter, logger } = args;
+  // The busy-table bounds from the environment, checked first: a value outside its range refuses
+  // the start before anything is read or changed.
+  const bounds = busyTableBounds({ env: process.env });
   logger.info("[Nextly] Running production migrations on boot...");
   const resolvedSchema = await resolveDeclaredSchema({
     projectRoot: process.cwd(),
@@ -309,6 +322,9 @@ async function applyBootMigrations(
     // Waits as a command-line run does, and refuses to start below when the lock stays held.
     lockMode: "wait",
     lockCommand: "boot migrations (db.runMigrationsOnBoot)",
+    // An app file waits for a busy table in tries, as `nextly migrate` does, each try's notice in
+    // the log; a boot whose tries run out refuses to start, as for a held schema lock.
+    busyTable: { bounds, notify: line => logger.warn(line) },
     // Inside a server: a SIGTERM may begin a graceful shutdown that lets the work run on, so the
     // lock is left to lapse within one lease rather than released under it.
     lockReleaseOnInterrupt: false,
@@ -318,6 +334,38 @@ async function applyBootMigrations(
     // A file with a Builder name the signature does not recognise is refused
     // here as `nextly migrate` refuses it: this boot runs the same files.
     refuseUnrecognisedBuilderFiles: true,
+    // A configuration holding a change no migration records refuses the start, naming each
+    // change, as `nextly migrate` refuses it: the start would otherwise serve a schema its
+    // migrations never made. The start is handed the schema's part of the configuration, so its
+    // permissions are not compared here.
+    refuseUnwrittenChanges: async () => {
+      const { refuseUnwrittenChanges } = await import(
+        "../domains/schema/migrate/refuse-unwritten-changes"
+      );
+      await refuseUnwrittenChanges({
+        // The same configuration the CLI loads, narrowed to what a start hands this step.
+        config: args.config as unknown as Parameters<
+          typeof refuseUnwrittenChanges
+        >[0]["config"],
+        ...(args.deferredExtends === undefined
+          ? {}
+          : {
+              deferredExtends: args.deferredExtends as unknown as NonNullable<
+                Parameters<typeof refuseUnwrittenChanges>[0]["deferredExtends"]
+              >,
+            }),
+        projectRoot: process.cwd(),
+        migrationsDir: run.migrationsDir,
+        dialect: adapter.dialect,
+        adapter: adapter as unknown as Parameters<
+          typeof refuseUnwrittenChanges
+        >[0]["adapter"],
+        logger,
+        comparePermissions: false,
+      });
+    },
+    // And a database that lacks what its applied migrations made.
+    refuseDatabaseBehind: true,
     // What the declared schema names, which old Builder files are judged
     // against as `nextly migrate` judges them.
     declared: {
@@ -378,9 +426,15 @@ async function applyBootMigrations(
    * closed and hang every consumer of it.
    */
   const { reloadDynamicTables } = await import("./reload-dynamic-tables");
+  const { loadingDefinitions } = await import(
+    "../route-handler/schema-version"
+  );
   // Inside this step, which is `nextly migrate`'s: the one place a production
-  // start may create a translation table the migrations left missing.
-  await reloadDynamicTables("[Nextly]", { createMissingCompanions: true });
+  // start may create a translation table the migrations left missing. At the
+  // stored version read first, so the first follow does not load again.
+  await loadingDefinitions(() =>
+    reloadDynamicTables("[Nextly]", { createMissingCompanions: true })
+  );
 
   allowBootMigrations();
 }
@@ -389,12 +443,20 @@ async function applyBootMigrations(
  * The refusal a failed run amounts to, or undefined when the failure is one
  * the app can serve through.
  *
- * Three fatal shapes: the refusal itself; the schema lock's own refusal,
+ * The fatal shapes: the refusal itself; the schema lock's own refusal,
  * `NEXTLY_MIGRATE_LOCK_BUSY`, which it throws on every dialect when the wait
  * ends with the lock still held; and `MIGRATION_MISSING`, an older build
- * whose folder lacks a migration a newer build applied. Each means this
- * process would serve a schema it cannot account for.
+ * whose folder lacks a migration a newer build applied; a busy table waited
+ * out (`NEXTLY_TABLE_BUSY`), and a busy-table bound set out of its range. Each
+ * means this process would serve a schema it cannot account for.
  */
+/** The refusals `nextly migrate` gives a schema no migration records, which refuse a start too. */
+const UNMIGRATED_SCHEMA_CODES: ReadonlySet<string> = new Set([
+  "SCHEMA_DRIFT",
+  "SETTINGS_CHANGE_WITHOUT_MIGRATION",
+  "DATABASE_BEHIND_MIGRATIONS",
+]);
+
 function fatalBootMigrationError(err: unknown): NextlyError | undefined {
   if (!(err instanceof NextlyError)) return undefined;
   if (err.code === "NEXTLY_BOOT_MIGRATIONS_NOT_RUN") return err;
@@ -402,6 +464,21 @@ function fatalBootMigrationError(err: unknown): NextlyError | undefined {
   if (err.code === "MIGRATION_MISSING") return err;
   if (err.code === "NEXTLY_MIGRATE_LOCK_BUSY") {
     return bootMigrationsNotRun(err);
+  }
+  // A busy table waited out, refused as itself, as for a held schema lock: its message names the
+  // table, what holds it and what to do. So is a busy-table bound set out of its range, refused
+  // before anything was read or changed.
+  if (err.code === "NEXTLY_TABLE_BUSY") return err;
+  // A configuration ahead of its migrations, or a database that lacks what they made, refused as
+  // itself: serving would answer from a schema the database does not hold. Each message names
+  // every change and what to run.
+  if (UNMIGRATED_SCHEMA_CODES.has(err.code)) return err;
+  if (
+    err.code === "INVALID_INPUT" &&
+    (err.logContext as { reason?: unknown } | undefined)?.reason ===
+      "busy-table-bound-invalid"
+  ) {
+    return err;
   }
   return undefined;
 }
@@ -449,8 +526,13 @@ async function settleFailedBootMigrations(
    * safe there for the same reason: the reload cannot throw.
    */
   const { reloadDynamicTables } = await import("./reload-dynamic-tables");
+  const { loadingDefinitions } = await import(
+    "../route-handler/schema-version"
+  );
   // Still this step's, as on the success path.
-  await reloadDynamicTables("[Nextly]", { createMissingCompanions: true });
+  await loadingDefinitions(() =>
+    reloadDynamicTables("[Nextly]", { createMissingCompanions: true })
+  );
 
   // The app continues on this path, so the gate must open — a swallowed
   // failure that left it pending would hang every consumer forever, turning a

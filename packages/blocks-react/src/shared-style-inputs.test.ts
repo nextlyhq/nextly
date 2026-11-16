@@ -26,6 +26,7 @@ import {
   UNIDENTIFIED_SHARED_INPUTS,
   sharedStyleInputsId,
   sharedStyleInputsLabel,
+  stampedUnderCurrentEncoding,
   type SharedStyleInputs,
 } from "./shared-style-inputs";
 
@@ -943,8 +944,8 @@ describe("the label the stamp is taken over", () => {
     // Both surfaces, because they can disagree — the label is what the stamp is
     // taken over, so a version reaching one and not the other would key
     // artifacts on a value the label never carried.
-    expect(JSON.parse(sharedStyleInputsLabel(inputs()))[0]).toBe("v5");
-    expect(sharedStyleInputsId(inputs())).toMatch(/^v5:[0-9a-z]+$/);
+    expect(JSON.parse(sharedStyleInputsLabel(inputs()))[0]).toBe("v9");
+    expect(sharedStyleInputsId(inputs())).toMatch(/^v9:[0-9a-z]+$/);
   });
 
   it("refuses every sheet stored before blocks lost their outer margins", () => {
@@ -957,7 +958,7 @@ describe("the label the stamp is taken over", () => {
     const label: unknown[] = JSON.parse(sharedStyleInputsLabel(inputs()));
     const before = `v3:${hashId(JSON.stringify(["v3", ...label.slice(1)]))}`;
     expect(now).not.toBe(before);
-    expect(now?.startsWith("v5:")).toBe(true);
+    expect(now?.startsWith("v9:")).toBe(true);
   });
 
   it("refuses every sheet stored before parts took properties from a wrapping root", () => {
@@ -969,6 +970,54 @@ describe("the label the stamp is taken over", () => {
     const label: unknown[] = JSON.parse(sharedStyleInputsLabel(inputs()));
     const before = `v4:${hashId(JSON.stringify(["v4", ...label.slice(1)]))}`;
     expect(now).not.toBe(before);
+  });
+
+  it("refuses every sheet stored before one spacing model", () => {
+    // `v6` compiles every site with container gaps. A `v5` sheet may have
+    // been stored for a site on the classic model, with the old heading and
+    // paragraph margins and no gap, and a read with no compile context judges
+    // it by its encoding alone: recompiled, not served. Rebuilt from the label
+    // the old compiler wrote.
+    const now = sharedStyleInputsId(inputs());
+    const label: unknown[] = JSON.parse(sharedStyleInputsLabel(inputs()));
+    const before = `v5:${hashId(JSON.stringify(["v5", ...label.slice(1)]))}`;
+    expect(now).not.toBe(before);
+    expect(stampedUnderCurrentEncoding(before)).toBe(false);
+  });
+
+  it("refuses every sheet stored before a contained block was padded in", () => {
+    // `v7` writes every inline padding as at least a contained block's inset.
+    // A `v6` sheet wrote an author's side padding as the bare value, which
+    // outweighs the containment and puts the content past the content width:
+    // recompiled, not served. Rebuilt from the label the old compiler wrote.
+    const now = sharedStyleInputsId(inputs());
+    const label: unknown[] = JSON.parse(sharedStyleInputsLabel(inputs()));
+    const before = `v6:${hashId(JSON.stringify(["v6", ...label.slice(1)]))}`;
+    expect(now).not.toBe(before);
+    expect(stampedUnderCurrentEncoding(before)).toBe(false);
+  });
+
+  it("refuses every sheet stored before a row's items were flagged", () => {
+    // `v8` flags a flex or grid item, and a block out of the flow, for the
+    // containment inset. A `v7` sheet carries neither flag, so a contained item
+    // in a row would be inset from the whole row: recompiled, not served.
+    // Rebuilt from the label the old compiler wrote.
+    const now = sharedStyleInputsId(inputs());
+    const label: unknown[] = JSON.parse(sharedStyleInputsLabel(inputs()));
+    const before = `v7:${hashId(JSON.stringify(["v7", ...label.slice(1)]))}`;
+    expect(now).not.toBe(before);
+    expect(stampedUnderCurrentEncoding(before)).toBe(false);
+  });
+
+  it("refuses every sheet stored before a full row and a contents wrapper were flagged", () => {
+    // `v9` flags a flex item that fills its row, and hands a `display:
+    // contents` wrapper's flags to its children. A `v8` sheet has neither:
+    // recompiled, not served. Rebuilt from the label the old compiler wrote.
+    const now = sharedStyleInputsId(inputs());
+    const label: unknown[] = JSON.parse(sharedStyleInputsLabel(inputs()));
+    const before = `v8:${hashId(JSON.stringify(["v8", ...label.slice(1)]))}`;
+    expect(now).not.toBe(before);
+    expect(stampedUnderCurrentEncoding(before)).toBe(false);
   });
 
   it("moves when a container's child gap moves", () => {

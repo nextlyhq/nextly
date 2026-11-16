@@ -26,7 +26,12 @@ import { z } from "nextly/zod";
 import { isRecord, textOf } from "../plain-values";
 import { designLevelOf } from "../resolver/design-level";
 import type { Levels } from "../resolver/order";
-import { levelsOf, NO_RULES, type SiteRules } from "../resolver/page-levels";
+import {
+  levelsOf,
+  NO_RULES,
+  patternsOf,
+  type SiteRules,
+} from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
 import type { PatternField } from "../settings/contract";
 import { tokenOf } from "../settings/pattern-fields";
@@ -236,6 +241,7 @@ export function seoTemplateRoute(setup: {
   baseUrl?: string | undefined;
 }): {
   method: "POST";
+  checksAccess: true;
   path: string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 } {
@@ -244,6 +250,7 @@ export function seoTemplateRoute(setup: {
   return {
     method: "POST",
     path: SEO_TEMPLATE_PATH,
+    checksAccess: true, // The handler judges each caller.
     handler: async (req, ctx) => {
       const body = await bodyOf(req);
       const caller = ctx.caller;
@@ -280,10 +287,14 @@ export function seoTemplateRoute(setup: {
       );
       const locale = body.locale ?? undefined;
       const rules = await readRules(ctx, locale);
+      // The pattern that gives the title of every page the design draws, as
+      // the order picks it; nothing where it holds no text.
+      const titlePattern = textOf(patternsOf(rules, body.collection).title);
       const answer: TemplateContext = {
         typeLabel: names.one,
         typePlural: names.many,
         fields,
+        ...(titlePattern === undefined ? {} : { titlePattern }),
         imageFields,
         entries,
         count: listed.total,

@@ -30,12 +30,21 @@ function notInstalledYet(error: unknown): boolean {
  * yet builds the root alone, as an empty one does; any other failure fails the
  * build, so a broken read cannot pass for a site with nothing to pre-render.
  */
-export async function pathsOrRoot(route: {
-  generateStaticParams(): Promise<Array<{ slug: string[] }>>;
-}): Promise<Array<{ slug: string[] }>> {
+export async function pathsOrRoot(
+  route: {
+    generateStaticParams(): Promise<Array<{ slug: string[] }>>;
+  },
+  /**
+   * The path built when the route names none. The root by default; a
+   * REQUIRED catch-all (`[...slug]`) cannot be the root, so it names one path
+   * it holds no page at, which renders the not-found page as it would on
+   * request.
+   */
+  fallback: { slug: string[] } = { slug: [] }
+): Promise<Array<{ slug: string[] }>> {
   const params = await route.generateStaticParams().catch((error: unknown) => {
     if (notInstalledYet(error)) return [];
     throw error;
   });
-  return params.length > 0 ? params : [{ slug: [] }];
+  return params.length > 0 ? params : [fallback];
 }

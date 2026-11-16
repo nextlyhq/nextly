@@ -18,6 +18,7 @@ import { render, screen } from "@admin/__tests__/utils";
 import { buildOutline } from "@admin/lib/builder/outline/outline-model";
 
 import { BuilderToolbar } from "../BuilderToolbar";
+import { NO_PENDING_CHANGES } from "./no-pending-changes";
 import type { BuilderConfig } from "../builder-config";
 import { Outline, type OutlineCallbacks } from "../outline/Outline";
 import type { BuilderField } from "../types";
@@ -49,7 +50,15 @@ function renderList(
   const callbacks: OutlineCallbacks = {
     select: vi.fn(),
     addAt: onAddAt,
-    move: vi.fn(),
+    fields,
+    // Nothing here moves: every move is refused, so the menu offers none.
+    judgeMove: vi.fn(() => ({
+      allowed: false as const,
+      reason: "not-found" as const,
+      message: "",
+    })),
+    moveDestinations: vi.fn(() => []),
+    commitMove: vi.fn(),
     duplicate: vi.fn(),
     remove: vi.fn(),
     setHidden: vi.fn(),
@@ -98,6 +107,7 @@ describe("picker entry points", () => {
         config={config}
         name="Posts"
         unsavedCount={0}
+        pending={NO_PENDING_CHANGES}
         onAddField={onAddField}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
@@ -217,6 +227,7 @@ describe("picker entry points", () => {
         config={config}
         name="Posts"
         unsavedCount={0}
+        pending={NO_PENDING_CHANGES}
         locked
         onAddField={vi.fn()}
         onOpenSettings={vi.fn()}

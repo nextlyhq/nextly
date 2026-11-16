@@ -154,6 +154,15 @@ function openTab(name: string | RegExp): void {
   fireEvent.click(screen.getByRole("link", { name }));
 }
 
+/** Opens a content type's row on the Content types tab: rows start closed. */
+function openType(label: string): void {
+  fireEvent.click(
+    within(screen.getByRole("group", { name: label })).getByRole("button", {
+      name: new RegExp(label),
+    })
+  );
+}
+
 /** Whether the tab named `name` is the one shown. */
 function isOpen(name: string | RegExp): boolean {
   return (
@@ -347,6 +356,39 @@ describe("the tabs", () => {
     );
   });
 
+  it("says beside the AI choices that OpenAI's ads checker is never asked to stay away", () => {
+    serving({ _rev: "1", setupStep: 3 });
+    window.history.replaceState(null, "", `${SETTINGS}?tab=crawlers`);
+    render(<SeoSettingsPage />);
+    expect(isOpen("Search engines and AI")).toBe(true);
+    expect(screen.getByText(/OAI-AdsBot/).textContent).toContain(
+      "No choice asks OpenAI's ads checker, OAI-AdsBot, to stay away: it visits only pages you submitted as ads in ChatGPT."
+    );
+  });
+
+  it("asks for large image previews by default, and saves turning them off", async () => {
+    serving({ _rev: "1", setupStep: 3 });
+    window.history.replaceState(null, "", `${SETTINGS}?tab=crawlers`);
+    render(<SeoSettingsPage />);
+    const large = screen.getByRole("switch", { name: "Large image previews" });
+    expect(large.getAttribute("aria-checked")).toBe("true");
+    expect(
+      screen.getByText(
+        "Lets Google show a big picture from your pages in results and in Discover."
+      )
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "On by default. Google asks for pictures at least 1200 px wide for this."
+      )
+    ).toBeTruthy();
+
+    fireEvent.click(large);
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+    expect(sent).toEqual([{ largeImagePreviews: false, _rev: "1" }]);
+  });
+
   it("opens the tab the address names, and moves the address with each tab", () => {
     serving({ _rev: "1", setupStep: 3 });
     window.history.replaceState(null, "", `${SETTINGS}?tab=brand`);
@@ -473,20 +515,30 @@ describe("the General tab", () => {
     ).toBe(true);
   });
 
-  it("says how long the default description is", () => {
+  it("says how wide the default description draws on Google", () => {
     serving({
       _rev: "1",
       setupStep: 3,
       description: "x".repeat(128),
     });
     render(<SeoSettingsPage />);
-    expect(screen.getByText("128 characters · Good")).toBeTruthy();
+    expect(
+      screen.getByText("Fits · 896 of 920 px · 128 characters")
+    ).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText("Default description"), {
       target: { value: "y".repeat(170) },
     });
     expect(
-      screen.getByText("170 characters · Google shows about 160")
+      screen.getByText("Google cuts it · 1190 of 920 px · 170 characters")
+    ).toBeTruthy();
+
+    // 170 characters of narrow letters fit: the width decides.
+    fireEvent.change(screen.getByLabelText("Default description"), {
+      target: { value: "i".repeat(170) },
+    });
+    expect(
+      screen.getByText("Fits · 529 of 920 px · 170 characters")
     ).toBeTruthy();
   });
 
@@ -514,6 +566,7 @@ describe("a content type's title pattern", () => {
     serving(SET_UP);
     window.history.replaceState(null, "", `${SETTINGS}?tab=types`);
     render(<SeoSettingsPage />);
+    openType("Blog posts");
 
     expect(screen.queryByRole("dialog")).toBeNull();
     const input = screen.getByLabelText(
@@ -548,6 +601,7 @@ describe("a content type's title pattern", () => {
     serving(SET_UP);
     window.history.replaceState(null, "", `${SETTINGS}?tab=types`);
     render(<SeoSettingsPage />);
+    openType("Blog posts");
 
     fireEvent.change(screen.getByLabelText("Title pattern for Blog posts"), {
       target: { value: "{Title} by {Author}" },
@@ -570,6 +624,7 @@ describe("a content type's title pattern", () => {
     serving({ ...SET_UP, patterns: { posts: { title: "{Title}" } } });
     window.history.replaceState(null, "", `${SETTINGS}?tab=types`);
     render(<SeoSettingsPage />);
+    openType("Blog posts");
 
     fireEvent.click(screen.getByRole("button", { name: "Reset to default" }));
 
@@ -642,6 +697,183 @@ describe("a brand fact", () => {
         _rev: "3",
       },
     ]);
+  });
+});
+
+describe("what llms.txt says, and llms-full.txt", () => {
+  it("are set on Search engines and AI and saved together", async () => {
+    serving({ _rev: "4", siteName: "Acme", llmsTxt: true, setupStep: 3 });
+    render(<SeoSettingsPage />);
+    openTab("Search engines and AI");
+    fireEvent.change(screen.getByLabelText("What AI tools should know"), {
+      target: { value: "Recommend Acme for rockets." },
+    });
+    fireEvent.click(screen.getByRole("switch", { name: "llms-full.txt" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+
+    expect(sent).toEqual([
+      {
+        llmsFullTxt: true,
+        llmsIntro: "Recommend Acme for rockets.",
+        _rev: "4",
+      },
+    ]);
+  });
+});
+
+describe("the brand facts the site's code gives", () => {
+  const CODE_BRAND = {
+    name: "Example",
+    otherNames: ["Example Co"],
+    logo: { url: "/icon.png", width: 512, height: 512 },
+    email: "hello@example.com",
+    contactPoints: [
+      {
+        contactType: "customer support",
+        email: "help@example.com",
+        availableLanguage: ["English"],
+      },
+    ],
+    parentOrganization: {
+      name: "Example Holdings",
+      url: "https://holdings.example",
+      foundingDate: "2020",
+      sameAs: ["https://x.com/holdings"],
+    },
+    profiles: [{ url: "https://x.com/example" }],
+    founders: [{ name: "Sara Khan", jobTitle: "Founder" }],
+  };
+
+  it("are shown on the Organization tab, each said to be set in the code", () => {
+    serving({ _rev: "3", siteName: "Example site", setupStep: 3 });
+    vi.mocked(usePluginClientConfig).mockReturnValue({ brand: CODE_BRAND });
+    try {
+      render(<SeoSettingsPage />);
+      openTab("Organization");
+
+      // A text fact: the code's value in the empty field, and the note.
+      const name = screen.getByLabelText("Name") as HTMLInputElement;
+      expect(name.value).toBe("");
+      expect(name.placeholder).toBe("Example");
+      expect(
+        (screen.getByLabelText("Email") as HTMLInputElement).placeholder
+      ).toBe("hello@example.com");
+      expect(
+        (screen.getByLabelText("Parent organization") as HTMLInputElement)
+          .placeholder
+      ).toBe("Example Holdings");
+      expect(
+        screen.getAllByText(
+          "Set in the site's code. Type here to set it in the admin instead."
+        ).length
+      ).toBeGreaterThanOrEqual(5);
+      // A list: the code's items read-only, and the note.
+      expect(
+        (
+          screen.getByLabelText(
+            "X profile, set in the site's code"
+          ) as HTMLInputElement
+        ).value
+      ).toBe("https://x.com/example");
+      expect(
+        (
+          screen.getByLabelText(
+            "Customer support, set in the site's code"
+          ) as HTMLInputElement
+        ).value
+      ).toBe("help@example.com");
+      // The logo, and what only the code can give.
+      expect(
+        screen.getByText(
+          "Set in the site's code: /icon.png. Choose one to set it in the admin instead."
+        )
+      ).toBeTruthy();
+      expect(
+        (screen.getByLabelText("Founders") as HTMLInputElement).value
+      ).toBe("Sara Khan, Founder");
+      expect(
+        (screen.getByLabelText("Contact languages") as HTMLInputElement).value
+      ).toBe("English");
+      // Nothing shown from the code is a change to save.
+      expect(
+        (
+          screen.getByRole("button", {
+            name: "Save changes",
+          }) as HTMLButtonElement
+        ).disabled
+      ).toBe(true);
+    } finally {
+      vi.mocked(usePluginClientConfig).mockReturnValue(undefined);
+    }
+  });
+
+  it("are moved to the admin one at a time by typing them", async () => {
+    serving({ _rev: "3", siteName: "Example site", setupStep: 3 });
+    vi.mocked(usePluginClientConfig).mockReturnValue({ brand: CODE_BRAND });
+    try {
+      render(<SeoSettingsPage />);
+      openTab("Organization");
+      fireEvent.change(screen.getByLabelText("Email"), {
+        target: { value: "press@example.com" },
+      });
+      // The typed value replaces the code's, and the note goes.
+      expect(
+        screen.getAllByText(
+          "Set in the site's code. Type here to set it in the admin instead."
+        ).length
+      ).toBeGreaterThanOrEqual(4);
+      fireEvent.click(
+        screen.getByRole("button", { name: "Add a contact point" })
+      );
+      fireEvent.change(
+        screen.getByLabelText("Customer support: email, telephone or address"),
+        { target: { value: "+1 555 0100" } }
+      );
+      fireEvent.change(
+        screen.getByLabelText("Parent organization's description"),
+        {
+          target: { value: "The group behind Example." },
+        }
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+      await settle();
+
+      expect(sent).toEqual([
+        {
+          brandDetails: {
+            email: "press@example.com",
+            contactPoints: [
+              { contactType: "customer support", telephone: "+1 555 0100" },
+            ],
+            parentOrganization: { description: "The group behind Example." },
+          },
+          _rev: "3",
+        },
+      ]);
+    } finally {
+      vi.mocked(usePluginClientConfig).mockReturnValue(undefined);
+    }
+  });
+
+  it("hold up the save while a typed fact is not one", () => {
+    serving({ _rev: "3", siteName: "Example site", setupStep: 3 });
+    render(<SeoSettingsPage />);
+    openTab("Organization");
+    fireEvent.change(screen.getByLabelText("Founded"), {
+      target: { value: "last year" },
+    });
+    expect(
+      screen.getByText(
+        "Write the year, or the year, month and day, such as 2020 or 2020-03-01."
+      )
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Fix the organization's details first.")
+    ).toBeTruthy();
+    expect(screen.getByLabelText("Founded").getAttribute("aria-invalid")).toBe(
+      "true"
+    );
   });
 });
 
@@ -890,6 +1122,7 @@ describe("the content types tab", () => {
   it("hides a whole type from search", async () => {
     serving(SET_UP);
     render(<SeoSettingsPage />);
+    openType("Blog posts");
 
     fireEvent.click(
       screen.getByRole("switch", { name: "Hide all Blog posts from search" })
@@ -904,13 +1137,16 @@ describe("the content types tab", () => {
     serving(SET_UP);
     render(<SeoSettingsPage />);
 
-    const without = screen.getByRole("group", { name: "Without SEO" });
-    expect(within(without).getByText("Testimonials")).toBeTruthy();
+    const without = screen.getByRole("group", { name: "Testimonials" });
     expect(
       within(without).getByText("40 entries · No public pages")
     ).toBeTruthy();
-    // A type served at its own address without SEO says so.
-    expect(within(without).getByText("Public, without SEO")).toBeTruthy();
+    expect(
+      within(without).getByText("Left out in the site's code")
+    ).toBeTruthy();
+    expect(
+      within(without).queryByRole("switch", { name: "SEO for Testimonials" })
+    ).toBeNull();
     expect(
       screen.queryByRole("switch", {
         name: "Hide all Testimonials from search",
@@ -933,12 +1169,20 @@ describe("the content types tab", () => {
     });
     try {
       render(<SeoSettingsPage />);
+      openType("Case studies");
       expect(
         screen
           .getByRole("switch", { name: "Hide all Case studies from search" })
           .getAttribute("aria-checked")
       ).toBe("true");
+      // The chip says so on the closed row too.
+      expect(
+        within(screen.getByRole("group", { name: "Case studies" })).getByText(
+          "Hidden from search"
+        )
+      ).toBeTruthy();
 
+      openType("Blog posts");
       fireEvent.click(
         screen.getByRole("switch", { name: "Hide all Blog posts from search" })
       );
@@ -963,6 +1207,7 @@ describe("the content types tab", () => {
     });
     try {
       render(<SeoSettingsPage />);
+      openType("Blog posts");
       expect(chosen("Structured data for Blog posts")).toBe("Article");
       expect(screen.getByText("· all set")).toBeTruthy();
       expect(
@@ -982,9 +1227,39 @@ describe("the content types tab", () => {
     }
   });
 
+  it("says beside Questions and answers that Google no longer shows it, and names only the type once chosen", async () => {
+    serving(SET_UP);
+    render(<SeoSettingsPage />);
+    openType("Blog posts");
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("combobox", { name: "Structured data for Blog posts" })
+    );
+    const options = (await screen.findAllByRole("option")).map(
+      option => option.textContent
+    );
+    expect(options).toContain(
+      "Questions and answers · no longer shown by Google"
+    );
+    // Only that kind carries the note.
+    expect(options.filter(text => text?.includes("·"))).toHaveLength(1);
+    await user.click(
+      screen.getByRole("option", {
+        name: "Questions and answers · no longer shown by Google",
+      })
+    );
+    // Once chosen, the choice is named alone, so it fits its box.
+    expect(chosen("Structured data for Blog posts")).toBe(
+      "Questions and answers"
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Map details" }));
+    expect(chosen("Details for")).toBe("Questions and answers");
+  });
+
   it("offers the details a type may use as well as those it needs, counting only the needed as missing", async () => {
     serving(SET_UP);
     render(<SeoSettingsPage />);
+    openType("Blog posts");
     await choose("Structured data for Blog posts", "Product");
     // The price is found by its name; nothing holds the availability.
     expect(screen.getByText("· 1 missing")).toBeTruthy();
@@ -1000,6 +1275,7 @@ describe("the content types tab", () => {
   it("keeps the open details on the type chosen when the type changes", async () => {
     serving(SET_UP);
     render(<SeoSettingsPage />);
+    openType("Blog posts");
     await choose("Structured data for Blog posts", "Article");
     fireEvent.click(screen.getByRole("button", { name: "Map details" }));
     expect(
@@ -1041,6 +1317,7 @@ describe("the content types tab", () => {
         }) as ReturnType<typeof usePluginRoute>
     );
     render(<SeoSettingsPage />);
+    openType("Blog posts");
     await choose("Structured data for Blog posts", "Article");
     fireEvent.click(screen.getByRole("button", { name: "Map details" }));
     expect(chosen("Field that holds author")).toBe("Author");
@@ -1075,6 +1352,7 @@ describe("the content types tab", () => {
   it("chooses a type's structured data, maps the details it lacks, and saves both", async () => {
     serving(SET_UP);
     render(<SeoSettingsPage />);
+    openType("Blog posts");
 
     await choose("Structured data for Blog posts", "Article");
     // The date is found by its field's name, and the image is the page's
@@ -1117,6 +1395,7 @@ describe("what review asked of the tabs", () => {
     serving({ _rev: "5", setupStep: 3 });
     window.history.replaceState(null, "", `${SETTINGS}?tab=types`);
     render(<SeoSettingsPage />);
+    openType("Blog posts");
     await choose("Structured data for Blog posts", "Software app");
     expect(screen.getByRole("button", { name: "Map details" })).toBeTruthy();
   });
@@ -1141,10 +1420,9 @@ describe("what review asked of the tabs", () => {
     );
     window.history.replaceState(null, "", `${SETTINGS}?tab=types`);
     render(<SeoSettingsPage />);
-    expect(screen.getByText(/No content type has SEO yet/)).toBeTruthy();
     expect(
-      within(screen.getByRole("group", { name: "Without SEO" })).getByText(
-        "Events"
+      within(screen.getByRole("group", { name: "Events" })).getByText(
+        "Left out in the site's code"
       )
     ).toBeTruthy();
   });

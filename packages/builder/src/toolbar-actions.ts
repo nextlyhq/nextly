@@ -261,7 +261,8 @@ function componentActions(
   ids: readonly string[],
   nesting: NestingSource,
   offer: ComponentVerbsOffer | undefined,
-  ask: LockQuestion | undefined
+  ask: LockQuestion | undefined,
+  planned: boolean
 ): ToolbarAction[] {
   if (offer === undefined) return [];
   const turn: ToolbarAction = {
@@ -273,6 +274,7 @@ function componentActions(
   if (!offer.mayCreate) {
     return [{ ...turn, enabled: false, reason: MAKE_COMPONENT_GRANT_REFUSAL }];
   }
+  if (!planned) return [turn];
   const choice = turnIntoChoice(document, ids, nesting, ask);
   if (choice.replaceRefused !== undefined && choice.keepRefused !== undefined) {
     return [{ ...turn, enabled: false, reason: choice.replaceRefused }];
@@ -291,27 +293,25 @@ function placementActions(
   ids: readonly string[],
   nesting: NestingSource,
   offer: ComponentVerbsOffer | undefined,
-  ask: LockQuestion | undefined
+  ask: LockQuestion | undefined,
+  planned: boolean
 ): ToolbarAction[] {
   const only = ids.length === 1 ? ids[0] : undefined;
   if (offer === undefined || only === undefined) return [];
   const node = findNode(document.nodes, only);
   if (node === undefined || !isComponentInstance(node)) return [];
-  const actions: ToolbarAction[] = [];
-  if (offer.definitions !== undefined) {
-    const detach: ToolbarAction = {
-      id: "detach-component",
-      label: "Detach from component",
-      enabled: true,
-      inMenu: true,
-    };
-    const plan = planDetach(document, only, offer.definitions, nesting);
-    actions.push(
-      plan.problem === undefined
-        ? heldByLock(detach, ask, plan.pageOps)
-        : { ...detach, enabled: false, reason: compositionRefusalReason(plan) }
-    );
-  }
+  const actions: ToolbarAction[] =
+    offer.definitions === undefined
+      ? []
+      : [
+          detachAction(
+            document,
+            only,
+            offer.definitions,
+            nesting,
+            planned ? ask : null
+          ),
+        ];
   const duplicate: ToolbarAction = {
     id: "duplicate-component",
     label: "Duplicate component",
@@ -365,6 +365,32 @@ function placementActions(
 }
 
 /**
+ * "Detach from component" for one placement: planned in full against the
+ * definitions the canvas draws, its ops put to the editor's lock question,
+ * where `ask` is not `null`; offered as it stands where it is (the plan is
+ * then made when a menu opens, or when the verb runs).
+ */
+function detachAction(
+  document: BlockDocument,
+  only: string,
+  definitions: DefinitionsById,
+  nesting: NestingSource,
+  ask: LockQuestion | undefined | null
+): ToolbarAction {
+  const detach: ToolbarAction = {
+    id: "detach-component",
+    label: "Detach from component",
+    enabled: true,
+    inMenu: true,
+  };
+  if (ask === null) return detach;
+  const plan = planDetach(document, only, definitions, nesting);
+  return plan.problem === undefined
+    ? heldByLock(detach, ask, plan.pageOps)
+    : { ...detach, enabled: false, reason: compositionRefusalReason(plan) };
+}
+
+/**
  * "Update pattern" for a selection that could be saved as one, where the host
  * offers it: the selection replaces a pattern's content.
  */
@@ -372,7 +398,8 @@ function updatePatternAction(
   document: BlockDocument,
   ids: readonly string[],
   nesting: NestingSource,
-  offer: ComponentVerbsOffer | undefined
+  offer: ComponentVerbsOffer | undefined,
+  planned: boolean
 ): ToolbarAction[] {
   if (offer?.mayUpdatePattern === undefined) return [];
   const action: ToolbarAction = {
@@ -386,7 +413,7 @@ function updatePatternAction(
       { ...action, enabled: false, reason: UPDATE_PATTERN_GRANT_REFUSAL },
     ];
   }
-  const reason = patternSaveRefusal(document, ids, nesting);
+  const reason = patternRefusal(document, ids, nesting, planned);
   return [
     reason === undefined ? action : { ...action, enabled: false, reason },
   ];
@@ -398,12 +425,13 @@ function compositionActions(
   ids: readonly string[],
   nesting: NestingSource,
   offer: ComponentVerbsOffer | undefined,
-  ask: LockQuestion | undefined
+  ask: LockQuestion | undefined,
+  planned: boolean
 ): ToolbarAction[] {
   return [
-    ...componentActions(document, ids, nesting, offer, ask),
-    ...placementActions(document, ids, nesting, offer, ask),
-    ...updatePatternAction(document, ids, nesting, offer),
+    ...componentActions(document, ids, nesting, offer, ask, planned),
+    ...placementActions(document, ids, nesting, offer, ask, planned),
+    ...updatePatternAction(document, ids, nesting, offer, planned),
   ];
 }
 
@@ -598,7 +626,8 @@ function saveAction(
   document: BlockDocument,
   ids: readonly string[],
   nesting: NestingSource,
-  mayCreate: boolean
+  mayCreate: boolean,
+  planned: boolean
 ): ToolbarAction {
   const label = "Save as pattern";
   // The GRANT first, and it is the one refusal not asked of the planner —
@@ -615,7 +644,7 @@ function saveAction(
       enabled: false,
       reason: SAVE_PATTERN_GRANT_REFUSAL,
     };
-  const reason = patternSaveRefusal(document, ids, nesting);
+  const reason = patternRefusal(document, ids, nesting, planned);
   if (reason === undefined)
     return { id: "save-as-pattern", label, enabled: true };
   return { id: "save-as-pattern", label, enabled: false, reason };
@@ -637,6 +666,23 @@ export function patternSaveRefusal(
   if (entryContent !== undefined) return entryContent;
   const refusal = saveAsPatternRefusal(document, ids, nesting);
   return refusal === undefined ? undefined : compositionRefusalReason(refusal);
+}
+
+/**
+ * {@link patternSaveRefusal} where the save is `planned`; otherwise only the
+ * Entry content rule, which reads the selection without building the pattern
+ * a save would store. The planner's other refusals are then said when the
+ * verb runs, or in a menu, which plans it as it opens.
+ */
+function patternRefusal(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource,
+  planned: boolean
+): string | undefined {
+  return planned
+    ? patternSaveRefusal(document, ids, nesting)
+    : compositionEntryContentRefusal(document, ids, "pattern");
 }
 
 /**
@@ -692,9 +738,10 @@ function manyBlockActions(
   ids: readonly string[],
   nesting: NestingSource,
   mayCreate: boolean,
-  ask?: LockQuestion,
-  components?: ComponentVerbsOffer,
-  sharedStyles?: SharedStyleOffer
+  ask: LockQuestion | undefined,
+  components: ComponentVerbsOffer | undefined,
+  sharedStyles: SharedStyleOffer | undefined,
+  planned: boolean
 ): ToolbarAction[] {
   const many = oneAtATime(ids.length);
   const deleteLock = ids
@@ -717,9 +764,9 @@ function manyBlockActions(
       ask,
       opsOf(selectionDuplication(document, ids))
     ),
-    saveAction(document, ids, nesting, mayCreate),
+    saveAction(document, ids, nesting, mayCreate, planned),
     ...sharedStyleActions(document, ids, sharedStyles),
-    ...compositionActions(document, ids, nesting, components, ask),
+    ...compositionActions(document, ids, nesting, components, ask, planned),
     deleteLock?.locked === undefined
       ? heldByLock(
           { id: "delete", label: "Delete", enabled: true },
@@ -803,7 +850,16 @@ export function toolbarActions(
    * right to change them, or nothing where it has none: then "Save as shared
    * style…" is not offered.
    */
-  sharedStyles?: SharedStyleOffer
+  sharedStyles?: SharedStyleOffer,
+  /**
+   * Whether to plan the verbs whose availability is answered by planning
+   * them in full: saving as a pattern, and the component verbs, which build
+   * the document they would store. Defaults to true. False for what a
+   * surface shows as the selection changes, so a click plans nothing; the
+   * grant and Entry content still dim them, and a menu that opens, or the
+   * verb when it runs, plans them and says why it refuses.
+   */
+  planned: boolean = true
 ): ToolbarAction[] {
   if (selectedId === null) return [];
 
@@ -820,7 +876,8 @@ export function toolbarActions(
       mayCreatePattern,
       lockRefusalFor,
       components,
-      sharedStyles
+      sharedStyles,
+      planned
     );
 
   const deleteLock = lockBlockingDelete(document, selectedId);
@@ -866,10 +923,17 @@ export function toolbarActions(
       lockRefusalFor,
       duplication?.ops
     ),
-    saveAction(document, ids, rules, mayCreatePattern),
+    saveAction(document, ids, rules, mayCreatePattern, planned),
     ...sharedStyleActions(document, ids, sharedStyles),
     ...editComponentAction(document, selectedId, offersEditComponent),
-    ...compositionActions(document, ids, rules, components, lockRefusalFor),
+    ...compositionActions(
+      document,
+      ids,
+      rules,
+      components,
+      lockRefusalFor,
+      planned
+    ),
     deleteLock === undefined
       ? heldByLock(
           { id: "delete", label: "Delete", enabled: deletion !== null },

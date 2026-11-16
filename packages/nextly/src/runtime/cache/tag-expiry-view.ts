@@ -240,12 +240,31 @@ interface ViewState {
    */
   own: Map<string, number>;
   /**
+   * Tags this process expired again after a stale `use cache` fill, per tag
+   * and per depth (index 0 is depth 1), on this process's clock: the latest
+   * re-expiry at each depth. Kept apart from `own`, which holds writes, so a
+   * re-expiry can be told from a write when the next fill is judged (see
+   * `expireAgainAfterStaleFill`). Optional: a copy of this module from before
+   * it was kept may have made this state.
+   */
+  again?: Map<string, number[]>;
+  /**
    * The ledger times this process's own records wrote, per tag. A lookup
    * answering one of these is judged by `own` and by the database time the
    * record read, not by the grace other instances are held to (this process
    * cleared its registry rows at once).
    */
   mine: Map<string, number>;
+  /**
+   * The earlier times this process's records wrote, per tag, once a later
+   * record moved `mine` on, each with when it stops counting, on this
+   * process's clock. A lookup made between two records of a tag answers the
+   * first and is reused for its TTL; judged by `mine` alone, that answer would
+   * read as another instance's, and its grace would refuse every entry this
+   * process filled after both writes. A field of its own rather than a change
+   * to `mine`, which other copies of this module read and write as it is.
+   */
+  mineSuperseded: Map<string, SupersededRecord[]>;
   /** The last record attempt's number: attempts are numbered as they start. */
   recordSeq: number;
   /**
@@ -285,10 +304,20 @@ interface ViewState {
   warned: boolean;
 }
 
+/** A time one of this process's records wrote, since superseded in `mine`. */
+interface SupersededRecord {
+  /** The time the record wrote, on the database's clock, graced. */
+  at: number;
+  /** When no lookup that may hold it is still reused, on this process's clock. */
+  until: number;
+}
+
 const globalForView = globalThis as unknown as {
-  // A copy of this module from before `mine` was kept may have made it.
-  __nextly_tag_expiry_view?: Omit<ViewState, "mine"> & {
+  // A copy of this module from before `mine` or `mineSuperseded` was kept may
+  // have made it.
+  __nextly_tag_expiry_view?: Omit<ViewState, "mine" | "mineSuperseded"> & {
     mine?: ViewState["mine"];
+    mineSuperseded?: ViewState["mineSuperseded"];
   };
 };
 
@@ -298,6 +327,7 @@ function state(): ViewState {
     asking: new Map(),
     own: new Map(),
     mine: new Map(),
+    mineSuperseded: new Map(),
     recordSeq: 0,
     refusals: new Map(),
     landedSeq: new Map(),
@@ -311,11 +341,59 @@ function state(): ViewState {
   // has no `mine`: given one here, the first record would otherwise throw.
   return Object.assign(view, {
     mine: view.mine ?? new Map(),
+    mineSuperseded:
+      view.mineSuperseded ?? new Map<string, SupersededRecord[]>(),
     recordSeq: view.recordSeq ?? 0,
     refusals: view.refusals ?? new Map<string, { seq: number; at: number }>(),
     landedSeq: view.landedSeq ?? new Map<string, number>(),
     calls: view.calls ?? noLedgerCalls(),
   });
+}
+
+/**
+ * How long a superseded own record still counts as this process's. A lookup
+ * that answered it began its read before the later record wrote the row, so
+ * it answered within {@link LEDGER_CALL_TIMEOUT_MS} of the later record
+ * landing, and is asked again {@link TAG_LOOKUP_TTL_MS} after its answer.
+ */
+const SUPERSEDED_RECORD_MS = LEDGER_CALL_TIMEOUT_MS + TAG_LOOKUP_TTL_MS;
+
+/**
+ * The most superseded own records kept per tag, however fast it is written.
+ * One dropped sooner, or still answered past {@link SUPERSEDED_RECORD_MS} (by
+ * a lookup whose refresh failed, or by a row a later record on a clock that
+ * stepped back could not move back), is judged as another instance's: that
+ * costs a rebuild within its grace, never a stale entry.
+ */
+const MAX_SUPERSEDED_RECORDS_PER_TAG = 8;
+
+/**
+ * Keeps `at`, the time an earlier record of `tag` by this process wrote, now
+ * a later record has moved `mine` on, dropping those past their time.
+ */
+function keepSupersededRecord(view: ViewState, tag: string, at: number): void {
+  const now = Date.now();
+  const kept = (view.mineSuperseded.get(tag) ?? []).filter(
+    record => record.until > now
+  );
+  kept.push({ at, until: now + SUPERSEDED_RECORD_MS });
+  view.mineSuperseded.set(tag, kept.slice(-MAX_SUPERSEDED_RECORDS_PER_TAG));
+}
+
+/**
+ * Whether `at`, a ledger time a lookup answered for `tag`, is one this
+ * process's own records wrote: the latest, or an earlier one a lookup may
+ * still hold. Matched exactly, as `mine` is: any other time, even one between
+ * two of this process's, is another instance's.
+ */
+function isOwnRecord(view: ViewState, tag: string, at: number): boolean {
+  if (view.mine.get(tag) === at) return true;
+  const now = Date.now();
+  return (
+    view.mineSuperseded
+      .get(tag)
+      ?.some(record => record.at === at && record.until > now) ?? false
+  );
 }
 
 /** Publishes the ledger the handlers read and record into; `null` withdraws it. */
@@ -413,6 +491,7 @@ function sweep(view: ViewState, now: number): void {
   for (const [tag, expiredAt] of view.own) {
     if (expiredAt < horizon) view.own.delete(tag);
   }
+  sweepAgain(view, horizon);
   for (const [tag, refusal] of view.refusals) {
     if (refusal.at < horizon) view.refusals.delete(tag);
   }
@@ -421,6 +500,16 @@ function sweep(view: ViewState, now: number): void {
       view.mine.delete(tag);
       view.landedSeq.delete(tag);
     }
+  }
+  forgetSupersededRecords(view, now);
+}
+
+/** Drops superseded own records once no lookup that may hold one is reused. */
+function forgetSupersededRecords(view: ViewState, now: number): void {
+  for (const [tag, records] of view.mineSuperseded) {
+    const kept = records.filter(record => record.until > now);
+    if (kept.length === 0) view.mineSuperseded.delete(tag);
+    else view.mineSuperseded.set(tag, kept);
   }
 }
 
@@ -528,20 +617,40 @@ export async function refreshTagExpiries(
  * still judged by its reading rather than ignored, because another instance
  * may record the same tag in the same millisecond, and only the time says
  * which: an entry begun before that reading is refused, whoever recorded it.
+ * An earlier own record a lookup still holds is this process's too: an entry
+ * begun before a later write is refused by that write's expiry in `own`.
  */
 function recordedExpiry(view: ViewState, tag: string): number {
   const recorded = view.lookups.get(tag)?.expiredAt ?? 0;
-  return recorded > 0 && view.mine.get(tag) === recorded
+  return recorded > 0 && isOwnRecord(view, tag, recorded)
     ? recorded - TAG_EXPIRY_GRACE_MS
     : recorded;
 }
 
 /** When `tag` last expired as far as this process knows, on the database's clock. */
 function expiryOf(view: ViewState, tag: string): number {
-  const own = view.own.get(tag);
+  const own = Math.max(view.own.get(tag) ?? 0, latestAgain(view, tag));
   return Math.max(
     recordedExpiry(view, tag),
-    own === undefined ? 0 : own + offsetOf(view)
+    own === 0 ? 0 : own + offsetOf(view)
+  );
+}
+
+/** Drops the re-expiries older than `horizon` (this process's clock). */
+function sweepAgain(view: ViewState, horizon: number): void {
+  const again = view.again;
+  if (again === undefined) return;
+  for (const tag of again.keys()) {
+    if (latestAgain(view, tag) < horizon) again.delete(tag);
+  }
+}
+
+/** The latest re-expiry of `tag` at any depth, on this process's clock; 0 when none. */
+function latestAgain(view: ViewState, tag: string): number {
+  // A depth may have no re-expiry yet while a deeper one has: a gap.
+  return (view.again?.get(tag) ?? []).reduce(
+    (latest: number, at: number | undefined) => Math.max(latest, at ?? 0),
+    0
   );
 }
 
@@ -557,19 +666,86 @@ export function isEntryExpired(
 ): boolean {
   if (Date.now() - storedAt > LEDGER_RETENTION_MS) return true;
   const view = state();
-  const storedOnDatabaseClock = storedAt + offsetOf(view);
   for (const tag of tags) {
-    // Another instance's expiry, on the database's clock, has no order with
-    // this process's events: at or after, since an entry begun in the same
-    // millisecond may hold the old value, and regenerating it costs one read.
-    const recorded = recordedExpiry(view, tag);
-    if (recorded > 0 && recorded >= storedOnDatabaseClock) return true;
-    // This process's own expiry is ordered with its entries by `localNow`, so
-    // strictly after: an entry begun once the expiry was made is fresh.
-    const own = view.own.get(tag);
-    if (own !== undefined && own > storedAt) return true;
+    if (expiredSince(view, tag, storedAt)) return true;
   }
   return false;
+}
+
+/** Whether `tag` expired after something begun at `begunAt` (this process's clock). */
+function expiredSince(view: ViewState, tag: string, begunAt: number): boolean {
+  return staleDepth(view, tag, begunAt) !== undefined;
+}
+
+/**
+ * How deep the shallowest expiry of `tag` after `begunAt` is: 0 for a write
+ * (this process's or another instance's), `d` for a re-expiry at depth `d`,
+ * `undefined` when none came after it.
+ */
+function staleDepth(
+  view: ViewState,
+  tag: string,
+  begunAt: number
+): number | undefined {
+  // Another instance's expiry, on the database's clock, has no order with
+  // this process's events: at or after, since an entry begun in the same
+  // millisecond may hold the old value, and regenerating it costs one read.
+  const recorded = recordedExpiry(view, tag);
+  if (recorded > 0 && recorded >= begunAt + offsetOf(view)) return 0;
+  // This process's own expiry is ordered with its entries by `localNow`, so
+  // strictly after: an entry begun once the expiry was made is fresh.
+  const own = view.own.get(tag);
+  if (own !== undefined && own > begunAt) return 0;
+  const depths = view.again?.get(tag) ?? [];
+  const index = depths.findIndex(at => at > begunAt);
+  return index === -1 ? undefined : index + 1;
+}
+
+/**
+ * How many `use cache` fills deep a stale value is followed: a fill that drew
+ * a stale fill, and one that drew that, and so on. Each level is one more
+ * re-expiry; past this depth a stale fill is still refused, but expires
+ * nothing more, so the re-expiries end however steady the traffic.
+ */
+const JOINED_FILL_DEPTH = 3;
+
+/**
+ * Expires again, in this process and now, the tags of a `use cache` fill that
+ * began before one of them expired: the fill holds the value from before the
+ * expiry. Answers whether the fill is stale, and so must not be stored.
+ *
+ * The fill itself is refused when stored, but Next.js shares an in-flight
+ * fill between concurrent requests, so a page whose render began after the
+ * write may have joined it and drawn the old value. That page began after the
+ * expiry, so by its own start it would look fresh and be kept old for its
+ * whole lifetime; expired again as the fill finishes, after the page began, it
+ * is refused and rendered again. Local only: a fill is shared only within the
+ * process that runs it. Asks nothing; `refreshTagExpiries` first.
+ *
+ * A fill begun before a re-expiry may have drawn the stale fill too (an outer
+ * `use cache` function around it), so it is refused and expires its tags one
+ * level deeper. Only up to `JOINED_FILL_DEPTH`: otherwise, with fills of a
+ * shared tag always overlapping, each refused fill's re-expiry would refuse
+ * the next, and nothing carrying the tag would be stored until traffic paused.
+ */
+export function expireAgainAfterStaleFill(
+  tags: Iterable<string>,
+  begunAt: number
+): boolean {
+  const view = state();
+  const now = localNow();
+  let stale = false;
+  for (const tag of new Set(tags)) {
+    const depth = staleDepth(view, tag, begunAt);
+    if (depth === undefined) continue;
+    stale = true;
+    if (depth >= JOINED_FILL_DEPTH) continue;
+    view.again ??= new Map();
+    const depths = view.again.get(tag) ?? [];
+    depths[depth] = now;
+    view.again.set(tag, depths);
+  }
+  return stale;
 }
 
 /** The latest expiry among `tags`, on this process's clock; 0 when none expired. */
@@ -641,6 +817,12 @@ async function record(
       return ledger.record(tags).then(stored => {
         if (stored === false) return stored;
         for (const [tag, at] of stored) {
+          // The time it replaces stays this process's while a lookup may
+          // still hold it, whichever copy of this module recorded it.
+          const before = view.mine.get(tag);
+          if (before !== undefined && before !== at) {
+            keepSupersededRecord(view, tag, before);
+          }
           view.mine.set(tag, at);
           view.landedSeq.set(
             tag,

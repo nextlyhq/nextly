@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { keyHint } from "./key-hint";
+import { keyHint, spokenKeyHint } from "./key-hint";
 
 describe("a binding spelled for a person", () => {
   it("names the key the platform carries, not the one the spec does", () => {
@@ -66,5 +66,31 @@ describe("a binding spelled for a person", () => {
      * — while a naive split leaves a chord carrying modifiers and no key.
      */
     expect(keyHint("mod++", false)).toBe("Ctrl++");
+  });
+});
+
+describe("a binding spoken for a screen reader", () => {
+  it("names each key in words as the keyboard labels it", () => {
+    // A Mac labels Option and Delete; elsewhere the same keys are Alt and
+    // Backspace. Words, not glyphs: ⌥ and ⌫ are skipped or read as "symbol".
+    expect(spokenKeyHint("alt+Backspace", true)).toBe("Option+Delete");
+    expect(spokenKeyHint("alt+Backspace", false)).toBe("Alt+Backspace");
+    expect(spokenKeyHint("mod+k", true)).toBe("Command+K");
+    expect(spokenKeyHint("mod+k", false)).toBe("Ctrl+K");
+    expect(spokenKeyHint("alt+ArrowUp", true)).toBe("Option+Up Arrow");
+    expect(spokenKeyHint("Enter", true)).toBe("Return");
+  });
+
+  it("names the same modifiers, in the same order, as the written hint", () => {
+    // One table for both: a spoken and a written hint that named different
+    // keys for one binding would teach two keystrokes.
+    expect(keyHint("mod+shift+z", false)).toBe("Ctrl+Shift+Z");
+    expect(spokenKeyHint("mod+shift+z", false)).toBe("Ctrl+Shift+Z");
+    expect(spokenKeyHint("mod+shift+z", true)).toBe("Command+Shift+Z");
+  });
+
+  it("answers null for a spec it cannot read, as the written hint does", () => {
+    expect(spokenKeyHint("mod+", true)).toBeNull();
+    expect(keyHint("mod+", true)).toBeNull();
   });
 });

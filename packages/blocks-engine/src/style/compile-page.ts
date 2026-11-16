@@ -47,6 +47,7 @@ import { isConditionGated } from "../visibility";
 import { BREAKPOINT_AXES } from "./breakpoint-axes";
 import type { BreakpointAxis } from "./breakpoint-axes";
 import { childGapForms } from "./child-gap";
+import { childFlagRule, withContainInset } from "./contain-inset";
 import { escapeIdentifier } from "./css-value";
 import type { MayFetchUrl } from "./css-value";
 import { compileStyleValues, DEFAULT_TOKEN_PREFIX } from "./declarations";
@@ -81,7 +82,6 @@ import {
 } from "./part-routing";
 import { serializeRules } from "./serialize";
 import type { CssRule } from "./serialize";
-import type { SpacingMode } from "./spacing-mode";
 import type { StyleOrigin, StyleTraceEntry } from "./style-trace";
 import type { StyleIssueBudget } from "./validate-style-value";
 import { newStyleIssueBudget } from "./validate-style-value";
@@ -218,17 +218,6 @@ export interface StyleCompileContext {
    * (a node value or a named class, both `0-3-0`).
    */
   childGaps?: Readonly<Record<string, StyleValue>>;
-
-  /**
-   * The site's spacing model. Under `classic` no container gap is written,
-   * whatever {@link childGaps} holds, and no container wears the gap marker;
-   * absent or `gaps`, the gaps are written as described there.
-   *
-   * The block library that supplies the element and block defaults reads the
-   * same flag to swap in the defaults of the classic model, so the one flag
-   * decides the whole spacing model of a compile. See `style/spacing-mode`.
-   */
-  spacingMode?: SpacingMode;
 
   /**
    * Whether a node's block declares that these props draw nothing.
@@ -1454,8 +1443,19 @@ function envelopeRules(
             (weightlessAnchor === undefined
               ? `${selector}${stateSelectors[state]}${rule.descendant}`
               : `${weightlessAnchor} :where(${selector}${stateSelectors[state]}${rule.descendant})`),
-          declarations: rule.declarations,
+          declarations: withContainInset(
+            rule.declarations,
+            rule.descendant === ""
+          ),
         });
+        // The flag for the block's children; not traced, as no one set it.
+        const flags = childFlagRule(
+          rule,
+          `${selector}${stateSelectors[state]} > *`,
+          weightlessAnchor,
+          context.atRule
+        );
+        if (flags !== undefined) rules.push(flags);
         // Recorded here, from the same declarations that were just emitted, in the same loop.
         // Anywhere else it would be a second reading of the document, and a second reading can
         // disagree with the first — which is the one failure a provenance record must not have.
@@ -2202,9 +2202,7 @@ export function compilePageCss(
   // the gap at equal weight; before the named classes and the nodes, so an
   // author's spacing on a child always wins.
   const flowGaps = new Map<string, readonly Declaration[]>();
-  // The classic model writes no container gap at all: its blocks space
-  // themselves with their own margins.
-  const gaps = ctx.spacingMode === "classic" ? {} : (ctx.childGaps ?? {});
+  const gaps = ctx.childGaps ?? {};
   for (const type of [...usedTypes].sort()) {
     if (!Object.hasOwn(gaps, type)) continue;
     const path = pointer("/childGaps", type);
@@ -2652,10 +2650,9 @@ export function compilePageCss(
         });
         continue;
       }
-      // A reference that reached nothing. Silently dropping it leaves an author with a class on
-      // the node, no class on the element, and nothing connecting the two — the same account
-      // every other unwritten value in this compile gets. Once per id, because a second report
-      // would name the same missing class and the same fix.
+      // A reference that reached nothing: reported, not dropped in silence, once per id, in words
+      // for the author. The advice suits a deleted shared style or a block style whose block is
+      // gone, and names no screen a host without a page builder lacks.
       // A set per stored node, because the pointer above names one reference and a reference is
       // per node. Deduped across the document, the first node to list a missing class takes the
       // only report, and an author who follows that pointer and repairs it hears nothing about
@@ -2680,8 +2677,9 @@ export function compilePageCss(
         path: entryPath,
         code: "unknown-class",
         severity: "warning",
-        message: `This node lists the class ${describeValue(id)}, which the site library does not define, so it was not applied.`,
-        suggestion: "Remove the reference, or add the class to the library.",
+        message: `This block uses a style this site doesn't have ("${describeValue(id)}"), so the page doesn't show it.`,
+        suggestion:
+          "Remove the style from this block, or choose one this site has.",
       });
     }
     // Two nodes sharing an id share one entry in this map, so a named class recorded here would

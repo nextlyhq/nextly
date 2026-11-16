@@ -1,7 +1,7 @@
 /**
  * The block document model — the stored shape of everything the page builder
- * produces: page content, patterns, components, Layout regions, and collection
- * templates.
+ * produces: page content, patterns, components (a Layout's header and footer
+ * among them), and collection templates.
  *
  * This module is data-only. It has zero runtime dependencies and no imports
  * from React or Nextly: documents must be readable and writable from any
@@ -27,8 +27,8 @@ export const DOCUMENT_FORMAT_VERSION: DocumentFormatVersion = 1;
  * - `page`      — an entry's blocks-field content
  * - `pattern`   — a copy-on-insert saved subtree (including full-page patterns)
  * - `component` — a linked, reusable definition with exposed props/slots/variants
- * - `region`    — a Layout region document (header, footer, ...); a Layout is a
- *                 named bundle REFERENCING region documents, so it is not a kind
+ *                 (a Layout's header and footer are components; a Layout is a
+ *                 named bundle REFERENCING them, so it is not a kind)
  * - `template`  — a collection template ("template" is reserved for exactly this)
  *
  * The enum is closed: an unknown kind is a validation error in strict mode and
@@ -45,7 +45,6 @@ export const DOCUMENT_KINDS = [
   "page",
   "pattern",
   "component",
-  "region",
   "template",
 ] as const;
 
@@ -212,6 +211,15 @@ export interface BlockNode {
   customCss?: string;
   /** CSS id applied to the node's root element. */
   cssId?: string;
+  /**
+   * "Never quote this": the node's root element carries `data-nosnippet`, so
+   * search engines that read it, Google's among them, show none of its text
+   * in a result's snippet. Stored only while on. Google reads the attribute
+   * on `span`, `div` and `section` elements
+   * (https://developers.google.com/search/docs/crawling-indexing/robots-meta-tag),
+   * so it is offered on blocks whose root is one of those.
+   */
+  nosnippet?: boolean;
   /** Sanitized custom HTML attributes applied to the node's root element. */
   attributes?: Record<string, string>;
   /**
@@ -966,6 +974,29 @@ export interface BlockPart {
     /** The wrapper parts the root may be (`frame`, `link`). */
     readonly whenRootIs: readonly string[];
   };
+}
+
+/**
+ * A reference to the design token `identity`, scaled by `times` when given:
+ * the one way a reference is built, so every writer stores the same shape
+ * and a reader looking for one in stored text ({@link tokenRefText}) looks
+ * for what was written.
+ */
+export function tokenRef(identity: string, times?: number): TokenRef {
+  return times === undefined
+    ? { $token: identity }
+    : { $token: identity, times };
+}
+
+/**
+ * The text a stored document holds for any reference to `identity`, as
+ * `JSON.stringify` writes it: the `$token` member of {@link tokenRef}, which
+ * a scale, when present, follows or precedes as another member. Matched
+ * against a document serialized the same way, it finds a reference wherever
+ * the document holds one, without reading the document as blocks.
+ */
+export function tokenRefText(identity: string): string {
+  return JSON.stringify(tokenRef(identity)).slice(1, -1);
 }
 
 /** True if a style value is a design-token reference. */

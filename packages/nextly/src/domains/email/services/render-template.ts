@@ -29,6 +29,12 @@ import {
   STARTING_BRAND,
   type BrandSettings,
 } from "../brand-settings";
+import { compileWrittenHtml, compileWrittenText } from "../written/compile";
+import {
+  WRITTEN_LINK_CLASS,
+  type TemplateFormat,
+  type WrittenDocument,
+} from "../written/document";
 
 import {
   markHtml,
@@ -78,6 +84,13 @@ export interface TemplateFields {
    * is stored about the template; absent means Liquid.
    */
   legacy?: boolean;
+  /**
+   * Written (blocks) or coded; coded when absent. A written template renders
+   * from its blocks, written out as Liquid when it is rendered.
+   */
+  format?: TemplateFormat;
+  /** A written template's blocks. */
+  blocks?: WrittenDocument | null;
 }
 
 /** A layout as the render needs it. */
@@ -145,17 +158,59 @@ function fill(
 }
 
 /**
+ * A written template as the render reads it: its body and plain text written
+ * from its blocks as they are now, on Liquid. Compiled here, at every render,
+ * so a preview, a test and a send of the same blocks write the same email.
+ * Anything that decides about a render from its text (what the brand settings
+ * reach) reads this too.
+ */
+export function fromBlocks<T extends TemplateFields>(template: T): T {
+  if (template.format !== "written" || !template.blocks) return template;
+  return {
+    ...template,
+    htmlContent: compileWrittenHtml(template.blocks),
+    plainTextContent: compileWrittenText(template.blocks),
+    legacy: false,
+  };
+}
+
+/**
  * @throws NextlyError when a Liquid template cannot be rendered (it does not
  *   parse, or a render limit is hit); it is not retryable.
  */
 export function renderTemplate(
-  template: TemplateFields,
+  given: TemplateFields,
   layout: LayoutFields | null,
   data: Record<string, unknown>,
   options: RenderTemplateOptions
 ): RenderedTemplate {
+  return renderTemplateParts(given, layout, data, options).rendered;
+}
+
+/**
+ * A render, plus the preheader as it was spliced into the HTML: `null` when
+ * the template has none. A preview reads its inbox line from this, so it is
+ * the line the HTML carries and not a second render's.
+ *
+ * @throws NextlyError as `renderTemplate` does.
+ */
+export function renderTemplateParts(
+  given: TemplateFields,
+  layout: LayoutFields | null,
+  data: Record<string, unknown>,
+  options: RenderTemplateOptions
+): { rendered: RenderedTemplate; preheaderHtml: string | null } {
+  // A written template renders from its blocks as they are now.
+  const template = fromBlocks(given);
   const legacy = template.legacy;
-  const layoutData = withLayoutChrome(data, options);
+  // The rule that keeps written links readable in dark mode, for an email
+  // that carries them: a written one, or one converted from it to code.
+  // Every other email's layout is unchanged.
+  const layoutData = withLayoutChrome(data, options, {
+    writtenLinks: template.htmlContent.includes(
+      `class="${WRITTEN_LINK_CLASS}"`
+    ),
+  });
   // The body reads the brand settings as `brand` too, so a site's template
   // can write in them. A send's own `brand` wins there, as every explicit value
   // does in a body: a template written for a `brand` its sends supply keeps
@@ -191,9 +246,10 @@ export function renderTemplate(
     ? fill(template.plainTextContent, bodyData, "text", legacy)
     : htmlToText(html);
 
+  let preheaderHtml: string | null = null;
   if (template.preheader?.trim()) {
-    const preheader = fill(template.preheader, bodyData, "html", legacy);
-    html = `${PREHEADER_OPEN}${preheader}</div>${html}`;
+    preheaderHtml = fill(template.preheader, bodyData, "html", legacy);
+    html = `${PREHEADER_OPEN}${preheaderHtml}</div>${html}`;
   }
 
   // A layout row IS a wrapper, so wrapping it in another would nest two
@@ -202,7 +258,7 @@ export function renderTemplate(
     html = spliceIntoLayout(layout, html, layoutData);
   }
 
-  return { subject, html, text };
+  return { rendered: { subject, html, text }, preheaderHtml };
 }
 
 /**
@@ -223,14 +279,15 @@ export function renderTemplate(
  */
 function withLayoutChrome(
   data: Record<string, unknown>,
-  options: RenderTemplateOptions
+  options: RenderTemplateOptions,
+  markup: { writtenLinks?: boolean } = {}
 ): Record<string, unknown> {
   const chrome = {
     ...data,
     year: data.year ?? new Date().getFullYear().toString(),
     appName: data.appName ?? options.appName,
   };
-  const brand = brandVariables(options.brand ?? STARTING_BRAND, chrome);
+  const brand = brandVariables(options.brand ?? STARTING_BRAND, chrome, markup);
   return { ...chrome, brand, [BRAND_BINDING]: brand };
 }
 

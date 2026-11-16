@@ -33,12 +33,21 @@
 import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type {
+  SqlParam,
+  StatementSession,
+} from "@nextlyhq/adapter-drizzle/types";
 import type { Command } from "commander";
 import { sql, type SQL } from "drizzle-orm";
 
 import { getDialectTables } from "../../database/index";
 import type { SeederResult } from "../../database/seeders/index";
 import { MIGRATION_LOCK_TABLE as FIELD_GROUP_LOCK_TABLE } from "../../domains/field-groups/migration/session";
+import {
+  busyTableBounds,
+  type BusyTableBounds,
+} from "../../domains/schema/busy-table/bounds";
+import { runStatementsInTries } from "../../domains/schema/busy-table/run-on-session";
 // F8 PR 2: was `DrizzlePushService` (legacy). Switched to the freshPushSchema
 // helper which has the same dialect-aware behavior but is self-contained
 // (no class state, no preview/apply duality).
@@ -48,6 +57,10 @@ import {
   judgeDataLoss,
 } from "../../domains/schema/migrate/data-loss-consent";
 import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
+import {
+  unwrittenChangesError,
+  unwrittenChangesOf,
+} from "../../domains/schema/migrate/unwritten-changes";
 import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT } from "../../domains/schema/pipeline/pg-visible-relation";
@@ -57,6 +70,7 @@ import {
 } from "../../domains/schema/pipeline/schema-lock";
 import { describeError, immediateMessage } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
+import { busyTableNotices } from "../busy-table-options";
 import { reportDryRun } from "../dry-run";
 import { exitWithError } from "../errors";
 import { CliError } from "../errors/cli-error";
@@ -124,6 +138,15 @@ export interface MigrateFreshCommandOptions {
    * Refused whenever it is given: it never consents to deleting data.
    */
   yes?: boolean;
+
+  /**
+   * One try's bound for a busy table, in whole seconds, as typed (`--lock-timeout`), for the drops
+   * and the re-applied migrations alike; checked with the total before anything changes.
+   */
+  lockTimeout?: string;
+
+  /** Every try's bound together, in whole seconds, as typed (`--lock-timeout-total`). */
+  lockTimeoutTotal?: string;
 }
 
 /**
@@ -159,7 +182,7 @@ const FRESH_LOCK_COMMAND = "nextly migrate:fresh";
 /**
  * Result of the fresh command
  */
-interface MigrateFreshResult {
+export interface MigrateFreshResult {
   /** Number of tables dropped */
   tablesDropped: number;
   /** Names of dropped tables */
@@ -188,6 +211,21 @@ export async function runMigrateFresh(
   const startTime = Date.now();
 
   logger.header("Migrate Fresh");
+
+  // The busy-table bounds are checked first, so a value outside its range is refused before
+  // anything is read or changed.
+  let bounds: BusyTableBounds;
+  try {
+    bounds = busyTableBounds({
+      flags: {
+        lockTimeout: options.lockTimeout,
+        lockTimeoutTotal: options.lockTimeoutTotal,
+      },
+      env: process.env,
+    });
+  } catch (error) {
+    exitWithError(logger, error);
+  }
 
   // `--yes` is refused before anything is read or reached, whatever else is
   // given, so a run that meant it as consent changes nothing.
@@ -219,6 +257,33 @@ export async function runMigrateFresh(
   }
 
   logger.keyValue("Dialect", getDialectDisplayName(dialect));
+
+  // A configuration holding a change no migration records is refused before anything is
+  // dropped, a dry run's too: the re-applied migrations would rebuild a database the
+  // configuration is ahead of, and the `nextly migrate` run inside would refuse it only once
+  // every table was gone. Compared offline, as `migrate:check` compares, since the database the
+  // migrations rebuild starts empty.
+  try {
+    const cwd = options.cwd ?? process.cwd();
+    const refusal = unwrittenChangesError(
+      await unwrittenChangesOf({
+        config: configResult.config,
+        ...(configResult.deferredExtends === undefined
+          ? {}
+          : { deferredExtends: configResult.deferredExtends }),
+        projectRoot: cwd,
+        migrationsDir: resolve(cwd, configResult.config.db.migrationsDir),
+        dialect,
+        logger: {
+          warn: message => logger.warn(message),
+          error: message => logger.error(message),
+        },
+      })
+    );
+    if (refusal !== undefined) throw refusal;
+  } catch (error) {
+    exitWithError(logger, error);
+  }
 
   if (options.dryRun === true) {
     await previewMigrateFresh(options, dbValidation, configResult, context);
@@ -281,7 +346,7 @@ export async function runMigrateFresh(
     const outcome = await withMigrateLock(
       adapter as unknown as DrizzleAdapter,
       dialect,
-      () => dropAndReapply(adapter, dialect, options, context),
+      () => dropAndReapply(adapter, dialect, options, bounds, context),
       {
         command: FRESH_LOCK_COMMAND,
         mode: "wait",
@@ -402,6 +467,7 @@ async function dropAndReapply(
   adapter: CLIDatabaseAdapter,
   dialect: SupportedDialect,
   options: ResolvedMigrateFreshOptions,
+  bounds: BusyTableBounds,
   context: CommandContext
 ): Promise<void> {
   const { logger } = context;
@@ -413,7 +479,12 @@ async function dropAndReapply(
   const result = await dropAllTables(
     adapter as unknown as DrizzleAdapter,
     dialect,
-    context
+    logger,
+    {
+      bounds,
+      // Each try's notice goes to standard error, as `nextly migrate`'s do, kept back under --quiet.
+      notify: busyTableNotices(logger),
+    }
   );
 
   const dropDuration = Date.now() - dropStartTime;
@@ -449,6 +520,9 @@ async function dropAndReapply(
       verbose: options.verbose,
       quiet: options.quiet,
       cwd: options.cwd,
+      // The re-applied migrations wait for a busy table with the bounds the drops waited with.
+      lockTimeout: options.lockTimeout,
+      lockTimeoutTotal: options.lockTimeoutTotal,
       throwOnFailure: true,
     },
     context
@@ -484,16 +558,22 @@ async function tablesToDrop(
   );
 }
 
+/** The command's name, as a busy-table report and the schema lock's mark name it. */
+const FRESH_CHANGE = "nextly migrate:fresh";
+
 /**
- * Drop all tables from the database
+ * Drop every table but the lock's own, one `DROP TABLE` at a time on one connection with the
+ * foreign-key checks off, each waiting for a busy table in its own tries
+ * (`runStatementsInTries`). Where one stays busy past its tries the run stops with
+ * `NEXTLY_TABLE_BUSY`, naming the tables already dropped and the held one; those stay dropped,
+ * and the next run drops the rest.
  */
-async function dropAllTables(
+export async function dropAllTables(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect,
-  context: CommandContext
+  logger: Pick<CommandContext["logger"], "debug">,
+  busyTable: { bounds: BusyTableBounds; notify: (line: string) => void }
 ): Promise<MigrateFreshResult> {
-  const { logger } = context;
-
   const tables = await tablesToDrop(adapter, dialect);
 
   if (tables.length === 0) {
@@ -509,19 +589,28 @@ async function dropAllTables(
 
   const startTime = Date.now();
 
-  // Disable foreign key constraints before dropping
-  await disableForeignKeyChecks(adapter, dialect);
-
-  try {
-    // Drop each table
-    for (const table of tables) {
-      logger.debug(`Dropping table: ${table}`);
-      await dropTable(adapter, dialect, table);
+  // The foreign-key checks are switched off on the connection the drops run on, and back on
+  // after the last drop, or the one that stopped the run.
+  const onSession = (session: StatementSession): SqlRunner => ({
+    executeQuery: <T = unknown>(statement: string, params?: SqlParam[]) =>
+      session.execute<T>(statement, params),
+  });
+  await runStatementsInTries(
+    adapter,
+    tables.map(table => dropTableStatement(dialect, table)),
+    {
+      change: FRESH_CHANGE,
+      bounds: busyTable.bounds,
+      notify: busyTable.notify,
+      appliedBefore: [],
+      // Table names are not secrets; a statement's text never reaches the report.
+      name: index => `the drop of table ${JSON.stringify(tables[index])}`,
+      settings: {
+        set: session => disableForeignKeyChecks(onSession(session), dialect),
+        restore: session => enableForeignKeyChecks(onSession(session), dialect),
+      },
     }
-  } finally {
-    // Re-enable foreign key constraints
-    await enableForeignKeyChecks(adapter, dialect);
-  }
+  );
 
   return {
     tablesDropped: tables.length,
@@ -714,14 +803,11 @@ export async function enableForeignKeyChecks(
   }
 }
 
-/**
- * Drop a single table
- */
-async function dropTable(
-  adapter: DrizzleAdapter,
+/** The statement that drops one table, its name quoted for the dialect. */
+function dropTableStatement(
   dialect: SupportedDialect,
   tableName: string
-): Promise<void> {
+): string {
   let query: string;
 
   // Properly quote the table name based on dialect
@@ -744,7 +830,7 @@ async function dropTable(
       throw new Error(`Unsupported dialect: ${String(dialect)}`);
   }
 
-  await adapter.executeQuery(query);
+  return query;
 }
 
 /**

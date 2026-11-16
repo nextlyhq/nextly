@@ -103,21 +103,23 @@ describe("the session-gated half of admin-meta", () => {
     expect(screen.getByTestId("status").textContent).toBe("pending");
   });
 
-  it("asks again after sign-in, rather than reusing the failed anonymous answer", async () => {
+  it("asks once signed in, having reported unavailable to the visitor without asking", async () => {
     get.mockResolvedValue({} as AdminBranding);
-    protectedGet.mockRejectedValueOnce(new Error("401"));
+    protectedGet.mockRejectedValue(new Error("401"));
     session.mockReturnValue(signedOut());
 
     const { rerender } = renderProbe();
 
-    // The anonymous attempt fails and, with no retry, is final for that key.
+    // Signed out, the half is unavailable, as a refusal would have made it,
+    // and no request is made that could only be refused.
     await waitFor(() =>
       expect(screen.getByTestId("status").textContent).toBe("unavailable")
     );
-    expect(protectedGet).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(get).toHaveBeenCalled());
+    expect(protectedGet).not.toHaveBeenCalled();
 
-    // Signing in must produce a fresh request. Before this fix the failed query
-    // was simply read again and every consumer stayed degraded until a reload.
+    // Signing in must produce a request, under a key of its own.
+    protectedGet.mockReset();
     protectedGet.mockResolvedValueOnce(WORKSPACE);
     session.mockReturnValue(signedIn());
     rerender();
@@ -125,7 +127,7 @@ describe("the session-gated half of admin-meta", () => {
     await waitFor(() =>
       expect(screen.getByTestId("status").textContent).toBe("answered")
     );
-    expect(protectedGet).toHaveBeenCalledTimes(2);
+    expect(protectedGet).toHaveBeenCalledTimes(1);
   });
 
   it("reports unavailable when the session itself could not be established", async () => {

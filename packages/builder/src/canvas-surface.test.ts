@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { CANVAS_FRAME_SHEET } from "./canvas-frame-sheet";
 import { EMPTY_CONTAINER_SELECTOR } from "./empty-slot";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
+import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
 
 /**
  * The canvas is drawn on the PAGE's surface, not on the editor's.
@@ -27,9 +28,8 @@ import { CANVAS_ROOT_CLASS } from "./shell-state";
  *
  * @module canvas-surface.test
  */
-const CHROME = readFileSync(
-  fileURLToPath(new URL("./styles/builder-chrome.css", import.meta.url)),
-  "utf8"
+const CHROME = chromeStylesheetSource(url =>
+  readFileSync(fileURLToPath(url), "utf8")
 );
 
 /**
@@ -109,11 +109,13 @@ describe("the canvas's frame as a sheet on the editor's surface", () => {
      * The surface around the frame is deliberately one step off the background
      * so it recedes, so the two alone are close by design. The edge is what
      * makes the page separable regardless of which of the two is lighter,
-     * which the palette inverts between modes.
+     * which the palette inverts between modes. Drawn in the frame-edge
+     * token, which follows the border and takes the system's text colour in
+     * forced colours.
      */
     const frame = ruleFor(".nx-canvas-frame");
     expect(declared(frame, "outline")).toBe(
-      "1px solid var(--nx-builder-border)"
+      "1px solid var(--nx-builder-frame-edge)"
     );
     expect(declared(frame, "box-shadow")).toBe("var(--shadow-md)");
   });

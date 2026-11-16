@@ -47,16 +47,20 @@ import {
   CANVAS_BINDINGS_ROUTE_PATH,
   conditionsToWire,
   demandToWire,
+  sourcesChangedAskOf,
   type CanvasBindingsRequest,
   type CanvasBindingsResponse,
+  type CanvasSourcesChangedRequest,
 } from "../canvas-bindings-contract";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
+import { onCanvasSourcesChanged } from "./canvas-sources";
 import {
   useCanvasEntryIdentity,
   useCanvasEntryRead,
   type CanvasEntryRead,
 } from "./editor/canvas-entry";
+import { useCanvasSourceCheck } from "./editor/canvas-source-check";
 /**
  * What each answer's reads cost the page's allowance, by the bindings it
  * gave, so the editor's read meter adds the binding reads as the route made
@@ -118,11 +122,13 @@ function kindsIn(
 /** No source read: what the canvas draws with until an answer arrives. */
 const NONE: PageBindings = Object.freeze({});
 
-/** How long an answer is kept for the same ask. */
-const KEPT_FOR_MS = 15_000;
-
-/** The asks answered so far, by ask, for the current person only. */
-const KEPT = new Map<string, { at: number; read: Promise<PageBindings> }>();
+/**
+ * The asks answered so far, by ask, for the current person only. An answer
+ * is kept for as long as its ask is the same, with no lifetime of its own,
+ * and dropped when the sources the canvas reads change (`canvas-sources`).
+ */
+const KEPT = new Map<string, { read: Promise<PageBindings> }>();
+onCanvasSourcesChanged(() => KEPT.clear());
 /**
  * The person whose answers `KEPT` holds. Always a known person: until the
  * signed-in person is known nothing is asked, so no answer is ever kept under
@@ -272,6 +278,49 @@ export function canvasBindingsRequest(
   };
 }
 
+/**
+ * What the change check asks about for the sources the canvas reads: the
+ * bindings' ask where the page reads through bindings, else its lists alone,
+ * so a page that only lists entries still sees them change.
+ */
+function sourcesCheckAskOf(
+  request: CanvasBindingsRequest | undefined,
+  drawn: readonly BlockDocument[],
+  identity: DocumentIdentity | null,
+  namedQueries: NamedQueryLookup | undefined,
+  locale: string | undefined
+): CanvasSourcesChangedRequest | undefined {
+  if (request !== undefined) return sourcesChangedAskOf(request);
+  if (identity === null) return undefined;
+  const lists = [...listCollections(drawn, namedQueries)].sort();
+  if (lists.length === 0) return undefined;
+  return {
+    source: requestSourceOf(identity),
+    singles: [],
+    lists,
+    ...(locale === undefined ? {} : { locale }),
+  };
+}
+
+/**
+ * Keep what the canvas reads in step with saves made elsewhere, through the
+ * editor's change check, for the sources {@link sourcesCheckAskOf} names.
+ */
+function useWatchedSources(
+  request: CanvasBindingsRequest | undefined,
+  drawn: readonly BlockDocument[],
+  identity: DocumentIdentity | null,
+  namedQueries: NamedQueryLookup | undefined,
+  locale: string | undefined,
+  userId: string | null
+): void {
+  const asked = useMemo(
+    () => sourcesCheckAskOf(request, drawn, identity, namedQueries, locale),
+    [request, drawn, identity, namedQueries, locale]
+  );
+  useCanvasSourceCheck(asked, userId);
+}
+
 /** The entry an ask is made for, as the route takes it. */
 function requestSourceOf(
   identity: DocumentIdentity
@@ -377,16 +426,14 @@ export function canvasBindingsFor(
   }
   const key = JSON.stringify(request);
   const kept = KEPT.get(key);
-  if (!fresh && kept !== undefined && Date.now() - kept.at < KEPT_FOR_MS) {
-    return kept.read;
-  }
+  if (!fresh && kept !== undefined) return kept.read;
   const reading = ask(request, signal).then(answer => {
     const bindings = bindingsFromWire(answer);
     const reads = readsIn(answer);
     if (reads !== undefined) READS.set(bindings, reads);
     return bindings;
   });
-  KEPT.set(key, { at: Date.now(), read: reading });
+  KEPT.set(key, { read: reading });
   // A failed ask is not kept, so the next draw asks again.
   reading.catch(() => {
     if (KEPT.get(key)?.read === reading) KEPT.delete(key);
@@ -465,6 +512,9 @@ export function useCanvasBindings(
   );
   // The ask as text: a new document that asks the same reads nothing new.
   const key = request === undefined ? "" : JSON.stringify(request);
+  // Saves made elsewhere to what this reads: asked once a minute at most
+  // while the builder is in sight, so a kept answer never outlives its data.
+  useWatchedSources(request, drawn, identity, namedQueries, locale, userId);
   const [answer, setAnswer] = useState<{
     readonly key: string;
     readonly userId: string;
@@ -475,10 +525,14 @@ export function useCanvasBindings(
   // The ask that failed last, so its failure is told rather than taken for
   // an answer on its way.
   const [failed, setFailed] = useState<string | null>(null);
-  // Bumped once an answer has been kept its while, so the same ask is made
-  // again: a source can change while what the page asks stays the same (a
-  // saved title, an updated Single).
+  // Bumped when the sources the canvas reads have changed, so the same ask is
+  // made again: a source can change while what the page asks stays the same
+  // (a saved title, an updated Single).
   const [round, setRound] = useState(0);
+  useEffect(
+    () => onCanvasSourcesChanged(() => setRound(value => value + 1)),
+    []
+  );
   // The retry this read last answered, so a retry the editor asks for reads
   // afresh rather than from what was kept for the same ask.
   const answeredRetry = useRef(retry);
@@ -489,23 +543,8 @@ export function useCanvasBindings(
     const fresh = answeredRetry.current !== retry;
     answeredRetry.current = retry;
     let current = true;
-    let stale: ReturnType<typeof setTimeout> | undefined;
     // Asked again, so an earlier failure of this ask is no longer the answer.
     setFailed(previous => (previous === key ? null : previous));
-    // Asked again when the editor is back in sight, never while it is not.
-    const onVisible = () => {
-      if (document.visibilityState === "hidden") return;
-      document.removeEventListener("visibilitychange", onVisible);
-      setRound(value => value + 1);
-    };
-    const askAgain = () => {
-      if (!current) return;
-      if (document.visibilityState === "hidden") {
-        document.addEventListener("visibilitychange", onVisible);
-        return;
-      }
-      setRound(value => value + 1);
-    };
     canvasBindingsFor(
       JSON.parse(key) as CanvasBindingsRequest,
       userId,
@@ -516,7 +555,6 @@ export function useCanvasBindings(
         if (!current) return;
         setAnswer({ key, userId, bindings, retry });
         setFailed(null);
-        stale = setTimeout(askAgain, KEPT_FOR_MS);
       },
       () => {
         // The sources could not be read: bound props keep their own values
@@ -530,8 +568,6 @@ export function useCanvasBindings(
     );
     return () => {
       current = false;
-      if (stale !== undefined) clearTimeout(stale);
-      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [key, userId, round, retry]);
   // Where this read stands, told to the editor that gave the entry, so what

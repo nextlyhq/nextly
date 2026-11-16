@@ -86,6 +86,32 @@ export interface GetSingleOptions {
    */
   translationStatus?: boolean;
 
+  /**
+   * Whole-document fallback: where the Single is not published in the
+   * requested language, answer in the first language of its fallback chain it
+   * is published in, and say which (`_locale`).
+   */
+  wholeDocumentFallback?: boolean;
+
+  /** Attach `_sources`: for each translatable field, the language its value came from. */
+  sourceLocales?: boolean;
+
+  /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
+  translations?: "all";
+
+  /**
+   * The fields to answer with, as a collection read selects them
+   * (`shared/lib/field-selection`): a field named `true` is included, a `false`
+   * entry is ignored, and a selection that includes nothing answers the whole
+   * document. The id and the system timestamps are always answered.
+   *
+   * The read takes only the selected fields' columns (with the system columns)
+   * when nothing else needs the rest: no read hook and no field read rule that
+   * runs for this read. Such a read takes the whole row and only its answer is
+   * narrowed, so a hook or a rule still sees every value.
+   */
+  select?: Record<string, boolean>;
+
   /** User context for access control and hooks. */
   user?: UserContext;
 
@@ -221,8 +247,6 @@ export interface UpdateSingleOptions {
    * The fields this write restored, and the version each came from, as server
    * code states it. A client states it as `_restoredFrom` in the body, read
    * at the write's boundary when this is absent.
-   *
-   * @experimental
    */
   restoredFrom?: FieldSources;
   /**
@@ -285,8 +309,9 @@ export interface UpdateSingleOptions {
  * Options for publishing every language of a Single at once.
  *
  * A deliberate subset of {@link UpdateSingleOptions}: this write persists no
- * caller content and names no locale, so the write-locale, hook-context and
- * version-lineage options an update carries have nothing to act on here.
+ * caller content and names no locale, so the write-locale and
+ * version-lineage options an update carries have nothing to act on here. The
+ * hook context and request do: the publish runs the update hooks a save runs.
  */
 export interface PublishAllSingleLocalesOptions {
   /** User context for access control. */
@@ -320,6 +345,11 @@ export interface PublishAllSingleLocalesOptions {
    * by callers that own their cache strategy — a CLI, seed, or bulk import.
    */
   disableRevalidate?: boolean;
+
+  /** Arbitrary data passed to the update hooks the publish runs. */
+  context?: Record<string, unknown>;
+  /** The HTTP request behind this publish, which its hooks are told about. */
+  request?: Request;
 
   /**
    * The request's data: only the version it was made from (`_rev`) and the

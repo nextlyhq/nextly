@@ -24,7 +24,8 @@ import {
 } from "./template-ownership-fixture";
 
 const ORDERS = "@acme/plugin-orders";
-const ORDERS_TEMPLATES: PluginEmailTemplate[] = [
+// Coded, as every plugin template was before written ones.
+const ORDERS_TEMPLATES: Array<PluginEmailTemplate & { htmlContent: string }> = [
   {
     slug: "orders-paid",
     name: "Order paid",

@@ -97,6 +97,131 @@ describe("the rows", () => {
     ]);
   });
 
+  it('offers no "Space between blocks" above the spacing variables, whatever a host hands it', () => {
+    // Spacing is set per container and by the spacing variables: there is no
+    // site-wide spacing switch. A host still passing the old `spacing` prop,
+    // as one written against an earlier version would, draws nothing for it.
+    const stale: Record<string, unknown> = {
+      spacing: { mode: "classic", onChange: () => undefined },
+    };
+    render(<Hosted tokens={SITE} {...stale} />);
+    const spacing = screen.getByRole("region", {
+      name: "Spacing, radius & shadows",
+    });
+    expect(screen.queryByText("Space between blocks")).toBeNull();
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    expect(screen.queryByText(/classic/i)).toBeNull();
+    // The spacing variables are listed as before.
+    expect(
+      within(spacing).getByRole("button", { name: "Space 4, 1rem" })
+    ).toBeTruthy();
+  });
+
+  it("shows a colour value that is not a colour as invalid, and never as black", async () => {
+    // A stored value no browser reads as a colour, as an import can leave.
+    const odd: SiteTokenSet = {
+      tokens: [
+        ...SITE.tokens,
+        { name: "color.odd", kind: "color", values: { light: "banana" } },
+      ],
+    };
+    render(<Hosted tokens={odd} />);
+    const colour = await openEditor(/^Odd/);
+    const swatch = within(colour).getByRole("button", {
+      name: /^Pick the light colour/,
+    });
+    expect(swatch.hasAttribute("data-invalid")).toBe(true);
+    expect(swatch.getAttribute("aria-label")).toBe(
+      "Pick the light colour (not a valid colour)"
+    );
+    expect(
+      within(colour)
+        .getByLabelText(/^Light/)
+        .getAttribute("aria-invalid")
+    ).toBe("true");
+    // Opened on it, the picker starts from a neutral grey, not black.
+    fireEvent.click(swatch);
+    const values = within(colour)
+      .getAllByRole("textbox")
+      .map(field => (field as HTMLInputElement).value.toLowerCase());
+    expect(values.length).toBeGreaterThan(1);
+    expect(values).not.toContain("000000");
+    expect(values).not.toContain("#000000");
+  });
+
+  it("marks a value invalid as it is typed, and not a colour the picker cannot read", async () => {
+    // jsdom computes no CSS and has no CSS.supports, so the browser's own
+    // answer is given here, for this test alone.
+    const css = CSS as unknown as Record<string, unknown>;
+    css.supports = (_property: string, value?: string) =>
+      /^(oklch|var)\(/.test(value ?? "");
+    try {
+      render(<Hosted tokens={SITE} />);
+      const colour = await openEditor(/^Brand/);
+      const swatch = () =>
+        within(colour).getByRole("button", { name: /^Pick the light colour/ });
+      // The control: a real colour, unmarked.
+      expect(swatch().hasAttribute("data-invalid")).toBe(false);
+      const light = within(colour).getByLabelText(/^Light/);
+      fireEvent.change(light, { target: { value: "#12" } });
+      expect(swatch().hasAttribute("data-invalid")).toBe(true);
+      // A colour the picker cannot read is still a colour. Nothing here
+      // resolves it, so the swatch is left empty rather than painted.
+      fireEvent.change(light, { target: { value: "oklch(0.6 0.2 250)" } });
+      expect(swatch().hasAttribute("data-invalid")).toBe(false);
+      expect(light.getAttribute("aria-invalid")).toBeNull();
+      expect(swatch().style.getPropertyValue("--nx-swatch")).toBe("");
+      // A variable would take the panel's own value, not the site's: never
+      // painted, and never marked.
+      fireEvent.change(light, { target: { value: "var(--brand)" } });
+      expect(swatch().hasAttribute("data-invalid")).toBe(false);
+      expect(swatch().style.getPropertyValue("--nx-swatch")).toBe("");
+      // A colour resolved here is painted.
+      fireEvent.change(light, { target: { value: "#336699" } });
+      expect(swatch().style.getPropertyValue("--nx-swatch")).toBe("#336699");
+    } finally {
+      delete css.supports;
+    }
+  });
+
+  it("clears a colour's refusal once its stored value is typed back", async () => {
+    render(<Hosted tokens={SITE} />);
+    const colour = await openEditor(/^Brand/);
+    const light = within(colour).getByLabelText(/^Light/);
+    fireEvent.change(light, { target: { value: "#12345" } });
+    fireEvent.keyDown(light, { key: "Enter" });
+    expect(light.getAttribute("aria-invalid")).toBe("true");
+    // The value it held, put back, is the fix: the refusal goes.
+    fireEvent.change(light, { target: { value: "#1d2b6b" } });
+    fireEvent.keyDown(light, { key: "Enter" });
+    expect(light.getAttribute("aria-invalid")).toBeNull();
+    expect(within(colour).queryByText(/is not a hex colour/)).toBeNull();
+  });
+
+  it("lets typing take over from a picker gesture", async () => {
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const colour = await openEditor(/^Brand/);
+    const swatch = () =>
+      within(colour).getByRole("button", { name: /^Pick the light colour/ });
+    fireEvent.click(swatch());
+    fireEvent.keyDown(
+      within(colour).getByRole("application", {
+        name: /Saturation and brightness/,
+      }),
+      { key: "ArrowRight" }
+    );
+    // Typed after the picker moved, the text is what the field says: judged
+    // as typed, not hidden behind the picker's colour.
+    const light = within(colour).getByLabelText(/^Light/);
+    fireEvent.change(light, { target: { value: "#12" } });
+    expect(swatch().hasAttribute("data-invalid")).toBe(true);
+    // Closing the picker writes nothing over the typed text.
+    fireEvent.click(swatch());
+    expect(onChange).not.toHaveBeenCalled();
+    expect((light as HTMLInputElement).value).toBe("#12");
+  });
+
   it("labels the colour columns beside the Colours heading, for sight only", () => {
     render(<Hosted tokens={SITE} />);
     const colours = screen.getByRole("region", { name: "Colours" });
@@ -365,6 +490,45 @@ describe("the editor beside the panel", () => {
     escape();
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(document.activeElement).toBe(row(/^Brand/));
+  });
+
+  it("spell-checks none of its fields and lists no earlier entries", async () => {
+    /*
+     * A colour's fields and a size's fields are drawn by different inputs,
+     * so both kinds are opened, and the colour's picker too: its hex field is
+     * drawn by the shared picker, which this editor cannot give attributes to
+     * directly. Every one of them holds a code-like word or a value, which a
+     * spell-checker would underline as misspelt.
+     *
+     * Read by the attribute's own rule, the nearest element that sets it,
+     * since that is how the hex field gets its setting.
+     */
+    const spellChecked = (field: HTMLElement): boolean =>
+      field.closest("[spellcheck]")?.getAttribute("spellcheck") !== "false";
+    render(<Hosted tokens={SITE} />);
+
+    const colour = await openEditor(/^Brand/);
+    const typed = within(colour).getAllByRole("textbox");
+    fireEvent.click(
+      within(colour).getByRole("button", { name: "Pick the light colour" })
+    );
+    const withPicker = within(colour).getAllByRole("textbox");
+    // The control: opening the picker really added its hex field.
+    expect(withPicker.length).toBeGreaterThan(typed.length);
+    for (const field of withPicker) expect(spellChecked(field)).toBe(false);
+    for (const field of typed) {
+      expect(field.getAttribute("autocomplete")).toBe("off");
+    }
+    escape();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    const size = await openEditor(/^Body/);
+    const fields = within(size).getAllByRole("textbox");
+    expect(fields.length).toBeGreaterThan(1);
+    for (const field of fields) {
+      expect(spellChecked(field)).toBe(false);
+      expect(field.getAttribute("autocomplete")).toBe("off");
+    }
   });
 
   it("keeps Tab inside while it is open, both ways round", async () => {
@@ -1391,5 +1555,52 @@ describe("each half of a type pair's dark value", () => {
     expect(
       within(editor).getByRole("button", { name: "Use light size" })
     ).toBeDefined();
+  });
+});
+
+describe("a new variable's code name follows its name", () => {
+  it("however the name field is left, a click outside included", async () => {
+    // A click outside closed the editor before the name field's blur had
+    // committed, so the code name was made from the placeholder name and
+    // the rename was lost for good.
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
+    const editor = await screen.findByRole("dialog");
+    const name = within(editor).getByLabelText("Name");
+    name.focus();
+    fireEvent.change(name, { target: { value: "Brand accent" } });
+    // Away from the editor, with the name still in its field.
+    fireEvent.pointerDown(document.body);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const saved = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
+    const added = saved.tokens.find(token => token.label === "Brand accent");
+    expect(added?.name).toBe("color.brand-accent");
+    expect(
+      document.querySelector('[data-variable-key="color.brand-accent"]')
+    ).not.toBeNull();
+  });
+
+  it("is not what search matches: only the name shown is", () => {
+    const named: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.new-colour",
+          label: "Brand accent",
+          kind: "color",
+          values: { light: "#2563eb" },
+        },
+      ],
+    };
+    render(<Hosted tokens={named} />);
+    const search = screen.getByRole("searchbox", { name: "Search variables" });
+    fireEvent.change(search, { target: { value: "new" } });
+    expect(
+      document.querySelector('[data-variable-key="color.new-colour"]')
+    ).toBeNull();
+    fireEvent.change(search, { target: { value: "accent" } });
+    expect(
+      document.querySelector('[data-variable-key="color.new-colour"]')
+    ).not.toBeNull();
   });
 });

@@ -11,6 +11,7 @@ import { container } from "../di/container";
 import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
+import type { PublishPartsRequest } from "../domains/collections/services/publish-parts";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
 import { collectionMetadataFetcher } from "../domains/dynamic-collections/services/collection-metadata-fetcher";
 import type { ResolvedEmailRetentionConfig } from "../domains/email/retention-config";
@@ -86,6 +87,11 @@ type EveryLanguageLifecycleHandlerParams = {
   authenticatedScope?: AuthenticatedScope;
   /** Acting identity from the transport, forwarded to the recorded event. */
   actor?: RequestActor;
+  /**
+   * Skip cache revalidation for this move (the outbox drain still runs), for a caller that owns
+   * its cache strategy.
+   */
+  disableRevalidate?: boolean;
   /**
    * The version the move was made from: `_rev` and `_overwrite`, judged as a
    * save's are (see the entry service).
@@ -494,6 +500,18 @@ export class CollectionsHandler {
     return this.entryService.releaseHeldDraftLocales(params);
   }
 
+  /**
+   * Rewrite one field of an entry on its live copy and on every pending draft
+   * that holds it, without publishing. See the mutation service.
+   *
+   * @experimental
+   */
+  async rewriteField(
+    call: Parameters<CollectionEntryService["rewriteField"]>[0]
+  ): ReturnType<CollectionEntryService["rewriteField"]> {
+    return this.entryService.rewriteField(call);
+  }
+
   private resolveUserParam<
     T extends {
       userId?: string;
@@ -715,6 +733,9 @@ export class CollectionsHandler {
           | undefined,
         fields: originalFields,
         slug: data.slug as string | undefined,
+        // An explicit answer from the stored record, where no `localized`
+        // means untranslated; absent is kept for older plugin callers.
+        localized: data.localized === true,
       });
       Object.assign(data, draftSplitResponseFields(draftSplit));
     }
@@ -845,6 +866,10 @@ export class CollectionsHandler {
     fallbackLocale?: string | false;
     /** i18n M7: attach a per-locale `_translations` overview map to each row. */
     translationStatus?: boolean;
+    /** Attach `_sources`: for each translatable field, the language its value came from. */
+    sourceLocales?: boolean;
+    /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
+    translations?: "all";
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
@@ -968,6 +993,10 @@ export class CollectionsHandler {
     fallbackLocale?: string | false;
     /** i18n M7: attach a per-locale `_translations` overview map to the entry. */
     translationStatus?: boolean;
+    /** Attach `_sources`: for each translatable field, the language its value came from. */
+    sourceLocales?: boolean;
+    /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
+    translations?: "all";
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
@@ -983,6 +1012,8 @@ export class CollectionsHandler {
      * read grant, so a super-admin-owned key gets no session bypass.
      */
     authenticatedScope?: AuthenticatedScope;
+    /** Whole-document fallback; see `CollectionEntryService.getEntry`. */
+    wholeDocumentFallback?: boolean;
   }) {
     return this.entryService.getEntry(params);
   }
@@ -1145,8 +1176,6 @@ export class CollectionsHandler {
       /**
        * The fields this write restored, and the version each came from,
        * recorded per field on the version it captures (see `restored-from`).
-       *
-       * @experimental
        */
       restoredFrom?: FieldSources;
       /**
@@ -1196,6 +1225,22 @@ export class CollectionsHandler {
    */
   async publishAllLocales(params: EveryLanguageLifecycleHandlerParams) {
     return this.entryService.publishAllLocales(this.resolveUserParam(params));
+  }
+
+  /**
+   * Publish or unpublish the parts of an entry `request` chooses: some of its languages, or every
+   * one, and its shared part, or say what doing so would do.
+   *
+   * @experimental
+   */
+  async publishParts(
+    params: EveryLanguageLifecycleHandlerParams,
+    request: PublishPartsRequest
+  ) {
+    return this.entryService.publishParts(
+      this.resolveUserParam(params),
+      request
+    );
   }
 
   /**

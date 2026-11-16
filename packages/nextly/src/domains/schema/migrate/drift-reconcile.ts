@@ -26,6 +26,7 @@
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { describeError, NextlyError } from "../../../errors";
+import { busyTableLeftNothing } from "../busy-table/report";
 import { isPluginLedgerRow } from "../events/ledger-scope";
 import { standingOf } from "../events/migration-state";
 import {
@@ -60,6 +61,11 @@ export interface ReconcileRepo {
     id: string,
     args: { errorMessage?: string | null; errorJson?: unknown }
   ): Promise<void>;
+  /** End an attempt that left nothing of its file: it resolves itself (`nothing_applied`). */
+  markNothingApplied(
+    id: string,
+    args: { errorMessage?: string | null; errorJson?: unknown }
+  ): Promise<void>;
   /**
    * Delete an attempt still `in_progress`: one whose work was rolled back
    * whole because another run recorded the same file first.
@@ -76,7 +82,15 @@ export interface ReconcileRepo {
    */
   boundTo(
     db: unknown
-  ): Pick<ReconcileRepo, "recordStart" | "markApplied" | "supersede">;
+  ): Pick<
+    ReconcileRepo,
+    | "recordStart"
+    | "markApplied"
+    | "supersede"
+    | "markFailed"
+    | "markNothingApplied"
+    | "discardAttempt"
+  >;
   /**
    * Every `file_apply` row for one filename: applied, failed, rolled back,
    * with what each row retired, which tells a rollback from a cleared
@@ -148,6 +162,13 @@ export interface ReconcileFileArgs {
    * its statements roll back with it, and it is never recorded applied.
    */
   beforeRecorded?: () => Promise<void>;
+  /**
+   * Runs the record of an attempt that stopped waiting for a busy table, through the handle it is
+   * given, bounded as one try of the run's (`writeLedgerBounded`): the ledger table can be the one
+   * another session holds, and the record must not wait past the bounds the stop kept. Absent, the
+   * record is written as any other is.
+   */
+  recordStopped?: (write: (db: unknown) => Promise<void>) => Promise<void>;
   /** Dev/ui/db_sync event ids this file_apply supersedes (ALREADY_APPLIED). */
   supersedableEventIds?: () => Promise<string[]>;
   /**
@@ -274,13 +295,31 @@ async function markAppliedOrRefuse(
  * (`assertNotPartiallyApplied`) until the operator has looked.
  */
 async function recordAttemptFailed(
-  repo: Pick<ReconcileRepo, "markFailed" | "discardAttempt">,
+  repo: Pick<
+    ReconcileRepo,
+    "markFailed" | "markNothingApplied" | "discardAttempt"
+  >,
   id: string,
   error: unknown,
   partial: boolean
 ): Promise<void> {
   if (isConcurrentRun(error) && !partial) {
     await repo.discardAttempt(id);
+    return;
+  }
+  // A file that stopped waiting for a busy table before anything of it was made durable ends
+  // with nothing applied: resolved, so the next run applies it as usual, where a failed attempt
+  // would be refused on until resolved by hand.
+  if (busyTableLeftNothing(error)) {
+    await repo.markNothingApplied(id, {
+      errorMessage: truncateErrorMessage(
+        describeError(error, { context: false })
+      ),
+      errorJson:
+        error instanceof Error
+          ? { name: error.name, message: error.message }
+          : null,
+    });
     return;
   }
   await repo.markFailed(id, {
@@ -590,6 +629,7 @@ export async function runRecordedAttempt(
     | "executeSql"
     | "recordApplied"
     | "beforeRecorded"
+    | "recordStopped"
   >
 ): Promise<void> {
   const { file, repo } = args;
@@ -600,12 +640,21 @@ export async function runRecordedAttempt(
     await runAndRecord(args, id);
   } catch (err) {
     if (id !== undefined) {
-      await recordAttemptFailed(
-        repo,
-        id,
-        err,
-        failedAttemptMayBePartial(file, args.dialect)
-      );
+      const partial = failedAttemptMayBePartial(file, args.dialect);
+      const busy = NextlyError.is(err) && err.code === "NEXTLY_TABLE_BUSY";
+      const record =
+        busy && args.recordStopped !== undefined
+          ? args.recordStopped(db =>
+              recordAttemptFailed(repo.boundTo(db), id, err, partial)
+            )
+          : recordAttemptFailed(repo, id, err, partial);
+      await record.catch((recordError: unknown) => {
+        // A file that stopped waiting for a busy table says so whatever its record does. The
+        // holder can still hold the ledger table (on SQLite, the whole database), so the record
+        // cannot be written within its bound; the attempt then stays without an outcome, which the
+        // next run refuses on until resolved, as for any attempt left so.
+        if (!busy) throw recordError;
+      });
     }
     throw err;
   }
@@ -622,6 +671,9 @@ async function runInSync(args: ReconcileFileArgs): Promise<void> {
     await runRecordedAttempt(args);
   } catch (err) {
     if (isConcurrentRun(err)) throw err;
+    // A file that stopped waiting for a busy table already says so, with its own code, which a
+    // script tells from any other failure; wrapped, it would read as a statement that failed.
+    if (NextlyError.is(err) && err.code === "NEXTLY_TABLE_BUSY") throw err;
     throw applyFailedError(file.filename, err);
   }
 }

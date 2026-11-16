@@ -5,7 +5,6 @@
  * reads correctly after the person or key is gone.
  *
  * @module domains/content-events/actor
- * @experimental
  */
 
 import type { RequestActor } from "../../auth/request-actor";
@@ -15,14 +14,13 @@ import { NextlyError } from "../../errors";
  * The actor of one event.
  *
  * A `principal` is a plugin-defined signed-in person, named by its own kind
- * and id so the id is never read as a staff user's. `agent` is reserved for an
- * AI-agent identity; nothing maps to it yet.
- *
- * @experimental
+ * and id so the id is never read as a staff user's. A `plugin` is a plugin
+ * acting on its own behalf, its id the name it booted under. `agent` is
+ * reserved for an AI-agent identity; nothing maps to it yet.
  */
 export type ContentEventActor =
   | {
-      kind: "person" | "apiKey" | "release" | "agent";
+      kind: "person" | "apiKey" | "plugin" | "release" | "agent";
       id: string;
       name: string | null;
     }

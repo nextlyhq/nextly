@@ -739,3 +739,56 @@ describe("a line height's two modes", () => {
     );
   });
 });
+
+describe("a value is checked before it is accepted", () => {
+  const set: SiteTokenSet = {
+    tokens: [
+      { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+      { name: "color.brand", kind: "color", values: { light: "#1d2b6b" } },
+      { name: "radius.md", kind: "dimension", values: { light: "6px" } },
+    ],
+  };
+
+  it("refuses a value the save would refuse, saying what is wrong and what to type", () => {
+    // The engine's own kind check, the one a save runs: a value refused here
+    // is never sent, and one accepted here is never refused for its kind.
+    expect(writeTokenValue(set, 0, "light", "12pxred")).toEqual({
+      issue:
+        '"12pxred" is measured in pxred, which is not a unit CSS knows, not a length. Type a number with a unit, such as 16px or 1.5rem.',
+    });
+    expect(writeTokenValue(set, 0, "light", "the spacing")).toEqual({
+      issue:
+        '"the spacing" is words, not a length. Type a number with a unit, such as 16px or 1.5rem.',
+    });
+    expect(writeTokenValue(set, 1, "light", "#12345")).toEqual({
+      issue:
+        '"#12345" is not a hex colour, which has 3, 4, 6 or 8 digits from 0-9 and a-f. Type a colour, such as #1d4ed8.',
+    });
+    // The dark value is held to the same rule.
+    expect("issue" in writeTokenValue(set, 1, "dark", "16px")).toBe(true);
+  });
+
+  it("adds px to a bare number in a length, and leaves zero and units alone", () => {
+    const light = (at: number, value: string): string | undefined => {
+      const written = writeTokenValue(set, at, "light", value);
+      return "tokens" in written
+        ? written.tokens.tokens[at]?.values.light
+        : undefined;
+    };
+    expect(light(0, "20")).toBe("20px");
+    expect(light(2, "4.5")).toBe("4.5px");
+    expect(light(0, "-8")).toBe("-8px");
+    expect(light(0, "0")).toBe("0");
+    expect(light(0, "2rem")).toBe("2rem");
+    expect(light(0, "clamp(1rem, 2vw, 2rem)")).toBe("clamp(1rem, 2vw, 2rem)");
+    // Not a length: a number stays a number.
+    expect(light(1, "20")).toBeUndefined();
+  });
+
+  it("accepts what the check cannot judge", () => {
+    expect(
+      "tokens" in writeTokenValue(set, 1, "light", "oklch(0.6 0.2 250)")
+    ).toBe(true);
+    expect("tokens" in writeTokenValue(set, 0, "light", "auto")).toBe(true);
+  });
+});

@@ -662,7 +662,10 @@ ${EMPTY_LIST}[data-nx-list-visitors]:not([data-nx-list-still])::before {
   padding-right: 0.125rem;
 }
 
-.nx-canvas-region[data-state="hover"] .nx-canvas-region__badge {
+/* Widened by the pointer or focus on the region, here rather than by the
+   editor, so a pointer crossing or resting on a region never draws it again;
+   with its tag open, the tag says it instead. */
+.nx-canvas-region:is(:hover, :focus-within):not([data-state="open"]) .nx-canvas-region__badge {
   display: inline;
 }
 

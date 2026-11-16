@@ -1,0 +1,714 @@
+/*
+ * The inserter panel.
+ *
+ * Colours come from the admin's tokens rather than from literals, so the panel
+ * follows the host's light and dark themes without a second palette here. The
+ * list scrolls inside the panel rather than the panel growing, because the rail
+ * fixes the panel's width and height and a growing list would push the shell's
+ * own layout instead of its own.
+ *
+ * The accent's soft wash — the placement line's ground and a tile's hover — is
+ * the accent mixed into transparency, so it is a tint of whichever accent the
+ * theme gives, in either mode, rather than a second colour to keep in step.
+ */
+/*
+ * The top bar at the editor's density. The shared buttons size themselves
+ * from the control-height tokens, so pointing those at the density's one
+ * height puts every control in the bar (Preview, the Publish menu, search,
+ * the devices, the zoom, undo and redo) at 28px without restyling each; their
+ * text takes the density's 12px.
+ */
+.nx-builder-topbar {
+  --nx-control-height: var(--nx-builder-control-height);
+  --nx-control-height-sm: var(--nx-builder-control-height);
+  --nx-control-height-md: var(--nx-builder-control-height);
+  --nx-control-height-lg: var(--nx-builder-control-height);
+  font-size: var(--nx-builder-font-size);
+  line-height: var(--nx-builder-line-height);
+}
+
+.nx-builder-topbar :where(button, input) {
+  font-size: var(--nx-builder-font-size);
+}
+
+/* No background: the shell's panel region is the one surface panels sit on. */
+.nx-insert-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  color: var(--nx-builder-text, var(--nx-foreground));
+}
+
+/* The panel's name, as the other panels on the rail head theirs. */
+.nx-insert-panel__title {
+  margin: 0;
+  padding: 0.625rem 0.75rem 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--nx-foreground);
+}
+
+/*
+ * The tabs take what is left of the panel's height, and the open tab's panel
+ * takes what is left under the tab list, so the tile list is what scrolls.
+ */
+.nx-insert-panel__tabs {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/*
+ * Blocks and Sections as a segmented control: two equal halves on a muted
+ * track, the open one raised. Restated over the shared tab list's underline
+ * style, which reads as page navigation rather than as a switch inside a
+ * narrow panel.
+ */
+.nx-insert-panel .nx-insert-panel__tablist {
+  display: flex;
+  gap: 0.125rem;
+  height: auto;
+  margin: 0 0.75rem 0.5rem;
+  padding: 0.125rem;
+  border: 0;
+  border-radius: 0.4375rem;
+  background: var(--nx-muted);
+}
+
+.nx-insert-panel .nx-insert-panel__tablist [role="tab"] {
+  flex: 1 1 0;
+  padding: 0.25rem 0;
+  border: 0;
+  border-radius: 0.3125rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--nx-muted-foreground);
+  background: transparent;
+}
+
+.nx-insert-panel .nx-insert-panel__tablist [role="tab"][data-state="active"] {
+  color: var(--nx-foreground);
+  background: var(--nx-background);
+  box-shadow: 0 1px 2px
+    color-mix(in srgb, var(--nx-shadow-color) 10%, transparent);
+}
+
+.nx-insert-panel__tab {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  margin: 0;
+}
+
+/*
+ * The palette fills the tab, and its list takes the height left under the
+ * search and the placement line and scrolls within it. The shared list caps
+ * itself at 400px for a menu; in a full-height panel that cut the grid off
+ * mid-row with empty panel below it.
+ */
+.nx-insert-panel .nx-insert-panel__palette {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  /*
+   * On the panel's own surface: the command palette it is built from paints
+   * a card of its own (the admin background, rounded), which drew a second
+   * surface inside the panel — black in dark, a white band in light.
+   */
+  background: transparent;
+  border-radius: 0;
+}
+
+.nx-insert-panel .nx-insert-panel__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+/* A closed tab's panel holds nothing and takes no room. */
+.nx-insert-panel__tab[hidden] {
+  display: none;
+}
+
+/*
+ * Where the next block lands: a soft accent pill under the search, with the
+ * block's name in bold. Announced politely rather than assertively: it
+ * changes on every selection change, and an assertive region would interrupt
+ * a screen reader mid-sentence each time the author moved.
+ */
+.nx-insert-panel__placement {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0.5rem 0.75rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.3125rem;
+  font-size: 0.71875rem;
+  line-height: 1.4;
+  /*
+   * The accent's hue, pulled toward the text colour: the accent itself is a
+   * fill colour and falls short of AA as small text on its own tint. Toward
+   * the foreground it darkens in light mode and lightens in dark mode.
+   */
+  color: color-mix(in oklch, var(--nx-primary) 55%, var(--nx-foreground));
+  background: color-mix(in oklch, var(--nx-primary) 10%, transparent);
+}
+
+.nx-insert-panel__placement svg {
+  flex: none;
+  color: var(--nx-primary);
+}
+
+.nx-insert-panel__placement b {
+  font-weight: 600;
+}
+
+.nx-insert-panel__note {
+  padding: 0.75rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * The library-cut notice sits between the placement line and the tiles, and
+ * closes with a rule, so the list below starts under one divider.
+ */
+.nx-insert-panel__cut {
+  border-bottom: 1px solid var(--nx-border);
+}
+
+/*
+ * The retry inside a notice: a link-shaped control in the sentence that
+ * explains it, rather than a button beside it, because the sentence is short
+ * and the action is its last clause.
+ */
+.nx-insert-panel__retry {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--nx-primary);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/*
+ * A category heading: small, uppercase and muted, so the tiles are what the
+ * eye lands on. Restated rather than left to the primitives' own heading
+ * style, which is spaced for a full-width list.
+ */
+.nx-insert-panel [cmdk-group] [cmdk-group-heading] {
+  padding: 0.5rem 0.5rem 0.375rem;
+  font-size: 0.65625rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * Tiles, three to a row.
+ *
+ * The count comes from the panel as `--nx-insert-columns` rather than being
+ * spelled here, so the layout has one source.
+ *
+ * It is a LAYOUT count and nothing else. Arrow keys belong to the command
+ * primitives and step by one option, matching the listbox semantics they
+ * announce — a grid keyboard would need a grid accessibility tree, which is
+ * not something the panel can add on top of them.
+ *
+ * Applied to the primitives\' OWN items container rather than to a wrapper of
+ * this file\'s. The primitives register an item through the group that
+ * contains it, and an element interposed between the two leaves the group
+ * holding no items at all — a panel that renders headings and nothing under
+ * them.
+ *
+ * `minmax(0, 1fr)` rather than `1fr`. A grid track's default minimum is its
+ * content, so a block whose name has no break opportunity — a plugin naming
+ * one "CollectionLoop" — would push its column wider than a third and squeeze
+ * the other two rather than wrapping.
+ */
+.nx-insert-panel [cmdk-group-items] {
+  display: grid;
+  grid-template-columns: repeat(var(--nx-insert-columns, 3), minmax(0, 1fr));
+  gap: 0.375rem;
+  padding: 0.125rem 0.5rem 0.5rem;
+}
+
+.nx-insert-panel__label {
+  display: block;
+  font-size: 0.71875rem;
+  font-weight: 500;
+  line-height: 1.2;
+  text-align: center;
+  color: var(--nx-foreground);
+  /*
+   * Broken anywhere rather than at spaces only. A tile is about 86px at the
+   * panel's default width, which is narrower than several block names, and a
+   * name that cannot break overflows its tile instead of wrapping inside it.
+   */
+  overflow-wrap: anywhere;
+}
+
+/*
+ * The description, and a refused tile's reason, stay in the option and are
+ * not drawn.
+ *
+ * Clipped rather than `display: none` or `visibility: hidden`, both of which
+ * remove it from the accessible description as well — and the description is
+ * the whole reason it is still here. A screen reader moving between tiles
+ * reads the block's sentence; sighted authors read it in the popover.
+ */
+.nx-insert-panel__description {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/*
+ * The touch gesture hint.
+ *
+ * No media query: whether to draw this is decided at runtime from the pointer
+ * that was actually used, because `(pointer: coarse)` describes the device's
+ * PRIMARY pointer and would hide it on a touchscreen laptop being touched.
+ *
+ * `flex: none`: this is one short line that must not be the thing that
+ * scrolls away.
+ */
+.nx-insert-panel__gesture-hint {
+  flex: none;
+  margin: 0;
+  padding: 0.375rem 0.75rem 0.5rem;
+  border-top: 1px solid var(--nx-border);
+  background: var(--nx-muted);
+  font-size: 0.6875rem;
+  line-height: 1.3;
+  color: var(--nx-muted-foreground);
+  text-align: center;
+}
+
+/*
+ * A tile: the mark above the name, both centred.
+ *
+ * Every geometry the primitives set for a LIST ITEM is restated rather than
+ * inherited — height, padding, the flex row, the 12px gap they put between an
+ * icon and its label. Those are correct for a row and wrong for a tile, and
+ * leaving any one of them turns the tile into a squat row with a glyph beside
+ * a clipped word.
+ *
+ * `position: relative` because the description inside is clipped out of view by
+ * absolute positioning, and it has to be positioned against the tile rather
+ * than against whatever ancestor happens to be positioned — the scrolling list,
+ * which would leave a 1px sliver following the scroll.
+ */
+.nx-insert-panel [cmdk-item] {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.25rem;
+  height: auto;
+  min-height: 3.75rem;
+  padding: 0.5rem 0.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.4375rem;
+  text-align: center;
+  color: var(--nx-foreground);
+  /*
+   * A quiet tile: the panel's own surface inside its border, so a grid of
+   * them reads as choices rather than as solid blocks (in dark, the admin
+   * background was the heaviest thing on screen). Hover and the highlighted
+   * tile are what fill it.
+   */
+  background: transparent;
+  cursor: grab;
+  /*
+   * Reserve the sideways gesture, so a tile can be DRAGGED onto the canvas.
+   *
+   * Left at the default, a touch browser owns direct manipulation from the
+   * moment it classifies the movement as panning, and it announces that by
+   * sending `pointercancel` — which the drag engine correctly treats as the
+   * gesture being withdrawn. The drag would abandon itself partway across, and
+   * only on touch.
+   *
+   * `pan-y` rather than `none`: the palette scrolls, and taking vertical
+   * panning as well would trade a broken drag for a list a finger cannot
+   * scroll.
+   */
+  touch-action: pan-y;
+}
+
+/*
+ * The tile the primitives mark as current, while the panel is at rest: drawn
+ * exactly as any other tile.
+ *
+ * The primitives mark their first item the moment the list draws and tint it,
+ * so without this the panel would open with a tile looking chosen that the
+ * author never touched.
+ */
+.nx-insert-panel:not([data-highlight="shown"])
+  [cmdk-item][data-selected="true"] {
+  color: var(--nx-foreground);
+  background: transparent;
+}
+
+/*
+ * A tile under the pointer, and the current tile once the author has moved
+ * through the tiles: an accent BORDER as well as the soft wash.
+ *
+ * The wash alone reads clearly across a full-width row and barely at all on
+ * an 86px tile sitting in a grid of them; the border is what makes the tile
+ * findable at a glance, and it replaces an existing border rather than adding
+ * one, so nothing reflows.
+ */
+.nx-insert-panel [cmdk-item]:hover,
+.nx-insert-panel[data-highlight="shown"] [cmdk-item][data-selected="true"] {
+  border-color: var(--nx-primary);
+  color: var(--nx-foreground);
+  background: color-mix(in oklch, var(--nx-primary) 12%, transparent);
+}
+
+/*
+ * A tile the place refuses: greyed, and no accent on hover or highlight,
+ * because choosing it adds nothing. Still drawn and still reachable — its
+ * reason is in the popover and its description.
+ */
+/*
+ * A refused tile is greyed in its icon and border, not by fading the whole
+ * tile: it stays reachable and is not `aria-disabled` (see the panel), so its
+ * label is text an author reads and has to meet AA contrast like any other.
+ */
+.nx-insert-panel [cmdk-item][data-refused="true"] {
+  border-style: dashed;
+  color: var(--nx-muted-foreground);
+  cursor: not-allowed;
+}
+
+.nx-insert-panel [cmdk-item][data-refused="true"] .nx-block-icon {
+  opacity: 0.45;
+}
+
+.nx-insert-panel [cmdk-item][data-refused="true"]:hover,
+.nx-insert-panel[data-highlight="shown"]
+  [cmdk-item][data-refused="true"][data-selected="true"] {
+  border-color: var(--nx-border-strong);
+  background: var(--nx-muted);
+}
+
+.nx-insert-panel .nx-block-icon {
+  flex: none;
+}
+
+/*
+ * The Components panel: the site's components as rows, under Add's own
+ * heading, placement line and notes, so the two panels on the rail read as
+ * one design. A row rather than Add's tile, because a component row also
+ * carries "Edit", and its name and sentence are what tell two components of
+ * one site apart.
+ */
+/* No background: the shell's panel region is the one surface panels sit on. */
+.nx-components-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  color: var(--nx-builder-text, var(--nx-foreground));
+}
+
+.nx-components-panel__search {
+  flex: none;
+  padding: 0 0.75rem;
+}
+
+/* The list, or its placeholders, takes the height left and scrolls in it. */
+.nx-components-panel__body,
+.nx-components-panel__list {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.nx-components-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  margin: 0;
+  padding: 0 0.5rem 0.75rem;
+  overflow-y: auto;
+  list-style: none;
+}
+
+/*
+ * A row: the place button across it and Edit at its end. The row draws the
+ * hover and the first match, so both buttons sit on one surface.
+ */
+.nx-components-panel__row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.125rem;
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+}
+
+.nx-components-panel__row:hover,
+.nx-components-panel__row[data-first-match="true"] {
+  border-color: var(--nx-primary);
+  background: color-mix(in oklch, var(--nx-primary) 12%, transparent);
+}
+
+.nx-components-panel__place {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: flex-start;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.4375rem 0.5rem;
+  border: 0;
+  border-radius: 0.3125rem;
+  font: inherit;
+  text-align: start;
+  color: var(--nx-foreground);
+  background: transparent;
+  cursor: grab;
+  /* The sideways gesture is the drag's, as on Add's tiles; the list scrolls. */
+  touch-action: pan-y;
+}
+
+.nx-components-panel__place:focus-visible,
+.nx-components-panel__edit:focus-visible {
+  outline: 2px solid var(--nx-builder-accent, var(--nx-ring));
+  outline-offset: -2px;
+}
+
+/* The component mark in the component colour, as Layers and the canvas draw it. */
+.nx-components-panel__place .nx-block-icon {
+  flex: none;
+  margin-top: 0.0625rem;
+  color: var(--nx-builder-component);
+}
+
+.nx-components-panel__text {
+  display: grid;
+  gap: 0.0625rem;
+  min-width: 0;
+}
+
+.nx-components-panel__name {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+/* Where it goes when past the line above, or why it cannot go here. */
+.nx-components-panel__aside {
+  font-size: 0.71875rem;
+  line-height: 1.35;
+  color: color-mix(in oklch, var(--nx-primary) 55%, var(--nx-foreground));
+}
+
+/* Two lines of the component's sentence at most, so rows keep one rhythm. */
+.nx-components-panel__description {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 0.71875rem;
+  line-height: 1.35;
+  color: var(--nx-muted-foreground);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+/*
+ * A row the place refuses: its mark greyed and its border dashed on hover, as
+ * Add greys a refused tile, with the reason as its second line. Still
+ * reachable, and its name is text that has to meet AA, so it is not faded.
+ */
+.nx-components-panel__row[data-refused="true"] .nx-components-panel__place {
+  cursor: not-allowed;
+}
+
+.nx-components-panel__row[data-refused="true"] .nx-block-icon {
+  opacity: 0.45;
+}
+
+.nx-components-panel__row[data-refused="true"] .nx-components-panel__aside {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-components-panel__row[data-refused="true"]:hover {
+  border-style: dashed;
+  border-color: var(--nx-border-strong);
+  background: var(--nx-muted);
+}
+
+.nx-components-panel__edit {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin-inline-end: 0.25rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0.3125rem;
+  color: var(--nx-muted-foreground);
+  background: transparent;
+  cursor: pointer;
+}
+
+.nx-components-panel__edit:hover {
+  color: var(--nx-foreground);
+  background: var(--nx-muted);
+}
+
+/*
+ * Edit shows on the row being pointed at or focused, where a pointer can
+ * hover; kept in place and only faded, so showing it moves nothing. A touch
+ * screen cannot hover, so there it is always shown.
+ */
+@media (hover: hover) {
+  .nx-components-panel__row:not(:hover, :focus-within)
+    .nx-components-panel__edit {
+    opacity: 0;
+  }
+}
+
+/* A placeholder row while the read is on its way, the height of a real one. */
+.nx-components-panel__placeholder {
+  height: 2.75rem;
+  border-radius: 0.375rem;
+  background: var(--nx-muted);
+}
+
+.nx-components-panel [data-empty="none"] p + p {
+  margin-top: 0.5rem;
+}
+
+/*
+ * The popover beside the panel: a preview, the tile's name, its sentence, and
+ * how to add it — or why it cannot be added here.
+ *
+ * Portalled out of the panel, so it reads the admin's tokens rather than the
+ * chrome's. Doubled class for weight over the shared popover's width and
+ * padding utilities, whatever order the two stylesheets load in.
+ */
+.nx-insert-popover.nx-insert-popover {
+  display: grid;
+  gap: 0.375rem;
+  width: 14.375rem;
+  padding: 0.625rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.5rem;
+  color: var(--nx-popover-foreground);
+  background: var(--nx-popover);
+  /* Never in the way of the pointer moving on to the next tile. */
+  pointer-events: none;
+}
+
+.nx-insert-popover__preview {
+  display: grid;
+  place-items: center;
+  height: 4.375rem;
+  overflow: hidden;
+  border-radius: 0.3125rem;
+  color: var(--nx-muted-foreground);
+  background: var(--nx-muted);
+}
+
+.nx-insert-popover__name {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+
+.nx-insert-popover__description {
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--nx-muted-foreground);
+}
+
+/* Where a tile goes when that is past the place the panel's line names. */
+.nx-insert-popover__place {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  color: var(--nx-foreground);
+}
+
+.nx-insert-popover__place svg {
+  flex: none;
+}
+
+.nx-insert-popover__place b {
+  font-weight: 600;
+}
+
+.nx-insert-popover__hint {
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  color: var(--nx-muted-foreground);
+}
+
+/* A refused tile's reason is what the author came to read, so it is not muted. */
+.nx-insert-popover__hint[data-refused="true"] {
+  color: var(--nx-foreground);
+}
+
+/*
+ * Available to assistive technology, absent from the page.
+ *
+ * `display: none` and `visibility: hidden` both remove an element from the
+ * accessibility tree as well as from view, so neither can carry an
+ * announcement. This clips the element to nothing instead, which leaves it
+ * rendered — and a live region has to be rendered to be watched.
+ *
+ * `white-space: nowrap` because a 1px-wide box wraps its text to one character
+ * per line, and some screen readers read the result letter by letter.
+ */
+.nx-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/*
+ * Highlighted for a moment when an add control on the canvas asks for the
+ * panel, so the author sees where the next block goes even when the panel
+ * was already open. A stronger tint and a ring of the same accent; it fades
+ * back where the author allows motion.
+ */
+.nx-insert-panel__placement[data-flash] {
+  background: color-mix(in oklch, var(--nx-primary) 22%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--nx-primary) 45%, transparent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .nx-insert-panel__placement {
+    transition:
+      background-color 400ms ease,
+      box-shadow 400ms ease;
+  }
+}

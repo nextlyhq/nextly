@@ -11,6 +11,7 @@
 import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { expectNoAxeViolations } from "./support/axe";
 import { test } from "./support/test";
 
 const ENTRIES = "/admin/api/collections/history-notes/entries";
@@ -53,13 +54,20 @@ async function showFirstVersion(page: Page, id: string): Promise<void> {
 }
 
 /** Choose "Restore…", keep the title and summary, and restore them. */
-async function restoreTitleAndSummary(page: Page): Promise<void> {
+async function restoreTitleAndSummary(
+  page: Page,
+  checkAccess = false
+): Promise<void> {
+  // In the admin's top bar, where an open document draws its controls.
   await page
-    .locator("main")
+    .getByRole("banner")
     .getByRole("button", { name: "Restore this version" })
     .click();
   const dialog = page.getByRole("alertdialog");
   await expect(dialog.getByText(/Restore from version 1/)).toBeVisible();
+  if (checkAccess) {
+    await expectNoAxeViolations(page, { include: '[role="alertdialog"]' });
+  }
   await dialog.getByRole("checkbox", { name: "Details" }).click();
   await dialog.getByRole("button", { name: "Restore 2 fields" }).click();
 }
@@ -74,18 +82,34 @@ test.describe("restoring a version into the editor", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     const id = await noteSavedTwice(page);
     await showFirstVersion(page, id);
+    // The history panel, as an assistive technology reads it, checked before
+    // the restore: a scan between the restore and its undo outlasts the
+    // editor's 2-second recovery point, which would then hold the restored
+    // values for the reload further down to bring back.
+    await expectNoAxeViolations(page, { include: "[data-history-panel]" });
 
-    await restoreTitleAndSummary(page);
-    const toast = page.getByText(/^2 fields restored from /);
+    await restoreTitleAndSummary(page, true);
+    // The toast, not the history's announcer, which says the same words.
+    const toast = page
+      .getByText(/^2 fields restored from /)
+      .and(page.locator(":not(#nextly-history-announcer)"));
     await expect(toast).toBeVisible();
     await expect(summaryBox(page)).toHaveValue("first summary");
+    // Said aloud as well as shown, through the history's own announcer.
+    const announcer = page.locator("#nextly-history-announcer");
+    await expect(announcer).toHaveText(/^2 fields restored from /);
 
-    // Undo puts the current values back.
+    // Undo puts the current values back, and says so.
     await page.getByRole("button", { name: "Undo" }).click();
     await expect(summaryBox(page)).toHaveValue("second summary");
+    await expect(announcer).toHaveText(
+      /^Restore undone: 2 fields put back as they were/
+    );
 
-    // Restored again, then saved: the person's own write, which on a
-    // published note is held as its draft.
+    // Restored again, then saved: the person's own write. A note holds no
+    // draft: it embeds the localized SEO field group, and a document with a
+    // localized field group keeps no pending changes, so its leading action
+    // is "Save changes" and the write goes to the live note.
     await showFirstVersion(page, id);
     await restoreTitleAndSummary(page);
     await expect(summaryBox(page)).toHaveValue("first summary");
@@ -94,7 +118,10 @@ test.describe("restoring a version into the editor", () => {
         response.url().includes(`/entries/${id}`) &&
         response.request().method() === "PATCH"
     );
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page
+      .getByRole("banner")
+      .getByRole("button", { name: "Save changes", exact: true })
+      .click();
     expect((await saved).ok()).toBe(true);
 
     // The save records where the two values came from.
@@ -105,14 +132,15 @@ test.describe("restoring a version into the editor", () => {
     };
     expect(items[0]?.fieldSources).toEqual({ title: 1, summary: 1 });
 
-    // And nothing was published or unpublished: the live note is version 2.
+    // And the note stays published, now holding the restored values: the
+    // save neither unpublished it nor kept the values it replaced.
     const live = await page.request.get(`${ENTRIES}/${id}`);
     expect(live.ok(), await live.text()).toBe(true);
     // A read answers with the document itself.
     const item = (await live.json()) as { status: string; summary: string };
     expect(item).toMatchObject({
       status: "published",
-      summary: "second summary",
+      summary: "first summary",
     });
   });
 });

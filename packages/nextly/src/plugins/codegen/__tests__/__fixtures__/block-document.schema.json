@@ -8,7 +8,7 @@
     },
     "kind": {
       "type": "string",
-      "enum": ["page", "pattern", "component", "region", "template"]
+      "enum": ["page", "pattern", "component", "template"]
     },
     "nodes": {
       "type": "array",
@@ -994,6 +994,9 @@
         },
         "cssId": {
           "type": "string"
+        },
+        "nosnippet": {
+          "type": "boolean"
         },
         "attributes": {
           "type": "object",

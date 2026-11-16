@@ -162,6 +162,7 @@ export function FieldSettingsPanel({
               readOnly={readOnly}
               onChange={onChange}
               saved={saved}
+              checkName={surface.checkName}
               deriveName={surface.deriveName}
               nameFixedReason={fixedReason(surface.fixed, "name", saved)}
               apiPath={fieldApiPath(ancestors, field)}
@@ -246,6 +247,7 @@ function ConditionsContent({
     <ConditionsTab
       field={control.field}
       siblings={control.siblings}
+      ancestors={control.ancestors}
       conditions={conditions}
       readOnly={control.readOnly}
       onChange={control.onChange}

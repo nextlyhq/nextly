@@ -290,6 +290,37 @@ export class S3StorageAdapter implements IStorageAdapter {
   }
 
   /**
+   * Write bytes at exactly `filePath`, beside a file already in the bucket.
+   *
+   * Core uses it to keep a file made from a stored one, such as a resized
+   * copy of an image, under a key derived from the original's. One request,
+   * since such a file is small, with the same cache setting and access as an
+   * upload, so it is served the way its original is.
+   *
+   * @experimental
+   */
+  async uploadAt(
+    filePath: string,
+    buffer: Buffer,
+    options: { mimeType: string }
+  ): Promise<UploadResult> {
+    const client = this.ensureClient();
+    const params: PutObjectCommandInput = {
+      Bucket: this.resolvedConfig.bucket,
+      Key: filePath,
+      Body: buffer,
+      ContentType: options.mimeType,
+      CacheControl: this.resolvedConfig.cacheControl,
+    };
+    // R2 ignores ACL settings, as for an upload.
+    if (!this.isR2) {
+      params.ACL = this.resolvedConfig.acl;
+    }
+    await client.send(new PutObjectCommand(params));
+    return { url: this.getPublicUrl(filePath), path: filePath };
+  }
+
+  /**
    * Delete file from S3.
    *
    * @param filePath - Storage path/key to delete
@@ -627,18 +658,27 @@ export class S3StorageAdapter implements IStorageAdapter {
    * Creates a pre-signed PutObject URL that allows direct uploads from
    * the browser to S3, bypassing server-side upload limits (e.g., Vercel's 4.5MB).
    *
+   * The signature covers the `Content-Type` and, given `options.contentLength`,
+   * the `Content-Length`: the bytes never pass Nextly's upload checks, so S3
+   * itself refuses a body of another type or length. The browser sets the
+   * length from the body; it is not a header the client sends.
+   *
    * @param key - Storage path/key for the upload
    * @param mimeType - MIME type of the file being uploaded
-   * @param expiresIn - URL validity duration in seconds (default: 3600)
+   * @param expiresIn - URL validity in seconds, at most the configured
+   *   `signedUrlExpiresIn` (its default)
+   * @param options - `contentLength`: the exact size the upload may have
    * @returns Client upload data with URL, method, and headers
    */
   async getPresignedUploadUrl(
     key: string,
     mimeType: string,
-    expiresIn?: number
+    expiresIn?: number,
+    options?: { contentLength?: number }
   ): Promise<ClientUploadData> {
     const client = this.ensureClient();
-    const expiration = expiresIn ?? this.resolvedConfig.signedUrlExpiresIn;
+    const longest = this.resolvedConfig.signedUrlExpiresIn;
+    const expiration = Math.min(expiresIn ?? longest, longest);
 
     // Build PutObject command parameters
     const commandParams: PutObjectCommandInput = {
@@ -646,6 +686,9 @@ export class S3StorageAdapter implements IStorageAdapter {
       Key: key,
       ContentType: mimeType,
       CacheControl: this.resolvedConfig.cacheControl,
+      ...(options?.contentLength !== undefined
+        ? { ContentLength: options.contentLength }
+        : {}),
     };
 
     // Add ACL if not R2
@@ -657,6 +700,8 @@ export class S3StorageAdapter implements IStorageAdapter {
 
     const uploadUrl = await getSignedUrl(client, command, {
       expiresIn: expiration,
+      // Signed, so S3 refuses an upload whose type or length differs.
+      signableHeaders: new Set(["content-type", "content-length"]),
     });
 
     return {

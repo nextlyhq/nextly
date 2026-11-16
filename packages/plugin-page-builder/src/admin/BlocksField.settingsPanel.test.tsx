@@ -25,6 +25,7 @@
  *
  * @module admin/BlocksField.settingsPanel.test
  */
+import type { DocumentStatus } from "@nextlyhq/plugin-sdk/admin";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { useForm, type FieldValues } from "react-hook-form";
@@ -32,6 +33,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /** What the entry-fields hook answers with for the test in hand. */
 let entryFields: React.ReactNode | null;
+/** How the surrounding form reports the document: no status unless a case sets one. */
+let documentStatus: DocumentStatus | null = null;
 /** Every path the hook was asked about, so the exclusion can be asserted. */
 const askedFor: string[] = [];
 
@@ -136,7 +139,11 @@ vi.mock("./site-style-read", () => ({
   }),
 }));
 
-vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
+  // The admin's pill words, for the template preview's rows.
+  PILL_LABEL: (
+    await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()
+  ).PILL_LABEL,
   // The canvas's media read, answering nothing: these cases draw no image.
   // One function for every call, as the admin's own hook keeps it.
   useMediaResolver: (
@@ -193,14 +200,22 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
   // The header's controls the bar places; drawn by the admin, not here.
-  DocumentSaveIndicator: () => null,
-  DocumentPrimaryAction: () => null,
+  DocumentSaveAndPublish: () => null,
+  // The page's life stage as the admin answers it from the saved status:
+  // the rule itself is the admin's, tested there; here it stands for it,
+  // so what is pinned is that the pill reads the stage and nothing else.
+  useDocumentLifeStage: () =>
+    documentStatus === null
+      ? null
+      : documentStatus.status === "published"
+        ? { stage: "published", label: "Published" }
+        : { stage: "draft", label: "Draft" },
   useDocumentActions: () => null,
   // No preview here: the top bar's Preview draws nothing.
   useDocumentPreview: () => null,
   // No one signed in: the editor keeps no preferences.
   useCurrentUserId: () => null,
-  useDocumentStatus: () => null,
+  useDocumentStatus: () => documentStatus,
   // The editor registers its restore; nothing here offers one.
   useDocumentRestore: () => undefined,
   validationIssues: () => [],
@@ -210,14 +225,24 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   }),
 }));
 
-/** What the status pill was told on the most recent render. */
-const pillDirty: boolean[] = [];
+/**
+ * Whether the editor told the Pages panel it holds unsaved work, on each
+ * render: the panel is the editor's reader of "the document is dirty" (it asks
+ * before switching page), and the shell above draws every panel on each
+ * render, so each render records one answer.
+ */
+const unsavedWorkTold: boolean[] = [];
 
-vi.mock("./DocumentStatusPill", () => ({
-  DocumentStatusPill: ({ isDirty }: { isDirty: boolean }) => {
-    pillDirty.push(isDirty);
-    return <span data-testid="pill">{isDirty ? "dirty" : "clean"}</span>;
-  },
+vi.mock("./editor/pages-panel", () => ({
+  usePagesPanel: () => ({
+    currentPage: null,
+    settingsRequest: undefined,
+    renderPagesPanel: ({ unsavedWork }: { unsavedWork: boolean }) => {
+      unsavedWorkTold.push(unsavedWork);
+      // Something, so the panel still counts as filled.
+      return <span data-testid="pages-panel" />;
+    },
+  }),
 }));
 
 const { PageBuilderView } = await import("./editor/PageBuilderView");
@@ -282,8 +307,9 @@ const rail = (): string => screen.getByTestId("rail").textContent ?? "";
 
 beforeEach(() => {
   entryFields = null;
+  documentStatus = null;
   askedFor.length = 0;
-  pillDirty.length = 0;
+  unsavedWorkTold.length = 0;
 });
 
 afterEach(cleanup);
@@ -352,29 +378,30 @@ describe("Settings, as a dialog rather than a panel", () => {
 
   it("reports the document dirty when only a SETTINGS field was edited", () => {
     /*
-     * The pill read `undoDepth` alone, which is the editor's own history. Once
-     * this panel makes the entry's fields editable, an author can rename the
-     * page, touch no block, and be told the document is saved — two surfaces
-     * writing to one document with the status answering for only one of them.
+     * The editor's reading of unsaved work once used `undoDepth` alone, which
+     * is the editor's own history. Once this panel makes the entry's fields
+     * editable, an author can rename the page, touch no block, and be told
+     * there is nothing to lose — two surfaces writing to one document with
+     * the answer covering only one of them.
      */
     entryFields = <p>fields</p>;
     openEditor();
-    expect(pillDirty.at(-1)).toBe(false);
+    expect(unsavedWorkTold.at(-1)).toBe(false);
 
     fireEvent.change(screen.getByLabelText("title"), {
       target: { value: "Renamed" },
     });
 
-    expect(pillDirty.at(-1)).toBe(true);
+    expect(unsavedWorkTold.at(-1)).toBe(true);
   });
 
   it("still reports clean when nothing has been touched at all", () => {
-    // The control. A pill hardwired to dirty would satisfy the case above.
+    // The control. A reading hardwired to dirty would satisfy the case above.
     entryFields = <p>fields</p>;
     openEditor();
 
-    expect(pillDirty.length).toBeGreaterThan(0);
-    expect(pillDirty.every(d => d === false)).toBe(true);
+    expect(unsavedWorkTold.length).toBeGreaterThan(0);
+    expect(unsavedWorkTold.every(d => d === false)).toBe(true);
   });
 
   it("still reports dirty for unsaved BLOCKS after the editor is reopened", () => {
@@ -383,7 +410,7 @@ describe("Settings, as a dialog rather than a panel", () => {
      * document into the form, so the blocks field is dirty; reopening builds a
      * fresh editor whose `undoDepth` is zero. Excluding the field from
      * `dirtyFields` — which that version did, to avoid double-counting the undo
-     * history — removed the only remaining witness, and the pill read clean
+     * history — removed the only remaining witness, and the editor read clean
      * over blocks that had never been saved.
      *
      * Double-counting cannot matter to a boolean, and the form's baseline is
@@ -398,6 +425,43 @@ describe("Settings, as a dialog rather than a panel", () => {
     fireEvent.click(screen.getByRole("button", { name: "commit blocks" }));
     view.rerender(<Host open />);
 
-    expect(pillDirty.at(-1)).toBe(true);
+    expect(unsavedWorkTold.at(-1)).toBe(true);
+  });
+});
+
+describe("the page status beside unsaved work", () => {
+  /** The pill's visible words, without its screen-reader subject. */
+  const pillWords = (): string =>
+    screen
+      .getByText(/Page status/)
+      .parentElement?.textContent?.replace("Page status: ", "") ?? "";
+
+  it("still reads Published after an edit, leaving unsaved work to the Save button", () => {
+    /*
+     * A published page with an edit used to read "Modified" here while the
+     * save chip said "Unsaved changes": two signals for one state. The pill
+     * reports where the page is in its life; the Save button says the rest.
+     */
+    documentStatus = { status: "published", hasWorkingDraft: false };
+    entryFields = <p>fields</p>;
+    openEditor();
+    expect(pillWords()).toBe("Published");
+
+    fireEvent.change(screen.getByLabelText("title"), {
+      target: { value: "Renamed" },
+    });
+
+    // The editor does hold unsaved work, so this is the state in question
+    // and not a page the edit never reached.
+    expect(unsavedWorkTold.at(-1)).toBe(true);
+    expect(pillWords()).toBe("Published");
+  });
+
+  it("reads Draft for a draft page", () => {
+    // The positive control: the pill follows the life stage, so the case
+    // above is not a pill stuck on "Published".
+    documentStatus = { status: "draft", hasWorkingDraft: false };
+    openEditor();
+    expect(pillWords()).toBe("Draft");
   });
 });

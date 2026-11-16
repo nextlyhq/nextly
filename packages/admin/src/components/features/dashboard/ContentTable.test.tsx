@@ -11,7 +11,7 @@ import type { SizeTier } from "@nextlyhq/ui/format";
 import type { CoreListWidgetData } from "nextly/core-widget-data";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen, within } from "@admin/__tests__/utils";
+import { cleanup, render, screen, within } from "@admin/__tests__/utils";
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import {
   CardHeightContext,
@@ -198,6 +198,21 @@ describe("the Content table", () => {
     expect(
       within(row).queryByRole("link", { name: /^New entry/ })
     ).not.toBeInTheDocument();
+  });
+
+  it("names one draft in the singular, in the table and stacked", () => {
+    draw([collectionRow("posts", { draft: 1 })]);
+    expect(
+      within(rowOf("Posts")).getByRole("link", { name: "1 draft in Posts" })
+    ).toHaveAttribute("href", "/admin/collections/posts?status=draft");
+    cleanup();
+
+    draw([collectionRow("posts", { draft: 1 })], { tier: "small" });
+    const details = within(rowOf("Posts")).getByTestId("content-row-details");
+    expect(details).toHaveTextContent(/^9 entries · 1 draft · \S/);
+    expect(
+      within(details).getByRole("link", { name: "1 draft in Posts" })
+    ).toBeInTheDocument();
   });
 
   it("shows — for drafts in a collection without the Draft / Published lifecycle", () => {

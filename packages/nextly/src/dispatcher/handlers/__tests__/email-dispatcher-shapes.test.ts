@@ -54,6 +54,7 @@ type TemplateService = {
   previewTemplate: ReturnType<typeof vi.fn>;
   previewDraft: ReturnType<typeof vi.fn>;
   keptOnOldEngineIds: ReturnType<typeof vi.fn>;
+  ownerSentBy: ReturnType<typeof vi.fn>;
 };
 
 function makeProviderService(
@@ -86,6 +87,9 @@ function makeTemplateService(
     previewTemplate: vi.fn(),
     previewDraft: vi.fn(),
     keptOnOldEngineIds: vi.fn().mockResolvedValue(new Set()),
+    // The senders column reads each slug's owner declarations; empty is
+    // the honest answer for a mock that declares none.
+    ownerSentBy: vi.fn().mockReturnValue([]),
     ...overrides,
   };
 }
@@ -301,7 +305,7 @@ describe("dispatchEmailProviders, actions (respondAction)", () => {
 // ============================================================
 
 describe("dispatchEmailTemplates, non-paginated reads (respondData)", () => {
-  it("listTemplates returns { templates: [...] } body and 200 status", async () => {
+  it("listTemplates returns { templates: [...], referencesComplete } body and 200 status", async () => {
     const fakeTemplates = [
       { id: "t1", slug: "welcome" },
       { id: "t2", slug: "password-reset" },
@@ -323,9 +327,23 @@ describe("dispatchEmailTemplates, non-paginated reads (respondData)", () => {
     // service once for the whole list.
     expect(body).toEqual({
       templates: [
-        { id: "t1", slug: "welcome", keptOnOldEngine: false },
-        { id: "t2", slug: "password-reset", keptOnOldEngine: true },
+        {
+          id: "t1",
+          slug: "welcome",
+          keptOnOldEngine: false,
+          // No owner declarations and no references: both lists empty.
+          sentBy: { declared: [], referenced: [] },
+        },
+        {
+          id: "t2",
+          slug: "password-reset",
+          keptOnOldEngine: true,
+          sentBy: { declared: [], referenced: [] },
+        },
       ],
+      // No plugin reported references here, and none threw, so the list is
+      // complete.
+      referencesComplete: true,
     });
     expect(keptOnOldEngineIds).toHaveBeenCalledTimes(1);
     expect(keptOnOldEngineIds).toHaveBeenCalledWith(fakeTemplates);
@@ -391,6 +409,9 @@ describe("dispatchEmailTemplates, non-paginated reads (respondData)", () => {
     expect(response.status).toBe(200);
     // `text` is the field the deleted browser-side render could only guess at.
     expect(await response.json()).toEqual(rendered);
+    // A render, not stored data: preview text that reads as a date is shown
+    // as the email renders it, not rewritten to the installation's timezone.
+    expect(response.headers.get("x-nextly-skip-date-formatting")).toBe("1");
     // Addressed by FIELDS, never by a row id — an unsaved draft has none.
     expect(previewDraft.mock.calls[0][0]).toMatchObject({
       subject: "Welcome, {{name}}",
@@ -422,11 +443,12 @@ describe("dispatchEmailTemplates, non-paginated reads (respondData)", () => {
 });
 
 describe("dispatchEmailTemplates, single-doc reads (respondDoc)", () => {
-  it("getTemplate returns bare doc body", async () => {
+  it("getTemplate returns the doc with what sends it", async () => {
     const fakeTemplate = { id: "t1", slug: "welcome" };
     wireTemplates(
       makeTemplateService({
         getTemplate: vi.fn().mockResolvedValue(fakeTemplate),
+        ownerSentBy: vi.fn().mockReturnValue(["Form: Contact us"]),
       })
     );
 
@@ -438,7 +460,14 @@ describe("dispatchEmailTemplates, single-doc reads (respondDoc)", () => {
 
     const response = result as Response;
     const body = await response.json();
-    expect(body).toEqual(fakeTemplate);
+    // What the list rows carry, for the one record the workbench edits: its
+    // owner's declarations and the settings that send it, and whether every
+    // plugin answered.
+    expect(body).toEqual({
+      ...fakeTemplate,
+      sentBy: { declared: ["Form: Contact us"], referenced: [] },
+      referencesComplete: true,
+    });
     expect(body).not.toHaveProperty("data");
   });
 });

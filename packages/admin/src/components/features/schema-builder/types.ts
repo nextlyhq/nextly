@@ -7,9 +7,15 @@
 import type { DragStartEvent, useSensors } from "@dnd-kit/core";
 import type { Dispatch, SetStateAction } from "react";
 
+import type {
+  BuilderFieldsStep,
+  BuilderSnapshot,
+} from "@admin/hooks/useFieldBuilder";
 import type { FieldBuilderValidationResult } from "@admin/lib/builder/field-validators";
 import type { SchemaPreviewResponse } from "@admin/services/schemaApi";
 import type { FieldConfig } from "@admin/types/ui/collection";
+
+import type { BuilderSettingsValues } from "./BuilderSettingsModal";
 
 // ============================================================
 // Field Width Options
@@ -477,6 +483,28 @@ export interface BuilderFieldsApi {
   handleFieldUpdate: (updatedField: BuilderField) => void;
   handleNestedFieldAdd: (parentFieldId: string, newField: BuilderField) => void;
   validateFields: (userFields: BuilderField[]) => FieldBuilderValidationResult;
+  // The fields and the entity's settings share one history: see
+  // `useFieldBuilder`'s `BuilderSnapshot`.
+  settings: BuilderSnapshot["settings"];
+  setSettings: (next: BuilderSettingsValues) => void;
+  snapshot: BuilderSnapshot;
+  rewriteSnapshots: (
+    change: (snapshot: BuilderSnapshot) => BuilderSnapshot
+  ) => void;
+  resetFields: (
+    fields: BuilderField[],
+    settings?: BuilderSnapshot["settings"]
+  ) => void;
+  clearHistory: (
+    saved?: BuilderSnapshot,
+    step?: number,
+    before?: BuilderSnapshot
+  ) => void;
+  historyStep: number;
+  canUndo: boolean;
+  canRedo: boolean;
+  undo: () => BuilderFieldsStep | null;
+  redo: () => BuilderFieldsStep | null;
 }
 
 /**
@@ -498,6 +526,12 @@ export interface SchemaChangeConfirmation {
   /** True from the moment the user confirms until the apply settles. */
   isApplying: boolean;
   /**
+   * True while a save is on its way: from asking for its preview until it is
+   * answered, and while the apply runs. What the save was started with is
+   * kept meanwhile, so nothing that would clear it is offered.
+   */
+  isBusy: boolean;
+  /**
    * Which preview this is, counting from the first.
    *
    * The dialog carries the author's unsaved answers — which rename to apply,
@@ -514,6 +548,9 @@ export interface SchemaChangeConfirmation {
   setOpen: (open: boolean) => void;
   /** The apply succeeded: close, and forget the preview it was describing. */
   settle: () => void;
+  /** Bracket the request for a preview, which the page shows as busy. */
+  beginPreview: () => void;
+  endPreview: () => void;
   /** Bracket the apply itself; also raises the flag that tells the fetcher
    *  this tab is the one changing the schema. */
   beginApply: () => void;

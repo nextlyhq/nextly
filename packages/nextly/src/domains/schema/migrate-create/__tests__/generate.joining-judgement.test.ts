@@ -108,9 +108,10 @@ describe.each(["postgresql", "mysql"] as const)(
       );
     });
 
+    // Narrowed, so a first join is refused: a field of another entity is no retry of this one.
     it("judges another entity's joining field as a first join", async () => {
       await expect(
-        joinAt(dialect, 12, { ...builder(["price"]), slug: "other" })
+        joinAt(dialect, 8, { ...builder(["price"]), slug: "other" })
       ).rejects.toThrow(
         /"price" changes how it is stored.*nextly migrate:create/
       );

@@ -33,6 +33,20 @@ describe("hasPluginsSection", () => {
     ).toBe(true);
   });
 
+  /**
+   * A role holding only a plugin's own settings permission. It manages no
+   * settings and may read no collection, but the plugin's settings page lets
+   * it in, and the panel is the one route to that page.
+   */
+  it("shows it for a role that can open a plugin's settings page and nothing else", () => {
+    expect(
+      hasPluginsSection(
+        { canManageSettings: false, canViewCollections: false },
+        { ...SETTLED, hasReachablePluginSettings: true }
+      )
+    ).toBe(true);
+  });
+
   it("hides it from a user with neither capability", () => {
     expect(
       hasPluginsSection(

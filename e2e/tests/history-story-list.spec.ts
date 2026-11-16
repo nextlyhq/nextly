@@ -13,8 +13,13 @@ import { expect, type Page } from "@playwright/test";
 // once a run passes the token's lifetime.
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { expectNoAxeViolations } from "./support/axe";
 
 const NOTES = "/admin/api/collections/history-notes/entries";
+// A post, for the history that holds a draft: posts keep pending changes. A
+// history note embeds the translated SEO field group without being translated
+// itself, so it holds none, and a save that names no status goes live.
+const POSTS = "/admin/api/collections/posts/entries";
 const AUTHORS = "/admin/api/collections/authors/entries";
 
 /**
@@ -54,22 +59,24 @@ async function write(
   return item;
 }
 
-/** A published note, saved twice since, with a draft over it. */
-async function noteWithADraft(page: Page): Promise<string> {
-  const { id } = await write(page, "post", NOTES, {
-    title: `Story ${Date.now()}`,
-    summary: "first words",
+/** A published post, saved twice since, with a draft over it. */
+async function postWithADraft(page: Page): Promise<string> {
+  const stamp = Date.now();
+  const { id } = await write(page, "post", POSTS, {
+    title: `Story ${stamp}`,
+    slug: `history-story-${stamp}`,
+    excerpt: "first words",
   });
-  await write(page, "patch", `${NOTES}/${id}`, { summary: "second words" });
-  await write(page, "patch", `${NOTES}/${id}`, {
-    summary: "third words",
+  await write(page, "patch", `${POSTS}/${id}`, { excerpt: "second words" });
+  await write(page, "patch", `${POSTS}/${id}`, {
+    excerpt: "third words",
     status: "published",
   });
-  // No status: a published note keeps its live row and holds this as a
+  // No status: a published post keeps its live row and holds this as a
   // draft. Naming "draft" would withdraw it instead.
-  await write(page, "patch", `${NOTES}/${id}`, {
-    summary: "a draft over it",
-    details: { subtitle: "new subtitle" },
+  await write(page, "patch", `${POSTS}/${id}`, {
+    excerpt: "a draft over it",
+    metaTitle: "new meta title",
   });
   return id;
 }
@@ -90,8 +97,11 @@ test.describe("the history list tells what happened", () => {
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
-    const id = await noteWithADraft(page);
-    await openHistory(page, `/collections/history-notes/${id}`);
+    const id = await postWithADraft(page);
+    await openHistory(page, `/collections/posts/${id}`);
+    // The history list, as an assistive technology reads it: the panel alone,
+    // since the document's own editor beside it is not history's.
+    await expectNoAxeViolations(page, { include: "[data-history-panel]" });
 
     await expect(
       page.getByRole("button", { name: /Current draft/ })
@@ -108,9 +118,9 @@ test.describe("the history list tells what happened", () => {
     await expect(
       page.getByText("Nothing to show for this filter.")
     ).toBeVisible();
-    const note = `/collections/history-notes/${id}`;
-    await shots(page, note, "one-language");
-    await shots(page, note, "empty-filter", () =>
+    const post = `/collections/posts/${id}`;
+    await shots(page, post, "one-language");
+    await shots(page, post, "empty-filter", () =>
       page.getByRole("button", { name: "Named" }).click()
     );
   });
@@ -135,6 +145,8 @@ test.describe("the history list tells what happened", () => {
 
     const languages = page.getByRole("combobox", { name: "Languages shown" });
     await expect(languages).toContainText("Spanish and shared fields");
+    // Spanish history, as an assistive technology reads it.
+    await expectNoAxeViolations(page, { include: "[data-history-panel]" });
 
     await languages.click();
     await page.getByRole("option", { name: "All languages" }).click();

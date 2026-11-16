@@ -155,13 +155,13 @@ Render a single the same way you render a collection, reading it with
 
 ## Built-in blocks
 
-Twenty-two, from `@nextlyhq/blocks-react/blocks`:
+Twenty-three, from `@nextlyhq/blocks-react/blocks`:
 
 `core/accordion`, `core/accordion-item`, `core/box`, `core/button`,
 `core/collection-loop`, `core/card`, `core/column`, `core/columns`, `core/divider`,
 `core/embed`, `core/entry-content`, `core/form`, `core/gallery`, `core/heading`,
 `core/icon`, `core/image`, `core/list`, `core/quote`, `core/rich-text`, `core/section`,
-`core/spacer`, `core/text`.
+`core/spacer`, `core/table-of-contents`, `core/text`.
 
 `core/entry-content` is offered only in a collection's template, where it draws the
 entry's own blocks field (see [Editing a template](https://nextlyhq.com/docs/page-builder/editor#editing-a-template)).
@@ -174,17 +174,23 @@ the inspector.
 Drop a **`core/collection-loop`**, set its collection, sort and limit, and place a template
 inside it. At render the loop fetches entries through the route's data access and renders
 the template once per item. Bind any prop on a nested block to an item field (Content tab →
-**Bind** → path, for example `title` or `author.name`). Bindings are stored but not
-resolved yet: each repeated item shows the text its blocks were given in the editor.
-Empty, error and unconfigured states are first-class, and a per-page query budget bounds
+**Bind** → path, for example `title` or `author.name`). Bindings are resolved when the
+page renders: each repeated item shows its own entry's field values, and a binding with
+no value shows its fallback, or the text the block was given in the editor. A value that
+breaks a binding rule never reaches the block. A binding whose field or block changed
+after it was saved shows its fallback, or the block's own value, until it is fixed. The
+dashboard's **Needs your attention** card counts these, and **Bindings to fix**, under
+**Checks** in the Page Builder's panel, lists them. Empty, error and unconfigured states are first-class, and a per-page query budget bounds
 nested loops — depth in a document becomes multiplication in reads.
 
 ## Styling, tokens & responsive
 
 Style values are **typed** (spacing as box-sides, colors, dimensions, …) and compiled to a
 single scoped `<style>` per page via a real CSS parser (never string concatenation).
-Colors may be raw values or design-token references (`{ token: "color.primary" }` →
-`var(--nx-color-primary)`). Breakpoints are desktop-first. Style a block separately for each
+Colors may be raw values or references to the site's design tokens
+(`{ $token: "color.primary" }` → `var(--site-color-primary)`). `--site-` is the default
+prefix; a site may choose its own, but never `--nx-` (the admin's own) or `--tw-`
+(Tailwind's), which are refused. Breakpoints are desktop-first. Style a block separately for each
 breakpoint: the Style tab edits the breakpoint the canvas is sized to, and the canvas resizes
 to each breakpoint's width. The canvas is a frame of its own at that width, so `vw`/`vh` sizes
 and hand-written `@media` rules answer for the device, as they do when published. To draw the
@@ -247,9 +253,21 @@ newer definition than this build registers is left exactly as found.
 
 - Text is escaped; image/link/video URLs are scheme-validated (rejects `javascript:` /
   `vbscript:` / `data:`, including control-char-obfuscated variants).
-- There is no author-written CSS surface. A `customCss` field existed, gated by
-  its own permission, and nothing rendered or sanitized what it stored; it was
-  removed rather than left one line away from reaching a page.
+- Author-written CSS never reaches a page. The document format still has a
+  `customCss` string, on the document's settings and on each block, and a stored
+  value is kept, but nothing renders it, sanitizes it or scopes it: the style
+  compiler never reads the key, and no editor control writes it.
+- Site code (**Settings → Site → Code**) is the one place code reaches every
+  published page: a head and an end-of-body slot for analytics, tag managers and
+  verification tags. Saving it needs the site settings permission and a signed-in
+  person; an API key can never save it. Each save is judged on the server: the
+  sanitiser parses the pasted HTML as a browser would and refuses anything off its
+  list with a reason (event handlers, `javascript:` URLs, `<base>`, a meta refresh,
+  anything that breaks out of its slot), and the code is checked against the site's
+  Content Security Policy. Code the policy would block is saved only after the person
+  has seen exactly what is blocked and confirmed. It is stored as structured entries,
+  never as HTML, and judged again by the same rules when it renders. See
+  [Site code](https://nextlyhq.com/docs/page-builder/site-code).
 - Structural limits: max depth, max node count, unique ids, no move-into-descendant,
   namespaced types, slot allow-lists.
 - The renderer's root entry imports no CMS runtime, no admin code and no `next/*`

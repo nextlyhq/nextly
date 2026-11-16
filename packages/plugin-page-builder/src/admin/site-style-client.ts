@@ -47,7 +47,6 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/site-style-client
  */
-import type { SpacingMode } from "@nextlyhq/blocks-engine";
 import {
   apiErrorMessage,
   readPluginRoute,
@@ -69,9 +68,7 @@ import { asOverwrite, documentVersionOf } from "../document-version";
 import {
   PAGE_BUILDER_PLUGIN_NAME,
   SITE_BREAKPOINTS_ROUTE_PATH,
-  SPACING_MODE_ROUTE_PATH,
   type SiteBreakpointsRequest,
-  type SpacingModeResult,
 } from "../library-contract";
 import {
   SITE_FONTS_CATALOGUE_ROUTE_PATH,
@@ -98,12 +95,8 @@ import {
 import { KEPT_CHANGING_WORDS } from "./conflict-words";
 import { useStoredSiteStyle } from "./site-style-read";
 
-/**
- * The four sections of the document, each one studio's to own. The spacing
- * model is not one: it is kept beside the document and saved through its own
- * route (see `useSaveSpacingMode`).
- */
-export type SiteStyleSection = Exclude<keyof SiteStyleData, "spacingMode">;
+/** The four sections of the document, each one studio's to own. */
+export type SiteStyleSection = keyof SiteStyleData;
 
 /**
  * The site style as the editor should draw it: the host's code-stated defaults
@@ -230,6 +223,12 @@ export interface SiteStyleSaveResult {
    * every try was made from a version another save had already replaced.
    */
   readonly keptChanging?: true;
+  /**
+   * Set when the server refused the values themselves, naming what is wrong
+   * with them: it answered, and stored nothing. Not set for a failure that
+   * left the answer unknown, such as the network's.
+   */
+  readonly invalid?: true;
 }
 
 /**
@@ -271,64 +270,6 @@ function issuesFromRejection(reason: unknown): Record<string, string> {
  */
 export function refusalWords(reason: unknown, fallback: string): string {
   return apiErrorMessage(reason, fallback);
-}
-
-/**
- * What one save of the site's spacing model came to: stored and read back,
- * stored but not read back (the editor still holds the earlier style), or
- * refused, with the words to show for the last two.
- */
-export type SpacingModeSaveResult =
-  | { readonly saved: true; readonly refreshed: true }
-  | { readonly saved: true; readonly refreshed: false; readonly issue: string }
-  | { readonly saved: false; readonly issue: string };
-
-/** What a stored choice whose read-back failed is told. */
-const SPACING_MODE_NOT_REFRESHED =
-  "The space between blocks was saved, but the editor could not read it back. Reload to see it on the canvas.";
-
-/** What saving the site's spacing model answers. */
-export interface SpacingModeSave {
-  readonly save: (mode: SpacingMode) => Promise<SpacingModeSaveResult>;
-}
-
-/**
- * Save the site's spacing model through its route, then read the style again.
- *
- * The model lives beside the Single rather than in it, so the Single's own
- * write path cannot carry it; the editor's style read answers it, and reading
- * that again is what moves the canvas onto the new model.
- */
-export function useSaveSpacingMode(): SpacingModeSave {
-  const { refetch } = useStoredSiteStyle();
-  const save = useCallback<SpacingModeSave["save"]>(
-    async mode => {
-      try {
-        await writePluginRoute<SpacingModeResult>({
-          plugin: PAGE_BUILDER_PLUGIN_NAME,
-          path: SPACING_MODE_ROUTE_PATH,
-          body: { mode },
-        });
-      } catch (reason) {
-        return {
-          saved: false,
-          issue: refusalWords(
-            reason,
-            "The space between blocks was not changed."
-          ),
-        };
-      }
-      // Stored; the canvas moves only once the style is read again. A failed
-      // read answers rather than rejects, so its verdict is what tells a
-      // refreshed editor from one still drawing the earlier model.
-      const read = await refetch().catch(() => ({ isError: true }));
-      return read.isError
-        ? { saved: true, refreshed: false, issue: SPACING_MODE_NOT_REFRESHED }
-        : { saved: true, refreshed: true };
-    },
-    [refetch]
-  );
-  return { save };
 }
 
 /**
@@ -780,7 +721,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
               : "This could not be saved.";
           return { result: { saved: false, issues: { [section]: message } } };
         }
-        return { result: { saved: false, issues } };
+        return { result: { saved: false, issues, invalid: true } };
       }
     },
     [mutation, refetch, readFresh, newest]
@@ -867,7 +808,7 @@ export function useSaveSiteStyle(): SiteStyleWrite {
               replaced: merged.replaced,
             };
       });
-      chain.attempt = attemptOf(chain.attempt, turn, done);
+      chain.attempt = attemptOf(chain.attempt, turn, done, section);
       track(SECTION_LABELS[section], chain.attempt.settled);
       chain.tail = done.then(({ holds }) => {
         chain.pending -= 1;
@@ -1296,6 +1237,13 @@ function replayedValue(replayed: SiteStyleReplayed): unknown {
  * answered, rejected with the reasons when it was refused, and, for a write
  * skipped without being sent, settled as the section's attempt before it
  * was, so that it says nothing new about the section.
+ *
+ * One refusal settles rather than rejects: the variables' values refused as
+ * invalid. The variables studio takes the refused variables back at once, so
+ * nothing the page could point at is left unsaved, and the reason is said
+ * beside them; holding the page's save as well would refuse every save until
+ * a reload. A write whose answer is unknown, as on a network failure, and a
+ * refusal of any other section still hold it.
  */
 function attemptOf(
   prior: SectionChain["attempt"],
@@ -1303,12 +1251,14 @@ function attemptOf(
   done: Promise<{
     result: SiteStyleSaveResult;
     skipped?: boolean;
-  }>
+  }>,
+  section: SiteStyleSection
 ): NonNullable<SectionChain["attempt"]> {
   const settled = done.then(({ result, skipped }) => {
     if (skipped === true) return prior?.settled;
     const reasons = Object.values(result.issues);
-    if (!result.saved && reasons.length > 0) {
+    const takenBack = section === "tokens" && result.invalid === true;
+    if (!result.saved && reasons.length > 0 && !takenBack) {
       throw new Error(reasons.join(" "));
     }
     return undefined;

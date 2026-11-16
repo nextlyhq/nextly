@@ -232,6 +232,79 @@ describe("scheduling from the Publishing section", () => {
     );
   });
 
+  it("holds the offer's place, unseen, while the schedule is checked, so the sections under it stay put", async () => {
+    // The releases read never answers: the section stays on its check.
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(() => {}));
+    showEditor();
+    const checking = await screen.findByText("Checking releases");
+    const body = checking.parentElement!;
+    expect(body.getAttribute("aria-busy")).toBe("true");
+    // The same button "Not scheduled." is drawn over, at its own size (its
+    // height is its size's, whatever it says), but neither seen, reached nor
+    // read while it only holds the place.
+    const held = within(body).getByRole("button", { hidden: true });
+    expect(held.getAttribute("data-slot")).toBe("button.outline");
+    expect(held.className.split(/\s+/)).toContain("invisible");
+    expect(held.getAttribute("tabindex")).toBe("-1");
+    expect(held.getAttribute("aria-hidden")).toBe("true");
+    expect(screen.queryByRole("button", { name: "Schedule…" })).toBeNull();
+  });
+
+  it("draws the check with valid nesting, so React reports no hydration error", async () => {
+    // A bar is a block element, and HTML closes a paragraph at one: the
+    // server's markup and the browser's tree then differ, and React says so.
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      fetchMock.mockImplementationOnce(() => new Promise<Response>(() => {}));
+      showEditor();
+      const checking = await screen.findByText("Checking releases");
+      const body = checking.parentElement!;
+      expect(body.querySelector("p div, p p, p ul")).toBeNull();
+      expect(
+        errors.mock.calls.filter(call =>
+          call.some(arg => String(arg).includes("cannot be a descendant of"))
+        )
+      ).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it("holds the place of the reason the offer is off, too, while the schedule is checked", async () => {
+    // A reader who may not schedule now (a colleague holds the document):
+    // the answer draws the offer with the reason under it, so the place
+    // held for it must be as tall.
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(() => {}));
+    function Withheld(props: { children: ReactNode }) {
+      const inner = Editor({ children: props.children });
+      if (hosted.current !== null) {
+        const [id] = Object.keys(hosted.current.bindings ?? {});
+        hosted.current = {
+          ...hosted.current,
+          bindings: {
+            ...hosted.current.bindings,
+            [id]: {
+              ...hosted.current.bindings![id]!,
+              disabledReason: "Someone else is editing this document.",
+            },
+          },
+        } as typeof hosted.current;
+      }
+      return inner;
+    }
+    render(
+      <Withheld>
+        <PublishingSection document={DOCUMENT} />
+      </Withheld>
+    );
+    const checking = await screen.findByText("Checking releases");
+    const body = checking.parentElement!;
+    const held = body.querySelector("p.text-xs");
+    expect(held?.textContent).toBe("Someone else is editing this document.");
+    expect(held?.className.split(/\s+/)).toContain("invisible");
+    expect(held?.getAttribute("aria-hidden")).toBe("true");
+  });
+
   it("offers nothing to a person who may not create releases, since every way makes or joins one", async () => {
     grants.missing = ["create-content-releases"];
     showEditor();

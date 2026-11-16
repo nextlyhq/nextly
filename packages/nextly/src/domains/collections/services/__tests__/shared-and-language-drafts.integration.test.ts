@@ -39,6 +39,8 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { CollectionEntryService } from "../../../../services/collections/collection-entry-service";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
+import { discardWorkingDraft } from "../../../versions/discard-working-draft";
+import { VersionsRepository } from "../../../versions/versions-repository";
 
 const TRANSLATED = "partposts";
 const UNTRANSLATED = "partnotes";
@@ -50,6 +52,8 @@ const PUBLISHER = "part-publisher";
 /** Translated, with a translated component holding a shared sub-field. */
 const BANNERED = "partbanners";
 const BANNER = "partbanner";
+const FIELD_GUARDED = "partfieldguards";
+const LOCKED = "partlocked";
 
 /** Translatable: `title` and `body`. Shared: `views` (a number). */
 const FIELDS = () => [
@@ -99,6 +103,47 @@ async function boot(dialect: TestDialect): Promise<CollectionEntryService> {
         status: true,
         versions: { drafts: true },
         fields: FIELDS(),
+      }),
+      defineCollection({
+        slug: LOCKED,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        fields: [
+          text({ name: "title" }),
+          text({ name: "body" }),
+          // Judged with each language's own document: views may not change under a locked title.
+          number({
+            name: "views",
+            validate: (
+              value: unknown,
+              { data }: { data: Record<string, unknown> }
+            ) =>
+              data.title !== "Locked" ||
+              value === 10 ||
+              "Views cannot change while the title is Locked.",
+          }),
+        ],
+      }),
+      defineCollection({
+        slug: FIELD_GUARDED,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => true,
+        },
+        fields: [
+          text({ name: "title" }),
+          text({ name: "body" }),
+          // A shared value this rule does not let the caller change in Spanish.
+          number({
+            name: "views",
+            access: { update: ({ locale }) => locale !== "es" },
+          }),
+        ],
       }),
       defineCollection({
         slug: UNTRANSLATED,
@@ -383,6 +428,35 @@ describe.each(getConfiguredTestDialects())(
       expect(Object.keys(await drafts(id))).toEqual(["en"]);
     }, 90_000);
 
+    // A publish that chooses languages and not the shared part puts only those languages' own
+    // changes live: the shared draft, and the shared values every language shows, stay as they
+    // were until the shared part is published.
+    it("publishes a chosen language's own change and leaves the shared draft pending", async () => {
+      const entries = await boot(dialect);
+      const id = await publishedInBoth(entries, TRANSLATED);
+      await save(entries, TRANSLATED, id, "es", { title: "es 2", views: 40 });
+
+      const published = await entries.publishParts(
+        {
+          collectionName: TRANSLATED,
+          entryId: id,
+          overrideAccess: true,
+          data: { _overwrite: true },
+        },
+        { direction: "publish", locales: ["es"] }
+      );
+
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      expect(await read(entries, TRANSLATED, id, "es")).toMatchObject({
+        title: "es 2",
+        views: 10,
+      });
+      expect((await read(entries, TRANSLATED, id, "en")).views).toBe(10);
+      expect(carried((await drafts(id)).shared ?? {}, SHARED)).toEqual([
+        "views",
+      ]);
+    }, 90_000);
+
     // An untranslated document is published from one language as a
     // translated one is: that language's draft with the shared draft. Another language's draft stays pending, unchanged, and is
     // published from its own language.
@@ -441,6 +515,221 @@ describe.each(getConfiguredTestDialects())(
         expect((await read(entries, TRANSLATED, id, locale)).views).toBe(60);
       }
       expect(await drafts(id)).toEqual({});
+    }, 90_000);
+
+    // Taking one language down leaves the entry live, so the version it records says so.
+    it("records the entry still published when one language alone is unpublished", async () => {
+      const entries = await boot(dialect);
+      const id = await publishedInBoth(entries, TRANSLATED);
+
+      const unpublished = await entries.publishParts(
+        {
+          collectionName: TRANSLATED,
+          entryId: id,
+          overrideAccess: true,
+          data: { _overwrite: true },
+        },
+        { direction: "unpublish", locales: ["es"] }
+      );
+
+      expect(unpublished.success, JSON.stringify(unpublished)).toBe(true);
+      const versions = await handle!.adapter.select<{
+        versionNo: number | null;
+        status: string;
+      }>("nextly_versions", {
+        where: { and: [{ column: "entryId", op: "=", value: id }] },
+      });
+      const newest = versions
+        .filter(version => version.versionNo !== null)
+        .sort((a, b) => Number(b.versionNo) - Number(a.versionNo))[0];
+      expect(newest?.status).toBe("published");
+    }, 90_000);
+
+    // The shared part shows in every live language, so publishing it asks its fields' rules in
+    // each of them: a shared value the caller may not change in Spanish is not put live by a
+    // publish chosen in English while Spanish is live.
+    it("asks the shared fields' rules in every live language when a publish carries the shared draft", async () => {
+      const entries = await boot(dialect);
+      await userWhoMay(handle!, PUBLISHER, "update", [FIELD_GUARDED]);
+      for (const action of ["read", "publish"]) {
+        await grantTo(handle!, PUBLISHER, action, [FIELD_GUARDED]);
+      }
+      const id = await publishedInBoth(entries, FIELD_GUARDED);
+      await save(entries, FIELD_GUARDED, id, "en", { views: 80 });
+
+      const published = await entries.publishParts(
+        {
+          collectionName: FIELD_GUARDED,
+          entryId: id,
+          user: { id: PUBLISHER, email: `${PUBLISHER}@example.test` },
+          overrideAccess: false,
+          data: { _overwrite: true },
+        },
+        { direction: "publish", locales: ["en"], shared: true }
+      );
+
+      expect(published.success, JSON.stringify(published)).toBe(false);
+      expect((await read(entries, FIELD_GUARDED, id, "es")).views).toBe(10);
+    }, 90_000);
+
+    // An API key is judged by the same field rules as a person: a request made with a key carries
+    // its owner and the key's own grants, and its publish still asks the shared fields' rules in
+    // every live language.
+    it("asks the shared fields' rules in every live language when an API key publishes", async () => {
+      const entries = await boot(dialect);
+      await userWhoMay(handle!, PUBLISHER, "read", [FIELD_GUARDED]);
+      const id = await publishedInBoth(entries, FIELD_GUARDED);
+      await save(entries, FIELD_GUARDED, id, "en", { views: 80 });
+
+      const published = await entries.publishParts(
+        {
+          collectionName: FIELD_GUARDED,
+          entryId: id,
+          user: { id: PUBLISHER, email: `${PUBLISHER}@example.test` },
+          overrideAccess: false,
+          authenticatedScope: {
+            actorType: "apiKey",
+            permissions: ["read", "update", "publish"].map(
+              action => `${action}-${FIELD_GUARDED}`
+            ),
+          },
+          data: { _overwrite: true },
+        },
+        { direction: "publish", locales: ["en"], shared: true }
+      );
+
+      // Refused by the field rule in Spanish, not by anything before it.
+      expect(published.success, JSON.stringify(published)).toBe(false);
+      expect(JSON.stringify(published)).toMatch(/views/);
+      expect((await read(entries, FIELD_GUARDED, id, "es")).views).toBe(10);
+    }, 90_000);
+
+    // The shared part's values show in every live language, so publishing them with chosen
+    // languages judges them in each language already live too: a value valid in English but not
+    // under Spanish's own document is refused.
+    it("validates a shared promotion in every live language, not only the chosen ones", async () => {
+      const entries = await boot(dialect);
+      const id = await publishedInBoth(entries, LOCKED);
+      await save(entries, LOCKED, id, "es", { title: "Locked" });
+      await save(entries, LOCKED, id, "es", { status: "published" });
+      await save(entries, LOCKED, id, "en", { views: 80 });
+
+      const published = await entries.publishParts(
+        {
+          collectionName: LOCKED,
+          entryId: id,
+          overrideAccess: true,
+          data: { _overwrite: true },
+        },
+        { direction: "publish", locales: ["en"], shared: true }
+      );
+
+      expect(published.success, JSON.stringify(published)).toBe(false);
+      expect((await read(entries, LOCKED, id, "es")).views).toBe(10);
+    }, 90_000);
+
+    // The shared part's pending change can be thrown away on its own: each language's change
+    // stays, and what readers see does not move.
+    it("discards the shared draft alone, keeping each language's", async () => {
+      const entries = await boot(dialect);
+      const id = await publishedInBoth(entries, TRANSLATED);
+      await save(entries, TRANSLATED, id, "es", { title: "es 2", views: 40 });
+      expect(Object.keys(await drafts(id)).sort()).toEqual(["es", "shared"]);
+
+      await discardWorkingDraft({
+        scopeKind: "collection",
+        slug: TRANSLATED,
+        entryId: id,
+        user: { id: "editor" } as never,
+        shared: true,
+        version: { _overwrite: true },
+      });
+
+      expect(Object.keys(await drafts(id))).toEqual(["es"]);
+      expect((await read(entries, TRANSLATED, id, "es", true)).title).toBe(
+        "es 2"
+      );
+      expect((await read(entries, TRANSLATED, id, "en")).views).toBe(10);
+      // The history names the shared part as the one thrown away, not a language.
+      const [discarded] = await handle!.adapter.select<{ id: string }>(
+        "nextly_content_events",
+        {
+          where: {
+            and: [
+              { column: "subjectId", op: "=", value: id },
+              { column: "kind", op: "=", value: "draft-discarded" },
+            ],
+          },
+        }
+      );
+      const parts = await handle!.adapter.select<{ part: string }>(
+        "nextly_content_event_parts",
+        {
+          where: { and: [{ column: "eventId", op: "=", value: discarded.id }] },
+        }
+      );
+      expect(parts.map(row => row.part)).toEqual(["~shared"]);
+    }, 90_000);
+
+    // A shared-only discard throws away no language's work, so the author's unsaved work recorded
+    // in the default language (as no language, the way the editor records it) stays to be offered
+    // back. The plausible broken implementation reads the shared slot as that unnamed language.
+    it("keeps the author's recovery point in the default language when the shared draft is discarded", async () => {
+      const entries = await boot(dialect);
+      const id = await publishedInBoth(entries, TRANSLATED);
+      await save(entries, TRANSLATED, id, "es", { title: "es 2", views: 40 });
+      const repo = new VersionsRepository(
+        handle!.adapter as unknown as ConstructorParameters<
+          typeof VersionsRepository
+        >[0]
+      );
+      const ref = {
+        scopeKind: "collection" as const,
+        scopeSlug: TRANSLATED,
+        entryId: id,
+      };
+      await repo.upsertAutosave({
+        ref,
+        status: "draft",
+        snapshot: { title: "typed in English, never saved" },
+        locale: null,
+        createdBy: "editor",
+      });
+
+      await discardWorkingDraft({
+        scopeKind: "collection",
+        slug: TRANSLATED,
+        entryId: id,
+        user: { id: "editor" } as never,
+        shared: true,
+        version: { _overwrite: true },
+      });
+
+      expect(Object.keys(await drafts(id))).toEqual(["es"]);
+      expect(await repo.findAutosave(ref, "editor")).toBeDefined();
+    }, 90_000);
+
+    // While the entry is live, a shared edit is pending until the shared part is published,
+    // whichever language it is saved from: a save in a language not yet live joins the shared
+    // draft rather than writing the shared value live beside it.
+    it("keeps a shared edit saved in a language not yet live pending with the shared draft", async () => {
+      const entries = await boot(dialect);
+      const created = await entries.createEntry(
+        { collectionName: TRANSLATED, overrideAccess: true, locale: "en" },
+        { title: "en title", body: "en body", views: 10, status: "published" }
+      );
+      expect(created.success, JSON.stringify(created)).toBe(true);
+      const id = (created.data as { id: string }).id;
+      await save(entries, TRANSLATED, id, "en", { views: 40 });
+      expect((await drafts(id)).shared?.views).toBe(40);
+
+      await save(entries, TRANSLATED, id, "es", {
+        title: "es title",
+        views: 50,
+      });
+
+      expect((await read(entries, TRANSLATED, id, "en")).views).toBe(10);
+      expect((await drafts(id)).shared?.views).toBe(50);
     }, 90_000);
 
     // A shared-only draft goes live in every language, so a publish of every

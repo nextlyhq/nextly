@@ -17,7 +17,11 @@ import {
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
 import { defineCollection, relationship, text } from "nextly/config";
-import { createPublicContentRoute, type ContentEntry } from "nextly/runtime";
+import {
+  createPublicContentRoute,
+  type ContentEntry,
+  type PageStructuredDataHints,
+} from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { seoPlugin } from "../../plugin";
@@ -74,7 +78,8 @@ async function boot(dialect: TestDialect) {
 async function renderedWith(
   t: TestNextly,
   slug: string,
-  description?: string
+  description?: string,
+  hints?: PageStructuredDataHints
 ): Promise<string | undefined> {
   const route = createPublicContentRoute({
     collections: ["posts"],
@@ -91,6 +96,9 @@ async function renderedWith(
       ...(description === undefined ? {} : { description }),
       openGraph: { images: ["/media/cover.jpg"] },
     }),
+    // What the route says about its page beyond the document, where a test
+    // gives anything.
+    ...(hints === undefined ? {} : { structuredDataHints: () => hints }),
   });
   return route.ContentPage({ params: { slug: [slug] } });
 }
@@ -171,6 +179,46 @@ describe.each(getConfiguredTestDialects())(
       // The type's markup is left out rather than naming an unpublished author.
       expect(nodeOf(text, "BlogPosting")).toBeUndefined();
       expect(text).not.toContain("Draft Writer");
+    });
+
+    it("describes the questions a route declares an FAQ section as a part of the page, and none it does not", async () => {
+      const t = await boot(dialect);
+      await t.nextly.create({
+        collection: "posts",
+        data: { title: "Pricing", slug: "pricing", status: "published" },
+      });
+      const questions = [
+        { question: "Is there a free plan?", answer: "Yes, for one site." },
+      ];
+
+      const declared = await renderedWith(t, "pricing", undefined, {
+        questions,
+        faqSection: true,
+      });
+
+      const page = "https://example.com/blog/pricing";
+      expect(nodeOf(declared, "WebPage")).toMatchObject({
+        "@id": `${page}#webpage`,
+        hasPart: { "@id": `${page}#faq` },
+      });
+      expect(nodeOf(declared, "FAQPage")).toMatchObject({
+        "@id": `${page}#faq`,
+        isPartOf: { "@id": `${page}#webpage` },
+        mainEntity: [
+          {
+            "@type": "Question",
+            name: "Is there a free plan?",
+            acceptedAnswer: { "@type": "Answer", text: "Yes, for one site." },
+          },
+        ],
+      });
+
+      // The same questions without the declaration are not described.
+      const undeclared = await renderedWith(t, "pricing", undefined, {
+        questions,
+      });
+      expect(nodeOf(undeclared, "FAQPage")).toBeUndefined();
+      expect(nodeOf(undeclared, "WebPage")).not.toHaveProperty("hasPart");
     });
 
     it("keeps a page's own choice of type with the page", async () => {

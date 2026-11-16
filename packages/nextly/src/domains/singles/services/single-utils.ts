@@ -18,6 +18,7 @@
 import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
+import { addressableFields } from "../../../shared/addressable-fields";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import type { ValidatableField } from "../../../shared/lib/entry-validation";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
@@ -27,6 +28,7 @@ import {
   storageTypeToken,
 } from "../../../shared/lib/plugin-storage";
 import type { Logger } from "../../../shared/types";
+import { decodeEachLanguage } from "../../i18n/read-in-language";
 import { getFieldType } from "../../schema/field-types/field-type-registry";
 import { relationshipStoresJson } from "../../schema/services/field-column-descriptor";
 import type { SingleDocument, SingleResult } from "../types";
@@ -555,6 +557,16 @@ export function expandMediaInData(
 // ============================================================
 
 /**
+ * The fields whose values a Single's row holds: those at the top of `fields`, and those inside a
+ * group with no name, which only lays fields out and stores them where it sits. Read through the
+ * shared walk, as the row's columns are (`fieldsStoredOnRow`), so a value inside such a group is
+ * encoded, decoded and normalised as one beside it is.
+ */
+function rowFieldsOf(fields: readonly FieldConfig[]): FieldConfig[] {
+  return addressableFields(fields) as unknown as FieldConfig[];
+}
+
+/**
  * Deserialize JSON fields from database format to in-memory objects.
  *
  * Also normalizes snake_case timestamp columns (`created_at`, `updated_at`)
@@ -568,8 +580,23 @@ export function deserializeJsonFields(
 ): SingleDocument {
   const result = { ...doc } as Record<string, unknown>;
 
-  for (const field of fields) {
+  // The fields stored on the row, those inside a group with no name among them (`rowFieldsOf`).
+  for (const field of rowFieldsOf(fields)) {
     if (!("name" in field) || !field.name) continue;
+
+    // Every language's values beside the document, read as stored, decode as
+    // the document's own value does.
+    if (shouldTreatAsJson(field)) {
+      const name = field.name;
+      decodeEachLanguage(result, name, stored => {
+        try {
+          return JSON.parse(stored);
+        } catch {
+          logger.warn("Failed to parse JSON field", { field: name });
+          return stored;
+        }
+      });
+    }
 
     if (shouldTreatAsJson(field) && result[field.name] != null) {
       const value = result[field.name];
@@ -599,7 +626,8 @@ export function serializeJsonFields(
 ): Record<string, unknown> {
   const result = { ...data };
 
-  for (const field of fields) {
+  // The fields stored on the row, those inside a group with no name among them (`rowFieldsOf`).
+  for (const field of rowFieldsOf(fields)) {
     if (!("name" in field) || !field.name) continue;
 
     if (shouldTreatAsJson(field) && result[field.name] != null) {
@@ -622,7 +650,8 @@ export function normalizeUploadFields(
   data: Record<string, unknown>,
   fields: FieldConfig[]
 ): void {
-  for (const field of fields) {
+  // The fields stored on the row, those inside a group with no name among them (`rowFieldsOf`).
+  for (const field of rowFieldsOf(fields)) {
     if (field.type !== "upload") continue;
     if (!("name" in field) || !field.name) continue;
 

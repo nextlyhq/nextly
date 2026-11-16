@@ -48,7 +48,7 @@ import {
 } from "nextly/config";
 import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { COMPONENTS_SLUG } from "../collections/components";
 import { LAYOUTS_SLUG } from "../collections/layouts";
@@ -58,6 +58,7 @@ import {
   type ComponentDeleteResult,
 } from "../component-delete/contract";
 import { BLOCKS_TYPE } from "../fields/blocksField";
+import { COMPONENT_DELETED_REASON } from "../host-rewrite/service";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
 import { COMPONENT_DELETE_JOB } from "../component-delete/sweep";
@@ -126,6 +127,25 @@ interface Switches {
   /** Run once, on the next read of a component that a read hook sees. */
   onComponentRead?: () => Promise<void>;
   /**
+   * Hold the next Layout write with this title after the page builder's own
+   * checks before the write: a Layout save that has passed them.
+   */
+  holdLayoutBeforeWrite?: {
+    title: string;
+    reached: () => void;
+    release: Promise<void>;
+  };
+  /**
+   * Hold the next Layout write with this title inside its transaction, after
+   * the page builder's own handlers there: a Layout save that has judged its
+   * components and not committed yet.
+   */
+  holdLayoutInTransaction?: {
+    title: string;
+    reached: () => void;
+    release: Promise<void>;
+  };
+  /**
    * What each localized brief save's `beforeChange` hook was told it moves
    * from: the main row's status and core's `storedStatus`.
    */
@@ -168,6 +188,23 @@ function harness(switches: Switches): PluginDefinition {
         if (run === undefined) return;
         switches.onComponentRead = undefined;
         await run();
+      });
+      // Registered after the page builder's, so each runs after its checks.
+      ctx.hooks.on("beforeChange", LAYOUTS_SLUG, async context => {
+        const hold = switches.holdLayoutBeforeWrite;
+        const title = (context as { data?: { title?: unknown } }).data?.title;
+        if (hold === undefined || title !== hold.title) return;
+        switches.holdLayoutBeforeWrite = undefined;
+        hold.reached();
+        await hold.release;
+      });
+      ctx.hooks.onInTransaction(LAYOUTS_SLUG, async write => {
+        const hold = switches.holdLayoutInTransaction;
+        const title = (write.data as { title?: unknown } | undefined)?.title;
+        if (hold === undefined || title !== hold.title) return;
+        switches.holdLayoutInTransaction = undefined;
+        hold.reached();
+        await hold.release;
       });
       ctx.hooks.on("afterRead", LAYOUTS_SLUG, async () => {
         const run = switches.onLayoutRead;
@@ -637,22 +674,40 @@ describe.each(getConfiguredTestDialects())(
       return answered;
     }
 
-    /** A field group made as the admin makes one: through its own route. */
+    /**
+     * A field group made as the admin makes one: through its own route, on a
+     * development server. There a Builder save runs its migration at once, so
+     * the group's table exists for the Single's save that follows. Anywhere
+     * else the save only writes the migration, for the deploy's
+     * `nextly migrate` to apply, and the table would not exist yet.
+     */
     async function adminGroup(cookie: string, fields: unknown[]) {
       const handlers = createDynamicHandlers();
-      const response = await handlers.POST(
-        new Request(`${ORIGIN}/api/field-groups`, {
-          method: "POST",
-          headers: {
-            cookie: `${cookie}; nextly_csrf=${CSRF}`,
-            "x-csrf-token": CSRF,
-            origin: ORIGIN,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({ slug: ADMIN_GROUP, label: "Promo", fields }),
-        }),
-        { params: Promise.resolve({ params: ["field-groups"] }) }
-      );
+      vi.stubEnv("NODE_ENV", "development");
+      let response: Response;
+      try {
+        response = await handlers.POST(
+          new Request(`${ORIGIN}/api/field-groups`, {
+            method: "POST",
+            headers: {
+              cookie: `${cookie}; nextly_csrf=${CSRF}`,
+              "x-csrf-token": CSRF,
+              origin: ORIGIN,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              slug: ADMIN_GROUP,
+              label: "Promo",
+              fields,
+            }),
+          }),
+          { params: Promise.resolve({ params: ["field-groups"] }) }
+        );
+      } finally {
+        // Only the save runs as development: the delete under test runs as
+        // the rest of the file does.
+        vi.unstubAllEnvs();
+      }
       expect(response.status, await response.clone().text()).toBe(201);
     }
 
@@ -856,9 +911,12 @@ describe.each(getConfiguredTestDialects())(
       expect((await call(cookie, cardId, "GET")).item.status).toBe("idle");
     });
 
-    it("keeps the component while a page holds unpublished changes", async () => {
-      const { t, cookie } = await boot();
-      const cardId = await card(t);
+    /** A published page placing `cardId`, with an edit saved as a pending draft. */
+    async function pageWithDraft(
+      t: TestNextly,
+      cardId: string,
+      draft: Node[]
+    ): Promise<string> {
       const created = await t.nextly.create({
         collection: "pages",
         data: {
@@ -874,59 +932,122 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "pages",
         id: pageId,
-        data: {
-          content: pageDoc([copyOf("i1", cardId), heading("d", "Draft edit")]),
-          _overwrite: true,
-        },
+        data: { content: pageDoc(draft), _overwrite: true },
         overrideAccess: true,
       });
+      return pageId;
+    }
 
-      const ended = await deleteToTheEnd(cookie, cardId);
-
-      expect(ended.item.status, JSON.stringify(ended.body)).toBe("partly-done");
-      expect(ended.item.left).toEqual([
-        expect.objectContaining({
-          document: expect.objectContaining({ slug: "pages", id: pageId }),
-          reason: "pending-draft",
-        }),
-      ]);
-      // The draft was converted; the live row keeps its copy, and so the
-      // component is kept, with the fence down.
-      expect(copies(await nodesOf(t, "pages", pageId, true), cardId)).toBe(0);
-      expect(copies(await nodesOf(t, "pages", pageId), cardId)).toBe(1);
-      expect(await exists(t, cardId)).toBe(true);
-      expect((await call(cookie, cardId, "GET")).item.status).toBe("idle");
-    });
-
-    it("keeps the component while a page's pending draft has already removed it, as a pending draft", async () => {
-      const { t, cookie } = await boot();
-      const cardId = await card(t);
-      const created = await t.nextly.create({
-        collection: "pages",
-        data: {
-          title: "Live",
-          slug: `live-${String(Math.random()).slice(2, 10)}`,
-          status: "published",
-          content: pageDoc([copyOf("i1", cardId)]),
-        },
-        overrideAccess: true,
-      });
-      const pageId = String(created.item.id);
-      // A pending draft without the copy: the delete has nothing to write
-      // there, and the live row's copy waits for the draft to be published.
-      await t.nextly.update({
+    /** A page as its editor reads it: its working draft, when it has one. */
+    async function draftRow(
+      t: TestNextly,
+      pageId: string
+    ): Promise<Record<string, unknown>> {
+      return (await t.nextly.findByID({
         collection: "pages",
         id: pageId,
-        data: {
-          content: pageDoc([heading("d", "Draft edit")]),
-          _overwrite: true,
-        },
         overrideAccess: true,
-      });
+        status: "all",
+        depth: 0,
+        draft: true,
+      })) as unknown as Record<string, unknown>;
+    }
+
+    /** The field rewrites a page's history records. */
+    async function rewritesOf(
+      t: TestNextly,
+      pageId: string
+    ): Promise<Record<string, unknown>[]> {
+      const { items } = await t.nextly.contentEvents.list({
+        subject: { kind: "collection", slug: "pages", id: pageId },
+      } as never);
+      return (items as unknown as Record<string, unknown>[]).filter(
+        event => event.kind === "field-rewritten"
+      );
+    }
+
+    it("converts a published page's live copy and its pending draft together, the draft still a draft, then deletes the component", async () => {
+      const { t, cookie } = await boot();
+      const cardId = await card(t);
+      const pageId = await pageWithDraft(t, cardId, [
+        copyOf("i1", cardId),
+        heading("d", "Draft edit"),
+      ]);
+      // POPULATION CONTROL: the edit is held as a draft, not live.
+      expect((await draftRow(t, pageId))._isWorkingDraft).toBe(true);
+      expect(texts(await nodesOf(t, "pages", pageId))).toHaveLength(1);
 
       const ended = await deleteToTheEnd(cookie, cardId);
 
-      // Left for its draft, not refused as a write the person may not make.
+      expect(ended.item.status, JSON.stringify(ended.body)).toBe("done");
+      // The live copy holds plain blocks now, and so does the draft, which is
+      // still the author's draft with their edit in it.
+      const live = await nodesOf(t, "pages", pageId);
+      expect(copies(live, cardId)).toBe(0);
+      expect(texts(live)).toEqual(["Card title"]);
+      const draft = await nodesOf(t, "pages", pageId, true);
+      expect(copies(draft, cardId)).toBe(0);
+      expect(texts(draft)).toEqual(["Card title", "Draft edit"]);
+      expect(await draftRow(t, pageId)).toMatchObject({
+        _isWorkingDraft: true,
+        status: "published",
+      });
+      // One rewrite in the history, naming the Page Builder and why.
+      expect(await rewritesOf(t, pageId)).toEqual([
+        expect.objectContaining({
+          actorKind: "person",
+          note: COMPONENT_DELETED_REASON,
+          payload: expect.objectContaining({
+            field: "content",
+            copies: ["live", "draft"],
+            plugin: PAGE_BUILDER_PLUGIN_NAME,
+          }),
+        }),
+      ]);
+      expect(await exists(t, cardId)).toBe(false);
+    });
+
+    it("converts the live copy of a page whose pending draft already removed it, leaving the draft as it is", async () => {
+      const { t, cookie } = await boot();
+      const cardId = await card(t);
+      const pageId = await pageWithDraft(t, cardId, [
+        heading("d", "Draft edit"),
+      ]);
+
+      const ended = await deleteToTheEnd(cookie, cardId);
+
+      expect(ended.item.status, JSON.stringify(ended.body)).toBe("done");
+      expect(copies(await nodesOf(t, "pages", pageId), cardId)).toBe(0);
+      expect(texts(await nodesOf(t, "pages", pageId, true))).toEqual([
+        "Draft edit",
+      ]);
+      expect(await draftRow(t, pageId)).toMatchObject({
+        _isWorkingDraft: true,
+      });
+      expect(await rewritesOf(t, pageId)).toEqual([
+        expect.objectContaining({
+          payload: expect.objectContaining({ copies: ["live"] }),
+        }),
+      ]);
+      expect(await exists(t, cardId)).toBe(false);
+    });
+
+    it("converts only the draft for a person who may not publish the page, and keeps the component until it is published", async () => {
+      const { t, anAuthor } = await boot();
+      const cardId = await card(t);
+      const pageId = await pageWithDraft(t, cardId, [
+        copyOf("i1", cardId),
+        heading("d", "Draft edit"),
+      ]);
+      const editor = await anAuthor("editor", [
+        "read-components",
+        "delete-components",
+        "read-pages",
+        "update-pages",
+      ]);
+
+      const ended = await deleteToTheEnd(editor, cardId);
+
       expect(ended.item.status, JSON.stringify(ended.body)).toBe("partly-done");
       expect(ended.item.left).toEqual([
         expect.objectContaining({
@@ -934,9 +1055,12 @@ describe.each(getConfiguredTestDialects())(
           reason: "pending-draft",
         }),
       ]);
+      // The draft was converted, as a save of it; the live row keeps its
+      // copy, and so the component is kept, with the fence down.
+      expect(copies(await nodesOf(t, "pages", pageId, true), cardId)).toBe(0);
       expect(copies(await nodesOf(t, "pages", pageId), cardId)).toBe(1);
+      expect(await rewritesOf(t, pageId)).toEqual([]);
       expect(await exists(t, cardId)).toBe(true);
-      expect((await call(cookie, cardId, "GET")).item.status).toBe("idle");
     });
 
     it("lets only the person who started a delete carry it on", async () => {
@@ -1251,6 +1375,184 @@ describe.each(getConfiguredTestDialects())(
         plan: { complete: true, next: null },
       });
     });
+    /** A Layout naming the component in its header, as the system saves it. */
+    const headerLayout = (t: TestNextly, title: string, componentId: string) =>
+      t.nextly.create({
+        collection: LAYOUTS_SLUG,
+        data: {
+          title,
+          slug: title.toLowerCase().replace(/[^a-z]+/g, "-"),
+          areas: [{ area: "header", component: componentId }],
+          status: "published",
+        },
+        overrideAccess: true,
+      });
+
+    /** The Layouts whose stored areas name the component. */
+    async function layoutsNaming(t: TestNextly, componentId: string) {
+      const found = await t.nextly.find({
+        collection: LAYOUTS_SLUG,
+        status: "all",
+        depth: 0,
+        overrideAccess: true,
+      });
+      return (found.items as { title?: unknown; areas?: unknown }[])
+        .filter(
+          row =>
+            Array.isArray(row.areas) &&
+            row.areas.some(
+              (area: { component?: unknown }) => area.component === componentId
+            )
+        )
+        .map(row => row.title);
+    }
+
+    /** The phase of the component's delete run, or null when none is open. */
+    async function runPhase(t: TestNextly, componentId: string) {
+      const rows = await t.adapter.select<{ phase: string }>(RUNS, {
+        where: {
+          and: [{ column: "componentId", op: "=", value: componentId }],
+        },
+      });
+      return rows[0]?.phase ?? null;
+    }
+
+    it("refuses a Layout save adding the component while its delete runs, and the delete still finishes", async () => {
+      const { t, cookie } = await boot();
+      const cardId = await card(t);
+      await note(t, "Holding", [copyOf("i1", cardId)]);
+      expect((await call(cookie, cardId, "POST", {})).item.status).toBe(
+        "running"
+      );
+
+      const refused = await headerLayout(t, "Late", cardId).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      const done = await deleteToTheEnd(cookie, cardId);
+
+      expect(refused).toMatchObject({ code: "VALIDATION_ERROR" });
+      expect(String((refused as Error).message)).not.toBe("");
+      expect(done.item.status, JSON.stringify(done.body)).toBe("done");
+      expect(await exists(t, cardId)).toBe(false);
+      expect(await layoutsNaming(t, cardId)).toEqual([]);
+    });
+
+    it("refuses a Layout save held past its checks that lands after the delete", async () => {
+      const switches: Switches = {};
+      const { t, cookie } = await boot(switches);
+      const cardId = await card(t);
+      let reached!: () => void;
+      const atHold = new Promise<void>(resolve => {
+        reached = resolve;
+      });
+      let release!: () => void;
+      switches.holdLayoutBeforeWrite = {
+        title: "Held",
+        reached,
+        release: new Promise<void>(resolve => {
+          release = resolve;
+        }),
+      };
+      // Checked before the delete starts, against a component that exists.
+      const save = headerLayout(t, "Held", cardId).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      await atHold;
+
+      const done = await deleteToTheEnd(cookie, cardId);
+      release();
+      const refused = await save;
+
+      expect(done.item.status, JSON.stringify(done.body)).toBe("done");
+      expect(refused).toMatchObject({ code: "VALIDATION_ERROR" });
+      expect(await exists(t, cardId)).toBe(false);
+      expect(await layoutsNaming(t, cardId)).toEqual([]);
+    });
+
+    // SQLite admits one writer at a time, so a Layout write open in its
+    // transaction holds every other write back and this order cannot arise.
+    it.skipIf(dialect === "sqlite")(
+      "waits for a Layout save open in its transaction before its last check, then keeps the component that Layout names",
+      async () => {
+        const switches: Switches = {};
+        const { t, cookie } = await boot(switches);
+        const cardId = await card(t);
+        // A Layout not using the card, so every scan of the Layouts reads a
+        // row and the read hook runs.
+        await t.nextly.create({
+          collection: LAYOUTS_SLUG,
+          data: {
+            title: "Plain",
+            slug: "plain",
+            areas: [],
+            status: "published",
+          },
+          overrideAccess: true,
+        });
+        let reached!: () => void;
+        const atHold = new Promise<void>(resolve => {
+          reached = resolve;
+        });
+        let release!: () => void;
+        switches.holdLayoutInTransaction = {
+          title: "Racing",
+          reached,
+          release: new Promise<void>(resolve => {
+            release = resolve;
+          }),
+        };
+        // The Layout save judges the card inside its transaction before the
+        // delete opens its run, and stays open.
+        const save = headerLayout(t, "Racing", cardId);
+        await atHold;
+        // Released at the delete's last check of the Layouts, once its run is
+        // at `deleting`: a delete not ordered after the save would have read
+        // the Layouts already and go on to delete the card. Released after a
+        // while otherwise, which is where a delete that waits for the save
+        // stands.
+        const atLastCheck = async (): Promise<void> => {
+          if ((await runPhase(t, cardId)) !== "deleting") {
+            switches.onLayoutRead = atLastCheck;
+            return;
+          }
+          release();
+          await save;
+        };
+        switches.onLayoutRead = atLastCheck;
+        const timer = setTimeout(() => release(), 2000);
+
+        // Stepped by hand: the step that reaches the component's own delete
+        // answers that delete's refusal.
+        let answered: Answer | undefined;
+        try {
+          for (let step = 0; step < 8; step += 1) {
+            answered = await call(cookie, cardId, "POST", {});
+            if (
+              answered.status !== 200 ||
+              !["preflight", "running"].includes(answered.item.status)
+            ) {
+              break;
+            }
+          }
+        } finally {
+          clearTimeout(timer);
+        }
+        await save;
+
+        expect(answered?.status, JSON.stringify(answered?.body)).toBe(409);
+        const refusal = answered?.body as
+          | { error?: { message?: string } }
+          | undefined;
+        expect(refusal?.error?.message).toContain(
+          'the Layout "Racing" uses it'
+        );
+        expect(await exists(t, cardId)).toBe(true);
+        expect(await layoutsNaming(t, cardId)).toEqual(["Racing"]);
+      }
+    );
+
     it("keeps the tombstone when a stale step of the same person is refused after the delete", async () => {
       const switches: Switches = {};
       const { t, cookie } = await boot(switches);

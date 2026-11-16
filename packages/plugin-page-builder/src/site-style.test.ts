@@ -7,6 +7,7 @@ import type {
 import { describe, expect, it } from "vitest";
 
 import {
+  removedSiteStyleOption,
   resolveSiteStyle,
   siteBreakpoints,
   siteSheet,
@@ -235,5 +236,59 @@ describe("siteSheet", () => {
       fonts: style.fonts,
       breakpoints: VIEWPORT_ONLY,
     });
+  });
+
+  it("answers the same sheet for the same style, so a draw from it can be kept", () => {
+    // The canvas, its regions and the entry page's miniature each keep their
+    // drawn page while its inputs keep their identity; a new sheet object per
+    // render made every one of them draw again for a selection or a keystroke.
+    const style: SiteStyleData = {
+      tokens: tokens([{ name: "color.primary", light: "#123456" }]),
+      breakpoints: VIEWPORT_ONLY,
+    };
+    expect(siteSheet(style)).toBe(siteSheet(style));
+    expect(siteSheet()).toBe(siteSheet());
+    expect(siteSheet(undefined)).toBe(siteSheet());
+  });
+
+  it("answers a new sheet for a new style", () => {
+    const style: SiteStyleData = { breakpoints: VIEWPORT_ONLY };
+    const changed: SiteStyleData = {
+      ...style,
+      classes: [cls("a", "card", 0)],
+    };
+    expect(siteSheet(changed)).not.toBe(siteSheet(style));
+    expect(siteSheet(changed)).toHaveProperty("classes", changed.classes);
+  });
+});
+
+describe("a spacing model left in a host's options or a stored document", () => {
+  it("reaches neither the resolved site style nor the sheet a page compiles from", () => {
+    // An untyped host, and a document an older release could have written:
+    // the engine then compiles every page with its default, container gaps.
+    const left = { spacingMode: "classic" } as never;
+    const resolved = resolveSiteStyle(left, left);
+    expect(resolved).not.toHaveProperty("spacingMode");
+    expect(siteSheet(resolved)).not.toHaveProperty("spacingMode");
+    // The control: a section that is stated does come through.
+    const stated = resolveSiteStyle(undefined, {
+      breakpoints: {
+        viewport: [{ id: "md", label: "Tablet", maxWidth: 1023 }],
+      },
+    } as never);
+    expect(stated).toHaveProperty("breakpoints");
+  });
+});
+
+describe("removedSiteStyleOption", () => {
+  it("names the removed option, and says it was removed, when it is passed", () => {
+    expect(removedSiteStyleOption({ spacingMode: "gaps" })).toMatch(
+      /siteStyle\.spacingMode.*removed/
+    );
+  });
+
+  it("says nothing for options without it", () => {
+    expect(removedSiteStyleOption(undefined)).toBeUndefined();
+    expect(removedSiteStyleOption({ tokens: { tokens: [] } })).toBeUndefined();
   });
 });

@@ -27,6 +27,7 @@ import {
   useQuery,
   useInfiniteQuery,
   useQueryClient,
+  type QueryClient,
   type UseQueryOptions,
   type UseQueryResult,
   type UseMutationResult,
@@ -35,13 +36,14 @@ import {
 } from "@tanstack/react-query";
 import { useCallback } from "react";
 
-import { toast } from "@admin/components/ui";
+import { toast } from "@admin/components/ui/toaster";
 import type { BulkResponse, PerItemError } from "@admin/lib/api/response-types";
 import {
   bulkDeleteMedia,
   deleteMedia,
   fetchMedia,
   getMediaById,
+  getMediaByIds,
   updateMedia,
   uploadMedia,
   createFolder,
@@ -305,23 +307,96 @@ function mediaItemQuery(mediaId: string): {
   };
 }
 
+/** Loads one media item for drawing; rejects for one that cannot be read. */
+type DrawnMediaLoader = (mediaId: string) => Promise<Media>;
+
 /**
- * How long a media item read for drawing stays fresh before it is read again.
- * A page drawn in the editor asks for each of its images whenever a block is
- * drawn afresh; within this time those asks are answered from the cache, and
- * an edit to an item through the library invalidates it at once.
+ * The longest id the media read by ids takes, as the server checks it: a
+ * longer one is refused, and would refuse the whole read with it.
  */
-const MEDIA_DRAWN_FRESH_MS = 60_000;
+const MEDIA_ID_MAX_LENGTH = 64;
+
+/**
+ * Whether one read by ids can carry `mediaId`: not empty, no longer than the
+ * server takes, and without the comma that separates ids. Any other is no
+ * media item's, and is answered missing on its own, so a malformed binding
+ * never blanks the other images it is read with.
+ */
+function readableMediaId(mediaId: string): boolean {
+  return (
+    mediaId !== "" &&
+    mediaId.length <= MEDIA_ID_MAX_LENGTH &&
+    !mediaId.includes(",")
+  );
+}
+
+/** Each query client's drawn-media loader, so every caller shares its reads. */
+const drawnMediaLoaders = new WeakMap<QueryClient, DrawnMediaLoader>();
+
+/**
+ * The drawn-media loader for `queryClient`: every item asked for before the
+ * next turn of the event loop is read in one request, whatever their number.
+ * It only groups the requests; caching, sharing a read in flight and reading
+ * again after an invalidation are the per-item query's.
+ */
+function drawnMediaLoaderOf(queryClient: QueryClient): DrawnMediaLoader {
+  const known = drawnMediaLoaders.get(queryClient);
+  if (known !== undefined) return known;
+  type Settle = { found: (media: Media) => void; missing: () => void };
+  let queued: Map<string, Settle> | null = null;
+
+  const readQueued = async (asked: Map<string, Settle>): Promise<void> => {
+    let found: Media[];
+    try {
+      found = await getMediaByIds([...asked.keys()]);
+    } catch {
+      // Every image asked for is drawn as missing, and asked for again on its
+      // next ask: one failed read must not stop a page being drawn.
+      found = [];
+    }
+    const byId = new Map(found.map(media => [media.id, media]));
+    for (const [id, settle] of asked) {
+      const media = byId.get(id);
+      if (media === undefined) settle.missing();
+      else settle.found(media);
+    }
+  };
+
+  const loader: DrawnMediaLoader = mediaId =>
+    new Promise<Media>((found, refuse) => {
+      if (!readableMediaId(mediaId)) {
+        refuse(new Error("not a media item id"));
+        return;
+      }
+      if (queued === null) {
+        queued = new Map();
+        // After the current turn, so every image a draw asks for in one pass,
+        // across its awaits, goes in the same request.
+        setTimeout(() => {
+          const asked = queued;
+          queued = null;
+          if (asked !== null) void readQueued(asked);
+        }, 0);
+      }
+      queued.set(mediaId, {
+        found,
+        missing: () => refuse(new Error("media item not readable")),
+      });
+    });
+  drawnMediaLoaders.set(queryClient, loader);
+  return loader;
+}
 
 /**
  * Read a media item by id, outside a component's render: for code that draws
  * a page and resolves its images as it goes.
  *
- * Through the same query as {@link useMediaItem}, so an item is fetched once
- * however many images name it, and a read in flight is shared rather than
- * repeated. Answers `null` for an item that cannot be read, so one missing
- * image does not stop a page being drawn. The function is stable for the
- * component's life.
+ * Every image asked for together is read in one request, whatever their
+ * number, into the same query as {@link useMediaItem}; a read in flight is
+ * shared rather than repeated, and what was read is kept for the editing
+ * session until the library invalidates media. Answers `null` for an item
+ * that cannot be read, so one missing image does not stop a page being
+ * drawn. The function is stable for the component's life.
  *
  * @experimental
  */
@@ -332,7 +407,12 @@ export function useMediaResolver(): (mediaId: string) => Promise<Media | null> {
       queryClient
         .fetchQuery<Media, Error, Media, readonly ["media", string]>({
           ...mediaItemQuery(mediaId),
-          staleTime: MEDIA_DRAWN_FRESH_MS,
+          queryFn: () => drawnMediaLoaderOf(queryClient)(mediaId),
+          // Kept for the editing session: an edit through the library
+          // invalidates media queries, and that is what reads one again.
+          staleTime: Infinity,
+          gcTime: Infinity,
+          retry: false,
         })
         .catch(() => null),
     [queryClient]

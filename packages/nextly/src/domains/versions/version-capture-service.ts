@@ -18,6 +18,7 @@ import {
 } from "../content-events/core-kinds";
 import { recordContentEvent } from "../content-events/record";
 
+import type { ChangedParts } from "./changed-parts";
 import type { VersionsDbApi } from "./db-api";
 import type { RecordedVersionStatus } from "./recorded-status";
 import { selectVersionsToPrune } from "./retention";
@@ -37,6 +38,8 @@ export interface CaptureInput {
   sourceVersionNo?: number | null;
   /** The version each restored field came from; see `restored-from`. */
   fieldSources?: Readonly<Record<string, number>> | null;
+  /** The parts this version changed; null or absent records them as unknown. */
+  changedParts?: ChangedParts | null;
   /**
    * Durable versions retained for this document; `false` or omitted leaves
    * history unbounded. Applied in the caller's transaction right after the
@@ -79,8 +82,9 @@ export class VersionCaptureService {
     const repo = new VersionsRepository(db);
     const { versionNo, retried } = await insertWithRetry(db, repo, input);
     // Trim history to the configured cap inside the caller's transaction. What
-    // is always kept (the newest version, each language's latest published one,
-    // named versions and restore lineage) is decided by selectVersionsToPrune.
+    // is always kept (the newest version, the latest published one of each
+    // language and of the shared part, named versions and restore lineage) is
+    // decided by selectVersionsToPrune, from the parts each row records.
     if (typeof input.maxPerDoc === "number") {
       // After a lost race the scan reads with a lock too: on MySQL a plain read
       // answers from the snapshot the first allocation took, which lacks the
@@ -207,6 +211,7 @@ async function insertWithRetry(
           locale: input.locale ?? null,
           sourceVersionNo: input.sourceVersionNo ?? null,
           fieldSources: input.fieldSources ?? null,
+          changedParts: input.changedParts ?? null,
           createdBy: input.createdBy ?? null,
         })
       );

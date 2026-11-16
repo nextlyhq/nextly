@@ -542,6 +542,33 @@ describe("LayersPanel", () => {
     expect(rows().some(text => text.includes("Title"))).toBe(false);
   });
 
+  it("shows the whole tree again, with the rows open before, once a search that matched nothing is cleared", async () => {
+    renderPanel();
+    // The author opens the Hero box: its Title row shows.
+    const hero = screen
+      .getAllByRole("treeitem")
+      .find(element => (element.textContent ?? "").includes("Hero"));
+    if (hero === undefined) throw new Error("the Hero row is missing");
+    React.act(() => {
+      fireEvent.keyDown(hero, { key: "ArrowRight" });
+    });
+    expect(rows()).toHaveLength(3);
+    const search = screen.getByLabelText("Search layers");
+
+    React.act(() => {
+      fireEvent.change(search, { target: { value: "zzz" } });
+    });
+    expect(rows()).toEqual([]);
+
+    React.act(() => {
+      fireEvent.change(search, { target: { value: "" } });
+    });
+
+    // Every row again, Hero still open, without reopening the panel.
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    expect(rows().some(text => text.includes("Title"))).toBe(true);
+  });
+
   it("says so when nothing matches, rather than showing an empty tree", () => {
     renderPanel();
 
@@ -577,6 +604,36 @@ describe("LayersPanel", () => {
     expect(screen.getAllByRole("treeitem")[0]?.textContent ?? "").toMatch(
       /locked/i
     );
+  });
+
+  it("names a block marked never to be quoted as not quoted in search, to a screen reader too", () => {
+    render(
+      <Host
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              node("a", "core/section", {
+                name: "Pricing table",
+                nosnippet: true,
+              }),
+              node("b", "core/section", { name: "Questions" }),
+            ],
+          } as BlockDocument
+        }
+      />
+    );
+    register();
+
+    expect(
+      screen.getByRole("treeitem", {
+        name: /Pricing table.*not quoted in search/i,
+      })
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("treeitem", { name: /Questions/ }).textContent
+    ).not.toMatch(/quoted/i);
   });
 
   it("names a row inside a locked block as locked BY that block, quieter than its own", () => {

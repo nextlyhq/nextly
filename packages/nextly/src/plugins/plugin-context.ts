@@ -99,7 +99,10 @@ import {
   afterCommit as holdUntilCommit,
   runAdapterTransaction,
 } from "../shared/lib/run-adapter-transaction";
-import { secretGenerations } from "../shared/lib/secret-generations";
+import {
+  generationsCurrentFirst,
+  secretGenerations,
+} from "../shared/lib/secret-generations";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import type { AdminPlacement } from "./admin-placement";
@@ -116,6 +119,7 @@ import {
   type PluginDatabase,
   type PluginDatabaseDeps,
   type PluginTransaction,
+  type PluginTransactionBounds,
   type PluginTransactionHandles,
 } from "./database/plugin-database";
 import { linkedTransaction } from "./database/plugin-transaction-link";
@@ -184,6 +188,7 @@ import {
   createPluginReceivedWebhooks,
   type ReceivedWebhooksAdapter,
 } from "./security/received-webhooks";
+import { isWellFormed } from "./security/well-formed";
 import type { PluginSelf } from "./self";
 import { resolvePluginSelf } from "./self";
 import { methodFacade } from "./service-facade";
@@ -206,6 +211,7 @@ export type {
   PluginDatabase,
   PluginInsert,
   PluginTransaction,
+  PluginTransactionBounds,
 } from "./database/plugin-database";
 
 // ============================================================
@@ -715,14 +721,14 @@ export type QueuedEmailChangeHandler = (
   change: QueuedEmailChange,
   context: { db: PluginTransaction; transaction: PluginCollectionTransaction }
 ) => void | Promise<void>;
-/** @experimental `ctx.services.versions`. */
+/** `ctx.services.versions`. */
 export type PluginVersionsService = Pick<
   VersionsService,
   (typeof PLUGIN_VERSIONS_READS)[number]
 > &
   PluginVersionWrites & {
     /**
-     * @experimental A subject's content events (a document's or a release's),
+     * A subject's content events (a document's or a release's),
      * filtered by kind and part, newest first, as `{ items, meta }`; the next
      * page passes the last item's id as `before`. Runs as the system unless
      * `opts` names a user (`as: "user"`), who is then judged as REST judges them.
@@ -877,7 +883,7 @@ export interface PluginContext {
     /** Email service for sending emails via templates and providers */
     email: PluginEmailService;
     /**
-     * @experimental Read-only content version history (list/get), and a
+     * Read-only content version history (list/get), and a
      * subject's content events (`listEvents`). Restore and diff arrive in
      * later stages.
      */
@@ -1599,6 +1605,28 @@ export interface PluginDefinition<W extends AnyWidget = AnyWidget> {
   ) => Promise<void> | void;
 
   /**
+   * @experimental Runs after a completed `nextly migrate` (and
+   * `nextly migrate:fresh`): every migrate that leaves nothing pending, after
+   * its schema, access and other post-schema steps. Never at a boot, never in
+   * a dry run, and not when `--step` leaves migrations pending.
+   *
+   * The place for work a deploy owes once the schema is in step and that no
+   * request should wait for, such as filling an index for content that
+   * existed before it. `run.applied` counts the migrations this run applied,
+   * 0 when it found nothing to apply: the hook runs either way.
+   *
+   * It runs after migrate's lock is released, so two migrates (or a migrate
+   * and a running app) can run it at the same time: it must be idempotent and
+   * safe when run twice at once. A throw makes the command exit non-zero once
+   * every plugin's hook has run; the schema it applied stays applied, and
+   * running `nextly migrate` again runs the hook again.
+   */
+  onMigrate?: (
+    context: PluginContext,
+    run: { applied: number }
+  ) => Promise<void> | void;
+
+  /**
    * @public Teardown on shutdown / HMR / test teardown.
    * Invocation is wired.
    */
@@ -1668,6 +1696,16 @@ export type {
 export function definePlugin<W extends AnyWidget = AnyWidget>(
   definition: PluginDefinition<W>
 ): PluginDefinition<W> {
+  // A plugin's name keys what it stores (its secrets, digests and settings). A name holding a lone
+  // surrogate encodes to UTF-8 as a replacement character, so two such names would key alike and
+  // reach each other's values: refused here, where every keyed use of the name begins.
+  if (typeof definition.name === "string" && !isWellFormed(definition.name)) {
+    throw NextlyError.configuration({
+      logMessage:
+        "A plugin's name must be well-formed Unicode: it holds a lone surrogate, which would key its stored values alike with another name's.",
+      logContext: { reason: "plugin-name-ill-formed" },
+    });
+  }
   const withRename: PluginDefinition<W> = {
     ...definition,
     // Framework remap: returns a NEW definition with the rename map
@@ -1943,6 +1981,14 @@ function buildPluginDatabase(
     // On SQLite it also runs marked as a plugin transaction, as `raw`'s does:
     // a service called inside nests as a savepoint, defers what follows its
     // write until the commit, and refuses what a rollback could not undo.
+    // Through the adapter, which keeps the bounds for the calling flow, so
+    // the transactions the core services open inside `work` take them too.
+    withTransactionBounds: (bounds, work) => {
+      const transactions = adapter();
+      return transactions.withTransactionBounds === undefined
+        ? work()
+        : transactions.withTransactionBounds(bounds, work);
+    },
     transaction: (fn, options) => {
       const run = (tx: AdapterTransactionHandles) => fn(handlesOf(tx));
       const transactions = adapter();
@@ -2004,6 +2050,15 @@ export interface AdapterTransactions
     work: (tx: AdapterTransactionHandles) => Promise<T>,
     /** The isolation and access mode, where the caller asked for one. */
     options?: TransactionOptions
+  ) => Promise<T>;
+  /**
+   * Run work with every outermost transaction it opens bounded by the
+   * database (the adapter's `withTransactionBounds`); absent on an adapter
+   * that offers none, where the work runs as given.
+   */
+  withTransactionBounds?: <T>(
+    bounds: PluginTransactionBounds,
+    work: () => Promise<T>
   ) => Promise<T>;
   /**
    * The pooled Drizzle handle, relations-enabled when given a config. Used
@@ -2989,7 +3044,15 @@ export function createPluginContext(
 
   return {
     services: {
-      collections: wrapCollectionsForPlugin(collectionService),
+      // Bound to this plugin's boot name, so what its services record names
+      // it, whatever the plugin itself says. A rewrite of a Single goes to
+      // the Singles service, resolved on its first use.
+      collections: wrapCollectionsForPlugin(
+        collectionService,
+        undefined,
+        pluginName,
+        () => getServiceFn("singleEntryService")
+      ),
       // The Singles service is resolved on the first own-Single read, for
       // the same reason `versions` and `singles` below are resolved on
       // access: a context built by a caller that never reads one asks
@@ -3216,8 +3279,13 @@ export function createPluginContext(
         adapter: () => asSecretsAdapter(getServiceFn("adapter")),
         // Every generation, the unkeyed one included: a secret minted before
         // NEXTLY_SECRET was set stays readable while '[null]' keeps it.
+        // The current generation first, the unkeyed one when no NEXTLY_SECRET is set, as the
+        // helper writes with the head of this list.
         secrets: () =>
-          secretGenerations(env.NEXTLY_SECRET, env.NEXTLY_SECRET_PREVIOUS),
+          generationsCurrentFirst(
+            env.NEXTLY_SECRET,
+            env.NEXTLY_SECRET_PREVIOUS
+          ),
       }),
     },
     // Kept within this plugin's name, which decides the types it may record.

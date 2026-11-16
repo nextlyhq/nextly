@@ -59,26 +59,34 @@ const ANSWERS: [string, SeoAnswer][] = [
   ],
   ["no title or description", { robots: LISTED }],
   [
-    "a title and a description past what Google shows",
+    "a title and a description wider than Google shows",
     {
-      title: text("t".repeat(61)),
-      description: text("d".repeat(161)),
+      title: text("W".repeat(40)),
+      description: text("W".repeat(70)),
       robots: LISTED,
     },
   ],
   [
-    "a title at the limit, in emoji, two UTF-16 units each",
+    "a title of narrow letters past 60 characters that still fits",
     {
-      title: text("😀".repeat(60)),
+      title: text("i".repeat(120)),
       description: text("A walk."),
       robots: LISTED,
     },
   ],
   [
-    "a description at the limit, in emoji",
+    "a title at the width, in emoji, two UTF-16 units each",
+    {
+      title: text("😀".repeat(30)),
+      description: text("A walk."),
+      robots: LISTED,
+    },
+  ],
+  [
+    "a description past the width, in emoji",
     {
       title: text("Harbour"),
-      description: text("😀".repeat(160)),
+      description: text("😀".repeat(70)),
       robots: LISTED,
     },
   ],
@@ -100,7 +108,7 @@ describe("the title and description checks the tab and the list share", () => {
       "noTitle",
       "noDescription",
     ]);
-    expect(tabCounts({ title: text("t".repeat(61)), robots: LISTED })).toEqual([
+    expect(tabCounts({ title: text("W".repeat(40)), robots: LISTED })).toEqual([
       "longTitle",
       "noDescription",
     ]);

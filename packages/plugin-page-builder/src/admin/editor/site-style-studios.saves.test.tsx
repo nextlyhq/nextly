@@ -95,7 +95,6 @@ vi.mock("../site-style-client", () => {
   });
   return {
     useSaveSiteStyle: () => ({ save, reserve, reread }),
-    useSaveSpacingMode: () => ({ save: async () => ({ saved: true }) }),
     useHeldSiteStyle: () => ({ extend: () => {}, release: async () => {} }),
     useFontCatalogueClient: () => ({
       load: async () => ({ families: [], previewBase: "", fetchedAt: "" }),
@@ -122,8 +121,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   usePluginClientConfig: () => undefined,
 }));
 
-const { FontsPanelWithUpload, TokensStudio, VariablesTab, useClassSurface } =
-  await import("./site-style-studios");
+const { TokensStudio, VariablesTab, useClassSurface } = await import(
+  "./site-style-studios"
+);
+const { FontsPanelWithUpload } = await import("./site-style-fonts");
 
 const brand = {
   name: "color.brand",

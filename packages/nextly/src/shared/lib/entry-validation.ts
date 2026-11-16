@@ -275,7 +275,15 @@ function rule(field: ValidatableField, key: string): unknown {
   return nested?.[key];
 }
 
-function numberRule(field: ValidatableField, key: string): number | undefined {
+/**
+ * A field's numeric rule `key`, in either spelling (on the field or under
+ * `validation`). Exported so a caller deciding whether a field can be left
+ * empty reads the same rule this validator enforces.
+ */
+export function numberRule(
+  field: ValidatableField,
+  key: string
+): number | undefined {
   const v = rule(field, key);
   return typeof v === "number" ? v : undefined;
 }
@@ -635,7 +643,8 @@ function isEmpty(value: unknown): boolean {
   );
 }
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// The email field's rule, which a type change into an email field asks of each value too.
+export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * Extract select/radio option values, tolerating both stored shapes:
@@ -643,7 +652,8 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * `options` storage-object (whose choices, when present, ride the same
  * key as an array).
  */
-function selectOptionValues(field: ValidatableField): string[] {
+// The option values a value must be one of, which a type change into a choice asks too.
+export function selectOptionValues(field: ValidatableField): string[] {
   const raw = field.options;
   if (!Array.isArray(raw)) return [];
   return raw

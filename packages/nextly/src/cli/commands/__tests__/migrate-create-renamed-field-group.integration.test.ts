@@ -13,7 +13,10 @@
  * Covered: a single field group on a collection, a repeatable dynamic zone (blocks) whose list of
  * groups is reordered in the same change, a field group nested inside another field group, and a
  * Single sharing the renamed field's group table without renaming its own field, whose rows the
- * move must leave alone. Run non-interactively with `--accept-renames`, as CI runs it.
+ * move must leave alone. Also a rename whose old name is taken in the same change by a field of
+ * another kind, as the SEO plugin's `seo` group takes it when a site moves its own `seo` field
+ * group to `legacySeo` while installing the plugin. Run non-interactively with
+ * `--accept-renames`, as CI runs it.
  *
  * Each run owns its database, reached by the commands through `DATABASE_URL` as an app's would: a
  * file on SQLite, a scratch database on the servers.
@@ -33,6 +36,7 @@ import {
   defineFieldGroup,
   defineSingle,
   fieldGroup,
+  group,
   text,
 } from "../../../config";
 import { createAdapter } from "../../../database/factory";
@@ -340,6 +344,126 @@ describe.each(getConfiguredTestDialects())(
         ["comp_rk_hero.cta", "dc_rk_posts.layout"].sort()
       );
       expect(await readBack(back.app, V1, id)).toEqual(stored);
+    });
+  }
+);
+
+/**
+ * The posts' `seo` field group renamed to `legacySeo`, and a new `seo` added beside it: the SEO
+ * plugin's group as its `extend` lands on the type, stored on the parent row, holding no rows of
+ * the old group. The old name is on both sides, so a comparison by name alone sees no field group
+ * removed and offers no rename.
+ */
+function pluginDeclarations(renamed: boolean) {
+  const fieldGroups = [
+    defineFieldGroup({ slug: "rk_seo", fields: [text({ name: "metaTitle" })] }),
+  ];
+  const collections = [
+    defineCollection({
+      slug: "rk_posts",
+      fields: [
+        text({ name: "title" }),
+        ...(renamed
+          ? [
+              fieldGroup({ name: "legacySeo", component: "rk_seo" }),
+              group({ name: "seo", fields: [text({ name: "title" })] }),
+            ]
+          : [fieldGroup({ name: "seo", component: "rk_seo" })]),
+      ],
+    }),
+  ];
+  return { fieldGroups, collections, singles: [] };
+}
+
+describe.each(getConfiguredTestDialects())(
+  "a field group renamed while another field takes its name keeps its values (%s)",
+  dialect => {
+    it("re-keys the rows to the new name and adds the new field, and migrate:down keys them back", async () => {
+      const url = await openDatabase(dialect);
+      await start(dialect, url, {});
+      const v1 = pluginDeclarations(false);
+      const v2 = pluginDeclarations(true);
+      loaded.config = defineConfig({
+        ...v1,
+        db: { migrationsDir: "./migrations" },
+      });
+      await createAndApply("create_posts");
+
+      const first = await start(dialect, url, v1);
+      const created = await first.app.nextly.create({
+        collection: "rk_posts" as never,
+        data: { title: "P", seo: { metaTitle: "Kept title" } } as never,
+      });
+      const id = String((created.item as { id: unknown }).id);
+
+      loaded.config = defineConfig({
+        ...v2,
+        db: { migrationsDir: "./migrations" },
+      });
+      await createAndApply("rename_and_add_seo", { acceptRenames: true });
+
+      const renamed = await start(dialect, url, v2);
+      const post = (await renamed.app.nextly.findByID({
+        collection: "rk_posts" as never,
+        id: id as never,
+      })) as Record<string, unknown>;
+      // The separating read: without the move the rows stay keyed `seo`, and this is null.
+      expect(
+        (post.legacySeo as { metaTitle?: unknown } | null)?.metaTitle
+      ).toBe("Kept title");
+      expect(await keys(renamed.adapter, "comp_rk_seo")).toEqual([
+        "dc_rk_posts.legacySeo",
+      ]);
+      // The new field is stored and read on its own.
+      await renamed.app.nextly.update({
+        collection: "rk_posts" as never,
+        id: id as never,
+        data: { seo: { title: "New title" }, _overwrite: true } as never,
+      });
+      const updated = (await renamed.app.nextly.findByID({
+        collection: "rk_posts" as never,
+        id: id as never,
+      })) as Record<string, unknown>;
+      expect((updated.seo as { title?: unknown } | null)?.title).toBe(
+        "New title"
+      );
+      expect(
+        (updated.legacySeo as { metaTitle?: unknown } | null)?.metaTitle
+      ).toBe("Kept title");
+
+      const { upSql, downSql } = parseSqlSections(
+        await migrationFile("rename_and_add_seo")
+      );
+      expect(upSql).toMatch(/UPDATE\s+\S*comp_rk_seo/);
+      expect(downSql).toMatch(/UPDATE\s+\S*comp_rk_seo/);
+
+      await shutdownServices().catch(() => {});
+      loaded.config = defineConfig({
+        ...v1,
+        db: { migrationsDir: "./migrations" },
+      });
+      const down = command();
+      // Rolling back removes the new field's column, which is the consent the run names.
+      expect(
+        await exiting(() =>
+          runMigrateDown(
+            { cwd: dir, acceptDataLoss: "dc_rk_posts.seo" },
+            down.context
+          )
+        ),
+        down.said.join("\n")
+      ).toBeUndefined();
+      const back = await start(dialect, url, v1);
+      expect(await keys(back.adapter, "comp_rk_seo")).toEqual([
+        "dc_rk_posts.seo",
+      ]);
+      const restored = (await back.app.nextly.findByID({
+        collection: "rk_posts" as never,
+        id: id as never,
+      })) as Record<string, unknown>;
+      expect((restored.seo as { metaTitle?: unknown } | null)?.metaTitle).toBe(
+        "Kept title"
+      );
     });
   }
 );

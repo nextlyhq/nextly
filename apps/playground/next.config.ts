@@ -81,6 +81,14 @@ const nextConfig: NextConfig = {
   // Unset everywhere else, which leaves Next.js's own default.
   distDir: process.env.NEXT_DIST_DIR || ".next",
 
+  // Source maps for the browser's chunks, written only when a build is made
+  // for the admin bundle report (`NEXTLY_BROWSER_SOURCE_MAPS=1`): the report
+  // names the modules each chunk holds through them. Off otherwise, since
+  // they add to the build's time and size.
+  ...(process.env.NEXTLY_BROWSER_SOURCE_MAPS === "1"
+    ? { productionBrowserSourceMaps: true }
+    : {}),
+
   // The browser suite's own server turns Next.js's development indicator off.
   // In development the indicator's button is injected into every document the
   // app serves, the canvas's frame included, so a keyboard walk through the
@@ -185,6 +193,24 @@ const nextConfig: NextConfig = {
       // identity mismatch" that broke FormBuilder custom view registration.
       "@nextlyhq/ui": ["../../packages/ui/src/index.ts"],
       "@nextlyhq/admin": ["../../packages/admin/src/index.ts"],
+      // The SDK's admin entry re-exports this one. Aliased with the root, so
+      // a plugin page and the admin share one instance of every module.
+      "@nextlyhq/admin/kit": ["../../packages/admin/src/kit.ts"],
+      "@nextlyhq/admin/kit/core": ["../../packages/admin/src/kit/core.ts"],
+      "@nextlyhq/admin/kit/document": [
+        "../../packages/admin/src/kit/document.ts",
+      ],
+      "@nextlyhq/admin/kit/field-ui": [
+        "../../packages/admin/src/kit/field-ui.ts",
+      ],
+      "@nextlyhq/admin/kit/media": ["../../packages/admin/src/kit/media.ts"],
+      "@nextlyhq/admin/kit/plugin-parts": [
+        "../../packages/admin/src/kit/plugin-parts.ts",
+      ],
+      "@nextlyhq/admin/kit/table": ["../../packages/admin/src/kit/table.ts"],
+      "@nextlyhq/admin/kit/widgets": [
+        "../../packages/admin/src/kit/widgets.ts",
+      ],
       "@nextlyhq/admin/lib/component-registry": [
         "../../packages/admin/src/lib/plugins/component-registry.ts",
       ],

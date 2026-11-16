@@ -1,9 +1,12 @@
 import { describe, it, expect } from "vitest";
 
+import { restatedColumn } from "../../schema/pipeline/sql-templates/mysql-live-restate";
+
 import {
   buildCompanionCreateOnlySql,
   buildLocalizationUpSql,
   buildLocalizationUpStatements,
+  companionUpdatedAtDdl,
 } from "./generate-up";
 import type { CompanionMigrationSpec } from "./types";
 
@@ -164,11 +167,11 @@ describe("retained columns that were required", () => {
   it("restates the column to relax it on mysql, which has no direct form", () => {
     const statements = buildLocalizationUpStatements(spec("mysql"), options);
 
-    expect(
-      statements.some(
-        s => s.includes("MODIFY COLUMN `title`") && s.endsWith("NULL")
-      )
-    ).toBe(true);
+    // Restated from the database's own description of the column, so its default, comment,
+    // character set and collation stay as they are and only its nullability changes.
+    const restated = restatedColumn("dc_pages", "title", { nullable: true });
+    expect(statements).toEqual(expect.arrayContaining(restated));
+    expect(statements.join("\n")).not.toMatch(/MODIFY COLUMN `title` \w+ NULL/);
   });
 
   it("drops it on sqlite, which cannot change nullability at all", () => {
@@ -267,5 +270,17 @@ describe("guarding the seed, and only where a transition record exists", () => {
         `SELECT "id", 'en', "title", "body" FROM "dc_pages"`
     );
     expect(sql).toContain(`ALTER TABLE "dc_pages" DROP COLUMN "title"`);
+  });
+});
+
+// `_updated_at` is an instant compared with `nextly_versions.created_at`, which has a time zone on
+// PostgreSQL, so it keeps one though a date field's column no longer does.
+describe("a translation table's _updated_at", () => {
+  it("keeps the type nextly_versions.created_at has", () => {
+    expect(companionUpdatedAtDdl("postgresql")).toBe(
+      `"_updated_at" TIMESTAMPTZ`
+    );
+    expect(companionUpdatedAtDdl("mysql")).toBe("`_updated_at` DATETIME(3)");
+    expect(companionUpdatedAtDdl("sqlite")).toBe(`"_updated_at" INTEGER`);
   });
 });

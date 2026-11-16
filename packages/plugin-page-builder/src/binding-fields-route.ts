@@ -46,6 +46,7 @@ import {
   type PickerField,
   type PickerSource,
 } from "./binding-fields-contract";
+import { previewOf } from "./binding-preview";
 import { collectionNaming } from "./bindings-report/readable";
 import { labelOf } from "./collection-labels";
 import { PAGES_SLUG } from "./collections/pages";
@@ -88,9 +89,6 @@ const MOST_SINGLES = 50;
 const MOST_RELATIONS = 20;
 /** A date every read of an entry carries, whatever its declared fields. */
 const TIMESTAMPS: ReadonlySet<string> = new Set(["createdAt", "updatedAt"]);
-/** A preview's length, in characters, before it is cut. */
-const PREVIEW_LENGTH = 80;
-
 /** One entry or one Single, as a source is read. */
 export type FieldsRef =
   | { readonly collection: string; readonly id: string }
@@ -137,19 +135,6 @@ export interface BindingFieldsReads {
   }): Promise<{ readonly served: boolean; readonly label: string }>;
   /** The site settings, as every visitor reads them. */
   site(): Promise<Readonly<Record<string, unknown>>>;
-}
-
-/** A value's preview: text, a number or a yes-or-no, cut short; else none. */
-function previewOf(value: unknown): string | undefined {
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  if (typeof value !== "string") return undefined;
-  const text = value.trim();
-  if (text === "") return undefined;
-  return text.length > PREVIEW_LENGTH
-    ? `${text.slice(0, PREVIEW_LENGTH - 1)}…`
-    : text;
 }
 
 /** The id a relation's value names, populated or not. */
@@ -258,7 +243,10 @@ function pickerField(shape: BindingFieldShape, read: SourceRead): PickerField {
   const value = read.row[shape.name];
   const { publicShape, isPublic } = visibilityOf(shape, read);
   const draft = !sameJsonValue(value, read.published?.[shape.name]);
-  const preview = isPublic && !draft ? previewOf(value) : undefined;
+  // The value as the person editing reads it, a draft's included and marked
+  // as one: the read is their own, through core's gate, so a draft's value
+  // reaches only someone that gate lets read it.
+  const preview = isPublic ? previewOf(value) : undefined;
   const group = groupRead(shape, read, publicShape);
   return {
     ...own,
@@ -274,8 +262,8 @@ function pickerField(shape: BindingFieldShape, read: SourceRead): PickerField {
 /**
  * A relation's field as a visitor reaches it: through the relation, so not
  * public where the relation is not, and a draft's where the relation is a
- * draft's (it names another entry than the published one does), with no
- * value shown then.
+ * draft's (it names another entry than the published one does), its value
+ * still shown as the person editing reads it.
  */
 function throughRelation(
   inner: PickerField,
@@ -291,7 +279,7 @@ function throughRelation(
     ...withoutInside,
     public: isPublic,
     ...(isPublic && draft ? { draft: true as const } : {}),
-    ...(isPublic && !draft && preview !== undefined ? { preview } : {}),
+    ...(isPublic && preview !== undefined ? { preview } : {}),
     ...(inside === undefined
       ? {}
       : { fields: inside.map(field => throughRelation(field, relation)) }),
@@ -637,6 +625,7 @@ function directBindingFieldsReads(
  */
 export function bindingFieldsRoute(): {
   method: "POST";
+  checksAccess: true;
   path: string;
   noStore: true;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
@@ -644,6 +633,7 @@ export function bindingFieldsRoute(): {
   return {
     method: "POST",
     path: BINDING_FIELDS_ROUTE_PATH,
+    checksAccess: true, // The handler judges each caller.
     noStore: true,
     handler: async (req, ctx) => {
       const body = await readBodyWith(req, BindingFieldsBody, "binding fields");

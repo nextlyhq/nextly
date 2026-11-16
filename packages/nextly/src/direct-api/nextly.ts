@@ -51,8 +51,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { passwordCredentialDeps } from "../auth/credentials/credential-deps";
 import type { CredentialDeps } from "../auth/credentials/verify-credentials";
+import { readSessionRoles } from "../auth/session/read-session-roles";
 import { container } from "../di/container";
 import { isServicesRegistered } from "../di/service-access";
+import { buildAuditLogWriter } from "../domains/audit/audit-log-writer";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import { AuthService } from "../domains/auth/services/auth-service";
 import { PermissionService } from "../domains/auth/services/permission-service";
@@ -60,6 +62,7 @@ import type { RBACAccessControlService } from "../domains/auth/services/rbac-acc
 import { RolePermissionService } from "../domains/auth/services/role-permission-service";
 import { RoleService } from "../domains/auth/services/role-service";
 import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
+import type { FieldRewriteResult } from "../domains/versions/field-rewrite";
 import { NextlyError } from "../errors/nextly-error";
 import { assertBootMigrationsSettled } from "../init/boot-migrations-gate";
 import { startInFlight } from "../init/start-in-flight";
@@ -83,12 +86,13 @@ import type { SingleRegistryService } from "../services/singles/single-registry-
 import { UserAccountService } from "../services/users/user-account-service";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 import type { UserService } from "../services/users/user-service";
+import { assertPaginationIsComplete } from "../shared/base-registry-service";
 import { consoleLogger } from "../shared/types";
 
 import { installLegacyFieldGroupsNamespaceGuard } from "./legacy-field-groups-namespace";
 import * as authNs from "./namespaces/auth";
 import * as collectionsNs from "./namespaces/collections";
-import type { NextlyContext } from "./namespaces/context";
+import type { DirectLoginDeps, NextlyContext } from "./namespaces/context";
 import { runAsCaller, withLanguagesPinned } from "./namespaces/helpers";
 import {
   createAccessNamespace,
@@ -169,6 +173,10 @@ import type {
   SingleListResult,
   SingleSlug,
   UpdateArgs,
+  RewriteFieldArgs,
+  RewriteSingleFieldArgs,
+  PublishArgs,
+  PublishResult,
   UpdateSingleArgs,
   UserContext,
   VerifyEmailArgs,
@@ -293,9 +301,9 @@ export class Nextly implements NextlyContext {
   public readonly releases: ReleasesNamespace;
   /** A person's own notices. */
   public readonly notices: NoticesNamespace;
-  /** @experimental A document's history: list, read, compare, name, restore. */
+  /** A document's history: list, read, compare, name, restore. */
   public readonly versions: VersionsNamespace;
-  /** @experimental A subject's content events: a document's or a release's. */
+  /** A subject's content events: a document's or a release's. */
   public readonly contentEvents: ContentEventsNamespace;
   /** @experimental Recognising a plugin's kind of signed-in person. */
   public readonly principals: NextlyPrincipals;
@@ -312,25 +320,33 @@ export class Nextly implements NextlyContext {
       ...config,
     };
 
-    this.users = createUsersNamespace(this);
-    this.media = createMediaNamespace(this);
+    this.users = withLanguagesPinned(createUsersNamespace(this));
+    this.media = withLanguagesPinned(createMediaNamespace(this));
     // One language list per call, as the collection and Single methods have through
     // `runAsCaller`: a submission writes an entry, and a field group's change seeds its rows.
+    // Every namespace runs each call that way, with the stored schema version checked first, as a
+    // request does, so no namespace is a door around either.
     this.forms = withLanguagesPinned(createFormsNamespace(this));
     this.fieldGroups = withLanguagesPinned(createFieldGroupsNamespace(this));
-    this.email = createEmailNamespace(this);
-    this.emailProviders = createEmailProvidersNamespace(this);
-    this.emailTemplates = createEmailTemplatesNamespace(this);
-    this.userFields = createUserFieldsNamespace(this);
-    this.roles = createRolesNamespace(this);
-    this.permissions = createPermissionsNamespace(this);
-    this.access = createAccessNamespace(this);
-    this.apiKeys = createApiKeysNamespace(this);
-    this.jobs = createJobsNamespace();
-    this.releases = createReleasesNamespace(this);
-    this.notices = createNoticesNamespace();
-    this.versions = createVersionsNamespace(this);
-    this.contentEvents = createContentEventsNamespace(this);
+    this.email = withLanguagesPinned(createEmailNamespace(this));
+    this.emailProviders = withLanguagesPinned(
+      createEmailProvidersNamespace(this)
+    );
+    this.emailTemplates = withLanguagesPinned(
+      createEmailTemplatesNamespace(this)
+    );
+    this.userFields = withLanguagesPinned(createUserFieldsNamespace(this));
+    this.roles = withLanguagesPinned(createRolesNamespace(this));
+    this.permissions = withLanguagesPinned(createPermissionsNamespace(this));
+    this.access = withLanguagesPinned(createAccessNamespace(this));
+    this.apiKeys = withLanguagesPinned(createApiKeysNamespace(this));
+    this.jobs = withLanguagesPinned(createJobsNamespace());
+    this.releases = withLanguagesPinned(createReleasesNamespace(this));
+    this.notices = withLanguagesPinned(createNoticesNamespace());
+    this.versions = withLanguagesPinned(createVersionsNamespace(this));
+    this.contentEvents = withLanguagesPinned(
+      createContentEventsNamespace(this)
+    );
     this.principals = createNextlyPrincipals();
 
     // The instance its callers reach: only the collection and Single
@@ -416,6 +432,22 @@ export class Nextly implements NextlyContext {
       container.get<DrizzleAdapter>("adapter")
     );
     return this._passwordCredentialDeps;
+  }
+
+  /** Cached Direct API login dependencies, read through the container. */
+  private _directLoginDeps: DirectLoginDeps | null = null;
+
+  /** @internal */
+  public get directLoginDeps(): DirectLoginDeps {
+    // Resolved per call through the container, as the auth router resolves
+    // them, so a login made before the services finish registering reads the
+    // adapter that is registered when it runs, not one captured here.
+    this._directLoginDeps ??= {
+      fetchSessionRoles: userId =>
+        readSessionRoles(container.get<DrizzleAdapter>("adapter"), userId),
+      auditLog: buildAuditLogWriter(name => container.get(name)),
+    };
+    return this._directLoginDeps;
   }
 
   /** Cached UserAccountService — not registered in the DI container. */
@@ -592,6 +624,42 @@ export class Nextly implements NextlyContext {
   }
 
   /**
+   * @experimental Rewrite one field of an entry or a Single on its live copy
+   * and on every pending draft that holds it, without publishing, from the
+   * version the caller read. See `RewriteFieldArgs`.
+   */
+  rewriteField(
+    args: RewriteFieldArgs | RewriteSingleFieldArgs
+  ): Promise<MutationResult<FieldRewriteResult>> {
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.rewriteField(this, callArgs)
+    );
+  }
+
+  /**
+   * Publish the parts of one entry `args` chooses: some of its languages, or every one, and its
+   * shared part. With `describe`, say what publishing them would do, and change nothing.
+   *
+   * @experimental Until publishing per language is complete.
+   */
+  publish(args: PublishArgs): Promise<MutationResult<PublishResult>> {
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.publish(this, callArgs)
+    );
+  }
+
+  /**
+   * Unpublish the parts of one entry `args` chooses, or say what doing so would do.
+   *
+   * @experimental Until publishing per language is complete.
+   */
+  unpublish(args: PublishArgs): Promise<MutationResult<PublishResult>> {
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.unpublish(this, callArgs)
+    );
+  }
+
+  /**
    * Delete a document by ID or by `where` clause.
    *
    * where `item` carries the deleted `id`. The bulk-by-where path still
@@ -687,7 +755,10 @@ export class Nextly implements NextlyContext {
   }
 
   /** Fetch the content of every registered Single. */
-  findSingles(args: FindSinglesArgs = {}): Promise<SingleListResult> {
+  async findSingles(args: FindSinglesArgs = {}): Promise<SingleListResult> {
+    // Refused before the call's own work, the schema follow included: a call this refuses must not
+    // read the stored version or reload a definition first. A precondition, so it comes first.
+    assertPaginationIsComplete({ limit: args.limit, offset: args.offset });
     return runAsCaller(this.defaultConfig, args, callArgs =>
       singlesNs.findSingles(this, callArgs)
     );
@@ -703,12 +774,19 @@ export class Nextly implements NextlyContext {
    * that instance's site, as it reads its content: `readPublicSiteSettings`
    * from `nextly/runtime`, and the block page routes, read it through here.
    *
+   * Read from the row, never this process's kept copy: what this answers is
+   * cached outside the process, under the tag a settings save expires
+   * (`nextlySiteSettingsTags()`). When another instance saves, the refill
+   * after that expiry may be made here, and a copy read a moment before the
+   * save would be cached again until the next save. A page render asks once
+   * per request (the block renderer shares the read), as it always did.
+   *
    * @experimental
    */
   async publicSiteSettings(): Promise<PublicSiteSettings> {
     const settings = await container
       .get<GeneralSettingsService>("generalSettingsService")
-      .getSettings();
+      .getSettings({ fresh: true });
     return publicSiteSettingsOf(settings);
   }
 
@@ -966,6 +1044,15 @@ export const nextly = {
     (await requireNextlyOnceStarted()).create(args),
   update: async <TSlug extends CollectionSlug>(args: UpdateArgs<TSlug>) =>
     (await requireNextlyOnceStarted()).update(args),
+  /** Rewrite one field on an entry's or a Single's live copy and drafts. @experimental */
+  rewriteField: async (args: RewriteFieldArgs | RewriteSingleFieldArgs) =>
+    (await requireNextlyOnceStarted()).rewriteField(args),
+  /** Publish the chosen parts of one entry. @experimental */
+  publish: async (args: PublishArgs) =>
+    (await requireNextlyOnceStarted()).publish(args),
+  /** Unpublish the chosen parts of one entry. @experimental */
+  unpublish: async (args: PublishArgs) =>
+    (await requireNextlyOnceStarted()).unpublish(args),
   delete: async (args: DeleteArgs) =>
     (await requireNextlyOnceStarted()).delete(args),
   count: async (args: CountArgs) =>

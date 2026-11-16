@@ -11,6 +11,7 @@ import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-f
 import type { JsonValue as JobJsonValue } from "../direct-api/types/jobs";
 import type { GeneratedTypes } from "../direct-api/types/shared";
 import type { RegisteredEmailProvider } from "../domains/email/provider-definition";
+import type { WrittenDocument } from "../domains/email/written/document";
 import type { AnyJobDefinition } from "../domains/jobs/job-registry";
 import type { LimitRule } from "../domains/limits/limit-rules";
 import type { SchemaHook } from "../domains/schema/extension/draft";
@@ -208,8 +209,20 @@ export interface PluginEmailTemplate {
   name: string;
   /** Subject line; supports `{{variable}}` interpolation. */
   subject: string;
-  /** HTML body; supports `{{variable}}` interpolation. */
-  htmlContent: string;
+  /**
+   * HTML body; supports `{{variable}}` interpolation. Give this or `blocks`,
+   * never both.
+   */
+  htmlContent?: string;
+  /**
+   * @experimental The template written in blocks instead of HTML, as the
+   * admin's written editor stores it (`{ version: 1, blocks }`). Its HTML and
+   * plain text are written from the blocks, so give neither with it. Both or
+   * neither of `htmlContent` and `blocks`, blocks that don't pass the
+   * written rules, or `engine: "legacy"` with blocks (a written template is
+   * always Liquid) are refused at startup.
+   */
+  blocks?: WrittenDocument;
   plainTextContent?: string;
   /**
    * The variables the template uses, as core's own are declared; a plugin
@@ -227,6 +240,14 @@ export interface PluginEmailTemplate {
    * password").
    */
   description?: string;
+  /**
+   * @experimental What sends the template, each in a sentence the admin shows
+   * as one of its senders (for example "A customer asks to reset their
+   * password"). Shown with the settings that send it, such as a form's
+   * notification rules. Left out, an email the plugin owns reads "Not known:
+   * may be sent from code".
+   */
+  sentBy?: string[];
   /**
    * @experimental Mark a template that carries a secret: a sign-in, reset or
    * verification link or code. Such a template takes no `cc` or `bcc`, and
@@ -783,9 +804,11 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
    *
    * `target` names entities by slug, or, as a {@link ContentTypeScope}
    * (`@experimental`), every content type the site defines except the ones
-   * listed, including Schema Builder types made later. A scope never reaches a
-   * plugin's own types or Nextly's system ones, and leaves alone a type that
-   * already has a field of the same name rather than refusing to boot.
+   * listed, including Schema Builder types made later. A scope never reaches
+   * Nextly's system types, nor a plugin's own types apart from a collection
+   * marked `siteContent`, and leaves alone a type that already has a field of
+   * the same name rather than refusing to boot. `typesExtendedBy` says which
+   * types a field was added to.
    */
   extend?: Array<{
     target: string | string[] | ContentTypeScope;

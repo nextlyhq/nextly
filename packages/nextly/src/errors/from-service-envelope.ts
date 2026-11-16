@@ -40,6 +40,8 @@ export interface ServiceErrorEnvelope {
     field?: string;
     code?: string;
     message: string;
+    /** The language the issue is in, where it is about one language's own value. */
+    locale?: string;
   }>;
   /**
    * Whether the write this envelope reports committed before it failed. A
@@ -83,6 +85,9 @@ function validationFromEnvelope(
         path: e.path ?? e.field ?? "",
         code: e.code ?? "INVALID",
         message: e.message,
+        // An issue in one language keeps naming it, so a refusal of several languages says
+        // which language each issue is in.
+        ...(typeof e.locale === "string" ? { locale: e.locale } : {}),
       }))
     : [
         {

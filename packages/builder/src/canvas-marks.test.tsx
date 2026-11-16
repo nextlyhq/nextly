@@ -1534,6 +1534,40 @@ describe("the hovered block's mark", () => {
     expect(mark?.hasAttribute("data-hover-tag-inside")).toBe(false);
   });
 
+  it("says a block marked never to be quoted is not quoted in search", async () => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.getAttribute(NODE_ID_ATTRIBUTE) === "b") {
+          return new DOMRect(100, 100, 200, 50);
+        }
+        return new DOMRect(0, 0, 1000, 1000);
+      }
+    );
+    const marked: BlockDocument = {
+      ...leaves,
+      nodes: leaves.nodes.map(node =>
+        node.id === "b" ? { ...node, nosnippet: true } : node
+      ),
+    };
+    const { container } = render(
+      <HoveredBlockProvider>
+        <PointAt id="b" />
+        <Canvas
+          document={marked}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          overlay={
+            <CanvasMarks nameOf={id => (id === "b" ? "Section" : undefined)} />
+          }
+        />
+      </HoveredBlockProvider>
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(hoveredIn(container)).toHaveLength(1));
+    expect(hoveredIn(container)[0]?.getAttribute("data-hover-label")).toBe(
+      "Section · not quoted in search"
+    );
+  });
+
   it("moves its tag in from the screen's left edge on a block that starts left of it", async () => {
     // The canvas scrolled sideways: the block starts 300px left of what the
     // scroller shows, and its tag moves in by as much, onto the screen.
@@ -1613,6 +1647,105 @@ describe("the hovered block's mark", () => {
     await act(async () => undefined);
     await waitFor(() => expect(halosIn(container)).toHaveLength(1));
     expect(hoveredIn(container)).toHaveLength(0);
+  });
+
+  it("follows the selection moving onto and off the block pointed at", async () => {
+    // The pointer stays on "b" while the selection moves: no hover change
+    // arrives, so the hover's mark is right only if a selection change still
+    // measures it again.
+    const drawn = (selectedId: string) => (
+      <HoveredBlockProvider>
+        <PointAt id="b" />
+        <Canvas
+          document={leaves}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          selectedId={selectedId}
+          overlay={<CanvasMarks />}
+        />
+      </HoveredBlockProvider>
+    );
+    const { container, rerender } = render(drawn("a"));
+    await act(async () => undefined);
+    await waitFor(() => expect(hoveredIn(container)).toHaveLength(1));
+    expect(halosIn(container)).toHaveLength(1);
+
+    // Selected under the pointer: the ring alone.
+    rerender(drawn("b"));
+    await act(async () => undefined);
+    await waitFor(() => expect(hoveredIn(container)).toHaveLength(0));
+    expect(halosIn(container)).toHaveLength(1);
+
+    // Selected away again: the hover's mark is back.
+    rerender(drawn("c"));
+    await act(async () => undefined);
+    await waitFor(() => expect(hoveredIn(container)).toHaveLength(1));
+    expect(halosIn(container)).toHaveLength(1);
+  });
+
+  it("keeps the canvas's watchers, and measures only the block newly pointed at", async () => {
+    // Every size watcher the canvas's overlays make, and every block they
+    // ask to be told about.
+    const watching = { made: 0, observed: 0 };
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor() {
+          watching.made += 1;
+        }
+        observe() {
+          watching.observed += 1;
+        }
+        unobserve() {}
+        disconnect() {}
+      }
+    );
+    // Every block measured, by its id.
+    const measured = new Set<string>();
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        const id = this.getAttribute(NODE_ID_ATTRIBUTE);
+        if (id !== null) measured.add(id);
+        return new DOMRect(0, 0, 100, 50);
+      }
+    );
+    const drawn = (id: string | null) => (
+      <HoveredBlockProvider>
+        <PointAt id={id} />
+        <Canvas
+          document={leaves}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          selectedId="a"
+          overlay={<CanvasMarks />}
+        />
+      </HoveredBlockProvider>
+    );
+    try {
+      const { container, rerender } = render(drawn(null));
+      await act(async () => undefined);
+      await waitFor(() => expect(halosIn(container)).toHaveLength(1));
+      // The control: drawing the canvas watched every block and measured the
+      // selected one.
+      expect(watching.made).toBeGreaterThan(0);
+      expect(watching.observed).toBeGreaterThanOrEqual(leaves.nodes.length);
+      expect(measured.has("a")).toBe(true);
+      for (const id of ["b", "c"]) {
+        watching.made = 0;
+        watching.observed = 0;
+        measured.clear();
+        rerender(drawn(id));
+        await act(async () => undefined);
+        await waitFor(() => expect(hoveredIn(container)).toHaveLength(1));
+        expect({ ...watching, measured: [...measured] }).toEqual({
+          made: 0,
+          observed: 0,
+          measured: [id],
+        });
+      }
+      // The selection's ring is kept, unmeasured, beside the hover's.
+      expect(halosIn(container)).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

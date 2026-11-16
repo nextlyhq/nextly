@@ -531,6 +531,7 @@ export function listEntriesRoute(
   guard: () => TemplateGuardSetup
 ): {
   method: "POST";
+  checksAccess: true;
   path: string;
   noStore: true;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
@@ -538,6 +539,7 @@ export function listEntriesRoute(
   return {
     method: "POST",
     path: LIST_ENTRIES_ROUTE_PATH,
+    checksAccess: true, // The handler judges each caller.
     noStore: true,
     handler: async (req, ctx) => {
       const body = await readBodyWith(req, ListEntriesAnyBody, ROUTE);

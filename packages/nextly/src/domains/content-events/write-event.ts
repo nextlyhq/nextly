@@ -8,7 +8,6 @@
  * path names what happened; how the event is assembled lives here.
  *
  * @module domains/content-events/write-event
- * @experimental
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -24,6 +23,7 @@ import {
   type PrincipalDigestDb,
 } from "../audit/principal-digest";
 import { pluginSettingsSecrets } from "../plugins/settings-service";
+import type { ChangedParts } from "../versions/changed-parts";
 import { statusEventsFor } from "../webhooks/status-events";
 
 import { contentEventActor } from "./actor";
@@ -41,8 +41,6 @@ import {
 
 /**
  * One event a write path records.
- *
- * @experimental
  */
 export interface WriteEventInput {
   subject: ContentEventSubject;
@@ -54,6 +52,15 @@ export interface WriteEventInput {
   kind: CoreContentEventKind | Readonly<ContentEventKind>;
   /** Who made the write, as the write path resolved it. */
   actor: RequestActor;
+  /**
+   * The plugin a write made as the system was made by, by the name it booted
+   * under: the event names the plugin rather than a nameless system. Taken
+   * from the plugin's own identity by the write path, never from a request.
+   * Ignored for any other actor, who is named as they are.
+   */
+  plugin?: string;
+  /** Why the change was made, in the caller's words, where it gave a reason. */
+  note?: string | null;
   /**
    * The person's display name, when the write path has it. An API key is
    * named by its own name, read here; the system is named by nothing.
@@ -75,8 +82,6 @@ export interface WriteEventInput {
 
 /**
  * What the writer needs besides the transaction.
- *
- * @experimental
  */
 export interface WriteEventDeps {
   /** The adapter the transaction belongs to: its dialect and locking. */
@@ -87,8 +92,6 @@ export interface WriteEventDeps {
 
 /**
  * One status move a write made: one language's, or the document's own.
- *
- * @experimental
  */
 export interface StatusMove {
   /** The language that moved; absent for the document's own status. */
@@ -124,8 +127,6 @@ async function actorName(
 
 /**
  * Record `input` on `tx`, the transaction of the write it records.
- *
- * @experimental
  */
 export async function recordWriteEvent(
   tx: TransactionContext,
@@ -133,7 +134,10 @@ export async function recordWriteEvent(
   input: WriteEventInput
 ): Promise<{ id: string }> {
   ensureCoreContentEventKinds();
-  const actor = contentEventActor(input.actor, await actorName(tx, input));
+  const actor =
+    input.plugin !== undefined && input.actor.type === "system"
+      ? { kind: "plugin" as const, id: input.plugin, name: input.plugin }
+      : contentEventActor(input.actor, await actorName(tx, input));
   const dialect = deps.adapter.getCapabilities().dialect;
   // Read under the shared deleted-people lock only for a plugin-defined
   // person: no other actor can have been reported deleted.
@@ -161,6 +165,7 @@ export async function recordWriteEvent(
       toState: input.toState ?? null,
       versionNo: input.versionNo ?? null,
       payload: input.payload ?? null,
+      note: input.note ?? null,
       // Passed through as given: only a feature with a definition names one.
       definitionHash: input.definitionHash ?? null,
     },
@@ -169,13 +174,50 @@ export async function recordWriteEvent(
 }
 
 /**
+ * The moves a write's history records as `kind`: those the rule that decides
+ * the webhook events calls a publish, or an unpublish. A move between equal
+ * states is neither, and is recorded as nothing.
+ */
+function movesRecordedAs(
+  kind: "published" | "unpublished",
+  moves: readonly StatusMove[],
+  isCreate: boolean
+): StatusMove[] {
+  return moves.filter(
+    m =>
+      typeof m.to === "string" &&
+      statusEventsFor({ from: m.from ?? null, to: m.to, isCreate }).includes(
+        `entry.${kind}`
+      )
+  );
+}
+
+/**
+ * The parts a write's status moves change, as its history records them: each
+ * language a recorded move names, and the shared part where one names none
+ * (the document's own status). Read from the same list of moves
+ * `recordTransitionEvents` is handed, so the version a publish records and
+ * the event it writes cannot name different parts. For the moves of a write
+ * that is not a create, as a publish of existing content is.
+ *
+ * @experimental
+ */
+export function partsMovesRecord(moves: readonly StatusMove[]): ChangedParts {
+  const recorded = (["published", "unpublished"] as const).flatMap(kind =>
+    movesRecordedAs(kind, moves, false)
+  );
+  return {
+    locales: [...new Set(recorded.flatMap(m => (m.locale ? [m.locale] : [])))],
+    shared: recorded.some(m => !m.locale),
+  };
+}
+
+/**
  * Record a write's status moves in the document's history: one "published"
  * event naming the parts it published, and one "unpublished" for those it
  * unpublished. Decided by the rule that decides the webhook events, so the
  * two never disagree on what was a publish, and written whatever the
  * document's webhook settings.
- *
- * @experimental
  */
 export async function recordTransitionEvents(
   tx: TransactionContext,
@@ -189,15 +231,7 @@ export async function recordTransitionEvents(
   moves: readonly StatusMove[]
 ): Promise<void> {
   for (const kind of ["published", "unpublished"] as const) {
-    const moved = moves.filter(
-      m =>
-        typeof m.to === "string" &&
-        statusEventsFor({
-          from: m.from ?? null,
-          to: m.to,
-          isCreate: write.isCreate === true,
-        }).includes(`entry.${kind}`)
-    );
+    const moved = movesRecordedAs(kind, moves, write.isCreate === true);
     const first = moved[0];
     if (!first) continue;
     const locales = moved.flatMap(m => (m.locale ? [m.locale] : []));
@@ -263,8 +297,6 @@ export async function recordOverwriteEvent(
  * Record a save in the document's history: a restore always, naming the
  * version it came from, and any other save only when it recorded a version,
  * so a save that changed nothing adds no event either.
- *
- * @experimental
  */
 export async function recordSaveEvent(
   tx: TransactionContext,

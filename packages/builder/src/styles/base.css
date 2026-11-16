@@ -1,0 +1,502 @@
+/**
+ * The editor chrome's stylesheet, compiled rather than copied.
+ *
+ * `@import "tailwindcss"` plus `@source` is what makes this shippable. The shell
+ * draws with utility classes — `flex`, `border-b`, `size-8` — and copying this
+ * file verbatim delivered the custom properties below while leaving those
+ * classes undefined. A consumer without our Tailwind preset then got the tokens
+ * and no layout: markup that renders, carries its class names, and stacks as
+ * full-width blocks. That reads as a layout bug rather than a missing build
+ * step, which is why it is compiled here instead of documented as a
+ * requirement.
+ *
+ * The theme is NOT imported. `--nx-*` belongs to `@nextlyhq/ui`, which the host
+ * already loads; importing it here would ship a second copy of every token and
+ * make re-theming depend on which stylesheet won. The variables below DERIVE
+ * from those tokens, so a host that re-themes the admin moves the builder with
+ * it.
+ */
+/**
+ * This sheet SUPPLEMENTS the design system rather than restating it.
+ *
+ * `@nextlyhq/ui` is already a peer dependency: the host installs it and loads
+ * its stylesheet, directly or through the admin's. That sheet owns three things
+ * this one therefore does not ship — the `--nx-*` tokens, the base reset, and
+ * the rules for the primitives the shell renders (`Tooltip`, `ResizableHandle`).
+ * Shipping a second copy of any of them would make the result depend on which
+ * stylesheet loaded last, which is the reason the theme is not imported here,
+ * and the reason applies unchanged to the other two.
+ *
+ * Concretely, this is why `@import "tailwindcss"` is NOT used. That entry bundles
+ * Preflight, which resets `html`, `*`, headings, lists, tables and form controls
+ * DOCUMENT-WIDE — so importing the builder's stylesheet restyled the host
+ * application and the caller's own slot content. Preflight belongs to the sheet
+ * that owns the page; for every consumer of this package that is the design
+ * system's, never the editor's.
+ *
+ * What is left is the part no one else can supply: the utility classes the shell
+ * itself draws with, which Tailwind only emits for source it has been pointed at.
+ */
+@layer theme, base, components, utilities;
+
+/**
+ * The theme is REFERENCED, not imported, and the difference is the whole point.
+ *
+ * `@import "tailwindcss/theme.css"` emits a global `:root, :host` block. Loaded
+ * in the documented order — the design system's sheet, then this one — that
+ * block lands AFTER theirs and wins, so this supplementary sheet silently
+ * replaced the host's theme: `--radius-md` reverted from the design system's
+ * `calc(var(--radius) - 2px)` to Tailwind's `.375rem`, and `--font-mono` from
+ * the Geist-aware stack to Tailwind's default. Controls and type elsewhere in
+ * the host changed the moment the editor's stylesheet loaded.
+ *
+ * `@reference` gives the compiler the same theme to generate utilities against
+ * and emits nothing. The variables those utilities resolve through are declared
+ * by the design system's sheet, which is already required.
+ */
+@reference "tailwindcss";
+
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* Scan this package's source so the shell's utility classes compile in. */
+@source "../";
+
+/**
+ * The shell's own box model, and deliberately nothing more.
+ *
+ * Border-box is the one part of a reset the chrome cannot be correct without:
+ * every panel bound here is a PIXEL width, and under the default content-box a
+ * border and padding are added on top of it, so the rail and the panels settle a
+ * few pixels wider than the geometry that reserved room for them.
+ *
+ * Confined to the shell's subtree, so it stays a statement about the editor
+ * rather than about the host's page — and to any token scope hoisted out of it,
+ * which is the same subtree by a different route.
+ */
+@layer base {
+  .nx-builder-chrome,
+  .nx-builder-chrome *,
+  .nx-builder-chrome *::before,
+  .nx-builder-chrome *::after,
+  .nx-builder-tokens,
+  .nx-builder-tokens *,
+  .nx-builder-tokens *::before,
+  .nx-builder-tokens *::after {
+    box-sizing: border-box;
+  }
+}
+
+/**
+ * The editor chrome's own token layer.
+ *
+ * Named `--nx-builder-*` and kept separate from `--nx-*` on purpose. The admin's
+ * tokens describe a CMS reading surface; the builder's chrome sits around a
+ * canvas showing the USER'S site, and the two have opposite jobs at the same
+ * moment: the canvas must look like the finished page, so the frame around it
+ * has to recede rather than compete. Sharing one palette makes every later
+ * chrome adjustment a change to the admin as well.
+ *
+ * Values derive from the admin tokens rather than restating colours, so a host
+ * that re-themes the admin moves the builder with it. The chrome is a SHIFT of
+ * that palette, not a second one.
+ *
+ * This layer is also where the ratified template-scope tint lands when there is
+ * a template scope to signal — PB-D17's "template scope = tinted chrome". It is
+ * a second value set for these variables, not a new component, which is why the
+ * F7 primitive list was the wrong home for it.
+ */
+
+/*
+ * DECLARING the tokens and BEING the chrome root are two jobs, and they are
+ * spelled separately because a surface can need the first without the second.
+ *
+ * `.nx-builder-chrome` identifies the editor's root: the empty-slot selector
+ * keys off it, and it is what carries the shell's own state attributes. A
+ * surface mounted OUTSIDE that root still has to resolve `--nx-builder-*`,
+ * because custom properties inherit down and never across — and giving it the
+ * chrome class to get them would put a second chrome root in the document, so
+ * every selector and every query that means "the editor" would match whichever
+ * came first.
+ *
+ * `.nx-builder-tokens` is that scope on its own. One declaration block serves
+ * both, so the two cannot drift apart; only the painting below is the chrome's.
+ *
+ * The canvas is a third case: it is also mounted on its own, with no scope
+ * above it, and the chrome it draws (a Layout's region badge and tag) reads
+ * these tokens too. It takes them only when nothing above it declares them,
+ * and at zero specificity, so inside the shell it inherits the shell's values
+ * untouched and its own rules below still win where they apply. The layer the
+ * editor draws over the canvas is the fourth, for the same reason: it is in
+ * the host's document, beside the frame rather than inside it, and the empty
+ * section prompt's plate on it reads these tokens. It takes no part in the
+ * dark picks below: its editing hues follow the page's own scheme
+ * (`.nx-canvas-layer[data-nx-page-scheme]`), and the surface, border and text
+ * tokens here follow the admin's `.dark` through the `--nx-*` they name.
+ */
+.nx-builder-tokens,
+.nx-builder-chrome,
+:where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)),
+:where(.nx-canvas-layer:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
+  /*
+   * The editor's tools and the page apart: the rail, the side panels, the top
+   * bar and every menu and popover sit on the PANEL surface, and the page sits
+   * on a plain grey WELL around it, so the page reads as a sheet on a desk and
+   * the panels as tools.
+   *
+   * The panel is the admin's popover surface: white in the light theme, and in
+   * the dark one the admin's raised dark surface, the one its sidebar and every
+   * popover already use. So a menu or popover the editor opens through the
+   * design system is on the panel surface in both themes by construction,
+   * with no per-menu override. The dark `--nx-background` is pure black, so it
+   * could not be the panel: nothing could then be a step darker for the well.
+   *
+   * The well is the panel mixed a step toward the darker end of the palette:
+   * the foreground in the light theme, the background in the dark one (below).
+   * Both stay at least 0.03 apart in OKLCH lightness from the panel, which
+   * `chrome-panel-tokens.test.ts` holds. No pattern: dots compete with a
+   * page's own light grounds and thin lines.
+   */
+  --nx-builder-panel: var(--nx-popover);
+  --nx-builder-well: color-mix(
+    in oklch,
+    var(--nx-builder-panel) 96%,
+    var(--nx-foreground)
+  );
+  /* The surface behind the chrome's contents, now the panel itself: the well
+     is the only grey. Kept as a name for the rules that paint "the editor's
+     own surface" (a ring's offset, a sticky header). */
+  --nx-builder-surface: var(--nx-builder-panel);
+  /* A surface drawn over the editor (a card, a notice, a tag, a plate): the
+     panel too, so whatever the editor opens reads as one of its panels. Not
+     `--nx-background`, which is pure black in the dark theme and drew each
+     of them as a hole in the panel or the well. */
+  --nx-builder-surface-raised: var(--nx-builder-panel);
+  --nx-builder-border: var(--nx-border);
+  /* The 1px lines between panels and between a panel and the well, and the
+     page frame's edge. They follow the border, so they turn to the foreground
+     when the system asks for more contrast (below), and take the system's
+     own text colour in forced colours. */
+  --nx-builder-divider: var(--nx-builder-border);
+  --nx-builder-frame-edge: var(--nx-builder-border);
+  --nx-builder-text: var(--nx-foreground);
+  --nx-builder-text-muted: var(--nx-muted-foreground);
+  /* The rail's selected item, and the only accent the chrome spends. */
+  --nx-builder-accent: var(--nx-primary);
+  --nx-builder-accent-text: var(--nx-primary-foreground);
+  /* How far a block in mid-drag fades where it sits, on the canvas and in
+     Layers alike, so the thing in hand reads the same on both. */
+  --nx-builder-drag-source-opacity: 0.4;
+  /* How far a Layout's region is quietened on the canvas: still the site's own
+     colours, read as "around the page" rather than "part of it". */
+  --nx-builder-region-opacity: 0.6;
+  /*
+   * The admin's colour scheme, as a value chrome can be handed back: chrome
+   * drawn inside the canvas sits under the page's own scheme and takes the
+   * admin's from here.
+   */
+  --nx-builder-scheme: light;
+  /*
+   * What a collection list's note on the canvas is drawn in: amber where its
+   * sort fell back, red where its read failed. Builder names, so the frame
+   * can hand them to the note alone without a site's own token of the same
+   * name being replaced.
+   */
+  --nx-builder-warning: var(--nx-warning);
+  --nx-builder-danger: var(--nx-destructive);
+  /*
+   * The badge on a block a visitor will not see filled: amber words on an
+   * amber-tinted plate of the editor's raised surface. The words are the
+   * warning mixed toward the admin's own text colour, darker in the light
+   * theme and lighter in the dark one, so they hold 4.5:1 on the plate in
+   * both.
+   */
+  --nx-builder-warning-text: color-mix(
+    in oklch,
+    var(--nx-warning) 55%,
+    var(--nx-foreground)
+  );
+  --nx-builder-warning-ground: color-mix(
+    in oklch,
+    var(--nx-warning) 12%,
+    var(--nx-builder-surface-raised)
+  );
+  /*
+   * The admin's destructive pair, for a reading past a limit (the page reads
+   * meter over its allowance): the deep red its Delete confirmation uses in
+   * the light theme (destructive-700), on that red's palest tint. Mixed here
+   * from the one token, as the admin's scale mixes them, since that scale is
+   * declared `@theme inline` and emits no property this sheet could read. The
+   * dark theme takes the solid red, below.
+   */
+  --nx-builder-destructive-text: color-mix(
+    in srgb,
+    var(--nx-destructive),
+    black 30%
+  );
+  --nx-builder-destructive-ground: color-mix(
+    in srgb,
+    var(--nx-destructive),
+    white 95%
+  );
+  /* The editing colours, picked for the admin's theme — see below. */
+  --nx-builder-select: var(--nx-builder-select-on-light);
+  --nx-builder-component: var(--nx-builder-component-on-light);
+  /* A prop bound to a field: its chip, its bind button while open. */
+  --nx-builder-bound: var(--nx-builder-bound-on-light);
+  /* The "what you're editing" target: this block (pink), a shared style (green). */
+  --nx-builder-local: var(--nx-builder-local-on-light);
+  --nx-builder-shared: var(--nx-success);
+  --nx-builder-component-text: var(--nx-builder-component-text-on-light);
+  --nx-builder-select-text: var(--nx-builder-select-text-on-light);
+  --nx-builder-ink: #15171c; /* design-lint-ok: the action bar's fixed dark ink */
+  --nx-builder-ink-text: #f8f9fa; /* design-lint-ok: text on the fixed dark ink */
+  /*
+   * The editor's ONE density scale, for the top bar, the panels and the
+   * inspector alike, so every control in the editor is one size:
+   * - a control (button, field, select, icon button) is 28px high, above the
+   *   24px WCAG target;
+   * - body text and labels are 12px on a 16px line;
+   * - a section title is 12px semibold;
+   * - rows sit 8px apart.
+   * The same in light and dark: density is not a colour.
+   */
+  --nx-builder-control-height: 1.75rem;
+  --nx-builder-control-padding-x: 0.5rem;
+  --nx-builder-font-size: 0.75rem;
+  --nx-builder-line-height: 1rem;
+  --nx-builder-title-size: 0.75rem;
+  --nx-builder-title-weight: 600;
+  --nx-builder-row-gap: 0.5rem;
+}
+
+/*
+ * The colours of editing itself: what is selected, what a drag will land on,
+ * and what belongs to a component.
+ *
+ * `--nx-primary` cannot carry these. It is black in the light theme and white
+ * in the dark one, and the marks it painted sit ON the author's page, whose
+ * colours are the site's: a white ring vanished on a white page in the dark
+ * theme and a black one on every dark section in the light theme. A hue reads
+ * as "selected" rather than as focus, and against both ends of a page.
+ *
+ * Each hue is stated once per GROUND it is drawn on, and a theme only picks
+ * between the two. The admin's theme picks for chrome on admin surfaces; the
+ * layer over the canvas picks by the page's own scheme instead, because its
+ * marks are drawn on the site's colours — see `.nx-canvas-layer`. Declared on
+ * the layer as well as the chrome, because the canvas frame is also mounted on
+ * its own, without the shell.
+ *
+ * Written as values rather than references, deliberately. The blue is the
+ * design system's blue 600 and 400, but that scale is declared `@theme inline`,
+ * which copies values into utilities and emits no custom property, so
+ * `var(--color-blue-600)` resolves to nothing at runtime. The halo is
+ * mode-invariant white, because it is drawn against site content rather than
+ * against the admin.
+ */
+.nx-builder-tokens,
+.nx-builder-chrome,
+.nx-canvas-layer {
+  --nx-builder-select-on-light: #2563eb; /* design-lint-ok: blue 600; no runtime variable */
+  --nx-builder-select-on-dark: #60a5fa; /* design-lint-ok: blue 400; no runtime variable */
+  --nx-builder-component-on-light: #7a00df; /* design-lint-ok: component purple; no admin token */
+  --nx-builder-component-on-dark: #c99bff; /* design-lint-ok: component purple; no admin token */
+  /* A bound prop's violet, apart from a component's purple: 5.9:1 on white, 8.9:1 on #15171c (AA). */
+  --nx-builder-bound-on-light: #7a3ce0; /* design-lint-ok: bound violet; no admin token */
+  --nx-builder-bound-on-dark: #c9a6ff; /* design-lint-ok: bound violet; no admin token */
+  /* This block's pink: 5.9:1 on the light ground, 9.4:1 on the dark (AA). */
+  --nx-builder-local-on-light: #c2185b; /* design-lint-ok: this-block pink; no admin token */
+  --nx-builder-local-on-dark: #f48fb1; /* design-lint-ok: this-block pink; no admin token */
+  --nx-builder-component-text-on-light: #ffffff; /* design-lint-ok: text on the deep purple */
+  --nx-builder-component-text-on-dark: #15171c; /* design-lint-ok: text on the light purple */
+  --nx-builder-select-text-on-light: #ffffff; /* design-lint-ok: text on the deep select blue */
+  --nx-builder-select-text-on-dark: #15171c; /* design-lint-ok: text on the light select blue */
+  --nx-builder-halo: #ffffff; /* design-lint-ok: mode-invariant halo on site content */
+}
+
+/*
+ * The dark theme's picks: the lighter hues, which hold contrast against the
+ * admin's dark surfaces, and a deeper ink so the bar still reads as a layer
+ * above them.
+ *
+ * Keyed on the admin's `.dark` class wherever it sits, on an ancestor or on the
+ * scope itself, exactly as the admin's own tokens are.
+ */
+.dark .nx-builder-tokens,
+.dark .nx-builder-chrome,
+.dark :where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)),
+.nx-builder-tokens.dark,
+.nx-builder-chrome.dark {
+  --nx-builder-scheme: dark;
+  /* A step darker than the panels, toward the dark theme's black ground. */
+  --nx-builder-well: color-mix(
+    in oklch,
+    var(--nx-builder-panel) 80%,
+    var(--nx-background)
+  );
+  --nx-builder-select: var(--nx-builder-select-on-dark);
+  --nx-builder-component: var(--nx-builder-component-on-dark);
+  --nx-builder-bound: var(--nx-builder-bound-on-dark);
+  --nx-builder-local: var(--nx-builder-local-on-dark);
+  --nx-builder-component-text: var(--nx-builder-component-text-on-dark);
+  --nx-builder-select-text: var(--nx-builder-select-text-on-dark);
+  --nx-builder-ink: #0b0c0f; /* design-lint-ok: the action bar's fixed dark ink */
+  /* The admin's destructive pair in the dark theme: the solid red, on a
+     ground tinted from the editor's raised surface. */
+  --nx-builder-destructive-text: var(--nx-destructive-solid);
+  --nx-builder-destructive-ground: color-mix(
+    in oklch,
+    var(--nx-destructive) 12%,
+    var(--nx-builder-surface-raised)
+  );
+}
+
+/* The chrome's root paints the panel surface, which shows through the rail,
+   the top bar, the bottom bar and the side panels; the canvas region paints
+   the well over it (canvas partial). */
+.nx-builder-chrome {
+  background-color: var(--nx-builder-panel);
+  color: var(--nx-builder-text);
+}
+
+/**
+ * Everything the author can press in the chrome shows the hand.
+ *
+ * The browser's own cursor for a button is the arrow, so without this every
+ * raw `<button>` in the editor (undo, the zoom, the panel toggles, the rail,
+ * the devices) read as inert. One scoped rule rather than a class on each
+ * control, so a control added later is covered without remembering to.
+ *
+ * In the base layer, and its control list at zero specificity, so any cursor
+ * a control states for itself (a drag handle's grab, a resize handle's) still
+ * wins. A disabled control keeps the browser's arrow. The canvas's own cursors
+ * (grab on a block, text while typing, the drop cursors) are drawn inside the
+ * page's frame, which this sheet does not reach. Both scopes, so a menu or
+ * popover hoisted out of the chrome is covered too.
+ */
+@layer base {
+  :is(.nx-builder-chrome, .nx-builder-tokens)
+    :where(
+      button,
+      [role="button"],
+      [role="menuitem"],
+      [role="menuitemradio"],
+      [role="menuitemcheckbox"],
+      [role="option"],
+      [role="tab"],
+      [role="radio"],
+      [role="checkbox"],
+      [role="switch"],
+      input[type="radio"],
+      input[type="checkbox"],
+      select,
+      summary
+    ):where(
+      :not(
+        :disabled,
+        [aria-disabled="true"],
+        [data-disabled]:not([data-disabled="false"])
+      )
+    ) {
+    cursor: pointer;
+  }
+}
+
+/*
+ * A side-panel toggle in the top bar: filled while its panel shows, so the
+ * state reads from the button itself and not from the icon's colour alone.
+ * The fill is the rail's hover wash, a step stronger, quiet in both themes.
+ */
+.nx-builder-panel-toggle {
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-builder-panel-toggle:hover {
+  background-color: color-mix(in oklch, var(--nx-builder-text) 8%, transparent);
+  color: var(--nx-builder-text);
+}
+
+.nx-builder-panel-toggle[data-shown="true"] {
+  background-color: color-mix(
+    in oklch,
+    var(--nx-builder-text) 12%,
+    transparent
+  );
+  color: var(--nx-builder-text);
+}
+
+/*
+ * Forced colours: the system draws every surface in its own Canvas, so the
+ * panel and the well no longer differ and the dividers are what hold the
+ * layout apart. They take the system's text colour. A resize handle draws its
+ * line as a background, which the system would repaint as Canvas and so hide,
+ * so the line alone keeps its colour; the grip on it is left to the system.
+ * A shown panel's toggle takes the system's selected pair.
+ */
+@media (forced-colors: active) {
+  .nx-builder-tokens,
+  .nx-builder-chrome,
+  :where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)),
+  :where(.nx-canvas-layer:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
+    --nx-builder-divider: CanvasText;
+    --nx-builder-frame-edge: CanvasText;
+  }
+
+  .nx-builder-chrome .nx-builder-divider-line {
+    forced-color-adjust: none;
+  }
+
+  .nx-builder-chrome .nx-builder-divider-line > * {
+    forced-color-adjust: auto;
+  }
+
+  .nx-builder-panel-toggle[data-shown="true"] {
+    forced-color-adjust: none;
+    background-color: Highlight;
+    color: HighlightText;
+  }
+}
+
+/**
+ * Enhanced contrast, per the PB-D17 a11y addendum.
+ *
+ * Driven by the platform preference rather than a setting, because a user who
+ * has asked their OS for more contrast has already answered this question. The
+ * border is the token that moves: chrome boundaries at rest are deliberately
+ * quiet, and quiet is exactly what fails at higher contrast needs.
+ */
+@media (prefers-contrast: more) {
+  /*
+   * Both scopes, for the reason the split exists. A surface hoisted out of the
+   * chrome takes its tokens from `.nx-builder-tokens`, so an override written
+   * only against the chrome silently hands it the resting values — and the
+   * surface that moved out is the failure region, which is the last thing that
+   * should be quiet when someone has asked for more contrast.
+   */
+  .nx-builder-tokens,
+  .nx-builder-chrome,
+  :where(.nx-canvas:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)),
+  :where(.nx-canvas-layer:not(:is(.nx-builder-tokens, .nx-builder-chrome) *)) {
+    --nx-builder-border: var(--nx-foreground);
+    --nx-builder-text-muted: var(--nx-foreground);
+  }
+}
+
+/**
+ * Motion is opt-in, not opt-out.
+ *
+ * Only elements this package marks with `data-builder-animates` transition, and
+ * only where the user has not asked for reduced motion. Written as a positive
+ * query so the default for an unstated preference is stillness.
+ *
+ * Deliberately NOT a universal `.nx-builder-chrome *` reset. That reaches every
+ * descendant, and the shell's regions are SLOTS filled by callers — a reset
+ * there silently disables animation in a host's own panel, inspector and
+ * top-bar content, which this package has no business deciding.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .nx-builder-chrome [data-builder-animates] {
+    transition:
+      background-color 120ms ease,
+      color 120ms ease;
+  }
+}

@@ -1,0 +1,503 @@
+// The Builder's pending changes, through the hooks a builder page uses: the
+// real field builder, holding the undo history, and the entity state, holding
+// what was saved. The fixture avoids "title" and "slug", which are the
+// builder's own system rows and never a change. Every edit waits as a pending change; undo and redo step
+// through states of the fields; Discard all puts back what was saved.
+import { act } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+
+import { renderHook } from "@admin/__tests__/utils";
+import type { BuilderSettingsValues } from "@admin/components/features/schema-builder/BuilderSettingsModal";
+import type { BuilderField } from "@admin/components/features/schema-builder/types";
+import type { FieldDefinition } from "@admin/types/collection";
+
+import { useBuilderEntityState } from "../useBuilderEntityState";
+import { useFieldBuilder } from "../useFieldBuilder";
+
+type Entity = { slug: string; name: string; fields: FieldDefinition[] };
+
+const definition = (
+  name: string,
+  extra: Partial<FieldDefinition> = {}
+): FieldDefinition => ({
+  name,
+  label: name[0]?.toUpperCase() + name.slice(1),
+  type: "text",
+  required: false,
+  unique: false,
+  index: false,
+  ...extra,
+});
+
+const entity: Entity = {
+  slug: "posts",
+  name: "Post",
+  fields: [
+    definition("headline"),
+    definition("summary"),
+    definition("address", {
+      type: "group",
+      fields: [definition("street"), definition("city"), definition("zip")],
+    }),
+  ],
+};
+
+const settingsOf = (loaded: Entity): BuilderSettingsValues => ({
+  singularName: loaded.name,
+  slug: loaded.slug,
+  icon: "Database",
+});
+
+function setup() {
+  const rendered = renderHook(() => {
+    const builder = useFieldBuilder({
+      resolver: async values => ({ values, errors: {} }),
+      defaultValues: {},
+    });
+    const state = useBuilderEntityState({
+      entity,
+      builder,
+      toFields: loaded => loaded.fields,
+      toSettings: settingsOf,
+      onLoad: () => {},
+      identity: loaded => loaded.slug,
+    });
+    return { builder, state };
+  });
+  const field = (name: string): BuilderField => {
+    const find = (fields: BuilderField[]): BuilderField | undefined =>
+      fields.flatMap(f => [f, ...(f.fields ?? [])]).find(f => f.name === name);
+    const found = find(rendered.result.current.builder.fields);
+    if (!found) throw new Error(`no field named ${name}`);
+    return found;
+  };
+  return { ...rendered, field };
+}
+
+describe("builder pending changes", () => {
+  it("starts with none, and nothing to undo", () => {
+    const { result } = setup();
+    expect(result.current.state.pending.changes).toEqual([]);
+    expect(result.current.state.unsavedCount).toBe(0);
+    expect(result.current.state.pending.canUndo).toBe(false);
+  });
+
+  it("typing a field's setting is one change and one undo step", () => {
+    const { result, field } = setup();
+    const title = field("headline");
+    for (const label of ["H", "He", "Hea", "Head"]) {
+      act(() => result.current.builder.handleFieldUpdate({ ...title, label }));
+    }
+    expect(result.current.state.unsavedCount).toBe(1);
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    expect(field("headline").label).toBe("Headline");
+    expect(result.current.state.unsavedCount).toBe(0);
+    act(() => {
+      result.current.state.pending.redo();
+    });
+    expect(field("headline").label).toBe("Head");
+  });
+
+  it("each edit of another field, an add and a delete are steps of their own", () => {
+    const { result, field } = setup();
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "A",
+      })
+    );
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("summary"),
+        label: "B",
+      })
+    );
+    act(() => result.current.builder.handleFieldAdd("text"));
+    act(() => result.current.builder.handleFieldDelete(field("address").id));
+    expect(result.current.state.unsavedCount).toBe(4);
+    for (let step = 0; step < 4; step += 1) {
+      act(() => {
+        result.current.state.pending.undo();
+      });
+    }
+    expect(result.current.state.unsavedCount).toBe(0);
+    expect(result.current.state.pending.canUndo).toBe(false);
+  });
+
+  it("a deleted container is one pending delete naming the fields inside, and undo brings them back", () => {
+    const { result, field } = setup();
+    act(() => result.current.builder.handleFieldDelete(field("address").id));
+    expect(result.current.state.pending.changes).toMatchObject([
+      { kind: "deleted", name: "address", inside: 3 },
+    ]);
+    let announced: string | null = null;
+    act(() => {
+      announced = result.current.state.pending.undo();
+    });
+    expect(announced).toBe("Undid: deleted Address and 3 fields inside");
+    expect(field("street").name).toBe("street");
+    expect(result.current.state.pending.changes).toEqual([]);
+  });
+
+  it("undo and redo say what they did", () => {
+    const { result, field } = setup();
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("summary"),
+        name: "excerpt",
+      })
+    );
+    let announced: string | null = null;
+    act(() => {
+      announced = result.current.state.pending.undo();
+    });
+    expect(announced).toBe("Undid: renamed summary to excerpt");
+    act(() => {
+      announced = result.current.state.pending.redo();
+    });
+    expect(announced).toBe("Redid: renamed summary to excerpt");
+  });
+
+  it("discard all puts back the saved fields and settings, and leaves nothing to undo", () => {
+    const { result, field } = setup();
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "X",
+      })
+    );
+    act(() => result.current.builder.handleFieldAdd("text"));
+    act(() =>
+      result.current.state.setSettings({
+        ...settingsOf(entity),
+        singularName: "Article",
+      })
+    );
+    expect(result.current.state.unsavedCount).toBe(3);
+    act(() => result.current.state.pending.discardAll());
+    expect(result.current.state.unsavedCount).toBe(0);
+    expect(field("headline").label).toBe("Headline");
+    expect(result.current.state.settings?.singularName).toBe("Post");
+    expect(result.current.state.pending.canUndo).toBe(false);
+    expect(result.current.builder.fields.some(f => f.isSystem)).toBe(true);
+  });
+
+  it("after a save, what was changed is the saved state, with nothing to undo", () => {
+    const { result, field } = setup();
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "X",
+      })
+    );
+    act(() => result.current.state.pinFields());
+    expect(result.current.state.unsavedCount).toBe(0);
+    expect(result.current.state.pending.canUndo).toBe(false);
+    expect(field("headline").label).toBe("X");
+  });
+
+  it("an edit made while a save is in flight stays pending and undoable once it lands", () => {
+    const { result, field } = setup();
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "A",
+      })
+    );
+    // The save is sent with the fields as they are now…
+    const pinWhenSaved = result.current.state.pinFields;
+    // …and another edit is made before it lands.
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("summary"),
+        label: "B",
+      })
+    );
+    act(() => pinWhenSaved());
+    expect(result.current.state.pending.changes).toMatchObject([
+      { kind: "settings", name: "summary" },
+    ]);
+    expect(result.current.state.pending.canUndo).toBe(true);
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    expect(field("summary").label).toBe("Summary");
+    expect(field("headline").label).toBe("A");
+    expect(result.current.state.unsavedCount).toBe(0);
+    expect(result.current.state.pending.canUndo).toBe(false);
+  });
+
+  it("an edit of the same field made while a save is in flight undoes back to what was saved", () => {
+    const { result, field } = setup();
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "A",
+      })
+    );
+    const pinWhenSaved = result.current.state.pinFields;
+    // The same field again: one step with the edit the save sent, as typing is.
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "AB",
+      })
+    );
+    act(() => pinWhenSaved());
+    expect(result.current.state.unsavedCount).toBe(1);
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    // Back to the saved value, not past it.
+    expect(field("headline").label).toBe("A");
+    expect(result.current.state.unsavedCount).toBe(0);
+    expect(result.current.state.pending.canUndo).toBe(false);
+  });
+
+  it("edits made after a same-field edit during a save stay steps of their own", () => {
+    const { result, field } = setup();
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "A",
+      })
+    );
+    const pinWhenSaved = result.current.state.pinFields;
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "AB",
+      })
+    );
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("summary"),
+        label: "S",
+      })
+    );
+    act(() => pinWhenSaved());
+    // One undo takes back the last edit only.
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    expect(field("summary").label).toBe("Summary");
+    expect(field("headline").label).toBe("AB");
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    expect(field("headline").label).toBe("A");
+    expect(result.current.state.unsavedCount).toBe(0);
+    expect(result.current.state.pending.canUndo).toBe(false);
+  });
+
+  it("the count is the field changes plus each changed setting, every one listed", () => {
+    const { result, field } = setup();
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("summary"),
+        name: "excerpt",
+        label: "Excerpt",
+      })
+    );
+    act(() =>
+      result.current.state.setSettings({
+        ...settingsOf(entity),
+        singularName: "Article",
+        description: "Long reads",
+      })
+    );
+    // A rename and a change of settings on one field, and two of the entity's
+    // own settings, each a pending change.
+    expect(result.current.state.pending.changes).toHaveLength(2);
+    expect(
+      result.current.state.pending.settingChanges.map(change => change.label)
+    ).toEqual(["name", "description"]);
+    expect(result.current.state.unsavedCount).toBe(4);
+  });
+});
+
+// The settings share the fields' history: each change of them is a step that
+// Undo takes back and Redo puts again, never joined with a field's step, and
+// Discard all puts the saved settings back with nothing left to undo.
+describe("builder pending changes: the entity's settings", () => {
+  const renamed = (singularName: string): BuilderSettingsValues => ({
+    ...settingsOf(entity),
+    singularName,
+  });
+
+  it("a settings change is undone, redone and reset by Discard all", () => {
+    const { result } = setup();
+    act(() => result.current.state.setSettings(renamed("Article")));
+    expect(result.current.state.pending.canUndo).toBe(true);
+
+    let announced: string | null = null;
+    act(() => {
+      announced = result.current.state.pending.undo();
+    });
+    expect(announced).toBe("Undid: changed the settings: name");
+    expect(result.current.state.settings?.singularName).toBe("Post");
+    expect(result.current.state.unsavedCount).toBe(0);
+
+    act(() => {
+      announced = result.current.state.pending.redo();
+    });
+    expect(announced).toBe("Redid: changed the settings: name");
+    expect(result.current.state.settings?.singularName).toBe("Article");
+
+    act(() => result.current.state.pending.discardAll());
+    expect(result.current.state.settings?.singularName).toBe("Post");
+    expect(result.current.state.pending.canUndo).toBe(false);
+    expect(result.current.state.pending.canRedo).toBe(false);
+  });
+
+  it("two changes of the settings are two steps", () => {
+    const { result } = setup();
+    act(() => result.current.state.setSettings(renamed("Article")));
+    act(() => result.current.state.setSettings(renamed("Story")));
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    expect(result.current.state.settings?.singularName).toBe("Article");
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    expect(result.current.state.settings?.singularName).toBe("Post");
+  });
+
+  it("a settings step between two edits of one field keeps them apart", () => {
+    const { result, field } = setup();
+    const headline = field("headline");
+    act(() =>
+      result.current.builder.handleFieldUpdate({ ...headline, label: "A" })
+    );
+    act(() => result.current.state.setSettings(renamed("Article")));
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "AB",
+      })
+    );
+
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    expect(field("headline").label).toBe("A");
+    expect(result.current.state.settings?.singularName).toBe("Article");
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    expect(field("headline").label).toBe("A");
+    expect(result.current.state.settings?.singularName).toBe("Post");
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    expect(field("headline").label).toBe("Headline");
+    expect(result.current.state.pending.canUndo).toBe(false);
+  });
+
+  it("undoing a field edit leaves a later settings change alone, and the other way round", () => {
+    const { result, field } = setup();
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "X",
+      })
+    );
+    act(() => result.current.state.setSettings(renamed("Article")));
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    // The settings step went; the field's edit before it stays.
+    expect(field("headline").label).toBe("X");
+    expect(result.current.state.settings?.singularName).toBe("Post");
+    act(() => {
+      result.current.state.pending.redo();
+    });
+    expect(field("headline").label).toBe("X");
+    expect(result.current.state.settings?.singularName).toBe("Article");
+  });
+});
+
+// A save that applies the fields first and writes the settings after: until
+// that settings write lands, its change stays pending and undoable.
+describe("builder pending changes: a save of fields and settings together", () => {
+  it("keeps the settings change undoable until its write lands", () => {
+    const { result, field } = setup();
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "X",
+      })
+    );
+    act(() =>
+      result.current.state.setSettings({
+        ...settingsOf(entity),
+        singularName: "Article",
+      })
+    );
+    // The fields landed; the settings write has not.
+    act(() => result.current.state.pinFields());
+    expect(result.current.state.pending.canUndo).toBe(true);
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    expect(result.current.state.settings?.singularName).toBe("Post");
+
+    act(() => {
+      result.current.state.pending.redo();
+    });
+    act(() =>
+      result.current.state.pinSettings({
+        ...settingsOf(entity),
+        singularName: "Article",
+      })
+    );
+    expect(result.current.state.unsavedCount).toBe(0);
+    expect(result.current.state.pending.canUndo).toBe(false);
+  });
+});
+
+describe("builder pending changes: settings changed before the fields they are saved with", () => {
+  it("leaves only the settings to undo once the fields have landed", () => {
+    const { result, field } = setup();
+    act(() =>
+      result.current.state.setSettings({
+        ...settingsOf(entity),
+        singularName: "Article",
+      })
+    );
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "X",
+      })
+    );
+    // The fields landed; the settings write has not, and may fail.
+    act(() => result.current.state.pinFields());
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    // The settings go back; the saved field stays as saved.
+    expect(result.current.state.settings?.singularName).toBe("Post");
+    expect(field("headline").label).toBe("X");
+    expect(result.current.state.pending.canUndo).toBe(false);
+  });
+});
+
+describe("builder pending changes: pinning a settings-only save", () => {
+  it("leaves nothing to undo whichever order the save pins in", () => {
+    const { result } = setup();
+    const renamed = { ...settingsOf(entity), singularName: "Article" };
+    act(() => result.current.state.setSettings(renamed));
+    // Both taken from the render the save started in, as a save's callbacks are.
+    const { pinSettings, pinFields } = result.current.state;
+    act(() => {
+      pinSettings(renamed);
+      pinFields();
+    });
+    expect(result.current.state.unsavedCount).toBe(0);
+    expect(result.current.state.pending.canUndo).toBe(false);
+  });
+});

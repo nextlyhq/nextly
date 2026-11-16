@@ -91,21 +91,21 @@ describe.skipIf(!POSTGRES_URL)("openDryRunAdapter on PostgreSQL", () => {
     }
   }
 
-  it("refuses a schema other than public before connecting, and creates nothing", async () => {
+  it("names a named schema that does not exist yet as missing, and creates nothing", async () => {
+    // A dry run writes nothing, so a schema the first real run would create
+    // is reported missing rather than made.
     const schema = `nx_dry_${randomBytes(4).toString("hex")}`;
-    await expect(
-      openDryRunAdapter({
-        dialect: "postgresql",
-        databaseUrl: POSTGRES_URL,
-        schema,
-      })
-    ).rejects.toMatchObject({ code: "NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED" });
+    const opened = await openDryRunAdapter({
+      dialect: "postgresql",
+      databaseUrl: POSTGRES_URL,
+      schema,
+    });
+    expect(opened).toEqual({ missing: expect.stringContaining(`"${schema}"`) });
     expect(await schemaExists(schema)).toBe(false);
   });
 
   it("connects read-only without creating a missing schema, where a plain connect creates it", async () => {
-    // The adapter's own guard, reached directly: Nextly's config refuses any
-    // schema but `public` before an adapter exists.
+    // The adapter's own guard, reached directly.
     const { createPostgresAdapter } = await import(
       "@nextlyhq/adapter-postgres"
     );

@@ -24,6 +24,7 @@ import { codePagesSlug } from "../code-pages/collection";
 import { isRecord, textOf } from "../plain-values";
 import type { AiCrawlerChoice } from "../settings/contract";
 import { fillPattern } from "../settings/patterns";
+import type { StoredRobotsRules } from "../settings/robots-rules-stored";
 import { typedPageLevel } from "../tab/typed";
 
 import type { Levels } from "./order";
@@ -47,14 +48,32 @@ export interface SiteRules {
    * are: every page of one is served `noindex` and left out of the sitemap.
    */
   hiddenTypes?: readonly string[];
+  /**
+   * The content types whose SEO is switched off, keyed as `patterns` are:
+   * the plugin answers nothing for their pages and lists none of them.
+   */
+  typesWithSeoOff?: readonly string[];
   /** What robots.txt asks AI crawlers to do, where the site has chosen. */
   aiCrawlers?: AiCrawlerChoice;
   /** Whether IndexNow is told of changed pages: only once switched on. */
   indexNow?: boolean;
   /** Whether `/llms.txt` is served: only once switched on. */
   llmsTxt?: boolean;
+  /**
+   * Whether `/llms-full.txt`, every listed page's words in one file, is
+   * served: only once switched on, and only beside llms.txt.
+   */
+  llmsFullTxt?: boolean;
+  /** What the site tells AI tools in its own words, at the top of llms.txt. */
+  llmsIntro?: string;
   /** Whether each listed page has a plain-text copy: only once switched on. */
   plainTextCopies?: boolean;
+  /** The site's own robots.txt lines, where stored and passing their rule. */
+  robotsRules?: StoredRobotsRules;
+  /** Why the stored own lines are not served, where they fail their rule. */
+  robotsRulesRefused?: string;
+  /** Whether listed pages ask for large image previews: on unless `false`. */
+  largeImagePreviews?: boolean;
 }
 
 /** No rules set: every value comes from the page, its route or its content. */
@@ -304,6 +323,18 @@ function patternLevel(
   });
 }
 
+/**
+ * A content type's patterns as the order fills them: the type's own, else the
+ * site's default, part by part. The one answer to which pattern gives a
+ * type's title, for the order and for whatever says which pattern it is.
+ */
+export function patternsOf(
+  rules: SiteRules,
+  key: string
+): { title?: string; description?: string } {
+  return { ...rules.defaultPatterns, ...rules.patterns[key] };
+}
+
 /** What every level holds for the page `input` names. */
 export async function levelsOf(
   ctx: PluginContext,
@@ -333,8 +364,7 @@ export async function levelsOf(
     code: input.code,
     template: input.derived,
     pattern: patternLevel(
-      // The type's own patterns, else the site's default for that part.
-      { ...rules.defaultPatterns, ...rules.patterns[key] },
+      patternsOf(rules, key),
       defined({ title: content.title?.value, siteName: rules.siteName }),
       document
     ),
@@ -346,6 +376,7 @@ export async function levelsOf(
       // The environment's addresses win over the settings', as the staging
       // guard reads them, so the two never disagree about the site's own.
       productionAddresses: productionAddressesOf(rules.productionAddresses),
+      largeImagePreviews: rules.largeImagePreviews,
     }),
     ...(address === undefined ? {} : { address }),
     ...(rules.hiddenTypes?.includes(key) === true ? { typeHidden: true } : {}),

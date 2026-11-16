@@ -77,13 +77,14 @@ export type VersionScope =
 
 /**
  * Who or what history credits a version or an event to: a person, an API key
- * (by its own name), a plugin's own kind of person, a release, the system, or
- * an agent.
+ * (by its own name), a plugin's own kind of person, a plugin acting on its own
+ * behalf (by its name), a release, the system, or an agent.
  */
 export type HistoryActorKind =
   | "person"
   | "apiKey"
   | "principal"
+  | "plugin"
   | "release"
   | "system"
   | "agent";
@@ -451,6 +452,25 @@ export const versionApi = {
       to: String(to),
     });
     if (opts.modifiedOnly) search.set("modifiedOnly", "1");
+    return protectedApi.get<VersionDiff>(
+      `${basePath(scope)}/diff?${search.toString()}`
+    );
+  },
+
+  /**
+   * A version compared with a baseline the server resolves by name: what is
+   * published, the current draft, or the version this person last looked at.
+   * Without `to`, the server picks the version to compare. The answer names
+   * the baseline it used, and the version retention left in place of one it
+   * removed.
+   */
+  diffFromBaseline: (
+    scope: VersionScope,
+    baseline: string,
+    to?: number
+  ): Promise<VersionDiff> => {
+    const search = new URLSearchParams({ baseline });
+    if (to !== undefined) search.set("to", String(to));
     return protectedApi.get<VersionDiff>(
       `${basePath(scope)}/diff?${search.toString()}`
     );

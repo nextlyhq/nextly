@@ -37,7 +37,6 @@ import type { emailTemplatesSqlite } from "../../../schemas/email-templates/sqli
 import type {
   EmailTemplateInsert,
   EmailTemplateRecord,
-  EmailTemplateVariable,
   EmailTemplateVersion,
 } from "../../../schemas/email-templates/types";
 import type { Logger } from "../../../services/shared";
@@ -56,15 +55,23 @@ import {
   type BrandSettings,
   type BrandSettingsUpdate,
 } from "../brand-settings";
+import type { DraftPreview } from "../draft-preview-request";
 import {
   changedTemplateFields,
   recordTemplateActivity,
   type EmailTemplateActivityInput,
 } from "../template-activity";
-import { checkTemplateEnvelope, type SavedCopies } from "../template-envelope";
+import {
+  checkTemplateEnvelope,
+  renderTemplateFrom,
+  usesVariables,
+  type SavedCopies,
+} from "../template-envelope";
 import {
   applyOwnerChoices,
   ownerChanges,
+  wholeTemplateChange,
+  wholeTemplateChoice,
   type OwnerChange,
   type OwnerChangeChoice,
 } from "../template-merge";
@@ -84,6 +91,7 @@ import {
   storedOwner,
   versionDigest,
   versionOf,
+  writtenVersionDigest,
   type KeptBase,
   type OwnedTemplate,
   type RegistryInput,
@@ -98,6 +106,14 @@ import {
   transactionOpenInFlow,
 } from "../transaction-flow";
 import type { EmailConfig } from "../types";
+import type { WrittenDocument } from "../written/document";
+import {
+  compiledVersion,
+  sitesVersionFormat,
+  storedFormat,
+  writtenForCreate,
+  writtenForUpdate,
+} from "../written/fields";
 
 import { EmailBrandStore } from "./email-brand-store";
 import {
@@ -106,12 +122,16 @@ import {
   templateReadsVariable,
 } from "./liquid-compat";
 import { parseLiquid, writesOutput } from "./liquid-engine";
+import { displayNameAndMailbox } from "./recipients";
 import {
   DEFAULT_APP_NAME,
+  fromBlocks,
   renderTemplate,
+  renderTemplateParts,
   type RenderedTemplate,
   type TemplateFields,
 } from "./render-template";
+import { htmlToText } from "./template-engine";
 import {
   BUILT_IN_TEMPLATES,
   DEFAULT_LAYOUT_SLUG,
@@ -213,6 +233,8 @@ const UPDATABLE_FIELDS = [
   "providerId",
   "attachments",
   "description",
+  "format",
+  "blocks",
 ] as const satisfies ReadonlyArray<keyof UpdateEmailTemplateInput>;
 
 /**
@@ -314,17 +336,52 @@ function changedSince(
 function reviewToken(
   base: EmailTemplateVersion,
   theirs: EmailTemplateVersion,
-  mine: EmailTemplateVersion
+  mine: EmailTemplateVersion,
+  blocks: {
+    theirs?: WrittenDocument | null;
+    mine?: WrittenDocument | null;
+  } = {}
 ): string {
+  // The blocks as well as the text: two documents can write the same HTML,
+  // and a choice made on one must not apply the other.
   return createHash("sha256")
-    .update(JSON.stringify([base, theirs, mine].map(v => versionOf(v))))
+    .update(
+      JSON.stringify([
+        ...[base, theirs, mine].map(v => versionOf(v)),
+        storedDigest(theirs, blocks.theirs),
+        storedDigest(mine, blocks.mine),
+      ])
+    )
     .digest("hex");
+}
+
+/**
+ * A stored version's digest: its text, or for a written one its subject,
+ * preheader and blocks, so blocks that write the same HTML are told apart.
+ */
+function storedDigest(
+  version: EmailTemplateVersion,
+  blocks: WrittenDocument | null | undefined
+): string {
+  return blocks
+    ? writtenVersionDigest(version, blocks)
+    : versionDigest(version);
 }
 
 /** What an applied review replaced, so it can be undone. */
 export interface OwnerUpdateUndo {
   /** The site's version before the review was applied. */
   version: EmailTemplateVersion;
+  /**
+   * @experimental A written template's blocks before the review was applied,
+   * so Undo makes it written again; null for a coded one.
+   */
+  blocks?: WrittenDocument | null;
+  /**
+   * @experimental The digest the override was based on before the review, so
+   * Undo puts it back as it was: a written owner's is taken over its blocks.
+   */
+  baseDigest?: string | null;
   /** The owner's version the override was based on before. */
   base: EmailTemplateVersion;
   /**
@@ -335,6 +392,18 @@ export interface OwnerUpdateUndo {
    */
   applied: string;
   appliedBase: string;
+}
+
+/**
+ * Whether an owner's update to this override is reviewed as a whole, the
+ * site's version or the owner's: when it is written in blocks on either
+ * side, until blocks are reviewed one by one.
+ */
+function reviewedWhole(
+  record: Pick<EmailTemplateRecord, "format" | "blocks">,
+  entry: OwnedTemplate
+): boolean {
+  return storedFormat(record).format === "written" || !!entry.blocks;
 }
 
 /** A stored row: the record's columns, with ownership as stored. */
@@ -450,6 +519,22 @@ type EmailTemplatesTable =
   | typeof emailTemplatesMysql
   | typeof emailTemplatesSqlite;
 
+/**
+ * The From line a reader would see, for a preview. One whose address uses a
+ * variable, which a save refuses, comes back as written: the preview shows
+ * the draft, and the save says what is wrong with it. Any other failure is
+ * the preview's, as it would be the send's.
+ */
+function previewFrom(
+  fromOverride: string,
+  data: Record<string, unknown>
+): string {
+  if (usesVariables(displayNameAndMailbox(fromOverride).email)) {
+    return fromOverride;
+  }
+  return renderTemplateFrom(fromOverride, data, "preview");
+}
+
 export class EmailTemplateService extends BaseService {
   private emailTemplates: EmailTemplatesTable;
 
@@ -469,6 +554,11 @@ export class EmailTemplateService extends BaseService {
    * boot reconciliation does not run (see `ensureBuiltInTemplates`).
    */
   private registry: TemplateOwnerRegistry;
+
+  /** What sends a template, as its running owner says; empty when it says nothing. */
+  ownerSentBy(slug: string): string[] {
+    return [...(this.registry.owned.get(slug)?.sentBy ?? [])];
+  }
   /** Where the switch to Liquid, and the templates kept off it, are recorded. */
   private readonly meta: MetaService;
   /**
@@ -617,6 +707,7 @@ export class EmailTemplateService extends BaseService {
               entry?.defaults.variables
             ),
       kind: columns.kind ?? "template",
+      ...storedFormat(columns),
       description: columns.description ?? null,
       cc: columns.cc ?? null,
       bcc: columns.bcc ?? null,
@@ -1313,21 +1404,16 @@ export class EmailTemplateService extends BaseService {
    * is read for any other, so an email without them never waits on the table.
    */
   private async brandFor(
-    template: Pick<
-      TemplateFields,
-      | "kind"
-      | "subject"
-      | "htmlContent"
-      | "plainTextContent"
-      | "preheader"
-      | "legacy"
-    >,
+    template: TemplateFields,
     layout: EmailTemplateRecord | null
   ): Promise<BrandSettings | undefined> {
+    // A written template is judged by what its blocks compile to, as it
+    // renders: a draft's own `htmlContent` is empty.
+    const rendered = fromBlocks(template);
     if (
       !layout &&
-      template.kind !== "layout" &&
-      !textReadsBrand(template, template.legacy)
+      rendered.kind !== "layout" &&
+      !textReadsBrand(rendered, rendered.legacy)
     ) {
       return undefined;
     }
@@ -1344,6 +1430,7 @@ export class EmailTemplateService extends BaseService {
     data: CreateEmailTemplateInput,
     actor?: RequestActor | null
   ): Promise<EmailTemplateRecord> {
+    data = writtenForCreate(data);
     const kind = orDefault(data, "kind");
     this.assertLayoutMarker(kind, data.htmlContent);
     this.assertLiquid(data);
@@ -1365,6 +1452,8 @@ export class EmailTemplateService extends BaseService {
       subject: data.subject,
       htmlContent: data.htmlContent,
       plainTextContent: orDefault(data, "plainTextContent"),
+      format: data.format ?? "code",
+      blocks: data.blocks ?? null,
       preheader: orDefault(data, "preheader"),
       layoutId: orDefault(data, "layoutId"),
       fromOverride: orDefault(data, "fromOverride"),
@@ -1565,6 +1654,14 @@ export class EmailTemplateService extends BaseService {
   ): Promise<EmailTemplateRecord> {
     const existing = await this.getRow(id);
     const record = this.toRecord(existing);
+    data = writtenForUpdate(
+      {
+        ...storedFormat(record),
+        htmlContent: record.htmlContent,
+        plainTextContent: record.plainTextContent,
+      },
+      data
+    );
 
     // Validate the effective post-update row (a layout must keep exactly one
     // `{{content}}` marker). Kind is immutable on update, so use the existing
@@ -1657,17 +1754,38 @@ export class EmailTemplateService extends BaseService {
     updateData: Record<string, unknown>
   ): boolean {
     if (record.owner.kind === "site" || record.overridden) return false;
-    return [...VERSION_FIELDS, ...DETAIL_FIELDS].some(field => {
-      if (updateData[field] === undefined) return false;
-      // A variable's type, label and example are presentation: changing only
-      // those is not the site saying something different from the owner.
-      return field === "variables"
-        ? !sameStoredValue(
-            declarationSubstance(updateData.variables),
-            declarationSubstance(existing.variables)
-          )
-        : !sameStoredValue(updateData[field] ?? null, existing[field] ?? null);
-    });
+    // A written owner's template converted to code keeps its HTML, so only
+    // its format says it is no longer the owner's: following the owner would
+    // turn it back into blocks at the next boot.
+    const converted =
+      updateData.format !== undefined &&
+      updateData.format !== storedFormat(existing).format;
+    // Blocks rewritten to write the same HTML are still the site's own: the
+    // owner's version is known by its blocks, not by what they write.
+    const rewritten =
+      updateData.blocks !== undefined &&
+      !sameStoredValue(
+        updateData.blocks ?? null,
+        storedFormat(existing).blocks
+      );
+    return (
+      converted ||
+      rewritten ||
+      [...VERSION_FIELDS, ...DETAIL_FIELDS].some(field => {
+        if (updateData[field] === undefined) return false;
+        // A variable's type, label and example are presentation: changing only
+        // those is not the site saying something different from the owner.
+        return field === "variables"
+          ? !sameStoredValue(
+              declarationSubstance(updateData.variables),
+              declarationSubstance(existing.variables)
+            )
+          : !sameStoredValue(
+              updateData[field] ?? null,
+              existing[field] ?? null
+            );
+      })
+    );
   }
 
   /**
@@ -1780,10 +1898,14 @@ export class EmailTemplateService extends BaseService {
 
     // `start` carries every version field from the read, so a save in
     // between must not be overwritten.
-    await this.writeSitesVersion(row, record, start, base.digest, {
-      overridden: true,
-      baseVersion: base.version,
-    });
+    await this.writeSitesVersion(
+      row,
+      record,
+      start,
+      base.digest,
+      { overridden: true, baseVersion: base.version },
+      record.blocks
+    );
 
     await this.recordActivity({
       action: "update",
@@ -1840,7 +1962,13 @@ export class EmailTemplateService extends BaseService {
       baseDigest: null,
       updatedAt: new Date(),
     });
-    await this.assertWritten(id, entry.version, null, record.slug);
+    await this.assertWritten(
+      id,
+      entry.version,
+      null,
+      record.slug,
+      entry.blocks ?? null
+    );
 
     await this.recordActivity({
       action: "update",
@@ -1881,14 +2009,21 @@ export class EmailTemplateService extends BaseService {
    * change the owner made since the override started.
    */
   async compareTemplate(id: string): Promise<EmailTemplateComparison> {
-    const { entry, base, mine } = await this.reviewOf(id);
+    const { record, entry, base, mine } = await this.reviewOf(id);
     return {
       base,
       // A copy: the registry's own version must not change with a caller's.
       theirs: versionOf(entry.version),
       mine,
-      changes: ownerChanges(base, entry.version, mine),
-      review: reviewToken(base, entry.version, mine),
+      changes: reviewedWhole(record, entry)
+        ? record.ownerChanged
+          ? [wholeTemplateChange(base, entry.version, mine)]
+          : []
+        : ownerChanges(base, entry.version, mine),
+      review: reviewToken(base, entry.version, mine, {
+        theirs: entry.blocks,
+        mine: record.blocks,
+      }),
     };
   }
 
@@ -1908,20 +2043,48 @@ export class EmailTemplateService extends BaseService {
     actor?: RequestActor | null
   ): Promise<{ template: EmailTemplateRecord; undo: OwnerUpdateUndo }> {
     const { row, record, entry, base, mine } = await this.reviewOf(id);
-    if (reviewToken(base, entry.version, mine) !== review) {
+    if (
+      reviewToken(base, entry.version, mine, {
+        theirs: entry.blocks,
+        mine: record.blocks,
+      }) !== review
+    ) {
       throw changedSince("reviewed", id, record.slug);
     }
-    const merged = applyOwnerChoices(base, entry.version, mine, choices);
+    // A template written on either side is reviewed whole: the site's
+    // version and blocks, or the owner's.
+    let merged: EmailTemplateVersion;
+    let blocks = record.blocks;
+    if (reviewedWhole(record, entry)) {
+      const use = wholeTemplateChoice(choices, record.ownerChanged);
+      if (use === "theirs") {
+        merged = versionOf(entry.version);
+        blocks = entry.blocks ?? null;
+      } else {
+        // As the blocks write now: HTML stored by a release that wrote them
+        // as other markup would read as code, and drop the blocks.
+        merged = blocks ? compiledVersion(mine, blocks) : mine;
+      }
+    } else {
+      merged = applyOwnerChoices(base, entry.version, mine, choices);
+    }
     this.assertLayoutMarker(row.kind, merged.htmlContent);
 
-    await this.writeSitesVersion(row, record, merged, entry.digest, {
-      // Rebased on the owner's version; the details the site's copy is
-      // compared against are a separate matter and carry over.
-      baseVersion: {
-        ...entry.version,
-        details: row.baseVersion?.details ?? detailsOf(entry.defaults),
+    await this.writeSitesVersion(
+      row,
+      record,
+      merged,
+      entry.digest,
+      {
+        // Rebased on the owner's version; the details the site's copy is
+        // compared against are a separate matter and carry over.
+        baseVersion: {
+          ...entry.version,
+          details: row.baseVersion?.details ?? detailsOf(entry.defaults),
+        },
       },
-    });
+      blocks
+    );
 
     await this.recordActivity({
       action: "update",
@@ -1941,8 +2104,10 @@ export class EmailTemplateService extends BaseService {
       template: await this.getTemplate(id),
       undo: {
         version: mine,
+        blocks: record.blocks,
+        baseDigest: row.baseDigest ?? null,
         base,
-        applied: versionDigest(merged),
+        applied: storedDigest(merged, blocks),
         appliedBase: entry.digest,
       },
     };
@@ -1962,18 +2127,25 @@ export class EmailTemplateService extends BaseService {
     this.ownedEntry(record);
     this.assertOverridden(record);
     if (
-      versionDigest(versionOf(row)) !== undo.applied ||
+      storedDigest(versionOf(row), storedFormat(row).blocks) !== undo.applied ||
       row.baseDigest !== undo.appliedBase
     ) {
       throw changedSince("applied", id, record.slug);
     }
-    const version = versionOf(undo.version);
+    const version = undo.blocks
+      ? compiledVersion(versionOf(undo.version), undo.blocks)
+      : versionOf(undo.version);
     const base = versionOf(undo.base);
     this.assertLayoutMarker(row.kind, version.htmlContent);
 
-    await this.writeSitesVersion(row, record, version, versionDigest(base), {
-      baseVersion: { ...base, details: row.baseVersion?.details },
-    });
+    await this.writeSitesVersion(
+      row,
+      record,
+      version,
+      undo.baseDigest ?? versionDigest(base),
+      { baseVersion: { ...base, details: row.baseVersion?.details } },
+      undo.blocks
+    );
 
     await this.recordActivity({
       action: "update",
@@ -2009,7 +2181,9 @@ export class EmailTemplateService extends BaseService {
       same(t.description, row.description ?? null),
       same(t.overridden, row.overridden ?? null),
       same(t.baseDigest, row.baseDigest ?? null),
-      this.sameVariables(row.variables ?? null),
+      same(t.format, row.format ?? null),
+      this.sameJson(t.blocks, row.blocks ?? null),
+      this.sameJson(t.variables, row.variables ?? null),
       // Every save moves it, to the second on SQLite and MySQL.
       row.updatedAt ? eq(t.updatedAt, row.updatedAt) : isNull(t.updatedAt)
     );
@@ -2020,13 +2194,12 @@ export class EmailTemplateService extends BaseService {
    * PostgreSQL, JSON equality on MySQL (the text cast to JSON), and the stored
    * text on SQLite, which drizzle writes with `JSON.stringify`.
    */
-  private sameVariables(variables: EmailTemplateVariable[] | null) {
-    const column = this.emailTemplates.variables;
-    if (variables === null) return isNull(column);
+  private sameJson(column: Column, value: unknown) {
+    if (value === null) return isNull(column);
     if (this.dialect === "mysql") {
-      return sql`${column} = CAST(${JSON.stringify(variables)} AS JSON)`;
+      return sql`${column} = CAST(${JSON.stringify(value)} AS JSON)`;
     }
-    return eq(column, variables);
+    return eq(column, value);
   }
 
   /**
@@ -2052,11 +2225,15 @@ export class EmailTemplateService extends BaseService {
     id: string,
     version: EmailTemplateVersion,
     baseDigest: string | null,
-    slug: string
+    slug: string,
+    blocks: WrittenDocument | null = null
   ): Promise<void> {
     const after = await this.getRow(id);
+    // With the blocks: a save of other blocks that write the same HTML is
+    // still a save in between.
     if (
-      versionDigest(versionOf(after)) !== versionDigest(version) ||
+      storedDigest(versionOf(after), storedFormat(after).blocks) !==
+        storedDigest(version, blocks) ||
       after.baseDigest !== baseDigest
     ) {
       throw changedSince("saved", id, slug);
@@ -2066,23 +2243,38 @@ export class EmailTemplateService extends BaseService {
   /**
    * Write a version the site chose (an override, an applied review, an undo),
    * conditioned on the row as read. Liquid judges it as it judges a save, and
-   * the re-check a save needs runs once it is written.
+   * the re-check a save needs runs once it is written. It stays written with
+   * `blocks` only while it holds what they compile to (`sitesVersionFormat`).
    */
   private async writeSitesVersion(
     row: StoredTemplateRow,
     record: EmailTemplateRecord,
     version: EmailTemplateVersion,
     baseDigest: string,
-    columns: Record<string, unknown>
+    columns: Record<string, unknown>,
+    blocks: WrittenDocument | null | undefined
   ): Promise<void> {
+    const format = sitesVersionFormat(blocks, version);
     const afterSave = await this.checkLiquidOnSave(record, version);
     await this.writeTemplateRow(row.id, db =>
       db
         .update(this.emailTemplates)
-        .set({ ...version, ...columns, baseDigest, updatedAt: new Date() })
+        .set({
+          ...version,
+          ...format,
+          ...columns,
+          baseDigest,
+          updatedAt: new Date(),
+        })
         .where(this.unchanged(row))
     );
-    await this.assertWritten(row.id, version, baseDigest, record.slug);
+    await this.assertWritten(
+      row.id,
+      version,
+      baseDigest,
+      record.slug,
+      format.blocks
+    );
     await afterSave(await this.getTemplate(row.id));
   }
 
@@ -2241,10 +2433,13 @@ export class EmailTemplateService extends BaseService {
    */
   async previewDraft(
     draft: TemplateFields &
-      Pick<EmailTemplateRecord, "layoutId"> & { id?: string },
+      Pick<EmailTemplateRecord, "layoutId"> & {
+        id?: string;
+        fromOverride?: string | null;
+      },
     sampleData: Record<string, unknown>,
     brandChange?: BrandSettingsUpdate
-  ): Promise<RenderedTemplate> {
+  ): Promise<DraftPreview> {
     const layout = draft.useLayout ? await this.getLayoutFor(draft) : null;
     // A draft of a saved template previews with that template's engine unless
     // the caller chose one, so a kept template's draft looks as it would send.
@@ -2253,21 +2448,33 @@ export class EmailTemplateService extends BaseService {
       (draft.id
         ? await this.keptOnOldEngine({ ...draft, id: draft.id }, "render")
         : false);
-    return renderTemplate(
+    const options = {
+      appName: this.appName,
+      brand: withBrandChange(
+        await this.brandFor({ ...draft, legacy }, layout),
+        brandChange
+      ),
+    };
+    const { rendered, preheaderHtml } = renderTemplateParts(
       { ...draft, legacy },
       layout && {
         ...layout,
         legacy: await this.keptOnOldEngine(layout, "render"),
       },
       sampleData,
-      {
-        appName: this.appName,
-        brand: withBrandChange(
-          await this.brandFor({ ...draft, legacy }, layout),
-          brandChange
-        ),
-      }
+      options
     );
+    return {
+      ...rendered,
+      // The preview text as an inbox shows it: the hidden line this render
+      // spliced into the HTML, read as text the way an inbox reads it.
+      preheader: preheaderHtml
+        ? htmlToText(preheaderHtml, { linkTargets: false }).trim()
+        : "",
+      from: draft.fromOverride
+        ? previewFrom(draft.fromOverride, sampleData)
+        : null,
+    };
   }
 
   // ============================================================
@@ -2422,6 +2629,10 @@ export class EmailTemplateService extends BaseService {
     return {
       ...entry.version,
       kind: entry.defaults.kind ?? "template",
+      // The owner's format with its version, so writing it replaces a site's
+      // blocks with the owner's, or with none for a coded owner.
+      format: entry.blocks ? ("written" as const) : ("code" as const),
+      blocks: entry.blocks ?? null,
       ...detailsOf(entry.defaults),
     };
   }
@@ -2531,7 +2742,7 @@ export class EmailTemplateService extends BaseService {
     // A row holding one of the owner's earlier versions was never edited,
     // only not brought up to date, so it follows the owner too.
     const keepSitesVersion =
-      !isOwnersVersion(entry, versionOf(row)) ||
+      !isOwnersVersion(entry, versionOf(row), storedFormat(row).blocks) ||
       (firstTime && this.registry.setInCode.has(row.slug)) ||
       row.overridden === true;
     const owner = storedOwner(entry.owner);
@@ -2633,6 +2844,7 @@ export class EmailTemplateService extends BaseService {
     const current = {
       ...versionOf(row),
       kind: row.kind ?? "template",
+      ...storedFormat(row),
       ...detailsOf(row),
     };
     // Compared presentation aside, the rule `followOwnerDetails` states: the
@@ -2670,6 +2882,8 @@ export class EmailTemplateService extends BaseService {
    * a plugin's contribution published before Liquid may not.
    */
   private keepsOwnersVersion(entry: OwnedTemplate): boolean {
+    // Blocks always render as Liquid; the boot refuses a legacy declaration.
+    if (entry.blocks) return false;
     if (entry.engine) return entry.engine === "legacy";
     return !this.readsAsLiquid(entry.version);
   }

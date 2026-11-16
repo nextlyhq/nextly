@@ -40,6 +40,24 @@ export function secretGenerations(
 }
 
 /**
+ * Every generation this install reads with, the CURRENT one first, for a helper that also writes
+ * with the head of the list: the unkeyed generation stands first when no `NEXTLY_SECRET` is set,
+ * ahead of any retired secret still listed. {@link secretGenerations} leaves it out then, which is
+ * right for a reader of retired data alone, but a writer taking that list's head would write with
+ * a retired key: clearing the retired setting would then strand what it wrote, and what the
+ * unkeyed generation wrote before would be unreadable while that setting stayed.
+ */
+export function generationsCurrentFirst(
+  current: string | undefined,
+  retiredList: string | undefined
+): SecretGeneration[] {
+  const generations = secretGenerations(current, retiredList);
+  return current === undefined
+    ? [undefined, ...generations.filter(generation => generation !== undefined)]
+    : generations;
+}
+
+/**
  * One generation this install can read with.
  *
  * `undefined` is the UNKEYED generation, not a missing value. A development

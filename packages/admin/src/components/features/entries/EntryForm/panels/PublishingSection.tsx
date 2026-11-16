@@ -69,6 +69,9 @@ export function PublishingSection({
   );
 }
 
+/** "Not scheduled." over the offer to schedule, and the place both hold while the answer is out. */
+const NOT_SCHEDULED_LAYOUT = "flex flex-col items-start gap-2";
+
 function PublishingBody({
   releases,
   isError,
@@ -88,16 +91,26 @@ function PublishingBody({
     );
   }
   if (isPending || releases === undefined) {
+    // Laid out as the answer most documents get, "Not scheduled." over the
+    // offer to schedule: a bar on the sentence's line, and the offer's own
+    // button held unseen, so the sections under this one stay where they are
+    // when that answer lands.
     return (
-      <div aria-busy="true">
+      <div aria-busy="true" className={NOT_SCHEDULED_LAYOUT}>
         <span className="sr-only">Checking releases</span>
-        <Skeleton className="h-4 w-40" />
+        {/* A div, not a paragraph: the bar is a block element, and a
+            paragraph around it is invalid HTML that React reports. */}
+        <div className="flex items-center text-sm">
+          {"\u200b"}
+          <Skeleton className="h-4 w-40" />
+        </div>
+        <ScheduleButton holdingPlace />
       </div>
     );
   }
   if (releases.length === 0) {
     return (
-      <div className="flex flex-col items-start gap-2">
+      <div className={NOT_SCHEDULED_LAYOUT}>
         <p className="text-sm text-muted-foreground">Not scheduled.</p>
         <ScheduleButton />
       </div>
@@ -130,7 +143,15 @@ function PublishingBody({
  * Held with its reason as visible text, as a menu row says it: a disabled
  * button's title reaches neither a keyboard nor a touch screen.
  */
-function ScheduleButton() {
+function ScheduleButton({
+  holdingPlace = false,
+}: {
+  /**
+   * Whether this only holds the button's place while the schedule is checked:
+   * the same button and the reason line under it, unseen and out of reach.
+   */
+  holdingPlace?: boolean;
+}) {
   const reasonId = useId();
   const documentActions = useDocumentActionsContext();
   const action = documentActions?.actions.find(
@@ -145,6 +166,34 @@ function ScheduleButton() {
     return null;
   }
   const reason = reasonFor(action, binding);
+  if (holdingPlace) {
+    // The reason the offer is off is known before the schedule is (a
+    // colleague holds the document), and the answer draws it under the
+    // button: its place is held too, so the sections below stay put.
+    return (
+      <>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled
+          tabIndex={-1}
+          aria-hidden="true"
+          className="invisible"
+        >
+          {action.label}
+        </Button>
+        {reason === undefined ? null : (
+          <p
+            aria-hidden="true"
+            className="invisible text-xs text-muted-foreground"
+          >
+            {reason}
+          </p>
+        )}
+      </>
+    );
+  }
   return (
     <>
       <Button

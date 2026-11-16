@@ -54,11 +54,16 @@ const REPLACED_BY: Readonly<Record<string, string>> = {
   ValidationRuleValues: PANEL,
 };
 
-/** Every declaration file under a built package's `dist`. */
-function declarationsIn(distDir: string): string[] {
-  return readdirSync(distDir, { recursive: true, encoding: "utf8" })
-    .filter(file => /\.d\.m?ts$/.test(file))
-    .map(file => readFileSync(join(distDir, file), "utf8"));
+/** Every declaration file under a built package's `dist`, by its path. */
+function declarationsIn(distDir: string): Map<string, string> {
+  return new Map(
+    readdirSync(distDir, { recursive: true, encoding: "utf8" })
+      .filter(file => /\.d\.m?ts$/.test(file))
+      .map(file => [
+        join(distDir, file),
+        readFileSync(join(distDir, file), "utf8"),
+      ])
+  );
 }
 
 /** The `dist` directory holding a package entry the SDK resolves. */
@@ -94,6 +99,36 @@ function localNameOf(name: string, text: string): string | undefined {
 }
 
 /**
+ * Where a file takes `local` from, when it imports it rather than declaring
+ * it: the declaration file the import names, and the name that file exports
+ * it under. A build splits declarations into shared files and re-exports them
+ * under short names (`import { G as FieldTypePicker } from "../field-ui.d-….mjs"`).
+ */
+function importOf(
+  local: string,
+  file: string,
+  text: string
+): { file: string; name: string } | undefined {
+  for (const found of text.matchAll(
+    /^import \{([^}]*)\} from "([^"]+)";?$/gm
+  )) {
+    for (const entry of found[1].split(",")) {
+      const spec = entry.trim().replace(/^type\s+/, "");
+      const parts = /^([\w$]+)(?:\s+as\s+([\w$]+))?$/.exec(spec);
+      if (
+        parts &&
+        (parts[2] ?? parts[1]) === local &&
+        found[2].startsWith(".")
+      ) {
+        const target = join(dirname(file), found[2]).replace(/\.m?js$/, "");
+        return { file: target, name: parts[1] };
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
  * The JSDoc directly above the declaration of `local` at the start of a line,
  * `""` when it has none, or `undefined` when the file does not declare it.
  */
@@ -107,11 +142,35 @@ function docOf(local: string, text: string): string | undefined {
   return found ? (found[1] ?? "") : undefined;
 }
 
+/**
+ * The JSDoc of the declaration `file` exports `name` as, following imports
+ * into the shared declaration files they name.
+ */
+function docIn(
+  name: string,
+  file: string,
+  files: ReadonlyMap<string, string>,
+  depth = 0
+): string | undefined {
+  const text = files.get(file);
+  const local = text === undefined ? undefined : localNameOf(name, text);
+  if (text === undefined || local === undefined || depth > 4) return undefined;
+  const doc = docOf(local, text);
+  if (doc !== undefined) return doc;
+  const from = importOf(local, file, text);
+  if (from === undefined) return undefined;
+  const target = [...files.keys()].find(
+    path => path.replace(/\.d\.m?ts$/, "") === from.file
+  );
+  return target === undefined
+    ? undefined
+    : docIn(from.name, target, files, depth + 1);
+}
+
 /** The JSDoc of the declaration each file exporting `name` resolves it to. */
-function docsOf(name: string, files: readonly string[]): string[] {
-  return files.flatMap(text => {
-    const local = localNameOf(name, text);
-    const doc = local === undefined ? undefined : docOf(local, text);
+function docsOf(name: string, files: ReadonlyMap<string, string>): string[] {
+  return [...files.keys()].flatMap(file => {
+    const doc = docIn(name, file, files);
     return doc === undefined ? [] : [doc];
   });
 }

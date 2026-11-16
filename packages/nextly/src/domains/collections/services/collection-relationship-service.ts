@@ -1,5 +1,6 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import {
+  and,
   getColumns,
   inArray,
   sql,
@@ -86,6 +87,7 @@ import {
   populateCompanionFields,
   selectRowsWithCompanion,
 } from "../../i18n/companion-join";
+import { publishedInLanguageCondition } from "../../i18n/read-in-language";
 import { resolveCompanionSchemaReadiness } from "../../i18n/runtime/companion-readiness";
 import {
   NO_DECISIONS,
@@ -95,7 +97,10 @@ import {
   NO_RELEASE_VISIBILITY,
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
-import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
+import {
+  fieldsStoredOnRow,
+  usesJunctionTable,
+} from "../../schema/services/field-column-descriptor";
 import {
   localizedFilterContext,
   matchColumn,
@@ -2073,7 +2078,23 @@ export class CollectionRelationshipService extends BaseService {
           );
         })
       : fetched;
-    const rows = lifecycleRows.filter(row => matching.has(row));
+    // Published in the read's language too, as a direct read of the target in
+    // that language finds it: a target withheld there is withheld here, and
+    // recorded as withheld rather than filled from a fallback language.
+    const inLanguage = statusFilter
+      ? await this.idsPublishedInReadLanguage(
+          targetCollection,
+          schema,
+          lifecycleRows,
+          statusFilter,
+          access,
+          decisions.reveal
+        )
+      : null;
+    const rows = lifecycleRows.filter(
+      row =>
+        matching.has(row) && (inLanguage === null || inLanguage.has(row.id))
+    );
     this.recordWithheld(targetCollection, fetched, rows, access);
 
     // A target whose translatable values live in its companion is read with them, in the language
@@ -2084,13 +2105,67 @@ export class CollectionRelationshipService extends BaseService {
       rows,
       statusFilter,
       access,
-      translations
+      translations,
+      revealed
     );
     // Redaction runs before any caller derives a label from a row: a label
     // copies a field's value under another key, so one taken from an unredacted
     // row survives the redaction of its own source field.
     await this.redactRelatedRows(targetCollection, rows, access);
     return rows;
+  }
+
+  /**
+   * Of `rows`, the ids published in the language the read asked for, by the
+   * rule a direct read of the target applies (`publishedInLanguageCondition`),
+   * a due release's reveals included. Null where that rule keeps nothing out:
+   * a read with no language, a system entity, a target that publishes no
+   * language on its own, or one whose translations table is not there yet.
+   */
+  private async idsPublishedInReadLanguage(
+    targetCollection: string,
+    schema: Table & { id: Column },
+    rows: Record<string, unknown>[],
+    statusFilter: StatusFilter,
+    access: RelatedRowAccess,
+    revealed: readonly string[]
+  ): Promise<ReadonlySet<unknown> | null> {
+    const localeChain = targetLocaleChain(access);
+    if (!localeChain || rows.length === 0 || isSystemEntity(targetCollection)) {
+      return null;
+    }
+    const companion = await this.resolveTargetCompanion(
+      targetCollection,
+      access
+    );
+    if (
+      !companion ||
+      (await resolveCompanionSchemaReadiness(this.adapter, companion)) !==
+        "ready"
+    ) {
+      return null;
+    }
+    const condition = publishedInLanguageCondition({
+      companion,
+      statusFilter,
+      revealed,
+      localeChain,
+      mainIdColumn: schema.id,
+    });
+    if (!condition) return null;
+    const found = (await this.db
+      .select({ id: schema.id })
+      .from(schema)
+      .where(
+        and(
+          inArray(
+            schema.id,
+            rows.map(row => row.id)
+          ),
+          condition
+        )
+      )) as { id: unknown }[];
+    return new Set(found.map(row => row.id));
   }
 
   /**
@@ -2159,7 +2234,10 @@ export class CollectionRelationshipService extends BaseService {
     statusFilter: StatusFilter | null,
     access: RelatedRowAccess,
     // The translations the rows were read with, when they came in the same statement.
-    translations: TargetTranslations | null = null
+    translations: TargetTranslations | null = null,
+    // The rows a due release reveals: their languages' rows are read whatever
+    // their status, as the release will publish them (`PopulateCompanionArgs.revealed`).
+    revealed?: ReadonlySet<unknown>
   ): Promise<void> {
     const localeChain = targetLocaleChain(access);
     if (!localeChain || rows.length === 0 || isSystemEntity(targetCollection)) {
@@ -2178,6 +2256,7 @@ export class CollectionRelationshipService extends BaseService {
         localeChain: [...translations.localeChain],
         statusValues:
           companion.hasStatus && statusFilter ? statusFilter.values : undefined,
+        revealed,
       });
       return;
     }
@@ -2191,6 +2270,7 @@ export class CollectionRelationshipService extends BaseService {
       localeChain: [...localeChain],
       statusValues:
         companion.hasStatus && statusFilter ? statusFilter.values : undefined,
+      revealed,
     });
   }
 
@@ -2668,9 +2748,11 @@ export class CollectionRelationshipService extends BaseService {
   async batchExpandRelationships(
     entries: Record<string, unknown>[],
     collectionName: string,
-    fields: FieldDefinition[],
+    declaredFields: FieldDefinition[],
     options: RelationshipExpansionOptions = {}
   ): Promise<Record<string, unknown>[]> {
+    // The references the row holds, those inside a group with no name among them (`rowReferenceFields`).
+    const fields = rowReferenceFields(declaredFields);
     const {
       depth = DEFAULT_RELATIONSHIP_DEPTH,
       currentDepth = 0,
@@ -3187,9 +3269,11 @@ export class CollectionRelationshipService extends BaseService {
   async expandRelationships(
     entry: Record<string, unknown>,
     collectionName: string,
-    fields: FieldDefinition[],
+    declaredFields: FieldDefinition[],
     options: RelationshipExpansionOptions = {}
   ): Promise<Record<string, unknown>> {
+    // The references the row holds, those inside a group with no name among them (`rowReferenceFields`).
+    const fields = rowReferenceFields(declaredFields);
     const { depth = DEFAULT_RELATIONSHIP_DEPTH, currentDepth = 0 } = options;
     // Travels with every nested expansion and row fetch, so a related row at
     // any depth is judged by its own collection's field rules.
@@ -4954,10 +5038,12 @@ export class CollectionRelationshipService extends BaseService {
           ) as table_exists
         `;
       } else {
+        // `current_schema()`, not `public`: the connection's `search_path` is
+        // the installation's configured schema, where the junction table is.
         checkQuery = sql`
           SELECT EXISTS (
             SELECT 1 FROM information_schema.tables
-            WHERE table_schema = 'public'
+            WHERE table_schema = current_schema()
             AND table_name = ${junctionTableName}
           ) as table_exists
         `;
@@ -5102,4 +5188,16 @@ export class CollectionRelationshipService extends BaseService {
     const tables = [sourceTableName, targetTableName].sort();
     return `${tables[0]}_${tables[1]}_${field.name}`;
   }
+}
+
+/**
+ * The fields whose references an entry holds at this level: those at the top, and those inside a
+ * group with no name, whose columns are on the same row (`fieldsStoredOnRow`). A many-to-many is
+ * taken at the top alone, where the creating SQL gives it the junction table it is read from.
+ */
+function rowReferenceFields(fields: FieldDefinition[]): FieldDefinition[] {
+  const topLevel = new Set(fields);
+  return fieldsStoredOnRow(fields).filter(
+    field => topLevel.has(field) || !usesJunctionTable(field)
+  );
 }

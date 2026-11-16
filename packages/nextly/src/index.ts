@@ -141,6 +141,16 @@ export { nextly } from "./direct-api";
 // were removed in PR 12 (final unified-error-system cleanup).
 export { NextlyError } from "./errors";
 
+// Whether a failure means Nextly is unavailable, and the render policy that
+// follows from it: in production a page render fails rather than being
+// served without what Nextly gives it. On the root as well as
+// `nextly/runtime`, so `@nextlyhq/plugin-sdk` re-exports it without pulling
+// the runtime barrel into every plugin. `@experimental`.
+export {
+  failRenderWhenUnavailable,
+  isNextlyUnavailable,
+} from "./errors/unavailable";
+
 // The canonical mutation builder, published so a CONTRIBUTED route can answer
 // in the same envelope every first-party write answers in.
 //
@@ -269,6 +279,7 @@ export type {
   FindMediaArgs,
   FindMediaByIDArgs,
   FindMediaByIDsArgs,
+  MediaCopyArgs,
   UpdateMediaArgs,
   DeleteMediaArgs,
   BulkDeleteMediaArgs,
@@ -436,6 +447,20 @@ export type {
 } from "./services/users/user-service";
 
 export { MediaService } from "./services/media/media-service";
+/**
+ * Resized copies of stored images: the widths a copy can have, the allowed
+ * width nearest any other, and what `copyOf` answers.
+ * @experimental
+ */
+export {
+  MEDIA_COPY_WIDTHS,
+  nearestMediaCopyWidth,
+  type MediaCopyWidth,
+} from "./domains/media/copies/copy-rules";
+export type {
+  MediaCopy,
+  MediaCopySource,
+} from "./domains/media/copies/media-copies";
 export type {
   MediaFile,
   MediaType,
@@ -584,6 +609,7 @@ export {
   type PluginPinTransaction,
   type PluginInsert,
   type PluginTransaction,
+  type PluginTransactionBounds,
   type PluginHookPointDeclaration,
   type PluginSettingsApi,
   type PluginCacheApi,
@@ -718,6 +744,14 @@ export {
   type ContentTypeKind,
   type ContentTypeScope,
 } from "./plugins/content-type-scope";
+// Which types a plugin's `extend` added each field to, as the start resolved
+// them. @experimental
+export { typesExtendedBy, type ExtendedType } from "./plugins/extended-types";
+// A plugin's switch for the fields its `extend` added. @experimental
+export {
+  EXTENSION_SWITCH_SERVICE,
+  type ExtensionSwitch,
+} from "./plugins/extension-switch";
 
 // The later pages of a paginated list's address (`/news/page/2`): one
 // spelling per page, read the way the content routes read them.
@@ -1019,6 +1053,19 @@ export type {
   PluginWriteExpectation,
 } from "./plugins/stored-fields";
 export { storedValueHash } from "./domains/collections/services/stored-field-read";
+// A field rewrite: one field of an entry or a Single changed on its live copy
+// and on every pending draft that holds it, without publishing, from the
+// version the caller read (`ctx.services.collections.rewriteField`,
+// `nextly.rewriteField`). Its types, here for `@nextlyhq/plugin-sdk` to
+// publish.
+export type {
+  DocumentFieldRewriteRequest,
+  FieldRewriteCopy,
+  FieldRewriteRequest,
+  FieldRewriteResult,
+  FieldRewriteValue,
+  SingleFieldRewriteRequest,
+} from "./domains/versions/field-rewrite";
 // A plugin's question "may this person delete this entry", asked of the
 // delete's own gate (its grant and a rule's row filter for the entry) with no
 // hook run and nothing written. Here for `@nextlyhq/plugin-sdk` to publish.
@@ -1115,7 +1162,6 @@ export type {
 // Version pins: a feature registers itself as a holder once, then points named
 // slots at a document's versions, and retention never removes a version a slot
 // points at. Pins run on the caller's core transaction.
-// @experimental
 export {
   registerVersionPinHolder,
   versionPins,
@@ -1288,6 +1334,8 @@ export {
   type ListQueryWhere,
   type ListQueryFilterContext,
   type PublicAddressTemplateContext,
+  type EmailTemplateReference,
+  type EmailTemplateReferencesContext,
 } from "./filters";
 
 // ============================================================

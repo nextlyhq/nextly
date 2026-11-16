@@ -2574,7 +2574,7 @@ describe("dragging a number field's label", () => {
   it("ends a drag unwritten when another block is selected under it", () => {
     // The drag's value came from the old block, so neither block is
     // written and the field shows the new one's, whether the row is drawn
-    // afresh for it (sections are keyed by block) or reused.
+    // afresh for it (section bodies are keyed by block) or reused.
     register({ spacing: true });
     const document = {
       formatVersion: 1,
@@ -5310,11 +5310,215 @@ describe("a per-side property is drawn as a box", () => {
     const box = mountWithOrientation(LTR);
 
     expect(frameOf(box)?.getAttribute("data-sides")).toBe("logical");
+    // In the document in the order Tab visits them, the shorthand's order:
+    // top, then the inline end (right in a left-to-right page), bottom, and
+    // the inline start. Where each is DRAWN is the stylesheet's, by side.
     expect(
       Array.from(box?.querySelectorAll("[data-side]") ?? [], field =>
         field.getAttribute("data-side")
       )
-    ).toEqual(["blockStart", "inlineStart", "inlineEnd", "blockEnd"]);
+    ).toEqual(["blockStart", "inlineEnd", "blockEnd", "inlineStart"]);
+  });
+
+  it("moves Tab through margin then padding, each Top, Right, Bottom, Left, and never onto a reset", () => {
+    /*
+     * Typed as an author types a box: a value, Tab, a value. Every side holds
+     * a value first, so each has a reset beside it; a reset that was a Tab
+     * stop would take the next value instead of the next side.
+     *
+     * The sequence is read as the browser builds it, since jsdom moves no
+     * focus on Tab: every element in the box that takes focus from the
+     * keyboard, in document order (no positive tabindex is used here). The
+     * browser test in e2e presses the real key.
+     */
+    const all = {
+      blockStart: "1px",
+      inlineEnd: "1px",
+      blockEnd: "1px",
+      inlineStart: "1px",
+    };
+    register({ spacing: true });
+    const editor = editorFor(
+      documentOf({
+        base: { [BASE_BREAKPOINT]: { margin: all, padding: all } },
+      } as unknown as NodeStyles)
+    );
+    render(<StyleInspectorPanel editor={editor} sideOrientation={LTR} />);
+    const box = within(
+      document.querySelector(".nx-spacing-box") as HTMLElement
+    );
+    // The control: every side does have a reset to land on.
+    expect(box.getAllByRole("button", { name: /^Reset / })).toHaveLength(8);
+
+    const order = [
+      "Margin top",
+      "Margin right",
+      "Margin bottom",
+      "Margin left",
+      "Padding top",
+      "Padding right",
+      "Padding bottom",
+      "Padding left",
+    ];
+    const stops = Array.from(
+      document
+        .querySelector(".nx-spacing-box")
+        ?.querySelectorAll<HTMLElement>("input, button, [tabindex]") ?? []
+    ).filter(
+      element =>
+        element.tabIndex >= 0 &&
+        !(element as HTMLInputElement | HTMLButtonElement).disabled
+    );
+    const visited = stops.map(
+      element =>
+        element.getAttribute("aria-label") ??
+        (element as HTMLInputElement).labels?.[0]?.textContent?.trim() ??
+        ""
+    );
+
+    expect(visited).toEqual(order);
+  });
+
+  it("resets the focused side with Alt+Backspace, as its reset button does", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { margin: { blockStart: "8px" } } },
+    } as unknown as NodeStyles;
+    register({ spacing: true });
+    const byButton = editorFor(documentOf(styles));
+    const first = render(
+      <StyleInspectorPanel editor={byButton} sideOrientation={LTR} />
+    );
+    fireEvent.click(
+      within(
+        document.querySelector(".nx-spacing-box") as HTMLElement
+      ).getByRole("button", { name: /^Reset Margin top/ })
+    );
+    first.unmount();
+
+    const byKey = editorFor(documentOf(styles));
+    render(<StyleInspectorPanel editor={byKey} sideOrientation={LTR} />);
+    const top = within(
+      document.querySelector(".nx-spacing-box") as HTMLElement
+    ).getByLabelText("Margin top");
+    fireEvent.keyDown(top, { key: "Backspace", altKey: true });
+
+    // The same write the button makes, so the key is the reset and not a
+    // second, slightly different one.
+    expect(byKey.applyAll).toHaveBeenCalledTimes(1);
+    expect(byKey.applyAll.mock.calls[0]?.[0]).toEqual(
+      byButton.applyAll.mock.calls[0]?.[0]
+    );
+  });
+
+  it("leaves Alt+Backspace alone on a side with nothing to reset", () => {
+    const { editor, box } = mountSpacingBox(LTR);
+    const top = within(box as HTMLElement).getByLabelText("Margin top");
+
+    // `fireEvent` answers whether the default went ahead: the key still
+    // deletes a word in the field when there is nothing to reset.
+    const wentAhead = fireEvent.keyDown(top, {
+      key: "Backspace",
+      altKey: true,
+    });
+
+    expect(wentAhead).toBe(true);
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("does not reset a side from the variables list it opened", () => {
+    /*
+     * The list is drawn in a layer at the end of the page, but React carries
+     * a key press from it back through the side that opened it. Alt+Backspace
+     * there (delete a word, in the list's search) is not the side's reset.
+     */
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { margin: { blockStart: "8px" } } },
+    } as unknown as NodeStyles;
+    register({ spacing: true });
+    const editor = editorFor(documentOf(styles));
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        sideOrientation={LTR}
+        tokens={{
+          tokens: [
+            { name: "space.sm", kind: "dimension", values: { light: "8px" } },
+          ],
+        }}
+      />
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Variables for Margin top" })
+    );
+    const list = screen.getByRole("listbox", { name: "Variables" });
+    // The control: the list really is outside the side's field.
+    expect(list.closest(".nx-spacing-box")).toBeNull();
+
+    fireEvent.keyDown(list, { key: "Backspace", altKey: true });
+
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("goes round the box mirrored on a right-to-left element", () => {
+    // The order is the sides' logical one: top, inline end, bottom, inline
+    // start, which on a right-to-left element is top, left, bottom, right.
+    const { box } = mountSpacingBox({
+      writingMode: "horizontal-tb",
+      direction: "rtl",
+    });
+    const names = Array.from(
+      box?.querySelectorAll<HTMLInputElement>(
+        "[data-ring='margin'] > [data-side] input"
+      ) ?? [],
+      input => input.labels?.[0]?.textContent?.trim() ?? ""
+    );
+
+    expect(names).toEqual([
+      "Margin top",
+      "Margin left",
+      "Margin bottom",
+      "Margin right",
+    ]);
+  });
+
+  /** A side's description, read as assistive technology reads it. */
+  function descriptionOf(field: HTMLElement): string {
+    return (field.getAttribute("aria-describedby") ?? "")
+      .split(" ")
+      .map(id => document.getElementById(id)?.textContent ?? "")
+      .join(" ");
+  }
+
+  it("names the reset key in each side's description, as this keyboard spells it", () => {
+    const { box } = mountSpacingBox(LTR);
+    const top = within(box as HTMLElement).getByLabelText("Margin top");
+
+    expect(descriptionOf(top)).toBe("Alt+Backspace resets this side.");
+    // A description, not an error: the side is not marked invalid by it.
+    expect(top.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("names the key Option+Delete on a Mac, in words", () => {
+    const original = Object.getOwnPropertyDescriptor(
+      window.navigator,
+      "platform"
+    );
+    Object.defineProperty(window.navigator, "platform", {
+      value: "MacIntel",
+      configurable: true,
+    });
+    try {
+      const { box } = mountSpacingBox(LTR);
+      const top = within(box as HTMLElement).getByLabelText("Margin top");
+
+      // In words, as a Mac keyboard labels the keys: a spoken description
+      // where glyphs like ⌥ would be skipped.
+      expect(descriptionOf(top)).toBe("Option+Delete resets this side.");
+    } finally {
+      if (original !== undefined) {
+        Object.defineProperty(window.navigator, "platform", original);
+      }
+    }
   });
 
   it("carries the EDITED ELEMENT's axes, so its grid resolves in them", () => {

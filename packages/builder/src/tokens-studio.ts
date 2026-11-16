@@ -37,8 +37,10 @@
  * @module tokens-studio
  */
 import {
+  checkTokenKind,
   emitTokenBlocks,
   tokenDisplayLabel,
+  tokenKindExample,
   tokenLabelIssue,
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
@@ -487,6 +489,33 @@ function lineHeightValueIssue(value: string): string | undefined {
     : undefined;
 }
 
+/** A number with no unit, other than zero, which a length needs a unit for. */
+const BARE_NUMBER = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/;
+
+/** A zero, which is a length without a unit. */
+const ZERO = /^[+-]?(?:0+(?:\.0*)?|\.0+)$/;
+
+/**
+ * A length as typed, with `px` added to a bare number, as the block panel
+ * adds it: `20` in a spacing variable means 20px to an author, and to CSS it
+ * is no length at all. A zero needs no unit and is left as typed.
+ */
+function withPixels(value: string): string {
+  return BARE_NUMBER.test(value) && !ZERO.test(value) ? `${value}px` : value;
+}
+
+/**
+ * Why a value cannot be its variable's kind, in words with what to type
+ * instead, or nothing. The engine's own kind check, the one a save runs, so
+ * the field refuses exactly what the server would.
+ */
+function kindValueIssue(kind: TokenKind, value: string): string | undefined {
+  const mismatch = checkTokenKind(kind, value);
+  if (mismatch === undefined) return undefined;
+  const example = tokenKindExample(kind);
+  return `"${value}" ${mismatch}.${example === undefined ? "" : ` Type ${example}.`}`;
+}
+
 /** What writing a variable's value comes to: the new set, or why not. */
 export type TokenValueWrite =
   | {
@@ -521,8 +550,13 @@ export function writeTokenValue(
   value: string
 ): TokenValueWrite {
   const token = tokens.tokens[at];
-  if (token === undefined || !isLineHeightToken(token)) {
-    return { tokens: setTokenValue(tokens, at, mode, value) };
+  if (token === undefined) return { tokens };
+  if (!isLineHeightToken(token)) {
+    const written = token.kind === "dimension" ? withPixels(value) : value;
+    const issue = kindValueIssue(token.kind, written);
+    return issue === undefined
+      ? { tokens: setTokenValue(tokens, at, mode, written) }
+      : { issue };
   }
   const issue = lineHeightValueIssue(value);
   if (issue !== undefined) return { issue };

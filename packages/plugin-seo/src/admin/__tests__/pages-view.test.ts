@@ -10,8 +10,11 @@ import type { Problem, ProblemKind } from "../../problems/contract";
 import {
   developerNote,
   entryHref,
+  linksText,
   problemsByPage,
   shownPages,
+  STATUS_ORDER,
+  STATUS_TEXT,
   statusOf,
   titleSourceText,
   typeChoices,
@@ -106,6 +109,32 @@ describe("each page's status", () => {
     expect(status(4)).toBe("hidden");
   });
 
+  it("writes how many pages link in and out, from the counts the list gives a checked page", () => {
+    const byPage = problemsByPage(
+      [],
+      [
+        {
+          type: "single:home",
+          id: "1",
+          links: { inbound: 0, outbound: 12 },
+        },
+        {
+          type: "posts",
+          id: "7",
+          locale: "de",
+          links: { inbound: 3, outbound: 1 },
+        },
+      ]
+    );
+    expect(linksText(ITEMS[0] as SiteAddress, byPage)).toBe("0 in · 12 out");
+    expect(linksText(ITEMS[2] as SiteAddress, byPage)).toBe("3 in · 1 out");
+    // Not checked in the site's language, so nothing to count yet.
+    expect(linksText(ITEMS[1] as SiteAddress, byPage)).toBe("—");
+    // A page built in code holds no content the check reads.
+    expect(linksText(ITEMS[3] as SiteAddress, byPage)).toBe("—");
+    expect(linksText(ITEMS[0] as SiteAddress, undefined)).toBe("—");
+  });
+
   it("is unknown for every page until the problem list has been read", () => {
     expect(statusOf(ITEMS[1] as SiteAddress, undefined)).toBe("unknown");
     // Not even "good": nothing was checked.
@@ -127,6 +156,38 @@ describe("each page's status", () => {
     expect(statusOf(ITEMS[1] as SiteAddress, byPage)).toBe("unknown");
     // A page built in code isn't checked per page either way.
     expect(statusOf(ITEMS[3] as SiteAddress, byPage)).toBe("not-connected");
+  });
+
+  it("is SEO off for a page of a type whose SEO is switched off, before any problem list is read", () => {
+    const off: SiteAddress = {
+      path: "/authors/mobeen",
+      name: "Mobeen",
+      source: "entry",
+      from: "Authors",
+      standing: "seo-off",
+      sources: {},
+      entry: { kind: "collection", slug: "authors", id: "9" },
+    };
+    expect(statusOf(off, undefined)).toBe("seo-off");
+    // The problem list never checks such a page, and says nothing of it.
+    expect(statusOf(off, problemsByPage([], []))).toBe("seo-off");
+    expect(STATUS_TEXT["seo-off"]).toBe("SEO off");
+    expect(STATUS_ORDER).toContain("seo-off");
+  });
+
+  it("is unconfirmed for a page the build's route list couldn't confirm, before any problem list is read", () => {
+    const unconfirmed: SiteAddress = {
+      path: "/integrations/webflow",
+      name: "Webflow",
+      source: "dynamic",
+      from: "app/integrations/[name]/page.tsx",
+      standing: "unconfirmed",
+      sources: { title: "code" },
+    };
+    expect(statusOf(unconfirmed, undefined)).toBe("unconfirmed");
+    expect(statusOf(unconfirmed, problemsByPage([], []))).toBe("unconfirmed");
+    expect(STATUS_TEXT.unconfirmed).toBe("Unconfirmed");
+    expect(STATUS_ORDER).toContain("unconfirmed");
   });
 
   it("names a Single by its type key", () => {
@@ -186,6 +247,16 @@ describe("where an entry opens", () => {
     ).toBe("/admin/collections/posts/7?locale=de");
     expect(entryHref({ kind: "single", slug: "home", id: "1" })).toBe(
       "/admin/singles/home"
+    );
+  });
+
+  it("opens the SEO tab by the id each editor holds it under", () => {
+    expect(
+      entryHref({ kind: "collection", slug: "posts", id: "7" }, "seo")
+    ).toBe("/admin/collections/posts/7?tab=nextlyhq-plugin-seo.tab");
+    // A Single's editor is another place, with a tab of its own.
+    expect(entryHref({ kind: "single", slug: "home", id: "1" }, "seo")).toBe(
+      "/admin/singles/home?tab=nextlyhq-plugin-seo.single-tab"
     );
   });
 });

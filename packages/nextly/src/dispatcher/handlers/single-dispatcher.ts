@@ -21,8 +21,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import {
   assertBuilderFieldNames,
+  assertTopLevelFieldsNamed,
   assertValidFieldsPayload,
   assertValidPluginFieldOptions,
+  readRequestedLifecycle,
 } from "../../api/fields-payload";
 import {
   respondAction,
@@ -52,22 +54,25 @@ import { resolveCompanionRename } from "../../domains/i18n/migration/companion-r
 import { translationLayoutChange } from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { assertLanguageStatesAgreeWithEntry } from "../../domains/i18n/runtime/language-states-agree";
+import type { SchemaChangeAnswers } from "../../domains/schema/builder-save/schema-change-save";
+import { entityRelations } from "../../domains/schema/builder-save/single-relations";
+import { singleEntity } from "../../domains/schema/builder-save/stored-entity";
 import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
 import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
-import { recordedFieldsOf } from "../../domains/schema/services/collection-schema-apply";
+import {
+  fieldsAsStored,
+  recordedFieldsOf,
+} from "../../domains/schema/services/collection-schema-apply";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
-import {
-  resolveSingleTableName,
-  singleTableFamiliesCollide,
-} from "../../domains/singles/services/resolve-single-table-name";
+import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import type { SingleMetadataService } from "../../domains/singles/services/single-metadata-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
@@ -96,6 +101,13 @@ import {
   readAuthenticatedUser,
   requireAuthenticatedUser,
 } from "../helpers/authenticated-user";
+import {
+  builderSaveDeps,
+  checkBuilderSaveHistory,
+  reviewBuilderSchemaChange,
+  landingPush,
+  writeBuilderSchemaChange,
+} from "../helpers/builder-save-change";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
 import {
   builderSchemaPush,
@@ -123,7 +135,9 @@ import {
   parseRichTextFormat,
   parseRichTextStyles,
   isTruthyParam,
+  parseFallbackParam,
   parseStatusParam,
+  parseTranslationsParam,
   requireParam,
   toNumber,
 } from "../helpers/validation";
@@ -134,10 +148,12 @@ import {
 } from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
+import { respondAddressCheck } from "./address-check-route";
 import { readListOffset } from "./list-offset";
 import { readListOwner, slugListsForOwner } from "./list-owner";
 import { readAccessCallerForDispatch } from "./read-access-caller";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
+import { assertSingleTablesUnowned } from "./single-table-family";
 import {
   assertLabelRequestValid,
   autosaveForDocument,
@@ -447,6 +463,10 @@ export const SINGLE_VERSION_METHODS: Record<
         // away. An empty value is the same as none: the request named no
         // language, which a localized Single resolves to its default.
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+        // `?part=shared` asks for the shared part's pending change alone. It is
+        // forwarded so the discard can refuse it where the Single keeps no such
+        // draft, rather than reading it as a discard of the default language's.
+        shared: p.part === "shared",
         // The version the change was read at, from the query: a DELETE
         // carries no body to read it from.
         version: versionInputOfQuery(p),
@@ -556,6 +576,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
     },
   },
 
+  // What creating a Single under an address would answer, for the Builder's new-entity dialog;
+  // writes nothing.
+  checkSingleAddress: {
+    execute: (_svc, _p, body) => respondAddressCheck("single", body),
+  },
   createSingle: {
     execute: async (svc, _, body) => {
       const b = body as
@@ -582,11 +607,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           }
         | undefined;
 
-      if (!b?.slug) throw new Error("Single slug is required");
       // Judged by the one address rule every road shares, before the DDL below runs, so a refused
       // address leaves no `single_<slug>` table behind. A system resource's name is among its
-      // refusals: it seeds the same permission rows that resource's routes check.
-      assertAddressAllowed("single", b.slug);
+      // refusals: it seeds the same permission rows that resource's routes check. A missing or
+      // empty address is the rule's refusal too, so a save answers it as the Builder's address
+      // check does, with the rule's reason.
+      assertAddressAllowed("single", b?.slug);
+      if (!b?.slug) throw new Error("Single slug is required");
       if (!b?.label) throw new Error("Single label is required");
       if (!b?.fields || !Array.isArray(b.fields))
         throw new Error("Single fields array is required");
@@ -618,25 +645,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         });
       }
 
-      // Refused before any DDL runs, and keyed on the TABLE FAMILY rather than the slug. A slug is
-      // normalised on its way to a table name, so `foo-bar` and `foo_bar` name one physical table
-      // while looking like two free slugs — and a Single's storage spans its main table AND the
-      // `_locales` companion beside it, so `foo-locales` collides with `foo` the same way. The
-      // registry's own check runs after the DDL, by which point the create has already acted
-      // against the table that exists and rebound the runtime to this request's fields.
-      const owner = (await svc.registry.getAllSingles()).find(s =>
-        singleTableFamiliesCollide(s.tableName, tableName)
-      );
-      if (owner) {
-        throw NextlyError.duplicate({
-          logContext: {
-            reason: "single-table-conflict",
-            slug: b.slug,
-            tableName,
-            ownedBy: owner.slug,
-          },
-        });
-      }
+      // Refused before any DDL runs, by the table family another Single holds; the Builder's
+      // address check asks the same function.
+      await assertSingleTablesUnowned(svc.registry, b.slug, tableName);
 
       // i18n: a localized single stores translatable values via the app's
       // `localization` config; creating one without that config would split
@@ -761,6 +772,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // the language pills. All no-op for non-localized singles.
         locale: p.locale,
         fallbackLocale: p["fallback-locale"],
+        // `?fallback=document`: answer in the first published language of the
+        // chain where the Single is not published in the requested one.
+        wholeDocumentFallback: parseFallbackParam(p.fallback),
+        // `?source-locales=1` attaches `_sources`, each translatable value's language.
+        sourceLocales: isTruthyParam(p["source-locales"]),
+        // `?translations=all` attaches every language's values (`_allLocales`).
+        translations: parseTranslationsParam(p.translations),
         translationStatus: p["translation-status"] === "1",
         // `?draft=1` opts into the working-draft overlay, matching the entry
         // read. Gated server-side on an actual update-capability probe, so a
@@ -835,11 +853,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
   publishAllSingleLocales: {
     // Publish every language of a Single in one transaction. The Single
     // equivalent of the collection entry's publish-all.
-    execute: async (svc, p, body) => {
+    execute: async (svc, p, body, request) => {
       const slug = requireParam(p, "slug", "Single slug");
       const user = readAuthenticatedUser();
       const result = await svc.entry.publishAllLocales(slug, {
         user,
+        // The request the publish's update hooks are told about.
+        request,
         // Who performed the publish, recorded on the outbox events: an API-key
         // caller attributes to the key rather than the user that owns it.
         actor: readAuthenticatedActor(),
@@ -924,6 +944,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // registry row another request took as the outcome asked for. Everything else it raises —
       // storage that would not go away — is a failed delete and has to reach the caller, whatever
       // words the driver chose for it.
+      // The metadata service's delete writes it as the Single's migration where a writer is set
+      // up, inside the same exclusion as its drops.
       await svc.metadata.deleteSingle(slug, single.tableName);
 
       // Spec divergence: spec §5.1 / §7.4 strictly maps delete to
@@ -1003,7 +1025,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           ...draftSplitResponseFields(draftSplit),
         } as Record<string, unknown>,
       ]);
-      return respondDoc(marked);
+      // As the Builder's editor reads it: a relationship the earlier Builder stored gets the
+      // target and the Unique mark the editor reads (`withEditorRelationshipShape`).
+      const { withEditorRelationshipShape } = await import(
+        "../../domains/schema/services/editor-relationship-fields"
+      );
+      return respondDoc(withEditorRelationshipShape(marked));
     },
   },
 
@@ -1112,10 +1139,18 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       if (b.fields !== undefined) {
         // Same rules as the ui-schema.json mirror (see api/fields-payload). A field name the
         // Single already holds keeps working whatever its case.
-        assertValidFieldsPayload(b.fields, { stored: existing.fields ?? [] });
-        updateData.fields = b.fields;
-        updateData.schemaHash = calculateSchemaHash(b.fields);
-        schemaFields = b.fields as unknown as FieldDefinition[];
+        // A new field may not take a name the lifecycle declares, judged as the Single will be
+        // once this save lands.
+        assertValidFieldsPayload(b.fields, {
+          kind: "single",
+          stored: existing.fields ?? [],
+          lifecycleEnabled: hasStatus,
+        });
+        // An earlier-shaped relationship the editor read is written back in its stored shape.
+        const fields = fieldsAsStored(b.fields, existing);
+        updateData.fields = fields;
+        updateData.schemaHash = calculateSchemaHash(fields);
+        schemaFields = fields as unknown as FieldDefinition[];
       }
 
       // The schema change and the registry row are written by one service call, because a lock has
@@ -1164,13 +1199,23 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       if (!single) throw new Error("Single not found");
       refuseChangeDefinedInCode(single, "Single", slug);
 
-      const { fields } = body as { fields: unknown[] };
-      if (!fields) throw new Error("fields is required in request body");
+      const { fields: sentFields } = body as { fields: unknown[] };
+      if (!sentFields) throw new Error("fields is required in request body");
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       // A field name the Single already holds keeps working whatever its case.
-      assertValidFieldsPayload(fields, { stored: single.fields ?? [] });
+      assertValidFieldsPayload(sentFields, {
+        kind: "single",
+        stored: single.fields ?? [],
+        // The lifecycle as stored, or as the Builder's pending settings will set it.
+        lifecycleEnabled:
+          single.status === true || readRequestedLifecycle(body) === true,
+      });
+      // Only named fields at the top level, as every road that saves a Single takes them.
+      assertTopLevelFieldsNamed(sentFields);
+      // Planned as the save will write them: an earlier-shaped relationship in its stored shape.
+      const fields = fieldsAsStored(sentFields, single);
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
       assertNoNewSiblingClashes(
@@ -1216,24 +1261,56 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         recordedFields: recordedFieldsOf(single),
       };
 
-      return respondData(
-        await builderSchemaPreviewBody({
-          desired,
-          db,
-          dialect,
-          slug: slug,
-          tableName,
-          builtBy: "collection",
-          entity: single,
-          currentFields,
-          newFields: fields as FieldDefinition[],
-          requestedLocalized: readRequestLocalized(body),
-          // Legacy rows (schema_version NULL) read as 1, so the editor always has a concrete
-          // version to echo back on Apply; JSON omits an undefined one and the guard would reject
-          // the first save as version-less.
-          schemaVersion: single.schemaVersion ?? 1,
-        })
-      );
+      const preview = await builderSchemaPreviewBody({
+        desired,
+        db,
+        dialect,
+        slug: slug,
+        tableName,
+        builtBy: "collection",
+        entity: single,
+        currentFields,
+        newFields: fields as FieldDefinition[],
+        requestedLocalized: readRequestLocalized(body),
+        // Legacy rows (schema_version NULL) read as 1, so the editor always has a concrete
+        // version to echo back on Apply; JSON omits an undefined one and the guard would reject
+        // the first save as version-less.
+        schemaVersion: single.schemaVersion ?? 1,
+      });
+      // What the save writes beyond the person's change, for the review to show before they
+      // confirm, as a collection's does: each conversion an adoption makes, each fill and delete.
+      const answers = body as SchemaChangeAnswers;
+      const reviewDeps = builderSaveDeps();
+      const notices = await reviewBuilderSchemaChange(reviewDeps, {
+        kind: "single",
+        slug,
+        table: tableName,
+        stored: singleEntity(single),
+        fields: fields as FieldDefinition[],
+        localized:
+          readRequestLocalized(body) ??
+          (single as { localized?: boolean }).localized === true,
+        answers: {
+          renameResolutions: answers.renameResolutions ?? [],
+          eventResolutions: answers.eventResolutions ?? [],
+          ...(answers.resolutions === undefined
+            ? {}
+            : { resolutions: answers.resolutions }),
+          ...(answers.acknowledgedConversions === undefined
+            ? {}
+            : { acknowledgedConversions: answers.acknowledgedConversions }),
+        },
+        ...(reviewDeps === undefined
+          ? {}
+          : await entityRelations(
+              reviewDeps.adapter,
+              getLoggerFromDI() ?? consoleLogger,
+              tableName,
+              currentFields,
+              fields as FieldDefinition[]
+            )),
+      });
+      return respondData({ ...preview, notices });
     },
   },
 
@@ -1242,12 +1319,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const slug = requireParam(p, "slug", "Single slug");
 
       const {
-        fields,
+        fields: sentFields,
         confirmed,
         schemaVersion,
         resolutions,
         renameResolutions,
         eventResolutions,
+        acknowledgedConversions,
       } = body as {
         fields: unknown[];
         confirmed: boolean;
@@ -1259,14 +1337,20 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // i18n AND changes fields in one shot provisions the companion in the same apply, rather
         // than reading a stale registry flag. Undefined = leave the persisted value untouched.
         localized?: boolean;
+        acknowledgedConversions?: string[];
       };
 
       if (!confirmed) throw new Error("Schema changes must be confirmed");
-      if (!fields) throw new Error("fields is required in request body");
+      if (!sentFields) throw new Error("fields is required in request body");
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
-      assertValidFieldsPayload(fields, { stored: "under-lock" });
+      // The lifecycle the Builder's pending settings ask for, read (and a malformed value refused)
+      // before the lock is taken.
+      const requestedLifecycle = readRequestedLifecycle(body);
+      assertValidFieldsPayload(sentFields, { stored: "under-lock" });
+      // Only named fields at the top level, as every road that saves a Single takes them.
+      assertTopLevelFieldsNamed(sentFields);
 
       // Everything above reads the request alone, so it is decided before the lock is taken: a
       // malformed save is answered as one, not with a lock refusal or a lock table created on the
@@ -1290,9 +1374,19 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           const single = await svc.registry.getSingleForWrite(slug);
           if (!single) throw new Error("Single not found");
           refuseChangeDefinedInCode(single, "Single", slug);
+          // An earlier-shaped relationship the editor read is written back in its stored shape,
+          // through a rename the save makes, against the row this save is checked and written
+          // against.
+          const fields = fieldsAsStored(sentFields, single, renameResolutions);
           // A field name the Single already holds keeps working whatever its case; one this save
           // creates is the Builder's own. Judged against the row as stored now.
-          assertBuilderFieldNames(fields, single.fields ?? []);
+          // A new field may not take a name the lifecycle declares itself, on now or once the
+          // pending settings land.
+          assertBuilderFieldNames(fields, single.fields ?? [], {
+            surface: "single",
+            lifecycleEnabled:
+              single.status === true || requestedLifecycle === true,
+          });
           // A pair of sibling fields this save would create is refused before any statement or archive
           // write; one the entity already holds keeps working. Asked here because this road reaches its
           // DDL through no shared service that could ask it.
@@ -1368,6 +1462,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // before anything changes. This and the preflights below ask where the values are stored
           // (`layout.wasStored`/`isStored`), not whether the Single is translated: an untranslated
           // Single kept per language moves a field leaving translation out of its companion too.
+          // The history checks a save makes, before anything below changes the table.
+          const builderSave = builderSaveDeps();
+          await checkBuilderSaveHistory(builderSave);
           const companionRename = await resolveCompanionRename(
             renameResolutions,
             {
@@ -1447,62 +1544,102 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             recordedFields: recordedFieldsOf(single),
           };
 
-          const push = builderSchemaPush({
-            dialect,
-            db,
-            databaseName,
-            slug,
-            kind: "single",
-            resolutions: [
-              renameResolutions ?? [],
-              eventResolutions ?? [],
-              legacyBundle,
-            ],
-          });
+          const landing = landingPush(
+            builderSchemaPush({
+              dialect,
+              db,
+              databaseName,
+              slug,
+              kind: "single",
+              resolutions: [
+                renameResolutions ?? [],
+                eventResolutions ?? [],
+                legacyBundle,
+              ],
+            }),
+            dialect
+          );
+          // Notes once the push may have changed the database, so a failure after it keeps the
+          // files that record it.
+          const push = landing.push;
           // The push excludes companion tables, so single_<slug>_locales is brought in step right
           // after it: created on the first translatable field, then ADD/DROPped as the field set
           // changes (mirrors collections).
-          await pushAndReconcileCompanion(push, desired, "single", {
-            slug,
-            tableName,
-            oldFields: single.fields as unknown as FieldDefinition[],
-            newFields: fields as unknown as FieldDefinition[],
-            localized: layout.isStored,
-            wasLocalized: layout.wasStored,
-            // Read from the same persisted record as `wasLocalized`: the companion's per-language
-            // `_status` before and after this apply.
-            status: layout.isPublishedPerLanguage,
-            wasStatus: layout.wasPublishedPerLanguage,
-            statusFromEntryInEveryLanguage:
-              layout.statusFromEntryInEveryLanguage,
-            adapter,
-            renamed: companionRename ?? undefined,
-            // The settings the first push left off, once the shared columns hold the default
-            // language's values. A new desired schema rather than an edit of the first: the pipeline
-            // keeps the last one it applied, by reference, to skip a push that changes nothing.
-            settleLeaving: settingsDeferred
-              ? leavingSettingsStep({
-                  adapter,
-                  entity: slug,
-                  tableName,
-                  builtBy: "collection",
-                  oldFields: single.fields as unknown as FieldDefinition[],
-                  newFields: fields as unknown as FieldDefinition[],
-                  renamed: companionRename,
-                  push: () =>
-                    push({
-                      ...desired,
-                      singles: {
-                        ...desired.singles,
-                        [slug]: {
-                          ...desired.singles[slug],
-                          fields: fields as DesiredSingle["fields"],
-                        },
-                      },
-                    }),
-                })
-              : undefined,
-          });
+          // The change applied by the push and written as the Single's migration, so its table
+          // stands on record for every migration after it, as a collection's Builder save leaves it.
+          await writeBuilderSchemaChange(
+            builderSave,
+            () =>
+              pushAndReconcileCompanion(push, desired, "single", {
+                slug,
+                tableName,
+                oldFields: single.fields as unknown as FieldDefinition[],
+                newFields: fields as unknown as FieldDefinition[],
+                localized: layout.isStored,
+                wasLocalized: layout.wasStored,
+                // Read from the same persisted record as `wasLocalized`: the companion's per-language
+                // `_status` before and after this apply.
+                status: layout.isPublishedPerLanguage,
+                wasStatus: layout.wasPublishedPerLanguage,
+                statusFromEntryInEveryLanguage:
+                  layout.statusFromEntryInEveryLanguage,
+                adapter,
+                renamed: companionRename ?? undefined,
+                // The settings the first push left off, once the shared columns hold the default
+                // language's values. A new desired schema rather than an edit of the first: the pipeline
+                // keeps the last one it applied, by reference, to skip a push that changes nothing.
+                settleLeaving: settingsDeferred
+                  ? leavingSettingsStep({
+                      adapter,
+                      entity: slug,
+                      tableName,
+                      builtBy: "collection",
+                      oldFields: single.fields as unknown as FieldDefinition[],
+                      newFields: fields as unknown as FieldDefinition[],
+                      renamed: companionRename,
+                      push: () =>
+                        push({
+                          ...desired,
+                          singles: {
+                            ...desired.singles,
+                            [slug]: {
+                              ...desired.singles[slug],
+                              fields: fields as DesiredSingle["fields"],
+                            },
+                          },
+                        }),
+                    })
+                  : undefined,
+              }),
+            {
+              kind: "single",
+              slug,
+              table: tableName,
+              stored: singleEntity(single),
+              fields: fields as unknown as FieldDefinition[],
+              localized: isLocalized,
+              answers: {
+                renameResolutions: renameResolutions ?? [],
+                eventResolutions: eventResolutions ?? [],
+                ...(resolutions ? { resolutions } : {}),
+                // The conversions an adoption makes that the review showed and the person confirmed.
+                ...(acknowledgedConversions === undefined
+                  ? {}
+                  : { acknowledgedConversions }),
+              },
+              // Its junction tables and relationship keys, which the writer does not derive itself.
+              ...(builderSave === undefined
+                ? {}
+                : await entityRelations(
+                    builderSave.adapter,
+                    getLoggerFromDI() ?? consoleLogger,
+                    tableName,
+                    (single.fields ?? []) as unknown as FieldDefinition[],
+                    fields as unknown as FieldDefinition[]
+                  )),
+            },
+            landing.landed
+          );
 
           const newSchemaVersion = currentVersion + 1;
 

@@ -3,22 +3,32 @@
  *
  * @module cli/__tests__/error-cases/migrations
  */
+import { tableBusyError } from "../../../domains/schema/busy-table/report";
 import { assertNoLegacyBookkeeping } from "../../../domains/schema/events/legacy-detection";
 import type { SchemaEventRow } from "../../../domains/schema/events/schema-events-repository";
 import {
   judgeDataLoss,
   resolveDataLossConsent,
 } from "../../../domains/schema/migrate/data-loss-consent";
+import {
+  coreDestructiveRefused,
+  coreUpgradeIncomplete,
+  coreUpgradeUnsupported,
+} from "../../../domains/schema/migrate/core-reconcile";
+import { coreDeletionOf } from "../../../domains/schema/migrate/core-retired-columns";
 import { migrationDriftError } from "../../../domains/schema/migrate/drift-error";
+import { ownWriteLockError } from "../../../domains/schema/migrate/migration-transaction";
 import {
   assertNotPartiallyApplied,
   concurrentRunError,
 } from "../../../domains/schema/migrate/drift-reconcile";
+import { uniqueIndexNameHeldError } from "../../../domains/schema/migrate/one-to-one-uniques";
 import { planChangedAfterConsent } from "../../../domains/schema/migrate/plan-changed-after-consent";
 import {
   resolveMigration,
   type ResolveMigrationArgs,
 } from "../../../domains/schema/migrate/resolve";
+import { uniqueColumnRepeatsError } from "../../../domains/schema/migrate/unique-column-guard";
 import { parseSnapshotFile } from "../../../domains/schema/migrate-create/snapshot-io";
 import type { NextlySchemaSnapshot } from "../../../domains/schema/pipeline/diff/types";
 import { describeHolder } from "../../../domains/schema/pipeline/schema-lock";
@@ -30,13 +40,13 @@ import {
 import { refusalOf } from "../../commands/migrate-down";
 import { CliError, dataLossRefusal, type CliErrorCode } from "../../errors";
 import {
-  coreDestructiveNeedsTerminal,
   migrationFileEdited,
   migrationSnapshotInvalid,
   migrationSnapshotMissing,
   resolveModeRequired,
   schemaChangeWithoutMigration,
   settingsChangeWithoutMigration,
+  databaseBehindMigrations,
   snapshotWithoutMigration,
 } from "../../errors/areas/migrations";
 import { requireConsented } from "../../utils/data-loss-consent";
@@ -175,6 +185,38 @@ export const MIGRATION_CASES = {
       },
     });
   },
+  // As `tableBusyError` builds it once a migration's tries for a busy table run out with nothing
+  // of the file left, the holder a PostgreSQL session.
+  TABLE_BUSY: () =>
+    tableBusyError({
+      change: "20261020_120000_add_posts.sql",
+      ended: {
+        table: "dc_posts",
+        holder: {
+          kind: "named",
+          sessions: [
+            {
+              id: "4242",
+              user: "app",
+              clientAddress: "10.0.0.5",
+              applicationName: "worker",
+              transactionOpenSeconds: 180,
+            },
+          ],
+          unreadable: [],
+        },
+      },
+      tries: 7,
+      elapsedMs: 89_600,
+      appliedBefore: ["20261019_090000_add_tags.sql"],
+      outcome: { kind: "nothing-changed" },
+      cause: "table-busy",
+      endedAtLease: false,
+    }),
+  // As `ownWriteLockError` builds it once a migration file's transaction meets a write, made inside
+  // it on another connection, that waited for the transaction's own lock.
+  LOCK_HELD_BY_THIS_PROCESS: () =>
+    ownWriteLockError("20261020_120000_add_posts.sql"),
   DATA_LOSS_CONSENT_REQUIRED: async () =>
     dataLossRefusal(await refusedVerdict(undefined)),
   DATA_LOSS_CONSENT_NOT_COVERED: async () =>
@@ -292,26 +334,46 @@ export const MIGRATION_CASES = {
   // As `reconcileCore` in `domains/schema/migrate/core-reconcile.ts` throws it in production-strict
   // mode, with the classifier's reasons.
   NEXTLY_CORE_DESTRUCTIVE_REFUSED: () =>
-    new NextlyError({
-      code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
-      publicMessage:
-        "Core schema reconciliation requires destructive operations: " +
-        "drops column 'nextly_users.legacy_role'; drops table 'nextly_sessions_old'" +
-        ". This usually means a Nextly version mismatch. Set " +
-        "NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 to proceed (see release notes).",
-    }),
-  // As `reconcileCore` throws it when the prompt is declined.
+    coreDestructiveRefused(
+      ["dynamic_collections", "dynamic_singles"].map(tableName =>
+        coreDeletionOf({
+          type: "drop_column",
+          tableName,
+          columnName: "access_rules",
+          columnType: "text",
+        })
+      )
+    ),
+  // As `reconcileCore` throws it when drizzle-kit cannot plan the push.
+  NEXTLY_CORE_UPGRADE_UNSUPPORTED: () =>
+    coreUpgradeUnsupported(
+      ["dynamic_collections", "dynamic_singles"].map(tableName => ({
+        type: "add_column" as const,
+        tableName,
+        column: { name: "webhooks", type: "jsonb", nullable: true },
+      }))
+    ),
+  // As `reconcileCore` throws it when a declared column is still missing.
+  NEXTLY_CORE_UPGRADE_INCOMPLETE: () =>
+    coreUpgradeIncomplete(["dynamic_collections: revalidate, webhooks"]),
+  // Retired: as `reconcileCore` threw it when the per-change prompt was declined.
   CORE_DESTRUCTIVE_CHANGE_DECLINED: () =>
-    new NextlyError({
-      code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
-      publicMessage:
-        "Core schema reconciliation aborted: destructive operations were not confirmed: " +
-        "drops column 'nextly_users.legacy_role'" +
-        ".",
+    new CliError("CORE_DESTRUCTIVE_CHANGE_DECLINED", {
+      what: "Core schema reconciliation aborted: destructive operations were not confirmed.",
+      why: "drops column 'nextly_users.legacy_role'",
+      next: "Run `nextly upgrade --reconcile-core` again and confirm each change once you have checked its data is not needed.",
     }),
-  // As `upgradeAction` in `cli/commands/upgrade.ts` throws it with no terminal to confirm on.
+  // Retired: as `upgradeAction` threw it with no terminal to confirm on, before its deletions were
+  // judged by the data-loss consent.
   CORE_DESTRUCTIVE_NEEDS_TERMINAL: () =>
-    coreDestructiveNeedsTerminal(["drops column 'nextly_users.legacy_role'"]),
+    new CliError("CORE_DESTRUCTIVE_NEEDS_TERMINAL", {
+      what: "This confirmation needs a terminal, so nothing was changed.",
+      why: [
+        "`--reconcile-core` asks before each destructive change to Nextly's own tables, and no terminal is attached to ask (or `--non-interactive` was given, or `CI` is set). The changes it would make:",
+        "- drops column 'nextly_users.legacy_role'",
+      ].join("\n"),
+      next: "Run `nextly upgrade --reconcile-core` again at a terminal, and confirm each change once you have checked its data is not needed.",
+    }),
   // As `reconcileCore` throws it when the core apply fails.
   CORE_SCHEMA_APPLY_FAILED: () =>
     new NextlyError({
@@ -421,6 +483,11 @@ export const MIGRATION_CASES = {
     ]),
   SETTINGS_CHANGE_WITHOUT_MIGRATION: () =>
     settingsChangeWithoutMigration(1, ["~ posts: labels.singular"]),
+  DATABASE_BEHIND_MIGRATIONS: () =>
+    databaseBehindMigrations(2, [
+      "- table dc_posts (created by 20261116_120000_000_create_posts)",
+      "- column dc_tags.label (created by 20261116_120000_001_add_label)",
+    ]),
   // The runner's own check, run for real on a file that holds a statement no transaction can.
   REFUSED_STATEMENT: () => {
     try {
@@ -452,6 +519,26 @@ export const MIGRATION_CASES = {
       field: "subtitle",
       cause: new Error("connection reset"),
     }),
+  UNIQUE_COLUMN_HAS_REPEATS: () =>
+    uniqueColumnRepeatsError(
+      [
+        {
+          entity: { kind: "collection", slug: "profiles" },
+          field: "person",
+          table: "dc_profiles",
+          column: "person",
+          repeats: [
+            { value: "3f2c9a1e-7b44-4d2a-9c61-0e5d8b7a2f10", entries: 2 },
+          ],
+          showValues: true,
+        },
+      ],
+      "20261111_120000_profiles.sql"
+    ),
+  UNIQUE_INDEX_NAME_TAKEN: () =>
+    uniqueIndexNameHeldError([
+      "profiles.person (its index uq_dc_profiles_person is the name of the index on dc_people)",
+    ]),
 } satisfies ErrorCases;
 
 /**

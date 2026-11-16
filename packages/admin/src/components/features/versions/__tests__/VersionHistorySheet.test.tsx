@@ -867,6 +867,33 @@ describe("VersionHistorySheet", () => {
     expect(screen.getByRole("checkbox", { name: /Title/ })).toBeChecked();
   });
 
+  it("opens the restore list for the version an address hands it from the comparison page", async () => {
+    window.history.pushState(
+      {},
+      "",
+      "/admin/collections/posts/e1?history=1&version=3&restore=1"
+    );
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
+      })
+    );
+    useVersionMock.mockReturnValue(
+      detailState({ data: { snapshot: { title: "Then" } } })
+    );
+    const { editor, apply } = fakeEditor();
+
+    renderPublishing({ canRestore: true }, editor);
+
+    expect(
+      await screen.findByText(/Restore from version 3/)
+    ).toBeInTheDocument();
+    // Asked once: the address no longer says to restore.
+    expect(window.location.search).not.toContain("restore=");
+    expect(apply).not.toHaveBeenCalled();
+    window.history.pushState({}, "", "/");
+  });
+
   it("puts the chosen values into the editor, never writing, and offers Undo", async () => {
     useVersionsMock.mockReturnValue(
       listState({

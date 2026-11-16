@@ -64,9 +64,7 @@ async function postWithHistory(
   await documentExcerpt(page).fill(first);
   await page.getByRole("button", { name: /save draft/i }).click();
 
-  // Saving a NEW entry returns to the LIST rather than staying in the editor.
-  await page.waitForURL(/\/collections\/posts$/, { timeout: 30_000 });
-  await page.getByRole("link", { name: title }).click();
+  // The first save stays on the new post, at its own address.
   await page.waitForURL(/\/collections\/posts\/(?!create$)[^/]+$/, {
     timeout: 30_000,
   });
@@ -153,7 +151,7 @@ test.describe("reading history does not write", () => {
     // component test of either half passes while the two are not connected.
     await expect(
       page
-        .locator("main")
+        .getByRole("banner")
         .getByRole("button", { name: "Restore this version" }),
       "an authorised reader must be offered restore from the title bar"
     ).toBeVisible({ timeout: 15_000 });

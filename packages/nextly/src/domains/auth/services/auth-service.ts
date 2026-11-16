@@ -3,11 +3,7 @@ import { randomBytes, createHash } from "crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq, and, gt, lt, isNull, or } from "drizzle-orm";
 
-import {
-  verifyPassword as verifyPasswordBcrypt,
-  hashPassword as hashPasswordBcrypt,
-  validatePasswordStrength,
-} from "@nextly/auth/password";
+import { validatePasswordStrength } from "@nextly/auth/password";
 import { EmailSchema } from "@nextly/schemas/_zod/validation";
 import type { MinimalUser } from "@nextly/types/auth";
 
@@ -15,7 +11,9 @@ import type { MinimalUser } from "@nextly/types/auth";
 // shapes to throw-based NextlyError. Successful methods now return their data
 // directly (or void); failures throw a NextlyError instance the consumer
 // catches via try/catch or lets the unified error handler convert to JSON.
+import type { PasswordDigester } from "../../../auth/password/digester";
 import { toDbError } from "../../../database/errors";
+import { appPasswordDigester } from "../../../di/password-digester";
 import { NextlyError } from "../../../errors/nextly-error";
 import { emitAuthEvent } from "../../../events/domain-events";
 import { env } from "../../../lib/env";
@@ -171,6 +169,14 @@ export class AuthService extends BaseService {
     this.emailService = emailService;
   }
 
+  /**
+   * The app's password digester: its `passwordHasher`, or core's bcrypt.
+   * Every flow here hashes and checks passwords with it, as sign-in does.
+   */
+  private get passwordDigester(): PasswordDigester {
+    return appPasswordDigester();
+  }
+
   // withTransaction is inherited from BaseService which routes through
   // Drizzle native on PG/MySQL and the adapter's transaction on SQLite.
   // Do NOT override it here — the base class's dialect-aware routing
@@ -205,12 +211,13 @@ export class AuthService extends BaseService {
   /**
    * Judges a password by the staff password rule and maps a refusal to the
    * flow's public `VALIDATION_ERROR` at `path`, naming the field but never
-   * the value. Every flow here hashes with bcrypt, so the reach the rule
-   * judges is bcrypt's own — which is what an unnamed check already defaults
-   * to.
+   * the value. The reach it judges is that of the digester the flow hashes
+   * with: the app's hasher's own contract, or bcrypt's 72 bytes.
    */
   private assertPasswordMeetsPolicy(password: string, path: string): void {
-    const passwordStrength = validatePasswordStrength(password);
+    const passwordStrength = validatePasswordStrength(password, {
+      hasher: this.passwordDigester.hasher,
+    });
     if (!passwordStrength.ok) {
       throw NextlyError.validation({
         errors: passwordStrength.errors.map(message => ({
@@ -474,10 +481,9 @@ export class AuthService extends BaseService {
       });
     }
 
-    const isValidPassword = await verifyPasswordBcrypt(
-      password,
-      user.passwordHash
-    );
+    const isValidPassword = (
+      await this.passwordDigester.verify(password, user.passwordHash)
+    ).ok;
 
     if (!isValidPassword) {
       throw NextlyError.invalidCredentials({
@@ -536,10 +542,9 @@ export class AuthService extends BaseService {
       });
     }
 
-    const isValidPassword = await verifyPasswordBcrypt(
-      currentPassword,
-      user.passwordHash
-    );
+    const isValidPassword = (
+      await this.passwordDigester.verify(currentPassword, user.passwordHash)
+    ).ok;
 
     if (!isValidPassword) {
       throw NextlyError.invalidCredentials({
@@ -555,7 +560,7 @@ export class AuthService extends BaseService {
     // the current credential exactly as it was.
     this.assertPasswordMeetsPolicy(newPassword, "newPassword");
 
-    const newPasswordHash = await hashPasswordBcrypt(newPassword);
+    const newPasswordHash = await this.passwordDigester.hash(newPassword);
 
     // The users service's own-password write, so both services that change
     // a user's own password make the one write: conditional on the account
@@ -763,7 +768,7 @@ export class AuthService extends BaseService {
     this.assertPasswordMeetsPolicy(newPassword, "newPassword");
 
     try {
-      const passwordHash = await hashPasswordBcrypt(newPassword);
+      const passwordHash = await this.passwordDigester.hash(newPassword);
       const { passwordResetTokens, users } = this.tables;
 
       // Checked, applied and spent in one transaction, holding the account's
@@ -1202,7 +1207,7 @@ export class AuthService extends BaseService {
 
     this.assertPasswordMeetsPolicy(newPassword, "newPassword");
 
-    const passwordHash = await hashPasswordBcrypt(newPassword);
+    const passwordHash = await this.passwordDigester.hash(newPassword);
 
     // Claim the token before touching the account. Two acceptances can both
     // pass the read above; the conditional update lets exactly one flip
@@ -1322,7 +1327,7 @@ export class AuthService extends BaseService {
     }
     if (
       current.passwordHash &&
-      (await verifyPasswordBcrypt(newPassword, current.passwordHash))
+      (await this.passwordDigester.verify(newPassword, current.passwordHash)).ok
     ) {
       throw NextlyError.validation({
         errors: [
@@ -1336,7 +1341,7 @@ export class AuthService extends BaseService {
       });
     }
 
-    const passwordHash = await hashPasswordBcrypt(newPassword);
+    const passwordHash = await this.passwordDigester.hash(newPassword);
 
     // The version as stored, read back in the transaction that wrote it:
     // MySQL and SQLite keep whole seconds, so the value written here is not

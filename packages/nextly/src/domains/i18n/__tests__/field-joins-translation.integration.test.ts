@@ -529,6 +529,20 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     injected.mockRestore();
     expect(refusedOnce).toBe(true);
     expect(await mainHeading("dc_posts", id)).toBeUndefined();
+    // The registry still records the field shared: the next apply is a retry of this one.
+    const [registry] = await query<{ fields: unknown }>(
+      `SELECT ${quote(dialect, "fields")} AS fields FROM ${quote(dialect, "dynamic_collections")} WHERE ${quote(dialect, "slug")} = 'posts'`
+    );
+    const recorded = (
+      typeof registry?.fields === "string"
+        ? JSON.parse(registry.fields)
+        : registry?.fields
+    ) as { name: string; localized?: unknown }[];
+    // Recorded, and recorded shared as the seed declared it: a field missing from the record, or
+    // recorded with no answer either way, is another state.
+    const heading = recorded.find(f => f.name === "heading");
+    expect(heading).toBeDefined();
+    expect(heading?.localized).toBe(false);
 
     await dialog.change(TRANSLATED);
 
@@ -648,6 +662,388 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     expect(JSON.stringify(applied)).toMatch(/RESHAPED_FIELD_JOINS_TRANSLATION/);
     expect(await mainHeading("dc_posts", id)).toBe("Hello");
     expect(await columnsOf("dc_posts_locales")).not.toContain("heading");
+  });
+
+  // An integer moved into a float column is stored as a floating-point number, which keeps no
+  // integer past 2^53: SQLite would copy 9007199254740993 as 9007199254740992, and no other dialect
+  // counts the change as a widening either.
+  // A fixed-point column given more digits copies every value as it is: applied, and the value
+  // becomes the default language's.
+  it("applies a code-first apply that widens a decimal as it becomes translated, keeping its value", async () => {
+    const price = (precision: number) => ({
+      name: "price",
+      type: "number",
+      dbType: "decimal",
+      precision,
+      scale: 2,
+    });
+    const created = await handler().createCollection({
+      name: "posts",
+      label: "Post",
+      localized: true,
+      fields: [
+        { name: "heading", type: "text", localized: false },
+        { ...price(10), localized: false },
+      ],
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const entry = await handler()
+      .getEntryService()
+      .createEntry(
+        { collectionName: "posts", overrideAccess: true, locale: "en" },
+        { heading: "Hello", price: 12345678.91 }
+      );
+    expect(entry.success, JSON.stringify(entry)).toBe(true);
+
+    const applied = await applyCodeFirst([
+      { name: "heading", type: "text", localized: false },
+      { ...price(12), localized: true },
+    ]);
+
+    expect(applied.success, JSON.stringify(applied)).toBe(true);
+    const [row] = await query<{ price: unknown }>(
+      `SELECT CAST(${quote(dialect, "price")} AS ${dialect === "mysql" ? "CHAR" : "TEXT"}) AS price FROM ${quote(dialect, "dc_posts_locales")} WHERE ${quote(dialect, "_locale")} = 'en'`
+    );
+    expect(Number(row?.price)).toBe(12345678.91);
+  });
+
+  it("refuses a code-first apply that makes an integer a float as it becomes translated, and changes nothing", async () => {
+    const id = await seedCollection();
+    // SQLite's INTEGER holds 64 bits; elsewhere the column is a 32-bit integer and keeps the 7 seeded.
+    const views = dialect === "sqlite" ? "9007199254740993" : "7";
+    if (dialect === "sqlite") {
+      await query(
+        `UPDATE ${quote(dialect, "dc_posts")} SET ${quote(dialect, "views")} = ${views} WHERE ${quote(dialect, "id")} = '${id}'`
+      );
+    }
+
+    const applied = await applyCodeFirst([
+      { name: "heading", type: "text", localized: false },
+      {
+        name: "views",
+        type: "number",
+        localized: true,
+        options: { format: "float" },
+      },
+    ]);
+
+    expect(applied.success).toBe(false);
+    expect(JSON.stringify(applied)).toMatch(/RESHAPED_FIELD_JOINS_TRANSLATION/);
+    expect(await columnsOf("dc_posts_locales")).not.toContain("views");
+    const [row] = await query<{ views: unknown }>(
+      // Read as text: a JavaScript number keeps no integer past 2^53 either.
+      `SELECT CAST(${quote(dialect, "views")} AS ${dialect === "mysql" ? "CHAR" : "TEXT"}) AS views FROM ${quote(dialect, "dc_posts")} WHERE ${quote(dialect, "id")} = '${id}'`
+    );
+    expect(String(row?.views)).toBe(views);
+  });
+
+  it("refuses a code-first apply whose move would lose the column's comment or collation, and changes nothing", async () => {
+    const id = await seedCollection();
+    // The main column as a database may have it: with a comment, or on SQLite, where a collation
+    // lives only in the table's statement, beside a column that names one.
+    if (dialect === "sqlite") {
+      await query(
+        `ALTER TABLE ${quote(dialect, "dc_posts")} ADD COLUMN ${quote(dialect, "note")} TEXT COLLATE NOCASE`
+      );
+    } else if (dialect === "mysql") {
+      await query(
+        `ALTER TABLE ${quote(dialect, "dc_posts")} MODIFY COLUMN ${quote(dialect, "heading")} VARCHAR(255) NULL COMMENT 'kept'`
+      );
+    } else {
+      await query(
+        `COMMENT ON COLUMN ${quote(dialect, "dc_posts")}.${quote(dialect, "heading")} IS 'kept'`
+      );
+    }
+
+    const applied = await applyCodeFirst([
+      { name: "heading", type: "text", localized: true },
+      { name: "views", type: "number" },
+    ]);
+
+    expect(applied.success).toBe(false);
+    expect(JSON.stringify(applied)).toMatch(
+      dialect === "sqlite"
+        ? /TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own collation/
+        : /TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own comment/
+    );
+    expect(await mainHeading("dc_posts", id)).toBe("Hello");
+    expect(await columnsOf("dc_posts_locales")).not.toContain("heading");
+  });
+
+  /**
+   * Gives `table`'s `column` a definition of its own as a database may have it: a comment, or on
+   * SQLite, where a collation lives only in the table's statement, a column beside it naming one.
+   */
+  async function markColumn(table: string, column: string): Promise<void> {
+    if (dialect === "sqlite") {
+      await query(
+        `ALTER TABLE ${quote(dialect, table)} ADD COLUMN ${quote(dialect, "note")} TEXT COLLATE NOCASE`
+      );
+    } else if (dialect === "mysql") {
+      await query(
+        `ALTER TABLE ${quote(dialect, table)} MODIFY COLUMN ${quote(dialect, column)} TEXT NULL COMMENT 'kept'`
+      );
+    } else {
+      await query(
+        `COMMENT ON COLUMN ${quote(dialect, table)}.${quote(dialect, column)} IS 'kept'`
+      );
+    }
+  }
+
+  /** The refusal a move losing part of a column's definition answers with, as the caller receives it. */
+  function expectDefinitionRefusal(error: unknown): void {
+    expect(JSON.stringify(error)).toMatch(
+      dialect === "sqlite"
+        ? /TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own collation/
+        : /TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own comment/
+    );
+  }
+
+  it("refuses turning a Single's translation on with no field sent, where the move would lose its column's definition", async () => {
+    await dispatchSingles(
+      "createSingle",
+      {},
+      {
+        slug: "mkd_hero",
+        label: "Hero",
+        localized: false,
+        fields: [{ name: "heading", type: "text" }],
+      }
+    );
+    await markColumn("single_mkd_hero", "heading");
+
+    const refused = await dispatchSingles(
+      "updateSingleSchema",
+      { slug: "mkd_hero" },
+      { localized: true }
+    ).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(refused).toBeInstanceOf(Error);
+    expectDefinitionRefusal(
+      (refused as { publicData?: unknown }).publicData ?? refused
+    );
+    expect(await columnsOf("single_mkd_hero")).toContain("heading");
+    expect(await columnsOf("single_mkd_hero_locales")).not.toContain("heading");
+  });
+
+  it("refuses turning a field group's translation on with no field sent, where the move would lose its column's definition", async () => {
+    await dispatchComponents(
+      "createComponent",
+      {},
+      {
+        slug: "mkd_banner",
+        label: "Banner",
+        localized: false,
+        fields: [{ name: "heading", type: "text" }],
+      }
+    );
+    await markColumn("comp_mkd_banner", "heading");
+
+    const refused = await dispatchComponents(
+      "updateComponent",
+      { slug: "mkd_banner" },
+      { localized: true }
+    ).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(refused).toBeInstanceOf(Error);
+    expectDefinitionRefusal(
+      (refused as { publicData?: unknown }).publicData ?? refused
+    );
+    expect(await columnsOf("comp_mkd_banner")).toContain("heading");
+    expect(await columnsOf("comp_mkd_banner_locales")).not.toContain("heading");
+  });
+
+  /** The default `table`'s `column` has, as the database's catalog reports it. */
+  async function columnDefault(
+    table: string,
+    column: string
+  ): Promise<string | null> {
+    const [row] = await query<{ d: string | null }>(
+      dialect === "mysql"
+        ? `SELECT COLUMN_DEFAULT AS d FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}' AND COLUMN_NAME = '${column}'`
+        : `SELECT column_default AS d FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${table}' AND column_name = '${column}'`
+    );
+    return row?.d ?? null;
+  }
+
+  // SQLite cannot give an existing column a default without rebuilding its table.
+  it.skipIf(dialect === "sqlite")(
+    "gives the companion column the main column's default as a code-first apply moves its values, or refuses where it cannot take it",
+    async () => {
+      const id = await seedCollection();
+      await query(
+        dialect === "mysql"
+          ? `ALTER TABLE ${quote(dialect, "dc_posts")} MODIFY COLUMN ${quote(dialect, "heading")} VARCHAR(255) NULL DEFAULT 'none'`
+          : `ALTER TABLE ${quote(dialect, "dc_posts")} ALTER COLUMN ${quote(dialect, "heading")} SET DEFAULT 'none'`
+      );
+
+      const applied = await applyCodeFirst([
+        { name: "heading", type: "text", localized: true },
+        { name: "views", type: "number" },
+      ]);
+
+      // MySQL gives a TEXT column no literal default, and the field's companion column is TEXT, so
+      // there the move is refused before anything runs and the value stays where it was.
+      if (dialect === "mysql") {
+        expect(applied.success).toBe(false);
+        expect(JSON.stringify(applied)).toMatch(
+          /TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own default/
+        );
+        expect(await mainHeading("dc_posts", id)).toBe("Hello");
+        return;
+      }
+      expect(applied.success, JSON.stringify(applied)).toBe(true);
+      expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
+      expect(
+        String(await columnDefault("dc_posts_locales", "heading"))
+      ).toMatch(/none/);
+    }
+  );
+
+  // The Builder's saves move a joining field's values on the live database, so the companion
+  // column they add takes what the live main column carries, as the code-first apply's does.
+  it.skipIf(dialect === "sqlite").each(PATHS)(
+    "gives the companion column the main column's default, or refuses where it cannot take it, when $path",
+    async ({ table, seed, change }) => {
+      const id = await seed();
+      await query(
+        dialect === "mysql"
+          ? `ALTER TABLE ${quote(dialect, table)} MODIFY COLUMN ${quote(dialect, "heading")} VARCHAR(255) NULL DEFAULT 'none'`
+          : `ALTER TABLE ${quote(dialect, table)} ALTER COLUMN ${quote(dialect, "heading")} SET DEFAULT 'none'`
+      );
+
+      const refusal = await change(TRANSLATED).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      // MySQL gives the field's TEXT companion column no literal default, so there the move is
+      // refused before anything runs and the value stays where it was.
+      if (dialect === "mysql") {
+        expect(reportedRefusal(refusal)).toMatch(
+          /own default; turning translation on moves its values into a new column/
+        );
+        expect(await mainHeading(table, id)).toBe("Hello");
+        return;
+      }
+      expect(refusal).toBeUndefined();
+      expect((await companionHeadings(table, id)).en).toBe("Hello");
+      expect(
+        String(await columnDefault(`${table}_locales`, "heading"))
+      ).toMatch(/none/);
+    }
+  );
+
+  // A Builder save refuses as the code-first apply does. SQLite is left out: its collation sits
+  // beside the field in a column of its own, which the Builder's dialogs would ask to drop.
+  it.skipIf(dialect === "sqlite").each(PATHS)(
+    "refuses a field whose move would lose its column's comment as it becomes translated, and changes nothing, when $path",
+    async ({ table, seed, change }) => {
+      const id = await seed();
+      await markColumn(table, "heading");
+
+      const refusal = await change(TRANSLATED).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(reportedRefusal(refusal)).toMatch(
+        /own comment; turning translation on moves its values into a new column/
+      );
+      expect(await mainHeading(table, id)).toBe("Hello");
+      expect(await columnsOf(`${table}_locales`)).not.toContain("heading");
+    }
+  );
+
+  /** What a Builder save's refusal says, whether it arrives as an error or a refused result. */
+  function reportedRefusal(refusal: unknown): string {
+    return refusal instanceof Error
+      ? `${refusal.message} ${JSON.stringify((refusal as { publicData?: unknown }).publicData ?? null)}`
+      : String(refusal);
+  }
+
+  // SQLite keeps a collation only in a table's statement; a quoted name holding the word is none.
+  it.runIf(dialect === "sqlite")(
+    "moves a field's values on SQLite beside a column named collate, which declares no collation",
+    async () => {
+      const id = await seedCollection();
+      await query(
+        `ALTER TABLE ${quote(dialect, "dc_posts")} ADD COLUMN ${quote(dialect, "collate")} TEXT`
+      );
+
+      const applied = await applyCodeFirst([
+        { name: "heading", type: "text", localized: true },
+        { name: "views", type: "number" },
+      ]);
+
+      expect(applied.success, JSON.stringify(applied)).toBe(true);
+      expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
+    }
+  );
+
+  // MySQL reports an expression default holding a string literal in a form no statement accepts
+  // back, so a move that would need it is refused before the main column is dropped.
+  it.runIf(dialect === "mysql")(
+    "refuses a code-first apply whose move would lose a default MySQL cannot restate, and changes nothing",
+    async () => {
+      const id = await seedCollection();
+      await query(
+        `ALTER TABLE ${quote(dialect, "dc_posts")} MODIFY COLUMN ${quote(dialect, "heading")} VARCHAR(255) NULL DEFAULT (lower('X'))`
+      );
+
+      const applied = await applyCodeFirst([
+        { name: "heading", type: "text", localized: true },
+        { name: "views", type: "number" },
+      ]);
+
+      expect(applied.success).toBe(false);
+      expect(JSON.stringify(applied)).toMatch(
+        /TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own default/
+      );
+      expect(await mainHeading("dc_posts", id)).toBe("Hello");
+    }
+  );
+
+  it("refuses a code-first apply that makes a float an integer as it becomes translated, and changes nothing", async () => {
+    // SQLite would keep 1.5 as it is in an INTEGER column, a value the whole-number field refuses;
+    // PostgreSQL and MySQL would round it.
+    const created = await handler().createCollection({
+      name: "posts",
+      label: "Post",
+      localized: true,
+      fields: [
+        { name: "heading", type: "text", localized: false },
+        { name: "views", type: "number", options: { format: "float" } },
+      ],
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const entry = await handler()
+      .getEntryService()
+      .createEntry(
+        { collectionName: "posts", overrideAccess: true, locale: "en" },
+        { heading: "Hello", views: 1.5 }
+      );
+    expect(entry.success, JSON.stringify(entry)).toBe(true);
+    const id = String((entry.data as { id: unknown }).id);
+
+    const applied = await applyCodeFirst([
+      { name: "heading", type: "text", localized: false },
+      { name: "views", type: "number", localized: true },
+    ]);
+
+    expect(applied.success).toBe(false);
+    expect(JSON.stringify(applied)).toMatch(/RESHAPED_FIELD_JOINS_TRANSLATION/);
+    expect(await columnsOf("dc_posts_locales")).not.toContain("views");
+    const [row] = await query<{ views: unknown }>(
+      `SELECT ${quote(dialect, "views")} AS views FROM ${quote(dialect, "dc_posts")} WHERE ${quote(dialect, "id")} = '${id}'`
+    );
+    expect(Number(row?.views)).toBe(1.5);
   });
 
   // SQLite keeps no length on a text column, so a narrower bound changes nothing it stores.
