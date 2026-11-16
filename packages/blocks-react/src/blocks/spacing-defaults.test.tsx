@@ -560,3 +560,87 @@ describe("a site whose stored style still names a spacing model", () => {
     );
   });
 });
+
+/**
+ * A page stylesheet stored for a site on the classic model, before there was
+ * one way to space blocks. Captured from that compiler: `resolvePageStyles`
+ * on this document with `spacingMode: "classic"` on its compile context, the
+ * way a classic site's page was stored. Its rules carry the old heading and
+ * paragraph margins and no container gap.
+ */
+describe("a sheet stored for a classic site before one spacing model", () => {
+  const node = (id: string, type: string, extra: object = {}): BlockNode =>
+    ({ id, type, version: 1, props: {}, ...extra }) as BlockNode;
+  const DOC: BlockDocument = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      node("band", "core/section", {
+        slots: {
+          children: [
+            node("title", "core/heading", {
+              props: { text: "T", level: "h2" },
+            }),
+            node("lead", "core/text", { props: { text: "L" } }),
+          ],
+        },
+      }),
+    ],
+  };
+  const STORED_UNDER_CLASSIC = {
+    css: [
+      ".nx-pb-page :where(h1) { font-size: 2.25em; font-weight: 700; line-height: 1.15; margin-block-end: 0.5em; margin-block-start: 1.5em }",
+      ".nx-pb-page :where(h2) { font-size: 1.75em; font-weight: 700; line-height: 1.2; margin-block-end: 0.5em; margin-block-start: 1.5em }",
+      ".nx-pb-page :where(h3) { font-size: 1.375em; font-weight: 700; line-height: 1.3; margin-block-end: 0.5em; margin-block-start: 1.5em }",
+      ".nx-pb-page :where(h4) { font-size: 1.125em; font-weight: 700; line-height: 1.4; margin-block-end: 0.5em; margin-block-start: 1.5em }",
+      ".nx-pb-page :where(h5) { font-size: 1em; font-weight: 700; line-height: 1.45; margin-block-end: 0.5em; margin-block-start: 1.5em }",
+      ".nx-pb-page :where(h6) { font-size: 0.875em; font-weight: 700; line-height: 1.5; margin-block-end: 0.5em; margin-block-start: 1.5em }",
+      ".nx-pb-page :where(p) { margin-block-end: 1em; margin-block-start: 0 }",
+    ].join("\n"),
+    classes: {
+      band: "nx-pb-gtwts95k29",
+      title: "nx-pb-1gso67mluts",
+      lead: "nx-pb-ckj5133jck",
+    },
+    sharedInputsId: "v5:iw813scoeh",
+  } as PageStyles;
+  const resolver = createBlockResolver(coreBlocks);
+  const BREAKPOINTS = {
+    viewport: [{ id: "base", label: "Desktop" }],
+    container: [],
+  };
+  const read = (stored: PageStyles, route: object = {}) =>
+    resolvePageStyles(
+      DOC,
+      stored,
+      { breakpoints: BREAKPOINTS, ...route },
+      resolver
+    );
+
+  it.each([
+    ["with no spacing model stated", {}],
+    ["with the route still stating classic", { spacingMode: "classic" }],
+  ])("is recompiled with gaps on the next read, %s", (_, route) => {
+    const served = read(STORED_UNDER_CLASSIC, route);
+    expect(served.sharedInputsId).not.toBe(STORED_UNDER_CLASSIC.sharedInputsId);
+    expect(served.css).not.toContain("margin-block-start: 1.5em");
+    expect(served.css).toContain(
+      `:where(h2) { font-size: 1.75em; font-weight: 700; line-height: 1.2; margin-block-end: 0; margin-block-start: 0 }`
+    );
+    expect(served.css).toContain(
+      `:where(.nx-bt-core--section.${CHILD_GAP_CLASS} > * + *) { margin-block-start: var(--site-space-stack) }`
+    );
+  });
+
+  it("CONTROL: a sheet stored by the current compiler is served as it stands", () => {
+    const current = resolvePageStyles(
+      DOC,
+      undefined,
+      { breakpoints: BREAKPOINTS },
+      resolver
+    );
+    // Marked so a recompile would show: the same stamp, a css nobody compiles.
+    const marked = { ...current, css: `${current.css}\n/* stored */` };
+    expect(read(marked).css).toBe(marked.css);
+  });
+});
