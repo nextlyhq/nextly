@@ -2,7 +2,7 @@ import { test } from "vitest";
 
 import { byteCapRefusal } from "./byte-cap";
 import { keptJsonBytes } from "./kept-sizes";
-import { countNodes, DEFAULT_LIMITS, treeDepth } from "./limits";
+import { DEFAULT_LIMITS, editorForestShape } from "./limits";
 import { migrateDocument } from "./migration";
 import { applyOp } from "./ops";
 import {
@@ -98,7 +98,7 @@ test("one whole edit", async ({ bench }) => {
 });
 
 // The cap check alone: a fresh edit each run (the first block's text, the rest
-// shared), then the node count, the depth and the byte cap it must fit, as
+// shared), then the node count and depth and the byte cap it must fit, as
 // `assertFitsCaps` asks them. The edited path is measured; the rest is kept.
 const freshEdit = (document: typeof longPage) => {
   const [first, ...rest] = document.nodes;
@@ -111,13 +111,12 @@ const freshEdit = (document: typeof longPage) => {
     ],
   };
 };
-countNodes(fourBlocks.nodes);
-countNodes(longPage.nodes);
+editorForestShape(fourBlocks.nodes);
+editorForestShape(longPage.nodes);
 
 const capCheck = (document: typeof longPage) => () => {
   const result = freshEdit(document);
-  countNodes(result.nodes);
-  treeDepth(result.nodes);
+  editorForestShape(result.nodes);
   byteCapRefusal(document, result, DEFAULT_LIMITS.maxBytes, "update");
 };
 

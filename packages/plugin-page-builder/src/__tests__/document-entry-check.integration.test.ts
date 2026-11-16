@@ -285,21 +285,34 @@ describe.each(getConfiguredTestDialects())(
           dryRun: true,
         }
       );
-      const fingerprint = (
+      // The preview names the overage and is not ready; its fingerprint is
+      // what lets the apply below be judged rather than refused as stale.
+      expect(preview.status).toBe(200);
+      const read = (
         JSON.parse(preview.text) as {
-          item?: { preview?: { fingerprint?: string } };
+          item?: {
+            preview?: {
+              ready?: boolean;
+              fingerprint?: string;
+              problems?: { message?: string }[];
+            };
+          };
         }
-      ).item?.preview?.fingerprint;
+      ).item?.preview;
+      expect(read?.ready).toBe(false);
+      expect(read?.fingerprint).toEqual(expect.any(String));
+      expect(
+        read?.problems?.map(problem => problem.message).join(" ")
+      ).toContain(TOO_LARGE);
+      // The apply, at that same preview, is refused for the overage itself.
       const imported = await send(
         "POST",
         pluginRoute(...IMPORT_ROUTE_PATH.split("/").filter(Boolean)),
-        {
-          file: enlarged,
-          ...(fingerprint === undefined ? {} : { expect: fingerprint }),
-        }
+        { file: enlarged, expect: read?.fingerprint }
       );
       expect(imported.status).toBeGreaterThanOrEqual(400);
-      expect(`${preview.text} ${imported.text}`).toContain(TOO_LARGE);
+      expect(imported.status).not.toBe(409);
+      expect(imported.text).toContain(TOO_LARGE);
       const stored = await t.nextly.find({
         collection: COMPONENTS_SLUG,
         where: { slug: { equals: fresh } },

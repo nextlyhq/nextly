@@ -9,13 +9,19 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { BlockDocument, BlockNode } from "./document";
+import {
+  COMPONENT_INSTANCE_TYPE,
+  type BlockDocument,
+  type BlockNode,
+} from "./document";
 import { documentWork } from "./document-walks";
 import { walkForest } from "./forest-walk";
 import { keptForestShape, keptJsonBytes } from "./kept-sizes";
 import {
   countNodes,
   DEFAULT_LIMITS,
+  editorForestShape,
+  treeDepth,
   documentTooLargeMessage,
   type DocumentLimits,
 } from "./limits";
@@ -63,17 +69,100 @@ const ids = (nodes: readonly BlockNode[]): string[] =>
     ...Object.values(node.slots ?? {}).flatMap(children => ids(children)),
   ]);
 
-/** The edit's result, or nothing when the engine refuses it at the default caps. */
+/** The applied edit, or nothing when the engine refuses it. */
+function tryApplied(
+  document: BlockDocument,
+  op: BuilderOp,
+  limits: DocumentLimits = DEFAULT_LIMITS
+): ReturnType<typeof applyOp> | undefined {
+  try {
+    return applyOp(document, op, limits);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The edit's result, or nothing when the engine refuses it. */
 function tryApply(
   document: BlockDocument,
   op: BuilderOp,
   limits: DocumentLimits = DEFAULT_LIMITS
 ): BlockDocument | undefined {
-  try {
-    return applyOp(document, op, limits).document;
-  } catch {
-    return undefined;
+  return tryApplied(document, op, limits)?.document;
+}
+
+/**
+ * A node an author might insert: text, a box holding a nested box, or a
+ * component placement.
+ */
+function freshNode(next: () => number): BlockNode {
+  const id = `new-${String(Math.floor(next() * 1e9))}`;
+  const roll = next();
+  if (roll < 0.4) {
+    return {
+      id,
+      type: "core/text",
+      version: 1,
+      props: { text: "é".repeat(Math.floor(next() * 40)) },
+    };
   }
+  if (roll < 0.8) {
+    const inner: BlockNode = {
+      id: `${id}-b`,
+      type: "core/box",
+      version: 1,
+      props: {},
+      slots: {
+        children: [
+          {
+            id: `${id}-h`,
+            type: "core/heading",
+            version: 1,
+            props: { text: "deep" },
+          },
+        ],
+      },
+    };
+    return {
+      id,
+      type: "core/box",
+      version: 1,
+      props: {},
+      slots: {
+        children: [
+          {
+            id: `${id}-t`,
+            type: "core/text",
+            version: 1,
+            props: { text: "in" },
+          },
+          inner,
+        ],
+      },
+    };
+  }
+  return {
+    id,
+    type: COMPONENT_INSTANCE_TYPE,
+    version: 1,
+    props: { componentId: `component-${String(Math.floor(next() * 3))}` },
+  };
+}
+
+/** Props as authors leave them: text, rich text, and a value per language. */
+function objectProps(next: () => number): Record<string, unknown> {
+  return {
+    text: `"quoted"\n${"x".repeat(Math.floor(next() * 60))}`,
+    content: {
+      root: {
+        type: "root",
+        children: [
+          { type: "paragraph", children: [{ type: "text", text: "rich é" }] },
+        ],
+      },
+    },
+    title: { en: "Title", fr: "Titre ✓" },
+  };
 }
 
 /** Kept bytes, count and depth are the full measurement's and the walk's. */
@@ -123,12 +212,7 @@ function randomOp(document: BlockDocument, next: () => number): BuilderOp {
   if (roll < 0.35) {
     return {
       kind: "insert",
-      node: {
-        id: `new-${String(Math.floor(next() * 1e9))}`,
-        type: "core/text",
-        version: 1,
-        props: { text: "é".repeat(Math.floor(next() * 40)) },
-      },
+      node: freshNode(next),
       at:
         next() < 0.5
           ? { index: Math.floor(next() * (document.nodes.length + 1)) }
@@ -140,7 +224,7 @@ function randomOp(document: BlockDocument, next: () => number): BuilderOp {
       kind: "update",
       id: pick(),
       patch: {
-        props: { text: `"quoted"\n${"x".repeat(Math.floor(next() * 60))}` },
+        props: objectProps(next),
       },
     };
   }
@@ -175,27 +259,52 @@ describe("a cap check over kept sizes", () => {
   });
 
   it("answers every random edit as a full measurement would, for every cap", () => {
+    // What actually applied, so the run cannot pass by skipping the shapes it
+    // claims to cover.
+    const seen = new Set<string>();
     for (const seed of [1, 7, 42]) {
       const next = random(seed);
       let document = scaleDocument({ nodes: 150 });
       for (let step = 0; step < 60; step++) {
         const op = randomOp(document, next);
-        const applied = tryApply(document, op);
+        const at = `seed ${String(seed)} step ${String(step)}`;
+        const applied = tryApplied(document, op);
         if (applied === undefined) continue;
-        expectKeptMatchesWalk(
-          applied,
-          `seed ${String(seed)} step ${String(step)}`
-        );
-        if (op.kind !== "remove") {
-          expectSameVerdicts(
-            document,
-            op,
-            applied,
-            `seed ${String(seed)} step ${String(step)}`
-          );
+        seen.add(op.kind === "insert" ? `insert ${op.node.type}` : op.kind);
+        if (op.kind === "update" && "content" in (op.patch.props ?? {})) {
+          seen.add("object props");
         }
-        document = applied;
+        expectKeptMatchesWalk(applied.document, at);
+        expectSameVerdicts(document, op, applied.document, at);
+        // An undo now and then: the inverse op, back to a document that
+        // shares its parts with both.
+        if (next() < 0.3) {
+          const undone = tryApplied(applied.document, applied.inverse);
+          if (undone !== undefined) {
+            seen.add("undo");
+            expectKeptMatchesWalk(undone.document, `${at} undo`);
+            expectSameVerdicts(
+              applied.document,
+              applied.inverse,
+              undone.document,
+              `${at} undo`
+            );
+            document = undone.document;
+            continue;
+          }
+        }
+        document = applied.document;
       }
+    }
+    for (const covered of [
+      "undo",
+      "insert core/box",
+      `insert ${COMPONENT_INSTANCE_TYPE}`,
+      "object props",
+      "move",
+      "remove",
+    ]) {
+      expect(seen, covered).toContain(covered);
     }
   });
 
@@ -205,7 +314,7 @@ describe("a cap check over kept sizes", () => {
       // The starting size and shape, as an editor holding the document already
       // knows them from its first check.
       keptJsonBytes(document);
-      countNodes(document.nodes);
+      editorForestShape(document.nodes);
       const op: BuilderOp = {
         kind: "update",
         id: "n0",
@@ -256,7 +365,7 @@ describe("a cap check over kept sizes", () => {
     const work = (nodes: number) => {
       const document = scaleDocument({ nodes });
       keptJsonBytes(document);
-      countNodes(document.nodes);
+      editorForestShape(document.nodes);
       const move = workOf(() =>
         applyOp(document, { kind: "move", id: "n7", to: { index: 0 } })
       );
@@ -353,6 +462,17 @@ describe("what the kept path declines", () => {
     "a cycle": cyclic,
     "a shared part": { a: shared, b: shared },
     "an array iterating nothing": { a: iteratesNothing },
+    "a hidden toJSON": {
+      a: Object.defineProperty({ b: 1 }, "toJSON", {
+        value: () => "x".repeat(1000),
+      }),
+    },
+    "a hidden data property": {
+      a: Object.defineProperty({ b: 1 }, "c", { value: "x".repeat(1000) }),
+    },
+    "an array with a hidden property": {
+      a: Object.defineProperty([1, 2], "extra", { value: "x".repeat(1000) }),
+    },
   };
 
   it.each(Object.keys(CASES))(
@@ -404,7 +524,7 @@ describe("what the kept path declines", () => {
     const forest = FORESTS[name]!();
     let count: number | undefined;
     expect(() => {
-      count = countNodes(forest);
+      count = editorForestShape(forest).count;
     }).not.toThrow();
     expect(count).toBe(walkedCount(forest));
   });
@@ -413,5 +533,40 @@ describe("what the kept path declines", () => {
     const forest = scaleDocument({ nodes: 50 }).nodes;
     expect(keptForestShape(forest, 10)).toBeUndefined();
     expect(keptForestShape(forest, 1000)?.count).toBe(walkedCount(forest));
+  });
+});
+
+describe("the published helpers and a bounded cold measurement", () => {
+  it("counts a forest afresh after it is changed in place", () => {
+    const root = {
+      id: "r",
+      type: "core/box",
+      version: 1,
+      props: {},
+      slots: { children: [] as BlockNode[] },
+    } as BlockNode;
+    expect(countNodes([root])).toBe(1);
+    expect(treeDepth([root])).toBe(1);
+    root.slots?.children?.push({
+      id: "c",
+      type: "core/text",
+      version: 1,
+      props: {},
+    } as BlockNode);
+    expect(countNodes([root])).toBe(2);
+    expect(treeDepth([root])).toBe(2);
+  });
+
+  it("stops measuring a fresh value once it passes the bound", () => {
+    const huge = { text: "x".repeat(1_000_000) };
+    const work = workOf(() => {
+      expect(keptJsonBytes(huge, 1000)).toBeUndefined();
+    });
+    // Nothing was kept for a value it stopped on, so a later unbounded read
+    // still measures it in full and gets the full measurement's answer.
+    expect(work.measuredObjects).toBe(0);
+    expect(keptJsonBytes(huge)).toBe(
+      measureBytes(huge, Number.POSITIVE_INFINITY).bytes
+    );
   });
 });

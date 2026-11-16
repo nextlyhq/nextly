@@ -61,8 +61,8 @@ import {
   type LayersLockBreak,
 } from "./layers-lock";
 import {
-  countNodes,
   DEFAULT_LIMITS,
+  editorForestShape,
   ForestTooLargeError,
   MAX_VALUE_PARTS,
   treeDepth,
@@ -2024,20 +2024,20 @@ function assertFitsCaps(
   // against a freshly measured original made the original's cost proportional
   // to the number of offending nodes, so lowering `maxDepth` under a broad
   // document turned a linear edit into a quadratic one.
-  const depth = measured(() => treeDepth(result.nodes), verb);
+  const depth = measured(() => editorForestShape(result.nodes).depth, verb);
   if (
     depth > limits.maxDepth &&
-    depth > measured(() => treeDepth(before.nodes), verb)
+    depth > measured(() => editorForestShape(before.nodes).depth, verb)
   ) {
     throw new OpError(
       `${verb}: this would leave the document nested ${String(depth)} ` +
         `levels deep, past the ${String(limits.maxDepth)} it may hold.`
     );
   }
-  const total = measured(() => countNodes(result.nodes), verb);
+  const total = measured(() => editorForestShape(result.nodes).count, verb);
   if (
     total > limits.maxNodes &&
-    total > measured(() => countNodes(before.nodes), verb)
+    total > measured(() => editorForestShape(before.nodes).count, verb)
   ) {
     throw new OpError(
       `${verb}: this would leave the document holding ${String(total)} nodes, ` +
@@ -3143,7 +3143,9 @@ function assertDocumentIdentity(document: BlockDocument): void {
  * same objects, and so are envelope fields like `settings`, because the engine's
  * tree primitives are persistent and `withNodes` spreads. Mutating the old
  * document therefore changes the new one, with no op recorded and nothing for
- * history or autosave to see.
+ * history or autosave to see. The cap check relies on it too: the size, count
+ * and depth of each part are kept against the part (`kept-sizes`), so a part
+ * changed in place after a check is judged as it was when first measured.
  *
  * Stated rather than prevented, deliberately. Detaching the result would mean
  * deep-copying the whole document on every edit — work proportional to the
@@ -3211,7 +3213,7 @@ export function applyOp(
   // helper reaches it first. This is deliberately NOT `limits.maxDepth`: that
   // is a product rule a site may relax, and this is a machine one nothing can.
   assertWalkable(
-    measured(() => treeDepth(nodes), "this document"),
+    measured(() => editorForestShape(nodes).depth, "this document"),
     "this document"
   );
 

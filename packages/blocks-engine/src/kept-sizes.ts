@@ -41,24 +41,45 @@ const MAX_KEPT_DEPTH = 512;
  * Exactly the full measurement's count for every value it answers, which is
  * what lets a cap check use it in place of one.
  */
-export function keptJsonBytes(value: unknown): number | undefined {
-  // A value that throws while being read (a Proxy's trap) has no kept size;
-  // the full measurement reports it without throwing.
+export function keptJsonBytes(
+  value: unknown,
+  limit: number = Number.POSITIVE_INFINITY
+): number | undefined {
+  // Bounded as the full measurement is: a fresh part past `limit` stops the
+  // read, keeps nothing, and is left to the full measurement, which stops at
+  // the cap rather than reading a pasted payload to its end. A value that
+  // throws while being read (a Proxy's trap) has no kept size either.
+  const read: Read = { limit, stopped: false };
   try {
-    return bytesOf(value, 0, new Set<object>());
+    const bytes = bytesOf(value, 0, new Set<object>(), read);
+    return read.stopped ? undefined : bytes;
   } catch {
     return undefined;
   }
 }
 
+/** The bound a measurement runs under, and whether it stopped at it. */
+interface Read {
+  limit: number;
+  stopped: boolean;
+}
+
+/** A size past the bound stops the read. */
+function within(bytes: number | undefined, read: Read): number | undefined {
+  if (bytes === undefined || bytes <= read.limit) return bytes;
+  read.stopped = true;
+  return undefined;
+}
+
 function bytesOf(
   value: unknown,
   depth: number,
-  open: Set<object>
+  open: Set<object>,
+  read: Read
 ): number | undefined {
   switch (typeof value) {
     case "string":
-      return 2 + utf8ByteLength(value, Number.POSITIVE_INFINITY);
+      return within(2 + utf8ByteLength(value, read.limit), read);
     case "number":
       // `NaN`, the infinities and `-0` are rewritten by the writer, which the
       // full measurement reports; only a number written as itself is counted.
@@ -68,7 +89,7 @@ function bytesOf(
     case "boolean":
       return value ? 4 : 5;
     case "object":
-      return value === null ? 4 : objectBytes(value, depth, open);
+      return value === null ? 4 : objectBytes(value, depth, open, read);
     default:
       // `undefined`, a function, a symbol or a BigInt: written differently or
       // refused, so the full measurement answers.
@@ -79,7 +100,8 @@ function bytesOf(
 function objectBytes(
   value: object,
   depth: number,
-  open: Set<object>
+  open: Set<object>,
+  read: Read
 ): number | undefined {
   const kept = KEPT.get(value);
   if (kept !== undefined) return kept === NOT_PLAIN ? undefined : kept;
@@ -87,10 +109,13 @@ function objectBytes(
   // answers. Neither is kept, because depth belongs to where a part sits.
   if (depth > MAX_KEPT_DEPTH || open.has(value)) return undefined;
   open.add(value);
-  const bytes = Array.isArray(value)
-    ? arrayBytes(value, depth, open)
-    : recordBytes(value, depth, open);
+  const measured = Array.isArray(value)
+    ? arrayBytes(value, depth, open, read)
+    : recordBytes(value, depth, open, read);
+  const bytes = within(measured, read);
   open.delete(value);
+  // A read that stopped keeps nothing: what it did not reach is not "not plain".
+  if (read.stopped) return undefined;
   countMeasuredObject();
   KEPT.set(value, bytes ?? NOT_PLAIN);
   return bytes;
@@ -100,14 +125,17 @@ function objectBytes(
 function arrayBytes(
   array: unknown[],
   depth: number,
-  open: Set<object>
+  open: Set<object>,
+  read: Read
 ): number | undefined {
   // An ordinary array with no holes and nothing but its indices: anything else
   // is written differently from how it reads, and the full measurement says so.
   if (
     Object.getPrototypeOf(array) !== Array.prototype ||
     Object.getOwnPropertySymbols(array).length > 0 ||
-    Object.keys(array).length !== array.length
+    Object.keys(array).length !== array.length ||
+    // `length` and the indices, and nothing hidden beside them.
+    Object.getOwnPropertyNames(array).length !== array.length + 1
   ) {
     return undefined;
   }
@@ -115,9 +143,10 @@ function arrayBytes(
   for (let index = 0; index < array.length; index++) {
     const held = Object.getOwnPropertyDescriptor(array, index);
     if (held === undefined || !("value" in held)) return undefined;
-    const element = bytesOf(held.value, depth + 1, open);
+    const element = bytesOf(held.value, depth + 1, open, read);
     if (element === undefined) return undefined;
     total += element;
+    if (within(total, read) === undefined) return undefined;
   }
   return total;
 }
@@ -126,12 +155,16 @@ function arrayBytes(
 function recordBytes(
   record: object,
   depth: number,
-  open: Set<object>
+  open: Set<object>,
+  read: Read
 ): number | undefined {
   const prototype = Object.getPrototypeOf(record);
   if (
     (prototype !== Object.prototype && prototype !== null) ||
-    Object.getOwnPropertySymbols(record).length > 0
+    Object.getOwnPropertySymbols(record).length > 0 ||
+    // A hidden property is one the writer may still read (a non-enumerable
+    // `toJSON`) and the full measurement counts, so it is left to that.
+    Object.getOwnPropertyNames(record).length !== Object.keys(record).length
   ) {
     return undefined;
   }
@@ -144,9 +177,10 @@ function recordBytes(
     if (held === undefined || !("value" in held) || key === "toJSON") {
       return undefined;
     }
-    const member = bytesOf(held.value, depth + 1, open);
+    const member = bytesOf(held.value, depth + 1, open, read);
     if (member === undefined) return undefined;
-    total += 2 + utf8ByteLength(key, Number.POSITIVE_INFINITY) + 1 + member;
+    total += 2 + utf8ByteLength(key, read.limit) + 1 + member;
+    if (within(total, read) === undefined) return undefined;
     written += 1;
   }
   return total + Math.max(0, written - 1);

@@ -46,11 +46,15 @@ export function byteCapRefusal(
   // The answer is the full measurement's; a document that is not plain data
   // has no kept size and takes the full measurement below, which probes every
   // object for a value the writer refuses.
-  const keptResult = keptJsonBytes(result);
-  const keptBefore =
-    keptResult === undefined ? undefined : keptJsonBytes(before);
-  if (keptResult !== undefined && keptBefore !== undefined) {
-    const keptCeiling = keptBefore > maxBytes ? keptBefore : maxBytes;
+  // The starting document first: it is kept from the previous check, and its
+  // size sets the ceiling the result is read against, so a fresh result is
+  // read only as far as the answer needs and an oversized paste stops there.
+  const keptBefore = keptJsonBytes(before);
+  const keptCeiling =
+    keptBefore === undefined || keptBefore <= maxBytes ? maxBytes : keptBefore;
+  const keptResult =
+    keptBefore === undefined ? undefined : keptJsonBytes(result, keptCeiling);
+  if (keptResult !== undefined) {
     return keptResult > keptCeiling
       ? documentTooLargeMessage(maxBytes)
       : undefined;

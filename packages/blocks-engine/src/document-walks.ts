@@ -35,7 +35,12 @@ export function countMeasuredObject(): void {
   measuredObjects += 1;
 }
 
-/** The engine's measuring work so far; compare two readings to cost a call. */
+/**
+ * The engine's measuring work so far; compare two readings to cost a call.
+ *
+ * @experimental What is counted may change while the editor's speed work
+ * settles; read it in tests and diagnostics, not to decide behaviour.
+ */
 export function documentWork(): { walks: number; measuredObjects: number } {
   return { walks, measuredObjects };
 }

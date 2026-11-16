@@ -1570,9 +1570,9 @@ function reidForestRestoringEach(
   const rebuilt = mapForest(nodes, original =>
     reidOneRestoringEach(original, each)
   );
-  // By the copy's id rather than its object: the rebuild assembles slots into
-  // a new object, so the node the first pass returned is not the one this pass
-  // is handed.
+  // By the copy's id rather than its object: a node the first pass changed is
+  // a new object once the rebuild puts its slots back, so it may not be the one
+  // this pass is handed.
   const linked = mapForest(rebuilt, copy =>
     relinkOne(copy, referenceAnswers(each.holders.get(copy.id), each))
   );
