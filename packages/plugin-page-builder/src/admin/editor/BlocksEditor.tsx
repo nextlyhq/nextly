@@ -28,7 +28,10 @@ import {
   SelectionBreadcrumb,
   VisitorUnreadableProvider,
 } from "@nextlyhq/builder/shell";
-import { useDocumentIdentity } from "@nextlyhq/plugin-sdk/admin";
+import {
+  useDocumentActions,
+  useDocumentIdentity,
+} from "@nextlyhq/plugin-sdk/admin";
 import { useEffect, useMemo, useState, type JSX } from "react";
 import {
   useFormState,
@@ -359,9 +362,9 @@ function EditorBody<TFieldValues extends FieldValues>({
    * form's own dirtiness, which is what a reading of the whole document needs.
    */
   const savePoint = useSavePoint(editor);
-  // A save made here drops what the canvas kept at once: the page's own
+  // A store made here drops what the canvas kept at once: the page's own
   // entry is among what it reads.
-  useDropKeptReadsOnSave(savePoint.savedAt);
+  useDropKeptReadsOnSave(useDocumentActions()?.storedAt ?? null);
   const documentDirty = useDocumentDirty(
     control,
     hasUnsavedWork(editor, inline, savePoint.savedAt)

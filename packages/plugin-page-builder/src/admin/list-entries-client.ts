@@ -212,8 +212,14 @@ export function canvasListReadsIn(
 ): CanvasListReads {
   // The route answers whoever the session cookie names, so while the person
   // is not known by id, each ask gets reads of its own that nothing keeps:
-  // a sign-in under way cannot be handed the previous account's rows.
-  if (userId === null) return listReadsIn(locale, visitor);
+  // a sign-in under way cannot be handed the previous account's rows. What
+  // was kept goes too: signed out, not even the same person signing back in
+  // is answered from it.
+  if (userId === null) {
+    READS.clear();
+    readsFor = undefined;
+    return listReadsIn(locale, visitor);
+  }
   if (readsFor !== userId) {
     READS.clear();
     readsFor = userId;

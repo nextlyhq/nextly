@@ -3,37 +3,48 @@
  * changed, different once an entry, a Single or a listed collection is saved
  * or gains or loses an entry, and fixed for a source the caller may not read.
  */
+import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 
 import {
+  NEWEST_MARKED,
   sourcesChangedStamp,
   type SourcesChangedReads,
 } from "./canvas-sources-changed-route";
 
-/** The sources as stored: each save time, and each collection's entries. */
+/** A stored document as a read answers it: its id and its version. */
+interface Doc {
+  id: string;
+  _rev: number;
+}
+
+/** The sources as stored, newest save first in each collection. */
 interface Stored {
-  entries: Record<string, string>;
-  singles: Record<string, string>;
-  lists: Record<string, { latest: string; total: number }>;
+  entries: Record<string, Doc>;
+  singles: Record<string, Doc>;
+  lists: Record<string, Doc[]>;
   refused: Set<string>;
+  broken: Set<string>;
 }
 
 function readsOf(stored: Stored): SourcesChangedReads {
-  const refuse = (name: string) => {
-    if (stored.refused.has(name)) throw new Error("refused");
+  const guard = (name: string) => {
+    if (stored.refused.has(name)) throw NextlyError.forbidden();
+    if (stored.broken.has(name)) throw new Error("connection reset");
   };
   return {
     entry: async (collection, id) => {
-      refuse(collection);
+      guard(collection);
       return stored.entries[`${collection}/${id}`];
     },
     single: async slug => {
-      refuse(slug);
+      guard(slug);
       return stored.singles[slug];
     },
     collection: async slug => {
-      refuse(slug);
-      return stored.lists[slug] ?? { latest: undefined, total: 0 };
+      guard(slug);
+      const rows = stored.lists[slug] ?? [];
+      return { newest: rows.slice(0, NEWEST_MARKED), total: rows.length };
     },
   };
 }
@@ -46,14 +57,34 @@ const ASK = {
 
 function stored(): Stored {
   return {
-    entries: { "pages/p1": "2026-11-16T10:00:00.000Z" },
+    entries: { "pages/p1": { id: "p1", _rev: 3 } },
     singles: {
-      home: "2026-11-16T09:00:00.000Z",
-      footer: "2026-11-16T08:00:00.000Z",
+      home: { id: "home", _rev: 2 },
+      footer: { id: "footer", _rev: 1 },
     },
-    lists: { posts: { latest: "2026-11-16T07:00:00.000Z", total: 4 } },
+    // Newest first: "a" edited once since it was made, the others not.
+    lists: {
+      posts: [
+        { id: "a", _rev: 2 },
+        { id: "b", _rev: 1 },
+        { id: "c", _rev: 1 },
+        { id: "d", _rev: 1 },
+      ],
+    },
     refused: new Set(),
+    broken: new Set(),
   };
+}
+
+/** Save `id` of collection `slug` again: one version on, and now newest. */
+function saveAgain(s: Stored, slug: string, id: string): void {
+  const rows = s.lists[slug] ?? [];
+  const row = rows.find(entry => entry.id === id);
+  if (row === undefined) throw new Error(`no ${id}`);
+  s.lists[slug] = [
+    { ...row, _rev: row._rev + 1 },
+    ...rows.filter(entry => entry !== row),
+  ];
 }
 
 describe("the change check's mark", () => {
@@ -72,25 +103,27 @@ describe("the change check's mark", () => {
     [
       "the page's own entry is saved",
       (s: Stored) => {
-        s.entries["pages/p1"] = "2026-11-16T11:00:00.000Z";
+        s.entries["pages/p1"] = { id: "p1", _rev: 4 };
       },
     ],
     [
       "a Single it binds is saved",
       (s: Stored) => {
-        s.singles.footer = "2026-11-16T11:00:00.000Z";
+        s.singles.footer = { id: "footer", _rev: 2 };
       },
     ],
     [
-      "an entry of a listed collection is saved",
-      (s: Stored) => {
-        s.lists.posts = { latest: "2026-11-16T11:00:00.000Z", total: 4 };
-      },
+      "the newest entry of a listed collection is saved again",
+      (s: Stored) => saveAgain(s, "posts", "a"),
     ],
     [
-      "a listed collection loses an entry, its newest save the same",
+      "an older entry of a listed collection is saved, to the same version the newest had",
+      (s: Stored) => saveAgain(s, "posts", "b"),
+    ],
+    [
+      "a listed collection loses an entry",
       (s: Stored) => {
-        s.lists.posts = { latest: "2026-11-16T07:00:00.000Z", total: 3 };
+        s.lists.posts = (s.lists.posts ?? []).filter(entry => entry.id !== "d");
       },
     ],
   ])("changes when %s", async (_, change) => {
@@ -104,10 +137,25 @@ describe("the change check's mark", () => {
     const refused = stored();
     refused.refused.add("footer");
     const first = await sourcesChangedStamp(ASK, readsOf(refused));
-    refused.singles.footer = "2026-11-16T12:00:00.000Z";
+    refused.singles.footer = { id: "footer", _rev: 9 };
     expect(await sourcesChangedStamp(ASK, readsOf(refused))).toBe(first);
     // CONTROL: read, the same change does change the mark.
     expect(await sourcesChangedStamp(ASK, readsOf(stored()))).not.toBe(first);
+  });
+
+  it("is the same whichever order a read hands back entries saved in the same second", async () => {
+    const tied = stored();
+    const first = await sourcesChangedStamp(ASK, readsOf(tied));
+    tied.lists.posts = [...(tied.lists.posts ?? [])].reverse();
+    expect(await sourcesChangedStamp(ASK, readsOf(tied))).toBe(first);
+  });
+
+  it("fails, rather than answer a mark that would read as a change, when a read fails for another reason", async () => {
+    const broken = stored();
+    broken.broken.add("posts");
+    await expect(sourcesChangedStamp(ASK, readsOf(broken))).rejects.toThrow(
+      "connection reset"
+    );
   });
 
   it("reads a Single's page by the Single itself", async () => {

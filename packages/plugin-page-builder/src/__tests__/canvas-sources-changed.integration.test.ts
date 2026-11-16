@@ -2,8 +2,8 @@
  * The editor's change check, through the route as a signed-in person, on
  * every configured dialect: its mark stays the same while nothing the canvas
  * reads changes, changes once the page's entry is saved, an entry is added
- * to a listed collection or a bound Single is saved, and never moves for a
- * source the person may not read.
+ * to a listed collection or any of its entries is edited, or a bound Single
+ * is saved, and never moves for a source the person may not read.
  */
 // Set before the harness boots: the routes verify the session with it.
 process.env.NEXTLY_SECRET =
@@ -109,6 +109,27 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
       });
       expect(await stampFor(owner, id)).not.toBe(afterList);
+    });
+
+    it("changes when an older entry of a listed collection is edited, whichever entry was newest", async () => {
+      const { t, owner } = await boot();
+      const page = await savePost(t, "The page");
+      const older = await savePost(t, "Older");
+      const newer = await savePost(t, "Newer");
+      const edit = (id: string, title: string) =>
+        t.nextly.update({
+          collection: POSTS,
+          id,
+          data: { title, _overwrite: true },
+          overrideAccess: true,
+        });
+      // The older entry edited once: it is now the newest, at its second
+      // version, and the other is still at its first.
+      await edit(older, "Older, edited");
+      const before = await stampFor(owner, page);
+      // The other edited once too: now the newest at the same version.
+      await edit(newer, "Newer, edited");
+      expect(await stampFor(owner, page)).not.toBe(before);
     });
 
     it("never moves for a source the person may not read", async () => {

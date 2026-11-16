@@ -9,7 +9,7 @@ import {
   defineNamedQuery,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 /** The document the hook test edits; the other tests pass theirs in. */
@@ -22,11 +22,15 @@ const editing = vi.hoisted(() => ({
   },
 }));
 const writePluginRoute = vi.hoisted(() => vi.fn());
+/** What the canvas handed its change check on each render. */
+const checked = vi.hoisted(() => [] as unknown[]);
 
 // The change check has its own tests; here it would share the mocked route
-// with the read under test.
+// with the read under test, so only what it is handed is recorded.
 vi.mock("./editor/canvas-source-check", () => ({
-  useCanvasSourceCheck: () => undefined,
+  useCanvasSourceCheck: (asked: unknown) => {
+    checked.push(asked);
+  },
 }));
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useCurrentUserId: () => editing.userId,
@@ -402,15 +406,27 @@ describe("the canvas's binding sources", () => {
       editing.identity = identity;
       writePluginRoute.mockReset();
       writePluginRoute.mockResolvedValue(answer("Kept"));
-      const drawn = [page({ text: { $bind: "title" } })];
-      const { result, rerender } = renderHook(() =>
-        useCanvasBindings(drawn, "it")
+      const bound = page({ text: { $bind: "title" } });
+      const { result, rerender } = renderHook(
+        ({ drawn }: { drawn: BlockDocument[] }) =>
+          useCanvasBindings(drawn, "it"),
+        { initialProps: { drawn: [bound] } }
       );
       await waitFor(() =>
         expect(result.current.entry).toEqual({ id: "p1", title: "Kept" })
       );
       await vi.advanceTimersByTimeAsync(5 * 60_000);
-      rerender();
+      // A new tree in which only a prop nothing binds changed.
+      const [heading] = bound.nodes;
+      if (heading === undefined) throw new Error("no heading");
+      rerender({
+        drawn: [
+          {
+            ...bound,
+            nodes: [{ ...heading, props: { ...heading.props, level: "h2" } }],
+          },
+        ],
+      });
       await vi.advanceTimersByTimeAsync(60_000);
       expect(writePluginRoute).toHaveBeenCalledTimes(1);
     } finally {
@@ -423,27 +439,60 @@ describe("the canvas's binding sources", () => {
     // A source can change while what the page asks stays the same: the
     // author saves a new title, or someone updates a Single.
     editing.identity = identity;
-    writePluginRoute.mockReset();
-    writePluginRoute
-      .mockResolvedValueOnce(answer("Before the save"))
-      .mockResolvedValueOnce(answer("After the save"));
-    const drawn = [page({ text: { $bind: "title" } })];
-    const { result } = renderHook(() => useCanvasBindings(drawn, "pt"));
-    await waitFor(() =>
-      expect(result.current.entry).toEqual({
-        id: "p1",
-        title: "Before the save",
-      })
-    );
-    canvasSourcesChanged();
-    await waitFor(() =>
-      expect(result.current.entry).toEqual({
-        id: "p1",
-        title: "After the save",
-      })
-    );
-    expect(writePluginRoute).toHaveBeenCalledTimes(2);
-    editing.identity = null;
+    try {
+      writePluginRoute.mockReset();
+      writePluginRoute
+        .mockResolvedValueOnce(answer("Before the save"))
+        .mockResolvedValueOnce(answer("After the save"));
+      const drawn = [page({ text: { $bind: "title" } })];
+      const { result } = renderHook(() => useCanvasBindings(drawn, "pt"));
+      await waitFor(() =>
+        expect(result.current.entry).toEqual({
+          id: "p1",
+          title: "Before the save",
+        })
+      );
+      act(() => canvasSourcesChanged());
+      await waitFor(() =>
+        expect(result.current.entry).toEqual({
+          id: "p1",
+          title: "After the save",
+        })
+      );
+      expect(writePluginRoute).toHaveBeenCalledTimes(2);
+    } finally {
+      editing.identity = null;
+    }
+  });
+
+  it("checks a page that only lists entries for changes to them, though it binds nothing", () => {
+    editing.identity = identity;
+    try {
+      checked.length = 0;
+      const listing: BlockDocument = {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "l",
+            type: "core/collection-loop",
+            version: 1,
+            props: { collection: "posts" },
+          },
+        ],
+      } as BlockDocument;
+      renderHook(() => useCanvasBindings([listing], "fr"));
+      expect(checked.at(-1)).toEqual({
+        source: { kind: "collection", slug: "posts", id: "p1" },
+        singles: [],
+        lists: ["posts"],
+      });
+      // CONTROL: a page that reads nothing is checked for nothing.
+      renderHook(() => useCanvasBindings([page()], "fr"));
+      expect(checked.at(-1)).toBeUndefined();
+    } finally {
+      editing.identity = null;
+    }
   });
 });
 

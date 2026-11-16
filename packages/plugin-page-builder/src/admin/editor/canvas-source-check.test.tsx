@@ -1,26 +1,27 @@
 // @vitest-environment jsdom
 /**
- * The editor's change check: one ask on opening, then at most once a minute
- * while the builder's tab is visible, none while it is hidden and one on
- * coming back to it; a different mark drops what the canvas kept, the same
- * mark nothing; and a save in this editor drops it at once.
+ * The editor's change check: one ask on opening, hidden or not, then a
+ * minute after the last ask while the builder's tab is visible, none on the
+ * minute while it is hidden and one on coming back to it; one again whenever
+ * what the canvas kept is dropped; a different mark drops what the canvas
+ * kept, the same mark nothing. What was kept also goes when the canvas starts
+ * reading a new source, on signing out, on closing the editor and when this
+ * editor stores the document.
  */
-import { renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({ writePluginRoute: vi.fn() }));
 
-const { onCanvasSourcesChanged } = await import("../canvas-sources");
+const { canvasSourcesChanged, onCanvasSourcesChanged } = await import(
+  "../canvas-sources"
+);
 const { SOURCE_CHECK_EVERY_MS, useCanvasSourceCheck, useDropKeptReadsOnSave } =
   await import("./canvas-source-check");
 
-const REQUEST = {
+const ASKED = {
   source: { kind: "collection" as const, slug: "pages", id: "p1" },
-  demand: {
-    singles: { home: { fields: [], follows: {} } },
-    site: false,
-    formatsDates: false,
-  },
+  singles: ["home"],
   lists: ["posts"],
 };
 
@@ -46,44 +47,63 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cleanup();
   stopHearing();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
 describe("the canvas's change check", () => {
-  it("asks once on opening, then at most once a minute while the tab is visible", async () => {
+  it("asks once on opening, then once a minute while the tab is visible", async () => {
     const ask = vi.fn(async () => "same");
-    renderHook(() => useCanvasSourceCheck(REQUEST, "u1", ask));
+    renderHook(() => useCanvasSourceCheck(ASKED, "u1", ask));
     await vi.advanceTimersByTimeAsync(0);
     expect(ask).toHaveBeenCalledTimes(1);
-    expect(ask).toHaveBeenCalledWith({
-      source: REQUEST.source,
-      singles: ["home"],
-      lists: ["posts"],
-    });
+    expect(ask).toHaveBeenCalledWith(ASKED);
     await vi.advanceTimersByTimeAsync(5 * SOURCE_CHECK_EVERY_MS);
     expect(ask).toHaveBeenCalledTimes(6);
     // The same mark each time: nothing the canvas kept is dropped.
     expect(dropped).toBe(0);
   });
 
-  it("asks nothing while the tab is hidden, and once on coming back to it", async () => {
-    const ask = vi.fn(async () => "same");
-    renderHook(() => useCanvasSourceCheck(REQUEST, "u1", ask));
+  it("takes its first mark on opening in a hidden tab, then asks nothing until the tab is back", async () => {
+    visibility = "hidden";
+    let mark = "opened";
+    const ask = vi.fn(async () => mark);
+    renderHook(() => useCanvasSourceCheck(ASKED, "u1", ask));
     await vi.advanceTimersByTimeAsync(0);
-    show("hidden");
+    expect(ask).toHaveBeenCalledTimes(1);
+    mark = "saved elsewhere";
     await vi.advanceTimersByTimeAsync(5 * SOURCE_CHECK_EVERY_MS);
     expect(ask).toHaveBeenCalledTimes(1);
     show("visible");
     await vi.advanceTimersByTimeAsync(0);
     expect(ask).toHaveBeenCalledTimes(2);
+    // Compared with the mark taken when the canvas read: the change shows.
+    expect(dropped).toBe(1);
+  });
+
+  it("counts the minute from the check on coming back, not from the one before", async () => {
+    const ask = vi.fn(async () => "same");
+    renderHook(() => useCanvasSourceCheck(ASKED, "u1", ask));
+    await vi.advanceTimersByTimeAsync(0);
+    show("hidden");
+    await vi.advanceTimersByTimeAsync(SOURCE_CHECK_EVERY_MS / 2);
+    show("visible");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ask).toHaveBeenCalledTimes(2);
+    // Half a minute on, the minute the opening check started has passed,
+    // and nothing is asked: the next ask is a minute after the return.
+    await vi.advanceTimersByTimeAsync(SOURCE_CHECK_EVERY_MS / 2 + 1);
+    expect(ask).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(SOURCE_CHECK_EVERY_MS / 2);
+    expect(ask).toHaveBeenCalledTimes(3);
   });
 
   it("drops what the canvas kept once the mark changes, and only then", async () => {
     let mark = "before";
     const ask = vi.fn(async () => mark);
-    renderHook(() => useCanvasSourceCheck(REQUEST, "u1", ask));
+    renderHook(() => useCanvasSourceCheck(ASKED, "u1", ask));
     await vi.advanceTimersByTimeAsync(SOURCE_CHECK_EVERY_MS);
     expect(dropped).toBe(0);
     mark = "after";
@@ -93,25 +113,95 @@ describe("the canvas's change check", () => {
     expect(dropped).toBe(1);
   });
 
+  it("takes the mark again at once when what was kept is dropped, so a save elsewhere just after is seen", async () => {
+    let mark = "opened";
+    const ask = vi.fn(async () => mark);
+    renderHook(() => useCanvasSourceCheck(ASKED, "u1", ask));
+    await vi.advanceTimersByTimeAsync(0);
+    // A save in this editor: the canvas reads again, and so does the check.
+    mark = "saved here";
+    act(() => canvasSourcesChanged());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ask).toHaveBeenCalledTimes(2);
+    expect(dropped).toBe(1);
+    // A colleague saves ten seconds later: the next check sees it.
+    await vi.advanceTimersByTimeAsync(10_000);
+    mark = "saved elsewhere";
+    await vi.advanceTimersByTimeAsync(SOURCE_CHECK_EVERY_MS);
+    expect(dropped).toBe(2);
+  });
+
+  it("changes nothing when a check fails, and compares the next with the last mark it read", async () => {
+    let answer: () => Promise<string> = async () => "before";
+    const ask = vi.fn(() => answer());
+    renderHook(() => useCanvasSourceCheck(ASKED, "u1", ask));
+    await vi.advanceTimersByTimeAsync(0);
+    answer = async () => {
+      throw new Error("offline");
+    };
+    await vi.advanceTimersByTimeAsync(SOURCE_CHECK_EVERY_MS);
+    expect(dropped).toBe(0);
+    answer = async () => "before";
+    await vi.advanceTimersByTimeAsync(SOURCE_CHECK_EVERY_MS);
+    expect(dropped).toBe(0);
+  });
+
+  it("drops what was kept when the canvas starts reading a source it did not, and not when one goes", async () => {
+    const ask = vi.fn(async () => "same");
+    const { rerender } = renderHook(
+      ({ asked }: { asked: typeof ASKED }) =>
+        useCanvasSourceCheck(asked, "u1", ask),
+      { initialProps: { asked: ASKED } }
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    rerender({ asked: { ...ASKED, lists: [] } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dropped).toBe(0);
+    // The list back: what was kept for it predates every mark since.
+    rerender({ asked: ASKED });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dropped).toBe(1);
+  });
+
+  it("drops what was kept on signing out and on closing the editor", async () => {
+    const ask = vi.fn(async () => "same");
+    const { rerender, unmount } = renderHook(
+      ({ userId }: { userId: string | null }) =>
+        useCanvasSourceCheck(ASKED, userId, ask),
+      { initialProps: { userId: "u1" as string | null } }
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dropped).toBe(0);
+    rerender({ userId: null });
+    expect(dropped).toBe(1);
+    unmount();
+    expect(dropped).toBe(2);
+  });
+
   it("asks nothing for a page that reads no source, or for a person not yet known", async () => {
     const ask = vi.fn(async () => "same");
     renderHook(() => useCanvasSourceCheck(undefined, "u1", ask));
-    renderHook(() => useCanvasSourceCheck(REQUEST, null, ask));
+    renderHook(() => useCanvasSourceCheck(ASKED, null, ask));
     await vi.advanceTimersByTimeAsync(2 * SOURCE_CHECK_EVERY_MS);
     expect(ask).not.toHaveBeenCalled();
   });
 });
 
-describe("a save in this editor", () => {
-  it("drops what the canvas kept at once, and the document as opened drops nothing", () => {
+describe("a store made in this editor", () => {
+  it("drops what the canvas kept at once, each time it stores, and nothing before the first", () => {
     const { rerender } = renderHook(
-      ({ savedAt }: { savedAt: number }) => useDropKeptReadsOnSave(savedAt),
-      { initialProps: { savedAt: 1 } }
+      ({ storedAt }: { storedAt: Date | null }) =>
+        useDropKeptReadsOnSave(storedAt),
+      { initialProps: { storedAt: null as Date | null } }
     );
     expect(dropped).toBe(0);
-    rerender({ savedAt: 2 });
+    rerender({ storedAt: new Date(1_000) });
     expect(dropped).toBe(1);
-    rerender({ savedAt: 2 });
+    // The same store, drawn again: nothing more.
+    rerender({ storedAt: new Date(1_000) });
     expect(dropped).toBe(1);
+    // Stored again, whatever changed or did not: dropped again.
+    rerender({ storedAt: new Date(2_000) });
+    expect(dropped).toBe(2);
   });
 });

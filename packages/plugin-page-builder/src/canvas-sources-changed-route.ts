@@ -24,7 +24,7 @@
  *
  * @module canvas-sources-changed-route
  */
-import type { PluginRouteContext } from "@nextlyhq/plugin-sdk";
+import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { respondDoc } from "nextly";
 import { z } from "nextly/zod";
 
@@ -61,22 +61,48 @@ const UNREAD = "-";
 
 /** How the check reads each source, as the caller. */
 export interface SourcesChangedReads {
-  /** A collection entry's last save, or nothing. */
+  /** A collection entry, or nothing. */
   entry(collection: string, id: string): Promise<unknown>;
-  /** A Single's last save, or nothing. */
+  /** A Single's document, or nothing. */
   single(slug: string): Promise<unknown>;
-  /** A collection's newest save and how many entries it holds. */
-  collection(
-    slug: string
-  ): Promise<{ readonly latest: unknown; readonly total: number }>;
+  /**
+   * A collection's most recently saved entries, newest first and at most
+   * {@link NEWEST_MARKED} of them, and how many entries it holds.
+   */
+  collection(slug: string): Promise<{
+    readonly newest: readonly unknown[];
+    readonly total: number;
+  }>;
 }
 
-/** A read's mark, or the unread one when the read fails or is refused. */
+/**
+ * How many of a listed collection's most recently saved entries its mark
+ * names. More than one, because a version counts per entry: an edit to an
+ * entry that was not the newest makes it the newest, which a mark of the
+ * newest entry's version alone could read as no change when the two held
+ * the same count. Twenty, so saves landing in the same second, which SQLite
+ * stores save times to, still fall inside what the mark names.
+ */
+export const NEWEST_MARKED = 20;
+
+/**
+ * A read's mark, or the unread one when the caller may not read the source
+ * or it is gone. Any other failure is thrown, so the check answers an error
+ * and the canvas keeps what it has, rather than a mark that would change
+ * once and change back.
+ */
 async function markOf(read: () => Promise<string>): Promise<string> {
   try {
     return await read();
-  } catch {
-    return UNREAD;
+  } catch (error) {
+    if (
+      NextlyError.isForbidden(error) ||
+      NextlyError.isNotFound(error) ||
+      NextlyError.isAuthRequired(error)
+    ) {
+      return UNREAD;
+    }
+    throw error;
   }
 }
 
@@ -93,25 +119,34 @@ export async function sourcesChangedStamp(
   const { source } = ask;
   const own =
     source.kind === "single"
-      ? markOf(async () => savedMark(await reads.single(source.slug)))
+      ? markOf(async () =>
+          savedMark(updatedAtOf(await reads.single(source.slug)))
+        )
       : source.id === undefined
         ? Promise.resolve(UNREAD)
         : markOf(async () =>
-            savedMark(await reads.entry(source.slug, source.id as string))
+            savedMark(
+              updatedAtOf(await reads.entry(source.slug, source.id as string))
+            )
           );
   const parts = await Promise.all([
     own.then(mark => `${source.kind}:${source.slug}=${mark}`),
     ...[...new Set(ask.singles)]
       .sort()
       .map(slug =>
-        markOf(async () => savedMark(await reads.single(slug))).then(
-          mark => `single:${slug}=${mark}`
-        )
+        markOf(async () =>
+          savedMark(updatedAtOf(await reads.single(slug)))
+        ).then(mark => `single:${slug}=${mark}`)
       ),
     ...[...new Set(ask.lists)].sort().map(slug =>
       markOf(async () => {
-        const { latest, total } = await reads.collection(slug);
-        return `${String(total)}@${savedMark(latest)}`;
+        const { newest, total } = await reads.collection(slug);
+        // By id, so two entries saved in the same second, which a store to
+        // the second may hand back in either order, mark the same way.
+        const entries = newest
+          .map(entry => `${idOf(entry)}:${savedMark(updatedAtOf(entry))}`)
+          .sort();
+        return `${String(total)}@${entries.join(",")}`;
       }).then(mark => `list:${slug}=${mark}`)
     ),
   ]);
@@ -129,6 +164,13 @@ function updatedAtOf(found: unknown): unknown {
   return _rev ?? updatedAt;
 }
 
+/** A read entry's id, as a mark names it. */
+function idOf(found: unknown): string {
+  if (typeof found !== "object" || found === null) return UNREAD;
+  const { id } = found as { id?: unknown };
+  return typeof id === "string" || typeof id === "number" ? String(id) : UNREAD;
+}
+
 /** The sources read through the Direct API as the caller, drafts included. */
 async function directSourcesChangedReads(
   ctx: PluginRouteContext
@@ -141,23 +183,17 @@ async function directSourcesChangedReads(
   const asEditing = { ...person, status: "all" as const, draft: true };
   return {
     entry: async (collection, id) =>
-      updatedAtOf(
-        await nextly.findByID({ collection, id, depth: 0, ...asEditing })
-      ),
-    single: async slug =>
-      updatedAtOf(await nextly.findSingle({ slug, depth: 0, ...asEditing })),
+      nextly.findByID({ collection, id, depth: 0, ...asEditing }),
+    single: async slug => nextly.findSingle({ slug, depth: 0, ...asEditing }),
     collection: async slug => {
       const found = await nextly.find({
         collection: slug,
-        sort: "-updatedAt",
-        limit: 1,
+        sort: ["-updatedAt", "id"],
+        limit: NEWEST_MARKED,
         depth: 0,
         ...asEditing,
       });
-      return {
-        latest: updatedAtOf(found.items[0]),
-        total: found.meta.total,
-      };
+      return { newest: found.items, total: found.meta.total };
     },
   };
 }

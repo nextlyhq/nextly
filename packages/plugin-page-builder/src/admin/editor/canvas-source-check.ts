@@ -7,14 +7,21 @@
  * ({@link useDropKeptReadsOnSave}). For a save made anywhere else, this asks
  * the plugin's change check, which answers one mark for every source the
  * canvas reads:
- * - once when the canvas opens, for the mark to compare with;
- * - then at most once a minute while the builder's tab is visible, and once
- *   when the tab becomes visible again, so a change shows at once on coming
- *   back;
- * - never while the tab is hidden.
+ * - once when the canvas opens, whether or not its tab is in sight, so the
+ *   mark compared with is taken with the canvas's first reads;
+ * - once whenever what the canvas kept is dropped, for the same reason;
+ * - then a minute after the last check while the builder's tab is visible,
+ *   and once when the tab becomes visible again, so a change shows at once
+ *   on coming back;
+ * - never on the minute while the tab is hidden.
  *
  * A different mark drops what the canvas kept, and it asks again for what
  * it draws. A check that fails changes nothing; the next one asks again.
+ *
+ * What the canvas kept lives as long as the editor: closing it, signing
+ * out, or the canvas starting to read a source it did not read before drops
+ * it, so no answer read before the marks were taken is ever compared with
+ * them.
  *
  * @module admin/editor/canvas-source-check
  */
@@ -23,8 +30,6 @@ import { useEffect, useRef } from "react";
 
 import {
   CANVAS_SOURCES_CHANGED_ROUTE_PATH,
-  sourcesChangedAskOf,
-  type CanvasBindingsRequest,
   type CanvasSourcesChangedRequest,
   type CanvasSourcesChangedResponse,
 } from "../../canvas-bindings-contract";
@@ -56,41 +61,56 @@ async function askRoute(ask: CanvasSourcesChangedRequest): Promise<string> {
   return body.stamp;
 }
 
+/** Whether `next` names a source `previous` did not. */
+function namesNewSource(
+  previous: CanvasSourcesChangedRequest,
+  next: CanvasSourcesChangedRequest
+): boolean {
+  const named = (ask: CanvasSourcesChangedRequest) =>
+    new Set([
+      JSON.stringify(ask.source),
+      ...ask.singles.map(slug => `single:${slug}`),
+      ...ask.lists.map(slug => `list:${slug}`),
+    ]);
+  const before = named(previous);
+  return [...named(next)].some(source => !before.has(source));
+}
+
 /**
  * Keep the canvas's kept reads in step with saves made elsewhere, for the
- * sources `request` reads, as `userId`. Asks nothing for a page that reads
- * no source, or while the signed-in person is not known.
+ * sources `asked` names, as `userId`. Asks nothing for a page that reads no
+ * source, or while the signed-in person is not known.
  */
 export function useCanvasSourceCheck(
-  request: CanvasBindingsRequest | undefined,
+  asked: CanvasSourcesChangedRequest | undefined,
   userId: string | null,
   ask: AskSourcesMark = askRoute
 ): void {
   // The sources by name: an edit that leaves them the same asks nothing new.
   const key =
-    request === undefined || userId === null
-      ? ""
-      : JSON.stringify(sourcesChangedAskOf(request));
+    asked === undefined || userId === null ? "" : JSON.stringify(asked);
+  // The sources the last check named, across asks: a source read for the
+  // first time may have been kept from before this editor watched it.
+  const previous = useRef<CanvasSourcesChangedRequest | undefined>(undefined);
   useEffect(() => {
     if (key === "") return;
-    const asked = JSON.parse(key) as CanvasSourcesChangedRequest;
+    const sources = JSON.parse(key) as CanvasSourcesChangedRequest;
     let cancelled = false;
     let inFlight = false;
     // The mark last read; `undefined` until one is, and after the canvas's
-    // reads were dropped for another reason, so the next mark is taken as
-    // it stands rather than dropping them a second time.
+    // reads were dropped for another reason, until the check that drop asks.
     let known: string | undefined;
     let telling = false;
-    const stopHearing = onCanvasSourcesChanged(() => {
-      if (!telling) known = undefined;
-    });
-    const check = async () => {
-      if (cancelled || inFlight || document.visibilityState === "hidden") {
-        return;
-      }
+    let next: ReturnType<typeof setTimeout> | undefined;
+    const check = async (whenHidden: boolean) => {
+      if (cancelled || inFlight) return;
+      if (!whenHidden && document.visibilityState === "hidden") return;
       inFlight = true;
+      // The minute counts from this check, whatever asked for it.
+      clearTimeout(next);
+      next = setTimeout(() => void check(false), SOURCE_CHECK_EVERY_MS);
       try {
-        const mark = await ask(asked);
+        const mark = await ask(sources);
         if (cancelled) return;
         const changed = known !== undefined && mark !== known;
         known = mark;
@@ -108,31 +128,55 @@ export function useCanvasSourceCheck(
         inFlight = false;
       }
     };
-    void check();
-    const every = setInterval(() => void check(), SOURCE_CHECK_EVERY_MS);
+    // Dropped for another reason (a save here, another canvas's check): the
+    // canvas reads again now, so the mark is taken again now too.
+    const stopHearing = onCanvasSourcesChanged(() => {
+      if (telling) return;
+      known = undefined;
+      void check(true);
+    });
+    const before = previous.current;
+    previous.current = sources;
+    if (before !== undefined && namesNewSource(before, sources)) {
+      // What was kept for the new source predates every mark: drop it, which
+      // asks the check again through the listener above.
+      canvasSourcesChanged();
+    } else {
+      void check(true);
+    }
     const onVisible = () => {
-      if (document.visibilityState === "visible") void check();
+      if (document.visibilityState === "visible") void check(false);
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
-      clearInterval(every);
+      clearTimeout(next);
       document.removeEventListener("visibilitychange", onVisible);
       stopHearing();
     };
   }, [key, ask]);
+  // Signed out: nothing kept for the person who was may answer again.
+  const signedIn = useRef(userId !== null);
+  useEffect(() => {
+    if (userId === null && signedIn.current) canvasSourcesChanged();
+    signedIn.current = userId !== null;
+  }, [userId]);
+  // Closed: what this editor kept goes with it, so the next editor's first
+  // marks are taken with its own first reads.
+  useEffect(() => () => canvasSourcesChanged(), []);
 }
 
 /**
- * Drop what the canvas kept as soon as this editor saves: the page's own
- * entry is among what it reads. `savedAt` is the editor's last save; its
- * first value, the document as opened, drops nothing.
+ * Drop what the canvas kept as soon as this editor stores the document: the
+ * page's own entry is among what it reads. `storedAt` is when it was last
+ * stored in this session; a store with no change of its own still drops.
  */
-export function useDropKeptReadsOnSave(savedAt: unknown): void {
-  const opened = useRef(savedAt);
+export function useDropKeptReadsOnSave(storedAt: Date | null): void {
+  const seen = useRef(storedAt?.getTime() ?? null);
   useEffect(() => {
-    if (savedAt === opened.current) return;
-    opened.current = savedAt;
+    const at = storedAt?.getTime() ?? null;
+    if (at === null || at === seen.current) return;
+    seen.current = at;
     canvasSourcesChanged();
-  }, [savedAt]);
+  }, [storedAt]);
 }

@@ -47,8 +47,10 @@ import {
   CANVAS_BINDINGS_ROUTE_PATH,
   conditionsToWire,
   demandToWire,
+  sourcesChangedAskOf,
   type CanvasBindingsRequest,
   type CanvasBindingsResponse,
+  type CanvasSourcesChangedRequest,
 } from "../canvas-bindings-contract";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
@@ -276,6 +278,24 @@ export function canvasBindingsRequest(
   };
 }
 
+/**
+ * What the change check asks about for the sources the canvas reads: the
+ * bindings' ask where the page reads through bindings, else its lists alone,
+ * so a page that only lists entries still sees them change.
+ */
+function sourcesCheckAskOf(
+  request: CanvasBindingsRequest | undefined,
+  drawn: readonly BlockDocument[],
+  identity: DocumentIdentity | null,
+  namedQueries: NamedQueryLookup | undefined
+): CanvasSourcesChangedRequest | undefined {
+  if (request !== undefined) return sourcesChangedAskOf(request);
+  if (identity === null) return undefined;
+  const lists = [...listCollections(drawn, namedQueries)].sort();
+  if (lists.length === 0) return undefined;
+  return { source: requestSourceOf(identity), singles: [], lists };
+}
+
 /** The entry an ask is made for, as the route takes it. */
 function requestSourceOf(
   identity: DocumentIdentity
@@ -469,7 +489,11 @@ export function useCanvasBindings(
   const key = request === undefined ? "" : JSON.stringify(request);
   // Saves made elsewhere to what this reads: asked once a minute at most
   // while the builder is in sight, so a kept answer never outlives its data.
-  useCanvasSourceCheck(request, userId);
+  const checked = useMemo(
+    () => sourcesCheckAskOf(request, drawn, identity, namedQueries),
+    [request, drawn, identity, namedQueries]
+  );
+  useCanvasSourceCheck(checked, userId);
   const [answer, setAnswer] = useState<{
     readonly key: string;
     readonly userId: string;

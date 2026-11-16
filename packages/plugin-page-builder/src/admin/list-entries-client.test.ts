@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
- * The canvas's data provider: each distinct read once, kept a short while,
- * and a refusal handed back in the shape the renderer recognises, so a sort
+ * The canvas's data provider: each distinct read once, kept until the
+ * canvas's sources change or the person signs out, and a refusal handed back in the shape the renderer recognises, so a sort
  * the reader refused falls back to id order on the canvas.
  */
 import {
@@ -15,7 +15,8 @@ import { createElement } from "react";
 import { renderToReadableStream } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({ writePluginRoute: vi.fn() }));
+const writePluginRoute = vi.hoisted(() => vi.fn());
+vi.mock("@nextlyhq/plugin-sdk/admin", () => ({ writePluginRoute }));
 
 const { canvasListCount, canvasListData, canvasListReadsIn } = await import(
   "./list-entries-client"
@@ -58,11 +59,27 @@ describe("the canvas's list data", () => {
   });
 
   it("reads afresh once the canvas's sources have changed", async () => {
-    const kept = canvasListReadsIn("en", "author-c");
-    expect(canvasListReadsIn("en", "author-c")).toBe(kept);
+    writePluginRoute.mockReset();
+    writePluginRoute.mockResolvedValue(ANSWER);
+    const query = { collection: "posts", limit: 3 };
+    await canvasListReadsIn("en", "author-c").data.find(query);
+    await canvasListReadsIn("en", "author-c").data.find(query);
+    expect(writePluginRoute).toHaveBeenCalledTimes(1);
     canvasSourcesChanged();
-    // New reads, which keep nothing from before the change.
-    expect(canvasListReadsIn("en", "author-c")).not.toBe(kept);
+    // The same query asked again: read, not answered from before the change.
+    await canvasListReadsIn("en", "author-c").data.find(query);
+    expect(writePluginRoute).toHaveBeenCalledTimes(2);
+  });
+
+  it("answers nothing kept to the same person signing back in", async () => {
+    writePluginRoute.mockReset();
+    writePluginRoute.mockResolvedValue(ANSWER);
+    const query = { collection: "posts", limit: 5 };
+    await canvasListReadsIn("en", "author-d").data.find(query);
+    // Signed out, then the same person again.
+    canvasListReadsIn("en", null);
+    await canvasListReadsIn("en", "author-d").data.find(query);
+    expect(writePluginRoute).toHaveBeenCalledTimes(2);
   });
 
   it("keeps no refusal, so the next draw asks again", async () => {
