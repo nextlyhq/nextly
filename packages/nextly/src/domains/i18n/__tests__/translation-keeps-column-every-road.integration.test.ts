@@ -199,6 +199,31 @@ describe.each(getConfiguredTestDialects())(
   dialect => {
     const q = (id: string) => (dialect === "mysql" ? `\`${id}\`` : `"${id}"`);
 
+    /** Every compared column is there, so none is compared as absent on both sides. */
+    const expectEveryColumn = (
+      columns: Record<string, ColumnDefinition | undefined>
+    ) => {
+      for (const name of comparedOn(dialect)) {
+        expect(columns[name], `${name} in the table`).toBeDefined();
+      }
+    };
+
+    /** The moved fields' columns `table` still has, by name; none when the table is gone. */
+    async function movedColumnsLeft(
+      t: TestNextly,
+      table: string
+    ): Promise<string[]> {
+      const rows = await run<{ name: string }>(
+        t,
+        dialect === "mysql"
+          ? `SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}'`
+          : dialect === "sqlite"
+            ? `SELECT name FROM pragma_table_info('${table}')`
+            : `SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${table}'`
+      );
+      return rows.map(row => row.name).filter(name => MOVED.includes(name));
+    }
+
     it("through the Builder's schema dialog, on the database it saves to", async () => {
       const first = await boot(dialect);
       instance = first;
@@ -216,21 +241,26 @@ describe.each(getConfiguredTestDialects())(
         );
       }
       const before = await movedColumns(first, dialect, TABLE);
-      expect(before.views).toBeDefined();
+      expectEveryColumn(before);
 
       await setTranslated(first, true);
 
       expect(
         asReceived(await movedColumns(first, dialect, COMPANION), dialect)
       ).toEqual(asReceived(before, dialect));
+      // Moved, not copied: the main table no longer has them.
+      expect(await movedColumnsLeft(first, TABLE)).toEqual([]);
 
       await setTranslated(first, false);
 
-      // A default set by hand on the main table, not through Nextly, is in no migration file, and
-      // the turn-off's own file restores the column from the field: the database stands as that
-      // file says, so the default does not survive. Everything else the column had comes back.
+      // The turn-off's own file restores each column as Nextly defines it, and the database stands
+      // as that file says: so each comes back as it was before translation, and the translations
+      // table is gone. A property no migration file holds is not kept on this road: a default set
+      // by hand on the main table, not through Nextly, does not survive.
+      expect(await movedColumnsLeft(first, COMPANION)).toEqual([]);
       const { views, ...rest } = before;
       const back = await movedColumns(first, dialect, TABLE);
+      expectEveryColumn(back);
       expect(back).toEqual({
         ...rest,
         views: views && { ...views, default: back.views?.default ?? null },
@@ -259,7 +289,7 @@ describe.each(getConfiguredTestDialects())(
 
       await migrateFolder(second, { step: created });
       const before = await movedColumns(second, dialect, TABLE);
-      expect(before.views).toBeDefined();
+      expectEveryColumn(before);
       // Until the data-loss judgement counts a translations table created in the same file as the
       // run's own, an unattended run refuses the file's writes into that table unless given the
       // consent without targets, which no target names.
@@ -276,6 +306,7 @@ describe.each(getConfiguredTestDialects())(
       expect(
         asReceived(await movedColumns(second, dialect, COMPANION), dialect)
       ).toEqual(asReceived(before, dialect));
+      expect(await movedColumnsLeft(second, TABLE)).toEqual([]);
     });
 
     // A turn-off replayed in a run of its own, after the turn-on's, stops on PostgreSQL and MySQL
@@ -292,6 +323,7 @@ describe.each(getConfiguredTestDialects())(
         });
 
         expect(await movedColumns(second, dialect, TABLE)).toEqual(before);
+        expect(await movedColumnsLeft(second, COMPANION)).toEqual([]);
       }
     );
   }
