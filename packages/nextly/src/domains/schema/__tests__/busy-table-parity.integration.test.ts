@@ -37,19 +37,29 @@ import { runFileMigrations } from "../../../cli/commands/migrate";
 import { downDatabaseDeps } from "../../../cli/commands/migrate-down";
 import { createLogger } from "../../../cli/utils/logger";
 import { defineConfig } from "../../../config";
+import { createMissingCodeFirstTables } from "../../../di/register";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
+import { clearCachedSnapshot } from "../../../init/schema-snapshot-cache";
 import { _resetEnvCache } from "../../../shared/lib/env";
+import { consoleLogger } from "../../../shared/types";
+import type { ManifestEntry } from "../../field-groups/migration/manifest";
+import { createStorageObserver } from "../../field-groups/migration/observer";
+import { runMigrationSteps } from "../../field-groups/migration/runner";
+import type { MigrationSession } from "../../field-groups/migration/session";
+import { buildMigrationSteps } from "../../field-groups/migration/steps";
 import { applyCompanionStatements } from "../../i18n/migration/held-leaving-drops";
 import type { UserExtSchemaService } from "../../users/services/user-ext-schema-service";
 import type { UserFieldDefinitionService } from "../../users/services/user-field-definition-service";
 import { writeCollectionSave } from "../builder-save/collection-save";
 import { busyTableBounds } from "../busy-table/bounds";
 import { plannedTryStarts } from "../busy-table/schedule";
+import type { DesiredSchema } from "../pipeline/types";
+import { readIdentifierCaseRules } from "../utils/read-identifier-case";
 import {
   lockWorld,
   type LockWorld,
@@ -362,6 +372,99 @@ describe("a busy database, met by every path outside the schema pipeline (sqlite
     expect(outcome).toBe("part-way");
   }, 30_000);
 
+  it("migrate:field-groups --apply's rename step", async () => {
+    await adapter.executeQuery(
+      "CREATE TABLE btp_fg (id integer, legacy_kind text)"
+    );
+    const identifierCase = await readIdentifierCaseRules(adapter);
+    const entries: ManifestEntry[] = [
+      { kind: "column", table: "btp_fg", from: "legacy_kind", to: "kind" },
+    ];
+    const session = {
+      dialect: "sqlite",
+      inTransaction: work => adapter.transaction(work),
+      lock: { kind: "held", owner: "btp" },
+    } as MigrationSession;
+    // Driven at the steps: the run writes its marker before them, which the holder would block.
+    stops.fieldGroupMigration = await stopOf(() =>
+      runMigrationSteps({
+        session,
+        meta: undefined as never,
+        migrationId: "btp",
+        steps: buildMigrationSteps({
+          entries,
+          identifierCase,
+          observer: createStorageObserver(adapter, identifierCase),
+          ownedDataTables: [],
+        }),
+        fromStep: 1,
+        busyTable: {
+          adapter,
+          bounds: bounds(),
+          notify,
+          command: "nextly migrate:field-groups --apply (up)",
+          direction: "up",
+        },
+      })
+    );
+  }, 30_000);
+
+  // The start creates its tables through the schema pipeline and reports a failure as a warning
+  // rather than throwing, so its stop is read from what it said: the warning names the code and
+  // what changed, and each try after the first sent its notice.
+  it("the development start's creation of a missing code-first table", async () => {
+    clearCachedSnapshot();
+    const warnings: string[] = [];
+    const pipelineNotices: string[] = [];
+    const spy = vi
+      .spyOn(consoleLogger, "warn")
+      .mockImplementation((line: string) => {
+        pipelineNotices.push(line);
+      });
+    const desired: DesiredSchema = {
+      collections: {
+        btp_boot: {
+          slug: "btp_boot",
+          tableName: "btp_boot",
+          fields: [{ name: "title", type: "text" }],
+        },
+      } as unknown as DesiredSchema["collections"],
+      singles: {},
+      components: {},
+    };
+    try {
+      await holdTheDatabase();
+      await createMissingCodeFirstTables(
+        adapter,
+        {
+          ...quietSave,
+          debug: () => {},
+          warn: (line: string) => {
+            warnings.push(line);
+          },
+        },
+        { desired, followUps: [] }
+      );
+    } finally {
+      free();
+      await holding.catch(() => {});
+      spy.mockRestore();
+    }
+    const failure = warnings.find(line =>
+      line.startsWith("Auto-sync tables failed")
+    );
+    const tryNotices = pipelineNotices.filter(line =>
+      line.includes(" is busy, ")
+    );
+    stops.startTables = {
+      code: /\(([A-Z_]+)\)/.exec(failure ?? "")?.[1],
+      tries: tryNotices.length + 1,
+      outcome: failure?.includes("nothing changed")
+        ? "nothing-changed"
+        : failure,
+    };
+  }, 30_000);
+
   it("stops every one of them the same way, after the same tries", () => {
     const planned = plannedTryStarts(bounds()).length;
     expect(Object.keys(stops).sort()).toEqual(
@@ -370,8 +473,10 @@ describe("a busy database, met by every path outside the schema pipeline (sqlite
         "companion",
         "down",
         "fieldGroup",
+        "fieldGroupMigration",
         "migrate",
         "single",
+        "startTables",
         "userField",
       ].sort()
     );
