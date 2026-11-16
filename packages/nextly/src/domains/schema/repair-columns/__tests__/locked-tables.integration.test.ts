@@ -188,6 +188,8 @@ describe.each(LOCK_DIALECTS)(
         beforeStep?: (at: ConversionStepAt) => Promise<void>;
         beforeStatement?: ApplyOptions["beforeStatement"];
         holdUnderLock?: () => Promise<void>;
+        /** Bounds of the run's own, in place of the suite's. */
+        bounds?: BusyTableBounds;
       } = {}
     ) =>
       applyRepairs({
@@ -201,7 +203,10 @@ describe.each(LOCK_DIALECTS)(
                 return on;
               },
         nextlyVersion: "test",
-        tableWait,
+        tableWait:
+          extra.bounds === undefined
+            ? tableWait
+            : { ...tableWait, bounds: extra.bounds },
         ...(extra.beforeStep === undefined
           ? {}
           : { beforeStep: extra.beforeStep }),
@@ -773,6 +778,87 @@ describe.each(LOCK_DIALECTS)(
         // Exactly one try ran between two statements of a step: the earlier statement's own.
         expect(at.tries - (before?.tries ?? 0)).toBe(1);
       }
+    });
+
+    it("a MySQL step's wait for its table is charged to the table's total", async () => {
+      // Each column's EXECUTE waits 800 ms for HELD, less than a try: the waits get the table,
+      // and each is charged. With 2 s in all, two such waits leave less than a whole try, so the
+      // third column makes none and is reported locked.
+      if (dialect !== "mysql") return;
+      await setUp();
+      const holder = holderAdapter;
+      if (holder === null) throw new Error("no holder connection");
+      const HOLD_MS = 800;
+      const held: string[] = [];
+      const applied = await apply(entities(), {
+        bounds: { tryMs: 1_000, totalMs: 2_000 },
+        beforeStatement: async at => {
+          // The step's EXECUTE: SET, PREPARE, EXECUTE, DEALLOCATE.
+          if (at.table !== HELD || at.statements !== 4 || at.statement !== 3) {
+            return;
+          }
+          held.push(at.column);
+          let isHeld: () => void = () => {};
+          const heldNow = new Promise<void>(resolve => {
+            isHeld = resolve;
+          });
+          const previous = holding;
+          holding = (async () => {
+            await previous.catch(() => undefined);
+            await holder.withSession(async session => {
+              await session.execute(`LOCK TABLES ${q(HELD)} WRITE`);
+              isHeld();
+              await sleep(HOLD_MS);
+              await session.execute("UNLOCK TABLES");
+            });
+          })();
+          await heldNow;
+        },
+      });
+      await holding;
+      // No try ended waiting: every wait got the table within its try.
+      expect(notices).toEqual([]);
+      expect(held).toHaveLength(2);
+      const records = recordsOf(applied.result?.records, HELD);
+      const outcomes = records.map(r => r.outcome).sort();
+      expect(outcomes).toEqual([
+        "converted",
+        "converted",
+        "unavailable-locked",
+      ]);
+      const locked = records.find(r => r.outcome === "unavailable-locked");
+      expect(locked?.lock).toMatchObject({ table: HELD, tries: 0 });
+      expect(locked?.lock?.waitedMs).toBeGreaterThan(1_000);
+      for (const record of recordsOf(applied.result?.records, OTHER)) {
+        expect(record.outcome).toBe("converted");
+      }
+    });
+
+    it("a long MySQL ALTER on a free table is not reported locked", async () => {
+      // Only a step's wait for its table is charged, not the time its ALTER works: a table nobody
+      // holds converts every column however long the copies take together.
+      if (dialect !== "mysql") return;
+      await setUp();
+      // About 24,000 rows, so each copying ALTER outlasts the run's whole total.
+      for (let k = 0; k < 13; k++) {
+        const suffix = k.toString(36);
+        await run(
+          `INSERT INTO ${q(HELD)} (${q("id")}, ${q("slug")}, ${q("title")}, ${q("author")}, ${q("links")}, ${q("price")}) ` +
+            `SELECT CONCAT(${q("id")}, '${suffix}'), CONCAT(${q("slug")}, '${suffix}'), ${q("title")}, ${q("author")}, ${q("links")}, ${q("price")} FROM ${q(HELD)}`
+        );
+      }
+      const bounds = { tryMs: 200, totalMs: 400 };
+      const applied = await timed(() => apply(entities(), { bounds }));
+      expect(applied.ms).toBeGreaterThan(bounds.totalMs * 2);
+      expect(notices).toEqual([]);
+      const records = recordsOf(applied.value.result?.records, HELD);
+      expect(records.map(r => r.column).sort()).toEqual(
+        differingColumns(dialect)
+      );
+      for (const record of records) {
+        expect(record.outcome).toBe("converted");
+      }
+      expect(applied.value.exitCode).toBe(0);
     });
 
     it("the catalog read does not wait for a table another session holds", async () => {

@@ -55,6 +55,12 @@ export interface TryContext {
    * the try is its own, never the table being busy, so it is not tried again.
    */
   readonly tableReached: (lockHeld: boolean) => Promise<void>;
+  /**
+   * The try holds every lock it needs from here to its end, without saying where its wait for the
+   * table ended (several statements, waits among them): the watch ends here, a later failure is
+   * the try's own, and the table is charged what the watch saw the try wait, not its work.
+   */
+  readonly locksHeld: () => Promise<void>;
   /** How long this try may wait for the table, in milliseconds. */
   readonly tryMs: number;
   /** Tells the try's watch the id of the session its statements run on. */
@@ -86,6 +92,8 @@ export interface TableWaitsOptions {
   readonly underSchemaLock: boolean;
   /** What the owner runs again, as the next step names it. */
   readonly command: string;
+  /** Shows the run still holds the schema lock, or throws; the schema lock's own by default. */
+  readonly assertHeld?: () => Promise<void>;
   readonly now?: () => number;
   readonly sleep?: (ms: number) => Promise<void>;
 }
@@ -168,15 +176,6 @@ export class SchemaLockLost extends Error {
   }
 }
 
-/** Shows the run still holds the schema lock, or throws `SchemaLockLost`. */
-async function assertStillHeld(): Promise<void> {
-  try {
-    await assertSchemaLockHeld();
-  } catch (error) {
-    throw new SchemaLockLost(error);
-  }
-}
-
 /** Thrown by the tries' end, so the wait can tell its own stop from the work's failures. */
 class TriesRanOut extends Error {
   constructor(readonly stop: BusyTableStop) {
@@ -244,6 +243,16 @@ export class TableWaits {
   constructor(private readonly options: TableWaitsOptions) {
     this.now = options.now ?? Date.now;
     this.underSchemaLock = options.underSchemaLock;
+  }
+
+  /** Under the schema lock, shows the run still holds it, or throws `SchemaLockLost`. */
+  private async assertStillHeld(): Promise<void> {
+    if (!this.underSchemaLock) return;
+    try {
+      await (this.options.assertHeld ?? assertSchemaLockHeld)();
+    } catch (error) {
+      throw new SchemaLockLost(error);
+    }
   }
 
   /** One try's bound, in milliseconds. */
@@ -329,21 +338,29 @@ export class TableWaits {
    * `judge`, asked when a try ends waiting, names a statement the next try would send again that
    * may not run twice, which stops the tries at once. Every other failure of a try goes through
    * as it is.
+   *
+   * `continuing` marks work that goes on with something already under way (a later statement of
+   * a MySQL step whose earlier statements committed): it is never refused before it tries, so a
+   * step that has started is not left part-way for want of a whole try; it gets at least one.
    */
   async inTries<T>(
     table: string,
     attempt: (context: TryContext) => Promise<T>,
-    judge?: () => Promise<TryLasting | undefined>
+    judge?: () => Promise<TryLasting | undefined>,
+    options: { continuing?: boolean } = {}
   ): Promise<Waited<T>> {
     const state = this.stateOf(table);
     if (state.ranOut !== null) {
       return { kind: "ran-out", lock: this.factsOf(table, state) };
     }
+    // Before the first try as before every later one: a run that lost the schema lock between
+    // two waits sends nothing more.
+    await this.assertStillHeld();
     const { adapter, dialect, bounds } = this.options;
     // One total per table per run: what earlier waits used is gone, and no try starts unless a
     // whole one still fits, as the engine's own schedule starts none (`mayStartTry`).
     const left = bounds.totalMs - state.spentMs;
-    if (left < bounds.tryMs) {
+    if (left < bounds.tryMs && options.continuing !== true) {
       state.ranOut = {
         holder: state.lastHolder ?? TOTAL_USED_HOLDER,
         ending: { kind: "total" },
@@ -354,18 +371,24 @@ export class TableWaits {
     let lastStarted = started;
     // When the try that got the table stopped waiting for it, where it said (`tableReached`).
     let reachedAt: number | undefined;
+    // How long its watch saw it waiting for locks: its wait where it said none (a MySQL step,
+    // whose one statement waits and works).
+    let watchedMs = 0;
+    // When the last try's wait ended: where it said, else its start plus what its watch saw.
+    const waitEnded = () => reachedAt ?? lastStarted + watchedMs;
     let triedNow = 0;
     try {
       const value = await withBusyTableTries(
         {
-          bounds: { tryMs: bounds.tryMs, totalMs: left },
+          bounds: {
+            tryMs: bounds.tryMs,
+            totalMs: Math.max(left, bounds.tryMs),
+          },
           change: this.options.command,
           appliedBefore: [],
           notify: this.options.notify,
           notice: tryNotice,
-          assertHeld: this.underSchemaLock
-            ? assertStillHeld
-            : () => Promise.resolve(),
+          assertHeld: () => this.assertStillHeld(),
           stopped: stop => new TriesRanOut(stop),
           // SQLite's holder keeps the schema lock from renewing while the tries wait, so under it
           // they end where it can still be shown held.
@@ -380,11 +403,15 @@ export class TableWaits {
         async (_tryNumber, tryMs) => {
           lastStarted = this.now();
           reachedAt = undefined;
+          watchedMs = 0;
           triedNow++;
           // Made before the try's connection runs anything, so its asks run on another one.
           const watch = watchTry(adapter, dialect, tryMs);
           let settled: Promise<void> | undefined;
-          const settle = () => (settled ??= watch.settle());
+          const settle = () =>
+            (settled ??= watch.settle().then(ms => {
+              watchedMs = ms;
+            }));
           let lockHeld = false;
           try {
             const value = await attempt({
@@ -394,6 +421,10 @@ export class TableWaits {
               tableReached: async held => {
                 reachedAt = this.now();
                 if (!held) return;
+                lockHeld = true;
+                await settle();
+              },
+              locksHeld: async () => {
                 lockHeld = true;
                 await settle();
               },
@@ -411,7 +442,11 @@ export class TableWaits {
               (dialect === "sqlite" && sqliteLockedWait(error)
                 ? SQLITE_LOCKED_HOLDER
                 : undefined);
-            if (holder === undefined) throw error;
+            if (holder === undefined) {
+              // Not a wait that ended: what the watch saw it wait is charged, as for a success.
+              await settle();
+              throw error;
+            }
             state.lastHolder = holder;
             const lasting = await judge?.();
             return {
@@ -426,14 +461,14 @@ export class TableWaits {
           }
         }
       );
-      this.chargeLastTry(state, started, reachedAt ?? lastStarted, triedNow);
+      this.chargeLastTry(state, started, waitEnded(), triedNow);
       return { kind: "done", value };
     } catch (error) {
       if (!(error instanceof TriesRanOut)) {
         // The last try failed some other way than by waiting: it is charged as a try that got
         // the table, so a failure after its lock (a wait for another table) uses none of this
         // table's total for its work.
-        this.chargeLastTry(state, started, reachedAt ?? lastStarted, triedNow);
+        this.chargeLastTry(state, started, waitEnded(), triedNow);
         throw error;
       }
       state.spentMs += this.now() - started;
@@ -448,8 +483,8 @@ export class TableWaits {
 
   /**
    * Charge a wait whose last try did not end waiting: the tries before it, their pauses, and the
-   * last try up to `waitEndedAt` (where it said its wait was over, else its start). The last try
-   * is not one the table's lock report counts.
+   * last try up to `waitEndedAt` (where it said its wait was over, else its start plus the wait
+   * its watch saw). The last try is not one the table's lock report counts.
    */
   private chargeLastTry(
     state: TableState,

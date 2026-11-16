@@ -159,6 +159,22 @@ describe("a run's waits for a busy table", () => {
     );
   });
 
+  it("gives work that goes on with a started step one try, though less than a whole one is left", async () => {
+    const { run, reachesAfter } = waits({ tryMs: 1_000, totalMs: 4_000 });
+    for (let wait = 0; wait < 4; wait++) {
+      await run.inTries("dc_posts", reachesAfter(900));
+    }
+    // 400 ms left: a new wait makes no try, but the rest of a step under way gets one.
+    expect(
+      await run.inTries("dc_posts", reachesAfter(0), undefined, {
+        continuing: true,
+      })
+    ).toEqual({ kind: "done", value: "read" });
+    expect((await run.inTries("dc_posts", reachesAfter(0))).kind).toBe(
+      "ran-out"
+    );
+  });
+
   it("lets a try's failure through once the try holds the table's lock, and tries no more", async () => {
     const { run, notices } = waits();
     let tried = 0;
@@ -257,6 +273,46 @@ describe("a run's waits for a busy table", () => {
       })
     ).rejects.toBe(own);
     expect(tried).toBe(1);
+  });
+
+  it("under the schema lock, shows it is still held before a wait's first try", async () => {
+    const lost = new Error("the schema lock was lost");
+    const run = new TableWaits({
+      adapter: {} as DrizzleAdapter,
+      dialect: "sqlite",
+      bounds: { tryMs: 1_000, totalMs: 4_000 },
+      notify: () => undefined,
+      underSchemaLock: true,
+      command: "nextly repair-columns --apply",
+      assertHeld: () => Promise.reject(lost),
+    });
+    let tried = 0;
+    await expect(
+      run.inTries("dc_posts", () => {
+        tried++;
+        return Promise.resolve("converted");
+      })
+    ).rejects.toMatchObject({ name: "SchemaLockLost", cause: lost });
+    expect(tried).toBe(0);
+  });
+
+  it("charges a try that holds its locks without saying where its wait ended only for what its watch saw it wait", async () => {
+    const { run, attempt } = waits({ tryMs: 1_000, totalMs: 4_000 });
+    let now = 0;
+    // 10 s of work (SQLite's watch sees no wait), then every lock held before its COMMIT.
+    expect(
+      await run.inTries("dc_posts", async ({ locksHeld }) => {
+        now += 10_000;
+        await locksHeld();
+        return now;
+      })
+    ).toEqual({ kind: "done", value: 10_000 });
+    // None of the table's total was used: its next wait has every try.
+    const held = await run.inTries("dc_posts", attempt().run);
+    expect(held).toMatchObject({
+      kind: "ran-out",
+      lock: { tries: 2, waitedMs: 3_000 },
+    });
   });
 
   it("lets any other failure of a try through as it is", async () => {

@@ -220,8 +220,14 @@ export async function dryRunReport(args: {
     ...(waits === undefined ? {} : { waits }),
   });
   const readMs = Date.now() - started;
-  // Read after the tables: where another connection held the whole database past its tries, the
-  // lock tables cannot be read either, and reading them would wait again outside the tries.
+  const unfinished = await unfinishedRecords(
+    { adapter, dialect, entities },
+    findings,
+    waits
+  );
+  // Read after the scan's last read (the unfinished conversions' live steps included): where
+  // another connection held the whole database past its tries, the lock tables cannot be read
+  // either, and reading them would wait again outside the tries.
   const { schemaLock, warnings } = schemaLockFacts(
     overScan(
       before,
@@ -229,11 +235,6 @@ export async function dryRunReport(args: {
         ? { state: "unknown", reason: DATABASE_HELD }
         : await readSchemaLockState(adapter)
     )
-  );
-  const unfinished = await unfinishedRecords(
-    { adapter, dialect, entities },
-    findings,
-    waits
   );
   return reportDocument({
     nextlyVersion: args.nextlyVersion,

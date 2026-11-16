@@ -1009,8 +1009,9 @@ class ApplyRun {
       await run(clearedStepStatement(rowId, step, still.length));
       // Every lock the clearing needs is held: the watch ends before the COMMIT, so a cancel it
       // decided while an earlier statement waited cannot end the COMMIT, which could leave it
-      // unknown whether the clearing stayed.
-      await try_.tableReached(true);
+      // unknown whether the clearing stayed. The table is charged the waits the watch saw, not
+      // the clearing's work.
+      await try_.locksHeld();
       await run(sql`COMMIT`);
       return still.length;
     } catch (error) {
@@ -1081,7 +1082,9 @@ class ApplyRun {
             });
             const waited = await inTries(
               () => sent.execute(statement),
-              () => this.statementLasting(statement, at + 1)
+              () => this.statementLasting(statement, at + 1),
+              // The step's first statement starts it; the later ones finish what it started.
+              { continuing: at > 0 }
             );
             if (waited.kind === "ran-out") {
               lock = waited.lock;
@@ -1151,7 +1154,8 @@ class ApplyRun {
     work: (
       inTries: <T>(
         attempt: (try_: TryContext) => Promise<T>,
-        judge: () => Promise<TryLasting | undefined>
+        judge: () => Promise<TryLasting | undefined>,
+        options?: { continuing?: boolean }
       ) => Promise<Waited<T>>,
       session: StatementSession
     ) => Promise<void>
@@ -1174,7 +1178,8 @@ class ApplyRun {
             work(
               <T>(
                 attempt: (try_: TryContext) => Promise<T>,
-                judge: () => Promise<TryLasting | undefined>
+                judge: () => Promise<TryLasting | undefined>,
+                options?: { continuing?: boolean }
               ): Promise<Waited<T>> =>
                 this.waits.inTries(
                   table,
@@ -1182,7 +1187,8 @@ class ApplyRun {
                     if (id !== undefined) try_.onSession(id);
                     return attempt(try_);
                   },
-                  judge
+                  judge,
+                  options
                 ),
               session
             )
