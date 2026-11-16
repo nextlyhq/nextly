@@ -46,7 +46,6 @@ packages/builder/src/geometry-dom.ts 2034
 
 packages/builder/src/insert-panel.tsx 1857
 
-packages/builder/src/inserter.ts 1559
 
 packages/builder/src/inspector-panel.tsx 1805
 
