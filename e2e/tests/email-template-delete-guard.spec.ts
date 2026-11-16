@@ -10,7 +10,7 @@ import { expect, type APIRequestContext } from "@playwright/test";
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
 import { expectOk } from "./support/runtime-collection";
-import { test } from "./support/test";
+import { fileAccount, test } from "./support/test";
 
 test.describe.configure({ lock: [LOCK.email] });
 
@@ -29,9 +29,15 @@ const RULE_NAME = "Notify logistics";
 let templateId: string | undefined;
 let formId: string | undefined;
 
-test.beforeAll(async ({ playwright, baseURL }) => {
+test.beforeAll(async ({ playwright }, testInfo) => {
+  const baseURL = testInfo.project.use.baseURL;
+  if (baseURL === undefined) throw new Error("[e2e] No baseURL configured.");
+  // A session, like every admin API context: without it the setup posts
+  // unauthenticated and the guard this spec covers never runs against real
+  // data.
   const api: APIRequestContext = await playwright.request.newContext({
     baseURL,
+    storageState: await fileAccount(baseURL, testInfo),
   });
 
   // 1. Create a site email template.
