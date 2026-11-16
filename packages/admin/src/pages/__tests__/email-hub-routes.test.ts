@@ -16,6 +16,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  EMAIL_DELIVERIES_READ_PERMISSION,
   EMAIL_HUB_PERMISSIONS,
   EMAIL_PROVIDER_CREATE_PERMISSIONS,
   EMAIL_PROVIDER_READ_PERMISSIONS,
@@ -47,6 +48,11 @@ describe("the Email hub's routes", () => {
       ROUTES.EMAIL_SENDING,
       routeConfig[ROUTES.EMAIL_SENDING].component,
       EMAIL_PROVIDER_READ_PERMISSIONS,
+    ],
+    [
+      ROUTES.EMAIL_ACTIVITY,
+      routeConfig[ROUTES.EMAIL_ACTIVITY].component,
+      [EMAIL_DELIVERIES_READ_PERMISSION],
     ],
     [
       ROUTES.EMAIL_MESSAGES_CREATE,

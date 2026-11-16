@@ -1,5 +1,6 @@
 import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
 import {
+  EMAIL_DELIVERIES_READ_PERMISSION,
   EMAIL_HUB_PERMISSIONS,
   EMAIL_PROVIDER_CREATE_PERMISSIONS,
   EMAIL_PROVIDER_READ_PERMISSIONS,
@@ -55,6 +56,7 @@ import { lazyRoute } from "./lazy-route";
 // each chunk is fetched when its route renders, so opening one screen
 // does not download the other pages.
 const CollectionsPage = lazyRoute(() => import("./dashboard/collection/index"));
+const EmailActivityPage = lazyRoute(() => import("./dashboard/email/activity"));
 const EmailDesignPage = lazyRoute(() => import("./dashboard/email/design"));
 const EmailMessagesPage = lazyRoute(() => import("./dashboard/email/index"));
 const CreateEmailTemplatePage = lazyRoute(
@@ -657,6 +659,13 @@ export const routeConfig: Record<string, RouteConfig> = {
     screenName: emailHubScreen(ROUTES.EMAIL_SENDING),
     type: "private",
     requiredPermission: [...EMAIL_PROVIDER_READ_PERMISSIONS],
+    section: overridableBy("settings"),
+  },
+  [ROUTES.EMAIL_ACTIVITY]: {
+    component: EmailActivityPage,
+    screenName: emailHubScreen(ROUTES.EMAIL_ACTIVITY),
+    type: "private",
+    requiredPermission: [EMAIL_DELIVERIES_READ_PERMISSION],
     section: overridableBy("settings"),
   },
   [ROUTES.EMAIL_MESSAGES_CREATE]: {
