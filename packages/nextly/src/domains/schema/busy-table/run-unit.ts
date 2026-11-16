@@ -151,7 +151,7 @@ export async function triggerTables(
  * with it. False on the other dialects, which have none. A read that fails answers yes, failing
  * closed.
  */
-export async function hasDdlEventTriggers(
+async function hasDdlEventTriggers(
   adapter: Pick<DrizzleAdapter, "queryStatement">,
   dialect: SupportedDialect
 ): Promise<boolean> {
