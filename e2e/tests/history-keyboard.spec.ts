@@ -57,14 +57,19 @@ async function tabTo(
   direction: "forward" | "back" = "forward"
 ): Promise<void> {
   const key = direction === "forward" ? "Tab" : "Shift+Tab";
+  // The last stops, so a failure says where focus went instead.
+  const trail: string[] = [];
   for (let presses = 0; presses < 120; presses += 1) {
     const focused = await focusedName(page);
     if (typeof name === "string" ? focused === name : name.test(focused)) {
       return;
     }
+    trail.push(focused);
     await page.keyboard.press(key);
   }
-  throw new Error(`Tab never reached ${String(name)}`);
+  throw new Error(
+    `Tab never reached ${String(name)}; last stops: ${trail.slice(-12).join(" | ")}`
+  );
 }
 
 /** The focused element shows it: it matches `:focus-visible`, as a keyboard move leaves it. */
