@@ -577,6 +577,77 @@ describe("a rename the Builder made", () => {
     expect(applyFn).not.toHaveBeenCalled();
   });
 
+  // A pair the preview offers but that would change or lose values is not a rename that keeps
+  // them: the save stops for the person to save the rename on its own.
+  it.each([
+    [
+      "changes its values",
+      { preservesValues: false, valueChangeReason: "text becomes number" },
+    ],
+    ["is between types that do not fit", { typesCompatible: false }],
+  ])(
+    "saves nothing, naming the field, when the pair %s",
+    async (_case, over) => {
+      const confirmation = confirmationStub();
+      const { result, applyFn } = setup({
+        confirmation,
+        previewFn: vi.fn(() =>
+          Promise.resolve(
+            preview({
+              renamed: [{ ...candidate("summary", "abstract"), ...over }],
+            })
+          )
+        ),
+        draftRenames: [rename("summary", "abstract")],
+      });
+
+      await act(async () => result.current.handleSave());
+
+      await waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
+      expect(toastError.mock.lastCall?.[0]).toMatch(
+        /Summary.*summary.*abstract/s
+      );
+      expect(confirmation.request).not.toHaveBeenCalled();
+      expect(applyFn).not.toHaveBeenCalled();
+    }
+  );
+
+  // Another dropped field the preview pairs with the renamed field's new column would compete for
+  // it: answered as a rename, it could take the column first and leave the real rename a drop.
+  it("answers every other pair onto the new column as a drop and an add", async () => {
+    const pending = preview({
+      renamed: [
+        candidate("summary", "abstract"),
+        candidate("body", "abstract"),
+      ],
+    });
+    const { result, applyFn } = setup({
+      confirmation: confirmationStub(pending),
+      draftRenames: [rename("summary", "abstract")],
+    });
+
+    await act(async () =>
+      result.current.confirmApply({}, [
+        {
+          tableName: "dc_posts",
+          fromColumn: "body",
+          toColumn: "abstract",
+          choice: "rename",
+        },
+      ])
+    );
+
+    await waitFor(() => expect(applyFn).toHaveBeenCalledTimes(1));
+    const sent = applyFn.mock.lastCall?.[3] as {
+      fromColumn: string;
+      toColumn: string;
+      choice: string;
+    }[];
+    expect(
+      sent.map(r => `${r.fromColumn}->${r.toColumn}:${r.choice}`).sort()
+    ).toEqual(["body->abstract:drop_and_add", "summary->abstract:rename"]);
+  });
+
   it("needs no pair when the new name keeps the column", async () => {
     const confirmation = confirmationStub();
     const { result } = setup({

@@ -260,7 +260,8 @@ export function useSchemaSave({
             resolutions,
             withDecidedRenames(
               renameResolutions,
-              renameAnswers(draftRenames, previewed.renamed ?? []).decided
+              renameAnswers(draftRenames, previewed.renamed ?? []).decided,
+              previewed.renamed ?? []
             )
           );
           if (!result.success) {

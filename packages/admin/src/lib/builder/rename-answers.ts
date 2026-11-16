@@ -49,16 +49,27 @@ export function draftRenamesOf(
     }));
 }
 
+/** A rename the save cannot keep as one, and why: the pair is not offered, or it changes values. */
+export interface RenameNotKept {
+  rename: DraftRename;
+  /** The pair is offered, but the column's values would not come through it unchanged. */
+  valuesChange: boolean;
+  /** The preview's reason the values change, when it gives one. */
+  reason?: string;
+}
+
 /**
- * The preview's candidates the Builder answers as renames, and the first rename that has none.
- * A rename whose column stays the same is not looked for.
+ * The preview's candidates the Builder answers as renames, and the first rename it cannot keep as
+ * one: a pair the preview does not offer, or one whose values would not come through unchanged
+ * (types that do not fit, or a conversion that rewrites them). A rename whose column stays the
+ * same is not looked for.
  */
 export function renameAnswers(
   renames: readonly DraftRename[],
   candidates: readonly SchemaPreviewRenameCandidate[]
 ): {
   decided: SchemaPreviewRenameCandidate[];
-  missing: DraftRename | null;
+  missing: RenameNotKept | null;
 } {
   const decided: SchemaPreviewRenameCandidate[] = [];
   for (const rename of renames) {
@@ -66,67 +77,77 @@ export function renameAnswers(
     const to = fieldColumnName(rename.name);
     if (from === to) continue;
     const pairs = candidates.filter(c => c.from === from && c.to === to);
-    if (pairs.length === 0) return { decided, missing: rename };
+    if (pairs.length === 0) {
+      return { decided, missing: { rename, valuesChange: false } };
+    }
+    const changing = pairs.find(c => !c.typesCompatible || !c.preservesValues);
+    if (changing) {
+      return {
+        decided,
+        missing: {
+          rename,
+          valuesChange: true,
+          reason: changing.valueChangeReason,
+        },
+      };
+    }
     decided.push(...pairs);
   }
   return { decided, missing: null };
 }
 
+/** Whether `c` shares a decided pair's dropped column or its new column, on the same table. */
+function competesWithDecided(
+  c: SchemaPreviewRenameCandidate,
+  decided: readonly SchemaPreviewRenameCandidate[]
+): boolean {
+  return decided.some(
+    d => d.table === c.table && (d.from === c.from || d.to === c.to)
+  );
+}
+
 /**
- * `resolutions` with every decided pair answered as a rename. For a column a decided pair renames,
- * the schema dialog's answers are overruled: the decided pair is the rename, and any other pair
- * from that column is a drop and an add. A decided pair the dialog gave no answer for is added.
+ * The rename answers the save is sent: every decided pair a rename, and every other pair from a
+ * decided pair's dropped column or onto its new column a drop and an add, whatever the schema
+ * dialog answered. A pair onto the new column answered as a rename could take that column first and
+ * leave the Builder's rename a drop. The dialog's answers for every other pair stand.
  */
 export function withDecidedRenames(
   resolutions: readonly SchemaRenameResolution[],
-  decided: readonly SchemaPreviewRenameCandidate[]
+  decided: readonly SchemaPreviewRenameCandidate[],
+  candidates: readonly SchemaPreviewRenameCandidate[]
 ): SchemaRenameResolution[] {
-  const drop = (table: string, from: string) => `${table}::${from}`;
-  const pair = (table: string, from: string, to: string) =>
+  const key = (table: string, from: string, to: string) =>
     `${table}::${from}::${to}`;
-  const decidedDrops = new Set(decided.map(c => drop(c.table, c.from)));
-  const decidedPairs = new Set(decided.map(c => pair(c.table, c.from, c.to)));
-  const answered = resolutions.map(
-    (each): SchemaRenameResolution =>
-      decidedDrops.has(drop(each.tableName, each.fromColumn))
-        ? {
-            ...each,
-            choice: decidedPairs.has(
-              pair(each.tableName, each.fromColumn, each.toColumn)
-            )
-              ? "rename"
-              : "drop_and_add",
-          }
-        : each
+  const decidedKeys = new Set(decided.map(c => key(c.table, c.from, c.to)));
+  const answers = new Map<string, SchemaRenameResolution>(
+    resolutions.map(each => [
+      key(each.tableName, each.fromColumn, each.toColumn),
+      each,
+    ])
   );
-  const unanswered = decided.filter(
-    c =>
-      !answered.some(
-        each =>
-          pair(each.tableName, each.fromColumn, each.toColumn) ===
-          pair(c.table, c.from, c.to)
-      )
-  );
-  return [
-    ...answered,
-    ...unanswered.map(
-      (c): SchemaRenameResolution => ({
+  for (const c of [...candidates, ...decided]) {
+    const k = key(c.table, c.from, c.to);
+    if (decidedKeys.has(k) || competesWithDecided(c, decided)) {
+      answers.set(k, {
         tableName: c.table,
         fromColumn: c.from,
         toColumn: c.to,
-        choice: "rename",
-      })
-    ),
-  ];
+        choice: decidedKeys.has(k) ? "rename" : "drop_and_add",
+      });
+    }
+  }
+  return [...answers.values()];
 }
 
-/** Why a save stops for a rename the preview does not offer as one, naming the field. */
-export function renameNotOffered(rename: DraftRename): string {
-  return (
-    `${rename.label} was renamed from ${rename.previousName} to ${rename.name}, but this save ` +
-    "does not see the two as one field, so saving would drop its values. Save the rename on its " +
-    "own, before other changes to the field."
-  );
+/** Why a save stops for a rename it cannot keep as one, naming the field. */
+export function renameNotOffered(notKept: RenameNotKept): string {
+  const { rename } = notKept;
+  const renamed = `${rename.label} was renamed from ${rename.previousName} to ${rename.name}`;
+  const why = notKept.valuesChange
+    ? `, but this save would not carry its values over unchanged${notKept.reason ? ` (${notKept.reason})` : ""}`
+    : ", but this save does not see the two as one field, so saving would drop its values";
+  return `${renamed}${why}. Save the rename on its own, before other changes to the field.`;
 }
 
 /**
@@ -141,7 +162,7 @@ export function previewWithDecidedRenames(
   if (decided.length === 0) return preview;
   const fromColumns = new Set(decided.map(c => c.from));
   const toColumns = new Set(decided.map(c => c.to));
-  const decidedDrops = new Set(decided.map(c => `${c.table}::${c.from}`));
+
   const changes = {
     ...preview.changes,
     removed: preview.changes.removed.filter(
@@ -155,8 +176,10 @@ export function previewWithDecidedRenames(
   return {
     ...preview,
     changes,
+    // A pair from a decided pair's dropped column, or onto its new column, is the Builder's to
+    // answer, not the person's.
     renamed: (preview.renamed ?? []).filter(
-      c => !decidedDrops.has(`${c.table}::${c.from}`)
+      c => !competesWithDecided(c, decided)
     ),
     hasDestructiveChanges: preview.hasDestructiveChanges && deletesData,
     classification:

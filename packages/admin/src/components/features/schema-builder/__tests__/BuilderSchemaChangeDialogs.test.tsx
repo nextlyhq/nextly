@@ -699,6 +699,29 @@ describe("a rename the Builder made", () => {
     ).not.toBeInTheDocument();
   });
 
+  // A pair from another dropped field onto the renamed field's new column is not offered: the
+  // column is the rename's.
+  it("does not offer another field's pair onto the renamed field's new column", () => {
+    render(
+      <BuilderSchemaChangeDialogs
+        confirmation={confirmationOf({
+          ...renaming,
+          renamed: [
+            ...(renaming.renamed ?? []),
+            { ...(renaming.renamed ?? [])[0], from: "body" },
+          ],
+        })}
+        kind="collection"
+        entityName="posts"
+        onConfirm={vi.fn()}
+        draftRenames={[
+          { label: "Summary", previousName: "summary", name: "abstract" },
+        ]}
+      />
+    );
+    expect(screen.queryAllByRole("radio")).toHaveLength(0);
+  });
+
   // The control: without the Builder's rename, the same preview asks, and shows the removal.
   it("still asks about the pair when the Builder did not rename the field", () => {
     renderDialogs(renaming);
