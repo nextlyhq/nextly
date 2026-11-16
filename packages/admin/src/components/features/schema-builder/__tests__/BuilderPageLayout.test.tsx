@@ -258,6 +258,22 @@ describe("BuilderPageLayout", () => {
     );
   });
 
+  // The toolbar's row is full on a phone: there the reason is announced and
+  // carried by Save itself rather than set beside it, where it would push the
+  // row past the screen's edge.
+  it("keeps the hold's reason out of a phone's toolbar row, on Save instead", () => {
+    renderLayout({
+      unsavedCount: 2,
+      saveHeld: "Save waits while the new address is checked.",
+    });
+    const status = screen.getByTestId("save-held-status");
+    expect(status).toHaveClass("sr-only", "sm:not-sr-only");
+    expect(screen.getByRole("button", { name: "Save" })).toHaveAttribute(
+      "title",
+      "Save waits while the new address is checked."
+    );
+  });
+
   it("carries the lock through to the field list", () => {
     renderLayout({ locked: true });
     // Every editing affordance on a row is gone when the entity is code-first.
