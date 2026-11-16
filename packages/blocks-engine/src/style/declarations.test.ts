@@ -413,14 +413,13 @@ describe("a child's share of a Row or a Grid, and a grid's item alignment", () =
     expect(emitted({ flexBasis: "fit-content" })).toEqual([
       "flex-basis: fit-content",
     ]);
+    expect(emitted({ flexBasis: "50%" })).toEqual(["flex-basis: 50%"]);
     expect(emitted({ alignSelf: "baseline" })).toEqual([
       "align-self: baseline",
     ]);
-    expect(emitted({ justifySelf: "safe end" })).toEqual([
-      "justify-self: safe end",
-    ]);
-    expect(emitted({ justifyItems: "legacy center" })).toEqual([
-      "justify-items: legacy center",
+    expect(emitted({ justifySelf: "end" })).toEqual(["justify-self: end"]);
+    expect(emitted({ justifyItems: "center" })).toEqual([
+      "justify-items: center",
     ]);
   });
 
@@ -433,5 +432,11 @@ describe("a child's share of a Row or a Grid, and a grid's item alignment", () =
     expect(emitted({ alignSelf: "left" })).toEqual([]);
     expect(emitted({ justifySelf: "right" })).toEqual([]);
     expect(emitted({ flexBasis: "red" })).toEqual([]);
+    // Values a browser would drop on these properties, which Baseline does
+    // not yet mark widely available there.
+    expect(emitted({ flexBasis: "stretch" })).toEqual([]);
+    expect(emitted({ flexBasis: "fit-content(10rem)" })).toEqual([]);
+    expect(emitted({ justifySelf: "safe end" })).toEqual([]);
+    expect(emitted({ justifyItems: "legacy center" })).toEqual([]);
   });
 });

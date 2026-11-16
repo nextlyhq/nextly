@@ -211,8 +211,7 @@ export interface StyleInspection {
   readonly sections: readonly StyleSection[];
   /**
    * The `object-fit` keyword in force here, lowercased, or `undefined` when
-   * nothing sets one: what decides whether the focal point shows, and what it
-   * says it does.
+   * nothing sets one: what decides what the focal point says it does.
    */
   readonly objectFit?: string | undefined;
 }
@@ -373,7 +372,7 @@ function appliesContextOf(
     flexWrap: own("flex-wrap", "flexWrap", "nowrap"),
     // A position is stored as an object; its type is the keyword in force.
     position: own("position", "position", "static", ["type"]),
-    parentDisplay: parentDisplayOf(document, node, at),
+    parentDisplay: parentDisplayOf(document, node, at, options),
     // Known not to be media only once the canvas has said what it draws.
     replaced:
       options?.media === true
@@ -395,17 +394,31 @@ const PAGE_ROOTED: ReadonlySet<string> = new Set(["page", "template"]);
  * `display: contents` parent, the nearest ancestor that draws a box.
  *
  * Read at the base state: a parent's interaction state is not the one being
- * edited. A top-level block of a page or a template sits in the page's own
- * flow; one of a component or a pattern goes wherever it is placed, so its
- * parent is not known.
+ * edited. A top-level block of a page or a template sits in the page root,
+ * laid out as the page's settings say; one of a component or a pattern goes
+ * wherever it is placed, so its parent is not known. Nor is it for a shared
+ * style or a look, which many blocks wear wherever each one sits.
  */
 function parentDisplayOf(
   document: BlockDocument,
   node: BlockNode,
-  at: ReadAt
+  at: ReadAt,
+  options: StyleInspectionOptions | undefined
 ): string | undefined {
   const base: ReadAt = { ...at, state: "base" };
-  const atRoot = PAGE_ROOTED.has(document.kind) ? IN_FLOW : undefined;
+  // A shared style or a look is worn by many blocks, wherever each one sits:
+  // the selected block's parent says nothing about the others.
+  if (options?.styles !== undefined) return undefined;
+  // The page root lays out its top-level blocks as the page's own settings
+  // say, which is in flow unless they give it a display.
+  const atRoot = PAGE_ROOTED.has(document.kind)
+    ? (cascadedKeyword(
+        document.settings?.styles,
+        { ...base, cascade: undefined },
+        "display",
+        "display"
+      ) ?? IN_FLOW)
+    : undefined;
   return at.cascade === undefined
     ? storedParentDisplay(document.nodes, node.id, base, atRoot)
     : cascadedParentDisplay(at.cascade, base, atRoot);

@@ -366,3 +366,101 @@ describe("a value that no longer applies", () => {
     expect(row).toMatchObject({ set: true, applies: false, common: true });
   });
 });
+
+describe("where the parent is read from", () => {
+  const stored = (values: Record<string, unknown>) =>
+    ({ base: { [BASE_BREAKPOINT]: values } }) as unknown as NodeStyles;
+
+  it("does not judge a shared style by the selected block's parent", () => {
+    // A shared style or a look reaches blocks in Rows and Stacks alike.
+    register();
+    const document = nested("page", {
+      outer: stored({ display: "block" }),
+    });
+    expect(shown(document, "inner", "size")).not.toContain("flexGrow");
+    expect(shown(document, "inner", "size", { styles: stored({}) })).toContain(
+      "flexGrow"
+    );
+  });
+
+  it("reads the page's own display for a top-level block", () => {
+    register();
+    const document = {
+      ...nested(),
+      settings: { styles: stored({ display: "grid" }) },
+    } as BlockDocument;
+    expect(
+      shown(document, "outer", "size", { cascade: read("outer", []) })
+    ).toContain("justifySelf");
+    expect(shown(document, "outer", "size")).toContain("justifySelf");
+  });
+
+  it("puts a template's top-level block in the page's flow, and a pattern's nowhere known", () => {
+    register();
+    const cascade = read("outer", []);
+    expect(shown(nested("template"), "outer", "size", { cascade })).toEqual(
+      SIZE
+    );
+    expect(shown(nested("pattern"), "outer", "size", { cascade })).toContain(
+      "flexGrow"
+    );
+  });
+
+  it("reads the parent at the base state, whatever state the child is edited in", () => {
+    register();
+    const document = nested("page", {
+      outer: {
+        base: { [BASE_BREAKPOINT]: { display: "flex" } },
+        hover: { [BASE_BREAKPOINT]: { display: "block" } },
+      } as unknown as NodeStyles,
+      inner: stored({ display: "block", flexWrap: "nowrap" }),
+    });
+    expect(shown(document, "inner", "size", { state: "hover" })).toContain(
+      "flexGrow"
+    );
+  });
+
+  it("reads the parent at the edited breakpoint", () => {
+    register();
+    const breakpoints = {
+      viewport: [
+        { id: BASE_BREAKPOINT, label: "Desktop" },
+        { id: "mobile", label: "Mobile", maxWidth: 640 },
+      ],
+      container: [],
+    } as never;
+    const document = nested("page", {
+      outer: {
+        base: {
+          [BASE_BREAKPOINT]: { display: "block" },
+          mobile: { display: "flex" },
+        },
+      } as unknown as NodeStyles,
+    });
+    const at = (breakpoint: string) =>
+      shown(document, "inner", "size", {
+        breakpoint: breakpoint as never,
+        breakpoints,
+      });
+    expect(at("mobile")).toContain("flexGrow");
+    expect(at(BASE_BREAKPOINT)).not.toContain("flexGrow");
+  });
+});
+
+describe("a Row's own wrap", () => {
+  it("gives align content an effect only once the Row wraps", () => {
+    register();
+    const alignContent = (wrap: string | undefined) =>
+      inspectStyle(nested(), "outer", {
+        cascade: read("outer", [
+          own("outer", "display", "flex"),
+          ...(wrap === undefined ? [] : [own("outer", "flex-wrap", wrap)]),
+        ]),
+      })
+        ?.sections.find(entry => entry.key === "layout")
+        ?.properties.find(row => row.property === "alignContent")?.applies;
+    expect(alignContent(undefined)).toBe(false);
+    expect(alignContent("nowrap")).toBe(false);
+    expect(alignContent("wrap")).toBe(true);
+  });
+});

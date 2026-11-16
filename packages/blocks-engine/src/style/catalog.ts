@@ -491,17 +491,9 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     appliesWhen: ["grid-container"],
     // Each grid item's place across its column. A flex line has no such
     // thing: it places items along its main axis with `justify-content`.
-    // `legacy` pairs only with `center` here, since `left` and `right` are
-    // absent by policy.
-    shape: keyword("justify-items", [
-      "normal",
-      "stretch",
-      ...BASELINE_POSITIONS,
-      ...withOverflowSafety(SELF_POSITIONS),
-      "legacy",
-      "legacy center",
-      "center legacy",
-    ]),
+    // Positions only, as on `justify-self`: Baseline records no baseline,
+    // overflow-safety or `legacy` forms here as widely available.
+    shape: keyword("justify-items", ["normal", "stretch", ...SELF_POSITIONS]),
     summary: "Where each grid item sits across its column.",
   },
 
@@ -634,9 +626,16 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     appliesWhen: ["flex-child"],
     shape: dimension("flex-basis", {
       // `content` sizes the item by its content even where a width is set,
-      // which `auto` (use the width) does not.
-      keywords: [...SIZING_KEYWORDS, "content"],
-      functions: SIZING_FUNCTIONS,
+      // which `auto` (use the width) does not. Only the keywords Baseline
+      // marks widely available on `flex-basis`: `stretch`, `contain` and the
+      // sizing functions a width takes are not, here.
+      keywords: [
+        "auto",
+        "content",
+        "min-content",
+        "max-content",
+        "fit-content",
+      ],
       allowPercentage: true,
     }),
     summary: "The element's starting size along a row, before space is shared.",
@@ -660,12 +659,13 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     property: "justifySelf",
     group: "dimensions",
     appliesWhen: ["grid-child"],
+    // Positions only: Baseline records no baseline or overflow-safety forms
+    // of `justify-self` as widely available.
     shape: keyword("justify-self", [
       "auto",
       "normal",
       "stretch",
-      ...BASELINE_POSITIONS,
-      ...withOverflowSafety(SELF_POSITIONS),
+      ...SELF_POSITIONS,
     ]),
     summary:
       "Where the element sits across its grid column, over its parent's.",
