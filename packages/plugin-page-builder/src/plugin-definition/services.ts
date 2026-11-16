@@ -41,6 +41,7 @@ import {
   USAGE_HEALTH_SERVICE,
   usageHealthService,
 } from "../usage-health-service";
+
 import type { BindingReportParts } from "./bindings";
 import type { BreakpointRemovalParts } from "./breakpoints";
 import type { retiredReader } from "./components";

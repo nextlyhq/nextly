@@ -319,7 +319,10 @@ describe.runIf(PG).each(["Asia/Karachi", "America/Los_Angeles"])(
         `UPDATE dynamic_collections SET localized = false WHERE slug = '${SLUG}'`
       );
 
-      expect(await runUpgradeStep()).toMatchObject({ pending: 1, converted: 1 });
+      expect(await runUpgradeStep()).toMatchObject({
+        pending: 1,
+        converted: 1,
+      });
       expect((await published(COMPANION, "_parent")).type).toBe(
         "timestamp without time zone"
       );

@@ -102,10 +102,9 @@ async function firstRowColumns(page: Page) {
 
 async function switchTo(page: Page, tab: string): Promise<void> {
   await page.getByRole("tab", { name: tab, exact: true }).click();
-  await expect(page.getByRole("tab", { name: tab, exact: true })).toHaveAttribute(
-    "aria-selected",
-    "true"
-  );
+  await expect(
+    page.getByRole("tab", { name: tab, exact: true })
+  ).toHaveAttribute("aria-selected", "true");
 }
 
 test("switching Design tabs leaves the rows' columns where they were", async ({
