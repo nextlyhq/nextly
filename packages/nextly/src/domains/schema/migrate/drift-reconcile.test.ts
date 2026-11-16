@@ -1109,10 +1109,11 @@ describe("a file whose applied row loses to another run's", () => {
 describe("reconcileFile — an app file nextly migrate hands its snapshot proof", () => {
   const CHECKSUM = "ab".repeat(32);
   const app = { ...file, sha256: CHECKSUM };
-  const proof = (statements: Array<{ label: string; shown: boolean }>) => ({
-    statements,
-    recordedChecksum: CHECKSUM,
-  });
+  const proof =
+    (statements: Array<{ label: string; shown: boolean }>) => () => ({
+      statements,
+      recordedChecksum: CHECKSUM,
+    });
   const ADD = { label: "CREATE TABLE b", shown: true };
   const BACKFILL = { label: 'UPDATE "b" SET', shown: false };
 
@@ -1186,6 +1187,42 @@ describe("reconcileFile — an app file nextly migrate hands its snapshot proof"
         snapshotProof: proof([ADD]),
       })
     ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_NOT_PROVEN" });
+  });
+
+  it("records it once its failed attempt is resolved", async () => {
+    const repo = fakeRepo([
+      { status: "failed", startedAt: new Date(1) },
+      { status: "rolled_back", startedAt: new Date(2) },
+    ]);
+    const r = await reconcileFile({
+      file: app,
+      before: snap("a"),
+      target: snap("a", "b"),
+      live: snap("a", "b"),
+      dialect: "postgresql",
+      repo,
+      executeSql: executor(),
+      snapshotProof: proof([ADD]),
+    });
+    expect(r.state).toBe("already_applied");
+  });
+
+  it("does not read its proof where the database stands at its start", async () => {
+    let read = 0;
+    await reconcileFile({
+      file: app,
+      before: snap("a"),
+      target: snap("a", "b"),
+      live: snap("a"),
+      dialect: "sqlite",
+      repo: fakeRepo(),
+      executeSql: executor(),
+      snapshotProof: () => {
+        read += 1;
+        return proof([ADD])();
+      },
+    });
+    expect(read).toBe(0);
   });
 
   it("runs the whole file where the database stands at its start, data statements included", async () => {

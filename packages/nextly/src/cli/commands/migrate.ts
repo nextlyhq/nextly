@@ -1699,8 +1699,10 @@ function previewPendingFile(
     logger.info(`    ✖ a real run would refuse it: ${refusal.message}`);
   }
   previewDeletions(deletions, logger);
-  // The file's own UP section. A run that finds the schema already at the file's target adopts it
-  // without running these, and one that finds it at neither end refuses it for drift.
+  // The file's own UP section. A run that finds the schema already at the file's target records it
+  // without running these only when its snapshot proves all of them, and otherwise refuses it
+  // (`MIGRATION_NOT_PROVEN`); one that finds it at neither end refuses it for drift. Neither is
+  // previewed: both depend on where the live schema stands.
   logger.info(`    UP, as written in the file:\n${m.upSql.trim()}`);
 }
 
@@ -4807,13 +4809,14 @@ export async function runFileMigrations(args: {
         // Where the database already stands at the file's end, it is recorded without running
         // only when its snapshot proves all of it: each statement as written, judged against both
         // sides whole, and the checksum the snapshot recorded when the file was written.
-        snapshotProof: {
+        // Read only where the database stands at the file's end.
+        snapshotProof: () => ({
           statements: statementsShownBySnapshot(upStatements, dialect, {
             before,
             target,
           }),
           recordedChecksum: targetFile?.migrationHash ?? "",
-        },
+        }),
       });
       applied++;
       lastApplied = filename;

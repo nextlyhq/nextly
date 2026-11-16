@@ -272,7 +272,7 @@ export const MIGRATION_CASES = {
   // As `refuseUnlessProven` refuses a pending file that adds a column and backfills it, the
   // column already brought to the database through `db:sync`.
   MIGRATION_NOT_PROVEN: () =>
-    thrown(() =>
+    thrown(async () =>
       refuseUnlessProven({
         file: { filename: FILE, sha256: POSTS_CHECKSUM },
         proof: {
@@ -289,7 +289,7 @@ export const MIGRATION_CASES = {
           ),
           recordedChecksum: POSTS_CHECKSUM,
         },
-        findFileApplies: () => Promise.resolve([]),
+        attempt: undefined,
       })
     ),
   // As `oldBuilderFilesChanged` in `cli/commands/migrate.ts` raises it.

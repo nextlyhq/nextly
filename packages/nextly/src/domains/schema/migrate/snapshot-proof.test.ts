@@ -43,17 +43,15 @@ function shown(
 
 const CHECKSUM = "ab".repeat(32);
 
-type Row = Pick<SchemaEventRow, "status" | "startedAt" | "supersededEventIds">;
-
-/** The refusal `refuseUnlessProven` throws for these statements and ledger rows, or undefined. */
-async function refusal(args: {
+/** The refusal `refuseUnlessProven` throws for these statements and attempt, or undefined. */
+function refusal(args: {
   statements: string[];
   sha256?: string;
   recordedChecksum?: string;
-  rows?: Row[];
-}): Promise<NextlyError | undefined> {
+  attempt?: Pick<SchemaEventRow, "status">;
+}): NextlyError | undefined {
   try {
-    await refuseUnlessProven({
+    refuseUnlessProven({
       file: {
         filename: "20261116_add_slug.sql",
         sha256: args.sha256 ?? CHECKSUM,
@@ -66,7 +64,7 @@ async function refusal(args: {
         ),
         recordedChecksum: args.recordedChecksum ?? CHECKSUM,
       },
-      findFileApplies: () => Promise.resolve(args.rows ?? []),
+      attempt: args.attempt,
     });
     return undefined;
   } catch (error) {
@@ -79,13 +77,13 @@ const ADD_SLUG = 'ALTER TABLE "dc_posts" ADD COLUMN "slug" text';
 const BACKFILL = `UPDATE "dc_posts" SET "slug" = 'untitled'`;
 
 describe("refuseUnlessProven", () => {
-  it("lets a file through when all three conditions hold", async () => {
-    expect(await refusal({ statements: [ADD_SLUG] })).toBeUndefined();
+  it("lets a file through when all three conditions hold", () => {
+    expect(refusal({ statements: [ADD_SLUG] })).toBeUndefined();
   });
 
   describe("first condition: every statement shown by the snapshot", () => {
-    it("refuses a file holding a statement the snapshot does not show, naming it", async () => {
-      const error = await refusal({ statements: [ADD_SLUG, BACKFILL] });
+    it("refuses a file holding a statement the snapshot does not show, naming it", () => {
+      const error = refusal({ statements: [ADD_SLUG, BACKFILL] });
       expect(error?.code).toBe("NEXTLY_MIGRATION_NOT_PROVEN");
       expect(error?.publicMessage).toContain(
         "its snapshot does not show what 1 statement does"
@@ -101,15 +99,15 @@ describe("refuseUnlessProven", () => {
       );
     });
 
-    it("never carries a string literal's content into the refusal", async () => {
-      const error = await refusal({ statements: [BACKFILL] });
+    it("never carries a string literal's content into the refusal", () => {
+      const error = refusal({ statements: [BACKFILL] });
       expect(error?.publicMessage).not.toContain("untitled");
     });
   });
 
   describe("second condition: the checksum its snapshot recorded", () => {
-    it("refuses an edited file, marking every statement not proven", async () => {
-      const error = await refusal({
+    it("refuses an edited file, marking every statement not proven", () => {
+      const error = refusal({
         statements: [ADD_SLUG],
         sha256: "cd".repeat(32),
       });
@@ -121,8 +119,8 @@ describe("refuseUnlessProven", () => {
       );
     });
 
-    it("refuses a file whose snapshot records no checksum", async () => {
-      const error = await refusal({
+    it("refuses a file whose snapshot records no checksum", () => {
+      const error = refusal({
         statements: [ADD_SLUG],
         recordedChecksum: "",
       });
@@ -133,54 +131,22 @@ describe("refuseUnlessProven", () => {
   });
 
   describe("third condition: no unresolved attempt", () => {
-    it("refuses a file whose last attempt failed, on any dialect", async () => {
-      const error = await refusal({
+    it("refuses a file whose last attempt failed, on any dialect", () => {
+      const error = refusal({
         statements: [ADD_SLUG],
-        rows: [
-          {
-            status: "failed",
-            startedAt: new Date(1),
-            supersededEventIds: null,
-          },
-        ],
+        attempt: { status: "failed" },
       });
       expect(error?.publicMessage).toContain("its last attempt failed");
     });
 
-    it("refuses a file whose last attempt recorded no outcome", async () => {
-      const error = await refusal({
+    it("refuses a file whose last attempt recorded no outcome", () => {
+      const error = refusal({
         statements: [ADD_SLUG],
-        rows: [
-          {
-            status: "in_progress",
-            startedAt: new Date(1),
-            supersededEventIds: null,
-          },
-        ],
+        attempt: { status: "in_progress" },
       });
       expect(error?.publicMessage).toContain(
         "its last attempt recorded no outcome"
       );
-    });
-
-    it("lets a file through once its attempt is resolved", async () => {
-      expect(
-        await refusal({
-          statements: [ADD_SLUG],
-          rows: [
-            {
-              status: "failed",
-              startedAt: new Date(1),
-              supersededEventIds: null,
-            },
-            {
-              status: "rolled_back",
-              startedAt: new Date(2),
-              supersededEventIds: null,
-            },
-          ],
-        })
-      ).toBeUndefined();
     });
   });
 });
@@ -224,6 +190,36 @@ describe("statementsShownBySnapshot: what fails the first condition", () => {
     ["a statement it cannot read", `VACUUM "dc_posts"`],
   ])("%s", (_kind, statement) => {
     expect(shown(statement)).toBe(false);
+  });
+
+  it("a column type change whose USING rewrites the values by an expression", () => {
+    expect(
+      shown(
+        'ALTER TABLE "dc_posts" ALTER COLUMN "slug" TYPE integer USING ("slug"::integer * 100)'
+      )
+    ).toBe(false);
+    expect(
+      shown(
+        'ALTER TABLE "dc_posts" ALTER COLUMN "slug" TYPE integer USING length("title")'
+      )
+    ).toBe(false);
+  });
+
+  it("an exclusion constraint, which the snapshot does not record", () => {
+    expect(
+      shown(
+        'ALTER TABLE "dc_posts" ADD CONSTRAINT "no_overlap" EXCLUDE USING gist ("slug" WITH =)'
+      )
+    ).toBe(false);
+  });
+
+  it("MySQL's DROP INDEX ... ON of an index neither side records", () => {
+    expect(
+      shown("DROP INDEX `posts_fulltext_body` ON `dc_posts`", "mysql")
+    ).toBe(false);
+    expect(
+      shown("DROP INDEX `dc_posts_title_idx` ON `dc_posts`", "mysql")
+    ).toBe(true);
   });
 
   it("MySQL table options and SET GLOBAL", () => {
@@ -272,6 +268,36 @@ describe("statementsShownBySnapshot: what passes the first condition", () => {
     ["SET LOCAL lock_timeout = '5s'"],
   ])("%s", statement => {
     expect(shown(statement)).toBe(true);
+  });
+
+  it("a column type change cast as the generator writes it", () => {
+    expect(
+      shown(
+        'ALTER TABLE "dc_posts" ALTER COLUMN "slug" SET DATA TYPE numeric(10, 2) USING "slug"::numeric(10, 2)'
+      )
+    ).toBe(true);
+    expect(
+      shown('ALTER TABLE "dc_posts" ALTER COLUMN "slug" TYPE text USING "slug"')
+    ).toBe(true);
+  });
+
+  it("a table built under another name and moved into place, in each reader's spelling", () => {
+    const pg = [
+      'CREATE TABLE "tmp_posts" ("id" text)',
+      'DROP TABLE "dc_posts"',
+      'ALTER TABLE IF EXISTS "tmp_posts" RENAME TO "dc_posts"',
+    ];
+    expect(
+      statementsShownBySnapshot(pg, "postgresql", sides).map(s => s.shown)
+    ).toEqual([true, true, true]);
+    const mysql = [
+      "CREATE TABLE `tmp_posts` (`id` varchar(36))",
+      "DROP TABLE `dc_posts`",
+      "RENAME TABLE `tmp_posts` TO `dc_posts`",
+    ];
+    expect(
+      statementsShownBySnapshot(mysql, "mysql", sides).map(s => s.shown)
+    ).toEqual([true, true, true]);
   });
 
   it("MySQL's MODIFY, CHANGE, index clauses and RENAME TABLE", () => {

@@ -35,7 +35,6 @@
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
-import { standingOf } from "../events/migration-state";
 import type { SchemaEventRow } from "../events/schema-events-repository";
 import { rebuildCopyStatements } from "../ownership/drop-guard";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
@@ -46,7 +45,11 @@ import {
 import { literalOf } from "../pipeline/sql-templates/sqlite-swap";
 import { registryRowKeys } from "../ui-schema/registry-row-keys";
 
-import { cursorOf, StatementCursor } from "./statement-cursor";
+import {
+  cursorOf,
+  StatementCursor,
+  type StatementToken,
+} from "./statement-cursor";
 import { labelOf } from "./statement-judgement";
 import { registryRowWrittenBy } from "./statement-targets";
 
@@ -231,11 +234,25 @@ function goneBy(
     return cursor.names() ?? [];
   }
   if (cursor.accept("ALTER", "TABLE")) {
+    // Read as `alterTableShown` reads it, so the two never disagree on which table it names.
+    cursor.acceptCondition();
+    if (dialect === "postgresql") cursor.accept("ONLY");
     const from = cursor.name();
     if (from === undefined || !cursor.accept("RENAME")) return [];
     if (!cursor.accept("TO")) cursor.accept("AS");
     const to = cursor.name();
     return to !== undefined && cursor.done() && tables.has(to) ? [from] : [];
+  }
+  if (dialect === "mysql" && cursor.accept("RENAME", "TABLE")) {
+    const gone: string[] = [];
+    do {
+      const from = cursor.name();
+      if (from === undefined || !cursor.accept("TO")) return [];
+      const to = cursor.name();
+      if (to === undefined) return [];
+      if (tables.has(to)) gone.push(from);
+    } while (cursor.accept(","));
+    return cursor.done() ? gone : [];
   }
   return [];
 }
@@ -372,8 +389,9 @@ function dropIndexShown(cursor: StatementCursor, file: FileContext): boolean {
   cursor.acceptCondition();
   const name = cursor.name();
   if (name === undefined) return false;
+  // The index must be one the snapshot records, on a table it may change where the drop names one.
   let shown = file.objects.indexes.has(name);
-  if (cursor.accept("ON")) shown = known(cursor.name(), file);
+  if (cursor.accept("ON")) shown = shown && known(cursor.name(), file);
   if (!cursor.accept("CASCADE")) cursor.accept("RESTRICT");
   return shown && cursor.done();
 }
@@ -412,13 +430,15 @@ function alterClauseShown(
   clauseCount: number
 ): boolean {
   const mysql = file.dialect === "mysql";
-  if (clause.accept("ADD") || clause.accept("DROP")) {
-    return elementFollows(clause, mysql);
-  }
+  if (clause.accept("ADD")) return elementFollows(clause, mysql, true);
+  if (clause.accept("DROP")) return elementFollows(clause, mysql, false);
   if (clause.accept("ALTER")) {
     clause.accept("COLUMN");
-    if (clause.name() === undefined) return false;
-    return COLUMN_CHANGES.some(words => clause.accept(...words));
+    const column = clause.name();
+    if (column === undefined) return false;
+    const change = COLUMN_CHANGES.find(words => clause.accept(...words));
+    if (change === undefined) return false;
+    return change.at(-1) !== "TYPE" || castsItself(clause.rest(), column);
   }
   if (mysql && (clause.accept("MODIFY") || clause.accept("CHANGE"))) {
     clause.accept("COLUMN");
@@ -449,13 +469,49 @@ function alterClauseShown(
  * What follows `ADD` or `DROP`: an element word the list names, or a column's name (a quoted name,
  * or a plain word that is not a keyword of another clause).
  */
-function elementFollows(clause: StatementCursor, mysql: boolean): boolean {
+function elementFollows(
+  clause: StatementCursor,
+  mysql: boolean,
+  adding: boolean
+): boolean {
   const next = clause.peek();
   if (typeof next !== "string") return clause.name() !== undefined;
+  // A named constraint added must be of a kind the snapshot records: not an `EXCLUDE`, say.
+  if (adding && clause.accept("CONSTRAINT")) {
+    if (clause.name() === undefined) return false;
+    const kind = clause.peek();
+    return typeof kind === "string" && CONSTRAINT_KINDS.has(kind);
+  }
   if (ELEMENT_WORDS.has(next) || (mysql && MYSQL_ELEMENT_WORDS.has(next))) {
     return true;
   }
   return /^[A-Z_][A-Z0-9_$]*$/.test(next) && !NOT_A_COLUMN.has(next);
+}
+
+/** The kinds of constraint the snapshot records. */
+const CONSTRAINT_KINDS = new Set(["UNIQUE", "PRIMARY", "FOREIGN", "CHECK"]);
+
+/**
+ * Whether what follows a column's new type converts each value by a plain cast of the column
+ * itself, as `migrate:create` writes it (`USING "c"` or `USING "c"::<type>`), or names no
+ * conversion. Any other `USING` rewrites the values by an expression the snapshot cannot show.
+ */
+function castsItself(tail: readonly StatementToken[], column: string): boolean {
+  const at = tail.indexOf("USING");
+  if (at === -1) return true;
+  const using = new StatementCursor(tail.slice(at + 1));
+  if (using.name() !== column) return false;
+  if (using.done()) return true;
+  if (!using.accept(":", ":") && !using.accept("::")) return false;
+  return using
+    .rest()
+    .every(
+      token =>
+        typeof token === "string" &&
+        (/^[A-Z_][A-Z0-9_]*$/.test(token) ||
+          /^[0-9]+$/.test(token) ||
+          ["(", ")", ",", "[", "]"].includes(token))
+    );
 }
 
 /** Words after `ADD` or `DROP` that change something other than a column. */
@@ -576,31 +632,20 @@ export interface SnapshotProof {
 /**
  * Refuses, before anything changes, to record a pending app file applied without running it
  * unless its snapshot proves all of it: every statement shown, its checksum the one its snapshot
- * recorded, and no unresolved attempt in its ledger rows, on any dialect.
+ * recorded, and no unresolved attempt (`attempt`, read from its ledger rows by the caller), on
+ * any dialect.
  */
-export async function refuseUnlessProven(args: {
+export function refuseUnlessProven(args: {
   file: { filename: string; sha256?: string };
   proof: SnapshotProof;
-  findFileApplies: (
-    filename: string
-  ) => Promise<
-    ReadonlyArray<
-      Pick<SchemaEventRow, "status" | "startedAt" | "supersededEventIds">
-    >
-  >;
-}): Promise<void> {
-  const { file, proof } = args;
+  attempt: Pick<SchemaEventRow, "status"> | undefined;
+}): void {
+  const { file, proof, attempt } = args;
   const checksum = file.sha256 ?? "";
   const reasons: UnprovenReasons = {};
   if (proof.recordedChecksum === "" || proof.recordedChecksum !== checksum) {
     reasons.changed = { checksum, recorded: proof.recordedChecksum };
   }
-  const rows = (await args.findFileApplies(file.filename)).map(row => ({
-    ...row,
-    eventType: "file_apply" as const,
-    filename: file.filename,
-  }));
-  const attempt = standingOf(file.filename, rows).unresolvedAttempt;
   if (attempt !== undefined) {
     reasons.attempt = attempt.status === "failed" ? "failed" : "no-outcome";
   }
