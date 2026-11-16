@@ -25,11 +25,16 @@ import {
 } from "../../../auth/access/rule-language";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import type { RetentionRunner } from "../../../domains/retention/runner";
+import { NextlyError } from "../../../errors";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import type { CacheRevalidator } from "../../../revalidation/types";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
+import type {
+  PublishPartsAnswer,
+  PublishPartsRequest,
+} from "../../collections/services/publish-parts";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
   type LocalizationSource,
@@ -371,6 +376,38 @@ export class SingleEntryService extends BaseService {
   ): Promise<SingleResult<PublishAllSinglePreview>> {
     return withRuleLanguage(everyLanguageOf(this.localization), () =>
       this.publishAllService.previewPublishAllLocales(slug, options)
+    );
+  }
+
+  /**
+   * Publish or unpublish the parts of a Single the request chooses: some of its languages, or
+   * every one, and its shared part, or say what doing so would do. The Single's counterpart of a
+   * collection entry's publish of chosen parts, answered in the same shape.
+   *
+   * Not yet carried out: answered as unavailable until the Single's move of chosen parts exists,
+   * so its routes and their callers can be built against the answer's shape.
+   *
+   * @experimental
+   */
+  publishParts(
+    params: PublishAllSingleLocalesOptions & {
+      slug: string;
+      /** A publish made without review, and why; handed to the publish gate. */
+      withoutReview?: { reason: string };
+    },
+    request: PublishPartsRequest
+  ): Promise<SingleResult<PublishPartsAnswer>> {
+    return Promise.reject(
+      new NextlyError({
+        code: "SERVICE_UNAVAILABLE",
+        publicMessage:
+          "Publishing chosen parts of a Single is not available yet: publish every language instead.",
+        logContext: {
+          reason: "single-publish-parts-unavailable",
+          slug: params.slug,
+          direction: request.direction,
+        },
+      })
     );
   }
 
