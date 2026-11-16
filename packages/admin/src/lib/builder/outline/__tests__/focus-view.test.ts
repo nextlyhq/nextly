@@ -161,6 +161,17 @@ describe("drawnAbove", () => {
   });
 });
 
+describe("a container inside one whose delete is pending", () => {
+  it("is not focused, nor fallen back to, though it carries no mark of its own", () => {
+    const nodes = withDeleted("f-sections");
+    expect(node(nodes, "f-items-cta").pending).toBeUndefined();
+    expect(focusView(nodes, "f-items-cta").focused).toBeNull();
+    expect(
+      focusFallback(nodes, ["f-sections", "f-sections-items", "f-items-cta"])
+    ).toBeNull();
+  });
+});
+
 describe("a container whose delete is pending", () => {
   it("is not focused, and Focus on it draws the whole outline", () => {
     const nodes = withDeleted("f-items-cta");
