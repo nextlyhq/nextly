@@ -56,8 +56,6 @@
  */
 import type { NodeStyles, StyleCompileContext } from "@nextlyhq/blocks-engine";
 
-import { CLASSIC_ELEMENT_BASES } from "./classic-spacing";
-
 /**
  * No outer margin on the block axis: what every element here carries, and
  * all that a paragraph, a list, a figure, a quotation and a rule carry.
@@ -169,18 +167,21 @@ export const TYPOGRAPHY_DEFAULTS: NonNullable<
  * what can be supplied here. `null` is not a state this reads for, because a
  * context omitting the field has no opinion while one stating it has already
  * won.
+ *
+ * A `spacingMode` the context states is NOT handed on. The engine's compile
+ * context still declares one, and under `classic` the engine writes no
+ * container gap; this library compiles one spacing model, so a route stating
+ * that field would otherwise draw every container without its gap, and a sheet
+ * stored from that compile would carry the same identity as one with the gaps.
+ * Every page and trace compile builds its context here, so this is the one
+ * place it is dropped.
  */
 export function withTypographyDefaults(
   context: StyleCompileContext
 ): StyleCompileContext {
-  if (context.elementBases !== undefined) return context;
-  // The baseline of the context's spacing model: a classic site keeps the
-  // element margins it was built with.
-  return {
-    ...context,
-    elementBases:
-      context.spacingMode === "classic"
-        ? CLASSIC_ELEMENT_BASES
-        : TYPOGRAPHY_DEFAULTS,
-  };
+  const { spacingMode: _stated, ...withoutModel } = context;
+  const single = "spacingMode" in context ? withoutModel : context;
+  if (single.elementBases !== undefined) return single;
+  // One baseline for every site: no element carries an outer margin.
+  return { ...single, elementBases: TYPOGRAPHY_DEFAULTS };
 }

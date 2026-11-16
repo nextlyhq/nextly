@@ -8,7 +8,6 @@ import {
   type BoundValues,
   type ComponentUnresolvedReason,
   type ResolvedBlockNode,
-  type SpacingMode,
 } from "@nextlyhq/blocks-engine";
 import {
   Fragment,
@@ -296,11 +295,6 @@ export interface BlockBoundaryProps {
    * own object is never rewritten and no block can supply its own.
    */
   hostPolicy?: BlockHostPolicy;
-  /**
-   * The site's spacing model, for the few blocks whose markup differs by it.
-   * Threaded down the tree beside `hostPolicy`, for the same reason.
-   */
-  spacingMode?: SpacingMode;
   /**
    * Emit `data-nx-node="<node id>"` on each block's root element.
    *
@@ -1341,9 +1335,9 @@ function settledOf(pending: PromiseLike<unknown>): Promise<SettledOutput> {
  * selection or a panel opening. Run again, an async block makes a new promise,
  * and its boundary shows the fallback until that settles: an image or a
  * button blinks out. Kept by everything the output is made from: the block,
- * its class, the node as stored and the site's spacing model, so a change to
- * any of them runs the block again, and by the bound values beside the node's
- * props, which the output reads too. Per context, because the output also
+ * its class and the node as stored, so a change to any of them runs the block
+ * again, and by the bound values beside the node's props, which the output
+ * reads too. Per context, because the output also
  * reads the context (the entry, the language, a loop's item), and a block
  * under another context is another output.
  *
@@ -1364,20 +1358,10 @@ function editorOutputKey(
   name: string,
   className: string,
   node: BlockNode,
-  bound: BoundValues | undefined,
-  spacingMode: SpacingMode | undefined
+  bound: BoundValues | undefined
 ): string | undefined {
   try {
-    // The spacing model too: a render argument a block's markup may read, so
-    // an output drawn under one model is not the block as it stands under
-    // the other.
-    return JSON.stringify([
-      name,
-      className,
-      node,
-      bound ?? null,
-      spacingMode ?? null,
-    ]);
+    return JSON.stringify([name, className, node, bound ?? null]);
   } catch {
     // A node a stringify cannot write (a cycle, a bigint) is drawn afresh.
     return undefined;
@@ -1426,11 +1410,10 @@ function editorOutputSlot(
   name: string,
   className: string,
   node: BlockNode,
-  bound: BoundValues | undefined,
-  spacingMode: SpacingMode | undefined
+  bound: BoundValues | undefined
 ): EditorOutputSlot {
   if (!editorRender) return UNKEPT;
-  const key = editorOutputKey(name, className, node, bound, spacingMode);
+  const key = editorOutputKey(name, className, node, bound);
   if (key === undefined) return UNKEPT;
   const kept = EDITOR_OUTPUTS.get(context)?.get(key);
   return {
@@ -1527,7 +1510,6 @@ export function BlockBoundary({
   classes,
   fallback,
   hostPolicy,
-  spacingMode,
   nodeAttribute,
   bindings,
   conditions,
@@ -1648,8 +1630,7 @@ export function BlockBoundary({
     definition.name,
     className,
     node,
-    bound,
-    spacingMode
+    bound
   );
 
   let output: unknown;
@@ -1677,7 +1658,6 @@ export function BlockBoundary({
         // The renderer's, not the context's. A block may replace the context its
         // slot children see; it can neither drop nor forge this.
         ...(hostPolicy === undefined ? {} : { hostPolicy }),
-        ...(spacingMode === undefined ? {} : { spacingMode }),
         // The renderer's too, for the same reason: what a bound prop holds comes
         // from the pass that filled it, never from a context a block built.
         ...boundArgument(bound),
@@ -1698,7 +1678,6 @@ export function BlockBoundary({
             classes={classes}
             fallback={fallback}
             {...(hostPolicy === undefined ? {} : { hostPolicy })}
-            {...(spacingMode === undefined ? {} : { spacingMode })}
             {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
             bindings={bindings}
             {...(conditions === undefined ? {} : { conditions })}
@@ -1761,11 +1740,6 @@ export interface BlockListProps {
   fallback?: ReactNode;
   hostPolicy?: BlockHostPolicy;
   /**
-   * The site's spacing model, for the few blocks whose markup differs by it.
-   * Threaded down the tree beside `hostPolicy`, for the same reason.
-   */
-  spacingMode?: SpacingMode;
-  /**
    * Emit `data-nx-node="<node id>"` on each block's root element.
    *
    * OFF by default: a published page should not carry editor concerns, which is
@@ -1798,7 +1772,6 @@ export function BlockList({
   classes,
   fallback,
   hostPolicy,
-  spacingMode,
   nodeAttribute,
   bindings,
   conditions,
@@ -1815,7 +1788,6 @@ export function BlockList({
         classes={classes}
         fallback={fallback}
         {...(hostPolicy === undefined ? {} : { hostPolicy })}
-        {...(spacingMode === undefined ? {} : { spacingMode })}
         {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
         {...(bindings === undefined ? {} : { bindings })}
         {...(conditions === undefined ? {} : { conditions })}

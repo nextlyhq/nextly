@@ -300,6 +300,9 @@ export function pruneRenderedPlaceholders(
  *   site's predicate, or the reconciliation is over a value it never saw.
  * - `fonts` and `tokens` are the sheet's alone: it emits `@font-face` and the
  *   token blocks, and the page compile emits neither and reads neither.
+ * - `spacingMode` is read by neither. Every page compiles with container gaps,
+ *   so a site style still stating one changes nothing: it is never reconciled
+ *   onto the page context, and the sheet writes nothing for it.
  */
 interface SiteInputRoles {
   breakpoints: "reconciled-here";
@@ -308,7 +311,7 @@ interface SiteInputRoles {
   tokenPrefix: "reconciled-here";
   previewContainer: "reconciled-here";
   previewStates: "reconciled-here";
-  spacingMode: "reconciled-here";
+  spacingMode: "read-by-neither";
   mayFetchUrl: "reconciled-elsewhere";
   fonts: "sheet-only";
   tokens: "sheet-only";
@@ -426,7 +429,6 @@ export function withoutStatedNulls(
     tokenPrefix: shared.tokenPrefix ?? undefined,
     previewContainer: shared.previewContainer ?? undefined,
     previewStates: shared.previewStates ?? undefined,
-    spacingMode: shared.spacingMode ?? undefined,
   };
 }
 
@@ -517,9 +519,6 @@ export function sharedStyleInputs(
     // stored tier describes the site. A site record has no business turning
     // forceable states on for a published page.
     previewStates: firstStated(route.previewStates, stored.previewStates),
-    // The site's spacing model is a fact about the site, so the stored tier
-    // wins, as it does for the block defaults the model decides.
-    spacingMode: firstStated(stored.spacingMode, route.spacingMode),
   });
 }
 
@@ -1117,9 +1116,6 @@ export function PageRenderer({
         classes={classes}
         fallback={blockFallback}
         {...(hostPolicy === undefined ? {} : { hostPolicy })}
-        {...(shared.spacingMode == null
-          ? {}
-          : { spacingMode: shared.spacingMode })}
         {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
         {...(boundaryBindings === undefined
           ? {}
