@@ -16,11 +16,8 @@
  *
  * @module __tests__/binding-schema-at-save.integration.test
  */
-import {
-  DOCUMENT_FORMAT_VERSION,
-  hasBlock,
-  registerBlocks,
-} from "@nextlyhq/blocks-engine";
+import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
+import { definePlugin } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -32,6 +29,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { asOverwrite } from "../document-version";
 import { BLOCKS_TYPE } from "../fields/blocksField";
+import { blockRegistry } from "../index";
 import { pageBuilder } from "../plugin";
 
 type Node = Record<string, unknown>;
@@ -68,10 +66,12 @@ const stat = (id: string, prop: string, binding: Node): Node => ({
  * A stat block as it is declared now: `value` became a number, and the
  * `subtitle` it once had is gone.
  */
-function registerStat(): void {
-  if (hasBlock(STAT)) return;
-  registerBlocks(
-    [
+const statBlock = definePlugin({
+  name: "test",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  init: ctx => {
+    blockRegistry(ctx).register([
       {
         name: STAT,
         version: 1,
@@ -84,10 +84,9 @@ function registerStat(): void {
         },
         defaultProps: { value: 0, caption: "" },
       },
-    ] as never,
-    { source: "test" } as never
-  );
-}
+    ] as never);
+  },
+});
 
 /**
  * The validation issue codes a refused write carries, sorted, or none for a
@@ -115,7 +114,7 @@ describe.each(getConfiguredTestDialects())(
     beforeAll(async () => {
       t = await createTestNextly({
         dialect,
-        plugins: [pageBuilder()],
+        plugins: [pageBuilder(), statBlock],
         collections: [
           defineCollection({
             slug: ARTICLES,
@@ -136,7 +135,6 @@ describe.each(getConfiguredTestDialects())(
           }),
         ],
       });
-      registerStat();
     });
 
     afterAll(async () => {

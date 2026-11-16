@@ -16,7 +16,7 @@
  *
  * @module bindings-report/route
  */
-import { getBlock } from "@nextlyhq/blocks-engine";
+import type { BlockRegistryReader } from "@nextlyhq/blocks-engine";
 import {
   NextlyError,
   respondList,
@@ -62,6 +62,8 @@ export interface BindingsToFixDeps {
   readonly componentStore: () => string;
   /** The site's default language, the one the Page Builder edits. */
   readonly defaultLocale: () => string | undefined;
+  /** The site's block registry, whose labels name each row's block and prop. */
+  readonly blocks: BlockRegistryReader;
 }
 
 /** What a row's way into the editor depends on, read once per answer. */
@@ -69,6 +71,7 @@ interface Editing {
   readonly singles: SingleLabels;
   readonly componentStore: string;
   readonly defaultLocale: string | undefined;
+  readonly blocks: BlockRegistryReader;
 }
 
 /** A capital first letter, for a name read off a key. */
@@ -78,7 +81,7 @@ function named(key: string): string {
 
 /**
  * A row with the names the editor gives its block and prop, read from the
- * running registry when the answer is made, so a renamed label shows at once
+ * site's registry when the answer is made, so a renamed label shows at once
  * and none is stored. A block no longer registered is named by its type.
  */
 function withLabels(
@@ -107,7 +110,7 @@ function withLabels(
     // The document's own metadata: `seo.title` is the page's Title.
     return { ...row, blockLabel: "", propLabel: named(row.prop.slice(4)) };
   }
-  const definition = getBlock(row.blockType) as
+  const definition = editing.blocks.get(row.blockType) as
     | {
         readonly editor?: { readonly label?: unknown };
         readonly props?: Readonly<Record<string, { readonly label?: unknown }>>;
@@ -266,6 +269,7 @@ async function readBindingsToFix(
     singles,
     componentStore: deps.componentStore(),
     defaultLocale: deps.defaultLocale(),
+    blocks: deps.blocks,
   };
   const visible = stored.flatMap(entry => {
     const item = itemFor(entry, readable.get(entry.documentKey), editing);
