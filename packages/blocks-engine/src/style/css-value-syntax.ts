@@ -8,7 +8,12 @@
 import type { CssNode } from "css-tree";
 import parse from "css-tree/parser";
 
+import { asciiLower, decodeIdentifier } from "./css-identifier";
 import { CSS_WIDE_KEYWORDS } from "./css-value-vocabulary";
+
+// Re-exported where they were always reached from; they live apart so the
+// contrast math can use them without this module's CSS parser.
+export { asciiLower, decodeIdentifier };
 
 /** Split a function's children on its top-level commas. */
 export function splitArguments(children: Iterable<CssNode>): CssNode[][] {
@@ -71,19 +76,6 @@ export function splitCssTokens(value: string): string[] {
   }
   if (current !== "") tokens.push(current);
   return tokens;
-}
-
-/**
- * Lowercase the ASCII letters and nothing else.
- *
- * CSS folds identifier case for A–Z only, while JavaScript's `toLowerCase` is
- * Unicode-aware and maps U+212A KELVIN SIGN to `k`. Folding with it would match
- * `blocK` against `block` here while the browser keeps them distinct
- * identifiers and discards the declaration, so every identifier comparison in
- * `css-value` and the validator uses this instead.
- */
-export function asciiLower(value: string): string {
-  return value.replace(/[A-Z]/g, letter => letter.toLowerCase());
 }
 
 /** True when a value is one of the keywords legal on every CSS property. */
@@ -195,20 +187,6 @@ export function escapeIdentifier(value: string): string {
     out += `\\${char}`;
   }
   return out;
-}
-
-export function decodeIdentifier(name: string): string {
-  if (!name.includes("\\")) return name;
-  return name.replace(
-    /\\(?:([0-9a-fA-F]{1,6})(?:\r\n|[ \t\r\n\f])?|([\s\S]))/g,
-    (_match: string, hex?: string, literal?: string) => {
-      if (hex === undefined) return literal ?? "";
-      const point = Number.parseInt(hex, 16);
-      const usable =
-        point > 0 && point <= 0x10ffff && !(point >= 0xd800 && point <= 0xdfff);
-      return usable ? String.fromCodePoint(point) : "\uFFFD";
-    }
-  );
 }
 
 /** An identifier as CSS reads it, folded for comparison. */
