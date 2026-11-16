@@ -34,7 +34,7 @@ const HOLDERS: Record<
  * before a failed refresh is not shown as current: a kept empty list would
  * claim "not used" when that is not known.
  */
-export function knownPlacements(query: {
+function knownPlacements(query: {
   data?: readonly FieldGroupPlacement[];
   isError: boolean;
 }): readonly FieldGroupPlacement[] | undefined {

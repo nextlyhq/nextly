@@ -135,6 +135,44 @@ export interface BuilderEntityState {
 const NO_FIELDS: readonly BuilderField[] = [];
 const NO_SETTING_CHANGES: readonly SettingChange[] = [];
 
+type SettingsUpdate =
+  | BuilderSettingsValues
+  | null
+  | ((prev: BuilderSettingsValues | null) => BuilderSettingsValues | null);
+
+/**
+ * The settings as last written, as state for rendering, and the same value as
+ * of now for the pins: a save calls them from the render it started in, in
+ * either order, and the second must see what the first pinned.
+ */
+function useSettingsBaseline(): [
+  BuilderSettingsValues | null,
+  (next: SettingsUpdate) => void,
+  { readonly current: BuilderSettingsValues | null },
+] {
+  const [baseline, setBaseline] = useState<BuilderSettingsValues | null>(null);
+  const now = useRef<BuilderSettingsValues | null>(null);
+  const set = useCallback((next: SettingsUpdate) => {
+    now.current = typeof next === "function" ? next(now.current) : next;
+    setBaseline(now.current);
+  }, []);
+  return [baseline, set, now];
+}
+
+/**
+ * The state kept before a saved snapshot whose settings are not written yet:
+ * its fields with the settings as last written, so Undo takes back only what
+ * is still to land. None when its settings are the written ones.
+ */
+function writtenBefore(
+  saved: BuilderSnapshot,
+  written: BuilderSettingsValues | null
+): BuilderSnapshot | undefined {
+  if (written === null || saved.settings === null) return undefined;
+  if (settingChanges(written, saved.settings).length === 0) return undefined;
+  return { fields: saved.fields, settings: written };
+}
+
 export function useBuilderEntityState<TEntity>({
   entity,
   builder,
@@ -159,25 +197,8 @@ export function useBuilderEntityState<TEntity>({
   const [originalFields, setOriginalFields] = useState<
     readonly BuilderField[] | null
   >(null);
-  const [originalSettings, setBaselineSettings] =
-    useState<BuilderSettingsValues | null>(null);
-  // The same baseline as of now rather than as of a render, for the pins: a
-  // save calls them from the render it started in, in either order, and the
-  // second must see what the first pinned.
-  const baselineNow = useRef<BuilderSettingsValues | null>(null);
-  const setOriginalSettings = useCallback(
-    (
-      next:
-        | BuilderSettingsValues
-        | null
-        | ((prev: BuilderSettingsValues | null) => BuilderSettingsValues | null)
-    ) => {
-      baselineNow.current =
-        typeof next === "function" ? next(baselineNow.current) : next;
-      setBaselineSettings(baselineNow.current);
-    },
-    []
-  );
+  const [originalSettings, setOriginalSettings, baselineNow] =
+    useSettingsBaseline();
 
   const { resetFields } = builder;
 
@@ -213,6 +234,7 @@ export function useBuilderEntityState<TEntity>({
     toSettings,
     onLoad,
     unsaved,
+    setOriginalSettings,
   ]);
 
   // False while a different entity's data is still on screen, so the page
@@ -264,19 +286,12 @@ export function useBuilderEntityState<TEntity>({
     // as last written. Undo then takes back only what is yet to land, and a
     // failed settings write leaves a change it can still take back
     // (`pinSettings` closes that step once the write lands).
-    const written = baselineNow.current;
-    const unwritten =
-      written !== null &&
-      saved.settings !== null &&
-      settingChanges(written, saved.settings).length > 0;
     clearHistory(
       saved,
       builder.historyStep,
-      unwritten && written
-        ? { fields: saved.fields, settings: written }
-        : undefined
+      writtenBefore(saved, baselineNow.current)
     );
-  }, [builder.snapshot, builder.historyStep, clearHistory]);
+  }, [builder.snapshot, builder.historyStep, clearHistory, baselineNow]);
 
   // The settings landed: they are the baseline, and nothing before this place
   // in the history can be undone any more.
