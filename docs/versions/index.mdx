@@ -50,7 +50,7 @@ change nor preserve one made while it was open.
 |            |                                                                                        |
 | ---------- | -------------------------------------------------------------------------------------- |
 | Built in   | No plugin required                                                                     |
-| Admin      | A **Versions** panel on the edit screen                                                |
+| Admin      | A **History** panel on the edit screen                                                 |
 | Permission | Reading history requires read access to the document; restoring requires update access |
 
 ## How a version is recorded
@@ -106,7 +106,7 @@ Some comparisons have nothing to start from, and are refused with `NO_BASELINE`:
 - a language that has been unpublished, or a translation never published, has nothing
   published to compare with, even though its history records an earlier publish.
 
-The response says which baseline it used. Baselines are experimental.
+The response says which baseline it used.
 
 ### The version you last looked at
 
@@ -119,8 +119,8 @@ at, so a comparison can show what changed since then (`?to=9&baseline=last-viewe
   `/singles/{slug}/versions/{n}/seen`). Reading a version, a comparison or the history
   records nothing, so a prefetch or a second tab never moves it. The mark needs read access
   to the document, and an API key or the system is refused: only a person's own screen
-  says what they saw. The admin's history screens do not send it yet, so until they do,
-  `last-viewed` answers only for a client that marks what it shows.
+  says what they saw. The admin's history screens send it for the version or comparison they
+  show.
 - **It counts by visit.** A mark more than 30 minutes after that marker's last one starts a
   new visit. "Last looked at" is the furthest version of the previous visit, and within a
   visit the marker only moves forward. Each language, and each document, keeps its own
@@ -147,8 +147,7 @@ depth. An API key is judged on its own grants, not its owner's.
 - A version read lists what it held back in `withheld`, by field name, or by a dotted
   path below the top level (`banner.secret`). A field in a row of a list (a repeater or a
   repeatable component) is named by that row's index in the version (`items.1.secret`),
-  so a rule that reads its row can hide a field in one row and show it in the next. The
-  shape of `withheld` is experimental.
+  so a rule that reads its row can hide a field in one row and show it in the next.
 - A comparison shows a held-back field as `hidden` in its place, with neither value, and
   only in the row that held it back: the other rows' changes to that field still show.
 - A restore never writes back a field the restorer may not read; it is reported in
@@ -174,6 +173,12 @@ returns:
   in it would answer for the default language instead. That includes history recorded in a
   language before localization was removed.
 
+Fields that are not translated are shared by every language. A version or event with no
+language holds them: a document without languages, a publish of every language at once, or a
+change to the shared fields alone. In the admin, history opens on the language being edited
+together with these ("Spanish and shared fields"); **All languages** shows every language you
+may read.
+
 ## Restoring
 
 A restore puts a version's values back into the document's **working draft**. It never
@@ -186,7 +191,7 @@ restored, and the published document stays as it is until someone publishes the 
 - **You choose the fields.** Every field the version holds is restored by default; name some
   with `fields` and only those are.
 - **It needs working drafts.** A collection or Single kept without drafts (`versions: { drafts:
-  false }`, or no `status`) keeps versions as history only. It has no draft to write, so a restore
+false }`, or no `status`) keeps versions as history only. It has no draft to write, so a restore
   is refused with `422 BUSINESS_RULE_VIOLATION` before anything changes. In the admin, put the
   values back by editing them.
 
@@ -241,7 +246,7 @@ await nextly.versions.restore({
 Like the rest of the Direct API, a call is trusted unless it says otherwise. Pass
 `overrideAccess: false` and a `user` to have it judged as REST judges that person: `read-<slug>`
 for the reads, `update-<slug>` for naming and restoring. Marking a version seen needs a `user`
-either way. The namespace is experimental while history is being finished.
+either way.
 
 A plugin restores through `ctx.services.versions.restore(ref, versionNo, { fields, version },
 opts)`, trusted when it acts as itself and judged as a person when its options name one.
@@ -272,6 +277,40 @@ replaces the draft. A save that changes nothing adds no version, and autosaves n
 in the history. Restoring any version puts its content back as the working draft;
 it does not publish it (see [Restoring](#restoring)).
 
+## The event record
+
+Beside its versions, each document keeps a record of what happened to it, written in the same
+transaction as the change, so a change never stands without its event. The history list reads
+from it.
+
+| Event              | Recorded when                                          |
+| ------------------ | ------------------------------------------------------ |
+| `created`          | The document is created                                |
+| `saved`            | A save is made                                         |
+| `published`        | The document, or a language of it, is published        |
+| `unpublished`      | The document, or a language of it, is unpublished      |
+| `restored`         | A version is restored (`from`, the version restored)   |
+| `named`            | A version is named                                     |
+| `draft-discarded`  | A working draft is discarded                           |
+| `overwritten`      | A save replaces a newer change it chose to overwrite   |
+| `field-rewritten`  | One field is rewritten on the live copy and its drafts |
+| `versions-removed` | Retention removes older versions (`count`)             |
+| `deleted`          | The document is deleted                                |
+
+Each event names who acted: a person, an API key by its own id and name, or the system.
+
+Read a document's events with `GET /collections/{slug}/entries/{id}/events` (a Single:
+`GET /singles/{slug}/events`), by anyone who may read the document; `?part=` narrows them to one
+language (see [Languages in history](#languages-in-history)). A document that has been deleted
+has no entry route, so its events, and a release's, are read by subject:
+`GET /content-events?subject=collection&slug={slug}&id={id}`, or from server code
+`nextly.contentEvents.list({ subject })`. Page with the `before` the response's
+`meta.nextBefore` gives: one page scans a bounded stretch of history, so it can come back short,
+or empty, while more remains.
+
+A document's events are kept while it exists, whatever its versions' limit. Once it is
+deleted, its events stay readable for the activity log's window, then are removed.
+
 ## Retention
 
 History grows. Old versions are trimmed when a document is saved, keeping the newest 50
@@ -294,10 +333,6 @@ So a run of saves in one language never removes another language's published ver
 "restored from" always points at a version that still exists.
 
 ## Pinning a version
-
-<Callout type="warn">
-  Experimental: the names and shapes below may change before they are stable.
-</Callout>
 
 A feature that refers to a version, such as the version an approval names, pins it so
 retention keeps it for as long as the feature needs it, whatever the limit.
