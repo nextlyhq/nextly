@@ -46,6 +46,25 @@ describe("a relationship's create check", () => {
     expect(check({ relationTo: [] })).toThrow(/must specify a target/);
   });
 
+  it("refuses a link to several collections naming one that is not a collection's address", () => {
+    expect(check({ relationTo: [""] })).toThrow(/must specify a target/);
+    expect(check({ relationTo: ["authors", 123] })).toThrow(
+      /must specify a target/
+    );
+  });
+
+  it("takes a many-to-many only with its target in options, where its junction table is made from", () => {
+    expect(
+      check({ relationTo: "tags", options: { relationType: "manyToMany" } })
+    ).toThrow(/must specify a target/);
+    expect(
+      check({
+        relationTo: "tags",
+        options: { target: "tags", relationType: "manyToMany" },
+      })
+    ).not.toThrow();
+  });
+
   it("refuses the earlier shape without its cardinality", () => {
     expect(check({ options: { target: "authors" } })).toThrow(
       /must specify a relationType/
@@ -58,13 +77,15 @@ describe("a relationship's create check", () => {
     ).toThrow(/Invalid relationType "lots"/);
   });
 
-  it("refuses a required many-to-many, whichever way the target is given", () => {
-    expect(
-      check({
-        relationTo: "authors",
-        required: true,
-        options: { relationType: "manyToMany" },
-      })
-    ).toThrow(/cannot be marked as required/);
+  it("refuses a required many-to-many, beside relationTo or not", () => {
+    for (const relationTo of ["authors", undefined]) {
+      expect(
+        check({
+          ...(relationTo ? { relationTo } : {}),
+          required: true,
+          options: { target: "authors", relationType: "manyToMany" },
+        })
+      ).toThrow(/cannot be marked as required/);
+    }
   });
 });

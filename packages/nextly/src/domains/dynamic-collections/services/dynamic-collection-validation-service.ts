@@ -236,11 +236,25 @@ export class DynamicCollectionValidationService {
     this.validateCardinalityRules(field, field.options);
   }
 
-  /** The collection it links to, and the cardinality the earlier shape must give. */
+  /**
+   * The collection it links to, and the cardinality the earlier shape must
+   * give. A link to several collections names each by its address. A
+   * many-to-many keeps its links in a junction table, which is made only for
+   * a target named in `options.target`, so it must name its target there: a
+   * `relationTo` target alone would leave it nowhere to keep them.
+   */
   private validateRelationshipTarget(field: FieldDefinition): void {
+    const relationType = field.options?.relationType;
+    const named = (value: unknown) => typeof value === "string" && value !== "";
     const linksSeveral =
-      Array.isArray(field.relationTo) && field.relationTo.length > 0;
-    if (relationshipTargetSlug(field) === null && !linksSeveral) {
+      Array.isArray(field.relationTo) &&
+      field.relationTo.length > 0 &&
+      field.relationTo.every(named);
+    const hasTarget =
+      relationType === "manyToMany"
+        ? named(field.options?.target)
+        : relationshipTargetSlug(field) !== null || linksSeveral;
+    if (!hasTarget) {
       throw new Error(
         `Relationship field "${field.name}" must specify a target collection`
       );
@@ -248,7 +262,6 @@ export class DynamicCollectionValidationService {
 
     // The earlier shape: its target in options, and no `relationTo` beside it.
     const earlierShape = field.relationTo === undefined;
-    const relationType = field.options?.relationType;
     if (earlierShape && !relationType) {
       throw new Error(
         `Relationship field "${field.name}" must specify a relationType (oneToOne, oneToMany, manyToOne, or manyToMany)`
