@@ -259,6 +259,52 @@ describe("an async block in the editor's client render", () => {
     expect(renders.count).toBe(2);
   });
 
+  it("runs again when the host's policy changes, so a host it now refuses or allows is judged anew", async () => {
+    const renders = { count: 0 };
+    const context = createStandaloneContext();
+    const judged = defineBlock<{ value: string }>({
+      name: "test/late",
+      version: 1,
+      description: "Renders after a promise, reading the host policy.",
+      example: { props: { value: "late" } },
+      defaultProps: { value: "" },
+      render: async ({ className, hostPolicy }) => {
+        renders.count += 1;
+        await Promise.resolve();
+        return (
+          <p className={className} data-testid="late">
+            {hostPolicy?.remotePatterns?.length ?? 0}
+          </p>
+        );
+      },
+    }) as AnyBlockDefinition;
+    const blocks = createBlockResolver([judged]);
+    const drawn = (patterns: number): ReactElement => (
+      <PageRenderer
+        document={documentWith("Same")}
+        blocks={blocks}
+        context={context}
+        keepAsyncOutputs
+        hostPolicy={{
+          remotePatterns: Array.from({ length: patterns }, (_, i) => ({
+            hostname: `cdn${String(i)}.example.com`,
+          })),
+        }}
+      />
+    );
+    const view = await act(async () => render(drawn(1)));
+    expect(screen.getByTestId("late").textContent).toBe("1");
+    await act(async () => {
+      view.rerender(drawn(1));
+    });
+    expect(renders.count).toBe(1);
+    await act(async () => {
+      view.rerender(drawn(2));
+    });
+    expect(screen.getByTestId("late").textContent).toBe("2");
+    expect(renders.count).toBe(2);
+  });
+
   it("is not kept for a published page, which renders per request", async () => {
     const renders = { count: 0 };
     const context = createStandaloneContext();

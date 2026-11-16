@@ -208,6 +208,30 @@ describe("the site sheet, compiled once per change of its inputs", () => {
     expect(counted.compiles).toBe(1);
   });
 
+  it("is compiled on every draw under a caller's own predicate it cannot identify", () => {
+    // A predicate with no stated policy id may answer differently next time,
+    // and nothing here can tell; the renderer already treats such a sheet as
+    // never reusable, and the kept one follows the same rule.
+    const site: SiteSheetInput = { breakpoints: BREAKPOINTS };
+    const context = {
+      breakpoints: BREAKPOINTS,
+      mayFetchUrl: () => true,
+    };
+    const drawWithPredicate = (): void => {
+      renderToStaticMarkup(
+        <PageRenderer
+          document={documentOf(["a"])}
+          blocks={BLOCKS}
+          styleContext={context}
+          siteStyles={site}
+        />
+      );
+    };
+    drawWithPredicate();
+    drawWithPredicate();
+    expect(counted.compiles).toBe(2);
+  });
+
   it("keeps the token-only sheet too, drawn when no breakpoints are known", () => {
     const site = { tokens: undefined } as unknown as SiteSheetInput;
     const tokenDraw = (): string =>

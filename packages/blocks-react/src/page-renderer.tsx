@@ -52,6 +52,7 @@ import {
   readableGatedRules,
   resolvePageStyles,
   styleTextForInjection,
+  UNIDENTIFIED_FETCH_POLICY,
   type PageStyles,
 } from "./styles";
 import { pruneNodes, type EntryJudgement } from "./visibility";
@@ -1193,7 +1194,11 @@ function keptSiteSheet(
   compile: () => SiteSheetArtifact
 ): SiteSheetArtifact {
   const owner = key.siteInput ?? key.styleContext;
-  if (owner === undefined) return compile();
+  // A caller's own predicate with no stated id may answer differently next
+  // time, and nothing here can tell: such a sheet is never reused, as a
+  // stored one under that label is never trusted (`effectiveCompile`).
+  if (owner === undefined || key.fetchPolicyId === UNIDENTIFIED_FETCH_POLICY)
+    return compile();
   const kept = KEPT_SITE_SHEETS.get(owner) ?? [];
   const found = kept.find(
     entry =>

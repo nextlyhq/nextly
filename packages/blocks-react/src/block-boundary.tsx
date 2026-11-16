@@ -346,6 +346,7 @@ export function BlockBoundary({
   const editorSlot = editorOutputSlot(
     nodeAttribute === true || keepAsyncOutputs === true,
     nodeAttribute === true,
+    hostPolicy,
     context,
     definition.name,
     className,
