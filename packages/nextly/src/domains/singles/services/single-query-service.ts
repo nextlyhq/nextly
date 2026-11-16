@@ -1550,11 +1550,23 @@ export class SingleQueryService extends BaseService {
         return singleAbsentResult(slug);
       }
       // A public read in a language the Single is not published in finds no
-      // Single, as a collection read finds no entry.
+      // Single, as a collection read finds no entry. Asked of every read, its
+      // translations joined with the document or read apart from it: a read
+      // whose language chain leaves a language of the version out (one with no
+      // fallback) reads them apart, and is held to the same rule.
+      const inLanguage = statusFilter
+        ? (translations ??
+          (await this.languageReadParts(
+            slug,
+            singleMeta,
+            options.locale,
+            options.fallbackLocale
+          )))
+        : null;
       if (
         statusFilter &&
-        translations &&
-        !(await this.publishedInRequestedLanguage(translations, statusFilter, {
+        inLanguage &&
+        !(await this.publishedInRequestedLanguage(inLanguage, statusFilter, {
           slug,
           now: readNow,
         }))
@@ -1841,7 +1853,7 @@ export class SingleQueryService extends BaseService {
    * (`publishedInLanguageCondition`); true where that rule keeps nothing out.
    */
   private async publishedInRequestedLanguage(
-    translations: JoinedTranslations,
+    translations: Omit<JoinedTranslations, "companionRows">,
     statusFilter: StatusFilter,
     /** Which Single, and the instant this read resolves releases against. */
     release: { slug: string; now: Date }
@@ -1859,7 +1871,6 @@ export class SingleQueryService extends BaseService {
       revealed,
       localeChain: translations.localeChain,
       mainIdColumn: (translations.mainTable as { id?: unknown }).id,
-      defaultLocale: this.localization?.defaultLocale,
     });
     if (!condition) return true;
     const found = await selectEntryWithCompanion({
@@ -1944,22 +1955,45 @@ export class SingleQueryService extends BaseService {
     locale: string | undefined,
     fallbackLocale: string | false | undefined
   ): Promise<Omit<JoinedTranslations, "companionRows"> | null> {
-    const localeChain = resolveLocaleChain(
-      this.localization,
+    const parts = await this.languageReadParts(
+      slug,
+      singleMeta,
       locale,
       fallbackLocale
     );
-    if (!localeChain || !storesPerLanguage(singleMeta)) return null;
     // Joined only when the chain holds every language the version names:
     // otherwise the counters are read before the content, apart from it.
     if (
-      !chainCoversVersion(localeChain, {
+      !parts ||
+      !chainCoversVersion(parts.localeChain, {
         localization: this.localization,
         locale,
       })
     ) {
       return null;
     }
+    return parts;
+  }
+
+  /**
+   * What a read of the Single in a language reads its translations with: the
+   * language chain, the translations table, and the Single's own registered
+   * table. Null when the read resolves no language chain, the Single keeps no
+   * translations, its translations table is not there yet, or the adapter
+   * holds no table for it.
+   */
+  private async languageReadParts(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    locale: string | undefined,
+    fallbackLocale: string | false | undefined
+  ): Promise<Omit<JoinedTranslations, "companionRows"> | null> {
+    const localeChain = resolveLocaleChain(
+      this.localization,
+      locale,
+      fallbackLocale
+    );
+    if (!localeChain || !storesPerLanguage(singleMeta)) return null;
     const companion = this.companionOf(slug, singleMeta);
     if (!companion) return null;
     if (

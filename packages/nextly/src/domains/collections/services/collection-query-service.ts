@@ -2540,7 +2540,6 @@ export class CollectionQueryService extends BaseService {
       revealed: decisions.reveal,
       localeChain,
       mainIdColumn: schema.id,
-      defaultLocale: this.localization?.defaultLocale,
     });
     if (inLanguage) conditions.push(inLanguage);
 
@@ -5546,7 +5545,6 @@ export class CollectionQueryService extends BaseService {
         revealed: decisions.reveal,
         localeChain,
         mainIdColumn: schema.id,
-        defaultLocale: this.localization?.defaultLocale,
       });
       const whereParts = [
         idCondition,

@@ -201,7 +201,11 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         localized: true,
         status: true,
         access: { read: () => true },
-        fields: [text({ name: "title" }), text({ name: "tagline" })],
+        fields: [
+          text({ name: "title" }),
+          text({ name: "tagline" }),
+          text({ name: "brand", localized: false }),
+        ],
       }),
       defineSingle({
         slug: SITE_DATA,
@@ -466,6 +470,39 @@ describe.each(getConfiguredTestDialects())(
         title: "Site in English",
         _locale: "en",
       });
+    }, 90_000);
+
+    // Published in a language is asked of every Single read, not only of one
+    // whose translations come in the same query as the document: a read that
+    // selects only shared fields reads no translations, and finds no Single
+    // all the same.
+    it("answers not found for a Single read of shared fields in a language it is not published in", async () => {
+      const t = await boot(dialect);
+      const singles = singlesOf(t);
+      const saved = await singles.update(
+        SITE,
+        {
+          title: "Site in English",
+          brand: "Acme",
+          status: "published",
+          _overwrite: true,
+        },
+        { locale: "en", overrideAccess: true }
+      );
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+
+      const missing = await singles.get(SITE, {
+        locale: "es",
+        select: { brand: true },
+        status: "published",
+      });
+      expect(missing.statusCode, JSON.stringify(missing)).toBe(404);
+      const english = await singles.get(SITE, {
+        locale: "en",
+        select: { brand: true },
+        status: "published",
+      });
+      expect(english.data?.brand, JSON.stringify(english)).toBe("Acme");
     }, 90_000);
 
     // A Single through REST and the Direct API answers as an entry does: not
@@ -1029,6 +1066,59 @@ describe.each(getConfiguredTestDialects())(
       expect(related.title).toBe("Entrada");
       const writer = related.author as Record<string, unknown>;
       expect(writer.name).toBe("Ana");
+    }, 90_000);
+
+    // A related document not published in the read's language is withheld
+    // from the read, as reading it by its id in that language finds nothing.
+    it("withholds a related document not published in the read's language", async () => {
+      const t = await boot(dialect);
+      // Published in English only.
+      const author = String(
+        (
+          await t.nextly.create({
+            collection: AUTHORS,
+            locale: "en",
+            data: { name: "Ann", status: "published" },
+          })
+        ).item.id
+      );
+      const post = String(
+        (
+          await t.nextly.create({
+            collection: POSTS,
+            locale: "en",
+            data: { title: "Post", author, status: "published" },
+          })
+        ).item.id
+      );
+      await t.nextly.update({
+        collection: POSTS,
+        id: post,
+        locale: "es",
+        data: { title: "Entrada", status: "published", _overwrite: true },
+      });
+
+      const direct = await restGet(
+        ["collections", AUTHORS, "entries", author],
+        "?locale=es"
+      );
+      expect(direct.status, JSON.stringify(direct.json)).toBe(404);
+      const english = await restGet(
+        ["collections", POSTS, "entries", post],
+        "?locale=en&depth=1"
+      );
+      expect(
+        (english.json.author as Record<string, unknown>).name,
+        JSON.stringify(english.json)
+      ).toBe("Ann");
+
+      const spanish = await restGet(
+        ["collections", POSTS, "entries", post],
+        "?locale=es&depth=1"
+      );
+      expect(spanish.status, JSON.stringify(spanish.json)).toBe(200);
+      expect(spanish.json.title).toBe("Entrada");
+      expect(JSON.stringify(spanish.json)).not.toContain("Ann");
     }, 90_000);
 
     // Whole-document fallback reads the document as a request for the
