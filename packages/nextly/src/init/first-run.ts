@@ -21,8 +21,10 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { busyTableBounds } from "../domains/schema/busy-table/bounds";
-import { runStatementsInTries } from "../domains/schema/busy-table/run-on-session";
+import {
+  busyTableBounds,
+  type BusyTableBounds,
+} from "../domains/schema/busy-table/bounds";
 import {
   type ExtensionSchema,
   getActiveExtensionSchema,
@@ -598,7 +600,10 @@ async function warnOfRetiredAccessRules(
  * `nextly migrate` brings the core tables up to date and names what it finds.
  * It reads only the two registry tables, for the rules left in their retired
  * `access_rules` column, which nothing else names and which look enforced
- * while they are not. Every other report here is a development start's.
+ * while they are not, and the translations tables of translated entities, for
+ * a date column an earlier release made with a time zone, which reads shifted
+ * on a server not in UTC until `nextly upgrade` converts it. Every other report
+ * here is a development start's.
  */
 async function runCoreSchemaChecks(
   adapter: AdapterLike,
@@ -617,6 +622,15 @@ async function runCoreSchemaChecks(
       await introspectLiveColumns(adapter.getDrizzle(), adapter.dialect, [
         ...RETIRED_ACCESS_RULES_TABLES,
       ])
+    );
+    // Translated date columns an earlier release made with a time zone: named, never converted,
+    // since a production start changes no column's type; `nextly upgrade` converts them.
+    const { convertZonedDateCompanions } = await import(
+      "../domains/i18n/runtime/zoned-date-companions"
+    );
+    await convertZonedDateCompanions(
+      adapter as unknown as Parameters<typeof convertZonedDateCompanions>[0],
+      { convert: false, onWarning: message => logger.warn(message) }
     );
     return;
   }
@@ -911,6 +925,9 @@ async function setUpNewDatabase(
  *
  * Failure-safe like first-run: a table that cannot be reconciled is reported,
  * and the plugin whose `init` needs it then fails with the query that names it.
+ * A busy-table bound out of range (`NEXTLY_LOCK_TIMEOUT`,
+ * `NEXTLY_LOCK_TIMEOUT_TOTAL`) is the exception: it throws `INVALID_INPUT`
+ * before any table is created, as every schema change refuses it.
  */
 export async function prepareExtensionTablesBeforeInit(args: {
   /** The site's adapter: the additions run on one session of it (`runTableStatements`). */
@@ -921,6 +938,10 @@ export async function prepareExtensionTablesBeforeInit(args: {
 }): Promise<{ created: string[]; altered: string[] }> {
   const { adapter, logger, extensionSchema } = args;
   if (!extensionSchema) return { created: [], altered: [] };
+  // The bounds an existing table's additions wait for a busy table within, read before anything
+  // is created or changed: a value out of range refuses the pass here, with nothing changed,
+  // rather than becoming a warning once the missing tables have been made.
+  const bounds = busyTableBounds({ env: process.env });
 
   const missing: TableSpec[] = [];
   const existing: TableSpec[] = [];
@@ -945,7 +966,7 @@ export async function prepareExtensionTablesBeforeInit(args: {
     missing,
     args.deps?.freshPushSchema
   );
-  const altered = await addUndecidedChanges(adapter, logger, existing);
+  const altered = await addUndecidedChanges(adapter, logger, existing, bounds);
   return { created, altered };
 }
 
@@ -1007,7 +1028,8 @@ const ADDITIVE_OP_TYPES = new Set<Operation["type"]>([
 async function addUndecidedChanges(
   adapter: DrizzleAdapter,
   logger: LoggerLike,
-  existing: readonly TableSpec[]
+  existing: readonly TableSpec[],
+  bounds: BusyTableBounds
 ): Promise<string[]> {
   if (existing.length === 0) return [];
   const operations = await diffExistingTables(adapter, logger, existing);
@@ -1024,7 +1046,9 @@ async function addUndecidedChanges(
       op => generateSQL(op, adapter.dialect)
     );
     if (statements.length === 0) continue;
-    if (await runTableStatements(adapter, logger, spec.name, statements)) {
+    if (
+      await runTableStatements(adapter, logger, spec.name, statements, bounds)
+    ) {
       altered.push(spec.name);
     }
   }
@@ -1115,20 +1139,27 @@ function undecidedStatements(
 
 /**
  * Run one table's statements in order; reports and stops at a failure. Each statement waits for
- * a busy table in tries (`runStatementsInTries`), bounded by `NEXTLY_LOCK_TIMEOUT` /
- * `NEXTLY_LOCK_TIMEOUT_TOTAL`, each try's notice through the logger; one that stays busy is
- * reported as any other failure is, naming the statements before it, which stay.
+ * a busy table in tries (`runStatementsInTries`), within `bounds` (`NEXTLY_LOCK_TIMEOUT` /
+ * `NEXTLY_LOCK_TIMEOUT_TOTAL`, read once by the caller before anything changed), each try's
+ * notice through the logger; one that stays busy is reported as any other failure is, naming the
+ * statements before it, which stay.
  */
 async function runTableStatements(
   adapter: DrizzleAdapter,
   logger: LoggerLike,
   table: string,
-  statements: readonly string[]
+  statements: readonly string[],
+  bounds: BusyTableBounds
 ): Promise<boolean> {
+  // Loaded here, not at the top: the tries' engine is needed only once a statement is sent, and
+  // every start imports this module whether or not it changes a table.
+  const { runStatementsInTries } = await import(
+    "../domains/schema/busy-table/run-on-session"
+  );
   try {
     await runStatementsInTries(adapter, statements, {
       change: `extension table ${table}`,
-      bounds: busyTableBounds({ env: process.env }),
+      bounds,
       notify: line => logger.warn(line),
       appliedBefore: [],
     });

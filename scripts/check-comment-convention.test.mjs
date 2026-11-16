@@ -319,7 +319,10 @@ describe("the allowlist", () => {
   // 436 -> 433: both recorded offences in `BuilderFieldList.tsx` no longer
   // exist, and its entry went with them; one in `routeHandler.ts` no longer
   // exists, and its entry remains.
-  const EXPECTED_TOTAL = 433;
+  // 433 -> 432: one recorded offence in `collection-entry-service.ts`, a comment
+  // on publishing every language naming a milestone, now describes the code; its
+  // entry remains.
+  const EXPECTED_TOTAL = 432;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);

@@ -20,7 +20,7 @@ import {
   BuilderSettingsModal,
   type BuilderSettingsValues,
 } from "./BuilderSettingsModal";
-import type { BuilderFieldsApi } from "./types";
+import type { BuilderField, BuilderFieldsApi } from "./types";
 
 /**
  * Which overlay is open, and the state that overlay needs.
@@ -47,6 +47,10 @@ type Props = {
   readOnly: boolean;
   /** A collection's stored hooks, which the settings modal shows read-only. */
   storedHooks?: readonly StoredHookConfig[];
+  /** The fields as last saved, where a pending delete still holds its name until the save. */
+  savedFields?: readonly BuilderField[];
+  /** Whether the save judges names with Draft/Published on: as stored, or as the pending settings set it. */
+  lifecycleEnabled?: boolean;
 };
 
 export function BuilderOverlays({
@@ -58,6 +62,8 @@ export function BuilderOverlays({
   onSettingsChange,
   readOnly,
   storedHooks,
+  savedFields,
+  lifecycleEnabled = false,
 }: Props): JSX.Element {
   const close = () => onActiveChange({ kind: "none" });
 
@@ -94,6 +100,8 @@ export function BuilderOverlays({
           onAdded={(fieldId, how) => {
             if (!how.addAnother) onActiveChange({ kind: "edit", fieldId });
           }}
+          savedFields={savedFields}
+          lifecycleEnabled={lifecycleEnabled}
         />
       )}
     </>

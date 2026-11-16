@@ -97,6 +97,26 @@ describe("the rows", () => {
     ]);
   });
 
+  it("offers no \"Space between blocks\" above the spacing variables, whatever a host hands it", () => {
+    // Spacing is set per container and by the spacing variables: there is no
+    // site-wide spacing switch. A host still passing the old `spacing` prop,
+    // as one written against an earlier version would, draws nothing for it.
+    const stale: Record<string, unknown> = {
+      spacing: { mode: "classic", onChange: () => undefined },
+    };
+    render(<Hosted tokens={SITE} {...stale} />);
+    const spacing = screen.getByRole("region", {
+      name: "Spacing, radius & shadows",
+    });
+    expect(screen.queryByText("Space between blocks")).toBeNull();
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    expect(screen.queryByText(/classic/i)).toBeNull();
+    // The spacing variables are listed as before.
+    expect(
+      within(spacing).getByRole("button", { name: "Space 4, 1rem" })
+    ).toBeTruthy();
+  });
+
   it("labels the colour columns beside the Colours heading, for sight only", () => {
     render(<Hosted tokens={SITE} />);
     const colours = screen.getByRole("region", { name: "Colours" });
@@ -365,6 +385,45 @@ describe("the editor beside the panel", () => {
     escape();
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(document.activeElement).toBe(row(/^Brand/));
+  });
+
+  it("spell-checks none of its fields and lists no earlier entries", async () => {
+    /*
+     * A colour's fields and a size's fields are drawn by different inputs,
+     * so both kinds are opened, and the colour's picker too: its hex field is
+     * drawn by the shared picker, which this editor cannot give attributes to
+     * directly. Every one of them holds a code-like word or a value, which a
+     * spell-checker would underline as misspelt.
+     *
+     * Read by the attribute's own rule, the nearest element that sets it,
+     * since that is how the hex field gets its setting.
+     */
+    const spellChecked = (field: HTMLElement): boolean =>
+      field.closest("[spellcheck]")?.getAttribute("spellcheck") !== "false";
+    render(<Hosted tokens={SITE} />);
+
+    const colour = await openEditor(/^Brand/);
+    const typed = within(colour).getAllByRole("textbox");
+    fireEvent.click(
+      within(colour).getByRole("button", { name: "Pick the light colour" })
+    );
+    const withPicker = within(colour).getAllByRole("textbox");
+    // The control: opening the picker really added its hex field.
+    expect(withPicker.length).toBeGreaterThan(typed.length);
+    for (const field of withPicker) expect(spellChecked(field)).toBe(false);
+    for (const field of typed) {
+      expect(field.getAttribute("autocomplete")).toBe("off");
+    }
+    escape();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    const size = await openEditor(/^Body/);
+    const fields = within(size).getAllByRole("textbox");
+    expect(fields.length).toBeGreaterThan(1);
+    for (const field of fields) {
+      expect(spellChecked(field)).toBe(false);
+      expect(field.getAttribute("autocomplete")).toBe("off");
+    }
   });
 
   it("keeps Tab inside while it is open, both ways round", async () => {

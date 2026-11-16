@@ -50,6 +50,31 @@ export interface FindSingleArgs<TSlug extends SingleSlug = SingleSlug>
   slug: TSlug;
 
   /**
+   * Whole-document fallback. A published read in a language the Single is not
+   * published in answers not found; with this set it answers in the first
+   * language of the fallback chain the Single is published in instead, and
+   * says which in `_locale`.
+   *
+   * @default false
+   */
+  wholeDocumentFallback?: boolean;
+
+  /**
+   * Attach `_sources`: for each translatable field, the language its value
+   * came from, its own or a fallback one; `null` where no language holds one.
+   *
+   * @default false
+   */
+  sourceLocales?: boolean;
+
+  /**
+   * `"all"`: attach every language's values beside the read's own, under
+   * `_allLocales` (`{ field: { code: value } }`). Every field keeps its own
+   * type. A public read holds published values only.
+   */
+  translations?: "all";
+
+  /**
    * Return the pending working draft in place of the live document when one
    * exists (draft/published split). Mirrors `draft` on `findByID`, and forwards
    * to the same service option, so a Single and a collection entry are read the
@@ -74,7 +99,14 @@ export interface FindSingleArgs<TSlug extends SingleSlug = SingleSlug>
   status?: "published" | "draft" | "all";
 
   /**
-   * Specific fields to include/exclude.
+   * The fields to answer with, meaning what it means on a collection read: a
+   * field named `true` is included, a `false` entry is ignored, and a
+   * selection that includes nothing answers the whole document. The id and
+   * the system timestamps are always answered.
+   *
+   * Where no read hook or field read rule needs the rest of the document, the
+   * read takes only the selected fields' columns, so a field whose column the
+   * database does not have yet fails only a read that selects it.
    */
   select?: Record<string, boolean>;
 

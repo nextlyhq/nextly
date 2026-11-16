@@ -124,6 +124,56 @@ describe("migrate --dry-run", () => {
     ]);
   });
 
+  it("lists what the core upgrade would delete, before the migrations, with the consent it needs", async () => {
+    testDb.sqlite.exec(
+      "ALTER TABLE dynamic_collections ADD COLUMN access_rules text"
+    );
+
+    await preview();
+
+    expect(lines.slice(0, 3)).toEqual([
+      "Pending: 3 migrations",
+      "  • Nextly's own tables (core upgrade)",
+      expect.stringMatching(
+        /deletes data: column dynamic_collections\.access_rules.*A real run needs --accept-data-loss=dynamic_collections\.access_rules/
+      ),
+    ]);
+  });
+
+  it("names the refusal a real run makes when the core push cannot be planned", async () => {
+    await previewMigrate({
+      adapter: testDb.adapter as unknown as Parameters<
+        typeof previewMigrate
+      >[0]["adapter"],
+      db: testDb.db,
+      dialect: "sqlite",
+      migrationsDir: dir,
+      plugins,
+      planCoreReconcileFn: () =>
+        Promise.resolve({
+          statements: [],
+          degraded: false,
+          deletions: [],
+          retiredDrops: [],
+          unsupported:
+            "This version of Nextly cannot bring users up to date from this database in one step, so it changed nothing.",
+        }),
+      logger: {
+        info: (message: string) => lines.push(message),
+        keyValue: (key: string, value: string) =>
+          lines.push(`${key}: ${value}`),
+        newline: () => {},
+        warn: (message: string) => lines.push(message),
+        debug: () => {},
+      } as unknown as Parameters<typeof previewMigrate>[0]["logger"],
+    });
+
+    expect(lines.slice(1, 3)).toEqual([
+      "  • Nextly's own tables (core upgrade)",
+      "    ✖ a real run would refuse before applying anything: This version of Nextly cannot bring users up to date from this database in one step, so it changed nothing.",
+    ]);
+  });
+
   it("spends --step on the plugin modules first", async () => {
     await preview(2);
 

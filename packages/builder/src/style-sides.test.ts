@@ -89,8 +89,9 @@ describe("logicalSideGroup", () => {
   });
 
   /*
-   * Returned in box order rather than the order the walk produced, because the
-   * order IS the layout: the caller places them into a grid by index.
+   * Returned in one fixed order rather than the order the walk produced,
+   * because that order is the document's and so the order Tab visits the
+   * sides in; the stylesheet places each side by which side it is.
    */
   it("returns the sides in the order the box draws them", () => {
     const scrambled = [...LOGICAL_SIDES]

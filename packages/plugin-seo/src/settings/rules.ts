@@ -12,6 +12,7 @@
 import {
   getCachedNextly,
   languageAddressOf,
+  NextlyError,
   type PageMetadataImage,
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
@@ -21,8 +22,10 @@ import { isRecord, textOf } from "../plain-values";
 import { imageOf } from "../resolver/page-levels";
 import type { StructuredDataTypeRule } from "../structured-data/rules";
 
+import { brandDetailsOf, type BrandDetails } from "./brand-details";
 import {
   AI_CRAWLER_CHOICES,
+  largeImagePreviewsOn,
   SEO_PLUGIN_NAME,
   SEO_SETTINGS_SLUG,
   SETUP_STEPS,
@@ -33,11 +36,18 @@ import {
 import { defaultTitlePattern, SEPARATORS, type Separator } from "./patterns";
 import { productionAddressesProblem } from "./production-addresses";
 import {
+  storedRobotsRulesOf,
+  type StoredRobotsRules,
+} from "./robots-rules-stored";
+import { seoSettingsSingle } from "./single";
+import {
   hiddenTypesProblem,
+  typesWithSeoOffProblem,
   patternsProblem,
   socialProfilesProblem,
 } from "./stored-values";
 import { structuredDataSettingsProblem } from "./structured-data-choices";
+import { verificationProblem, verificationTagsOf } from "./verification-stored";
 
 /** A content type's patterns: the title's, and the description's. */
 export interface TypePatterns {
@@ -71,12 +81,39 @@ export interface SeoRules {
    * are, once the settings name any.
    */
   hiddenTypes?: string[];
+  /**
+   * The content types whose SEO is switched off, keyed as `patterns` are,
+   * once the settings name any. Every type is on until listed.
+   */
+  typesWithSeoOff?: string[];
   /** Whether IndexNow is told of changed pages: only once switched on. */
   indexNow?: boolean;
   /** Whether `/llms.txt` is served: only once switched on. */
   llmsTxt?: boolean;
+  /**
+   * Whether `/llms-full.txt`, every listed page's words in one file, is
+   * served: only once switched on, and only beside llms.txt.
+   */
+  llmsFullTxt?: boolean;
+  /** What the site tells AI tools in its own words, at the top of llms.txt. */
+  llmsIntro?: string;
   /** Whether each listed page has a plain-text copy: only once switched on. */
   plainTextCopies?: boolean;
+  /**
+   * The site's own robots.txt lines and their confirmation, where stored and
+   * passing their rule.
+   */
+  robotsRules?: StoredRobotsRules;
+  /**
+   * Why the stored own lines are not served, where they fail their rule: a
+   * value edited past the screen. Said once in the log by what serves them.
+   */
+  robotsRulesRefused?: string;
+  /**
+   * Whether every listed page asks for large image previews: on until the
+   * site switches it off, so it is set only as `false`.
+   */
+  largeImagePreviews?: false;
 }
 
 /** One of the brand's official accounts. */
@@ -85,8 +122,13 @@ export interface SocialProfile {
   url: string;
 }
 
-/** The one record of facts about the site's owner, for every output. */
-export interface BrandFacts {
+/**
+ * The one record of facts about the site's owner, for every output: its
+ * name, other names, logo and profiles, and the details kept with them
+ * (`brandDetails`): what it is, how to reach it, when it was founded and
+ * who owns it.
+ */
+export interface BrandFacts extends BrandDetails {
   name?: string;
   /** Other names people search for the brand by. */
   otherNames: string[];
@@ -191,14 +233,39 @@ async function rulesOf(
     defaultPatterns: { title: defaultTitlePattern(separatorOf(document)) },
     ...withDefined("aiCrawlers", aiCrawlersOf(document)),
     ...withDefined("hiddenTypes", hiddenTypesOf(document)),
+    ...withDefined(
+      "typesWithSeoOff",
+      checked<string[]>(document.typesWithSeoOff, typesWithSeoOffProblem)
+    ),
     // Off unless stored as switched on: a value that is not `true` is off.
     ...withDefined("indexNow", document.indexNow === true ? true : undefined),
     ...withDefined("llmsTxt", document.llmsTxt === true ? true : undefined),
     ...withDefined(
+      "llmsFullTxt",
+      document.llmsFullTxt === true ? true : undefined
+    ),
+    ...withDefined("llmsIntro", trimmed(document.llmsIntro)),
+    ...withDefined(
       "plainTextCopies",
       document.plainTextCopies === true ? true : undefined
     ),
+    ...withDefined<"largeImagePreviews", false>(
+      "largeImagePreviews",
+      largeImagePreviewsOn(document.largeImagePreviews) ? undefined : false
+    ),
     patterns: patternsOf(document),
+    ...ownRobotsRulesOf(document),
+  };
+}
+
+/** The own robots.txt lines, or why the stored ones are not served. */
+function ownRobotsRulesOf(
+  document: SeoSettingsDocument
+): Pick<SeoRules, "robotsRules" | "robotsRulesRefused"> {
+  const { rules, problem } = storedRobotsRulesOf(document.robotsRules);
+  return {
+    ...withDefined("robotsRules", rules),
+    ...withDefined("robotsRulesRefused", problem),
   };
 }
 
@@ -215,6 +282,8 @@ async function brandOf(
     .map(other => other.trim())
     .filter(other => other !== "");
   return {
+    // The details first: the facts named below are never among them.
+    ...brandDetailsOf(document.brandDetails),
     ...(name === undefined ? {} : { name }),
     otherNames,
     ...(logo === undefined ? {} : { logo }),
@@ -255,21 +324,97 @@ function settingsSingleFor(ctx: Pick<PluginContext, "self">): string {
 }
 
 /**
+ * The field of the Single `slug` a read failed on because the site's
+ * database has no column for it yet, as core names it; none for any other
+ * failure, another entity's included.
+ */
+function unmigratedField(error: unknown, slug: string): string | undefined {
+  if (!NextlyError.isCode(error, "ENTITY_NOT_MIGRATED")) return undefined;
+  const data: unknown = error.publicData;
+  return isRecord(data) &&
+    data.reason === "column" &&
+    data.kind === "single" &&
+    data.slug === slug
+    ? textOf(data.field)
+    : undefined;
+}
+
+/** The fields already said to be waiting for a migration, said once each. */
+const toldUnmigrated = new Set<string>();
+
+/**
+ * Every field the settings Single declares, as a `select` naming all but
+ * `left`: a Single read reads only the columns its `select` names, so a field
+ * the database has no column for yet is not asked for.
+ */
+function selectingAllBut(left: ReadonlySet<string>): Record<string, true> {
+  return Object.fromEntries(
+    seoSettingsSingle()
+      .fields.flatMap(field =>
+        "name" in field && typeof field.name === "string" ? [field.name] : []
+      )
+      .filter(name => !left.has(name))
+      .map(name => [name, true])
+  );
+}
+
+/**
  * The stored SEO settings in `locale`, as the system: the published values,
  * since they decide what the live site serves. Empty before anyone saves.
+ *
+ * A site that upgraded and has not yet run its migrations has no column for
+ * a setting a newer release added. Each such field is read as unset, which is
+ * its default, and the rest are read as stored, so every page keeps its SEO
+ * until the migration runs; the log says which field waits. Any other failure
+ * is thrown.
  */
 async function readSeoSettingsDocument(
-  ctx: Pick<PluginContext, "self">,
+  ctx: Pick<PluginContext, "self" | "logger">,
   locale?: string
+): Promise<SeoSettingsDocument> {
+  const slug = settingsSingleFor(ctx);
+  const left = new Set<string>();
+  // Bounded by the Single's fields: each retry leaves one more out, and a
+  // field named twice is thrown.
+  for (;;) {
+    try {
+      return await readSettingsOnce(slug, locale, left);
+    } catch (error) {
+      const field = unmigratedField(error, slug);
+      if (field === undefined || left.has(field)) throw error;
+      left.add(field);
+      sayUnmigrated(ctx, field);
+    }
+  }
+}
+
+/** One read of the settings, asking for every field but those `left` names. */
+async function readSettingsOnce(
+  slug: string,
+  locale: string | undefined,
+  left: ReadonlySet<string>
 ): Promise<SeoSettingsDocument> {
   const nextly = await getCachedNextly();
   const document: unknown = await nextly.findSingle({
-    slug: settingsSingleFor(ctx),
+    slug,
     overrideAccess: true,
     depth: 0,
     ...(locale === undefined ? {} : { locale }),
+    ...(left.size === 0 ? {} : { select: selectingAllBut(left) }),
   });
   return isRecord(document) ? document : {};
+}
+
+/** Says in the log, once per field for the process, that a setting waits. */
+function sayUnmigrated(
+  ctx: Pick<PluginContext, "logger">,
+  field: string
+): void {
+  if (toldUnmigrated.has(field)) return;
+  toldUnmigrated.add(field);
+  ctx.logger.warn(
+    `The SEO setting "${field}" is read as unset until the database is migrated for it. Run \`nextly migrate\`.`
+  );
 }
 
 /**
@@ -409,4 +554,48 @@ export async function readStructuredDataSettings(
         structuredDataSettingsProblem
       ) ?? {},
   };
+}
+
+/**
+ * The stored values already warned about, so a value refused on read is
+ * logged once per process rather than on every home page it would have
+ * reached. Bounded: a value edited again and again past the screen warns
+ * afresh only while the set has room.
+ */
+const warnedVerification = new Set<string>();
+const MAX_WARNED = 20;
+
+/**
+ * The verification tags the home page's head carries, by meta name, read
+ * with the rule they were saved under. Nothing where none is saved, where
+ * the settings were saved before the field existed, or where the stored
+ * value fails its rule: that one is ignored, never emitted, with a warning.
+ * Never awaited while the site starts.
+ */
+export async function readVerificationTags(
+  ctx: PluginContext
+): Promise<Record<string, string>> {
+  const document = await readSeoSettingsDocument(ctx);
+  return verificationTagsFrom(document.verificationCodes, message =>
+    ctx.logger.warn(message)
+  );
+}
+
+/** The tags a stored value gives, warning once about a value its rule refuses. */
+export function verificationTagsFrom(
+  stored: unknown,
+  warn: (message: string) => void
+): Record<string, string> {
+  const problem = verificationProblem(stored);
+  if (problem !== null) {
+    const key = JSON.stringify(stored) ?? "";
+    if (!warnedVerification.has(key) && warnedVerification.size < MAX_WARNED) {
+      warnedVerification.add(key);
+      warn(
+        `The SEO settings' verification codes were not placed on the home page: ${problem} Save them again on Settings, Connections.`
+      );
+    }
+    return {};
+  }
+  return verificationTagsOf(stored);
 }

@@ -1,6 +1,6 @@
 {
   "name": "nextly",
-  "version": "0.0.2-alpha.75",
+  "version": "0.0.2-alpha.78",
   "description": "Nextly is an open-source CMS and visual page builder for Next.js. Model content, build pages, localize, version and release from your own stack.",
   "license": "MIT",
   "type": "module",
@@ -108,6 +108,10 @@
     "./field-label": {
       "types": "./dist/collections/fields/field-label.d.mts",
       "import": "./dist/collections/fields/field-label.mjs"
+    },
+    "./admin-path": {
+      "types": "./dist/auth/redirect/sanitize-admin-path.d.mts",
+      "import": "./dist/auth/redirect/sanitize-admin-path.mjs"
     },
     "./media-categories": {
       "types": "./dist/domains/media/media-categories.d.mts",

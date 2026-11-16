@@ -128,6 +128,28 @@ describeEachDialect("deleting a user a relationship points at", dialect => {
     expect(await roleRows(ada)).toBe(rolesBefore);
   });
 
+  it("deletes an account inside a transaction that first deleted what pointed at it", async () => {
+    const ada = await user("ada");
+    await current.nextly.create({
+      collection: "notes",
+      data: { title: "One", author: ada },
+    });
+
+    // The refusal is asked inside the deletion's transaction, which joins this one: it sees the
+    // note this transaction deleted as gone. Asked on another connection, it saw the note still
+    // there and refused, and on PostgreSQL and MySQL its reads ran outside the transaction. The
+    // note goes by a statement of this transaction, so the deletion is all the test exercises.
+    await current.adapter.transaction(async tx => {
+      await tx.execute(`DELETE FROM ${q("dc_notes")}`);
+      await current.nextly.users.delete({ id: ada });
+    });
+
+    expect(await userIds()).not.toContain(ada);
+    expect(await rows(`SELECT ${q("id")} FROM ${q("dc_notes")}`)).toHaveLength(
+      0
+    );
+  });
+
   it("empties an optional relationship and deletes the account", async () => {
     const ada = await user("ada");
     const grace = await user("grace");

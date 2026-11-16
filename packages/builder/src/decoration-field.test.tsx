@@ -6,7 +6,13 @@
  *
  * @module decoration-field.test
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 
@@ -434,5 +440,25 @@ describe("DecorationField", () => {
     fireEvent.change(thickness, { target: { value: "2px" } });
     expect(fireEvent.keyDown(thickness, { key: "Enter" })).toBe(false);
     expect(onCommit).toHaveBeenCalledWith("underline 2px");
+  });
+});
+
+describe("spell-check in the style popover", () => {
+  it("is off for its fields, which the Style tab's own setting cannot reach", () => {
+    // The popover is drawn in a layer at the end of the page, outside the
+    // Style tab, so it carries the setting itself. Read by the attribute's
+    // own rule: the nearest element that sets it decides.
+    mount("underline 2px");
+    openStyle();
+    const layer = document.querySelector("[data-radix-popper-content-wrapper]");
+    if (!(layer instanceof HTMLElement)) throw new Error("no style popover");
+    const fields = within(layer).getAllByRole("textbox");
+    expect(fields.length).toBeGreaterThan(0);
+
+    for (const field of fields) {
+      expect(field.closest("[spellcheck]")?.getAttribute("spellcheck")).toBe(
+        "false"
+      );
+    }
   });
 });

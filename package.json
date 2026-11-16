@@ -31,6 +31,7 @@
     "check:instance-boot-lane": "node scripts/check-instance-boot-lane.mjs",
     "check:agent-contract": "node scripts/check-agent-contract.mjs",
     "check:instruction-size": "node scripts/check-instruction-size.mjs",
+    "check:source-size": "node scripts/check-source-size.mjs",
     "instructions:sync": "node scripts/agent-instructions.mjs sync",
     "skills:sync": "node scripts/agent-skills.mjs sync",
     "check:comments": "node scripts/check-comment-convention.mjs",

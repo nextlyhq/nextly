@@ -48,6 +48,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "@nextly/collections";
 
+import { assertTopLevelFieldsNamed } from "../../../api/fields-payload";
 import { NextlyError } from "../../../errors";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
@@ -58,6 +59,7 @@ import type {
 } from "../../../schemas/dynamic-singles/types";
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
 import { assertAddressAllowed } from "../../../shared/address-rule";
+import { addressableFields } from "../../../shared/addressable-fields";
 import type { Logger } from "../../../shared/types";
 import { collectionTablesBySlug } from "../../dynamic-collections/services/collection-tables";
 import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
@@ -69,6 +71,7 @@ import {
 import {
   archiveFieldsLeavingTranslation,
   fieldsLeavingTranslationUnder,
+  refuseTranslationMovesLosingDefinition,
 } from "../../i18n/migration/archive-preflight";
 import {
   leavingFieldConstraints,
@@ -82,18 +85,11 @@ import {
   type TranslationLayoutChange,
 } from "../../i18n/per-language-storage";
 import { assertLanguageStatesAgreeWithEntry } from "../../i18n/runtime/language-states-agree";
-import {
-  writeCollectionSave,
-  type BuilderSaveSetup,
-  type CollectionSaveDeps,
+import type {
+  BuilderSaveSetup,
+  CollectionSaveDeps,
 } from "../../schema/builder-save/collection-save";
-import {
-  checkEntitySaveHistory,
-  entitySaveDeps,
-  previousEntity,
-  writeEntityDelete,
-  writeEntitySave,
-} from "../../schema/builder-save/entity-save";
+import { entitySaveDeps } from "../../schema/builder-save/entity-save-deps";
 import { entityRelations } from "../../schema/builder-save/single-relations";
 import { singleEntity } from "../../schema/builder-save/stored-entity";
 import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
@@ -110,6 +106,15 @@ import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
 import { singleTableFamiliesCollide } from "./resolve-single-table-name";
 import type { SingleRegistryService } from "./single-registry-service";
+
+/**
+ * The Builder save writer, loaded where a save runs: it brings the migration
+ * generator and runner, which a read, or a save with no writer set up, never
+ * needs.
+ */
+const loadEntitySave = () => import("../../schema/builder-save/entity-save");
+const loadCollectionSave = () =>
+  import("../../schema/builder-save/collection-save");
 
 /**
  * 🔴 The schema generators, the runtime-schema builder and the companion reconcile are loaded on
@@ -430,6 +435,9 @@ export class SingleMetadataService {
    * table name. Rejecting after this point would leave a `pending` row behind.
    */
   async createSingle(input: CreateSingleInput): Promise<CreateSingleResult> {
+    // Only named fields at the top level, as a collection's API takes them: the request alone
+    // decides it, so it is refused before the lock (`assertTopLevelFieldsNamed`).
+    assertTopLevelFieldsNamed(input.fields ?? []);
     // 🔴 The exclusion wraps ALL THREE phases, not just the apply. A storage migration renaming
     // tables between the plan and the row write would leave this create describing storage that
     // moved underneath it, and the row is as much a part of the schema as the table is.
@@ -694,6 +702,8 @@ export class SingleMetadataService {
       await remove();
       return;
     }
+    const { checkEntitySaveHistory, writeEntityDelete } =
+      await loadEntitySave();
     await checkEntitySaveHistory(deps);
     await writeEntityDelete(
       deps,
@@ -792,6 +802,9 @@ export class SingleMetadataService {
   async updateSingleSchema(
     input: UpdateSingleSchemaInput
   ): Promise<UpdateSingleSchemaResult> {
+    // Only named fields at the top level, as a collection's API takes them: a field cannot be
+    // created in, or moved into, a group with no name there (`assertTopLevelFieldsNamed`).
+    if (input.fields !== undefined) assertTopLevelFieldsNamed(input.fields);
     return withSchemaChangeExcluded(
       {
         adapter: this.adapter,
@@ -900,7 +913,10 @@ export class SingleMetadataService {
 
     // The history checks a Builder save makes, before that first write, where a writer is set up.
     const deps = this.saveDeps();
-    await checkEntitySaveHistory(deps);
+    if (deps !== undefined) {
+      const { checkEntitySaveHistory } = await loadEntitySave();
+      await checkEntitySaveHistory(deps);
+    }
 
     await this.assertFieldsMayLeaveTranslation(input);
 
@@ -1000,6 +1016,7 @@ export class SingleMetadataService {
     input: UpdateSingleSchemaInput,
     plan: UpdateDdlPlan | null
   ): Promise<UpdateSingleSchemaResult> {
+    const { previousEntity, writeEntitySave } = await loadEntitySave();
     const existing = input.existing;
     const updateData = input.updateData;
     const before = (existing.fields ?? []) as unknown as FieldDefinition[];
@@ -1115,6 +1132,7 @@ export class SingleMetadataService {
     /** Writes the row with the settings, once they have applied. */
     recordApplied: () => Promise<void>
   ): Promise<LeavingSettingStep[]> {
+    const { writeEntitySave } = await loadEntitySave();
     const adapter = deps.adapter;
     const tableName = input.existing.tableName;
     const save = {
@@ -1219,9 +1237,12 @@ export class SingleMetadataService {
   private async assertFieldsMayLeaveTranslation(
     input: UpdateSingleSchemaInput
   ): Promise<void> {
+    if (!input.wasLocalized && !input.isLocalized) return;
+    // A save that sends no fields moves nothing unless it turns translation on or off, and with no
+    // adapter none of it runs: neither is asked anything.
     if (
-      input.fields === undefined ||
-      (!input.wasLocalized && !input.isLocalized)
+      input.fields === undefined &&
+      (input.wasLocalized === input.isLocalized || !this.adapter)
     ) {
       return;
     }
@@ -1232,6 +1253,25 @@ export class SingleMetadataService {
           slug: input.slug,
         },
       });
+    }
+    if (input.fields === undefined) {
+      // A save that sends no fields still moves every translated field's values as it turns
+      // translation on or off, through the companion transition after it, so their columns are
+      // asked here what the move would lose.
+      const fields = (input.existing.fields ??
+        []) as unknown as FieldDefinition[];
+      await refuseTranslationMovesLosingDefinition({
+        adapter: this.adapter,
+        // Singles are built by the collection schema service.
+        builtBy: "collection",
+        tableName: input.existing.tableName,
+        oldFields: fields,
+        newFields: fields,
+        wasLocalized: input.wasLocalized,
+        isLocalized: input.isLocalized,
+        surface: "builder",
+      });
+      return;
     }
     // The site's default language as it is now, the same one the Single's companion reconcile reads.
     const defaultLocale = appLocalization()?.defaultLocale ?? "en";
@@ -1432,6 +1472,15 @@ export class SingleMetadataService {
       schemaService
     );
 
+    // A junction carried to a name the database already holds would meet that table at apply,
+    // after earlier statements ran. Asked on the full lists, the ones the junctions are planned on.
+    await schemaService.refuseJunctionMovesOntoLiveTables(
+      tableName,
+      startingFields,
+      fields,
+      table => adapter.tableExists(table)
+    );
+
     if (liveFacts.tableHasRows !== false) {
       await refuseFillsTheirFieldsRefuse(
         alterInput.oldFields,
@@ -1470,6 +1519,10 @@ export class SingleMetadataService {
           isSingle: true,
           wasStatus,
           hasStatus,
+          // The junction tables are decided on the full lists, as a collection's save decides
+          // them: a translated many-to-many sits in neither list the main diff sees and still
+          // has one.
+          junctionFields: { old: startingFields, new: fields },
           tableHasRows: liveFacts.tableHasRows,
           foreignKeysByColumn: liveFacts.foreignKeysByColumn,
           indexNames: liveFacts.indexNames,
@@ -1598,8 +1651,21 @@ export class SingleMetadataService {
         .filter(f => isFieldLocalized(f, change.wasLocalized))
         .map(f => f.name)
     );
+    // Not unique by either rule (`builderColumnIsUnique`): neither its mark nor a one-to-one's
+    // cardinality, so a translated relationship made one-to-one is not grouped by its column alone
+    // when its index is per language.
+    const notUnique = (f: FieldDefinition): FieldDefinition => {
+      const options = f.options as { relationType?: unknown } | undefined;
+      return f.type === "relationship" && options?.relationType === "oneToOne"
+        ? {
+            ...f,
+            unique: false,
+            options: { ...options, relationType: "manyToOne" },
+          }
+        : { ...f, unique: false };
+    };
     const lengthOnly = (f: FieldDefinition): FieldDefinition =>
-      isFieldLocalized(f, change.isLocalized) ? { ...f, unique: false } : f;
+      isFieldLocalized(f, change.isLocalized) ? notUnique(f) : f;
     return {
       main: {
         oldFields: change.previousFields.filter(
@@ -1615,7 +1681,7 @@ export class SingleMetadataService {
         ),
         newFields: change.fields
           .filter(f => translatedBefore.has(f.name))
-          .map(f => ({ ...f, unique: false })),
+          .map(notUnique),
       },
     };
   }
@@ -1814,7 +1880,9 @@ export class SingleMetadataService {
     const registry = new FieldGroupRegistryService(adapter, this.logger);
     const resolved = new Map<string, string>();
     const slugs = new Set<string>();
-    for (const f of [...oldFields, ...newFields]) {
+    // The field groups at this level, those inside a group with no name among them, as the rename
+    // above pairs them (`fieldGroupRenamePairs`): a table left unresolved moves no rows.
+    for (const f of addressableFields([...oldFields, ...newFields])) {
       for (const slug of fieldGroupSlugList(f)) slugs.add(slug);
     }
     await Promise.all(
@@ -1870,7 +1938,7 @@ export class SingleMetadataService {
     const { resolveLocalizedFieldNames } = await import(
       "../../i18n/classify-fields"
     );
-    const { columnsDeclaredBy } = await import(
+    const { columnsDeclaredBy, fieldsStoredOnRow } = await import(
       "../../schema/services/field-column-descriptor"
     );
 
@@ -1888,10 +1956,16 @@ export class SingleMetadataService {
       required: false,
     };
 
+    // The fields whose columns sit on the row (`fieldsStoredOnRow`): those inside a group with no
+    // name are columns of this table, and every check and statement planned from these lists
+    // reads them, so the group itself, which has no name to give a column, is read through here
+    // once. Which are translated is classified from the declared list, as the companion and the
+    // entry write classify it, so a field inside such a group stays on the row.
     const omitLocalized = (fields: FieldDefinition[]): FieldDefinition[] => {
-      if (!omitLocalizedColumns) return fields;
+      const stored = fieldsStoredOnRow(fields);
+      if (!omitLocalizedColumns) return stored;
       const localizedNames = new Set(resolveLocalizedFieldNames(fields, true));
-      return fields.filter(f => !localizedNames.has(f.name));
+      return stored.filter(f => !localizedNames.has(f.name));
     };
 
     const normalize = (fields: FieldDefinition[]): FieldDefinition[] => {
@@ -2684,6 +2758,7 @@ export class SingleMetadataService {
     input: CreateSingleInput,
     plan: CreateDdlPlan
   ): Promise<SingleMigrationStatus> {
+    const { writeCollectionSave } = await loadCollectionSave();
     await writeCollectionSave(deps, {
       kind: "single",
       slug: input.slug,

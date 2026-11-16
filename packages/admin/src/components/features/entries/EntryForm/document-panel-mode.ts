@@ -27,7 +27,20 @@ import { useCallback, useLayoutEffect, useState } from "react";
 export type DocumentPanelMode = "docked" | "floating" | "sheet";
 
 /** Below this editor width the panel floats over the fields. */
-const PANEL_FLOATS_BELOW = 1000;
+export const PANEL_FLOATS_BELOW = 1000;
+
+/**
+ * The editor's outline drawn by the same rule: its side column only where the
+ * editor docks its panel, by the width of the editor's frame (the
+ * `@container/editor` the outline sets around it) rather than the window's.
+ * Written out in full, as Tailwind reads class names from the source text;
+ * `1000px` is {@link PANEL_FLOATS_BELOW}.
+ */
+export const DOCKED_PANEL_ROW = "@[1000px]/editor:flex-row";
+
+/** The outline's side column: drawn, at its width and rule, only where docked. */
+export const DOCKED_PANEL_COLUMN =
+  "hidden @[1000px]/editor:flex @[1000px]/editor:w-(--editor-side-width) @[1000px]/editor:border-l";
 
 /** Below this editor width the panel is a bottom sheet. */
 const PANEL_SHEET_BELOW = 600;

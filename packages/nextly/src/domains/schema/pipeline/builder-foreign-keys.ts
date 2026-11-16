@@ -41,6 +41,7 @@ import type { CollectionTables } from "../../dynamic-collections/services/collec
 import { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import {
   fieldProducesColumn,
+  fieldsStoredOnRow,
   relationshipStoresJson,
   toSnakeCase,
 } from "../services/field-column-descriptor";
@@ -54,6 +55,18 @@ import type {
   TableSpec,
 } from "./diff/types";
 import type { DesiredCollection } from "./types";
+
+/**
+ * The recorded fields whose columns sit on the row (`fieldsStoredOnRow`), or undefined where none
+ * were recorded, which keeps its own meaning below.
+ */
+function recordedRowFields(
+  fields: DesiredCollection["recordedFields"]
+): FieldDefinition[] | undefined {
+  return fields === undefined
+    ? undefined
+    : fieldsStoredOnRow(fields as unknown as FieldDefinition[]);
+}
 
 export function withBuilderForeignKeys(
   spec: TableSpec,
@@ -71,10 +84,13 @@ export function withBuilderForeignKeys(
     (live?.columns ?? []).map(column => lower(column.name))
   );
   const builder = new DynamicCollectionSchemaService(undefined, dialect);
-  const fields = collection.fields as unknown as FieldDefinition[];
-  const recordedFields = collection.recordedFields as
-    | readonly FieldDefinition[]
-    | undefined;
+  // The fields whose columns sit on the row, before and after, those inside a group with no name
+  // among them (`fieldsStoredOnRow`): a relationship there is a column of this table, keyed as the
+  // creating SQL keys it, and the group itself has no column to key.
+  const fields = fieldsStoredOnRow(
+    collection.fields as unknown as FieldDefinition[]
+  );
+  const recordedFields = recordedRowFields(collection.recordedFields);
   // Without the recorded field list, every column already in place counts as recorded.
   const recorded =
     recordedFields === undefined

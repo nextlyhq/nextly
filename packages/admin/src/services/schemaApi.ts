@@ -166,11 +166,19 @@ export const schemaApi = {
     // against a DIFFERENT localization state can miss a required-column
     // prompt the apply turns out to need — the save then fails after the user
     // already confirmed. Undefined leaves the persisted flag in charge.
-    localized?: boolean
+    localized?: boolean,
+    // The pending Draft/Published toggle, so a field taking one of the lifecycle's own names is
+    // refused when the same save turns the lifecycle on. Judged with, never applied: the settings
+    // save that follows the fields sets it. Undefined leaves the stored flag alone in charge.
+    status?: boolean
   ): Promise<SchemaPreviewResponse> => {
     return protectedApi.post<SchemaPreviewResponse>(
       `/collections/schema/${slug}/preview`,
-      { fields, ...(localized !== undefined ? { localized } : {}) }
+      {
+        fields,
+        ...(localized !== undefined ? { localized } : {}),
+        ...(status !== undefined ? { status } : {}),
+      }
     );
   },
 
@@ -196,7 +204,9 @@ export const schemaApi = {
     // fields provisions the companion in the same request instead of diffing
     // against the registry flag as it was before the save. Undefined leaves
     // the persisted value untouched.
-    localized?: boolean
+    localized?: boolean,
+    // The pending Draft/Published toggle, judged with as the preview is (see above).
+    status?: boolean
   ): Promise<SchemaApplyResponse> => {
     const result = await protectedApi.post<
       ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
@@ -207,6 +217,7 @@ export const schemaApi = {
       resolutions,
       renameResolutions,
       ...(localized !== undefined ? { localized } : {}),
+      ...(status !== undefined ? { status } : {}),
     });
     return {
       success: true,

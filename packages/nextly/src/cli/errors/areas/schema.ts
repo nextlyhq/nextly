@@ -11,7 +11,7 @@
 import type { NextlyError } from "../../../errors/nextly-error";
 import type { CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
-import { contextString, sentences } from "../messages";
+import { asSentence, contextString, sentences } from "../messages";
 
 /**
  * The refusal of a start whose configured schema holds no installation while another schema of
@@ -81,6 +81,30 @@ function invalidSchemaName(error: NextlyError): CliErrorParts {
     next:
       rule ||
       'Use lower-case letters, digits and underscores, starting with a letter or underscore (max 63 characters), and not beginning with "pg_".',
+  };
+}
+
+/**
+ * A create refused over tables nothing registered owns, as its three parts.
+ *
+ * `clearLeftoverStorage` writes 'Creating the <kind> "<slug>" was refused: <the tables and why
+ * they stay>. <what to drop or rename, then retry>.', so the message is split at its first
+ * `": "` and its last sentence rather than reworded, and the CLI and the server log keep one
+ * wording.
+ */
+function leftoverRefusal(error: NextlyError): CliErrorParts {
+  const message = error.publicMessage;
+  const colon = message.indexOf(": ");
+  const rest = sentences(colon === -1 ? "" : message.slice(colon + 2));
+  const next = rest.length > 1 ? rest[rest.length - 1] : undefined;
+  const why = (next === undefined ? rest : rest.slice(0, -1)).join(" ");
+  return {
+    what: colon === -1 ? message : `${message.slice(0, colon)}.`,
+    // Capitalised: after the colon a refusal may go on with "the view …" or "the shared …".
+    why: why
+      ? asSentence(why)
+      : "Tables nothing registered owns stand where it would build, and they hold rows or something else depends on them.",
+    next: next ?? "Drop or rename the tables it names, then retry the create.",
   };
 }
 
@@ -273,6 +297,40 @@ export const SCHEMA_CODES = defineCodes({
             next: "Run it again when you are ready.",
           };
         },
+      },
+    ],
+  },
+  // A create never builds over a table nothing registered owns: it drops an empty leftover, and
+  // refuses one that holds rows, is referenced from outside, or stands where it would build a
+  // junction or under a view. Each refusal names its tables and changes nothing.
+  CREATE_BLOCKED_BY_LEFTOVER_TABLE: {
+    cause:
+      "A collection, field group or Single create was refused, because tables nothing registered owns stand where it would build and they hold rows or something else depends on them.",
+    from: [
+      {
+        // A table of the leftover's family holds rows, or rows elsewhere name it as their parent.
+        code: "CONFLICT",
+        reason: "create-table-occupied",
+        describe: leftoverRefusal,
+      },
+      {
+        // A table that is not one of the create's own junctions references the leftover.
+        code: "CONFLICT",
+        reason: "create-table-referenced",
+        describe: leftoverRefusal,
+      },
+      {
+        // A table not keyed as the create's junction stands where it would build one.
+        code: "CONFLICT",
+        reason: "create-objects-taken",
+        describe: leftoverRefusal,
+      },
+      {
+        // A view reads one of the leftover's tables, and dropping or redefining the view is the
+        // remedy, not renaming the tables it reads.
+        code: "CONFLICT",
+        reason: "create-table-viewed",
+        describe: leftoverRefusal,
       },
     ],
   },

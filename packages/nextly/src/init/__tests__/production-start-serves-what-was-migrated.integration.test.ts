@@ -43,6 +43,8 @@ import {
 import { createAdapter } from "../../database/factory";
 import { shutdownServices } from "../../di/register";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { storeSchemaVersion } from "../../domains/schema/schema-version";
+import { SCHEMA_VERSION_READ_INTERVAL_MS } from "../../domains/schema/stored-schema-seq";
 import { recordPluginLifecycle } from "../../domains/schema/ownership/plugin-lifecycle-state";
 import { NextlyError } from "../../errors/nextly-error";
 import { getNextly, shutdownNextly, startSettled } from "../../init";
@@ -356,6 +358,51 @@ describe.each(getConfiguredTestDialects())(
         },
         single: { status: 409, code: "ENTITY_NOT_MIGRATED", field: undefined },
       });
+    }, 240_000);
+
+    it("keeps serving a declared field the table has through the schema follow, though the registry row lacks it", async () => {
+      const setup = await adapterFor();
+      await createTestNextly({
+        adapter: setup as never,
+        ...appEntities(false),
+      });
+      await shutdownServices();
+      // The Single's table holds the newer build's column; its registry row is the older build's.
+      const ddl = await adapterFor();
+      await ddl.executeQuery(
+        `ALTER TABLE single_pssm_banner ADD COLUMN subtitle ${
+          dialect === "mysql" ? "varchar(255)" : "text"
+        }`
+      );
+      await ddl.disconnect().catch(() => undefined);
+
+      vi.stubEnv("NODE_ENV", "production");
+      _resetEnvCache();
+      const nextly = await getNextly({
+        config: sanitizeConfig(defineConfig(appEntities(true))) as never,
+      });
+      await startSettled();
+
+      // The first call follows the stored version: the definitions it loads keep the field the
+      // configuration declares, as the start's did.
+      await nextly.updateSingle({
+        slug: "pssm_banner",
+        data: { title: "Banner", subtitle: "Kept", _overwrite: true },
+      } as never);
+
+      // Another copy's registry write moves the stored version; once the read interval has passed
+      // this copy follows it, loading the definitions again.
+      const other = await adapterFor();
+      await storeSchemaVersion(other.getDrizzle(), dialect, { wrote: true });
+      await other.disconnect().catch(() => undefined);
+      await new Promise(resolve =>
+        setTimeout(resolve, SCHEMA_VERSION_READ_INTERVAL_MS + 250)
+      );
+
+      const read = (await nextly.findSingle({ slug: "pssm_banner" })) as {
+        subtitle?: unknown;
+      };
+      expect(read.subtitle).toBe("Kept");
     }, 240_000);
   }
 );

@@ -8,17 +8,14 @@
 // of pinning it to the empty string. The override is recomputed from the values
 // rather than recorded — there is no flag to keep in step, and editing the slug
 // back to the derived form resumes tracking too, which is what someone
-// correcting a typo expects.
-// Slug case is per-kind: singles use kebab (the entry-form slug validator is
-// kebab-only); collections and components keep snake to match their backend
-// validators. This is the one place the shared modal needs a per-kind branch
-// because the slug-case decision is genuinely kind-specific.
+// correcting a typo expects. The slug's case is per kind (kebab for Singles,
+// snake for the others), decided with the rest of the derivation in
+// `lib/builder/entity-names`, which the new-entity dialog shares.
 import { Input, Label, Textarea } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
 import { usePluginFieldTypeEntries } from "@admin/components/field-ui";
-import { toKebabName, toSnakeName } from "@admin/lib/builder";
-import { pluralizeName } from "@admin/lib/builder/pluralize-helper";
+import { namesFollowingName } from "@admin/lib/builder/entity-names";
 import {
   hasStartingFieldChoice,
   startingFieldChoices,
@@ -48,10 +45,6 @@ export function BasicsTab({
   onChange,
   slugEditable = true,
 }: Props): JSX.Element {
-  // Singles' entry-form slug field validates as kebab-case only, so the
-  // auto-derived default in the create popup must also be kebab. Collections
-  // and components keep snake_case to match their respective backend rules.
-  const toSlug = kind === "single" ? toKebabName : toSnakeName;
   const set = <K extends keyof BuilderSettingsValues>(
     key: K,
     value: BuilderSettingsValues[K]
@@ -78,32 +71,12 @@ export function BasicsTab({
     </div>
   );
 
-  // Auto-derive slug AND plural from the singular name until the field holds
-  // a value of its own. "Of its own" is the literal test below and is worth
-  // reading rather than paraphrasing: `!values.slug || values.slug ===
-  // previousAutoSlug`. Two states count as still-automatic — EMPTY, and equal
-  // to what the OLD singular name would have derived — so clearing the field
-  // resumes tracking rather than pinning it to the empty string, which is what
-  // someone who deletes a slug to start over expects.
-  //
-  // Nothing records the override; it is recomputed from the values on every
-  // keystroke. So any route to a differing non-empty value ends tracking
-  // identically, typed or programmatic, and editing back to the derived form
-  // resumes it.
+  // The slug and plural follow the singular name until each holds a value of
+  // its own; empty, or equal to what the old name derived, still follows. The
+  // derivation is shared with the new-entity dialog (`namesFollowingName`), so
+  // the two derive alike.
   const setSingular = (singular: string) => {
-    const previousAutoSlug = toSlug(values.singularName);
-    const isStillAutoSlug = !values.slug || values.slug === previousAutoSlug;
-    const previousAutoPlural = pluralizeName(values.singularName);
-    const isStillAutoPlural =
-      !values.pluralName || values.pluralName === previousAutoPlural;
-    onChange({
-      ...values,
-      singularName: singular,
-      slug: isStillAutoSlug ? toSlug(singular) : values.slug,
-      pluralName: isStillAutoPlural
-        ? pluralizeName(singular)
-        : values.pluralName,
-    });
+    onChange({ ...values, ...namesFollowingName(kind, values, singular) });
   };
 
   const hasPlural = fields.includes("pluralName");

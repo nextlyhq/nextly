@@ -29,6 +29,7 @@ import {
   COLLECTION_LIST_TYPE,
   isPlainRecord,
   LIST_ENTRY_SLOT,
+  readListQuery,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -40,10 +41,11 @@ import {
   type ResolvedIcon,
   type ResolvedMedia,
 } from "@nextlyhq/blocks-react";
-import { listShownCount } from "@nextlyhq/blocks-react/blocks";
+import { listShownCount, readList } from "@nextlyhq/blocks-react/blocks";
 import { useCurrentUserId, useMediaResolver } from "@nextlyhq/plugin-sdk/admin";
 import { useEffect, useMemo, useState } from "react";
 
+import { rowPreviews } from "../../binding-preview";
 import type { ListEntriesVisitor } from "../../list-entries-contract";
 import { canvasListReadsIn } from "../list-entries-client";
 import { canvasNamedQueriesIn } from "../named-queries-client";
@@ -314,7 +316,7 @@ export function visitorListWords(
 }
 
 /** The entry the canvas draws, which a related list reads its ids from. */
-interface CanvasEntry {
+export interface CanvasEntry {
   readonly entryCollection: string | undefined;
   readonly entryId: string | undefined;
 }
@@ -335,6 +337,27 @@ function ownShown(
       .shown(props)
       .catch(() => undefined);
   }
+  const { reads, ctx } = ownListReads(locale, userId, {
+    entryCollection,
+    entryId,
+  });
+  // A count that can't be taken says nothing, as the inspector's does.
+  return listShownCount(props, ctx, reads.data).catch(() => undefined);
+}
+
+/**
+ * The reads the canvas draws a collection list with as the person editing,
+ * and the page context they are made under: the one place both are built,
+ * so a count and a sample read exactly the rows the canvas draws.
+ */
+function ownListReads(
+  locale: string | undefined,
+  userId: string | null,
+  { entryCollection, entryId }: CanvasEntry
+): {
+  readonly reads: ReturnType<typeof canvasListReadsIn>;
+  readonly ctx: PageContext;
+} {
   const reads = canvasListReadsIn(locale, userId);
   const ctx = createStandaloneContext({
     ...reads.terms,
@@ -343,8 +366,42 @@ function ownShown(
       ? {}
       : { entry: { id: entryId }, entryCollection }),
   });
-  // A count that can't be taken says nothing, as the inspector's does.
-  return listShownCount(props, ctx, reads.data).catch(() => undefined);
+  return { reads, ctx };
+}
+
+/**
+ * The start of each field's value in the first entry a collection list
+ * shows, as the person editing reads it, by the field's path: the binding
+ * picker's samples beside the list item's fields. Read through the list's
+ * own read and the canvas's provider, whose answers are kept a while, so it
+ * is the canvas's own first row and reads nothing new while that is held.
+ * `undefined` for a list fed by a named query, one naming no collection, one
+ * with no entry, or one whose read fails.
+ *
+ * @param props - the list's stored props
+ * @param locale - the language being edited
+ * @param userId - the signed-in person, whose reads these are
+ * @param entry - the entry the canvas draws, for a list of related entries
+ * @returns the previews by path, or `undefined`
+ */
+export async function canvasListSample(
+  props: Readonly<Record<string, unknown>>,
+  locale: string | undefined,
+  userId: string | null,
+  entry: CanvasEntry
+): Promise<Readonly<Record<string, string>> | undefined> {
+  if (props.namedQuery !== undefined && props.namedQuery !== null) {
+    return undefined;
+  }
+  const collection = readListQuery(props).query.collection;
+  if (collection === undefined) return undefined;
+  const { reads, ctx } = ownListReads(locale, userId, entry);
+  const outcome = await readList(props, collection, ctx, {
+    find: async query => (await reads.data.find(query)).items,
+    claim: () => true,
+  });
+  const first = outcome.items[0];
+  return first === undefined ? undefined : rowPreviews(first);
 }
 
 /** No list drawn yet. */

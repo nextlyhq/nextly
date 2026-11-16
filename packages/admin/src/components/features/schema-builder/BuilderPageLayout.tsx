@@ -14,7 +14,7 @@
  * have to know about plugin slots and about field-group repair, and neither is
  * the layout's business.
  */
-import { DndContext, type DragEndEvent } from "@dnd-kit/core";
+import { DndContext } from "@dnd-kit/core";
 import type { JSX, ReactNode } from "react";
 import { useMemo } from "react";
 
@@ -25,8 +25,13 @@ import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
 import { useMediaQuery } from "@admin/hooks/useMediaQuery";
 import { findFieldById } from "@admin/lib/builder";
 import { builderAnnouncements } from "@admin/lib/builder/builder-announcements";
-import { moveWithinContainer } from "@admin/lib/builder/builder-rows";
+import type { DuplicateNaming } from "@admin/lib/builder/duplicate-field";
 import { builderFieldErrors } from "@admin/lib/builder/field-validators";
+import {
+  judgeMove,
+  moveDestinations,
+  type MoveContext,
+} from "@admin/lib/builder/move-rule";
 import {
   flattenOutline,
   nodePlacement,
@@ -47,10 +52,12 @@ import { BuilderOverlays, type ActiveOverlay } from "./BuilderOverlays";
 import { BuilderReadOnlyNotice } from "./BuilderReadOnlyNotice";
 import type { BuilderSettingsValues } from "./BuilderSettingsModal";
 import { BuilderToolbar } from "./BuilderToolbar";
-import { FormPreview } from "./outline/FormPreview";
+import { crumbsByPointer } from "./outline/FocusCrumbs";
+import { LazyFormPreview } from "./outline/LazyFormPreview";
 import { Outline, type OutlineCallbacks } from "./outline/Outline";
 import { useBuilderOutline } from "./outline/useBuilderOutline";
 import type { BuilderFieldsApi } from "./types";
+import { useMoveContext } from "./useMoveContext";
 
 type Props = {
   config: BuilderConfig;
@@ -72,18 +79,31 @@ type Props = {
   onSave: () => void;
   settings: BuilderSettingsValues;
   onSettingsChange: (next: BuilderSettingsValues) => void;
+  /**
+   * Whether the save judges names with Draft/Published on: on as stored, or as the pending settings
+   * turn it on. Its columns stand until the save that turns it off lands, after the fields, so a
+   * name it owns is refused either way. Absent, as for a field group, it is off.
+   */
+  lifecycleEnabled?: boolean;
   /** A collection's stored hooks, shown read-only in its settings modal. */
   storedHooks?: readonly StoredHookConfig[];
   active: ActiveOverlay;
   onActiveChange: (next: ActiveOverlay) => void;
-  onDuplicateField: (fieldId: string) => void;
-  onRowDragEnd: (event: DragEndEvent) => void;
+  /** Copy a field to right after itself, named clear of what is beside it. */
+  onDuplicateField: (fieldId: string, naming?: DuplicateNaming) => void;
   /** Rendered between the read-only notice and the field list. */
   beforeFieldList?: ReactNode;
   /** True while a save or a schema apply is in flight. */
   isSaving: boolean;
   /** What the live region announces during that save. */
   savingLabel: string;
+  /**
+   * Runs when the editor is left through the leave guard's Discard Changes,
+   * before the navigation: an unsaved entity is let go with its changes.
+   */
+  onDiscard?: () => void;
+  /** Where the Page Builder opens for this entity, when it offers to. */
+  pageBuilderHref?: string;
   /** Page-owned dialogs — the schema-change confirmations, and any of the
    *  page's own. Mounted inside the frame so they share its stacking context. */
   children?: ReactNode;
@@ -107,6 +127,8 @@ export function BuilderPageLayout(props: Props): JSX.Element {
     onActiveChange,
     isSaving,
     savingLabel,
+    onDiscard,
+    pageBuilderHref,
     children,
   } = props;
   // While changes are pending, every way out asks first: an in-app link, the
@@ -120,6 +142,7 @@ export function BuilderPageLayout(props: Props): JSX.Element {
       isDirty={unsavedCount > 0 || isSaving}
       disabled={locked}
       busy={isSaving}
+      onDiscard={onDiscard}
     >
       <div className="flex flex-col min-h-screen bg-background">
         <BuilderToolbar
@@ -132,6 +155,7 @@ export function BuilderPageLayout(props: Props): JSX.Element {
           onAddField={() => onActiveChange({ kind: "picker", position: {} })}
           onOpenSettings={() => onActiveChange({ kind: "settings" })}
           onSave={onSave}
+          pageBuilderHref={pageBuilderHref}
         />
         <BuilderWorkspace {...props} />
 
@@ -144,6 +168,8 @@ export function BuilderPageLayout(props: Props): JSX.Element {
           onSettingsChange={onSettingsChange}
           readOnly={locked}
           storedHooks={storedHooks}
+          savedFields={pending.saved}
+          lifecycleEnabled={props.lifecycleEnabled}
         />
 
         {children}
@@ -177,10 +203,10 @@ function BuilderWorkspace(
     | "active"
     | "onActiveChange"
     | "onDuplicateField"
-    | "onRowDragEnd"
     | "savedFieldIds"
     | "settings"
     | "pending"
+    | "lifecycleEnabled"
   >
 ): JSX.Element {
   const { builder, pending } = props;
@@ -200,6 +226,17 @@ function BuilderWorkspace(
     () => markPending(built, pending.marks, pending.changes),
     [built, pending.marks, pending.changes]
   );
+  // What the move rule needs beyond the fields, for every way of moving one.
+  const moveContext = useMoveContext({
+    config: props.config,
+    locked: props.locked,
+    fields: builder.fields,
+    saved: pending.saved,
+    // As the save judges names: with Draft/Published as stored or as the pending settings set it.
+    lifecycleEnabled: props.lifecycleEnabled === true,
+    outline,
+    fieldGroups,
+  });
   // Leaves for a field group's own editor, where its fields are changed. The
   // page's guard asks first while changes are pending, as it does for every
   // other way out.
@@ -210,6 +247,7 @@ function BuilderWorkspace(
     <div className="flex flex-1 items-start">
       <FieldListRegion
         {...props}
+        moveContext={moveContext}
         outline={outline}
         fieldGroups={fieldGroups}
         fieldGroupsLoad={fieldGroupsLoad}
@@ -241,6 +279,8 @@ function EditedFieldSettings({
   savedFieldIds,
   locked,
   openFieldGroup,
+  pending,
+  lifecycleEnabled,
 }: Pick<
   Props,
   | "active"
@@ -249,6 +289,8 @@ function EditedFieldSettings({
   | "builder"
   | "savedFieldIds"
   | "locked"
+  | "pending"
+  | "lifecycleEnabled"
 > & {
   outline: readonly OutlineNode[];
   openFieldGroup: (slug: string) => void;
@@ -282,6 +324,10 @@ function EditedFieldSettings({
         node && !node.own ? nodePlacement(node, byId, outline) : undefined
       }
       onOpenFieldGroup={openFieldGroup}
+      // A name is judged as the save judges it: beside the names pending deletes still hold, with
+      // Draft/Published as the save judges it.
+      savedFields={pending.saved}
+      lifecycleEnabled={lifecycleEnabled}
       onFieldChange={builder.handleFieldUpdate}
       onFieldDelete={fieldId => {
         builder.handleFieldDelete(fieldId);
@@ -309,7 +355,7 @@ function FieldListRegion({
   active,
   onActiveChange,
   onDuplicateField,
-  onRowDragEnd,
+  moveContext,
   openFieldGroup,
 }: Pick<
   Props,
@@ -322,8 +368,9 @@ function FieldListRegion({
   | "active"
   | "onActiveChange"
   | "onDuplicateField"
-  | "onRowDragEnd"
 > & {
+  /** What the move rule needs beyond the fields, for every way of moving one. */
+  moveContext: MoveContext;
   outline: readonly OutlineNode[];
   fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
   fieldGroupsLoad: FieldGroupsLoad;
@@ -333,7 +380,11 @@ function FieldListRegion({
   // The same map the save's refusal is read from, so a row marked with an
   // error is a row the save refuses.
   const errors = useMemo(
-    () => builderFieldErrors(builder.fields.filter(field => !field.isSystem)),
+    () =>
+      builderFieldErrors(
+        builder.fields.filter(field => !field.isSystem),
+        builder.fields
+      ),
     [builder.fields]
   );
   const systemFields = useMemo(
@@ -344,9 +395,19 @@ function FieldListRegion({
   const callbacks: OutlineCallbacks = {
     select: fieldId => onActiveChange({ kind: "edit", fieldId }),
     addAt: position => onActiveChange({ kind: "picker", position }),
-    move: (fieldId, delta) =>
-      builder.setFields(prev => moveWithinContainer(prev, fieldId, delta)),
-    duplicate: onDuplicateField,
+    fields: builder.fields,
+    judgeMove: (fieldId, target) =>
+      judgeMove(builder.fields, fieldId, target, moveContext),
+    moveDestinations: fieldId =>
+      moveDestinations(builder.fields, fieldId, moveContext),
+    // One change for undo, as every other edit is.
+    commitMove: fields => builder.setFields(fields),
+    duplicate: fieldId =>
+      onDuplicateField(fieldId, {
+        heldNames: moveContext.heldNames,
+        surface: moveContext.surface,
+        lifecycleEnabled: moveContext.lifecycleEnabled,
+      }),
     remove: fieldId => {
       builder.handleFieldDelete(fieldId);
       // A field deleted while its settings are open closes them too.
@@ -373,8 +434,8 @@ function FieldListRegion({
       {beforeFieldList}
       <DndContext
         sensors={builder.sensors}
+        collisionDetection={crumbsByPointer}
         onDragStart={builder.handleDragStart}
-        onDragEnd={onRowDragEnd}
         accessibility={{
           announcements: builderAnnouncements(builder.fields),
         }}
@@ -392,7 +453,7 @@ function FieldListRegion({
           readOnly={locked}
           callbacks={callbacks}
           renderPreview={() => (
-            <FormPreview
+            <LazyFormPreview
               kind={config.kind}
               fields={builder.fields}
               fieldGroups={fieldGroups}

@@ -40,6 +40,20 @@ export {
 } from "nextly/testing";
 
 /**
+ * @public A plugin's routes that declare neither `requiredPermission`,
+ * `public`, `principal` nor `siteWide: false`: each is refused for every
+ * caller. Stable: assert it is empty in the plugin's own test, so an
+ * undeclared route fails the suite instead of every request.
+ *
+ * @example
+ * ```ts
+ * import { undeclaredPluginRoutes } from "@nextlyhq/plugin-sdk/testing";
+ * expect(undeclaredPluginRoutes(myPlugin())).toEqual([]);
+ * ```
+ */
+export { undeclaredPluginRoutes } from "nextly/testing";
+
+/**
  * The aborted-transaction guard, for a suite booting against a real PostgreSQL server.
  *
  * `createTestNextly` records any transaction it leaves in PostgreSQL's aborted state, which is the

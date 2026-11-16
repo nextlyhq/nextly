@@ -25,6 +25,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   NOTICES_FILE,
   packageDirOf,
+  packageFileOf,
   thirdPartyNotices,
 } from "./third-party-notices.mjs";
 
@@ -61,6 +62,31 @@ describe("packageDirOf", () => {
       "/r/node_modules/@s/b"
     );
     expect(packageDirOf("/r/packages/admin/src/index.ts")).toBeNull();
+  });
+
+  it("reads a Windows path, whose separators are backslashes, the same way", () => {
+    expect(packageDirOf("D:\\r\\node_modules\\@s\\b\\lib\\y.mjs")).toBe(
+      "D:/r/node_modules/@s/b"
+    );
+  });
+});
+
+// The build's record of its chunks names a package's module by this, so the
+// record reads alike on every system: a Windows build that kept its
+// backslashes named every package's module by its path from the admin
+// (`../../node_modules/...`), and the record then held no package at all.
+describe("packageFileOf", () => {
+  it("reads a module's path from where its package starts, with `/` on every system", () => {
+    expect(
+      packageFileOf("/r/node_modules/.pnpm/a@1/node_modules/a/dist/x.js")
+    ).toBe("a/dist/x.js");
+    expect(
+      packageFileOf(
+        "D:\\r\\node_modules\\.pnpm\\b@1\\node_modules\\@s\\b\\lib\\y.mjs"
+      )
+    ).toBe("@s/b/lib/y.mjs");
+    expect(packageFileOf("/r/packages/admin/src/index.ts")).toBeNull();
+    expect(packageFileOf("D:\\r\\packages\\admin\\src\\a.ts")).toBeNull();
   });
 });
 

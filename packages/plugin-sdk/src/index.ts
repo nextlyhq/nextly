@@ -38,18 +38,22 @@ export { definePlugin } from "nextly";
  * `PageStructuredDataHints` (with `PageListItem` and `PageQuestion`) is what
  * a route says about its page for its structured data, handed in as
  * `input.structuredDataHints`; experimental with the rest of the contract,
- * and intended to become stable with it. Type-only, so importing it pulls
- * no runtime into the plugin.
+ * and intended to become stable with it. `PageRobots` (with
+ * `PageImagePreview`) is the answer's `robots`: whether the page is listed,
+ * and Google's controls over how it is shown; experimental with the
+ * contract too. Type-only, so importing it pulls no runtime into the plugin.
  */
 export type {
   PageMetadataAnswer,
   PageMetadataImage,
+  PageImagePreview,
   PageMetadataInput,
   PageMetadataResolver,
   PageMetadataSource,
   PageMetadataValues,
   PageListItem,
   PageQuestion,
+  PageRobots,
   PageStructuredDataHints,
 } from "nextly/runtime";
 
@@ -489,6 +493,8 @@ export type {
  * @experimental `PluginDatabase` — typed, owner-checked access to the tables
  *   the plugin declared (`contributes.schema`) and its dependencies' tables;
  *   `PluginTransaction` — the handle `ctx.db.transaction` passes its work;
+ *   `PluginTransactionBounds` — what `ctx.db.withTransactionBounds` bounds
+ *   each transaction by;
  *   `PluginInsert` — what `ctx.db.insert` takes for a table;
  *   `PluginRawDatabase` — `ctx.db.raw`, the Drizzle fluent builder and a
  *   transaction, with no ownership check, or the live instance for a plugin
@@ -500,6 +506,7 @@ export type {
   PluginInsert,
   PluginRawDatabase,
   PluginTransaction,
+  PluginTransactionBounds,
 } from "nextly";
 
 /**
@@ -557,8 +564,9 @@ export type {
  * "Every content type the site defines, except these": the target a
  * `contributes.extend` clause takes to reach types it cannot name, and the one
  * function that says which types a scope covers. The site's own collections
- * and Singles, Schema Builder ones made later included; never a plugin's own
- * types, Nextly's system types or field groups. Anything else that needs to
+ * and Singles, Schema Builder ones made later included, and a plugin's
+ * collection marked `siteContent`; never a plugin's other types, Nextly's
+ * system types or field groups. Anything else that needs to
  * know what a scope covers asks `typesReachedBy` rather than deciding again.
  *
  * @experimental
@@ -569,6 +577,30 @@ export type {
   ContentTypeKind,
   ContentTypeScope,
 } from "nextly";
+
+/**
+ * Which content types a plugin's `extend` added a field to, as the latest
+ * start resolved them: `typesExtendedBy(plugin, field)`. A plugin that
+ * extends every content type reads here which types got its field, the
+ * Schema Builder's included, without the ones a scope left alone. Pairs with
+ * a contribution's `extendedWith`, which offers it only on those types.
+ *
+ * @experimental
+ */
+export { typesExtendedBy } from "nextly";
+export type { ExtendedType } from "nextly";
+
+/**
+ * A plugin's switch for the fields its `extend` added: a service named
+ * `EXTENSION_SWITCH_SERVICE` whose `switchedOff(field)` says on which types
+ * the field is off now. There the admin's editors draw the field nowhere and offer
+ * none of the plugin's `extendedWith` contributions; the column and every
+ * stored value stay, and switching it on brings them back.
+ *
+ * @experimental
+ */
+export { EXTENSION_SWITCH_SERVICE } from "nextly";
+export type { ExtensionSwitch } from "nextly";
 
 /**
  * Where an entry is served, as the site declares it. `publicAddressOf` answers
@@ -813,6 +845,24 @@ export type {
 export { getCachedNextly } from "nextly";
 
 /**
+ * @experimental Whether a failure means Nextly is unavailable (its start
+ *   failed, the database is busy or could not be reached, a service is
+ *   unavailable), and the render policy that follows: in production, a page
+ *   render fails rather than being served without what Nextly gives it, so
+ *   Next.js keeps the page's last good render and a build fails instead of
+ *   shipping such pages; in development, and for any other failure, the
+ *   caller's fallback runs. Core's route helpers follow it for a page's head;
+ *   a plugin rendering part of a page from Nextly calls
+ *   `failRenderWhenUnavailable(error)` in its catch, before its fallback, so
+ *   the same failure is answered the same way.
+ *
+ *   From core's root rather than `nextly/runtime`, so it pulls no runtime
+ *   barrel into a plugin. Intended to become stable with the page-metadata
+ *   contract, which `@nextlyhq/plugin-seo` exercises.
+ */
+export { failRenderWhenUnavailable, isNextlyUnavailable } from "nextly";
+
+/**
  * @experimental The cache tag `ctx.cache.tag(part)` gives, for code that
  * renders a plugin's data outside its context (a route an app owns), so the
  * read it caches carries the tag `ctx.cache.expire(part)` clears. Intended to
@@ -962,18 +1012,21 @@ export type {
 
 /**
  * @experimental A field rewrite, made with `ctx.services.collections.rewriteField`:
- *   one field of an entry changed on its live copy and on every pending draft
- *   that holds it, in one transaction, without publishing, applied only from
- *   the version the plugin read (`STALE_VERSION` otherwise, with nothing
- *   changed). The new value is given (`{ value }`) or computed from each
- *   copy's own (`{ from(current, copy) }`); the reason is kept in the entry's
- *   history, which names the plugin. Runs no save hooks.
+ *   one field of an entry (`{ collection, id }`) or a Single (`{ single }`)
+ *   changed on its live copy and on every pending draft that holds it, in one
+ *   transaction, without publishing, applied only from the version the plugin
+ *   read (`STALE_VERSION` otherwise, with nothing changed). The new value is
+ *   given (`{ value }`) or computed from each copy's own
+ *   (`{ from(current, copy) }`); the reason is kept in the document's history,
+ *   which names the plugin. Runs no save hooks.
  */
 export type {
+  DocumentFieldRewriteRequest,
   FieldRewriteCopy,
   FieldRewriteRequest,
   FieldRewriteResult,
   FieldRewriteValue,
+  SingleFieldRewriteRequest,
 } from "nextly";
 
 /**
@@ -1268,6 +1321,23 @@ export {
   type DocumentEventName,
   type AuthEventName,
   type MediaEventName,
+} from "nextly";
+
+/**
+ * Resized copies of stored images, for a plugin showing an image at a known
+ * width: `ctx.services.media.copyOf(source, width)` answers a copy's address
+ * (`MediaCopy`), or `null` when the image is to be used as it is. Copies come
+ * only at `MEDIA_COPY_WIDTHS`, and any other width is served the nearest
+ * (`nearestMediaCopyWidth`), so a plugin can build `srcset` from the same
+ * list the server keeps.
+ * @experimental until a first-party plugin serves them on a deployed site.
+ */
+export {
+  MEDIA_COPY_WIDTHS,
+  nearestMediaCopyWidth,
+  type MediaCopy,
+  type MediaCopySource,
+  type MediaCopyWidth,
 } from "nextly";
 
 /**

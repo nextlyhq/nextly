@@ -17,7 +17,7 @@ import type {
   SupportedDialect,
   TransactionContext,
 } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, getTableColumns, isTable, sql } from "drizzle-orm";
 
 import type { RequestActor } from "../../../auth/request-actor";
 import { isUniqueViolation } from "../../../database/errors";
@@ -84,6 +84,7 @@ interface CompanionFieldLike {
   name: string;
   type: string;
   localized?: boolean;
+  unique?: boolean;
 }
 
 /**
@@ -126,6 +127,50 @@ export interface CompanionSchema {
  */
 function toColumn(name: string): string {
   return toCanonicalSnakeCase(name);
+}
+
+/**
+ * The translatable fields of `fields`, each with its companion column, and
+ * marked where it is unique, so a read never fills it from another language
+ * (`LocalizedFieldRef.unique`). The one mapping every companion schema is
+ * built with.
+ */
+export function localizedFieldRefs(
+  fields: readonly CompanionFieldLike[]
+): LocalizedFieldRef[] {
+  const unique = new Set(
+    fields.filter(field => field.unique === true).map(field => field.name)
+  );
+  return resolveLocalizedFieldNames([...fields], true).map(name => ({
+    name,
+    column: toColumn(name),
+    ...(unique.has(name) ? { unique: true } : {}),
+  }));
+}
+
+/**
+ * `fields` with each one whose companion column does not store text on this
+ * dialect marked `nonText`, read off the companion table built for them: a
+ * number, a boolean, a date or JSON is never blank text, and comparing such a
+ * column with an empty string fails the query on PostgreSQL and is coerced on
+ * MySQL, where it can read `0` or `false` as blank.
+ */
+export function markNonTextFields(
+  fields: readonly LocalizedFieldRef[],
+  table: unknown
+): LocalizedFieldRef[] {
+  const nonText = new Set(
+    isTable(table)
+      ? Object.values(getTableColumns(table))
+          // Drizzle spells a text column's data type `string` alone; a
+          // decimal is `string numeric`, and every other type names its own.
+          .filter(column => column.dataType !== "string")
+          .map(column => column.name)
+      : []
+  );
+  return fields.map(field =>
+    nonText.has(field.column) ? { ...field, nonText: true } : field
+  );
 }
 
 /**
@@ -184,10 +229,7 @@ function companionSchemaOf(args: {
   dialect: SupportedDialect;
   status?: boolean;
 }): CompanionSchema | null {
-  const localizedFields: LocalizedFieldRef[] = resolveLocalizedFieldNames(
-    args.fields,
-    true
-  ).map(name => ({ name, column: toColumn(name) }));
+  const localizedFields = localizedFieldRefs(args.fields);
   if (localizedFields.length === 0) return null;
 
   const companion = buildCompanionRuntimeTable({
@@ -203,7 +245,7 @@ function companionSchemaOf(args: {
   return {
     table: companion.table,
     companionTableName: companion.companionTableName,
-    localizedFields,
+    localizedFields: markNonTextFields(localizedFields, companion.table),
     hasStatus: args.status === true,
     hasUpdatedAt: true,
   };
@@ -426,11 +468,29 @@ export async function upsertCompanionRow(
   const ph = () =>
     adapter.dialect === "postgresql" ? `$${params.length}` : "?";
 
+  // A date field's value is bound as its column stores it, the UTC wall clock, as every write
+  // through the translation table's model binds it (`fieldColumnDriverValue`). Bound as a bare
+  // `Date`, node-postgres sends the Node process's local wall clock, which a `timestamp` column
+  // keeps; mysql2 is pinned to UTC and SQLite stores epoch seconds, so only PostgreSQL differs.
+  const { fieldColumnDriverValue } = await import(
+    "../../schema/services/runtime-schema-generator"
+  );
+  const bound = (value: unknown): unknown =>
+    adapter.dialect === "postgresql" && value instanceof Date
+      ? fieldColumnDriverValue("postgresql", "timestamp", value)
+      : value;
+
   const allCols = ["_parent", "_locale", ...cols];
   const valuePlaceholders = allCols
     .map(c => {
       params.push(
-        c === "_parent" ? parentId : c === "_locale" ? locale : withChanger[c]
+        c === "_parent"
+          ? parentId
+          : c === "_locale"
+            ? locale
+            : c === COMPANION_UPDATED_AT_COLUMN
+              ? withChanger[c]
+              : bound(withChanger[c])
       );
       return ph();
     })
@@ -1214,7 +1274,7 @@ export async function liveCompanionColumns(
 }
 
 /** `tableName`'s columns as this database has them; empty when the table is missing. */
-async function liveColumnsOf(
+export async function liveColumnsOf(
   adapter: CompanionIntrospectAdapter,
   tableName: string
 ): Promise<readonly ColumnSpec[]> {
@@ -1262,13 +1322,15 @@ export async function liveCompanionShape(
   existingMainColumns: string[];
   presentOnCompanion?: string[];
   liveCompanionColumns?: string[];
+  liveCompanionDefinitions?: Readonly<Record<string, ColumnSpec>>;
   liveCompanionIndexes?: readonly string[];
   liveCompanionNotUnique?: readonly string[];
 }> {
   const { tableName, companionExists } = args;
-  const live = companionExists
-    ? await companionColumnNames(adapter, tableName)
+  const liveSpecs = companionExists
+    ? await liveCompanionColumns(adapter, tableName)
     : undefined;
+  const live = liveSpecs?.map(c => c.name);
   return {
     existingMainColumns: (
       await localizedColumnsOnMain(adapter, tableName, args.oldFields)
@@ -1282,6 +1344,15 @@ export async function liveCompanionShape(
             live
           ),
     liveCompanionColumns: live,
+    // Each companion column as it is, whose wider type and default a column restored to the main
+    // table takes back (`carriedDefinition`).
+    ...(liveSpecs
+      ? {
+          liveCompanionDefinitions: Object.fromEntries(
+            liveSpecs.map(c => [c.name, c] as const)
+          ),
+        }
+      : {}),
     // Only for a companion that exists: there are no indexes on a table that is about to be
     // created, and the transition plans its creates from that.
     ...(companionExists
@@ -1694,6 +1765,38 @@ export async function resolveCompanionSeedDebt(
 }
 
 /**
+ * Runs `statements` in order. On MySQL they run on one connection: a column restated from the
+ * database's own description of it (`restatedColumn`) is built in a session variable and run as a
+ * prepared statement, which another pooled connection cannot see. MySQL commits each schema
+ * statement as it runs, so this pins the connection and does not make the statements atomic.
+ * `afterEach` runs once each statement has landed.
+ */
+async function runStatementsInOrder(
+  adapter: CompanionIntrospectAdapter,
+  statements: readonly string[],
+  afterEach?: () => void
+): Promise<void> {
+  if (adapter.dialect !== "mysql") {
+    for (const statement of statements) {
+      await adapter.executeQuery(statement);
+      afterEach?.();
+    }
+    return;
+  }
+  const db = adapter.getDrizzle<{
+    transaction<T>(
+      run: (tx: { execute(query: unknown): Promise<unknown> }) => Promise<T>
+    ): Promise<T>;
+  }>();
+  await db.transaction(async tx => {
+    for (const statement of statements) {
+      await tx.execute(sql.raw(statement));
+      afterEach?.();
+    }
+  });
+}
+
+/**
  * Finish a copy that an earlier run started and did not complete.
  *
  * The companion already exists, so its CREATE is not reissued — only the copy is, and only for the
@@ -1782,13 +1885,11 @@ async function resumeInterruptedSeed(
         });
       }
     }
-    for (const statement of copy) {
-      // Issued as generated. The seed carries its guard from `buildLocalizationUpStatements`,
-      // which this path asks for — matching on a statement's leading text to decide whether to
-      // rewrite it made the guard a property of whoever executed the statement rather than of the
-      // statement itself.
-      await adapter.executeQuery(statement);
-    }
+    // Issued as generated. The seed carries its guard from `buildLocalizationUpStatements`,
+    // which this path asks for — matching on a statement's leading text to decide whether to
+    // rewrite it made the guard a property of whoever executed the statement rather than of the
+    // statement itself.
+    await runStatementsInOrder(adapter, copy);
     // The interrupted run's debt is discharged, so the record stops describing one.
     // A settlement that did not land means this run no longer holds the transition: someone took
     // it over while the copy ran. Reporting success would let the schema apply that follows drop
@@ -1897,6 +1998,22 @@ async function buildSeedingCreateStatements(
   });
   if (!spec) return null;
 
+  // Each companion column created from a main column takes what that column carries, as the
+  // database has it (`carriedDefinition`): a wider type, and a default.
+  const { carriedDefinition } = await import("../migration/carried-definition");
+  const liveMain = await liveColumnsOf(adapter, args.tableName);
+  const carriedSpec = {
+    ...spec,
+    columns: spec.columns.map(col => {
+      const carried = carriedDefinition(
+        liveMain.find(main => main.name === col.name),
+        col,
+        args.dialect
+      );
+      return carried ? { ...col, carried } : col;
+    }),
+  };
+
   const columnsOnMain = spec.columns
     .map(c => c.name)
     .filter(name => present.has(name));
@@ -1923,7 +2040,7 @@ async function buildSeedingCreateStatements(
   // something the next boot can put back. The copies left on main are inert once reads resolve
   // through the companion, and `nextly migrate` removes them under supervision.
   return buildLocalizationUpStatements(
-    { ...spec, columnsOnMain },
+    { ...carriedSpec, columnsOnMain },
     {
       dropSeededColumns: false,
       guardSeed: options.guardSeed,
@@ -2106,10 +2223,9 @@ async function createOrCompleteCompanionTable(
         status: args.status === true,
         companionExists: false,
       });
-    for (const stmt of statements) {
-      await adapter.executeQuery(stmt);
+    await runStatementsInOrder(adapter, statements, () => {
       created = true;
-    }
+    });
     // Only once every statement landed. Settling earlier would mark a copy complete that a later
     // statement could still fail, and the record would then say the content is in the companion
     // when it is not.

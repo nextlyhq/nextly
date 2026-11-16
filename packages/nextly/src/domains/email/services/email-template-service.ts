@@ -104,6 +104,13 @@ import {
   transactionOpenInFlow,
 } from "../transaction-flow";
 import type { EmailConfig } from "../types";
+import type { WrittenDocument } from "../written/document";
+import {
+  sitesVersionFormat,
+  storedFormat,
+  writtenForCreate,
+  writtenForUpdate,
+} from "../written/fields";
 
 import { EmailBrandStore } from "./email-brand-store";
 import {
@@ -115,6 +122,7 @@ import { parseLiquid, writesOutput } from "./liquid-engine";
 import { displayNameAndMailbox } from "./recipients";
 import {
   DEFAULT_APP_NAME,
+  fromBlocks,
   renderTemplate,
   renderTemplateParts,
   type RenderedTemplate,
@@ -161,6 +169,9 @@ export interface OldEngineStatus {
   kept: boolean;
   reasons: Array<{ field: string; label: string; reason: string }>;
 }
+
+/** The format of every owner's version: plugins and core contribute coded templates. */
+const OWNERS_FORMAT = { format: "code", blocks: null } as const;
 
 /** Legacy reserved slugs migrated into the unified layout row on boot. */
 const LEGACY_HEADER_SLUG = "_email-header";
@@ -222,6 +233,7 @@ const UPDATABLE_FIELDS = [
   "providerId",
   "attachments",
   "description",
+  "blocks",
 ] as const satisfies ReadonlyArray<keyof UpdateEmailTemplateInput>;
 
 /**
@@ -334,6 +346,11 @@ function reviewToken(
 export interface OwnerUpdateUndo {
   /** The site's version before the review was applied. */
   version: EmailTemplateVersion;
+  /**
+   * @experimental A written template's blocks before the review was applied,
+   * so Undo makes it written again; null for a coded one.
+   */
+  blocks?: WrittenDocument | null;
   /** The owner's version the override was based on before. */
   base: EmailTemplateVersion;
   /**
@@ -647,6 +664,7 @@ export class EmailTemplateService extends BaseService {
               entry?.defaults.variables
             ),
       kind: columns.kind ?? "template",
+      ...storedFormat(columns),
       description: columns.description ?? null,
       cc: columns.cc ?? null,
       bcc: columns.bcc ?? null,
@@ -1343,21 +1361,16 @@ export class EmailTemplateService extends BaseService {
    * is read for any other, so an email without them never waits on the table.
    */
   private async brandFor(
-    template: Pick<
-      TemplateFields,
-      | "kind"
-      | "subject"
-      | "htmlContent"
-      | "plainTextContent"
-      | "preheader"
-      | "legacy"
-    >,
+    template: TemplateFields,
     layout: EmailTemplateRecord | null
   ): Promise<BrandSettings | undefined> {
+    // A written template is judged by what its blocks compile to, as it
+    // renders: a draft's own `htmlContent` is empty.
+    const rendered = fromBlocks(template);
     if (
       !layout &&
-      template.kind !== "layout" &&
-      !textReadsBrand(template, template.legacy)
+      rendered.kind !== "layout" &&
+      !textReadsBrand(rendered, rendered.legacy)
     ) {
       return undefined;
     }
@@ -1374,6 +1387,7 @@ export class EmailTemplateService extends BaseService {
     data: CreateEmailTemplateInput,
     actor?: RequestActor | null
   ): Promise<EmailTemplateRecord> {
+    data = writtenForCreate(data);
     const kind = orDefault(data, "kind");
     this.assertLayoutMarker(kind, data.htmlContent);
     this.assertLiquid(data);
@@ -1395,6 +1409,8 @@ export class EmailTemplateService extends BaseService {
       subject: data.subject,
       htmlContent: data.htmlContent,
       plainTextContent: orDefault(data, "plainTextContent"),
+      format: data.format ?? "code",
+      blocks: data.blocks ?? null,
       preheader: orDefault(data, "preheader"),
       layoutId: orDefault(data, "layoutId"),
       fromOverride: orDefault(data, "fromOverride"),
@@ -1595,6 +1611,7 @@ export class EmailTemplateService extends BaseService {
   ): Promise<EmailTemplateRecord> {
     const existing = await this.getRow(id);
     const record = this.toRecord(existing);
+    data = writtenForUpdate(storedFormat(record), data);
 
     // Validate the effective post-update row (a layout must keep exactly one
     // `{{content}}` marker). Kind is immutable on update, so use the existing
@@ -1810,10 +1827,14 @@ export class EmailTemplateService extends BaseService {
 
     // `start` carries every version field from the read, so a save in
     // between must not be overwritten.
-    await this.writeSitesVersion(row, record, start, base.digest, {
-      overridden: true,
-      baseVersion: base.version,
-    });
+    await this.writeSitesVersion(
+      row,
+      record,
+      start,
+      base.digest,
+      { overridden: true, baseVersion: base.version },
+      record.blocks
+    );
 
     await this.recordActivity({
       action: "update",
@@ -1944,14 +1965,21 @@ export class EmailTemplateService extends BaseService {
     const merged = applyOwnerChoices(base, entry.version, mine, choices);
     this.assertLayoutMarker(row.kind, merged.htmlContent);
 
-    await this.writeSitesVersion(row, record, merged, entry.digest, {
-      // Rebased on the owner's version; the details the site's copy is
-      // compared against are a separate matter and carry over.
-      baseVersion: {
-        ...entry.version,
-        details: row.baseVersion?.details ?? detailsOf(entry.defaults),
+    await this.writeSitesVersion(
+      row,
+      record,
+      merged,
+      entry.digest,
+      {
+        // Rebased on the owner's version; the details the site's copy is
+        // compared against are a separate matter and carry over.
+        baseVersion: {
+          ...entry.version,
+          details: row.baseVersion?.details ?? detailsOf(entry.defaults),
+        },
       },
-    });
+      record.blocks
+    );
 
     await this.recordActivity({
       action: "update",
@@ -1971,6 +1999,7 @@ export class EmailTemplateService extends BaseService {
       template: await this.getTemplate(id),
       undo: {
         version: mine,
+        blocks: record.blocks,
         base,
         applied: versionDigest(merged),
         appliedBase: entry.digest,
@@ -2001,9 +2030,14 @@ export class EmailTemplateService extends BaseService {
     const base = versionOf(undo.base);
     this.assertLayoutMarker(row.kind, version.htmlContent);
 
-    await this.writeSitesVersion(row, record, version, versionDigest(base), {
-      baseVersion: { ...base, details: row.baseVersion?.details },
-    });
+    await this.writeSitesVersion(
+      row,
+      record,
+      version,
+      versionDigest(base),
+      { baseVersion: { ...base, details: row.baseVersion?.details } },
+      undo.blocks
+    );
 
     await this.recordActivity({
       action: "update",
@@ -2096,20 +2130,29 @@ export class EmailTemplateService extends BaseService {
   /**
    * Write a version the site chose (an override, an applied review, an undo),
    * conditioned on the row as read. Liquid judges it as it judges a save, and
-   * the re-check a save needs runs once it is written.
+   * the re-check a save needs runs once it is written. It stays written with
+   * `blocks` only while it holds what they compile to (`sitesVersionFormat`).
    */
   private async writeSitesVersion(
     row: StoredTemplateRow,
     record: EmailTemplateRecord,
     version: EmailTemplateVersion,
     baseDigest: string,
-    columns: Record<string, unknown>
+    columns: Record<string, unknown>,
+    blocks: WrittenDocument | null | undefined
   ): Promise<void> {
+    const format = sitesVersionFormat(blocks, version);
     const afterSave = await this.checkLiquidOnSave(record, version);
     await this.writeTemplateRow(row.id, db =>
       db
         .update(this.emailTemplates)
-        .set({ ...version, ...columns, baseDigest, updatedAt: new Date() })
+        .set({
+          ...version,
+          ...format,
+          ...columns,
+          baseDigest,
+          updatedAt: new Date(),
+        })
         .where(this.unchanged(row))
     );
     await this.assertWritten(row.id, version, baseDigest, record.slug);
@@ -2467,6 +2510,8 @@ export class EmailTemplateService extends BaseService {
     return {
       ...entry.version,
       kind: entry.defaults.kind ?? "template",
+      // An owner's version is coded, so writing it replaces a site's blocks.
+      ...OWNERS_FORMAT,
       ...detailsOf(entry.defaults),
     };
   }
@@ -2678,6 +2723,7 @@ export class EmailTemplateService extends BaseService {
     const current = {
       ...versionOf(row),
       kind: row.kind ?? "template",
+      ...storedFormat(row),
       ...detailsOf(row),
     };
     // Compared presentation aside, the rule `followOwnerDetails` states: the

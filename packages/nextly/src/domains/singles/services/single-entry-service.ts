@@ -35,6 +35,11 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../../i18n/localization-source";
+import {
+  readInFirstPublishedLanguage,
+  readOfEveryLanguage,
+} from "../../i18n/read-in-language";
+import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import { releaseVisibilityFor } from "../../releases/release-visibility";
 import type { WebhookFastDrainScheduler } from "../../webhooks/after-drain";
 import type {
@@ -44,7 +49,10 @@ import type {
   UpdateSingleOptions,
 } from "../types";
 
-import { SingleMutationService } from "./single-mutation-service";
+import {
+  SingleMutationService,
+  type SingleFieldRewriteCall,
+} from "./single-mutation-service";
 import {
   SinglePublishAllService,
   type PublishAllSinglePreview,
@@ -190,15 +198,29 @@ export class SingleEntryService extends BaseService {
    * field values.
    */
   get(slug: string, options?: GetSingleOptions): Promise<SingleResult> {
-    return withRuleLanguage(
-      readLanguagesFor(
-        this.localization,
-        options?.locale,
-        options?.fallbackLocale,
-        options
-      ),
-      () => this.queryService.get(slug, options)
-    );
+    const read = (locale: string | undefined) => {
+      const inLanguage = { ...options, locale };
+      return withRuleLanguage(
+        readLanguagesFor(
+          this.localization,
+          inLanguage.locale,
+          inLanguage.fallbackLocale,
+          inLanguage
+        ),
+        // The query reads what the request stands for: `locale=all` is the
+        // default language with every language's values beside it.
+        () => this.queryService.get(slug, readOfEveryLanguage(inLanguage))
+      );
+    };
+    const [first, ...rest] = options?.wholeDocumentFallback
+      ? (resolveLocaleChain(
+          this.localization,
+          options.locale,
+          options.fallbackLocale
+        ) ?? [])
+      : [];
+    if (first === undefined) return read(options?.locale);
+    return readInFirstPublishedLanguage([first, ...rest], read);
   }
 
   // ============================================================
@@ -221,6 +243,27 @@ export class SingleEntryService extends BaseService {
       () => this.mutationService.update(slug, data, options)
     );
     await this.afterWrite(result, options?.disableRevalidate === true);
+    return result;
+  }
+
+  /**
+   * Rewrite one field of a Single on its live copy and on every pending draft
+   * that holds it, without publishing. See the mutation service.
+   *
+   * @experimental
+   */
+  async rewriteField(
+    call: SingleFieldRewriteCall
+  ): ReturnType<SingleMutationService["rewriteField"]> {
+    // Judged as an update in the language it writes: a translated field's
+    // language, or every rule's default for a shared one.
+    const result = await withRuleLanguage(
+      writeLanguagesFor(this.localization, call.request.locale),
+      () => this.mutationService.rewriteField(call)
+    );
+    // The live copy changed, so its pages revalidate and its event is
+    // delivered, as an update of it does.
+    await this.afterWrite(result, false);
     return result;
   }
 

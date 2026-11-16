@@ -86,6 +86,7 @@ import type { SingleRegistryService } from "../services/singles/single-registry-
 import { UserAccountService } from "../services/users/user-account-service";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 import type { UserService } from "../services/users/user-service";
+import { assertPaginationIsComplete } from "../shared/base-registry-service";
 import { consoleLogger } from "../shared/types";
 
 import { installLegacyFieldGroupsNamespaceGuard } from "./legacy-field-groups-namespace";
@@ -173,6 +174,7 @@ import type {
   SingleSlug,
   UpdateArgs,
   RewriteFieldArgs,
+  RewriteSingleFieldArgs,
   PublishArgs,
   PublishResult,
   UpdateSingleArgs,
@@ -318,25 +320,33 @@ export class Nextly implements NextlyContext {
       ...config,
     };
 
-    this.users = createUsersNamespace(this);
-    this.media = createMediaNamespace(this);
+    this.users = withLanguagesPinned(createUsersNamespace(this));
+    this.media = withLanguagesPinned(createMediaNamespace(this));
     // One language list per call, as the collection and Single methods have through
     // `runAsCaller`: a submission writes an entry, and a field group's change seeds its rows.
+    // Every namespace runs each call that way, with the stored schema version checked first, as a
+    // request does, so no namespace is a door around either.
     this.forms = withLanguagesPinned(createFormsNamespace(this));
     this.fieldGroups = withLanguagesPinned(createFieldGroupsNamespace(this));
-    this.email = createEmailNamespace(this);
-    this.emailProviders = createEmailProvidersNamespace(this);
-    this.emailTemplates = createEmailTemplatesNamespace(this);
-    this.userFields = createUserFieldsNamespace(this);
-    this.roles = createRolesNamespace(this);
-    this.permissions = createPermissionsNamespace(this);
-    this.access = createAccessNamespace(this);
-    this.apiKeys = createApiKeysNamespace(this);
-    this.jobs = createJobsNamespace();
-    this.releases = createReleasesNamespace(this);
-    this.notices = createNoticesNamespace();
-    this.versions = createVersionsNamespace(this);
-    this.contentEvents = createContentEventsNamespace(this);
+    this.email = withLanguagesPinned(createEmailNamespace(this));
+    this.emailProviders = withLanguagesPinned(
+      createEmailProvidersNamespace(this)
+    );
+    this.emailTemplates = withLanguagesPinned(
+      createEmailTemplatesNamespace(this)
+    );
+    this.userFields = withLanguagesPinned(createUserFieldsNamespace(this));
+    this.roles = withLanguagesPinned(createRolesNamespace(this));
+    this.permissions = withLanguagesPinned(createPermissionsNamespace(this));
+    this.access = withLanguagesPinned(createAccessNamespace(this));
+    this.apiKeys = withLanguagesPinned(createApiKeysNamespace(this));
+    this.jobs = withLanguagesPinned(createJobsNamespace());
+    this.releases = withLanguagesPinned(createReleasesNamespace(this));
+    this.notices = withLanguagesPinned(createNoticesNamespace());
+    this.versions = withLanguagesPinned(createVersionsNamespace(this));
+    this.contentEvents = withLanguagesPinned(
+      createContentEventsNamespace(this)
+    );
     this.principals = createNextlyPrincipals();
 
     // The instance its callers reach: only the collection and Single
@@ -614,12 +624,12 @@ export class Nextly implements NextlyContext {
   }
 
   /**
-   * @experimental Rewrite one field of an entry on its live copy and on every
-   * pending draft that holds it, without publishing, from the version the
-   * caller read. See `RewriteFieldArgs`.
+   * @experimental Rewrite one field of an entry or a Single on its live copy
+   * and on every pending draft that holds it, without publishing, from the
+   * version the caller read. See `RewriteFieldArgs`.
    */
   rewriteField(
-    args: RewriteFieldArgs
+    args: RewriteFieldArgs | RewriteSingleFieldArgs
   ): Promise<MutationResult<FieldRewriteResult>> {
     return runAsCaller(this.defaultConfig, args, callArgs =>
       collectionsNs.rewriteField(this, callArgs)
@@ -745,7 +755,10 @@ export class Nextly implements NextlyContext {
   }
 
   /** Fetch the content of every registered Single. */
-  findSingles(args: FindSinglesArgs = {}): Promise<SingleListResult> {
+  async findSingles(args: FindSinglesArgs = {}): Promise<SingleListResult> {
+    // Refused before the call's own work, the schema follow included: a call this refuses must not
+    // read the stored version or reload a definition first. A precondition, so it comes first.
+    assertPaginationIsComplete({ limit: args.limit, offset: args.offset });
     return runAsCaller(this.defaultConfig, args, callArgs =>
       singlesNs.findSingles(this, callArgs)
     );
@@ -1031,8 +1044,8 @@ export const nextly = {
     (await requireNextlyOnceStarted()).create(args),
   update: async <TSlug extends CollectionSlug>(args: UpdateArgs<TSlug>) =>
     (await requireNextlyOnceStarted()).update(args),
-  /** Rewrite one field on an entry's live copy and drafts. @experimental */
-  rewriteField: async (args: RewriteFieldArgs) =>
+  /** Rewrite one field on an entry's or a Single's live copy and drafts. @experimental */
+  rewriteField: async (args: RewriteFieldArgs | RewriteSingleFieldArgs) =>
     (await requireNextlyOnceStarted()).rewriteField(args),
   /** Publish the chosen parts of one entry. @experimental */
   publish: async (args: PublishArgs) =>

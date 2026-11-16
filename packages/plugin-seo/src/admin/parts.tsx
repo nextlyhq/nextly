@@ -1,7 +1,7 @@
 /**
  * The small pieces the SEO panel is built from: the chip and line under a
- * field saying where its value comes from, a field's character count, the
- * plain link-style action, and a note.
+ * field saying where its value comes from, how wide a title or description
+ * draws on Google, the plain link-style action, and a note.
  *
  * @module admin/parts
  */
@@ -10,6 +10,7 @@ import { TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 
 import type { SeoLevel, Sourced } from "../resolver/order";
+import { fitSummary, textFit, type SearchText } from "../tab/problems";
 
 /** Classes joined, without the empty ones. */
 export function cx(...names: (string | false | undefined)[]): string {
@@ -64,7 +65,7 @@ export function LinkAction({
 }
 
 /** Pattern or code text, set in the code face. */
-function Code({ children }: { children: ReactNode }): ReactNode {
+export function Code({ children }: { children: ReactNode }): ReactNode {
   return (
     <code className="rounded bg-muted px-[5px] py-px font-mono text-xs whitespace-nowrap text-foreground">
       {children}
@@ -151,14 +152,14 @@ export function inSentence(name: string): string {
  * the site's default. Both ways a source is said, the chip's line and the
  * "Empty uses" sentence, word this one answer.
  */
-type SourceDescription =
+export type SourceDescription =
   | { kind: "pattern"; type: string; pattern: string }
   | { kind: "field"; type: string; field: string }
   | { kind: "template"; design: boolean }
   | { kind: "code" }
   | { kind: "site"; what: string };
 
-function describeSource(
+export function describeSource(
   sourced: Pick<Sourced<unknown>, "from" | "pattern" | "field">,
   value: SourcedValue,
   names: SourceNames
@@ -285,30 +286,56 @@ export function Note({
   );
 }
 
-/** A field's character count against what Google shows, `58 / 60`. */
-export function CharacterCount({
+/** How far past the limit the bar reaches, so a cut text shows its excess. */
+const BAR_SPAN = 1.25;
+
+/**
+ * How wide a title or description draws on Google against what Google
+ * shows of it: a bar with a mark where Google cuts, and the width in words
+ * with the characters as a hint. Measured by `textFit`, the measure the
+ * problem list judges by, so the bar and the list cannot disagree.
+ */
+export function WidthMeter({
   id,
-  count,
-  limit,
+  kind,
+  text,
 }: {
   id?: string;
-  count: number;
-  limit: number;
+  kind: SearchText;
+  text: string;
 }): ReactNode {
-  const over = count > limit;
+  const fit = textFit(kind, text);
+  const span = fit.limit * BAR_SPAN;
+  const filled = Math.min(fit.pixels / span, 1) * 100;
   return (
-    <span
+    <div
       id={id}
-      data-over={over ? "true" : "false"}
-      title={
-        over ? `Google usually shows about ${limit} characters` : undefined
-      }
-      className={cx(
-        "text-xs whitespace-nowrap tabular-nums",
-        over ? "font-semibold text-warning-text" : "text-muted-foreground"
-      )}
+      data-testid={`seo-width-${kind}`}
+      data-fits={fit.fits ? "true" : "false"}
+      className="grid gap-1"
     >
-      {count} / {limit}
-    </span>
+      <div
+        aria-hidden="true"
+        className="relative h-1 w-full overflow-hidden rounded-full bg-border"
+      >
+        <div
+          className={cx(
+            "h-full rounded-full",
+            fit.fits ? "bg-muted-foreground/50" : "bg-warning"
+          )}
+          style={{ width: `${filled}%` }}
+        />
+        {/* Where Google cuts: the limit's place along the bar. */}
+        <div className="absolute inset-y-0 left-[80%] w-px bg-foreground/60" />
+      </div>
+      <span
+        className={cx(
+          "text-xs tabular-nums",
+          fit.fits ? "text-muted-foreground" : "font-medium text-warning-text"
+        )}
+      >
+        {fitSummary(fit)}
+      </span>
+    </div>
   );
 }

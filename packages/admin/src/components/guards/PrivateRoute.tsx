@@ -4,15 +4,20 @@ import { useQueryClient } from "@tanstack/react-query";
 import type React from "react";
 import { useEffect, useState } from "react";
 
-import { AdminUnavailable } from "@admin/components/guards/AdminPending";
+import {
+  AdminNoRole,
+  AdminUnavailable,
+} from "@admin/components/guards/AdminPending";
 import { ROUTES } from "@admin/constants/routes";
 import {
   restartSessionCheck,
   useAuthSession,
 } from "@admin/hooks/queries/useAuthSession";
+import { useLogout } from "@admin/hooks/useLogout";
 import {
   holdLoginRedirect,
   redirectToLogin,
+  refreshAccessToken,
 } from "@admin/lib/api/refreshInterceptor";
 import {
   getCurrentUserId,
@@ -79,6 +84,7 @@ function RedirectNotice({ destination }: { destination: string }) {
 /** What the guard draws: one answer, read from the session's state. */
 type GuardScreen =
   | "unavailable"
+  | "no-role"
   | "screen"
   | "frame"
   | "sign-in"
@@ -96,11 +102,15 @@ function guardScreen(state: {
   unavailable: boolean;
   settled: boolean;
   confirmed: boolean;
+  /** The confirmed session's account holds a role. */
+  hasRole: boolean;
   signedInHere: boolean;
   signInInPlace: boolean;
 }): GuardScreen {
   if (state.unavailable) return "unavailable";
-  if (state.confirmed) return "screen";
+  // A session the server confirmed, of an account with no role: nothing here
+  // is its to do, so it is told so instead of being shown the staff screens.
+  if (state.confirmed) return state.hasRole ? "screen" : "no-role";
   // Nothing decided yet: the frame, with nothing in it read from the server,
   // or the sign-in form, the screen right for anyone, which can be filled in
   // while the server starts.
@@ -108,38 +118,67 @@ function guardScreen(state: {
   return state.signInInPlace ? "sign-in" : "redirecting";
 }
 
-export function PrivateRoute({
-  children,
-  signIn,
-}: PrivateRouteProps): React.JSX.Element {
-  // The shared session query, not a second verification of the same fact. The
-  // data providers read this same key, so a session is fetched once and every
-  // reader of it agrees.
-  const { data, status, fetchStatus } = useAuthSession();
-  const queryClient = useQueryClient();
-  // Read once per visit: it chooses the first screen, and the answer below
-  // decides everything after it.
-  const [signedInHere] = useState(hasSignedInHere);
+/** What the guard reads from the session query, decided once per render. */
+interface GuardReading {
+  screen: GuardScreen;
+  /** Where a settled answer that is not a session sends the visitor. */
+  redirect: { path: string; destination: string } | null;
+  /** The visitor stays on the sign-in form drawn here. */
+  signInInPlace: boolean;
+  /** The server's answer on the session; null until it has one. */
+  isAuthenticated: boolean | null;
+  /** The signed-in account's email, for the no-role screen. */
+  email: string | null;
+}
 
-  // Only acted on once the query has DEFINITIVELY resolved with data. In React
-  // Query v5 `isLoading` can be false while data is still undefined — an error
-  // state, or a transient one during a route transition — and redirecting from
-  // there sends the visitor to LOGIN on a result that never arrived, which
-  // loops against PublicRoute.
-  const settled = status === "success" && data !== undefined;
-  const redirect = settled ? redirectFor(data) : null;
-  const confirmed = settled && redirect === null;
+/**
+ * The guard's reading of the shared session query.
+ *
+ * Only acted on once the query has DEFINITIVELY resolved with data. In React
+ * Query v5 `isLoading` can be false while data is still undefined — an error
+ * state, or a transient one during a route transition — and redirecting from
+ * there sends the visitor to LOGIN on a result that never arrived, which
+ * loops against PublicRoute.
+ */
+function readGuard(
+  query: ReturnType<typeof useAuthSession>,
+  signedInHere: boolean
+): GuardReading {
+  const { data, status, fetchStatus } = query;
+  const session = status === "success" ? data : undefined;
+  const redirect = session ? redirectFor(session) : null;
   // A visitor already on the sign-in form stays on it when the server says
   // there is no session, rather than being moved to the same form at another
   // address with what they typed thrown away.
   const signInInPlace =
     !signedInHere && redirect !== null && redirect.path === ROUTES.LOGIN;
+  return {
+    screen: guardScreen({
+      unavailable: status === "error" && fetchStatus !== "fetching",
+      settled: session !== undefined,
+      confirmed: session !== undefined && redirect === null,
+      // Only a session that says it holds no role is role-less: one that does
+      // not say is drawn as before, and the server refuses what it may not do.
+      hasRole: session?.hasRole !== false,
+      signedInHere,
+      signInInPlace,
+    }),
+    redirect,
+    signInInPlace,
+    isAuthenticated: session ? session.isAuthenticated : null,
+    email: session?.email ?? null,
+  };
+}
 
-  // The device memory follows the server's answer: on a confirmed session the
-  // record is kept and what was remembered is checked against the versions
-  // the server serves; when the server says there is none, the session ended,
-  // and everything remembered about the person goes, in every open tab.
-  const isAuthenticated = settled ? data.isAuthenticated : null;
+/**
+ * The device memory follows the server's answer: on a confirmed session the
+ * record is kept and what was remembered is checked against the versions the
+ * server serves; when the server says there is none, the session ended, and
+ * everything remembered about the person goes, in every open tab. Signed out
+ * in another tab, this one goes to the sign-in page too rather than drawing a
+ * person who left.
+ */
+function useDeviceMemory(isAuthenticated: boolean | null): void {
   useEffect(() => {
     if (isAuthenticated === true) {
       rememberSignedInHere();
@@ -153,8 +192,6 @@ export function PrivateRoute({
     if (isAuthenticated === false && forgetPerson()) announceSignedOut();
   }, [isAuthenticated]);
 
-  // Signed out in another tab: the session this tab holds is gone with it, so
-  // it goes to the sign-in page too rather than drawing a person who left.
   useEffect(
     () =>
       onSignedOutElsewhere(() => {
@@ -163,20 +200,41 @@ export function PrivateRoute({
       }),
     []
   );
+}
+
+export function PrivateRoute({
+  children,
+  signIn,
+}: PrivateRouteProps): React.JSX.Element {
+  // The shared session query, not a second verification of the same fact. The
+  // data providers read this same key, so a session is fetched once and every
+  // reader of it agrees.
+  const query = useAuthSession();
+  const queryClient = useQueryClient();
+  // Read once per visit: it chooses the first screen, and the answer below
+  // decides everything after it.
+  const [signedInHere] = useState(hasSignedInHere);
+  const { screen, redirect, signInInPlace, isAuthenticated, email } = readGuard(
+    query,
+    signedInHere
+  );
+
+  useDeviceMemory(isAuthenticated);
 
   useEffect(() => {
     if (redirect && !signInInPlace) navigateTo(redirect.path);
   }, [redirect, signInInPlace]);
 
   const retry = () => void restartSessionCheck(queryClient);
-
-  const screen = guardScreen({
-    unavailable: status === "error" && fetchStatus !== "fetching",
-    settled,
-    confirmed,
-    signedInHere,
-    signInInPlace,
-  });
+  const logout = useLogout();
+  // The roles a session names are those its access token was minted with, so
+  // a role given since only shows once the token is minted again: refreshed
+  // first, and the session read afresh rather than from the cached answer.
+  const checkRoleAgain = async () => {
+    await refreshAccessToken();
+    invalidateSessionCache();
+    await restartSessionCheck(queryClient);
+  };
 
   // While the sign-in form is drawn here, a background query refused for
   // want of a session leaves the visitor on it rather than moving them to the
@@ -193,6 +251,9 @@ export function PrivateRoute({
       draw={children}
       signIn={signIn}
       onRetry={retry}
+      onCheckRoleAgain={() => void checkRoleAgain()}
+      onSignOut={() => void logout()}
+      email={email}
       destination={redirect?.destination ?? "login"}
     />
   );
@@ -207,18 +268,33 @@ function GuardScreenView({
   draw,
   signIn,
   onRetry,
+  onCheckRoleAgain,
+  onSignOut,
+  email,
   destination,
 }: {
   screen: GuardScreen;
   draw: PrivateRouteProps["children"];
   signIn: React.ReactNode;
   onRetry: () => void;
+  onCheckRoleAgain: () => void;
+  onSignOut: () => void;
+  /** The signed-in account's email, for the no-role screen. */
+  email: string | null;
   /** Where a settled answer that is not a session sends the visitor. */
   destination: string;
 }): React.JSX.Element {
   switch (screen) {
     case "unavailable":
       return <AdminUnavailable onRetry={onRetry} />;
+    case "no-role":
+      return (
+        <AdminNoRole
+          email={email}
+          onCheckAgain={onCheckRoleAgain}
+          onSignOut={onSignOut}
+        />
+      );
     case "screen":
       return <>{draw(true)}</>;
     case "frame":

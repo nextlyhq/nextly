@@ -970,7 +970,7 @@ async function detectRemovedSingles(
 }
 
 /**
- * Delete orphaned singles: remove registry entry and drop data table.
+ * Delete orphaned singles: drop the data table, then remove the registry entry.
  * Uses raw delete to avoid re-fetch issues with getSingle/updateSingle.
  */
 async function handleRemovedSingles(
@@ -995,22 +995,9 @@ async function handleRemovedSingles(
       await teardownEntityComponentData({ adapter, parentTable: tableName });
       await teardownEntityI18n({ adapter, slug, tableName, kind: "single" });
 
-      // Delete the registry entry directly, then the Single's autosaves and
-      // version pins, in one transaction and in that order, as the
-      // registry's own delete does: see `deleteEntityRegistryRow`.
-      // Asked before the transaction opens: see `DashboardTables`.
-      const tables = {
-        dashboardPinsPresent: await dashboardPinsPresent(adapter),
-        mediaUsagePresent: await mediaUsageTablePresent(adapter),
-      };
-      await adapter.transaction(tx =>
-        deleteEntityRegistryRow(tx, "single", slug, tables)
-      );
-      applied.push(
-        `${change}: the registry entry of single ${JSON.stringify(slug)}`
-      );
-
-      // Drop the data table, waiting for it in tries where another session is using it.
+      // Drop the data table, waiting for it in tries where another session is using it. Before
+      // the registry delete: a drop that stops leaves the entry, so the next sync still finds
+      // the orphan and drops it then.
       const sql =
         dialect === "postgresql"
           ? `DROP TABLE IF EXISTS ${q}${tableName}${q} CASCADE`
@@ -1023,6 +1010,21 @@ async function handleRemovedSingles(
           appliedBefore: applied,
           name: () => `the drop of table ${JSON.stringify(tableName)}`,
         }))
+      );
+
+      // Delete the registry entry directly, then the Single's autosaves and
+      // version pins, in one transaction and in that order, as the
+      // registry's own delete does: see `deleteEntityRegistryRow`.
+      // Asked before the transaction opens: see `DashboardTables`.
+      const tables = {
+        dashboardPinsPresent: await dashboardPinsPresent(adapter),
+        mediaUsagePresent: await mediaUsageTablePresent(adapter),
+      };
+      await adapter.transaction(tx =>
+        deleteEntityRegistryRow(tx, "single", slug, tables, dialect)
+      );
+      applied.push(
+        `${change}: the registry entry of single ${JSON.stringify(slug)}`
       );
 
       logger.success(`Deleted orphaned single: ${slug} (table: ${tableName})`);
@@ -1053,7 +1055,7 @@ async function detectRemovedComponents(
 }
 
 /**
- * Delete orphaned components: remove registry entry and drop data table.
+ * Delete orphaned components: drop the data table, then remove the registry entry.
  * Uses raw delete to avoid re-fetch issues with getComponent/updateComponent.
  */
 /**
@@ -1122,18 +1124,9 @@ async function deleteOrphanedComponents(
         kind: "fieldGroup",
       });
 
-      // Delete registry entry directly
-      // Resolved: this delete runs AFTER the nested instances and localized
-      // data are torn down, so addressing a registry that is not there fails
-      // once the dependent content is already gone.
-      await adapter.delete(await resolveFieldGroupRegistryName(adapter), {
-        and: [{ column: "slug", op: "=", value: slug }],
-      });
-      applied.push(
-        `${change}: the registry entry of field group ${JSON.stringify(slug)}`
-      );
-
-      // Drop the data table, waiting for it in tries where another session is using it.
+      // Drop the data table, waiting for it in tries where another session is using it. Before
+      // the registry delete: a drop that stops leaves the entry, so the next sync still finds
+      // the orphan and drops it then.
       const sql =
         dialect === "postgresql"
           ? `DROP TABLE IF EXISTS ${q}${tableName}${q} CASCADE`
@@ -1146,6 +1139,17 @@ async function deleteOrphanedComponents(
           appliedBefore: applied,
           name: () => `the drop of table ${JSON.stringify(tableName)}`,
         }))
+      );
+
+      // Delete registry entry directly
+      // Resolved: this delete runs AFTER the nested instances and localized
+      // data are torn down, so addressing a registry that is not there fails
+      // once the dependent content is already gone.
+      await adapter.delete(await resolveFieldGroupRegistryName(adapter), {
+        and: [{ column: "slug", op: "=", value: slug }],
+      });
+      applied.push(
+        `${change}: the registry entry of field group ${JSON.stringify(slug)}`
       );
 
       logger.success(
@@ -1490,6 +1494,22 @@ export async function ensureLocalizedCompanions(
         cause: "companion-provisioning-failed",
         entities: failures,
       },
+    });
+  }
+  // Each translated date column an earlier release made with a time zone, of every entity the
+  // registry holds, Builder-made ones included, once nothing above was refused. The development
+  // sync converts it, no earlier instance writing beside it. `nextly migrate` (`supervised`) runs
+  // while instances of the earlier release may still write, which would store a date in a
+  // non-default language shifted into a converted column, so it only names each, and `nextly
+  // upgrade`, which converts them once the release serves every instance.
+  if (phase === "afterApply") {
+    const { convertZonedDateCompanions } = await import(
+      "../../domains/i18n/runtime/zoned-date-companions"
+    );
+    await convertZonedDateCompanions(adapter as unknown as DrizzleAdapter, {
+      convert: options.supervised !== true,
+      onNotice: message => logger.info(message),
+      onWarning: message => logger.warn(message),
     });
   }
 }

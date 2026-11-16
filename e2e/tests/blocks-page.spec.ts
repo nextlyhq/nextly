@@ -20,7 +20,8 @@
  *    conditions tier is that the markup never leaves the server.
  * 3. The route's lifecycle scope holds — an unpublished entry 404s.
  * 4. The metadata the blocks declared reaches the document head, including a
- *    canonical carrying this route's mount point.
+ *    canonical carrying this route's mount point, and the browser tab reads
+ *    the page's own title, never the H1 its first block draws.
  *
  * Safe to write against: the suite owns its database and empties it before
  * every run.
@@ -34,13 +35,12 @@ test.describe.configure({ mode: "serial" });
 
 const ENTRIES = "/admin/api/collections/block-pages/entries";
 
-/** Whether the suite runs against a production build rather than `next dev`. */
-const PRODUCTION = process.env.E2E_SERVER === "production";
-
 const PUBLISHED_SLUG = "dogfood";
 const DRAFT_SLUG = "dogfood-draft";
 
 const PAGE_HEADING = "Rendered by blocks-react";
+/** The published entry's own title, which its tab reads. */
+const PAGE_TITLE = "Dogfood";
 const BUTTON_LABEL = "Read the docs";
 
 /**
@@ -191,7 +191,7 @@ test.beforeAll(async ({ playwright }, testInfo) => {
   try {
     for (const row of [
       {
-        title: "Dogfood",
+        title: PAGE_TITLE,
         slug: PUBLISHED_SLUG,
         content: DOCUMENT,
         status: "published",
@@ -338,18 +338,15 @@ test("an unpublished entry is not served", async ({ page }) => {
   // Under Cache Components the public route renders an unlisted path on its
   // first request and streams its static shell before it reads the entry, so
   // that status is 200 by the time it knows the entry is not published. The
-  // route is public, so Next keeps the not-found render and answers later
-  // requests with a 404. Every request gets the not-found page marked
-  // `noindex`, and none of the draft's content.
-  for (const [request, status] of [
-    ["first", 200],
-    // Next keeps the render only in a production build: under `next dev`
-    // nothing is kept, so every request renders it afresh and answers 200.
-    ["second", PRODUCTION ? 404 : 200],
-  ] as const) {
+  // route answers a miss through the SEO plugin's `notFoundLogged`, which
+  // reads the request so that each miss is decided, and logged, per request:
+  // Next keeps no render of it, and a later request is answered the same
+  // way, in a production build as under `next dev`. Every request gets the
+  // not-found page marked `noindex`, and none of the draft's content.
+  for (const request of ["first", "second"]) {
     const response = await page.request.get(`/blocks/${DRAFT_SLUG}`);
     const html = await response.text();
-    expect(response.status(), `${request} request`).toBe(status);
+    expect(response.status(), `${request} request`).toBe(200);
     expect(html, `${request} request`).toMatch(
       /<meta[^>]+name="robots"[^>]+content="noindex"/
     );
@@ -359,11 +356,18 @@ test("an unpublished entry is not served", async ({ page }) => {
   }
 });
 
-test("block-declared metadata reaches the head", async ({ page }) => {
+test("block-declared metadata reaches the head, and the tab reads the page's title", async ({
+  page,
+}) => {
   await page.goto(`/blocks/${PUBLISHED_SLUG}`);
 
-  // `core/heading` declares the title through its `seo` hook.
-  await expect(page).toHaveTitle(PAGE_HEADING);
+  // The page opens with an H1 worded unlike its title, and the heading never
+  // sets the tab: the page's own title does (in its title pattern where the
+  // SEO plugin runs, as here, with no site name set).
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+    PAGE_HEADING
+  );
+  await expect(page).toHaveTitle(PAGE_TITLE);
 
   await expect(page.locator('meta[name="description"]')).toHaveAttribute(
     "content",

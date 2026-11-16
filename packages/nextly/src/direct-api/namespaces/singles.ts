@@ -73,6 +73,9 @@ export async function findSingle<
     // field falls back to the default language, and a rule keyed on it sees
     // `undefined` when it is dropped here.
     fallbackLocale: config.fallbackLocale,
+    wholeDocumentFallback: args.wholeDocumentFallback,
+    sourceLocales: args.sourceLocales,
+    translations: args.translations,
     // Forwarded to the same service option `findByID` uses for its own `draft`
     // flag, so one idea keeps one spelling across the two read paths. The
     // service applies the trust gate; nothing is decided here.
@@ -84,6 +87,9 @@ export async function findSingle<
       ? {}
       : { createIfMissing: args.createIfMissing }),
     ...(args.whenAbsent === undefined ? {} : { whenAbsent: args.whenAbsent }),
+    // The fields to answer with, which the service also reads alone where it
+    // can, so a read naming its fields does not depend on the others' columns.
+    ...(args.select === undefined ? {} : { select: args.select }),
     ...accessOptions(config),
     context: config.context,
   });

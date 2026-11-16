@@ -41,21 +41,28 @@ import type { StyleControl } from "./style-controls";
 export type LogicalSide = keyof LogicalSidesShape["sides"];
 
 /**
- * Where each side sits in the drawn box, top row first.
+ * The order the sides come in the document, which is the order Tab visits
+ * them: the CSS shorthand's, top, then the inline end (right in a
+ * left-to-right page), bottom, and the inline start. An author typing a box
+ * from the keyboard goes round it as they would write `margin: 1px 2px 3px
+ * 4px`.
+ *
+ * Where each side is DRAWN is not decided here: the stylesheet places every
+ * side by which side it is, so this order moves no side on screen.
  *
  * A `Record` over the engine's own union, so this cannot fall out of step with
  * the catalog without failing to compile. The numbers are this module's
- * decision — they are a reading order, which the engine has no opinion about.
+ * decision, which the engine has no opinion about.
  */
 const DRAW_ORDER: Record<LogicalSide, number> = {
   blockStart: 0,
-  inlineStart: 1,
-  inlineEnd: 2,
-  blockEnd: 3,
+  inlineEnd: 1,
+  blockEnd: 2,
+  inlineStart: 3,
 };
 
 /**
- * The four sides, in the order the box draws them.
+ * The four sides, in the order they come in the document and Tab visits them.
  *
  * Derived from `DRAW_ORDER` rather than written out a second time: two lists of
  * the same four names is exactly the drift this module exists to avoid.

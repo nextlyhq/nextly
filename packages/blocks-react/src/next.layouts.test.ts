@@ -120,6 +120,14 @@ const heading = (id: string, text: string, level = "h2") => ({
   props: { text, level },
 });
 
+/** One line of prose: what describes a page, since a heading never titles it. */
+const prose = (id: string, text: string) => ({
+  id,
+  type: "core/text",
+  version: 1,
+  props: { text },
+});
+
 const instance = (id: string, componentId: string) => ({
   id,
   type: COMPONENT_INSTANCE_TYPE,
@@ -648,11 +656,11 @@ describe("a page drawn inside its Layout", () => {
   });
 
   it("spends a tight budget in metadata as the render does, when the page's conditions read the entry", async () => {
-    // A heading shown by a condition on the entry: no binding, but the entry
+    // Prose shown by a condition on the entry: no binding, but the entry
     // read it needs comes after the Layout's, in the render and in metadata.
     const content = doc([
       {
-        ...heading("c", "Conditioned title", "h1"),
+        ...prose("c", "Conditioned line"),
         visibility: {
           conditions: [
             [{ field: "title", op: "equals", value: "Entry title" }],
@@ -669,7 +677,7 @@ describe("a page drawn inside its Layout", () => {
         blocks: createBlockResolver(coreBlocks),
         layouts: provider("main"),
         metadata: (_entry, _context, derived) => ({
-          title: derived.title ?? "No derived title",
+          description: derived.description ?? "No derived description",
         }),
         ...(maxQueries === undefined ? {} : { maxQueries }),
       });
@@ -682,18 +690,21 @@ describe("a page drawn inside its Layout", () => {
       const meta = await routeWith(maxQueries).generateMetadata({
         params: { slug: ["about"] },
       });
-      return { drawn: html.includes("Conditioned title"), title: meta.title };
+      return {
+        drawn: html.includes("Conditioned line"),
+        description: meta.description,
+      };
     };
     // One claim: the Layout takes it, so the entry can't be read and the
     // block fails closed; metadata, reading in the same order, agrees.
     expect(await outcome(1)).toEqual({
       drawn: false,
-      title: "No derived title",
+      description: "No derived description",
     });
-    // CONTROL: with room for both, the block shows and names the page.
+    // CONTROL: with room for both, the block shows and describes the page.
     expect(await outcome()).toEqual({
       drawn: true,
-      title: "Conditioned title",
+      description: "Conditioned line",
     });
   });
 
@@ -717,16 +728,7 @@ describe("a page drawn inside its Layout", () => {
   });
 });
 
-/**
- * How long the reads behind a "no regions, no usable default" answer may live.
- *
- * The plugin repairs a lost default from its job runner, usually outside a
- * request, where a tag revalidation can be held; a page cached on that answer
- * must ask again within a minute rather than wait for an unrelated write. The
- * release bound is stubbed to "none scheduled" (`false`), so a read carries a
- * number only where something capped it.
- */
-describe("a classic site through the route", () => {
+describe("a site whose stored style still names a spacing model, through the route", () => {
   const box = (id: string, children: unknown[]) => ({
     id,
     type: "core/box",
@@ -735,8 +737,12 @@ describe("a classic site through the route", () => {
     slots: { children },
   });
 
-  /** A page and its header, each a box of blocks, on a site in `mode`. */
-  async function drawn(mode: "classic" | "gaps") {
+  /**
+   * A page and its header, each a box of blocks, on a site whose stored style
+   * holds `stored` beside its breakpoints. Spread in as a plain value, the way
+   * an untyped stored document arrives, rather than as a typed field.
+   */
+  async function drawn(stored: object) {
     return render(
       {
         page: {
@@ -757,7 +763,7 @@ describe("a classic site through the route", () => {
           // The site's style the way a host's route reads it: through a
           // provider, which names the single its read depends on.
           siteStyles: {
-            read: async () => ({ breakpoints: BREAKPOINTS, spacingMode: mode }),
+            read: async () => ({ breakpoints: BREAKPOINTS, ...stored }),
             singles: ["site-style"],
           },
         },
@@ -765,19 +771,30 @@ describe("a classic site through the route", () => {
     );
   }
 
-  it("compiles the page and its Layout's regions under the classic model", async () => {
-    const { html } = await drawn("classic");
+  it("compiles the page and its Layout's regions with container gaps", async () => {
+    const { html } = await drawn({ spacingMode: "classic" });
     expect(html).toContain("Head");
-    expect(html).not.toContain("nx-pb-gap");
+    // Both boxes, the page's and the header's, wear the gap marker.
+    expect(
+      html.match(/class="[^"]*nx-pb-gap[^"]*nx-bt-core--box"/g)
+    ).toHaveLength(2);
     expect(html).toMatch(
-      /:where\(h2\) \{[^}]*margin-block-end: 0\.5em; margin-block-start: 1\.5em/
+      /:where\(h2\) \{[^}]*margin-block-end: 0; margin-block-start: 0 \}/
     );
-    // The control: the same site on container gaps marks both boxes.
-    const gaps = await drawn("gaps");
-    expect(gaps.html).toContain("nx-pb-gap");
+    // The key changes nothing the route serves.
+    expect(html).toBe((await drawn({})).html);
   });
 });
 
+/**
+ * How long the reads behind a "no regions, no usable default" answer may live.
+ *
+ * The plugin repairs a lost default from its job runner, usually outside a
+ * request, where a tag revalidation can be held; a page cached on that answer
+ * must ask again within a minute rather than wait for an unrelated write. The
+ * release bound is stubbed to "none scheduled" (`false`), so a read carries a
+ * number only where something capped it.
+ */
 describe("a page with no usable default", () => {
   async function withRelease<T>(
     release: number | false,

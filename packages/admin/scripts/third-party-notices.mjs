@@ -22,21 +22,40 @@ export const NOTICES_FILE = "THIRD-PARTY-NOTICES";
 const LICENCE_FILE = /^(licen[cs]e|copying|notice)(\.(md|txt|markdown))?$/i;
 
 /**
+ * A bundled module's path split where its package starts, after the last
+ * `node_modules/`, with `/` for a separator whatever the system wrote: a
+ * Windows build names modules with backslashes. Null for a module outside any
+ * package.
+ */
+function splitAtPackages(moduleId) {
+  const file = moduleId.replace(/^\0/, "").split("\\").join("/");
+  const at = file.lastIndexOf("/node_modules/");
+  if (at === -1) return null;
+  const end = at + "/node_modules/".length;
+  return { modules: file.slice(0, end), inPackage: file.slice(end) };
+}
+
+/**
+ * A bundled module's path from where its package starts
+ * (`react-hook-form/dist/index.esm.mjs`), with `/` on every system. Null for
+ * a module outside any package.
+ */
+export function packageFileOf(moduleId) {
+  return splitAtPackages(moduleId)?.inPackage ?? null;
+}
+
+/**
  * The directory of the package a bundled module belongs to, from the module's
  * path: what follows the last `node_modules/`, one segment, or two for a
  * scoped name. Null for a module outside any package.
  */
 export function packageDirOf(moduleId) {
-  const file = moduleId.replace(/^\0/, "").split("\\").join("/");
-  const at = file.lastIndexOf("/node_modules/");
-  if (at === -1) return null;
-  const rest = file.slice(at + "/node_modules/".length).split("/");
+  const split = splitAtPackages(moduleId);
+  if (split === null) return null;
+  const rest = split.inPackage.split("/");
   const segments = rest[0]?.startsWith("@") ? 2 : 1;
   if (rest.length <= segments) return null;
-  return (
-    file.slice(0, at + "/node_modules/".length) +
-    rest.slice(0, segments).join("/")
-  );
+  return split.modules + rest.slice(0, segments).join("/");
 }
 
 /** One package's notice: its name, version and licence, then its licence text. */

@@ -3,9 +3,11 @@
  * draws follows, where the page's own text does not say otherwise.
  *
  * The same preview, fields and rows the SEO tab draws, with variables in
- * place of typed text: a title is written `{Post title} | {Site name}` and
- * stored as the design's own metadata, which the Page Builder fills for each
- * page. The preview is the answer one of the type's pages gets with the
+ * place of typed text: a description is written `{Post excerpt}` and stored
+ * as the design's own metadata, which the Page Builder fills for each page.
+ * The title is not a rule of the design: a page's title is its own SEO title,
+ * else its title in the content type's pattern, so its row says which pattern
+ * gives it and links to where that is changed. The preview is the answer one of the type's pages gets with the
  * design as it is being edited, worked out by the route the page's head is
  * worked out by. A change is one edit of the design, undone with the editor's
  * Undo and saved with it.
@@ -38,8 +40,9 @@ import {
 
 import { resolveOrder, type SeoAnswer } from "../resolver/order";
 import type { PatternField } from "../settings/contract";
+import { SETTINGS_PAGE_HREF } from "../settings/contract";
 import { SITE_NAME_TOKEN } from "../settings/patterns";
-import { DESCRIPTION_LIMIT, TITLE_LIMIT } from "../tab/problems";
+import type { SearchText } from "../tab/problems";
 import type { TemplateContext } from "../template/contract";
 import {
   ruleOfText,
@@ -47,7 +50,8 @@ import {
   type RuleSegment,
 } from "../template/rule-text";
 
-import { CharacterCount, inSentence, Note } from "./parts";
+import { Code, inSentence, Note, WidthMeter } from "./parts";
+import { AdminLink } from "./section";
 import { PreviewCard } from "./previews";
 import { Row, RowButton } from "./rows";
 import { useTemplateContext } from "./use-template-context";
@@ -308,11 +312,8 @@ function useProblemBadge(
   const problems =
     draft === undefined || fields === undefined
       ? 0
-      : [
-          draft.title,
-          draft.description,
-          draft.shareDiff ? draft.socialTitle : "",
-        ]
+      : // Not the title: the design gives none, so a stored one is not shown.
+        [draft.description, draft.shareDiff ? draft.socialTitle : ""]
           .map(text => unknownIn(text, fields).length)
           .reduce((sum, count) => sum + count, 0);
   useEffect(() => {
@@ -372,6 +373,7 @@ export function TemplateSeoPanel(props: TemplateSeoPanelProps): ReactNode {
       writable={writable}
       previewWith={context.previewed?.id ?? null}
       ownDesign={draws.entryId !== null}
+      typeKey={draws.collection}
       onPreviewWith={setPreviewWith}
       onChange={setDraft}
       onCommit={commit}
@@ -390,6 +392,8 @@ interface RuleEditorProps {
   writable: boolean;
   previewWith: string | null;
   ownDesign: boolean;
+  /** The content type the design draws, by its key in SEO settings. */
+  typeKey: string;
   onPreviewWith: (id: string) => void;
   onChange: (next: RuleDraft) => void;
   onCommit: (next: RuleDraft) => void;
@@ -405,7 +409,7 @@ function RuleEditor(props: RuleEditorProps): ReactNode {
     {}
   );
   // The field a variable is added to: the one last in focus.
-  const focused = useRef<RuleField>("title");
+  const focused = useRef<RuleField>("description");
   const set = (field: RuleField, text: string): RuleDraft => ({
     ...draft,
     [field]: text,
@@ -486,26 +490,16 @@ function RuleEditor(props: RuleEditorProps): ReactNode {
           />
         }
       />
-      <RuleText
-        id={`${id}-title`}
-        label="Title on Google"
-        count={answer?.title?.value.length ?? 0}
-        limit={TITLE_LIMIT}
-        unknown={unknownIn(draft.title, context.fields)}
-      >
-        <Input
-          id={`${id}-title`}
-          ref={input => {
-            inputs.current.title = input;
-          }}
-          {...textProps("title")}
-        />
-      </RuleText>
+      <TitleFollowsPattern
+        context={context}
+        typeKey={props.typeKey}
+        title={answer?.title?.value ?? ""}
+      />
       <RuleText
         id={`${id}-desc`}
         label="Description on Google"
-        count={answer?.description?.value.length ?? 0}
-        limit={DESCRIPTION_LIMIT}
+        kind="description"
+        text={answer?.description?.value ?? ""}
         unknown={unknownIn(draft.description, context.fields)}
       >
         <Input
@@ -641,34 +635,32 @@ function Variables({
   );
 }
 
-/** One of the rule's text fields: its label and count, and what it names wrongly. */
+/**
+ * One of the rule's text fields: its label, how wide the example it gives
+ * draws on Google, and what it names wrongly.
+ */
 function RuleText({
   id,
   label,
-  count,
-  limit,
+  kind,
+  text,
   unknown,
   children,
 }: {
   id: string;
   label: string;
-  count: number;
-  limit: number;
+  kind: SearchText;
+  text: string;
   unknown: readonly string[];
   children: ReactNode;
 }): ReactNode {
   return (
     <div className="grid gap-1.5">
-      <div className="flex items-baseline justify-between gap-2.5">
-        <label
-          htmlFor={id}
-          className="text-[13px] font-semibold text-foreground"
-        >
-          {label}
-        </label>
-        <CharacterCount count={count} limit={limit} />
-      </div>
+      <label htmlFor={id} className="text-[13px] font-semibold text-foreground">
+        {label}
+      </label>
       {children}
+      <WidthMeter kind={kind} text={text} />
       {unknown.length === 0 ? null : (
         <p role="alert" className="m-0 text-xs font-medium text-warning-text">
           {unknown.map(token => `{${token}}`).join(", ")}{" "}
@@ -678,6 +670,55 @@ function RuleText({
           shown as written.
         </p>
       )}
+    </div>
+  );
+}
+
+/** Where a content type's title pattern is changed: its row in SEO settings. */
+function titlePatternHref(typeKey: string): string {
+  const query = new URLSearchParams({ tab: "types", type: typeKey });
+  return `${SETTINGS_PAGE_HREF}?${query.toString()}`;
+}
+
+/**
+ * "Title on Google", read only: the content type's title pattern gives it,
+ * else the page's own title, and the pattern is changed in SEO settings. A
+ * title a design stored as a rule before is left as it is, and unused.
+ */
+function TitleFollowsPattern({
+  context,
+  typeKey,
+  title,
+}: {
+  context: TemplateContext;
+  typeKey: string;
+  title: string;
+}): ReactNode {
+  const link = (
+    <AdminLink
+      href={titlePatternHref(typeKey)}
+      className="font-semibold text-foreground underline underline-offset-2 hover:decoration-2"
+    >
+      SEO settings
+    </AdminLink>
+  );
+  return (
+    <div className="grid gap-1.5">
+      <p className="m-0 text-[13px] leading-[1.5] text-foreground">
+        <b className="font-semibold">Title on Google</b>{" "}
+        {context.titlePattern === undefined ? (
+          <>
+            is each {inSentence(context.typeLabel)}&apos;s own title. Add a
+            title pattern in {link}.
+          </>
+        ) : (
+          <>
+            follows the {context.typePlural} title pattern:{" "}
+            <Code>{context.titlePattern}</Code>. Change it in {link}.
+          </>
+        )}
+      </p>
+      <WidthMeter kind="title" text={title} />
     </div>
   );
 }
@@ -721,7 +762,10 @@ function SharedTitleRow({
           <Input
             ref={inputRef}
             aria-labelledby={`${id}-label`}
-            placeholder={withoutSiteName(draft.title, context.site.name)}
+            placeholder={withoutSiteName(
+              previewAnswer(context)?.title?.value ?? "",
+              context.site.name
+            )}
             {...textProps}
           />
           <p className="m-0 text-[12.5px] leading-[1.45] text-muted-foreground">

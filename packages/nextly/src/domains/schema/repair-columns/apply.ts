@@ -31,9 +31,11 @@
 //   count. A stop between two commits leaves a recorded step the next run finishes from the live
 //   column; a clearing still to run needs that run's own consent.
 //
-// A conversion waits for its table one bounded try, then leaves the column as it was (or at its
-// last committed step) and is reported as unavailable, locked (or interrupted), and the run goes
-// on. On SQLite, whose one writer holds every table, no further conversion tries in that run.
+// A read of a table's rows, and a conversion, waits for a table another session is using in the
+// bounded, retried tries every schema change takes (`table-wait.ts`), one total per table per run.
+// When they run out the column is left as it was (or at its last committed step) and reported as
+// unavailable, locked (or interrupted), and the run goes on with no further wait for that table.
+// On SQLite, whose one writer holds every table, that is every table.
 //
 // @module domains/schema/repair-columns/apply
 
@@ -46,8 +48,16 @@ import { sql, type SQL } from "drizzle-orm";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { DEFAULT_BUSY_TABLE_BOUNDS } from "../busy-table/bounds";
+import { firstNoRetry, type TriggerTables } from "../busy-table/judge";
+import { triggerTables } from "../busy-table/run-unit";
+import { boundSessionTry, boundSqliteWait } from "../busy-table/session-try";
 import { NO_CONSENT, type DataLossConsent } from "../migrate/data-loss-consent";
-import { executeTransaction } from "../migrate/migration-transaction";
+import {
+  executeTransaction,
+  type MigrationTransaction,
+} from "../migrate/migration-transaction";
+import { leadingWords } from "../migrate/split-sql";
 import { mysqlReferenceListNormalise } from "../pipeline/reference-list-conversion";
 import { withSchemaLock } from "../pipeline/schema-lock";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
@@ -93,21 +103,26 @@ import {
   clearsFirst,
   isAt,
   LIST_CONVERSION_STEPS,
-  liveStepOf,
+  liveProgressOf,
   noStepReason,
   notResumed,
   progressFinding,
   progressStepName,
-  readLiveState,
   stepName,
 } from "./resume";
+import { findingLock, type TableWaitSettings } from "./run-report";
+import {
+  SchemaLockLost,
+  settledFirst,
+  TableWaits,
+  type TryContext,
+  type TryLasting,
+  type Waited,
+} from "./table-wait";
 import type { ColumnFinding, DiffersFinding, RepairEntity } from "./types";
 
 /** The command the schema lock names while a repair holds it. */
 const APPLY_COMMAND = "nextly repair-columns --apply";
-
-/** How long one try waits for a table another session is using, about 5 seconds. */
-export const TABLE_TRY_MS = 5_000;
 
 /** Where a conversion is about to run one of its steps. */
 export interface ConversionStepAt {
@@ -136,12 +151,17 @@ export interface ApplyRepairsArgs {
    * The entities to compare, or how to read them. Read here, once the schema lock is held, so a
    * migration that ends while the run waits for the lock is the state the run converts towards.
    */
-  entities: readonly RepairEntity[] | (() => Promise<readonly RepairEntity[]>);
+  entities:
+    | readonly RepairEntity[]
+    | ((waits: TableWaits) => Promise<readonly RepairEntity[]>);
   nextlyVersion: string;
   /** How long to wait for the schema lock; the lock's own wait for a command-line run when left out. */
   schemaLockWaitMs?: number;
-  /** How long one try waits for a table in use; {@link TABLE_TRY_MS} when left out. */
-  tableTryMs?: number;
+  /**
+   * How to wait for a table another session is using: the bounds every schema change takes, and
+   * where each try's notice goes. The default bounds, with no notices, when left out.
+   */
+  tableWait?: TableWaitSettings;
   /**
    * The run's data-loss consent. A lossy column converts under it only where it names the column
    * as `table.column`. No consent when left out.
@@ -158,6 +178,13 @@ export interface ApplyRepairsArgs {
    * step; an error it throws fails that column as a database's refusal would.
    */
   beforeStep?: (at: ConversionStepAt) => Promise<void>;
+  /**
+   * MySQL only: called before each statement of a step is sent, with its position in the step (1
+   * for the first) and how many the step has. A test uses it to hold the table between them.
+   */
+  beforeStatement?: (
+    at: ConversionStepAt & { statement: number; statements: number }
+  ) => Promise<void>;
 }
 
 /** A column's finding as this run last judged it, and what the run established about it. */
@@ -199,18 +226,31 @@ interface StepPlan {
 export async function applyRepairs(
   args: ApplyRepairsArgs
 ): Promise<RepairColumnsDocument> {
+  // One set of waits for the whole run: a table's total covers the reads made to ask about it as
+  // well as every read and conversion under the lock.
+  const waits = new TableWaits({
+    adapter: args.adapter,
+    dialect: args.dialect,
+    bounds: args.tableWait?.bounds ?? DEFAULT_BUSY_TABLE_BOUNDS,
+    notify: args.tableWait?.notify ?? (() => undefined),
+    underSchemaLock: false,
+    command: APPLY_COMMAND,
+  });
   // Asked before the lock, so no other schema change waits on a person's answer. Only a run that
   // may ask reads the database here; under the lock everything is read again.
   const answers =
     args.confirmClearing === undefined
       ? new Map<string, ReadonlySet<string> | null>()
-      : await new ApplyRun({
-          ...args,
-          entities:
-            typeof args.entities === "function"
-              ? await args.entities()
-              : args.entities,
-        }).askBeforeLock();
+      : await new ApplyRun(
+          {
+            ...args,
+            entities:
+              typeof args.entities === "function"
+                ? await args.entities(waits)
+                : args.entities,
+          },
+          waits
+        ).askBeforeLock();
   const held = await withSchemaLock(
     {
       adapter: args.adapter,
@@ -225,11 +265,13 @@ export async function applyRepairs(
     async () => {
       // Under the lock: the definitions, the live columns and the progress rows the run decides
       // from are all read from the one schema state no other change can move.
+      // The run holds the lock from here: SQLite's tries end where it can still be shown held.
+      waits.enterSchemaLock();
       const entities =
         typeof args.entities === "function"
-          ? await args.entities()
+          ? await args.entities(waits)
           : args.entities;
-      return new ApplyRun({ ...args, entities, answers }).run();
+      return new ApplyRun({ ...args, entities, answers }, waits).run();
     }
   );
   if (!held.ran) {
@@ -314,37 +356,6 @@ function firstCleared(finding: DiffersFinding): RowKey[] {
     .flatMap(reason => reason.rows?.first ?? []);
 }
 
-/** The codes and messages a database gives when a statement waited out its lock timeout. */
-function waitedOutTable(error: unknown): boolean {
-  let link: unknown = error;
-  for (
-    let depth = 0;
-    depth < 6 && typeof link === "object" && link !== null;
-    depth++
-  ) {
-    const { code, errno, message } = link as {
-      code?: unknown;
-      errno?: unknown;
-      message?: unknown;
-    };
-    // PostgreSQL lock_not_available, MySQL ER_LOCK_WAIT_TIMEOUT, SQLite busy or locked.
-    if (code === "55P03" || code === "ER_LOCK_WAIT_TIMEOUT" || errno === 1205) {
-      return true;
-    }
-    if (code === "SQLITE_BUSY" || code === "SQLITE_LOCKED") return true;
-    if (
-      typeof message === "string" &&
-      /lock timeout|lock wait timeout exceeded|database (?:table )?is locked/i.test(
-        message
-      )
-    ) {
-      return true;
-    }
-    link = (link as { cause?: unknown }).cause;
-  }
-  return false;
-}
-
 /** The database's reason for a failure, as its message gives it. */
 function reasonOf(error: unknown): string {
   let link: unknown = error;
@@ -369,11 +380,10 @@ const ROWS_CHANGED =
 class ApplyRun {
   private readonly adapter: DrizzleAdapter;
   private readonly dialect: SupportedDialect;
-  private readonly tryMs: number;
   private readonly consent: DataLossConsent;
   private repairsTableReady = false;
-  /** SQLite's one writer was held past a try: no further conversion tries this run. */
-  private databaseHeld = false;
+  /** The tables with a trigger, read once, the first time a MySQL step is judged for a resend. */
+  private triggers: Promise<TriggerTables> | undefined;
 
   constructor(
     private readonly args: ApplyRepairsArgs & {
@@ -383,11 +393,12 @@ class ApplyRun {
        * yes was given for, or null for a no.
        */
       answers?: ReadonlyMap<string, ReadonlySet<string> | null>;
-    }
+    },
+    /** The run's waits for a table another session is using, one total per table. */
+    private readonly waits: TableWaits
   ) {
     this.adapter = args.adapter;
     this.dialect = args.dialect;
-    this.tryMs = args.tableTryMs ?? TABLE_TRY_MS;
     this.consent = args.consent ?? NO_CONSENT;
   }
 
@@ -401,6 +412,7 @@ class ApplyRun {
       db: this.db,
       dialect: this.dialect,
       entities: this.args.entities,
+      waits: this.waits,
     });
     const records: RepairRecord[] = [];
     // Each unfinished conversion first, before any other column converts.
@@ -432,61 +444,23 @@ class ApplyRun {
   private async columnOutcome(
     finding: ColumnFinding
   ): Promise<Converted | null> {
+    // A column whose rows or definition could not be read is neither classed nor converted.
+    const unread = findingLock(finding, 0);
+    if (unread !== null) {
+      return { finding, facts: { ...NO_RUN_FACTS, lock: unread } };
+    }
     if (!convertible(finding) && !clearable(finding)) {
       return { finding, facts: NO_RUN_FACTS };
     }
-    if (this.databaseHeld) {
-      return {
-        finding,
-        facts: { ...NO_RUN_FACTS, lock: this.lockFacts(finding, 0, 0) },
-      };
+    // Its table's tries ran out earlier in this run (on SQLite, the database's): no try of its own.
+    const ranOut = this.waits.ranOut(this.liveTableOf(finding));
+    if (ranOut !== null) {
+      return { finding, facts: { ...NO_RUN_FACTS, lock: ranOut } };
     }
     try {
-      // Planned again from the table as the conversions before it in this run left it: a plan
-      // read at the start could restate a table another column's conversion has since changed,
-      // and on SQLite rebuild it as it first stood.
-      const fresh = await this.refreshed(finding);
-      if (fresh === null) return null;
-      let clearing: Clearing | null = null;
-      if (clearable(fresh)) {
-        const decided = this.consentFor(fresh);
-        if (!("given" in decided)) {
-          return {
-            finding: decided.finding,
-            facts: { ...NO_RUN_FACTS, ...decided.facts },
-          };
-        }
-        clearing = decided;
-      } else if (!convertible(fresh)) {
-        return { finding: fresh, facts: NO_RUN_FACTS };
-      }
-      // Made only once a column is still to convert.
-      await this.ensureRepairsTable();
-      const done =
-        this.dialect === "mysql"
-          ? await this.convertInSteps(fresh, clearing)
-          : await this.convertInTransaction(fresh, clearing);
-      // A consent given stays on the record whatever the conversion's outcome, so a failed column
-      // never reads as one no consent covered.
-      return clearing === null || done.facts.consent !== null
-        ? done
-        : {
-            ...done,
-            facts: { ...done.facts, consent: consentRan(clearing, 0) },
-          };
+      return await this.convertFresh(finding);
     } catch (error) {
-      // SQLite's one writer held past its try while the record table was made: the database is
-      // held, as for a conversion's own wait, so no further SQLite conversion tries this run.
-      if (this.dialect === "sqlite" && waitedOutTable(error)) {
-        this.databaseHeld = true;
-        return {
-          finding,
-          facts: {
-            ...NO_RUN_FACTS,
-            lock: this.lockFacts(finding, 1, this.tryMs),
-          },
-        };
-      }
+      if (error instanceof SchemaLockLost) throw error;
       // Anything that stops the column before its first step, such as its progress record
       // being refused, fails that column alone, which is exactly as it was.
       return {
@@ -497,6 +471,61 @@ class ApplyRun {
         },
       };
     }
+  }
+
+  /**
+   * Plan the column again from the table as the conversions before it in this run left it, and
+   * convert it: a plan read at the start could restate a table another column's conversion has
+   * since changed, and on SQLite rebuild it as it first stood.
+   */
+  private async convertFresh(
+    finding: DiffersFinding
+  ): Promise<Converted | null> {
+    const fresh = await this.refreshed(finding);
+    if (fresh === null) return null;
+    const freshLock = findingLock(fresh, 0);
+    if (freshLock !== null) {
+      return { finding: fresh, facts: { ...NO_RUN_FACTS, lock: freshLock } };
+    }
+    const plan = this.clearingOf(fresh);
+    if (!("convert" in plan)) return plan;
+    const { convert, clearing } = plan;
+    // Made only once a column is still to convert.
+    const ready = await this.ensureRepairsTable(convert);
+    if (ready !== null) {
+      return { finding: convert, facts: { ...NO_RUN_FACTS, lock: ready } };
+    }
+    const done =
+      this.dialect === "mysql"
+        ? await this.convertInSteps(convert, clearing)
+        : await this.convertInTransaction(convert, clearing);
+    // A consent given stays on the record whatever the conversion's outcome, so a failed column
+    // never reads as one no consent covered.
+    return clearing === null || done.facts.consent !== null
+      ? done
+      : { ...done, facts: { ...done.facts, consent: consentRan(clearing, 0) } };
+  }
+
+  /**
+   * A fresh finding to convert, with the consent or yes to clear its values (null for a column
+   * that only converts); or the outcome of a column left as it is: no consent to clear it, or
+   * nothing left to convert.
+   */
+  private clearingOf(
+    fresh: ColumnFinding
+  ): { convert: DiffersFinding; clearing: Clearing | null } | Converted {
+    if (clearable(fresh)) {
+      const decided = this.consentFor(fresh);
+      return "given" in decided
+        ? { convert: fresh, clearing: decided }
+        : {
+            finding: decided.finding,
+            facts: { ...NO_RUN_FACTS, ...decided.facts },
+          };
+    }
+    return convertible(fresh)
+      ? { convert: fresh, clearing: null }
+      : { finding: fresh, facts: NO_RUN_FACTS };
   }
 
   /**
@@ -561,13 +590,16 @@ class ApplyRun {
       db: this.db,
       dialect: this.dialect,
       entities: this.args.entities,
+      waits: this.waits,
     });
     for (const progress of unfinished) {
       if (!clearsFirst(progress)) continue;
-      const live = await readLiveState(this.db, this.dialect, progress);
-      if ((await liveStepOf(this.db, this.dialect, progress, live)) !== 0) {
-        continue;
-      }
+      // A table whose tries run out is asked nothing: under the lock it takes no further wait.
+      const read = await this.waits.read(progress.table, db =>
+        liveProgressOf(db, this.dialect, progress)
+      );
+      if (read.kind === "ran-out" || read.value.reached !== 0) continue;
+      const { live } = read.value;
       const finding = progressFinding(
         progress,
         findings,
@@ -592,7 +624,11 @@ class ApplyRun {
     const { table, column } = finding.location;
     if (consentForColumn(this.consent, table, column).covered) return;
     if (this.clearingRefusal(finding) !== null) return;
-    const judged = await this.judged(this.db, finding);
+    const read = await this.waits.read(this.liveTableOf(finding), db =>
+      this.judged(db, finding)
+    );
+    if (read.kind === "ran-out") return;
+    const judged = read.value;
     if (findingClass(judged.finding) !== "lossy") return;
     const yes = await ask({
       table,
@@ -625,20 +661,55 @@ class ApplyRun {
       db: this.db,
       dialect: this.dialect,
       entities: [entity],
+      waits: this.waits,
     });
+    // A table whose definition could not be read this time is reported with its lock, never
+    // dropped from the report as a column that no longer differs.
     return (
       now.find(
         f =>
-          f.kind === "differs" &&
+          (f.kind === "differs" || f.kind === "definition-unreadable") &&
           isAt(f, finding.location.table, finding.location.column)
       ) ?? null
     );
   }
 
-  private async ensureRepairsTable(): Promise<void> {
-    if (this.repairsTableReady) return;
-    await ensureColumnRepairsTable(this.adapter, this.dialect);
+  /**
+   * Make the record table, once. On SQLite that needs the database's write lock, which another
+   * connection's write holds, so it waits in the database's tries; the lock facts where they run
+   * out, else null.
+   */
+  private async ensureRepairsTable(
+    finding: DiffersFinding
+  ): Promise<TableLockFacts | null> {
+    if (this.repairsTableReady) return null;
+    if (this.dialect !== "sqlite") {
+      await ensureColumnRepairsTable(this.adapter, this.dialect);
+    } else {
+      const made = await this.waits.inTries(
+        this.liveTableOf(finding),
+        async ({ tryMs, tableReached }) => {
+          const restore = await boundSqliteWait(this.adapter, tryMs);
+          try {
+            await ensureColumnRepairsTable(this.adapter, this.dialect);
+            // One statement: its time is its wait.
+            await tableReached(false);
+          } finally {
+            await restore();
+          }
+        }
+      );
+      if (made.kind === "ran-out") return made.lock;
+    }
     this.repairsTableReady = true;
+    return null;
+  }
+
+  /** The table a finding's conversion changes, as the database spells it. */
+  private liveTableOf(finding: ColumnFinding): string {
+    return finding.kind === "differs"
+      ? (finding.judged?.liveTable ?? finding.location.table)
+      : finding.location.table;
   }
 
   /**
@@ -729,87 +800,17 @@ class ApplyRun {
     finding: DiffersFinding,
     clearing: Clearing | null
   ): Promise<Converted> {
-    const started = Date.now();
-    const liveTable = finding.judged?.liveTable ?? finding.location.table;
-    const table = quoteIdent(liveTable, this.dialect);
-    const restoreBusyTimeout = await this.boundSqliteWait();
     try {
-      return await executeTransaction(this.adapter, async tx => {
-        if (this.dialect === "postgresql") {
-          // The table is closed first, as the type change closes it anyway, so no write comes
-          // between the judgement below and the change; the wait for it is one bounded try.
-          await tx.execute(
-            `SET LOCAL lock_timeout = '${String(this.tryMs)}ms'`
-          );
-          await tx.execute(`LOCK TABLE ${table} IN ACCESS EXCLUSIVE MODE`);
-        }
-        const judged = await this.judged(tx.db, finding);
-        const stopped = this.stillConverts(judged, clearing);
-        if (stopped !== null) return stopped;
-        const now = judged.finding;
-        const cls = findingClass(now) ?? "safe";
-        const cleared = cls === "lossy" ? judged.cleared : [];
-        const clear = clearingStatements({
-          table: liveTable,
-          column: now.judged?.liveColumn ?? now.location.column,
-          keyedBy: now.judged?.keyedBy ?? "none",
-          keys: cleared,
-        });
-        const liveColumn = now.judged?.liveColumn ?? now.location.column;
-        if (this.dialect === "postgresql" && clear.length > 0) {
-          // PostgreSQL's cast refuses a value the new type cannot hold, so the named values are
-          // cleared before it runs; a column that does not allow a null yet (its field allows
-          // one, or the clearing would be blocked) drops NOT NULL first, as its conversion would.
-          if (!now.live.nullable) {
-            await runSql(
-              tx.db,
-              this.dialect,
-              sql`ALTER TABLE ${sql.identifier(liveTable)} ALTER COLUMN ${sql.identifier(liveColumn)} DROP NOT NULL`
-            );
-          }
-          for (const statement of clear) {
-            await runSql(tx.db, this.dialect, statement);
-          }
-        }
-        for (const [index, group] of (now.conversion?.steps ?? []).entries()) {
-          await this.step(now, index);
-          for (const statement of group) await tx.execute(statement);
-        }
-        if (this.dialect === "sqlite") {
-          // SQLite's rebuild copies each value as the new column keeps it, so the named values
-          // are cleared in the rebuilt table, before the transaction commits.
-          for (const statement of clear) {
-            await runSql(tx.db, this.dialect, statement);
-          }
-        }
-        const steps = now.conversion?.steps.length ?? 0;
-        await insertRepair(
-          tx.db,
-          this.dialect,
-          repairFacts(now, cls, clearing, cleared.length),
-          { state: "converted", step: steps, steps }
-        );
-        return {
-          finding: now,
-          facts: {
-            ...NO_RUN_FACTS,
-            converted: true,
-            consent:
-              clearing === null ? null : consentRan(clearing, cleared.length),
-          },
-        };
-      });
+      // Each try is the whole transaction: one that ends waiting rolls back whole, having run no
+      // row change (PostgreSQL waits at its first statement, the lock; SQLite at its first write),
+      // so the next try judges the rows again and runs it all from the start.
+      const waited = await this.waits.inTries(this.liveTableOf(finding), try_ =>
+        this.convertOnce(finding, clearing, try_)
+      );
+      if (waited.kind === "done") return waited.value;
+      return { finding, facts: { ...NO_RUN_FACTS, lock: waited.lock } };
     } catch (error) {
-      if (waitedOutTable(error)) {
-        if (this.dialect === "sqlite") this.databaseHeld = true;
-        return {
-          finding,
-          facts: {
-            ...NO_RUN_FACTS,
-            lock: this.lockFacts(finding, 1, Date.now() - started),
-          },
-        };
-      }
+      if (error instanceof SchemaLockLost) throw error;
       return {
         finding,
         facts: {
@@ -817,35 +818,147 @@ class ApplyRun {
           failure: { reason: reasonOf(error), heldStep: null },
         },
       };
+    }
+  }
+
+  /** One try of a PostgreSQL or SQLite conversion, bounded by `try_`. */
+  private async convertOnce(
+    finding: DiffersFinding,
+    clearing: Clearing | null,
+    try_: TryContext
+  ): Promise<Converted> {
+    const table = quoteIdent(this.liveTableOf(finding), this.dialect);
+    const restoreBusyTimeout =
+      this.dialect === "sqlite"
+        ? await boundSqliteWait(this.adapter, try_.tryMs)
+        : () => Promise.resolve();
+    try {
+      // The watch ends before the connection is let go, whatever the try's outcome.
+      return await executeTransaction(this.adapter, tx =>
+        settledFirst(try_.settle, () =>
+          this.convertIn(tx, finding, clearing, try_, table)
+        )
+      );
     } finally {
       await restoreBusyTimeout();
     }
   }
 
   /**
-   * On SQLite, bound the wait for the database's write lock to one try for this conversion, and
-   * return what puts the connection's own wait back. Nothing to do elsewhere.
+   * A PostgreSQL or SQLite try's one wait, then its end. PostgreSQL closes the table first, as
+   * the type change closes it anyway, so no write comes between the judgement and the change;
+   * the try's watch ends the wait at its bound, and a `lock_timeout` half a second past it is the
+   * backstop. SQLite already holds the database's write lock from its BEGIN IMMEDIATE.
    */
-  private async boundSqliteWait(): Promise<() => Promise<void>> {
-    if (this.dialect !== "sqlite") return () => Promise.resolve();
-    const [row] = (await this.adapter.executeQuery(
-      "PRAGMA busy_timeout"
-    )) as Array<Record<string, unknown>>;
-    const previous = Number(Object.values(row ?? {})[0] ?? 0);
-    await this.adapter.executeQuery(
-      `PRAGMA busy_timeout = ${String(this.tryMs)}`
+  private async takeTable(
+    tx: MigrationTransaction,
+    try_: TryContext,
+    table: string
+  ): Promise<void> {
+    if (this.dialect === "postgresql") {
+      const session = await tx.session();
+      if (session !== undefined) try_.onSession(session);
+      await tx.execute(
+        `SET LOCAL lock_timeout = '${String(Math.round(try_.tryMs) + 500)}ms'`
+      );
+      await tx.execute(`LOCK TABLE ${table} IN ACCESS EXCLUSIVE MODE`);
+    }
+    // The try's one wait is over, and its lock is held to the end of the transaction. The watch
+    // ends here, so it cannot cancel a later statement of this conversion that waits for
+    // something else, which then fails the column as its own failure rather than as this table
+    // being busy.
+    await try_.tableReached(true);
+  }
+
+  /**
+   * The column's conversion inside the try's transaction, with the values `cleared` names
+   * cleared where the dialect needs them cleared: before PostgreSQL's cast, which refuses a value
+   * the new type cannot hold, or after SQLite's rebuild, which copies each value as the new
+   * column keeps it.
+   */
+  private async convertWithin(
+    tx: MigrationTransaction,
+    now: DiffersFinding,
+    cleared: readonly RowKey[]
+  ): Promise<void> {
+    const liveTable = this.liveTableOf(now);
+    const liveColumn = now.judged?.liveColumn ?? now.location.column;
+    const clear = clearingStatements({
+      table: liveTable,
+      column: liveColumn,
+      keyedBy: now.judged?.keyedBy ?? "none",
+      keys: cleared,
+    });
+    if (this.dialect === "postgresql" && clear.length > 0) {
+      await this.clearBeforeCast(tx, now, liveTable, liveColumn, clear);
+    }
+    for (const [index, group] of (now.conversion?.steps ?? []).entries()) {
+      await this.step(now, index);
+      for (const statement of group) await tx.execute(statement);
+    }
+    if (this.dialect === "sqlite") {
+      for (const statement of clear) {
+        await runSql(tx.db, this.dialect, statement);
+      }
+    }
+  }
+
+  /**
+   * PostgreSQL: clear the named values before the cast. A column that does not allow a null yet
+   * (its field allows one, or the clearing would be blocked) drops NOT NULL first, as its
+   * conversion would.
+   */
+  private async clearBeforeCast(
+    tx: MigrationTransaction,
+    now: DiffersFinding,
+    liveTable: string,
+    liveColumn: string,
+    clear: readonly SQL[]
+  ): Promise<void> {
+    if (!now.live.nullable) {
+      await runSql(
+        tx.db,
+        this.dialect,
+        sql`ALTER TABLE ${sql.identifier(liveTable)} ALTER COLUMN ${sql.identifier(liveColumn)} DROP NOT NULL`
+      );
+    }
+    for (const statement of clear) {
+      await runSql(tx.db, this.dialect, statement);
+    }
+  }
+
+  /** The body of one try's transaction (`convertOnce`). */
+  private async convertIn(
+    tx: MigrationTransaction,
+    finding: DiffersFinding,
+    clearing: Clearing | null,
+    try_: TryContext,
+    table: string
+  ): Promise<Converted> {
+    await this.takeTable(tx, try_, table);
+    const judged = await this.judged(tx.db, finding);
+    const stopped = this.stillConverts(judged, clearing);
+    if (stopped !== null) return stopped;
+    const now = judged.finding;
+    const cls = findingClass(now) ?? "safe";
+    const cleared = cls === "lossy" ? judged.cleared : [];
+    await this.convertWithin(tx, now, cleared);
+    const steps = now.conversion?.steps.length ?? 0;
+    await insertRepair(
+      tx.db,
+      this.dialect,
+      repairFacts(now, cls, clearing, cleared.length),
+      { state: "converted", step: steps, steps }
     );
-    // Putting the wait back is best effort: the conversion has already committed or rolled back,
-    // and a failure here must not turn its outcome into another.
-    return () =>
-      this.adapter
-        .executeQuery(
-          `PRAGMA busy_timeout = ${String(Number.isFinite(previous) ? previous : 0)}`
-        )
-        .then(
-          () => undefined,
-          () => undefined
-        );
+    return {
+      finding: now,
+      facts: {
+        ...NO_RUN_FACTS,
+        converted: true,
+        consent:
+          clearing === null ? null : consentRan(clearing, cleared.length),
+      },
+    };
   }
 
   /**
@@ -856,7 +969,13 @@ class ApplyRun {
     finding: DiffersFinding,
     clearing: Clearing | null
   ): Promise<Converted> {
-    const judged = await this.judged(this.db, finding);
+    const read = await this.waits.read(this.liveTableOf(finding), db =>
+      this.judged(db, finding)
+    );
+    if (read.kind === "ran-out") {
+      return { finding, facts: { ...NO_RUN_FACTS, lock: read.lock } };
+    }
+    const judged = read.value;
     const stopped = this.stillConverts(judged, clearing);
     if (stopped !== null) return stopped;
     const now = judged.finding;
@@ -911,7 +1030,8 @@ class ApplyRun {
     finding: DiffersFinding,
     rowId: string,
     keys: readonly RowKey[],
-    step: number
+    step: number,
+    try_: TryContext
   ): Promise<number> {
     const compiler = new MySqlDialect();
     const run = async <R>(statement: SQL): Promise<R[]> => {
@@ -934,6 +1054,11 @@ class ApplyRun {
         await run(statement);
       }
       await run(clearedStepStatement(rowId, step, still.length));
+      // Every lock the clearing needs is held: the watch ends before the COMMIT, so a cancel it
+      // decided while an earlier statement waited cannot end the COMMIT, which could leave it
+      // unknown whether the clearing stayed. The table is charged the waits the watch saw, not
+      // the clearing's work.
+      await try_.locksHeld();
       await run(sql`COMMIT`);
       return still.length;
     } catch (error) {
@@ -944,81 +1069,240 @@ class ApplyRun {
     }
   }
 
-  /** Run `plan`'s steps from `from` on one strict-mode session, recording each committed step. */
+  /**
+   * Run `plan`'s steps from `from` on one strict-mode session, recording each committed step. Each
+   * step waits for the table in tries: a statement that waited did not run, so the next try sends
+   * it again, after the statements of the step that committed before it, which are not. The
+   * tries are the table's for the run, so a step whose tries run out leaves the column at the
+   * last step that committed, and the run makes no further wait for that table.
+   */
   private async runSteps(
     finding: DiffersFinding,
     rowId: string,
     from: number,
     plan: StepPlan
   ): Promise<Converted> {
-    const started = Date.now();
     const total = plan.offset + plan.statements.length;
     const clearing = plan.offset === 1;
+    const table = this.liveTableOf(finding);
     let reached = from;
     let cleared = 0;
+    let lock: TableLockFacts | null = null;
     try {
-      await this.adapter.withSession(
-        async session => {
-          // One bounded try for the table, for every statement of this session: the metadata
-          // lock a schema statement waits for, and the row locks the list conversion's rewrite
-          // and a clearing wait for.
-          const seconds = String(Math.max(1, Math.ceil(this.tryMs / 1000)));
-          await session.execute(`SET SESSION lock_wait_timeout = ${seconds}`);
-          await session.execute(
-            `SET SESSION innodb_lock_wait_timeout = ${seconds}`
-          );
-          for (let index = from; index < total; index++) {
-            await this.step(finding, index);
-            if (index < plan.offset) {
-              // The clearing commits with its record, so the record cannot fall behind it.
-              cleared = await this.clearOnSession(
-                session,
-                finding,
-                rowId,
-                plan.clear ?? [],
-                index + 1
-              );
-              reached = index + 1;
-              continue;
+      await this.onTriedSession(table, async (inTries, sent) => {
+        for (let index = from; index < total; index++) {
+          await this.step(finding, index);
+          if (index < plan.offset) {
+            // The clearing commits with its record, so the record cannot fall behind it; a try
+            // that ends waiting rolls it back whole.
+            const waited = await inTries(
+              try_ =>
+                this.clearOnSession(
+                  sent,
+                  finding,
+                  rowId,
+                  plan.clear ?? [],
+                  index + 1,
+                  try_
+                ),
+              () => this.rowChangeLasting(table, 1)
+            );
+            if (waited.kind === "ran-out") {
+              lock = waited.lock;
+              return;
             }
-            for (const statement of plan.statements[index - plan.offset]) {
-              await session.execute(statement);
-            }
+            cleared = waited.value;
             reached = index + 1;
-            await recordStep(this.db, this.dialect, rowId, reached, total);
+            continue;
           }
-        },
-        { strictSqlMode: true }
-      );
-      return {
-        finding,
-        facts: {
-          ...NO_RUN_FACTS,
-          converted: true,
-          consent:
-            plan.consent === null
-              ? null
-              : { ...plan.consent, valuesCleared: cleared },
-        },
-      };
+          const group = plan.statements[index - plan.offset];
+          // Each statement is a try of its own, with its own watch: the watch ends between two
+          // statements, so a cancel it decided while one waited cannot end the next. A statement
+          // that waited did not run, so the next try sends it again; those before it committed.
+          for (const [at, statement] of group.entries()) {
+            await this.args.beforeStatement?.({
+              table: finding.location.table,
+              column: finding.location.column,
+              step: index,
+              statement: at + 1,
+              statements: group.length,
+            });
+            const waited = await inTries(
+              () => sent.execute(statement),
+              () => this.statementLasting(statement, at + 1),
+              // The step's first statement starts it; the later ones finish what it started.
+              { continuing: at > 0 }
+            );
+            if (waited.kind === "ran-out") {
+              lock = waited.lock;
+              return;
+            }
+          }
+          reached = index + 1;
+          await recordStep(this.db, this.dialect, rowId, reached, total);
+        }
+      });
     } catch (error) {
+      if (error instanceof SchemaLockLost) throw error;
       const stopped = await this.stoppedAt(
         finding,
         rowId,
         { from, reached, total, clearing },
-        error,
-        started
+        { failure: error }
       );
-      return plan.consent === null
-        ? stopped
-        : {
-            ...stopped,
-            facts: {
-              ...stopped.facts,
-              consent: { ...plan.consent, valuesCleared: cleared },
-            },
-          };
+      return this.withConsent(stopped, plan.consent, cleared);
     }
+    if (lock !== null) {
+      const stopped = await this.stoppedAt(
+        finding,
+        rowId,
+        { from, reached, total, clearing },
+        { lock }
+      );
+      return this.withConsent(stopped, plan.consent, cleared);
+    }
+    return {
+      finding,
+      facts: {
+        ...NO_RUN_FACTS,
+        converted: true,
+        consent:
+          plan.consent === null
+            ? null
+            : { ...plan.consent, valuesCleared: cleared },
+      },
+    };
+  }
+
+  /** A stopped conversion's facts, with the consent it ran under and the values it cleared. */
+  private withConsent(
+    stopped: Converted,
+    consent: ColumnConsentFacts | null,
+    cleared: number
+  ): Converted {
+    return consent === null
+      ? stopped
+      : {
+          ...stopped,
+          facts: {
+            ...stopped.facts,
+            consent: { ...consent, valuesCleared: cleared },
+          },
+        };
+  }
+
+  /**
+   * MySQL: one strict-mode session for a conversion's steps, its lock waits bounded half a second
+   * past a try as the backstop of each try's watch, which it is told the session's id. `work` runs
+   * each piece of a step in the table's tries through `inTries`.
+   */
+  private async onTriedSession(
+    table: string,
+    work: (
+      inTries: <T>(
+        attempt: (try_: TryContext) => Promise<T>,
+        judge: () => Promise<TryLasting | undefined>,
+        options?: { continuing?: boolean }
+      ) => Promise<Waited<T>>,
+      session: StatementSession
+    ) => Promise<void>
+  ): Promise<void> {
+    await this.adapter.withSession(
+      session => {
+        let id: string | undefined;
+        // The engine's per-try bounds, set back afterwards: a table's metadata lock and a row's
+        // lock, each half a second past a try, and the session's id for each try's watch.
+        return boundSessionTry(
+          session,
+          "mysql",
+          {
+            tryMs: this.waits.tryMs,
+            onSession: given => {
+              id = given;
+            },
+          },
+          () =>
+            work(
+              <T>(
+                attempt: (try_: TryContext) => Promise<T>,
+                judge: () => Promise<TryLasting | undefined>,
+                options?: { continuing?: boolean }
+              ): Promise<Waited<T>> =>
+                this.waits.inTries(
+                  table,
+                  async (try_: TryContext) => {
+                    if (id !== undefined) try_.onSession(id);
+                    return attempt(try_);
+                  },
+                  judge,
+                  options
+                ),
+              session
+            )
+        );
+      },
+      { strictSqlMode: true }
+    );
+  }
+
+  /**
+   * Whether the next try may not send `statement` (the `number`th of its step) again. Every
+   * statement a step sends is this command's own: a schema change (sent directly, or prepared
+   * from the catalog and executed, on the step's one session, which keeps what it prepared), a
+   * session setting, or a row change. Only a row change can run code the system does not know, a
+   * trigger, so only it is judged, by the engine's reading; it may not run again where its table
+   * has a trigger, or this account cannot see every trigger. Undefined where it may run again.
+   */
+  private async statementLasting(
+    statement: string | undefined,
+    number: number
+  ): Promise<TryLasting | undefined> {
+    if (statement === undefined) return undefined;
+    const [first] = leadingWords(statement, this.dialect, 1);
+    if (first !== "UPDATE" && first !== "INSERT" && first !== "DELETE") {
+      return undefined;
+    }
+    this.triggers ??= triggerTables(this.adapter, this.dialect).catch(
+      (error: unknown) => {
+        // A read that failed is asked again next time, not remembered.
+        this.triggers = undefined;
+        throw error;
+      }
+    );
+    const found = firstNoRetry([statement], this.dialect, await this.triggers);
+    return found === undefined
+      ? undefined
+      : { statementNumber: number, judgement: found.judgement };
+  }
+
+  /**
+   * The clearing's row change, judged as `statementLasting` judges a statement: it may not run
+   * again where its table has a trigger, or MySQL does not show this account every trigger.
+   */
+  private async rowChangeLasting(
+    table: string,
+    number: number
+  ): Promise<TryLasting | undefined> {
+    this.triggers ??= triggerTables(this.adapter, this.dialect).catch(
+      (error: unknown) => {
+        // A read that failed is asked again next time, not remembered.
+        this.triggers = undefined;
+        throw error;
+      }
+    );
+    const triggers = await this.triggers;
+    if (triggers === "unseen") {
+      return {
+        statementNumber: number,
+        judgement: { kind: "no-retry", reason: "hidden-trigger" },
+      };
+    }
+    return triggers.has(table.toLowerCase())
+      ? {
+          statementNumber: number,
+          judgement: { kind: "no-retry", reason: "trigger" },
+        }
+      : undefined;
   }
 
   /** What a conversion that stopped at step `reached` of `total` leaves, and its outcome. */
@@ -1026,34 +1310,34 @@ class ApplyRun {
     finding: DiffersFinding,
     rowId: string,
     at: { from: number; reached: number; total: number; clearing: boolean },
-    error: unknown,
-    started: number
+    why: { lock: TableLockFacts } | { failure: unknown }
   ): Promise<Converted> {
     const { from, reached, total, clearing } = at;
-    const busy = waitedOutTable(error);
+    const lock = "lock" in why ? why.lock : null;
     if (reached === 0) {
       // Nothing committed: the column is exactly as it was, so its progress is removed.
       await deleteRepair(this.db, this.dialect, rowId).catch(() => undefined);
       return {
         finding,
-        facts: busy
-          ? {
-              ...NO_RUN_FACTS,
-              lock: this.lockFacts(finding, 1, Date.now() - started),
-            }
-          : {
-              ...NO_RUN_FACTS,
-              failure: { reason: reasonOf(error), heldStep: null },
-            },
+        facts:
+          lock !== null
+            ? { ...NO_RUN_FACTS, lock }
+            : {
+                ...NO_RUN_FACTS,
+                failure: {
+                  reason: reasonOf("failure" in why ? why.failure : null),
+                  heldStep: null,
+                },
+              },
       };
     }
     const held = stepName(reached, total, clearing);
-    if (busy) {
+    if (lock !== null) {
       return {
         finding,
         facts: {
           ...NO_RUN_FACTS,
-          lock: this.lockFacts(finding, 1, Date.now() - started),
+          lock,
           progress: { recordedStep: held, liveStep: held },
         },
       };
@@ -1062,7 +1346,10 @@ class ApplyRun {
       finding,
       facts: {
         ...NO_RUN_FACTS,
-        failure: { reason: reasonOf(error), heldStep: held },
+        failure: {
+          reason: reasonOf("failure" in why ? why.failure : null),
+          heldStep: held,
+        },
         progress:
           reached > from ? { recordedStep: held, liveStep: held } : null,
       },
@@ -1080,6 +1367,7 @@ class ApplyRun {
     try {
       return await this.resume(progress, findings);
     } catch (error) {
+      if (error instanceof SchemaLockLost) throw error;
       return {
         finding: progressFinding(progress, findings, this.args.entities, null),
         facts: {
@@ -1103,15 +1391,29 @@ class ApplyRun {
     progress: RecordedProgress,
     findings: readonly ColumnFinding[]
   ): Promise<Converted> {
-    const live = await readLiveState(this.db, this.dialect, progress);
+    const recordedStep = progressStepName(progress, progress.step);
+    // Its live step is read in its table's tries; where they run out, the column and its record
+    // stay as they are, and it stays interrupted at its recorded step, with the lock.
+    const read = await this.waits.read(progress.table, db =>
+      liveProgressOf(db, this.dialect, progress)
+    );
+    if (read.kind === "ran-out") {
+      return {
+        finding: progressFinding(progress, findings, this.args.entities, null),
+        facts: {
+          ...NO_RUN_FACTS,
+          progress: { recordedStep, liveStep: null },
+          lock: read.lock,
+        },
+      };
+    }
+    const { live, reached } = read.value;
     const finding = progressFinding(
       progress,
       findings,
       this.args.entities,
       live
     );
-    const reached = await liveStepOf(this.db, this.dialect, progress, live);
-    const recordedStep = progressStepName(progress, progress.step);
     if (reached === null) {
       return {
         finding,
@@ -1123,28 +1425,78 @@ class ApplyRun {
       };
     }
     if (reached === progress.steps) {
-      // The column already holds its field's definition: only the record is behind. A list
-      // conversion stopped between its retype and the normalising that follows it can still
-      // hold a scalar written before the retype, so that is finished first.
-      if (progress.steps === LIST_CONVERSION_STEPS && !clearsFirst(progress)) {
-        await this.adapter.withSession(
-          async session => {
-            await session.execute(
-              mysqlReferenceListNormalise(progress.table, progress.column)
-            );
-          },
-          { strictSqlMode: true }
-        );
-      }
-      await recordStep(
-        this.db,
-        this.dialect,
-        progress.id,
-        reached,
-        progress.steps
-      );
-      return { finding, facts: { ...NO_RUN_FACTS, converted: true } };
+      return this.finishRecord(progress, finding, recordedStep);
     }
+    return this.resumeFrom(progress, finding, reached, recordedStep);
+  }
+
+  /**
+   * A column that already holds its field's definition: only the record is behind. A list
+   * conversion stopped between its retype and the normalising that follows it can still hold a
+   * scalar written before the retype, so that is finished first, in its table's tries.
+   */
+  private async finishRecord(
+    progress: RecordedProgress,
+    finding: DiffersFinding,
+    recordedStep: string
+  ): Promise<Converted> {
+    if (progress.steps === LIST_CONVERSION_STEPS && !clearsFirst(progress)) {
+      const lock = await this.normaliseList(progress);
+      if (lock !== null) {
+        return {
+          finding,
+          facts: {
+            ...NO_RUN_FACTS,
+            progress: {
+              recordedStep,
+              liveStep: progressStepName(progress, progress.steps),
+            },
+            lock,
+          },
+        };
+      }
+    }
+    await recordStep(
+      this.db,
+      this.dialect,
+      progress.id,
+      progress.steps,
+      progress.steps
+    );
+    return { finding, facts: { ...NO_RUN_FACTS, converted: true } };
+  }
+
+  /** Normalise a list column's scalars in its table's tries; the lock facts where they run out. */
+  private async normaliseList(
+    progress: RecordedProgress
+  ): Promise<TableLockFacts | null> {
+    const normalise = mysqlReferenceListNormalise(
+      progress.table,
+      progress.column
+    );
+    let lock: TableLockFacts | null = null;
+    await this.onTriedSession(progress.table, async (inTries, session) => {
+      const waited = await inTries(
+        () => session.execute(normalise),
+        () => this.statementLasting(normalise, 1)
+      );
+      if (waited.kind === "ran-out") lock = waited.lock;
+    });
+    return lock;
+  }
+
+  /**
+   * A column stopped before its last step, resumed from the step its live column has reached. The
+   * clearing still to run needs this run's consent naming the column, or the yes given for it
+   * before the lock; the rows it clears are the ones judged now, and under a yes only those the
+   * person was shown.
+   */
+  private async resumeFrom(
+    progress: RecordedProgress,
+    finding: DiffersFinding,
+    reached: number,
+    recordedStep: string
+  ): Promise<Converted> {
     const interrupted: Converted = {
       finding,
       facts: {
@@ -1158,92 +1510,84 @@ class ApplyRun {
     if (finding.judged === undefined || finding.conversion === null)
       return interrupted;
     const offset = clearsFirst(progress) ? 1 : 0;
-    // The clearing still to run needs this run's consent naming the column, or the yes given for
-    // it before the lock; the rows it clears are the ones judged now, and under a yes only those
-    // the person was shown.
-    let clearing: Clearing | null = null;
-    if (offset === 1 && reached === 0) {
-      const decided = this.consentFor(finding);
-      if (!("given" in decided)) {
-        return {
-          finding: decided.finding,
-          facts: { ...interrupted.facts, ...decided.facts },
-        };
-      }
-      clearing = decided;
+    const decided =
+      offset === 1 && reached === 0 ? this.consentFor(finding) : null;
+    if (decided !== null && !("given" in decided)) {
+      return {
+        finding: decided.finding,
+        facts: { ...interrupted.facts, ...decided.facts },
+      };
     }
-    const judged = await this.judged(this.db, finding);
+    const judging = await this.waits.read(progress.table, db =>
+      this.judged(db, finding)
+    );
+    if (judging.kind === "ran-out") {
+      return {
+        ...interrupted,
+        facts: { ...interrupted.facts, lock: judging.lock },
+      };
+    }
+    return this.resumeJudged(progress, judging.value, {
+      reached,
+      offset,
+      clearing: decided,
+      interrupted,
+    });
+  }
+
+  /**
+   * Run the rest of a recorded conversion judged again now. The conversion the column needs now
+   * must be the one its record began, towards the same target; anything else is left for its
+   * owner, never run in its place.
+   */
+  private async resumeJudged(
+    progress: RecordedProgress,
+    judged: Judged,
+    at: {
+      reached: number;
+      offset: 0 | 1;
+      clearing: Clearing | null;
+      interrupted: Converted;
+    }
+  ): Promise<Converted> {
     const now = judged.finding;
     const statements = now.conversion?.steps ?? [];
-    const cls = findingClass(now);
-    // The conversion the column needs now must be the one its record began, towards the same
-    // target; anything else is left for its owner, never run in its place.
+    const clearingLeft = at.offset === 1 && at.reached === 0;
     const sameConversion =
-      offset + statements.length === progress.steps &&
+      at.offset + statements.length === progress.steps &&
       compareColumn(now.expected, progress.to) === null;
-    const clearingLeft = offset === 1 && reached === 0;
-    if (!sameConversion || cls !== (clearingLeft ? "lossy" : "safe")) {
-      return { ...interrupted, finding: now };
+    if (
+      !sameConversion ||
+      findingClass(now) !== (clearingLeft ? "lossy" : "safe")
+    ) {
+      return { ...at.interrupted, finding: now };
     }
-    if (clearing !== null) {
-      const stopped = this.stillConverts(judged, clearing);
-      if (stopped !== null) {
-        return {
-          finding: now,
-          facts: {
-            ...interrupted.facts,
-            consent: stopped.facts.consent,
-            failure: stopped.facts.failure,
-          },
-        };
-      }
+    const stopped =
+      at.clearing === null ? null : this.stillConverts(judged, at.clearing);
+    if (stopped !== null) {
+      return {
+        finding: now,
+        facts: {
+          ...at.interrupted.facts,
+          consent: stopped.facts.consent,
+          failure: stopped.facts.failure,
+        },
+      };
     }
-    if (reached !== progress.step) {
+    if (at.reached !== progress.step) {
       await recordStep(
         this.db,
         this.dialect,
         progress.id,
-        reached,
+        at.reached,
         progress.steps
       );
     }
-    return this.runSteps(now, progress.id, reached, {
+    return this.runSteps(now, progress.id, at.reached, {
       statements,
-      offset: offset === 1 ? 1 : 0,
+      offset: at.offset,
       clear: clearingLeft ? judged.cleared : null,
-      consent: clearing === null ? null : consentRan(clearing, 0),
+      consent: at.clearing === null ? null : consentRan(at.clearing, 0),
     });
-  }
-
-  /** The lock facts of a conversion whose table another session held through `tries` tries. */
-  private lockFacts(
-    finding: ColumnFinding,
-    tries: number,
-    waitedMs: number
-  ): TableLockFacts {
-    const wholeDatabase = this.dialect === "sqlite";
-    return {
-      table: finding.location.table,
-      tries,
-      waitedMs,
-      holder: {
-        sessions: [],
-        couldNotRead: {
-          details: [
-            wholeDatabase
-              ? "which connection holds the database"
-              : "which session holds the table",
-          ],
-          why: wholeDatabase
-            ? "SQLite reports only that the database is locked, not who holds it"
-            : "this run does not read the sessions holding a table",
-        },
-        wholeDatabase,
-      },
-      nextStep:
-        tries === 0
-          ? "run `nextly repair-columns --apply` again once the connection holding the database ends"
-          : "run `nextly repair-columns --apply` again once the session using the table ends",
-    };
   }
 }

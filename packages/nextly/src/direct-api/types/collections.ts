@@ -16,6 +16,7 @@ import type {
   DirectAPIConfig,
   PopulateOptions,
   RunAsPrincipal,
+  SingleSlug,
   WhereFilter,
 } from "./shared";
 
@@ -43,6 +44,21 @@ import type {
 export interface FindArgs<TSlug extends CollectionSlug = CollectionSlug>
   extends DirectAPIConfig,
     RunAsPrincipal {
+  /**
+   * Attach `_sources`: for each translatable field, the language its value
+   * came from, its own or a fallback one; `null` where no language holds one.
+   *
+   * @default false
+   */
+  sourceLocales?: boolean;
+
+  /**
+   * `"all"`: attach every language's values beside the read's own, under
+   * `_allLocales` (`{ field: { code: value } }`). Every field keeps its own
+   * type. A public read holds published values only.
+   */
+  translations?: "all";
+
   /** Collection slug (required) */
   collection: TSlug;
 
@@ -218,6 +234,32 @@ export interface FindByIDArgs<TSlug extends CollectionSlug = CollectionSlug>
    * and a caller passing it before this field existed was silently ignored.
    */
   status?: "published" | "draft" | "all";
+
+  /**
+   * Whole-document fallback. A published read in a language the document is
+   * not published in answers not found; with this set it answers in the first
+   * language of the fallback chain the document is published in instead, and
+   * says which in `_locale`. Its relationships, components and field fallback
+   * are read in that language.
+   *
+   * @default false
+   */
+  wholeDocumentFallback?: boolean;
+
+  /**
+   * Attach `_sources`: for each translatable field, the language its value
+   * came from, its own or a fallback one; `null` where no language holds one.
+   *
+   * @default false
+   */
+  sourceLocales?: boolean;
+
+  /**
+   * `"all"`: attach every language's values beside the read's own, under
+   * `_allLocales` (`{ field: { code: value } }`). Every field keeps its own
+   * type. A public read holds published values only.
+   */
+  translations?: "all";
 
   /**
    * Specific fields to include/exclude.
@@ -766,22 +808,9 @@ export interface PublishResult {
   shared: { changes: boolean; added: boolean };
 }
 
-/**
- * @experimental Arguments for `nextly.rewriteField`: one field of one entry,
- * rewritten on its live copy and on every pending draft that holds it, without
- * publishing, from the version the caller read.
- *
- * Trusted server code by default, as every Direct API call is
- * (`overrideAccess: true`). Made for a person (`overrideAccess: false` with
- * `user`), it needs their permission to update the entry and, where the
- * collection has a publish lifecycle, to publish it.
- */
-export interface RewriteFieldArgs
+/** What every `nextly.rewriteField` call names, of an entry or of a Single. */
+interface RewriteFieldArgsBase
   extends Pick<DirectAPIConfig, "overrideAccess" | "user"> {
-  /** The entry's collection. */
-  collection: CollectionSlug;
-  /** The entry's id. */
-  id: string;
   /** A top-level field, by name. */
   field: string;
   /**
@@ -789,10 +818,37 @@ export interface RewriteFieldArgs
    * when omitted. A shared field takes none.
    */
   locale?: string;
-  /** The version (`_rev`) the entry was read at. */
+  /** The version (`_rev`) the document was read at. */
   expectedVersion: string;
   /** The new value, or how to compute it from each copy's own. */
   set: FieldRewriteValue;
-  /** Why, kept in the entry's history. */
+  /** Why, kept in the document's history. */
   reason: string;
+}
+
+/**
+ * @experimental Arguments for `nextly.rewriteField` on an entry: one field of
+ * one entry, rewritten on its live copy and on every pending draft that holds
+ * it, without publishing, from the version the caller read.
+ *
+ * Trusted server code by default, as every Direct API call is
+ * (`overrideAccess: true`). Made for a person (`overrideAccess: false` with
+ * `user`), it needs their permission to update the entry and, where the
+ * collection has a publish lifecycle, to publish it.
+ */
+export interface RewriteFieldArgs extends RewriteFieldArgsBase {
+  /** The entry's collection. */
+  collection: CollectionSlug;
+  /** The entry's id. */
+  id: string;
+}
+
+/**
+ * @experimental Arguments for `nextly.rewriteField` on a Single: as
+ * {@link RewriteFieldArgs}, with the Single named by its slug in place of a
+ * collection and an id.
+ */
+export interface RewriteSingleFieldArgs extends RewriteFieldArgsBase {
+  /** The Single, by slug. */
+  single: SingleSlug;
 }

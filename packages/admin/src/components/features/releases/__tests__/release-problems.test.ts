@@ -73,6 +73,27 @@ describe("a problem that stops the release", () => {
     });
   });
 
+  it("names the collection or Single removed from code, and offers to take the document out", () => {
+    expect(
+      hard(
+        finding("ENTITY_REMOVED_FROM_CODE", {
+          kind: "collection",
+          slug: "old-posts",
+        })
+      )
+    ).toEqual({
+      text: "Its collection “old-posts” was removed from code, so a release cannot move it",
+      remedy: "remove",
+    });
+    expect(
+      hard(
+        finding("ENTITY_REMOVED_FROM_CODE", { kind: "single", slug: "banner" })
+      )?.text
+    ).toBe(
+      "Its Single “banner” was removed from code, so a release cannot move it"
+    );
+  });
+
   it("says the run's own reasons in the words the schedule dialog uses", () => {
     expect(hard(finding("AUTHOR_GONE"))?.text).toBe(
       "The person who added it has been deleted or deactivated"
