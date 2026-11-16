@@ -138,9 +138,16 @@ const DTCG_TYPE: Partial<Record<TokenKind, string>> = {
 };
 
 /** The kinds a `$type` projects back onto. */
-const KIND_BY_TYPE = new Map<string, TokenKind>(
-  Object.entries(DTCG_TYPE).map(([kind, type]) => [type, kind as TokenKind])
-);
+const KIND_BY_TYPE = new Map<string, TokenKind>([
+  ...Object.entries(DTCG_TYPE).map(([kind, type]): [string, TokenKind] => [
+    type,
+    kind as TokenKind,
+  ]),
+  // The one type outside DTCG this reads: Figma writes a string variable as
+  // `string`, which is how the Figma export writes a custom value, so a file
+  // from Figma or from this system's own Figma export comes back as one.
+  ["string", "custom"],
+]);
 
 function issue(message: string): ValidationIssue {
   return {
@@ -196,6 +203,16 @@ export function tokensToDtcg(set: SiteTokenSet): {
     document.$extensions = { [NEXTLY_EXTENSION]: { [CARRIED]: carried } };
   }
   return { document, issues };
+}
+
+/** The line a fluid size's `$description` names its `clamp()` with. */
+function fluidNoteFor(css: string): string {
+  return `Fluid size: ${css.trim()}`;
+}
+
+/** A description and a fluid size's note, as `$description` holds the two. */
+function withFluidNote(own: string | undefined, note: string): string {
+  return [own, note].filter(Boolean).join("\n\n");
 }
 
 /** Where the document's own extension holds the variables the format cannot type. */
@@ -261,9 +278,7 @@ function entryFor(token: SiteToken, typed: TypedValue | undefined): DtcgNode {
   // A fluid size names its `clamp()` for tools that read only the native value,
   // and the extension records the author's own description beside it.
   const fluidNote =
-    typed?.fluid === true
-      ? `Fluid size: ${token.values.light.trim()}`
-      : undefined;
+    typed?.fluid === true ? fluidNoteFor(token.values.light) : undefined;
   const extension: NextlyExtension = {
     css:
       token.values.dark === undefined
@@ -298,7 +313,7 @@ function entryFor(token: SiteToken, typed: TypedValue | undefined): DtcgNode {
   const description =
     fluidNote === undefined
       ? token.description
-      : [token.description, fluidNote].filter(Boolean).join("\n\n");
+      : withFluidNote(token.description, fluidNote);
   if (description !== undefined) entry.$description = description;
   return entry;
 }
@@ -428,6 +443,20 @@ function fluidLargestPixels(css: string): number | undefined {
   const args = topLevelArguments(match[1] ?? "");
   if (args.length !== 3) return undefined;
   return pixelsOf((args[2] ?? "").trim());
+}
+
+/**
+ * What a value becomes in the format, read back as CSS: the value an import
+ * finds for a token this system wrote from `css`. Nothing when the format
+ * cannot type it. The theme file's import compares against it to tell a
+ * converted value from one an author edited.
+ */
+export function nativeReading(
+  kind: TokenKind,
+  css: string
+): string | undefined {
+  const typed = typedValue({ name: "value", kind, values: { light: css } });
+  return typed === undefined ? undefined : fromDtcgValue(typed.value, kind);
 }
 
 /**
@@ -1034,6 +1063,14 @@ export function dtcgToTokens(input: unknown): {
       );
       continue;
     }
+    if (!holdsStoredValue(entry)) {
+      issues.push(
+        issue(
+          `"${name}" in ${NEXTLY_EXTENSION} holds stored data that could not be read, so it was skipped.`
+        )
+      );
+      continue;
+    }
     const token = readToken(entry, name.split("."), undefined, issues);
     if (token !== undefined) {
       named.add(name);
@@ -1041,6 +1078,20 @@ export function dtcgToTokens(input: unknown): {
     }
   }
   return { tokens, issues };
+}
+
+/**
+ * Whether a carried entry states its stored CSS and kind, the only way one can
+ * be read: it has no `$type` or `$value` to fall back on.
+ */
+function holdsStoredValue(entry: DtcgNode): boolean {
+  const own = statedExtensions(entry)?.[NEXTLY_EXTENSION];
+  return (
+    isPlainObject(own) &&
+    isPlainObject(own.css) &&
+    typeof own.css.light === "string" &&
+    isKind(own.kind)
+  );
 }
 
 /**
@@ -1769,8 +1820,18 @@ function authoredDescription(
     return statedDescription(node);
   }
   const recorded = own.description;
-  if (recorded === null) return undefined;
-  if (typeof recorded === "string") return recorded;
+  const stated = statedDescription(node);
+  const css = isPlainObject(own.css) ? own.css.light : undefined;
+  if (recorded === null || typeof recorded === "string") {
+    const own = recorded ?? undefined;
+    // `$description` as this system wrote it means the recorded one is the
+    // author's; anything else was edited by another tool, and the edit is kept.
+    const written =
+      typeof css === "string"
+        ? withFluidNote(own, fluidNoteFor(css))
+        : undefined;
+    return stated === undefined || stated === written ? own : stated;
+  }
   issues.push(
     issue(
       `"${name}" carries a description in ${NEXTLY_EXTENSION} that is not text, so the file's own description was kept.`
@@ -2043,48 +2104,65 @@ export function isKind(value: unknown): value is TokenKind {
 
 /** A DTCG value as the CSS this system stores, or `undefined`. */
 function fromDtcgValue(value: unknown, kind: TokenKind): string | undefined {
-  switch (kind) {
-    case "color":
-      return colorFromDtcg(value);
-    case "dimension":
-    case "duration": {
-      if (!isPlainObject(value)) return undefined;
-      const amount = value.value;
-      const unit = value.unit;
-      // The same units the export side allows, so the two directions agree. A
-      // unit is text from a file being concatenated into a stored value: read
-      // unchecked, `{ value: 16, unit: "px;color:red" }` becomes CSS nothing
-      // here wrote.
-      const allowed =
-        kind === "dimension" ? DTCG_LENGTH_UNITS : DTCG_TIME_UNITS;
-      if (
-        typeof amount !== "number" ||
-        !Number.isFinite(amount) ||
-        typeof unit !== "string" ||
-        !allowed.includes(unit.toLowerCase())
-      ) {
-        return undefined;
-      }
-      return `${amount}${unit.toLowerCase()}`;
-    }
-    case "fontFamily":
-      // A DTCG family value is a NAME, not CSS. `ACME,Inc` is one family in the
-      // file and two the moment it is written into a stylesheet unquoted, and a
-      // name holding a quote produces CSS that does not parse at all.
-      if (typeof value === "string") return cssFamilyName(value);
-      if (Array.isArray(value) && value.every(v => typeof v === "string")) {
-        return value.map(cssFamilyName).join(", ");
-      }
-      return undefined;
-    case "fontWeight":
-      if (typeof value === "number") return String(value);
-      return typeof value === "string" ? value : undefined;
-    case "number":
-      return typeof value === "number" ? String(value) : undefined;
-    default:
-      return undefined;
-  }
+  return FROM_DTCG[kind](value);
 }
+
+/**
+ * A measure as CSS, in a unit the format allows for it. The same units the
+ * export side allows, so the two directions agree. A unit is text from a file
+ * being concatenated into a stored value: read unchecked,
+ * `{ value: 16, unit: "px;color:red" }` becomes CSS nothing here wrote.
+ */
+const measureFromDtcg =
+  (allowed: readonly string[]) =>
+  (value: unknown): string | undefined => {
+    if (!isPlainObject(value)) return undefined;
+    const amount = value.value;
+    const unit = value.unit;
+    if (
+      typeof amount !== "number" ||
+      !Number.isFinite(amount) ||
+      typeof unit !== "string" ||
+      !allowed.includes(unit.toLowerCase())
+    ) {
+      return undefined;
+    }
+    return `${amount}${unit.toLowerCase()}`;
+  };
+
+/**
+ * A family value as CSS. A DTCG family value is a NAME, not CSS: `ACME,Inc` is
+ * one family in the file and two the moment it is written into a stylesheet
+ * unquoted, and a name holding a quote produces CSS that does not parse at all.
+ */
+function familyFromDtcg(value: unknown): string | undefined {
+  if (typeof value === "string") return cssFamilyName(value);
+  if (Array.isArray(value) && value.every(v => typeof v === "string")) {
+    return value.map(cssFamilyName).join(", ");
+  }
+  return undefined;
+}
+
+/** How each kind's DTCG value reads as CSS, one reader per kind. */
+const FROM_DTCG: Readonly<
+  Record<TokenKind, (value: unknown) => string | undefined>
+> = {
+  color: value => colorFromDtcg(value),
+  dimension: measureFromDtcg(DTCG_LENGTH_UNITS),
+  duration: measureFromDtcg(DTCG_TIME_UNITS),
+  fontFamily: familyFromDtcg,
+  fontWeight: value =>
+    typeof value === "number"
+      ? String(value)
+      : typeof value === "string"
+        ? value
+        : undefined,
+  number: value => (typeof value === "number" ? String(value) : undefined),
+  // A shadow has no DTCG value this reads; its CSS travels in the extension.
+  shadow: () => undefined,
+  // A string variable's text is the custom value itself.
+  custom: value => (typeof value === "string" ? value : undefined),
+};
 
 /**
  * A DTCG colour as CSS.

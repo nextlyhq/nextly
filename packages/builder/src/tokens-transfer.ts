@@ -929,8 +929,9 @@ export function exportDtcgWithTheme(tokens: SiteTokenSet): ExportResult[] {
     {
       text: `${JSON.stringify(theme.resolver, null, 2)}\n`,
       filename: THEME_FILE,
-      // Only the variables with a dark value are in it, which a file name
-      // ending in "resolver" does not say.
+      // It holds the dark values the format can type, which a file name
+      // ending in "resolver" does not say; the token file's extension holds
+      // every dark value exactly.
       label: "theme file: dark values",
       mime: "application/json",
       skipped: theme.issues.map(entry => entry.message),

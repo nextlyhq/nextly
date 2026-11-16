@@ -2375,6 +2375,35 @@ describe("every variable, whatever the format can type", () => {
     expect((file.misc as DtcgNode | undefined)?.ratio).toBeUndefined();
   });
 
+  it("says a carried variable's stored data could not be read, not that it has no type", () => {
+    const read = dtcgToTokens({
+      $extensions: {
+        [NEXTLY_EXTENSION]: {
+          variables: {
+            "gap.odd": {
+              $extensions: { [NEXTLY_EXTENSION]: { kind: "bogus" } },
+            },
+          },
+        },
+      },
+    });
+    expect(read.tokens).toEqual([]);
+    const said = read.issues.map(i => i.message).join(" ");
+    expect(said).toContain("gap.odd");
+    expect(said).toContain("could not be read");
+    expect(said).not.toContain('the type "none"');
+  });
+
+  it("takes a fluid size's description edited by another tool", () => {
+    const { file } = exported();
+    const stack = (file.space as Record<string, DtcgNode>).stack as DtcgNode;
+    stack.$description = "Edited in a design tool.";
+    const read = dtcgToTokens(file);
+    expect(
+      read.tokens.find(token => token.name === "space.stack")?.description
+    ).toBe("Edited in a design tool.");
+  });
+
   it("writes a file that is valid DTCG", () => {
     expect(dtcgProblems(exported().file)).toEqual([]);
   });

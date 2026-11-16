@@ -185,8 +185,8 @@ describe("an import of Figma's own export", () => {
   // import (Figma Help Center, "Import and export variables", article
   // 15343816063383): one file per mode, sRGB colours with `hex`, px
   // dimensions, durations in seconds, a single font family, whole-token
-  // aliases, `com.figma.*` keys in `$extensions`, and Figma's own `string` type
-  // and boolean numbers, which this site has no kind for.
+  // aliases, `com.figma.*` keys in `$extensions`, Figma's own `string` type,
+  // read as a custom value, and boolean numbers, which this site has no kind for.
   const read = (mode: string): unknown =>
     JSON.parse(
       readFileSync(
@@ -214,8 +214,13 @@ describe("an import of Figma's own export", () => {
     );
     // Figma's own keys are another vendor's data, and travel with the token.
     expect(brand?.extensions?.["com.figma.variableId"]).toBe("VariableID:1:4");
+    // A string variable is a custom value: the text it holds.
+    expect(tokens.find(t => t.name === "copy.cta")).toMatchObject({
+      kind: "custom",
+      values: { light: "Start free" },
+    });
     const said = issues.map(i => i.message).join(" ");
-    expect(said).toMatch(/copy\.cta/);
+    expect(said).not.toMatch(/copy\.cta/);
     expect(said).toMatch(/flags\.rounded/);
     expect(tokens.map(t => t.name)).not.toContain("flags.rounded");
   });
@@ -399,5 +404,85 @@ describe("every variable through the theme file and the Figma files", () => {
     expect(light.issues.map(i => i.message).join(" ")).toContain(
       "Figma keeps shadows as effect styles, not variables"
     );
+  });
+});
+
+describe("the theme file beside variables the format types in one mode only", () => {
+  const MIXED: SiteTokenSet = {
+    tokens: [
+      // Light the format cannot type, dark it can: carried in the token file,
+      // written as a token in the theme file.
+      {
+        name: "space.x",
+        kind: "dimension",
+        values: { light: "1em", dark: "16px" },
+      },
+      {
+        name: "color.mixed",
+        kind: "color",
+        values: { light: "color-mix(in srgb, red 50%, blue)", dark: "#112233" },
+      },
+      {
+        name: "color.edited",
+        kind: "color",
+        values: { light: "#ffffff", dark: "#000000" },
+      },
+    ],
+  };
+  const files = () => {
+    const base = JSON.parse(JSON.stringify(tokensToDtcg(MIXED).document));
+    const { resolver } = tokensToResolver(MIXED, "variables.tokens.json");
+    return { base, resolver: JSON.parse(JSON.stringify(resolver)) };
+  };
+  const sorted = (list: readonly { name: string }[]) =>
+    [...list].sort((a, b) => a.name.localeCompare(b.name));
+
+  it("imports cleanly, every value exact, with nothing said twice", () => {
+    const { base, resolver } = files();
+    const back = resolverToTokens(
+      resolver,
+      new Map([["variables.tokens.json", base]])
+    );
+    expect(back.issues).toEqual([]);
+    expect(sorted(back.tokens)).toEqual(sorted(MIXED.tokens));
+  });
+
+  it("takes a dark value edited in the theme file", () => {
+    const { base, resolver } = files();
+    const dark = (
+      (resolver.modifiers.theme.contexts.dark as Record<string, unknown>[])[0]
+        ?.color as Record<string, Record<string, unknown>>
+    ).edited;
+    if (dark === undefined) throw new Error("the theme file lost color.edited");
+    dark.$value = { colorSpace: "srgb", components: [1, 0, 0], hex: "#ff0000" };
+    const back = resolverToTokens(
+      resolver,
+      new Map([["variables.tokens.json", base]])
+    );
+    expect(
+      back.tokens.find(token => token.name === "color.edited")?.values.dark
+    ).toBe("#ff0000");
+  });
+});
+
+describe("Nextly's own Figma files, imported back", () => {
+  it("reads a custom value back from its string variable", () => {
+    const set: SiteTokenSet = {
+      tokens: [
+        { name: "misc.ratio", kind: "custom", values: { light: "16 / 9" } },
+      ],
+    };
+    const back = modeFilesToTokens([
+      {
+        name: "light.tokens.json",
+        document: tokensToFigma(set, "light").document,
+      },
+      {
+        name: "dark.tokens.json",
+        document: tokensToFigma(set, "dark").document,
+      },
+    ]);
+    expect(back.issues).toEqual([]);
+    expect(back.tokens).toEqual(set.tokens);
   });
 });

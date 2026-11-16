@@ -24,6 +24,7 @@ import {
   dtcgToTokens,
   exportNamingRefusal,
   largestPixels,
+  nativeReading,
   readFamilyList,
   tokensToDtcg,
   type DtcgNode,
@@ -122,12 +123,23 @@ export function resolverToTokens(
   const base = mergeSources(baseSources(resolver), files, issues);
   const modes = themeContexts(resolver);
   const light = mergeTrees(base, mergeSources(modes.light, files, issues));
+  // The dark tree without the token file's own extension: the variables it
+  // carries are read once, from the light tree, with their exact dark values,
+  // and a dark value the theme file types for one of them is not a second one.
   const dark =
     modes.dark === undefined
       ? undefined
-      : mergeTrees(base, mergeSources(modes.dark, files, issues));
+      : withoutRootExtensions(
+          mergeTrees(base, mergeSources(modes.dark, files, issues))
+        );
   const read = combineModes(light, dark);
   return { tokens: read.tokens, issues: [...issues, ...read.issues] };
+}
+
+/** A token tree without its own root `$extensions`. */
+function withoutRootExtensions(tree: DtcgNode): DtcgNode {
+  const { $extensions: _extensions, ...rest } = tree;
+  return rest;
 }
 
 /** The sources of every set, in the order the theme file resolves them. */
@@ -319,12 +331,18 @@ function combineModes(
     const other = darkByName.get(token.name);
     darkByName.delete(token.name);
     // A dark value the light file already states came from this system's own
-    // extension, exactly as the author wrote it; the dark file's is that value
-    // converted to what the format can hold (a fluid size's px, a colour's hex),
-    // so it never replaces the exact one.
+    // extension, exactly as the author wrote it. The dark file holds it
+    // converted to what the format can type (a fluid size's px, a colour's
+    // hex); while it still reads as that conversion the exact one is kept, and
+    // a different value is an edit made to the dark file, which is taken.
+    const stored = token.values.dark;
+    const unedited =
+      stored !== undefined &&
+      other !== undefined &&
+      other.values.light === nativeReading(token.kind, stored);
     if (
       other === undefined ||
-      token.values.dark !== undefined ||
+      unedited ||
       other.values.light === token.values.light
     ) {
       return token;
