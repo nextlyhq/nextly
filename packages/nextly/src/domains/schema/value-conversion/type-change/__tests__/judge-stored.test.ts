@@ -11,7 +11,7 @@ import { reasonClass } from "../../judge-column";
 import type { ConversionClass, StoredValue } from "../../types";
 import { decodeStored } from "../decode-stored";
 import { fieldTypeOnDialect } from "../field-type";
-import { collectTypeChange } from "../judge-stored";
+import { collectTypeChange, fieldAccepts } from "../judge-stored";
 
 const typeOf = (dialect: SupportedDialect, type: string, extra: object = {}) =>
   fieldTypeOnDialect(
@@ -108,6 +108,32 @@ describe("a type change collected over its stored values", () => {
       rounded: [{ id: "3" }],
     });
     expect(result.readings).toEqual([{ key: { id: "1" }, readsAs: "1" }]);
+  });
+
+  it("loses a value the new field's own validation refuses, though the rules would keep it", async () => {
+    const toField = {
+      name: "f",
+      type: "text",
+      validation: { minLength: 5 },
+    } as unknown as FieldDefinition;
+    const result = await collectTypeChange(
+      typeOf("postgresql", "textarea"),
+      fieldTypeOnDialect(toField, "postgresql", "collection"),
+      stored("a", "long enough"),
+      fieldAccepts(
+        fieldTypeOnDialect(toField, "postgresql", "collection"),
+        toField
+      )
+    );
+    expect(result.counts).toEqual({ kept: 1, changed: 0, lost: 1, blocked: 0 });
+    expect(result.cleared).toEqual([{ id: "1" }]);
+    expect(result.judgement.reasons).toEqual([
+      {
+        kind: "field-refuses",
+        class: "lossy",
+        rows: { first: [{ id: "1" }], count: 1 },
+      },
+    ]);
   });
 
   it("blocks a pair blocked whatever its values hold, naming no rows", async () => {

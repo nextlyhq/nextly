@@ -6,6 +6,8 @@
  *
  * @module domains/schema/value-conversion/type-change/judge-stored
  */
+import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
+import { validateEntryData } from "../../../../shared/lib/entry-validation";
 import type { SupportedDialect } from "../../services/field-column-descriptor";
 import { reasonClass } from "../judge-column";
 import type { KeyedBy } from "../read-values";
@@ -23,6 +25,7 @@ import type { FieldTypeOnDialect } from "./field-type";
 import {
   classOf,
   judgeValue,
+  type ValueVerdict,
   type OutcomeReason,
   pairBlocked,
   type ValueOutcome,
@@ -70,6 +73,7 @@ const REPORTED_AS: Record<
   "kind-never-held": "kind-never-held",
   "pair-blocked": "pair-blocked",
   "column-refuses": "column-refuses",
+  "field-refuses": "field-refuses",
 };
 
 /**
@@ -80,7 +84,8 @@ const REPORTED_AS: Record<
 export async function collectTypeChange(
   from: FieldTypeOnDialect,
   to: FieldTypeOnDialect,
-  values: AsyncIterable<Pick<StoredValue, "key" | "text" | "exactReal">>
+  values: AsyncIterable<Pick<StoredValue, "key" | "text" | "exactReal">>,
+  accepts?: (readsAs: string) => Promise<boolean>
 ): Promise<StoredTypeChangeJudgement> {
   const counts: Record<ValueOutcome, number> = {
     kept: 0,
@@ -98,7 +103,10 @@ export async function collectTypeChange(
   const pair = pairBlocked(from, to);
   for await (const value of values) {
     if (pair !== null) break;
-    const verdict = judgeValue(from, to, decodeStored(from, value));
+    const verdict = await withFieldRule(
+      judgeValue(from, to, decodeStored(from, value)),
+      accepts
+    );
     counts[verdict.outcome] += 1;
     if (verdict.readsAs !== undefined) {
       readings.push({ key: value.key, readsAs: verdict.readsAs });
@@ -133,6 +141,61 @@ export async function collectTypeChange(
     counts,
     readings,
   };
+}
+
+/**
+ * A verdict the rules keep or change, asked of the new field's own validation too: a value it
+ * refuses is lost, as the write path would refuse it. Lost, blocked and empty values are left as
+ * the rules judged them.
+ */
+async function withFieldRule(
+  verdict: ValueVerdict,
+  accepts: ((readsAs: string) => Promise<boolean>) | undefined
+): Promise<ValueVerdict> {
+  if (accepts === undefined || verdict.readsAs === undefined) return verdict;
+  return (await accepts(verdict.readsAs))
+    ? verdict
+    : { outcome: "lost", reason: "field-refuses" };
+}
+
+/**
+ * Whether the new field's own validation accepts a value as the new type reads it, by the entry
+ * validator every write runs (`validateEntryData`): its length, pattern, range and options, and a
+ * plugin type's own `validate`. The value is validated as the field's only value, as an update
+ * that sets it.
+ */
+export function fieldAccepts(
+  to: FieldTypeOnDialect,
+  field: FieldDefinition
+): (readsAs: string) => Promise<boolean> {
+  return async readsAs => {
+    const issues = await validateEntryData(
+      { [field.name]: valueOf(to, readsAs) },
+      [field],
+      { mode: "update" }
+    );
+    return issues.length === 0;
+  };
+}
+
+/** A value as the new field holds it, from its writing as the new type reads it (`readsAs`). */
+function valueOf(to: FieldTypeOnDialect, readsAs: string): unknown {
+  switch (to.family) {
+    case "number":
+      return Number(readsAs);
+    case "checkbox":
+      return readsAs === "true";
+    case "json":
+    case "list":
+    case "richText":
+      return JSON.parse(readsAs) as unknown;
+    case "relationship":
+      return to.relation?.kept === "one"
+        ? readsAs
+        : (JSON.parse(readsAs) as unknown);
+    default:
+      return readsAs;
+  }
 }
 
 /**

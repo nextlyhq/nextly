@@ -89,7 +89,9 @@ export type OutcomeReason =
   /** The pair of types is blocked whatever its values hold (`pairBlocked`). */
   | "pair-blocked"
   /** The new column refuses the value's writing outright, so it cannot hold it at all. */
-  | "column-refuses";
+  | "column-refuses"
+  /** The new field's own validation refuses the value as the new type reads it. */
+  | "field-refuses";
 
 /** How a relationship keeps its links. */
 type RelationKept = RelationTarget["kept"];
