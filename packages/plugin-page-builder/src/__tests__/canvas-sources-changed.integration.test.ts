@@ -16,7 +16,12 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, defineSingle, text } from "nextly/config";
+import {
+  defineCollection,
+  defineSingle,
+  relationship,
+  text,
+} from "nextly/config";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { pageBuilder } from "../plugin";
@@ -24,6 +29,7 @@ import { pageBuilder } from "../plugin";
 import { holding, person, post, sessionOf } from "./transfer-harness";
 
 const POSTS = "csc_posts";
+const PEOPLE = "csc_people";
 const HOME = "csc_home";
 
 describe.each(getConfiguredTestDialects())(
@@ -42,9 +48,16 @@ describe.each(getConfiguredTestDialects())(
         plugins: [pageBuilder()],
         collections: [
           defineCollection({
+            slug: PEOPLE,
+            fields: [text({ name: "name" })],
+          }),
+          defineCollection({
             slug: POSTS,
             status: true,
-            fields: [text({ name: "title" })],
+            fields: [
+              text({ name: "title" }),
+              relationship({ name: "author", relationTo: PEOPLE }),
+            ],
           }),
         ],
         singles: [
@@ -129,6 +142,61 @@ describe.each(getConfiguredTestDialects())(
       const before = await stampFor(owner, page);
       // The other edited once too: now the newest at the same version.
       await edit(newer, "Newer, edited");
+      expect(await stampFor(owner, page)).not.toBe(before);
+    });
+
+    it("changes when an entry a binding follows a relation to is saved", async () => {
+      const { t, owner } = await boot();
+      const person = await t.nextly.create({
+        collection: PEOPLE,
+        data: { name: "Ada" },
+        overrideAccess: true,
+      });
+      const authorId = String(person.item.id);
+      const page = await t.nextly.create({
+        collection: POSTS,
+        data: { title: "By Ada", author: authorId, status: "published" },
+        overrideAccess: true,
+      });
+      const id = String(page.item.id);
+      const stamp = async () => {
+        const answer = await post(owner, ["canvas-sources", "changed"], {
+          source: { kind: "collection", slug: POSTS, id },
+          singles: [],
+          lists: [],
+          follows: { entry: ["author"], singles: {} },
+        });
+        expect(answer.status).toBe(200);
+        return answer.body.stamp as string;
+      };
+      const before = await stamp();
+      expect(await stamp()).toBe(before);
+      // People keep no versions, so a save is marked by its save time, which
+      // SQLite keeps to the second: the save lands in a later second.
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      await t.nextly.update({
+        collection: PEOPLE,
+        id: authorId,
+        data: { name: "Ada Lovelace", _overwrite: true },
+        overrideAccess: true,
+      });
+      expect(await stamp()).not.toBe(before);
+    });
+
+    it("changes when the oldest of more entries than it names is edited", async () => {
+      const { t, owner } = await boot();
+      const page = await savePost(t, "The page");
+      const ids: string[] = [];
+      for (let n = 0; n < 24; n += 1) ids.push(await savePost(t, `Post ${n}`));
+      const before = await stampFor(owner, page);
+      const [oldest] = ids;
+      if (oldest === undefined) throw new Error("no posts");
+      await t.nextly.update({
+        collection: POSTS,
+        id: oldest,
+        data: { title: "Oldest, edited", _overwrite: true },
+        overrideAccess: true,
+      });
       expect(await stampFor(owner, page)).not.toBe(before);
     });
 

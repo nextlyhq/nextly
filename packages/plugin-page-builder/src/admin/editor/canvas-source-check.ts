@@ -10,7 +10,8 @@
  * - once when the canvas opens, whether or not its tab is in sight, so the
  *   mark compared with is taken with the canvas's first reads;
  * - once whenever what the canvas kept is dropped, for the same reason;
- * - then a minute after the last check while the builder's tab is visible,
+ * - then a minute after the last check settled while the builder's tab is
+ *   visible,
  *   and once when the tab becomes visible again, so a change shows at once
  *   on coming back;
  * - never on the minute while the tab is hidden.
@@ -72,8 +73,13 @@ function namesNewSource(
   const named = (ask: CanvasSourcesChangedRequest) =>
     new Set([
       JSON.stringify(ask.source),
+      `locale:${ask.locale ?? ""}`,
       ...ask.singles.map(slug => `single:${slug}`),
       ...ask.lists.map(slug => `list:${slug}`),
+      ...(ask.follows?.entry ?? []).map(field => `follow::${field}`),
+      ...Object.entries(ask.follows?.singles ?? {}).flatMap(([slug, fields]) =>
+        fields.map(field => `follow:${slug}:${field}`)
+      ),
     ]);
   const before = named(previous);
   return [...named(next)].some(source => !before.has(source));
@@ -109,9 +115,7 @@ export function useCanvasSourceCheck(
       if (cancelled || inFlight) return;
       if (!whenHidden && document.visibilityState === "hidden") return;
       inFlight = true;
-      // The minute counts from this check, whatever asked for it.
       clearTimeout(next);
-      next = setTimeout(() => void check(false), SOURCE_CHECK_EVERY_MS);
       try {
         const mark = await ask(sources);
         if (cancelled) return;
@@ -129,6 +133,12 @@ export function useCanvasSourceCheck(
         // A failed check changes nothing: the next one asks again.
       } finally {
         inFlight = false;
+        // The minute counts from when this check settled, whatever asked
+        // for it, so a check slower than a minute never stops the next.
+        if (!cancelled) {
+          clearTimeout(next);
+          next = setTimeout(() => void check(false), SOURCE_CHECK_EVERY_MS);
+        }
       }
     };
     // Dropped for another reason (a save here, another canvas's check): the

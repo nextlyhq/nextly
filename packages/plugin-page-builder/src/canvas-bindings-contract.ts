@@ -39,6 +39,20 @@ export interface CanvasSourcesChangedRequest {
   readonly singles: readonly string[];
   /** The collections the page's lists draw. */
   readonly lists: readonly string[];
+  /**
+   * The relations the page's bindings follow, by the field they leave from:
+   * on the page's own entry, and on each Single. An entry reached through
+   * one (an author's name) is read too, so a save to it changes the mark.
+   */
+  readonly follows?: {
+    readonly entry: readonly string[];
+    readonly singles: Readonly<Record<string, readonly string[]>>;
+  };
+  /**
+   * The language being edited, read in: a save to that language's own
+   * fields changes only its own version.
+   */
+  readonly locale?: string;
 }
 
 /**
@@ -53,10 +67,27 @@ export interface CanvasSourcesChangedResponse {
 export function sourcesChangedAskOf(
   request: CanvasBindingsRequest
 ): CanvasSourcesChangedRequest {
+  const entry = Object.keys(request.demand.entry?.follows ?? {}).sort();
+  const singles = Object.fromEntries(
+    Object.keys(request.demand.singles)
+      .sort()
+      .flatMap(slug => {
+        const followed = Object.keys(
+          request.demand.singles[slug]?.follows ?? {}
+        ).sort();
+        return followed.length === 0 ? [] : [[slug, followed] as const];
+      })
+  );
+  const follows =
+    entry.length === 0 && Object.keys(singles).length === 0
+      ? undefined
+      : { entry, singles };
   return {
     source: request.source,
     singles: Object.keys(request.demand.singles).sort(),
     lists: [...request.lists].sort(),
+    ...(follows === undefined ? {} : { follows }),
+    ...(request.locale === undefined ? {} : { locale: request.locale }),
   };
 }
 

@@ -6,16 +6,21 @@
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 
+import { sourcesChangedAskOf } from "./canvas-bindings-contract";
 import {
   NEWEST_MARKED,
   sourcesChangedStamp,
   type SourcesChangedReads,
 } from "./canvas-sources-changed-route";
 
-/** A stored document as a read answers it: its id and its version. */
+/**
+ * A stored document as a read answers it: its id, its version, and any
+ * relation, as the entry it names at depth 1 or its id at depth 0.
+ */
 interface Doc {
   id: string;
   _rev: number;
+  author?: Doc;
 }
 
 /** The sources as stored, newest save first in each collection. */
@@ -27,19 +32,30 @@ interface Stored {
   broken: Set<string>;
 }
 
+/** The depths reads were asked at, in order. */
+const depths: number[] = [];
+
+/** `doc` as a read at `depth` answers it: relations as ids at depth 0. */
+function atDepth(doc: Doc | undefined, depth: 0 | 1): unknown {
+  if (doc === undefined || depth === 1 || doc.author === undefined) return doc;
+  return { ...doc, author: doc.author.id };
+}
+
 function readsOf(stored: Stored): SourcesChangedReads {
   const guard = (name: string) => {
     if (stored.refused.has(name)) throw NextlyError.forbidden();
     if (stored.broken.has(name)) throw new Error("connection reset");
   };
   return {
-    entry: async (collection, id) => {
+    entry: async (collection, id, depth) => {
       guard(collection);
-      return stored.entries[`${collection}/${id}`];
+      depths.push(depth);
+      return atDepth(stored.entries[`${collection}/${id}`], depth);
     },
-    single: async slug => {
+    single: async (slug, depth) => {
       guard(slug);
-      return stored.singles[slug];
+      depths.push(depth);
+      return atDepth(stored.singles[slug], depth);
     },
     collection: async slug => {
       guard(slug);
@@ -57,7 +73,9 @@ const ASK = {
 
 function stored(): Stored {
   return {
-    entries: { "pages/p1": { id: "p1", _rev: 3 } },
+    entries: {
+      "pages/p1": { id: "p1", _rev: 3, author: { id: "u7", _rev: 1 } },
+    },
     singles: {
       home: { id: "home", _rev: 2 },
       footer: { id: "footer", _rev: 1 },
@@ -158,6 +176,40 @@ describe("the change check's mark", () => {
     );
   });
 
+  it("marks a followed relation's entry, read at depth 1, only where the page follows it", async () => {
+    const following = { ...ASK, follows: { entry: ["author"], singles: {} } };
+    const before = await sourcesChangedStamp(following, readsOf(stored()));
+    const edited = stored();
+    const page = edited.entries["pages/p1"];
+    if (page?.author === undefined) throw new Error("no author");
+    page.author = { ...page.author, _rev: 2 };
+    // The author's name saved elsewhere: the page that follows it sees it.
+    expect(await sourcesChangedStamp(following, readsOf(edited))).not.toBe(
+      before
+    );
+    // CONTROL: a page that follows no relation reads at depth 0 and marks
+    // only the page's own save.
+    depths.length = 0;
+    const plain = await sourcesChangedStamp(ASK, readsOf(stored()));
+    expect(await sourcesChangedStamp(ASK, readsOf(edited))).toBe(plain);
+    expect(new Set(depths)).toEqual(new Set([0]));
+  });
+
+  it("marks a followed entry the caller may not read by its id alone", async () => {
+    const following = { ...ASK, follows: { entry: ["author"], singles: {} } };
+    // Unread, the relation comes back as the id it stores.
+    const unread = (s: Stored): SourcesChangedReads => {
+      const reads = readsOf(s);
+      return { ...reads, entry: (c, id) => reads.entry(c, id, 0) };
+    };
+    const before = await sourcesChangedStamp(following, unread(stored()));
+    const edited = stored();
+    const page = edited.entries["pages/p1"];
+    if (page?.author === undefined) throw new Error("no author");
+    page.author = { ...page.author, _rev: 5 };
+    expect(await sourcesChangedStamp(following, unread(edited))).toBe(before);
+  });
+
   it("reads a Single's page by the Single itself", async () => {
     const asked: string[] = [];
     const reads = readsOf(stored());
@@ -172,5 +224,32 @@ describe("the change check's mark", () => {
       }
     );
     expect(asked).toEqual(["home"]);
+  });
+});
+
+describe("the change check's ask", () => {
+  it("names the relations the bindings follow and the language being edited", () => {
+    expect(
+      sourcesChangedAskOf({
+        source: { kind: "collection", slug: "posts", id: "p1" },
+        demand: {
+          entry: { fields: ["title"], follows: { author: ["name"] } },
+          singles: {
+            home: { fields: ["tagline"], follows: {} },
+            footer: { fields: [], follows: { owner: ["name"] } },
+          },
+          site: false,
+          formatsDates: false,
+        },
+        lists: ["posts"],
+        locale: "fr",
+      })
+    ).toEqual({
+      source: { kind: "collection", slug: "posts", id: "p1" },
+      singles: ["footer", "home"],
+      lists: ["posts"],
+      follows: { entry: ["author"], singles: { footer: ["owner"] } },
+      locale: "fr",
+    });
   });
 });

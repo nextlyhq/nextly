@@ -43,8 +43,14 @@ const SLUG = z
   .max(128)
   .regex(/^[A-Za-z0-9_-]+$/);
 
-/** The most Singles or collections one check names: more than a page reads. */
-const MOST_SOURCES = 50;
+/** A field name a binding follows: no paths, operators or quoting. */
+const NAME = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
+
+/**
+ * The most Singles, collections or followed fields one check names: the
+ * bindings route's own bound, so every ask it takes can be checked too.
+ */
+const MOST_SOURCES = 200;
 
 const CanvasSourcesChangedBody = z.object({
   source: z.object({
@@ -54,6 +60,17 @@ const CanvasSourcesChangedBody = z.object({
   }),
   singles: z.array(SLUG).max(MOST_SOURCES),
   lists: z.array(SLUG).max(MOST_SOURCES),
+  follows: z
+    .object({
+      entry: z.array(NAME).max(MOST_SOURCES),
+      singles: z
+        .record(SLUG, z.array(NAME).max(MOST_SOURCES))
+        .refine(singles => Object.keys(singles).length <= MOST_SOURCES, {
+          message: `At most ${String(MOST_SOURCES)} Singles.`,
+        }),
+    })
+    .optional(),
+  locale: z.string().min(1).max(35).optional(),
 });
 
 /** The mark of a source the caller may not read, or one that is gone. */
@@ -61,10 +78,13 @@ const UNREAD = "-";
 
 /** How the check reads each source, as the caller. */
 export interface SourcesChangedReads {
-  /** A collection entry, or nothing. */
-  entry(collection: string, id: string): Promise<unknown>;
-  /** A Single's document, or nothing. */
-  single(slug: string): Promise<unknown>;
+  /**
+   * A collection entry, or nothing; at `depth` 1 with the entries its
+   * relations name read in place of their ids.
+   */
+  entry(collection: string, id: string, depth: 0 | 1): Promise<unknown>;
+  /** A Single's document, or nothing; `depth` as for an entry. */
+  single(slug: string, depth: 0 | 1): Promise<unknown>;
   /**
    * A collection's most recently saved entries, newest first and at most
    * {@link NEWEST_MARKED} of them, and how many entries it holds.
@@ -111,22 +131,65 @@ function savedMark(value: unknown): string {
   return value === undefined || value === null ? UNREAD : JSON.stringify(value);
 }
 
+/** A read entry's mark: its id and its last save. */
+function entryMark(found: unknown): string {
+  return `${idOf(found)}:${savedMark(updatedAtOf(found))}`;
+}
+
+/**
+ * A read document's mark: its last save, and for each relation `followed`,
+ * the entries it names as they were read. An entry the caller may not read
+ * is named by its id alone, so it neither leaks when it changed nor reads as
+ * changing.
+ */
+function documentMark(found: unknown, followed: readonly string[]): string {
+  const own = savedMark(updatedAtOf(found));
+  if (followed.length === 0 || typeof found !== "object" || found === null) {
+    return own;
+  }
+  const fields = found as Record<string, unknown>;
+  const related = followed.map(field => {
+    const value = fields[field];
+    const named = (Array.isArray(value) ? value : [value]).map(item =>
+      typeof item === "object" && item !== null
+        ? entryMark(item)
+        : String(item ?? UNREAD)
+    );
+    return `${field}[${named.sort().join(",")}]`;
+  });
+  return `${own}>${related.join(";")}`;
+}
+
 /** The mark of every source `ask` names, in a fixed order. */
 export async function sourcesChangedStamp(
   ask: CanvasSourcesChangedRequest,
   reads: SourcesChangedReads
 ): Promise<string> {
   const { source } = ask;
+  const entryFollows = ask.follows?.entry ?? [];
+  const followsOf = (slug: string) => ask.follows?.singles[slug] ?? [];
+  const depthFor = (followed: readonly string[]) =>
+    followed.length === 0 ? 0 : 1;
+  const sourceFollows =
+    source.kind === "single" ? followsOf(source.slug) : entryFollows;
   const own =
     source.kind === "single"
       ? markOf(async () =>
-          savedMark(updatedAtOf(await reads.single(source.slug)))
+          documentMark(
+            await reads.single(source.slug, depthFor(sourceFollows)),
+            sourceFollows
+          )
         )
       : source.id === undefined
         ? Promise.resolve(UNREAD)
         : markOf(async () =>
-            savedMark(
-              updatedAtOf(await reads.entry(source.slug, source.id as string))
+            documentMark(
+              await reads.entry(
+                source.slug,
+                source.id as string,
+                depthFor(sourceFollows)
+              ),
+              sourceFollows
             )
           );
   const parts = await Promise.all([
@@ -135,7 +198,10 @@ export async function sourcesChangedStamp(
       .sort()
       .map(slug =>
         markOf(async () =>
-          savedMark(updatedAtOf(await reads.single(slug)))
+          documentMark(
+            await reads.single(slug, depthFor(followsOf(slug))),
+            followsOf(slug)
+          )
         ).then(mark => `single:${slug}=${mark}`)
       ),
     ...[...new Set(ask.lists)].sort().map(slug =>
@@ -143,9 +209,7 @@ export async function sourcesChangedStamp(
         const { newest, total } = await reads.collection(slug);
         // By id, so two entries saved in the same second, which a store to
         // the second may hand back in either order, mark the same way.
-        const entries = newest
-          .map(entry => `${idOf(entry)}:${savedMark(updatedAtOf(entry))}`)
-          .sort();
+        const entries = newest.map(entryMark).sort();
         return `${String(total)}@${entries.join(",")}`;
       }).then(mark => `list:${slug}=${mark}`)
     ),
@@ -171,29 +235,67 @@ function idOf(found: unknown): string {
   return typeof id === "string" || typeof id === "number" ? String(id) : UNREAD;
 }
 
-/** The sources read through the Direct API as the caller, drafts included. */
+/**
+ * The most entries a listed collection's mark names when entries tie at the
+ * boundary of its newest {@link NEWEST_MARKED}: every entry saved in the
+ * same instant as the last one named, up to this many.
+ */
+const MOST_TIED = 200;
+
+/** A save time as a filter value. */
+function asFilterValue(value: unknown): unknown {
+  return value instanceof Date ? value.toISOString() : value;
+}
+
+/**
+ * The sources read through the Direct API as the caller, drafts included,
+ * in `locale` where one is edited.
+ */
 async function directSourcesChangedReads(
-  ctx: PluginRouteContext
+  ctx: PluginRouteContext,
+  locale: string | undefined
 ): Promise<SourcesChangedReads> {
   const { requireNextly } = await import("nextly/runtime");
   const nextly = requireNextly();
   const person = await readingAsUser(ctx);
   // As the canvas reads its sources: every state, the working draft in place
   // of the live row, judged as the person.
-  const asEditing = { ...person, status: "all" as const, draft: true };
+  const asEditing = {
+    ...person,
+    status: "all" as const,
+    draft: true,
+    ...(locale === undefined ? {} : { locale }),
+  };
   return {
-    entry: async (collection, id) =>
-      nextly.findByID({ collection, id, depth: 0, ...asEditing }),
-    single: async slug => nextly.findSingle({ slug, depth: 0, ...asEditing }),
+    entry: async (collection, id, depth) =>
+      nextly.findByID({ collection, id, depth, ...asEditing }),
+    single: async (slug, depth) =>
+      nextly.findSingle({ slug, depth, ...asEditing }),
     collection: async slug => {
+      const newestFirst = { sort: ["-updatedAt", "id"], depth: 0 as const };
       const found = await nextly.find({
         collection: slug,
-        sort: ["-updatedAt", "id"],
         limit: NEWEST_MARKED,
-        depth: 0,
+        ...newestFirst,
         ...asEditing,
       });
-      return { newest: found.items, total: found.meta.total };
+      const last = found.items.at(-1) as { updatedAt?: unknown } | undefined;
+      if (found.items.length < NEWEST_MARKED || last?.updatedAt == null) {
+        return { newest: found.items, total: found.meta.total };
+      }
+      // Every entry saved in the same instant as the last one named, too:
+      // saves in one second tie where save times are kept to the second,
+      // and one past the boundary would otherwise go unseen.
+      const tied = await nextly.find({
+        collection: slug,
+        where: {
+          updatedAt: { greater_than_equal: asFilterValue(last.updatedAt) },
+        },
+        limit: MOST_TIED,
+        ...newestFirst,
+        ...asEditing,
+      });
+      return { newest: tied.items, total: found.meta.total };
     },
   };
 }
@@ -224,7 +326,7 @@ export function canvasSourcesChangedRoute(): {
       const answer: CanvasSourcesChangedResponse = {
         stamp: await sourcesChangedStamp(
           body,
-          await directSourcesChangedReads(ctx)
+          await directSourcesChangedReads(ctx, body.locale)
         ),
       };
       return respondDoc(answer);

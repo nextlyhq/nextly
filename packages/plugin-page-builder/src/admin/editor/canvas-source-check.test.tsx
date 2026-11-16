@@ -136,6 +136,31 @@ describe("the canvas's change check", () => {
     expect(dropped).toBe(2);
   });
 
+  it("goes on checking after a check slower than a minute", async () => {
+    let answer: (mark: string) => void = () => undefined;
+    const ask = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce("opened")
+      .mockImplementationOnce(
+        () =>
+          new Promise<string>(resolve => {
+            answer = resolve;
+          })
+      )
+      .mockResolvedValue("opened");
+    renderHook(() => useCanvasSourceCheck(ASKED, "u1", ask));
+    await vi.advanceTimersByTimeAsync(0);
+    // The minute's check is asked, and takes a minute and a half.
+    await vi.advanceTimersByTimeAsync(SOURCE_CHECK_EVERY_MS);
+    expect(ask).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(SOURCE_CHECK_EVERY_MS * 1.5);
+    expect(ask).toHaveBeenCalledTimes(2);
+    answer("opened");
+    // A minute after it settled, the next is asked.
+    await vi.advanceTimersByTimeAsync(SOURCE_CHECK_EVERY_MS);
+    expect(ask).toHaveBeenCalledTimes(3);
+  });
+
   it("changes nothing when a check fails, and compares the next with the last mark it read", async () => {
     let answer: () => Promise<string> = async () => "before";
     const ask = vi.fn(() => answer());
