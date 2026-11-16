@@ -32,7 +32,6 @@ packages/blocks-engine/src/style/compile-page.ts 2761
 packages/builder/src/binding-controls.tsx 1632
 
 
-packages/builder/src/canvas-drag.tsx 1698
 
 packages/builder/src/canvas.tsx 2705
 

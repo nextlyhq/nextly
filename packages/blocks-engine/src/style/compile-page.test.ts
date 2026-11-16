@@ -2565,6 +2565,51 @@ describe("inline padding and a contained container's inset", () => {
     ).not.toContain(COLUMN);
   });
 
+  it("flags a flex item its author made fill the row", () => {
+    // A contained item with `min-width: 100%` takes the whole row, which is
+    // the width its inset is measured from, so it keeps its inset: its own
+    // minimum width sets a flag the site sheet reads beside the item flag.
+    const FILLS = "--nx-fills-row";
+    const at = (minWidth: string) =>
+      css(doc([node("n1", { base: { base: { minWidth } } })]));
+    for (const minWidth of ["100%", "120%"]) {
+      expect(at(minWidth)).toContain(`${FILLS}: 1`);
+    }
+    // `inherit` takes the parent's minimum, which is `auto` unless an author
+    // set one, so it does not fill the row: it clears an earlier flag.
+    for (const minWidth of ["50%", "300px", "0", "inherit"]) {
+      expect(at(minWidth)).toContain(`${FILLS}: 0`);
+    }
+    expect(
+      css(doc([node("n1", { base: { base: { gap: "1rem" } } })]))
+    ).not.toContain(FILLS);
+  });
+
+  it("hands a display: contents wrapper's flags on to its children", () => {
+    // A wrapper with `display: contents` draws no box, so its children are
+    // items of the layout around it. They take the wrapper's own flags, which
+    // that layout set on it, with `inherit`, which every property accepts.
+    const out = css(
+      doc([node("n1", { base: { base: { display: "contents" } } })])
+    );
+    expect(out).toMatch(/> \* \{[^}]*--nx-sized-item: inherit[^}]*\}/);
+    expect(out).toMatch(/> \* \{[^}]*--nx-column-flow: inherit[^}]*\}/);
+    // A direction stated in the same rule is kept, so a wider breakpoint that
+    // turns the wrapper into a flex column still has its direction's flag.
+    const column = css(
+      doc([
+        node("n1", {
+          base: {
+            base: { display: "contents", flexDirection: "column" },
+            tablet: { display: "flex" },
+          },
+        }),
+      ])
+    );
+    expect(column).toMatch(/> \* \{[^}]*--nx-column-flow: 1[^}]*\}/);
+    expect(column).not.toContain("--nx-column-flow: inherit");
+  });
+
   it("flags a block taken out of the flow by its own position", () => {
     // An absolutely or fixed positioned child of a row is not a flex
     // item, so the item flag must not hold for it. Its own position sets a

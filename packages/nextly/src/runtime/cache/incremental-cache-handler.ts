@@ -106,8 +106,18 @@ const FILL_WINDOW_MS = 60_000;
 /** At most this many reads are remembered before the old ones are dropped. */
 const MAX_REMEMBERED_READS = 10_000;
 
+/**
+ * A remembered read of a key: when it was made, and what it answered so far.
+ * `reading` until the handler answers it; `missed` when it answered nothing,
+ * so Next.js renders the key; `served` when it answered a stored entry.
+ */
+interface RememberedRead {
+  at: number;
+  answer: "reading" | "missed" | "served";
+}
+
 const globalForReads = globalThis as unknown as {
-  __nextly_cache_reads?: Map<string, number>;
+  __nextly_cache_reads?: Map<string, RememberedRead>;
   __nextly_cache_reads_overflowed_at?: number;
 };
 
@@ -117,20 +127,40 @@ const globalForReads = globalThis as unknown as {
  * fill began: an expiry recorded while it ran then judges what it stores,
  * instead of the fill passing for fresh because it finished later.
  */
-function reads(): Map<string, number> {
+function reads(): Map<string, RememberedRead> {
   globalForReads.__nextly_cache_reads ??= new Map();
   return globalForReads.__nextly_cache_reads;
 }
 
-function rememberRead(key: string): void {
+/**
+ * Remembers a read of `key`, and answers the record to mark with what the
+ * read answers (`undefined` when it could not be remembered).
+ */
+function rememberRead(key: string): RememberedRead | undefined {
   const remembered = reads();
   const now = localNow();
+  // A render of this key that a missed read within the window started is
+  // still the one being filled: a later read of the same key is served that
+  // render, so it does not move when the render began. Moved, a render begun
+  // before an expiry and stored after it would be dated after the expiry, and
+  // kept. A read still being answered may yet miss, so it holds too. A read
+  // answered from the store started no render, so a later read starts afresh:
+  // kept, it would date a render begun after an expiry from before it, and
+  // refuse it once more than the expiry needs.
+  const earlier = remembered.get(key);
+  const read =
+    earlier !== undefined &&
+    earlier.answer !== "served" &&
+    now - earlier.at <= FILL_WINDOW_MS
+      ? earlier
+      : { at: now, answer: "reading" as const };
   remembered.delete(key);
   if (remembered.size >= MAX_REMEMBERED_READS) {
     // Reads past the window mark no fill still running, so they go first.
-    for (const [old, at] of remembered) {
-      if (now - at <= FILL_WINDOW_MS) break;
-      remembered.delete(old);
+    // Not in time order: a read that holds an earlier one's start is put
+    // back last with that start, so every entry is looked at.
+    for (const [old, { at }] of remembered) {
+      if (now - at > FILL_WINDOW_MS) remembered.delete(old);
     }
   }
   if (remembered.size >= MAX_REMEMBERED_READS) {
@@ -138,9 +168,48 @@ function rememberRead(key: string): void {
     // that fill would lose when it began. This read is not remembered, and
     // its fill is judged as one begun at the window's start (`fillBegan`).
     globalForReads.__nextly_cache_reads_overflowed_at = now;
-    return;
+    return undefined;
   }
-  remembered.set(key, now);
+  remembered.set(key, read);
+  return read;
+}
+
+/**
+ * Whether Next.js will fill `stored` again in the background as it serves it:
+ * its revalidate time (the route's cache control, or a cached fetch's own) has
+ * passed. When that time cannot be read it is taken as passed, so the read
+ * holds its start: at worst one render more after an expiry, never a stale
+ * one kept.
+ */
+function dueForRevalidation(stored: StoredEntry): boolean {
+  const seconds =
+    revalidateOf(stored.cacheControl) ?? revalidateOf(stored.value);
+  if (seconds === false) return false;
+  if (seconds === undefined) return true;
+  return Date.now() - stored.lastModified >= seconds * 1000;
+}
+
+/** The `revalidate` an object carries: seconds, `false` for never, or `undefined`. */
+function revalidateOf(holder: unknown): number | false | undefined {
+  if (typeof holder !== "object" || holder === null) return undefined;
+  if (!("revalidate" in holder)) return undefined;
+  const { revalidate } = holder;
+  return typeof revalidate === "number" || revalidate === false
+    ? revalidate
+    : undefined;
+}
+
+/**
+ * Marks what a remembered read answered. A read that another read of the
+ * same key has since joined is marked as missed if either missed, since a
+ * render either started is still the one being filled.
+ */
+function markAnswer(
+  read: RememberedRead | undefined,
+  answer: "missed" | "served"
+): void {
+  if (read === undefined || read.answer === "missed") return;
+  read.answer = answer;
 }
 
 /**
@@ -151,7 +220,7 @@ function rememberRead(key: string): void {
  */
 function fillBegan(key: string): number {
   const remembered = reads();
-  const readAt = remembered.get(key);
+  const readAt = remembered.get(key)?.at;
   remembered.delete(key);
   const now = localNow();
   if (readAt !== undefined && now - readAt <= FILL_WINDOW_MS) return readAt;
@@ -193,12 +262,34 @@ export default class NextlyIncrementalCacheHandler {
     value: unknown;
     cacheControl?: unknown;
   } | null> {
-    rememberRead(key);
+    const read = rememberRead(key);
+    const stored = await this.freshEntry(key, ctx);
+    // A miss sets off a render, and so does an entry served past its
+    // revalidate time (Next.js fills it again in the background): either read
+    // holds its start, as the render's. One served within its time started
+    // no render.
+    markAnswer(
+      read,
+      stored === undefined || dueForRevalidation(stored) ? "missed" : "served"
+    );
+    if (stored === undefined) return null;
+    return {
+      lastModified: stored.lastModified,
+      value: stored.value,
+      cacheControl: stored.cacheControl,
+    };
+  }
+
+  /** The entry stored for `key` while none of its tags expired after it began. */
+  private async freshEntry(
+    key: string,
+    ctx: CacheContext | undefined
+  ): Promise<StoredEntry | undefined> {
     // Where a timer may never fire, a read retries what the ledger refused.
     const retrying = retryFailedRecordsAtRead();
     if (retrying !== undefined) await retrying;
     const stored = entries().get(key) ?? (await this.storedFromBuild(key, ctx));
-    if (stored === undefined) return null;
+    if (stored === undefined) return undefined;
     const tags = [
       ...stored.tags,
       ...(ctx?.tags ?? []),
@@ -210,13 +301,9 @@ export default class NextlyIncrementalCacheHandler {
     await refreshTagExpiries(tags);
     if (isEntryExpired(tags, stored.begunAt)) {
       entries().deleteIf(key, stored);
-      return null;
+      return undefined;
     }
-    return {
-      lastModified: stored.lastModified,
-      value: stored.value,
-      cacheControl: stored.cacheControl,
-    };
+    return stored;
   }
 
   /**
