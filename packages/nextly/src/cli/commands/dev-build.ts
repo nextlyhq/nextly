@@ -1450,6 +1450,8 @@ export async function ensureLocalizedCompanions(
             kind,
             entity.slug
           ),
+          // Attended here, as the guard above holds: the development sync, or `nextly migrate`.
+          convertZonedDates: true,
         },
         reportCompanionFailure(
           "update",
@@ -1459,6 +1461,10 @@ export async function ensureLocalizedCompanions(
         // failure: the run did not change it, and an install nobody touched must not start failing.
         message =>
           logger.warn(
+            `The translations table for "${entity.slug}" (${tableName}_locales): ${message}`
+          ),
+        message =>
+          logger.info(
             `The translations table for "${entity.slug}" (${tableName}_locales): ${message}`
           )
       );

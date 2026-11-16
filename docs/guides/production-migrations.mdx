@@ -1245,6 +1245,12 @@ On PostgreSQL and SQLite the file runs in one transaction, so a failed attempt l
 
 Run `nextly upgrade` once the new release serves every instance. An instance still running the earlier release can store a password as it was written after the step has passed its row, so if you ran it during a rollout, run it again after the last earlier instance has stopped. A run that finds nothing left says so.
 
+### Translated date fields on PostgreSQL
+
+A translated date field is kept in the translations table (`<table>_locales`) as a plain `timestamp` holding the UTC time, the same way the main table keeps it. Earlier releases kept it as `timestamp with time zone`. On a server not in UTC, a date moved there by turning translation on was stored shifted by the server's time zone, and a date written there while translated was shown in Nextly shifted by it.
+
+`nextly migrate` converts each such column once and logs it: `Converted <table>_locales.<field> from a date with a time zone to TIMESTAMP, reading each value in this connection's time zone (<zone>)`. Each value keeps the date Nextly showed. Dates written in a translation on a non-UTC server before this release were shown, and are kept, shifted by the zone's offset, so check recent translated dates after upgrading. The conversion reads each value in the time zone of the connection it runs on, so run it with the same time zone as the app: a runner whose `PGTZ` or connection options set another zone moves every value by the difference. A second run finds nothing to convert. In development the sync converts the same way. A production start never changes a column's type: it logs once which columns `nextly migrate` converts and leaves them until then. A server in UTC is unaffected.
+
 ### Core tables missing after an upgrade
 
 A release can add tables to Nextly's own core schema. An existing database gets them only through `nextly migrate` (or a boot run with `db.runMigrationsOnBoot`); a production boot never creates tables. Until you run it, every boot logs one warning naming each missing core table, and whatever reads or writes those tables fails: deleting a document, for one, rolls back. Run `nextly migrate` after every upgrade, and the warning goes away.

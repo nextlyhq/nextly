@@ -49,6 +49,7 @@ import type { LocalizedFieldRef } from "../companion-join";
 import {
   companionColumnsThatCannotHold,
   judgeCompanionColumns,
+  zonedDateColumns,
 } from "../migration/companion-column-holds";
 import { companionIndexFacts } from "../migration/reconcile-companion";
 import {
@@ -426,11 +427,29 @@ export async function upsertCompanionRow(
   const ph = () =>
     adapter.dialect === "postgresql" ? `$${params.length}` : "?";
 
+  // A date field's value is bound as its column stores it, the UTC wall clock, as every write
+  // through the translation table's model binds it (`fieldColumnDriverValue`). Bound as a bare
+  // `Date`, node-postgres sends the Node process's local wall clock, which a `timestamp` column
+  // keeps; mysql2 is pinned to UTC and SQLite stores epoch seconds, so only PostgreSQL differs.
+  const { fieldColumnDriverValue } = await import(
+    "../../schema/services/runtime-schema-generator"
+  );
+  const bound = (value: unknown): unknown =>
+    adapter.dialect === "postgresql" && value instanceof Date
+      ? fieldColumnDriverValue("postgresql", "timestamp", value)
+      : value;
+
   const allCols = ["_parent", "_locale", ...cols];
   const valuePlaceholders = allCols
     .map(c => {
       params.push(
-        c === "_parent" ? parentId : c === "_locale" ? locale : withChanger[c]
+        c === "_parent"
+          ? parentId
+          : c === "_locale"
+            ? locale
+            : c === COMPANION_UPDATED_AT_COLUMN
+              ? withChanger[c]
+              : bound(withChanger[c])
       );
       return ph();
     })
@@ -738,6 +757,71 @@ export interface CompanionReconcileAdapter extends CompanionIntrospectAdapter {
  * the columns already widened stay so, and the next run, which judges the columns again, widens
  * the rest.
  */
+/**
+ * Converts each translated date column an earlier release made with a time zone to the field's
+ * own type, reading each value in this connection's zone, which is the zone it was moved or written
+ * in as long as the server's has not changed since: the result is the UTC wall clock Nextly wrote.
+ * Each column is one statement that commits on its own; a failure is reported and answers false,
+ * and the next run converts the rest.
+ */
+async function convertZonedDateColumns(
+  adapter: CompanionReconcileAdapter,
+  table: string,
+  zoned: readonly { column: string; type: string }[],
+  onNotice?: (message: string) => void,
+  onError?: (error: unknown) => void
+): Promise<boolean> {
+  if (zoned.length === 0) return true;
+  const q = (name: string) => quoteIdent(name, "postgresql");
+  try {
+    const [setting] = (await adapter.executeQuery(
+      "SELECT current_setting('TimeZone') AS zone"
+    )) as { zone?: string }[];
+    for (const { column, type } of zoned) {
+      await adapter.executeQuery(
+        `ALTER TABLE ${q(table)} ALTER COLUMN ${q(column)} TYPE ${type} USING ${q(column)} AT TIME ZONE current_setting('TimeZone')`
+      );
+      onNotice?.(
+        `Converted ${table}.${column} from a date with a time zone to ${type}, reading each value ` +
+          `in this connection's time zone (${setting?.zone ?? "unknown"}), so it holds the UTC ` +
+          `time Nextly wrote.`
+      );
+    }
+    return true;
+  } catch (error) {
+    onError?.(error);
+    return false;
+  }
+}
+
+/** The columns `warnZonedDateColumnsOnce` has named, per database handle. */
+const zonedDatesWarned = new WeakMap<object, Set<string>>();
+
+/**
+ * Names, once per database handle, each translated date column an earlier release made with a
+ * time zone that this unattended run leaves as it is, and what converts it.
+ */
+function warnZonedDateColumnsOnce(
+  adapter: object,
+  table: string,
+  zoned: readonly { column: string }[],
+  onWarning?: (message: string) => void
+): void {
+  if (zoned.length === 0) return;
+  const warned = zonedDatesWarned.get(adapter) ?? new Set<string>();
+  zonedDatesWarned.set(adapter, warned);
+  for (const { column } of zoned) {
+    const name = `${table}.${column}`;
+    if (warned.has(name)) continue;
+    warned.add(name);
+    onWarning?.(
+      `${name} is a date column with a time zone, as an earlier release made it: on a server ` +
+        `whose time zone is not UTC its values are stored shifted by that zone. Run \`nextly ` +
+        `migrate\` to convert it, in the time zone the app runs in.`
+    );
+  }
+}
+
 async function widenCompanionColumns(
   adapter: CompanionReconcileAdapter,
   table: string,
@@ -854,10 +938,18 @@ export async function reconcileCompanionColumns(
      * caller that judges nothing.
      */
     recordedBefore?: RecordedEntity | null;
+    /**
+     * Whether to convert a translated date field's column an earlier release made with a time zone
+     * (`zonedDateColumns`). Only an attended run converts: the development sync and `nextly
+     * migrate`. Left out, as an unattended start leaves it, each such column is warned about once.
+     */
+    convertZonedDates?: boolean;
   },
   onError?: (error: unknown) => void,
   /** Told of a column left as it is that cannot hold its field, which fails nothing. */
-  onWarning?: (message: string) => void
+  onWarning?: (message: string) => void,
+  /** Told of a column this run converted, and how. */
+  onNotice?: (message: string) => void
 ): Promise<boolean> {
   const companionTableName = `${args.tableName}_locales`;
   // Hoisted so the concurrency recheck in the catch can reuse it.
@@ -886,6 +978,30 @@ export async function reconcileCompanionColumns(
     const liveColumns =
       snapshot.tables.find(t => t.name === companionTableName)?.columns ?? [];
     const present = new Set(liveColumns.map(c => c.name));
+    // A translated date field's column an earlier release made with a time zone holds each value
+    // read in the session's zone: converted back to the wall clock Nextly wrote by an attended
+    // run, and only named by an unattended one, which changes no column's type.
+    const zoned = zonedDateColumns({
+      fields: desired,
+      live: liveColumns,
+      dialect: args.dialect,
+      builtBy: args.builtBy,
+    });
+    if (args.convertZonedDates === true) {
+      if (
+        !(await convertZonedDateColumns(
+          adapter,
+          companionTableName,
+          zoned,
+          onNotice,
+          fail
+        ))
+      ) {
+        return !failed;
+      }
+    } else {
+      warnZonedDateColumnsOnce(adapter, companionTableName, zoned, onWarning);
+    }
     // A column already there is taken below as its field's. For a field this run newly
     // translates it may be another field's leftover, so it is taken only if it can hold the
     // field's values, judged as the Schema Builder judges it. A field translated before the run
