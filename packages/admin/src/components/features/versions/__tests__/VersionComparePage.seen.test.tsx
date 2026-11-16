@@ -10,13 +10,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import { act, render, screen, waitFor } from "@admin/__tests__/utils";
 
-const { useVersionsMock, markSeenMock, baselineDiffMock } = vi.hoisted(() => ({
-  useVersionsMock: vi.fn(),
-  markSeenMock: vi.fn(() =>
-    Promise.resolve({ message: "Marked as seen.", item: {} })
-  ),
-  baselineDiffMock: vi.fn(),
-}));
+const { useVersionsMock, markSeenMock, baselineDiffMock, versionDiffMock } =
+  vi.hoisted(() => ({
+    useVersionsMock: vi.fn(),
+    versionDiffMock: vi.fn(),
+    markSeenMock: vi.fn(() =>
+      Promise.resolve({ message: "Marked as seen.", item: {} })
+    ),
+    baselineDiffMock: vi.fn(),
+  }));
 
 vi.mock("../diff/VersionDiffView", () => ({
   VersionDiffView: () => <div data-testid="diff-view" />,
@@ -30,11 +32,7 @@ vi.mock("@admin/hooks/queries/useVersions", async importOriginal => {
   return {
     useVersions: (...a: unknown[]) => useVersionsMock(...a),
     useBaselineDiff: actual.useBaselineDiff,
-    useVersionDiff: () => ({
-      data: undefined,
-      isLoading: false,
-      isError: false,
-    }),
+    useVersionDiff: (...a: unknown[]) => versionDiffMock(...a),
     scopeKey: actual.scopeKey,
   };
 });
@@ -50,6 +48,16 @@ import type { ServerBaseline } from "../version-pairing";
 import { VersionComparePage } from "../VersionComparePage";
 
 const scope = { kind: "collection" as const, slug: "posts", entryId: "e1" };
+
+/** The pair's comparison as the diff view reads it: arrived and drawn. */
+const DIFF_DRAWN = {
+  // No field an editor wrote, so the history rail draws no summary line.
+  data: { from: 4, to: 5, fields: [] },
+  isSuccess: true,
+  isPlaceholderData: false,
+  isLoading: false,
+  isError: false,
+};
 
 const row = (versionNo: number) => ({
   id: `v${versionNo}`,
@@ -80,6 +88,7 @@ function page(from: number, to: number) {
 describe("VersionComparePage, what it marks as seen", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    versionDiffMock.mockReturnValue(DIFF_DRAWN);
     useVersionsMock.mockReturnValue({
       data: { pages: [{ items: [row(5), row(4), row(3)] }] },
       isLoading: false,
@@ -106,6 +115,60 @@ describe("VersionComparePage, what it marks as seen", () => {
     expect(markSeenMock).toHaveBeenCalledTimes(1);
     expect(markSeenMock).toHaveBeenCalledWith(scope, 5);
   });
+
+  // Seen means drawn: a comparison still loading, one that failed, or the
+  // previous pair's answer shown while this one loads has shown none of this
+  // pair's fields, so the reader's last-viewed version stays where it was.
+  it("marks nothing while the comparison is still loading", () => {
+    versionDiffMock.mockReturnValue({
+      data: undefined,
+      isSuccess: false,
+      isPlaceholderData: false,
+      isLoading: true,
+      isError: false,
+    });
+    render(page(4, 5));
+
+    expect(markSeenMock).not.toHaveBeenCalled();
+  });
+
+  it("marks nothing when the comparison failed to load", () => {
+    versionDiffMock.mockReturnValue({
+      data: undefined,
+      isSuccess: false,
+      isPlaceholderData: false,
+      isLoading: false,
+      isError: true,
+    });
+    render(page(4, 5));
+
+    expect(markSeenMock).not.toHaveBeenCalled();
+  });
+
+  it("marks nothing while another pair's answer stands in for this one", () => {
+    versionDiffMock.mockReturnValue({ ...DIFF_DRAWN, isPlaceholderData: true });
+    render(page(4, 5));
+
+    expect(markSeenMock).not.toHaveBeenCalled();
+  });
+
+  it("marks the newer version once its comparison arrives", () => {
+    versionDiffMock.mockReturnValue({
+      data: undefined,
+      isSuccess: false,
+      isPlaceholderData: false,
+      isLoading: true,
+      isError: false,
+    });
+    const { rerender } = render(page(4, 5));
+    expect(markSeenMock).not.toHaveBeenCalled();
+
+    versionDiffMock.mockReturnValue(DIFF_DRAWN);
+    rerender(page(4, 5));
+
+    expect(markSeenMock).toHaveBeenCalledTimes(1);
+    expect(markSeenMock).toHaveBeenCalledWith(scope, 5);
+  });
 });
 
 describe("VersionComparePage, a baseline comparison it marks as seen", () => {
@@ -126,6 +189,7 @@ describe("VersionComparePage, a baseline comparison it marks as seen", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    versionDiffMock.mockReturnValue(DIFF_DRAWN);
     useVersionsMock.mockReturnValue({
       data: { pages: [{ items: [row(5), row(4), row(3)] }] },
       isLoading: false,

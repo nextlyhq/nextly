@@ -23,6 +23,7 @@ import { LOCALE_PARAM } from "@admin/constants/search-params";
 import {
   scopeKey,
   useBaselineDiff,
+  useVersionDiff,
   useVersions,
 } from "@admin/hooks/queries/useVersions";
 import { useCan } from "@admin/hooks/useCan";
@@ -310,12 +311,25 @@ export function VersionComparePage({
         : null,
     [pairFrom, pairTo]
   );
+  // The pair's own comparison, read from the same query the diff view draws
+  // from (same key, so one request serves both), to know when it is on screen.
+  const shownDiff = useVersionDiff({
+    scope,
+    from: shown?.from ?? null,
+    to: shown?.to ?? null,
+  });
+  // Seen means drawn: a comparison still loading or that failed, or another
+  // pair's answer standing in while this one loads, has shown none of this
+  // pair's fields, and marking it would move the reader's last-viewed version
+  // past changes they never saw.
+  const drawn =
+    shown !== null && shownDiff.isSuccess && !shownDiff.isPlaceholderData;
   // The newer of the two is what the reader has now seen, whichever side it
   // is on, once per showing.
   useMarkVersionSeen(
     scope,
     scopeKey(scope).join(":"),
-    shown ? Math.max(shown.from, shown.to) : null
+    drawn ? Math.max(shown.from, shown.to) : null
   );
 
   /** The same comparison, at another baseline or in another view. */

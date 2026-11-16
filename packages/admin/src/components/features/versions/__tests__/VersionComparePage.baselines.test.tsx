@@ -40,7 +40,15 @@ vi.mock("../diff/VersionDiffView", () => ({
 vi.mock("@admin/hooks/queries/useVersions", () => ({
   useVersions: (...a: unknown[]) => useVersionsMock(...a),
   useBaselineDiff: (...a: unknown[]) => baselineMock(...a),
-  useVersionDiff: () => ({ data: undefined, isLoading: false, isError: false }),
+  // Each comparison has arrived and is drawn, with no field an editor wrote,
+  // so the page may mark what it shows and the rail draws no summary line.
+  useVersionDiff: () => ({
+    data: { fields: [] },
+    isSuccess: true,
+    isPlaceholderData: false,
+    isLoading: false,
+    isError: false,
+  }),
   scopeKey: (s: { kind: string; slug: string; entryId?: string }) => [
     s.kind,
     s.slug,
