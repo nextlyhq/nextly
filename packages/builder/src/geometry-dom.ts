@@ -17,18 +17,16 @@
  * arithmetic stays testable without a DOM. This is the edge; that is the pure
  * part.
  *
+ * Every rectangle read stays in this file. What is worked out from those reads
+ * without reading again sits beside it: the arithmetic of an element's own
+ * transform in `geometry-transform.ts`, and the comparisons that decide whether
+ * a clipping ancestor cuts a block in `geometry-clip.ts`.
+ *
  * @module geometry-dom
  */
 
-import type { CornerRadii, EdgeBounds } from "./border-radii";
-import {
-  insetCornerRadii,
-  isSquare,
-  roundedInsideRounded,
-  scaleCornerRadii,
-  SQUARE_CORNERS,
-  usedCornerRadii,
-} from "./border-radii";
+import type { CornerRadii } from "./border-radii";
+import { SQUARE_CORNERS, usedCornerRadii } from "./border-radii";
 import { isHTMLElement, isIFrame } from "./dom-kind";
 import {
   frameContentOrigin,
@@ -41,6 +39,30 @@ import {
   type Rect,
   type Scale,
 } from "./geometry";
+import {
+  anyAncestorCuts,
+  type AncestorClipContext,
+  clipEdges,
+  cornerCut,
+  narrowTo,
+  overflowApplies,
+  rectCut,
+} from "./geometry-clip";
+import {
+  AXIS_ALIGNED_TOLERANCE,
+  edgesMovedBy,
+  NO_EDGE_MOVED,
+  type RenderedScale,
+  transformOriginOf,
+} from "./geometry-transform";
+
+// The transform arithmetic and the clip comparisons live in modules of their
+// own; their public names are still exported from here.
+export { overflowApplies } from "./geometry-clip";
+export type { RenderedScale } from "./geometry-transform";
+// Kept so the module's exported names stay the same, though nothing imports it.
+// fallow-ignore-next-line unused-type
+export type { MovedEdges } from "./geometry-transform";
 
 /**
  * How far a frame's content viewport sits inside its border box.
@@ -922,120 +944,6 @@ export function renderSkips(element: Element): boolean {
   return !element.checkVisibility();
 }
 
-/**
- * The cumulative transform between an element and the canvas root, reduced to
- * the two things axis-aligned chrome can use.
- *
- * `transform` is a catalog property taking a free-form CSS value, so an author
- * can scale, rotate, skew or MIRROR a block. Everything measured through
- * `getBoundingClientRect` is post-transform while every length from
- * `getComputedStyle` stays in unscaled CSS pixels, and anything combining the
- * two is wrong by whatever sits between them.
- *
- * ## Read from the matrix rather than inferred from a ratio
- *
- * Comparing the drawn box against `offsetWidth` looks equivalent and is not, in
- * three ways that all read as ordinary code:
- *
- * - `offsetWidth` is INTEGER-ROUNDED and a bounding rectangle is not, so an
- *   untransformed block of fractional width reports a scale it does not have —
- *   worst at exactly the small sizes where a band is hardest to judge by eye.
- * - A bounding rectangle is never negative, so `scaleX(-1)` divides out to an
- *   ordinary positive factor and the mirroring vanishes from the answer.
- * - A rotation or skew inflates the bounding box, so the ratio reports a scale
- *   that describes no axis at all.
- *
- * The matrix has none of those: it is exact, it is signed, and its off-diagonal
- * terms are what a rotation or skew shows up in.
- *
- * ## `describable` is a refusal, not a detail
- *
- * A band is an axis-aligned rectangle pinned to a physical side. That
- * representation has no meaning for a rotated, skewed or mirrored box — a left
- * margin on a mirrored element renders on the RIGHT — and no choice of scale
- * factor rescues it. So the answer carries whether the question is askable, and
- * chrome that cannot draw the truth draws nothing rather than something
- * confident and wrong.
- *
- * Composed up to the ROOT rather than read off the element, because a scaled
- * ancestor moves and resizes its descendants while their own transform stays
- * `none`.
- */
-export interface RenderedScale {
-  readonly x: number;
-  readonly y: number;
-  /** False for a rotation, a skew, a reflection, or a collapse to zero. */
-  readonly describable: boolean;
-  /**
-   * The physical edges the element's OWN transform draws away from their layout
-   * position.
-   *
-   * Separated from the composed scale because the two do OPPOSITE things to a
-   * margin. **A transform does not affect layout.** An ancestor's transform
-   * scales the whole subtree it lays out, gaps included, so a margin inside one
-   * really does render smaller and `x`/`y` above are right to apply. The
-   * element's own transform moves only its rendering, while the space its margin
-   * reserves stays where the untransformed box left it — measured, a 100px block
-   * with `margin-bottom: 20px` under `scale(2)` leaves a gap of MINUS eighty
-   * pixels, drawn over the neighbour the margin is holding away.
-   *
-   * PER EDGE, and the question asked is the direct one: does this edge RENDER
-   * where it LAYS OUT. Coarser answers were tried and each was a different wrong
-   * one. Reading whether a transform is DECLARED blanks the margins of every
-   * resting hover state, since `scale(1)`, `translate(0)` and `rotate(360deg)`
-   * all compute to a non-`none` matrix that moves nothing. Reading it per AXIS
-   * blanks a valid band whenever one edge is pinned: measured,
-   * `translateY(-25px) scaleY(0.5)` on a 100px block computes to
-   * `matrix(1, 0, 0, 0.5, 0, -25)` and renders its top edge exactly where the
-   * layout put it while moving the bottom one, and `transform` is a catalog
-   * property so an author reaches that with no `transform-origin` at all.
-   *
-   * There is no finer grain below an edge, which is the point of asking the
-   * question this way rather than refining a proxy again.
-   */
-  readonly selfMoved: MovedEdges;
-  /**
-   * The composition ABOVE the element, excluding its own transform.
-   *
-   * Margins are measured with this and padding with the composed scale, because
-   * the two live in different spaces. Padding is inside the element's own
-   * transform and renders scaled with it; a margin is laid out in the PARENT's
-   * coordinates, and the element's own transform never touches the space it
-   * reserves.
-   *
-   * Measured: a 100px block with `margin-top: 28px` and a transform pinning its
-   * top edge leaves a real gap of 28 rendered pixels above it, not 14 — so a
-   * band drawn at the composed scale is half the size of the space it names.
-   */
-  readonly ancestor: { readonly x: number; readonly y: number };
-}
-
-/** Which physical edges are drawn away from where they were laid out. */
-export interface MovedEdges {
-  readonly top: boolean;
-  readonly right: boolean;
-  readonly bottom: boolean;
-  readonly left: boolean;
-}
-
-const NO_EDGE_MOVED: MovedEdges = {
-  top: false,
-  right: false,
-  bottom: false,
-  left: false,
-};
-
-/**
- * How far an edge may be drawn from its layout position and still count as put.
- *
- * Half a rendered pixel: below that the band and the space it names are the same
- * pixels on screen, and refusing the band would cost an author information to
- * avoid an error nobody can see. Deliberately NOT the axis-aligned tolerance,
- * which guards serialization noise in a matrix term; this one is about what is
- * visible, and the two would drift apart if they shared a constant.
- */
-const EDGE_STILL_PX = 0.5;
-
 const IDENTITY_SCALE: RenderedScale = {
   x: 1,
   y: 1,
@@ -1043,9 +951,6 @@ const IDENTITY_SCALE: RenderedScale = {
   describable: true,
   selfMoved: NO_EDGE_MOVED,
 };
-
-/** Below this, an off-diagonal matrix term is serialization noise, not a rotation. */
-const AXIS_ALIGNED_TOLERANCE = 1e-9;
 
 export function renderedScale(element: Element, root: Element): RenderedScale {
   const view = element.ownerDocument.defaultView;
@@ -1141,184 +1046,6 @@ export function renderedScale(element: Element, root: Element): RenderedScale {
 }
 
 /**
- * How far each of the box's four extremes is drawn from where it was laid out.
- *
- * A transform about an origin maps a local coordinate `v` to
- * `o + factor * (v - o) + shift`, so an extreme at `v` is displaced by
- * `(o - v) * (1 - factor) + shift`. The near extreme sits at `v = 0` and the far
- * one at `v = size`, which is the whole of the arithmetic.
- *
- * Compared in RENDERED pixels rather than local ones, because the tolerance is
- * about what an author can see: a tenth of a local pixel under a tenfold
- * ancestor scale is a visible pixel on screen, and the same displacement inside
- * a shrunken ancestor is not.
- *
- * Converted by the ANCESTOR scale, never the composed one. The displacement is
- * already expressed in the parent's coordinates — the element's own transform is
- * what produced it — so multiplying by that transform again counts it twice and
- * understates the movement by exactly the factor doing the moving. Measured, a
- * 100px block under `scaleY(0.01)` displaces each vertical extreme by 49.5
- * rendered pixels while the composed conversion answers 0.495, which is under
- * the threshold and would call a plainly moved extreme stationary.
- *
- * These are EXTREMES of the box rather than named sides, and the distinction is
- * load-bearing under a reflection: the image of `v = 0` is then the rendered
- * box's far side, so `leftX` names the displacement of the near extreme and not
- * of whatever ends up on the left. Callers that could meet a reflection refuse
- * it before reading these.
- */
-function endpointsMovedBy(
-  own: DOMMatrix,
-  origin: { x: number; y: number },
-  box: { width: number; height: number },
-  ancestor: { x: number; y: number }
-): { topY: boolean; bottomY: boolean; leftX: boolean; rightX: boolean } {
-  const moved = (
-    o: number,
-    v: number,
-    factor: number,
-    shift: number,
-    axisScale: number
-  ): boolean =>
-    Math.abs(((o - v) * (1 - factor) + shift) * axisScale) > EDGE_STILL_PX;
-
-  return {
-    topY: moved(origin.y, 0, own.d, own.f, ancestor.y),
-    bottomY: moved(origin.y, box.height, own.d, own.f, ancestor.y),
-    leftX: moved(origin.x, 0, own.a, own.e, ancestor.x),
-    rightX: moved(origin.x, box.width, own.a, own.e, ancestor.x),
-  };
-}
-
-/**
- * Which physical edges a single element's own transform draws away from layout.
- *
- * Asked of the MATRIX rather than of the declaration, because a declaration that
- * moves nothing is ordinary: `scale(1)`, `translate(0)`, `translateY(0)` and
- * `rotate(360deg)` all compute to a non-`none` transform and all serialize to
- * exactly `matrix(1, 0, 0, 1, 0, 0)`. They are the resting state of every hover
- * animation, so reading presence rather than effect blanks the margins of a
- * large share of real pages.
- *
- * Asked PER EDGE rather than per axis, because a transform is applied about
- * `transform-origin` and a translate composed with a scale pins one edge while
- * moving the other. Measured, `translateY(-25px) scaleY(0.5)` on a 100px block
- * renders its top edge exactly where layout put it and moves only the bottom —
- * and that needs `transform` alone, which IS a catalog property.
- *
- * An earlier version answered per axis and argued the pinned case could not
- * arise, on the grounds that `transform-origin` is not authorable here. That
- * trace was right and the conclusion drawn from it was too wide: proving one
- * MECHANISM unreachable is not proving the STATE unreachable, and composing two
- * functions of one property reaches it. The note is kept because the shape of
- * the error is worth more than the correction — the question to ask of an
- * unreachability argument is what ELSE produces the state.
- *
- * `a` and `d` are the per-axis scales and `e`/`f` the per-axis translations,
- * which is why each edge is decided by the two terms of its own axis. A rotation
- * or a skew mixes the axes and moves every edge; anything not flat in 2D is not
- * decidable by these terms at all, and all four are reported moved rather than
- * guessed at.
- *
- * There is no grain below an edge, which is the point of asking whether an edge
- * RENDERS WHERE IT LAYS OUT rather than refining a proxy for a fourth time.
- */
-function edgesMovedBy(
-  own: DOMMatrix | null,
-  origin: { x: number; y: number },
-  box: { width: number; height: number },
-  ancestor: { x: number; y: number }
-): MovedEdges {
-  const EVERY_EDGE: MovedEdges = {
-    top: true,
-    right: true,
-    bottom: true,
-    left: true,
-  };
-  if (own === null) return { ...NO_EDGE_MOVED };
-  /*
-   * A non-positive ancestor scale carries no margin that can be drawn, and it
-   * reaches here past the caller's own guard: that guard reads the COMPOSED
-   * matrix, and an ancestor reflection CANCELLED by the element's own reflection
-   * composes to a positive matrix. Measured, a parent at `scaleX(-1)` holding a
-   * child at `translateX(-200px) scaleX(-1)` composes to `a = 1` and passes
-   * describability while the ancestor's own `a` is still −1.
-   *
-   * Left unchecked that negative factor becomes the margin's scale, turning a
-   * positive margin into a negative extent — which the band code draws INWARD
-   * over the content while still labelling it as ordinary positive spacing. The
-   * mirrored space is real; a rectangle claiming to be it is not.
-   */
-  if (!(ancestor.x > 0) || !(ancestor.y > 0)) return EVERY_EDGE;
-  const skewed =
-    !own.is2D ||
-    Math.abs(own.b) > AXIS_ALIGNED_TOLERANCE ||
-    Math.abs(own.c) > AXIS_ALIGNED_TOLERANCE;
-  if (skewed) return EVERY_EDGE;
-
-  /*
-   * How far one edge is drawn from where it was laid out.
-   *
-   * A transform about an origin maps a local coordinate `v` to
-   * `o + factor * (v - o) + shift`, so an edge at `v` is displaced by
-   * `(o - v) * (1 - factor) + shift`. The near edge sits at `v = 0` and the far
-   * one at `v = size`, which is the whole of the arithmetic.
-   *
-   * Compared in RENDERED pixels rather than local ones, because the tolerance is
-   * about what an author can see: a tenth of a local pixel under a tenfold
-   * ancestor scale is a visible pixel on screen, and the same displacement
-   * inside a shrunken ancestor is not.
-   *
-   * Converted by the ANCESTOR scale, never the composed one. The displacement
-   * above is already expressed in the parent's coordinates — the element's own
-   * transform is what produced it — so multiplying by that transform again
-   * counts it twice and understates the movement by exactly the factor doing
-   * the moving. Measured, a 100px block under `scaleY(0.01)` displaces each
-   * vertical edge by 49.5 rendered pixels while the composed conversion answers
-   * 0.495, which is under the threshold and would call a plainly moved edge
-   * stationary.
-   */
-  const { topY, bottomY, leftX, rightX } = endpointsMovedBy(
-    own,
-    origin,
-    box,
-    ancestor
-  );
-
-  return edgesFromEndpoints({ topY, bottomY, leftX, rightX });
-}
-
-/**
- * Which edges are undrawable, given which of the box's extremes moved.
- *
- * An edge is a SEGMENT, so BOTH of its endpoints have to land where layout put
- * them. Its own coordinate is only half the question: measured,
- * `translate(30px, -25px) scaleY(0.5)` leaves the top edge's Y exactly where
- * layout had it and slides the whole edge thirty pixels sideways, so a band
- * anchored to it names pixels the margin never occupied, at exactly the right
- * height.
- *
- * The top and bottom edges therefore need the horizontal extent still, and the
- * left and right edges need the vertical extent still — which is why the four
- * answers are not independent even though the four displacements are.
- */
-function edgesFromEndpoints(moved: {
-  topY: boolean;
-  bottomY: boolean;
-  leftX: boolean;
-  rightX: boolean;
-}): MovedEdges {
-  const acrossStill = !moved.leftX && !moved.rightX;
-  const downStill = !moved.topY && !moved.bottomY;
-  return {
-    top: moved.topY || !acrossStill,
-    bottom: moved.bottomY || !acrossStill,
-    left: moved.leftX || !downStill,
-    right: moved.rightX || !downStill,
-  };
-}
-
-/**
  * The element's own border box before its own transform, in local pixels.
  *
  * Derived from the rendered rectangle and the COMPOSED scale rather than read
@@ -1335,18 +1062,6 @@ function untransformedBox(
 ): { width: number; height: number } {
   const rect = element.getBoundingClientRect();
   return { width: rect.width / scale.x, height: rect.height / scale.y };
-}
-
-/** The resolved `transform-origin`, in local pixels from the border box's corner. */
-function transformOriginOf(style: CSSStyleDeclaration): {
-  x: number;
-  y: number;
-} {
-  // Two or three components, space separated, already resolved to pixels by the
-  // time computed style reports them — a keyword or a percentage never survives
-  // to here. The third is the Z origin, which an axis-aligned box ignores.
-  const parts = style.transformOrigin.split(" ");
-  return { x: edgeWidth(parts[0] ?? ""), y: edgeWidth(parts[1] ?? "") };
 }
 
 /**
@@ -1438,54 +1153,6 @@ export function hasScrollbarGutter(
  * that clipping applies to the bands and the page alike, so it produces no
  * mismatch; only a clip between the block and the root does.
  */
-/**
- * Computed `display` values whose generated box `overflow` does not clip.
- *
- * MEASURED across the catalog's display set in Chromium rather than read off a
- * spec table, by giving each value `overflow: hidden` and a child pulled outside
- * it, then reading the pixels. The list is wider than the inline box people
- * reach for first, and two of the entries are not guessable:
- *
- * - The internal TABLE boxes take no clip — a row, a row group, a header group
- *   and a footer group all paint a child straight through the edge — while
- *   `table`, `inline-table` and `table-cell` all clip normally.
- * - `contents` generates no box at all, so nothing clips AND
- *   `getBoundingClientRect` answers 0x0 on it. A caller that skipped this entry
- *   would compare a descendant against a zero-sized rectangle and conclude every
- *   block is outside it.
- *
- * `ruby-base`, `ruby-base-container` and `ruby-text-container` are deliberately
- * ABSENT: all three compute to plain `block` in Chromium, so they clip and an
- * entry for them would describe a value that never arrives.
- *
- * The measurement had to force overflow with a NEGATIVE MARGIN rather than an
- * oversized child, because table boxes size to their content: a wide child makes
- * them grow to fit, and "not clipped" then means "never overflowed" — which read
- * as six false entries on the first pass.
- */
-const OVERFLOW_NEVER_CLIPS: ReadonlySet<string> = new Set([
-  "inline",
-  "inline list-item",
-  "table-row",
-  "table-row-group",
-  "table-header-group",
-  "table-footer-group",
-  "ruby",
-  "ruby-text",
-  "contents",
-]);
-
-/** Whether `overflow` establishes a clip on a box with this computed display. */
-export function overflowApplies(display: string): boolean {
-  return !OVERFLOW_NEVER_CLIPS.has(display);
-}
-
-/** A computed border width in pixels, or zero when the browser reports no number. */
-function edgeWidth(value: string): number {
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
 export function clippedByAncestor(
   element: Element,
   root: Element,
@@ -1544,47 +1211,6 @@ export function visiblePartOf(
   );
 }
 
-/** Cut `edges` to one ancestor's clip, on each axis the ancestor clips. */
-function narrowTo(
-  edges: { left: number; top: number; right: number; bottom: number },
-  context: { clipsX: boolean; clipsY: boolean; clip: EdgeBounds }
-): void {
-  if (context.clipsX) {
-    edges.left = Math.max(edges.left, context.clip.left);
-    edges.right = Math.min(edges.right, context.clip.right);
-  }
-  if (context.clipsY) {
-    edges.top = Math.max(edges.top, context.clip.top);
-    edges.bottom = Math.min(edges.bottom, context.clip.bottom);
-  }
-}
-
-/**
- * Walks the ancestors strictly between `element` and `root`, reporting
- * whether any one of them satisfies `cut`.
- *
- * Shared by {@link clippedByAncestor} and {@link clippedByAncestorRect}
- * rather than each climbing the chain on its own: the two answer different
- * questions about the same ancestor and must stop at the same first match for
- * the same reason `ancestorClipContext` is shared rather than re-derived —
- * two copies of "which elements to ask" agree on the day both are written and
- * are free to drift the moment either caller's walk changes.
- */
-function anyAncestorCuts(
-  element: Element,
-  root: Element,
-  cut: (node: Element) => boolean
-): boolean {
-  for (
-    let node: Element | null = element.parentElement;
-    node !== null && node !== root;
-    node = node.parentElement
-  ) {
-    if (cut(node)) return true;
-  }
-  return false;
-}
-
 /**
  * Whether an ancestor cuts the block's own RECTANGLE — the straight-edge
  * question alone, with no opinion about a rounded corner.
@@ -1640,103 +1266,6 @@ function cutByAncestor(
   const context = ancestorClipContext(node, view, root);
   return rectCut(context, box) || cornerCut(context, box, radii);
 }
-
-/**
- * Whether an ancestor cuts the block's RECTANGLE — the whole of
- * {@link clippedByAncestorRect}'s verdict, and the first half of
- * {@link cutByAncestor}'s.
- *
- * ONE implementation rather than one per caller. The two questions differ by
- * the corner refinement below and by nothing else, so the straight-edge part
- * has to be the same reading in both — and it was not: written out twice, the
- * rect question guarded with `context.kind === "clips" && ...` while the
- * corner-aware one narrowed the union. A refusal reason added to
- * {@link AncestorClipContext} would have been gained by one caller and
- * silently skipped by the other.
- *
- * Exhaustive over the union deliberately: with no `default`, a fourth member
- * leaves this function able to return `undefined`, which its declared `boolean`
- * refuses. Both callers inherit that, which is the property the duplicate
- * version could not have.
- */
-function rectCut(context: AncestorClipContext, box: DOMRect): boolean {
-  switch (context.kind) {
-    case "no-clip":
-      return false;
-    case "cut":
-      return true;
-    case "clips":
-      return cutByEdges(box, context.clip, context.clipsX, context.clipsY);
-  }
-}
-
-/**
- * Whether a rounded clipping ancestor cuts the block at a CORNER — the
- * refinement {@link clippedByAncestor} adds and {@link clippedByAncestorRect}
- * deliberately does not.
- *
- * Only a `clips` ancestor has a curve to compare against: `no-clip` and `cut`
- * are already whole answers that {@link rectCut} gave, and asking a second
- * question about them would either re-refuse something or refuse something
- * nothing clips.
- */
-function cornerCut(
-  context: AncestorClipContext,
-  box: DOMRect,
-  radii: CornerRadii
-): boolean {
-  if (context.kind !== "clips") return false;
-  /*
-   * The BLOCK's radii are composed here too, and for the same reason the
-   * ancestor's geometry is.
-   *
-   * The caller scales them by the block's own composition, which stops below
-   * the root — so the outer curve below carries the canvas scale and the inner
-   * one does not. Compared across that difference, an oversized inner curve
-   * reads as fitting inside the outer one, and a block whose visible corner IS
-   * clipped keeps its bands and draws them over clipped pixels.
-   *
-   * Done at the comparison rather than at the call site: this is the only place
-   * that holds both curves, and asking the caller to pre-compose one of them
-   * puts half a decision somewhere that cannot see the other half.
-   */
-  const inner = scaleCornerRadii(radii, context.painted);
-  return cutByCorner(
-    box,
-    inner,
-    context.clip,
-    context.style,
-    context.scale,
-    context.clipsX && context.clipsY,
-    CLIP_SLACK_PX
-  );
-}
-
-/**
- * What one ancestor's clip means for a descendant, computed ONCE and shared
- * by {@link clippedByAncestor} (the corner-aware question) and
- * {@link clippedByAncestorRect} (the straight-edge one) — reading `overflow`,
- * composing the rendered scale and resolving the clip rectangle are the same
- * work either caller needs, and a second reading of any of them is a second
- * chance for the two to disagree about the same ancestor.
- *
- * Three outcomes rather than a boolean, because "does not clip at all" and
- * "clips, but the geometry cannot be described" are different answers a
- * caller must not conflate: the first lets the walk continue up to the next
- * ancestor, the second is itself a refusal.
- */
-type AncestorClipContext =
-  | { readonly kind: "no-clip" }
-  | { readonly kind: "cut" }
-  | {
-      readonly kind: "clips";
-      readonly clipsX: boolean;
-      readonly clipsY: boolean;
-      readonly style: CSSStyleDeclaration;
-      readonly clip: EdgeBounds;
-      readonly scale: RenderedScale;
-      readonly painted: Scale;
-    };
 
 function ancestorClipContext(
   node: Element,
@@ -1837,132 +1366,6 @@ function ancestorClipContext(
   if (!scale.describable) return { kind: "cut" };
   const clip = clipEdges(outer, style, scale);
   return { kind: "clips", clipsX, clipsY, style, clip, scale, painted };
-}
-
-/**
- * How far a block may sit outside a clip edge before the overhang is real.
- *
- * Half a pixel, because both rectangles are fractional and a block laid out
- * flush against its container's edge is not clipped by rounding.
- */
-const CLIP_SLACK_PX = 0.5;
-
-/** The ancestor's PADDING edge, which is where overflow actually clips. */
-function clipEdges(
-  outer: DOMRect,
-  style: CSSStyleDeclaration,
-  scale: RenderedScale
-): EdgeBounds {
-  return {
-    top: outer.top + edgeWidth(style.borderTopWidth) * scale.y,
-    left: outer.left + edgeWidth(style.borderLeftWidth) * scale.x,
-    bottom: outer.bottom - edgeWidth(style.borderBottomWidth) * scale.y,
-    right: outer.right - edgeWidth(style.borderRightWidth) * scale.x,
-  };
-}
-
-/**
- * Whether the block falls outside the clip RECTANGLE, on an axis that clips.
- *
- * Each axis is asked only where it clips: a block overflowing the axis that is
- * still `visible` has its overflow rendered, and refusing it costs every band.
- */
-function cutByEdges(
-  box: DOMRect,
-  clip: EdgeBounds,
-  clipsX: boolean,
-  clipsY: boolean
-): boolean {
-  const cutVertically =
-    clipsY &&
-    (box.top < clip.top - CLIP_SLACK_PX ||
-      box.bottom > clip.bottom + CLIP_SLACK_PX);
-  const cutHorizontally =
-    clipsX &&
-    (box.left < clip.left - CLIP_SLACK_PX ||
-      box.right > clip.right + CLIP_SLACK_PX);
-  return cutVertically || cutHorizontally;
-}
-
-/**
- * Whether a rounded clipping ancestor cuts the block at one of its CORNERS.
- *
- * A container with `border-radius` and `overflow: hidden` clips on the curve,
- * not on the rectangle: a child inside all four padding edges can still have a
- * corner visibly removed, and the comparison above accepts it. That container is
- * the ordinary card, so declining every rounded ancestor outright would blank
- * the overlay for most blocks on a real page — the exact test is what keeps the
- * refusal to the blocks that are genuinely cut.
- *
- * Asked only when BOTH axes clip, which is measured rather than assumed. With
- * `overflow: clip visible` the clip region is unbounded on the visible axis, and
- * a corner needs two bounds to exist — probed in Chromium, a child at the corner
- * of a 60px-radius box under `overflow: clip visible` is painted in full, while
- * the same child under `overflow: hidden` is cut away. Applying the arc there
- * would refuse a block nothing removes.
- *
- * The radii come off the PADDING box, because that is where overflow clips and
- * `border-radius` states the border box's curve.
- */
-function cutByCorner(
-  box: DOMRect,
-  radii: CornerRadii,
-  clip: EdgeBounds,
-  style: CSSStyleDeclaration,
-  scale: RenderedScale,
-  bothAxesClip: boolean,
-  slack: number
-): boolean {
-  if (!bothAxesClip) return false;
-  const outer = usedCornerRadii(
-    {
-      topLeft: style.borderTopLeftRadius,
-      topRight: style.borderTopRightRadius,
-      bottomRight: style.borderBottomRightRadius,
-      bottomLeft: style.borderBottomLeftRadius,
-    },
-    /*
-     * The ancestor's LAYOUT size, so a percentage resolves against what the
-     * author declared it against. `clip` is post-transform and inset to the
-     * padding edge, so it is divided back out by the scale and re-widened by the
-     * borders that were taken off it.
-     */
-    {
-      width: (clip.right - clip.left) / scale.x + borderSpan(style, "x"),
-      height: (clip.bottom - clip.top) / scale.y + borderSpan(style, "y"),
-    }
-  );
-  /*
-   * A radius this cannot resolve is a clip of UNKNOWN shape, and the block is
-   * refused rather than treated as sitting inside a square one — the same answer
-   * this module gives for every other geometry it cannot describe.
-   */
-  if (outer === undefined) return true;
-  const inner = scaleCornerRadii(
-    insetCornerRadii(outer, {
-      top: edgeWidth(style.borderTopWidth),
-      right: edgeWidth(style.borderRightWidth),
-      bottom: edgeWidth(style.borderBottomWidth),
-      left: edgeWidth(style.borderLeftWidth),
-    }),
-    scale
-  );
-  if (isSquare(inner)) return false;
-  /*
-   * The block's OWN curve is part of the comparison. A rounded block flush
-   * inside an equally rounded container is not cut at all, while its bounding
-   * rectangle's corners lie outside every one of that container's arcs — so
-   * reading only the rectangle refuses the ordinary nested rounded card and
-   * takes the whole overlay with it.
-   */
-  return !roundedInsideRounded(box, radii, clip, inner, slack);
-}
-
-/** The two border widths an axis loses, in unscaled CSS pixels. */
-function borderSpan(style: CSSStyleDeclaration, axis: "x" | "y"): number {
-  return axis === "x"
-    ? edgeWidth(style.borderLeftWidth) + edgeWidth(style.borderRightWidth)
-    : edgeWidth(style.borderTopWidth) + edgeWidth(style.borderBottomWidth);
 }
 
 /**

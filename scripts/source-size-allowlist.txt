@@ -43,7 +43,6 @@ packages/builder/src/content-controls.tsx 1591
 
 packages/builder/src/editor-state.ts 1510
 
-packages/builder/src/geometry-dom.ts 2034
 
 packages/builder/src/insert-panel.tsx 1857
 
