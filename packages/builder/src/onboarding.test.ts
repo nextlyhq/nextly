@@ -122,7 +122,7 @@ describe("builderChecklist", () => {
     );
   });
 
-  it.each(["pattern", "region", "template"])(
+  it.each(["pattern", "template"])(
     "names Add block for an empty %s, which has no sections",
     kind => {
       const document = { ...documentOf([]), kind } as never;

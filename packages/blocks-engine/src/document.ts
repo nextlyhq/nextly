@@ -1,7 +1,7 @@
 /**
  * The block document model — the stored shape of everything the page builder
- * produces: page content, patterns, components, Layout regions, and collection
- * templates.
+ * produces: page content, patterns, components (a Layout's header and footer
+ * among them), and collection templates.
  *
  * This module is data-only. It has zero runtime dependencies and no imports
  * from React or Nextly: documents must be readable and writable from any
@@ -27,8 +27,8 @@ export const DOCUMENT_FORMAT_VERSION: DocumentFormatVersion = 1;
  * - `page`      — an entry's blocks-field content
  * - `pattern`   — a copy-on-insert saved subtree (including full-page patterns)
  * - `component` — a linked, reusable definition with exposed props/slots/variants
- * - `region`    — a Layout region document (header, footer, ...); a Layout is a
- *                 named bundle REFERENCING region documents, so it is not a kind
+ *                 (a Layout's header and footer are components; a Layout is a
+ *                 named bundle REFERENCING them, so it is not a kind)
  * - `template`  — a collection template ("template" is reserved for exactly this)
  *
  * The enum is closed: an unknown kind is a validation error in strict mode and
@@ -45,7 +45,6 @@ export const DOCUMENT_KINDS = [
   "page",
   "pattern",
   "component",
-  "region",
   "template",
 ] as const;
 
