@@ -15,6 +15,15 @@
  * the blocks field, and carries the hash of the value it was computed from, so
  * a write that would overwrite somebody's edit is refused and the host is read
  * again (core's conditional write, judged under the write's own row lock).
+ *
+ * A run walked with a copies writer (`RewriteDeps.writeCopies`) changes a
+ * collection entry holding a pending draft through core's field rewrite
+ * instead: its live copy and every draft holding the field, each rewritten by
+ * the step from its own value, in one transaction, from the version read,
+ * each draft staying a draft. Without it, or where the person may not make
+ * that rewrite, the draft alone is written and a live copy that still holds
+ * what the step would change is left (`pending-draft`).
+ *
  * Doubt never reads as "nothing to do": a host that cannot be read, read to
  * the end, or addressed is reported as left.
  *
@@ -135,6 +144,43 @@ export type WriteResult =
 export type HostWriter = (write: HostWrite) => Promise<WriteResult>;
 
 /**
+ * One field rewrite of a collection entry's host: its live copy and every
+ * pending draft holding the field, each copy's new value the step's answer
+ * for that copy's own stored value.
+ */
+export interface HostCopiesWrite {
+  readonly host: HostAddress;
+  /** The row's version as read: the rewrite is refused once it moved on. */
+  readonly rev: string;
+  /** How the step judges the live copy: `published`, or `draft` for a row not public. */
+  readonly liveForm: HostForm;
+  readonly step: HostStep;
+  /**
+   * The copies the walk read, each with the form it was judged as: judged
+   * again before the rewrite, so the rewrite's own transaction asks the step
+   * nothing it already knows.
+   */
+  readonly seeds: readonly {
+    readonly value: unknown;
+    readonly form: HostForm;
+  }[];
+}
+
+/**
+ * What a copies write came to: as a write's, or a copy the step refused when
+ * the rewrite asked it (a draft in a language the walk did not read), with
+ * nothing written.
+ */
+export type CopiesResult =
+  | WriteResult
+  | { readonly kind: "step-refused"; readonly detail: string };
+
+/** Makes one copies write as the person the run belongs to. */
+export type HostCopiesWriter = (
+  write: HostCopiesWrite
+) => Promise<CopiesResult>;
+
+/**
  * A run as the walk reads it: which walk it is on, and where its final walk
  * stopped. Every kind of run is walked by these alone, so a component's runs
  * and a breakpoint removal's share one walk.
@@ -176,6 +222,12 @@ export interface RewriteDeps {
    * the entry in hand; a refusal leaves the host as `not-permitted`.
    */
   readonly write: HostWriter;
+  /**
+   * Rewrites a collection entry's live copy and drafts together, as the
+   * module docblock says. Absent, a host with a pending draft has its draft
+   * written alone.
+   */
+  readonly writeCopies?: HostCopiesWriter;
 }
 
 /** What one call of {@link rewriteHosts} is asked to do. */
@@ -433,14 +485,32 @@ async function visit(
   }
 }
 
-/** What one read of a host says to do. */
-type Decision =
+/** A write one read of a host decides on. */
+interface WriteDecision {
+  readonly kind: "write";
+  readonly write: HostWrite;
+  /** Whether the live row is left holding what the step would change. */
+  readonly liveLeft: boolean;
+}
+
+/** What one read of a host says to do without a copies write. */
+type SingleDecision =
   | { readonly kind: "done"; readonly result: HostResult }
+  | WriteDecision;
+
+/**
+ * What one read of a host says to do: a copies write, where the walk has a
+ * copies writer and the host takes one, or else a single write or nothing.
+ */
+type Decision =
+  | SingleDecision
   | {
-      readonly kind: "write";
-      readonly write: HostWrite;
-      /** Whether the live row is left holding what the step would change. */
-      readonly liveLeft: boolean;
+      readonly kind: "copies";
+      readonly copies: HostCopiesWrite;
+      /** The write a dry run reports it as: the field, with its new value. */
+      readonly planned: PlannedHostWrite;
+      /** What the host comes to where the person may not make the rewrite. */
+      readonly fallback: SingleDecision;
     };
 
 /** One host, read and judged, written when it must be, retried on a race. */
@@ -472,7 +542,12 @@ async function attemptHost(
   } catch (error) {
     return { kind: "left", reason: "unreadable", detail: messageOf(error) };
   }
-  const decision = await decide(walk.args.step, candidate, read);
+  const decision = await decide(
+    walk.args.step,
+    candidate,
+    read,
+    walk.deps.writeCopies !== undefined
+  );
   if (decision.kind === "done") return decision.result;
   if (candidate.access !== "write") {
     return { kind: "left", reason: "unaddressable" };
@@ -480,32 +555,64 @@ async function attemptHost(
   if (!writes) {
     // Kept only in a dry run that asks for them: a real run's values are
     // not held past their write, and a long dry walk holds none.
-    if (walk.args.plannedWrites === true)
-      recordWrite(walk, candidate, decision);
-    return written(decision);
+    if (walk.args.plannedWrites === true) {
+      walk.tally.writes.push(plannedOf(candidate, decision));
+    }
+    return decision.kind === "copies"
+      ? { kind: "rewritten" }
+      : written(decision);
   }
+  if (decision.kind === "copies") return copiesWritten(walk, decision);
   return writtenBy(await walk.deps.write(decision.write), decision);
 }
 
-/** Hold one write a dry run would make, with the body it sends. */
-function recordWrite(
-  walk: Walk,
+/** One write a dry run would make, with the body it sends. */
+function plannedOf(
   candidate: HostCandidate,
-  decision: Extract<Decision, { kind: "write" }>
-): void {
-  walk.tally.writes.push({
+  decision: Exclude<Decision, { kind: "done" }>
+): PlannedHostWrite {
+  if (decision.kind === "copies") return decision.planned;
+  return {
     host: candidate.host,
     value: decision.write.value,
     ...(decision.write.publishAs === undefined
       ? {}
       : { status: decision.write.publishAs }),
-  });
+  };
+}
+
+/**
+ * A copies write, made: the host rewritten on every copy, read again when it
+ * changed since the read, left where the step refused a copy the walk did not
+ * read, and, where the person may not make the rewrite or a field's rules
+ * refuse it, what the host comes to without it.
+ */
+async function copiesWritten(
+  walk: Walk,
+  decision: Extract<Decision, { kind: "copies" }>
+): Promise<HostResult | typeof AGAIN> {
+  const writeCopies = walk.deps.writeCopies;
+  if (writeCopies === undefined)
+    return { kind: "left", reason: "unaddressable" };
+  const result = await writeCopies(decision.copies);
+  if (result.kind === "step-refused") {
+    return { kind: "left", reason: "refused", detail: result.detail };
+  }
+  // Refused for want of the right to publish, or by a field's own rules on
+  // one of the copies: the host comes to what it did without the rewrite,
+  // its draft written alone, so no refusal leaves it worse than before.
+  if (result.kind === "forbidden" || result.kind === "refused") {
+    const { fallback } = decision;
+    if (fallback.kind === "done") return fallback.result;
+    return writtenBy(await walk.deps.write(fallback.write), fallback);
+  }
+  return writtenBy(result, { liveLeft: false });
 }
 
 /** What a write's result comes to for its host. */
 function writtenBy(
   result: WriteResult,
-  decision: Extract<Decision, { kind: "write" }>
+  decision: Pick<WriteDecision, "liveLeft">
 ): HostResult | typeof AGAIN {
   if (result.kind === "changed") return AGAIN;
   if (result.kind === "forbidden") {
@@ -518,7 +625,7 @@ function writtenBy(
 }
 
 /** What a host that was (or in a dry run would be) written comes to. */
-function written(decision: Extract<Decision, { kind: "write" }>): HostResult {
+function written(decision: Pick<WriteDecision, "liveLeft">): HostResult {
   return decision.liveLeft
     ? { kind: "left", reason: "pending-draft" }
     : { kind: "rewritten" };
@@ -528,14 +635,93 @@ function written(decision: Extract<Decision, { kind: "write" }>): HostResult {
 async function decide(
   step: HostStep,
   candidate: HostCandidate,
-  read: HostRead
+  read: HostRead,
+  /** Whether the walk has a copies writer. */
+  copies: boolean
 ): Promise<Decision> {
   if (candidate.access === "scan") {
     return { kind: "done", result: await scannedHost(step, candidate, read) };
   }
-  return read.draft === null
-    ? decideLive(step, candidate, read)
-    : decideWithDraft(step, candidate, read, read.draft);
+  if (read.draft === null) return decideLive(step, candidate, read);
+  const single = await decideWithDraft(step, candidate, read, read.draft);
+  const rev = copies ? copiesRevision(candidate, read) : undefined;
+  if (rev === undefined) return single;
+  return decideCopies(step, candidate, read, { rev, single });
+}
+
+/**
+ * The version a copies write of this host is made from, or `undefined` where
+ * the host takes none: anything but a collection entry's top-level field, a
+ * value read in a language that may not be its own (`maybeShared`), whose
+ * rewrite could not name its language rightly, or a read that gave no
+ * version.
+ */
+function copiesRevision(
+  candidate: HostCandidate,
+  read: HostRead
+): string | undefined {
+  const { host } = candidate;
+  if (candidate.access !== "write" || host.kind !== "collection") {
+    return undefined;
+  }
+  if (host.path.length !== 1 || candidate.maybeShared === true) {
+    return undefined;
+  }
+  return read.rev;
+}
+
+/**
+ * A host with a pending draft, decided as one copies write where its live
+ * copy or its draft holds what the step would change: both are rewritten
+ * together, so the live copy no longer waits on its author. Nothing to change
+ * anywhere, or a refusal, is the single decision's own answer.
+ */
+async function decideCopies(
+  step: HostStep,
+  candidate: HostCandidate,
+  read: HostRead,
+  found: { readonly rev: string; readonly single: SingleDecision }
+): Promise<Decision> {
+  const { single } = found;
+  const leftForDraft =
+    single.kind === "done" &&
+    single.result.kind === "left" &&
+    single.result.reason === "pending-draft";
+  if (single.kind === "done" && !leftForDraft) return single;
+  const planned = await plannedValue(step, candidate, read, single);
+  const liveForm: HostForm = read.liveState === null ? "draft" : "published";
+  const seeds: { readonly value: unknown; readonly form: HostForm }[] = [];
+  if (read.published.kind === "value") {
+    seeds.push({ value: read.published.value, form: liveForm });
+  }
+  if (read.draft?.kind === "value") {
+    seeds.push({ value: read.draft.value, form: "draft" });
+  }
+  return {
+    kind: "copies",
+    copies: { host: candidate.host, rev: found.rev, liveForm, step, seeds },
+    planned: { host: candidate.host, value: planned },
+    fallback: single,
+  };
+}
+
+/**
+ * The value a dry run reports a copies write as setting: the draft's new
+ * value where the draft changes, else the live copy's.
+ */
+async function plannedValue(
+  step: HostStep,
+  candidate: HostCandidate,
+  read: HostRead,
+  single: SingleDecision
+): Promise<unknown> {
+  if (single.kind === "write") return single.write.value;
+  if (read.published.kind !== "value") return null;
+  const live = await step(read.published.value, {
+    host: candidate.host,
+    form: "published",
+  });
+  return live.kind === "rewritten" ? live.value : read.published.value;
 }
 
 /** A host with no pending draft: its one stored form, written where it lives. */
@@ -543,7 +729,7 @@ async function decideLive(
   step: HostStep,
   candidate: HostCandidate,
   read: HostRead
-): Promise<Decision> {
+): Promise<SingleDecision> {
   if (read.published.kind === "absent") {
     return { kind: "done", result: { kind: "unchanged" } };
   }
@@ -583,7 +769,7 @@ async function decideWithDraft(
   candidate: HostCandidate,
   read: HostRead,
   draft: ReadValue
-): Promise<Decision> {
+): Promise<SingleDecision> {
   const live =
     read.published.kind === "value"
       ? await step(read.published.value, {

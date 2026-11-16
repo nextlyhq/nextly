@@ -4,6 +4,7 @@
  */
 import type { Command } from "commander";
 
+import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
 import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
 
@@ -28,9 +29,12 @@ export function registerUpgradeCommand(program: Command): void {
     )
     .option(
       "--reconcile-core",
-      "Reconcile drifted core schema (dev-loose, confirms each destructive op). Use only if `nextly migrate` reports core drift.",
+      "Reconcile drifted core schema, listing what it deletes and asking (or refusing without consent). Use only if `nextly migrate` reports core drift.",
       false
     )
+    // What `--reconcile-core` deletes (a retired core column such as
+    // `access_rules`) needs the one consent every deleting command takes.
+    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
     // Both upgrade paths take the shared migrate lock, and the lock-busy
     // error tells operators to re-run with this flag — so every lock-taking
     // command must register it. Same escape hatch as `nextly migrate`.

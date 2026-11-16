@@ -44,7 +44,10 @@ import type {
   UpdateSingleOptions,
 } from "../types";
 
-import { SingleMutationService } from "./single-mutation-service";
+import {
+  SingleMutationService,
+  type SingleFieldRewriteCall,
+} from "./single-mutation-service";
 import {
   SinglePublishAllService,
   type PublishAllSinglePreview,
@@ -221,6 +224,27 @@ export class SingleEntryService extends BaseService {
       () => this.mutationService.update(slug, data, options)
     );
     await this.afterWrite(result, options?.disableRevalidate === true);
+    return result;
+  }
+
+  /**
+   * Rewrite one field of a Single on its live copy and on every pending draft
+   * that holds it, without publishing. See the mutation service.
+   *
+   * @experimental
+   */
+  async rewriteField(
+    call: SingleFieldRewriteCall
+  ): ReturnType<SingleMutationService["rewriteField"]> {
+    // Judged as an update in the language it writes: a translated field's
+    // language, or every rule's default for a shared one.
+    const result = await withRuleLanguage(
+      writeLanguagesFor(this.localization, call.request.locale),
+      () => this.mutationService.rewriteField(call)
+    );
+    // The live copy changed, so its pages revalidate and its event is
+    // delivered, as an update of it does.
+    await this.afterWrite(result, false);
     return result;
   }
 

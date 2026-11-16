@@ -22,6 +22,7 @@ process.env.NEXTLY_SECRET =
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
+import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
@@ -343,6 +344,100 @@ describeEachDialect(
         expect(await columnsOf("dc_posts")).toEqual(columnsBefore);
       });
     }
+
+    // A field-group reference keeps its values in the field group's own table, so no column of
+    // `dc_posts` carries its name and a name too long for one is stored. Saved again as a field
+    // that becomes a column, under the same name, the name is asked about the column it now
+    // reaches; kept as it is, the stored name keeps working.
+    const TOO_LONG = `${LONGEST}_x`;
+    const REFERENCE: Field = {
+      name: TOO_LONG,
+      type: "component",
+      component: "chips",
+    };
+
+    /**
+     * `posts` holding a field-group reference named `TOO_LONG`, added through the Builder's
+     * apply: the collection create road caps a name at 50 characters, while the apply asks a
+     * field with no column nothing about a column's length.
+     */
+    async function storedReference() {
+      expect(
+        await answerOf(() =>
+          dispatchComponents(
+            "createComponent",
+            {},
+            {
+              slug: "chips",
+              label: "Chips",
+              fields: [{ name: "label", type: "text" }],
+            }
+          )
+        )
+      ).toBe("accepted");
+      await posts(false);
+      expect(await applyToPosts([...BODY, REFERENCE])).toBe("accepted");
+    }
+
+    it("refuses a stored field given a column its name is too long for, and writes nothing", async () => {
+      await storedReference();
+      const columnsBefore = await columnsOf("dc_posts");
+
+      const answer = await applyToPosts([
+        ...BODY,
+        { name: TOO_LONG, type: "text" },
+      ]);
+
+      expect(answer).toEqual([
+        expect.objectContaining({
+          code: "INVALID_FIELD_NAME",
+          path: "1.name",
+          message: expect.stringContaining("longer than 63 characters"),
+        }),
+      ]);
+      expect(await columnsOf("dc_posts")).toEqual(columnsBefore);
+    });
+
+    it("keeps a stored field whose name is too long for a column while it has none", async () => {
+      await storedReference();
+
+      expect(
+        await applyToPosts([
+          ...BODY,
+          REFERENCE,
+          { name: "teaser", type: "text" },
+        ])
+      ).toBe("accepted");
+      expect((await registered("dynamic_collections", "posts")).names).toEqual([
+        "body",
+        TOO_LONG,
+        "teaser",
+      ]);
+    });
+
+    // The save keeps no root `virtual` flag on a Builder field, so the field is stored, and its
+    // column made, like any other: the flag spares its name nothing.
+    it("refuses a new field marked virtual whose column would be too long, and writes nothing", async () => {
+      await posts(false);
+      const columnsBefore = await columnsOf("dc_posts");
+
+      const answer = await applyToPosts([
+        ...BODY,
+        { name: TOO_LONG, type: "text", virtual: true },
+      ]);
+
+      expect(answer).toEqual([
+        expect.objectContaining({
+          code: "INVALID_FIELD_NAME",
+          path: "1.name",
+          message: expect.stringContaining("longer than 63 characters"),
+        }),
+      ]);
+      expect((await registered("dynamic_collections", "posts")).names).toEqual([
+        "body",
+      ]);
+      expect(await columnsOf("dc_posts")).toEqual(columnsBefore);
+    });
 
     // The control: a name exactly as long as every database keeps saves, and its value is kept.
     it("saves a field whose column is as long as the database keeps, with its value", async () => {

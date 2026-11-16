@@ -169,7 +169,10 @@ export function createMockAdapter(): Record<string, Mock> {
  * token carries (none, never lapsing, unless a test says otherwise) and the
  * audit trail it records each attempt on.
  */
-export function createMockDirectLoginDeps() {
+export function createMockDirectLoginDeps(): {
+  fetchSessionRoles: Mock;
+  auditLog: { write: Mock };
+} {
   return {
     fetchSessionRoles: vi
       .fn()

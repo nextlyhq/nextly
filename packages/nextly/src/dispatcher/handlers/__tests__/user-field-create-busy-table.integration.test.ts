@@ -15,6 +15,7 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { UserExtSchemaService } from "../../../domains/users/services/user-ext-schema-service";
 import type { UserFieldDefinitionService } from "../../../domains/users/services/user-field-definition-service";
 import { NextlyError } from "../../../errors/nextly-error";
 import { dispatchUserFields } from "../user-field-dispatcher";
@@ -22,6 +23,12 @@ import { dispatchUserFields } from "../user-field-dispatcher";
 const SERVERS = getConfiguredTestDialects().filter(
   dialect => dialect !== "sqlite"
 );
+
+// Shown as skipped, rather than as a file with no tests, on a run that has
+// neither server configured: the SQLite-only leg fails a file with no suite.
+if (SERVERS.length === 0) {
+  it.skip("runs on PostgreSQL and MySQL only", () => {});
+}
 
 describe.each(SERVERS)(
   "a user field created while user_ext is busy (%s)",
@@ -92,6 +99,13 @@ describe.each(SERVERS)(
       expect((await definitions().listFields()).map(f => f.name)).not.toContain(
         "ufbSecond"
       );
+      // The fields the user model is built from no longer name the field taken back.
+      const schema = handle.getService(
+        "userExtSchemaService"
+      ) as unknown as UserExtSchemaService;
+      const merged = schema.getMergedFieldConfigs().map(f => f.name);
+      expect(merged).toContain("ufbFirst");
+      expect(merged).not.toContain("ufbSecond");
 
       await create("ufbSecond");
       expect((await definitions().listFields()).map(f => f.name)).toContain(

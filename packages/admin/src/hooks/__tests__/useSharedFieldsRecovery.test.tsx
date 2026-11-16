@@ -20,8 +20,8 @@ const toast = vi.hoisted(() => ({
   loading: vi.fn(),
   dismiss: vi.fn(),
 }));
-vi.mock("@admin/components/ui", async importOriginal => ({
-  ...(await importOriginal<typeof import("@admin/components/ui")>()),
+vi.mock("@admin/components/ui/toaster", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/components/ui/toaster")>()),
   toast,
 }));
 

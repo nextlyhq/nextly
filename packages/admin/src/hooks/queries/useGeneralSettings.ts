@@ -19,6 +19,7 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
+import { useAuthSession } from "@admin/hooks/queries/useAuthSession";
 import {
   getGeneralSettings,
   updateGeneralSettings,
@@ -52,10 +53,18 @@ export function useGeneralSettings(): UseQueryResult<
   GeneralSettingsRecord,
   Error
 > {
+  // Asked only of a signed-in session. The route answers a visitor 401, so on
+  // the sign-in screen the request could only be refused, and a refused query
+  // is asked again by every reader that mounts after the refusal arrived
+  // (TanStack Query's `retryOnMount`), which the screen's own re-renders do.
+  // Until the session is known nothing is asked either: `isPending` stays true
+  // meanwhile, so a reader waiting for the settings keeps waiting.
+  const { data: session } = useAuthSession();
   return useQuery<GeneralSettingsRecord, Error>({
     queryKey: generalSettingsKeys.all(),
     queryFn: getGeneralSettings,
     gcTime: 0, // Immediately clear from cache when component unmounts
+    enabled: session?.isAuthenticated === true,
   });
 }
 

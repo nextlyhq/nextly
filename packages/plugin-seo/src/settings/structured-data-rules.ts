@@ -20,32 +20,74 @@ import {
   type StructuredDataSettings,
 } from "./rules";
 
-/** The brand as structured data names it: the settings' facts over the options'. */
+/** `{ [key]: value }` where the value is set, and nothing where it is not. */
+const defined = <K extends string, V>(
+  key: K,
+  value: V | undefined
+): Partial<Record<K, V>> =>
+  value === undefined ? {} : ({ [key]: value } as Partial<Record<K, V>>);
+
+/** A list the settings hold, where they hold one with anything in it. */
+const heldList = <T>(
+  list: readonly T[] | undefined
+): readonly T[] | undefined =>
+  list !== undefined && list.length > 0 ? list : undefined;
+
+/**
+ * The owner as structured data names it: each of its facts the settings
+ * hold over the options' same fact, and none where neither side names it.
+ */
+function parentOf(
+  base: StructuredDataBrand["parentOrganization"],
+  settings: StructuredDataSettings["brand"]["parentOrganization"]
+): StructuredDataBrand["parentOrganization"] {
+  const name = settings?.name ?? base?.name;
+  if (name === undefined) return undefined;
+  return {
+    ...base,
+    ...settings,
+    name,
+  };
+}
+
+/**
+ * The brand as structured data names it: fact by fact, the settings' over
+ * the options', so a site moves each fact from its code to the admin on its
+ * own, and a fact only the code gives (its founders, say) stays. A list (the
+ * other names, profiles, contact points) is one fact, taken whole from the
+ * side that holds it.
+ */
 function brandOf(
   base: StructuredDataBrand,
   settings: StructuredDataSettings
 ): StructuredDataBrand {
   const { brand } = settings;
-  const name = brand.name ?? settings.siteName ?? base.name;
-  const logo = brand.logo ?? base.logo;
-  const otherNames =
-    brand.otherNames.length > 0 ? brand.otherNames : base.otherNames;
+  // The brand's own name before the site's, which names the site.
+  const name = brand.name ?? base.name ?? settings.siteName;
+  const otherNames = heldList(brand.otherNames) ?? base.otherNames;
   const profiles =
-    brand.profiles.length > 0
-      ? brand.profiles.map(profile => ({ url: profile.url }))
-      : base.profiles;
-  // The brand's own description where the options give one, else the site's
-  // default description, which says what the site is.
-  const description = base.description ?? settings.description;
+    heldList(brand.profiles)?.map(profile => ({ url: profile.url })) ??
+    base.profiles;
+  const contactPoints = heldList(brand.contactPoints) ?? base.contactPoints;
+  // The brand's own description where either side gives one, else the
+  // site's default description, which says what the site is.
+  const description =
+    brand.description ?? base.description ?? settings.description;
   return {
-    // The facts the settings do not hold, such as contact points, are the
-    // options' alone.
     ...base,
-    ...(description === undefined ? {} : { description }),
-    ...(name === undefined ? {} : { name }),
-    ...(otherNames === undefined ? {} : { otherNames }),
-    ...(logo === undefined ? {} : { logo }),
-    ...(profiles === undefined ? {} : { profiles }),
+    ...defined("name", name),
+    ...defined("otherNames", otherNames),
+    ...defined("logo", brand.logo ?? base.logo),
+    ...defined("profiles", profiles),
+    ...defined("description", description),
+    ...defined("email", brand.email ?? base.email),
+    ...defined("telephone", brand.telephone ?? base.telephone),
+    ...defined("foundingDate", brand.foundingDate ?? base.foundingDate),
+    ...defined("contactPoints", contactPoints),
+    ...defined(
+      "parentOrganization",
+      parentOf(base.parentOrganization, brand.parentOrganization)
+    ),
   };
 }
 

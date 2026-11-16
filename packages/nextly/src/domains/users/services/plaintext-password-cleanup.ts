@@ -17,7 +17,9 @@
  * own `passwordHasher` to `getNextly`, and the account creation that kept raw
  * values was written to accept a hash made elsewhere; either may have stored a
  * hash in another format, which an app's hasher can still sign people in with.
- * So a value in a format such hashers write is never cleared: an argon2,
+ * So a value the configured `auth.passwordHasher` recognises (any value, where
+ * it declares no `isHash`) is never cleared, nor one in a format such hashers
+ * write: an argon2,
  * scrypt or pbkdf2 string in the modular-crypt form their libraries write,
  * with that format's fields and alphabet, or a hex salt and digest joined by a
  * colon. A value that only starts with `$` is not one of them. A raw password
@@ -30,7 +32,8 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, asc, eq, gt, isNotNull } from "drizzle-orm";
 
-import { isPasswordHash } from "../../../auth/password/index";
+import { passwordDigester } from "../../../auth/password/digester";
+import type { PasswordHasher } from "../../../auth/password/policy";
 import { NextlyError } from "../../../errors/nextly-error";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
@@ -92,14 +95,30 @@ interface UsersPageReader {
 }
 
 export class PlainTextPasswordCleanup extends BaseService {
+  /**
+   * Whether a stored value is a hash the app signs in with: core's bcrypt,
+   * or one the configured hasher recognises (any value, where it declares no
+   * `isHash`). Such a value is never taken for plain text.
+   */
+  private readonly isAppHash: (value: unknown) => boolean;
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
-    // Rows read per page; smaller only where a test needs several pages.
-    private readonly pageSize = PAGE_SIZE
+    options: {
+      /** The config's `auth.passwordHasher`, when it sets one. */
+      hasher?: PasswordHasher;
+      /** Rows read per page; smaller only where a test needs several pages. */
+      pageSize?: number;
+    } = {}
   ) {
     super(adapter, logger);
+    this.pageSize = options.pageSize ?? PAGE_SIZE;
+    const digester = passwordDigester(options.hasher);
+    this.isAppHash = value => digester.isHash(value);
   }
+
+  private readonly pageSize: number;
 
   /**
    * The ids of the accounts whose stored password is set but is neither a
@@ -201,7 +220,7 @@ export class PlainTextPasswordCleanup extends BaseService {
         if (
           typeof row.value === "string" &&
           row.value !== "" &&
-          !isPasswordHash(row.value) &&
+          !this.isAppHash(row.value) &&
           !isOtherHasherFormat(row.value)
         ) {
           found.push({ id: String(row.id), value: row.value });

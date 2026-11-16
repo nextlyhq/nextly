@@ -18,6 +18,8 @@ import { z } from "zod";
 
 import {
   fieldNameProblem,
+  type FieldNamePlace,
+  type FieldNameProblem,
   type FieldNameSurface,
   isCollectionOnlyFieldName,
 } from "../domains/dynamic-collections/field-name-rule";
@@ -147,6 +149,32 @@ export function assertValidFieldsPayload(
 }
 
 /**
+ * Refuses a list of an entity's fields in which a top-level entry has no name.
+ *
+ * A collection's and a Single's API take only named fields at the top level: the row's columns,
+ * its system-column choices and its translations are all named by them, and a group with no name
+ * there is a shape only the definition file holds, which the column builders read through
+ * (`fieldsStoredOnRow`) so that file cannot stop a save. A group with no name inside a named group
+ * or a repeater stays legal everywhere. One rule for every road that takes such a list, so the
+ * collection and Single APIs refuse it in the same words.
+ */
+export function assertTopLevelFieldsNamed(fields: readonly unknown[]): void {
+  const unnamed = fields.findIndex(
+    field => typeof (field as { name?: unknown } | null)?.name !== "string"
+  );
+  if (unnamed === -1) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: `fields[${unnamed}].name`,
+        code: "REQUIRED",
+        message: "Each field requires a name.",
+      },
+    ],
+  });
+}
+
+/**
  * The Draft/Published lifecycle a schema save asks it be judged under, read from the request's
  * `status`: the Builder sends its pending toggle with the fields, because it saves its settings
  * only once the fields have applied. Undefined when the request says nothing. A value that is not a
@@ -210,6 +238,35 @@ function fieldNames(list: unknown): readonly FieldName[] {
     : [];
 }
 
+/** `fields` in the payload schema's shape, as the save keeps them, or as given when they do not parse. */
+function fieldsAsSaved(fields: unknown): unknown {
+  const parsed = fieldsArraySchema.safeParse(fields);
+  return parsed.success ? parsed.data : fields;
+}
+
+/**
+ * What a kept name breaks only because the save gives it a column it did not have: a field
+ * stored as a field-group reference, a many-to-many relationship or a virtual field, saved as
+ * one that becomes a column. The name was never asked about a column, so the rules that a column
+ * brings (its length, a lifecycle column it would reach) are asked now. A problem the name has
+ * with or without a column is the stored name's, which keeps working where it is stored.
+ */
+function problemTheColumnBrings(
+  name: string,
+  field: FieldName,
+  kept: FieldName,
+  place: Omit<FieldNamePlace, "producesColumn" | "spelling">
+): FieldNameProblem | null {
+  if (!fieldProducesColumn(field) || fieldProducesColumn(kept)) return null;
+  // The declared spelling, so a camelCase name a plugin declared reaches the column's rules.
+  const asked = { ...place, spelling: "declared" as const };
+  const withColumn = fieldNameProblem(name, { ...asked, producesColumn: true });
+  const without = fieldNameProblem(name, { ...asked, producesColumn: false });
+  return withColumn !== null && withColumn.kind !== without?.kind
+    ? withColumn
+    : null;
+}
+
 /**
  * Refuses a field, at any depth, whose name is new at its place (not one
  * `stored` already holds there) and breaks the Builder's name rule for that
@@ -221,7 +278,8 @@ function fieldNames(list: unknown): readonly FieldName[] {
  * `status` field may predate the lifecycle being turned on; the admin sends
  * every field the entity has on each save, so refusing those would refuse
  * every later edit. A name the save creates, renames to, or moves to another
- * place is the Builder's, and is held to the whole rule.
+ * place is the Builder's, and is held to the whole rule. A kept name the save
+ * gives a column it did not have is asked the rules that column brings.
  */
 export function assertBuilderFieldNames(
   fields: unknown,
@@ -233,20 +291,30 @@ export function assertBuilderFieldNames(
   for (const field of fieldNames(stored)) {
     if (typeof field.name === "string") held.set(field.name, field);
   }
-  fieldNames(fields).forEach((field, index) => {
+  // Judged as the save keeps them: the payload schema's shape, which the stored definition and
+  // the columns follow. A key the schema does not declare, such as a root `virtual`, does not
+  // survive the save, so it cannot spare a name the rules a column brings. Parsed once, at the
+  // top; nested lists arrive already parsed.
+  const asSaved = path === "" ? fieldsAsSaved(fields) : fields;
+  fieldNames(asSaved).forEach((field, index) => {
     const at = `${path}${index}`;
     const kept =
       typeof field.name === "string" ? held.get(field.name) : undefined;
+    const place = {
+      surface: entity.surface,
+      nested: path !== "",
+      lifecycleEnabled: entity.lifecycleEnabled,
+    };
     const problem =
-      typeof field.name === "string" && kept === undefined
-        ? fieldNameProblem(field.name, {
-            surface: entity.surface,
-            nested: path !== "",
-            lifecycleEnabled: entity.lifecycleEnabled,
-            // Asked of the field by the one predicate that says whether it has a column.
-            producesColumn: fieldProducesColumn(field),
-          })
-        : null;
+      typeof field.name !== "string"
+        ? null
+        : kept === undefined
+          ? fieldNameProblem(field.name, {
+              ...place,
+              // Asked of the field by the one predicate that says whether it has a column.
+              producesColumn: fieldProducesColumn(field),
+            })
+          : problemTheColumnBrings(field.name, field, kept, place);
     if (problem !== null) {
       throw NextlyError.validation({
         errors: [

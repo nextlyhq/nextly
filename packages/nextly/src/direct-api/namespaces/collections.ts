@@ -11,6 +11,7 @@
 
 import {
   parseFieldRewrite,
+  rewritesSingle,
   type FieldRewriteResult,
 } from "../../domains/versions/field-rewrite";
 import { NextlyError } from "../../errors/nextly-error";
@@ -39,6 +40,7 @@ import type {
   PublishArgs,
   PublishResult,
   RewriteFieldArgs,
+  RewriteSingleFieldArgs,
   UpdateArgs,
 } from "../types/index";
 
@@ -48,6 +50,7 @@ import {
   buildMutationMessage,
   callerAccess,
   createErrorFromResult,
+  createErrorFromSingleResult,
   isNotFoundError,
   mergeConfig,
 } from "./helpers";
@@ -710,23 +713,24 @@ export async function duplicate<TSlug extends CollectionSlug>(
 }
 
 /**
- * @experimental Rewrite one field of an entry on its live copy and on every
- * pending draft that holds it, in one transaction, without publishing: each
- * draft stays a draft and the entry's status is unchanged. Refused with
+ * @experimental Rewrite one field of an entry, or of a Single, on its live
+ * copy and on every pending draft that holds it, in one transaction, without
+ * publishing: each draft stays a draft and the status is unchanged. Refused with
  * `STALE_VERSION`, changing nothing, unless the entry is still at
  * `expectedVersion`. Runs no save hooks; records one history event with the
  * reason, and the `entry.updated` event for the live change.
  */
 export async function rewriteField(
   ctx: NextlyContext,
-  args: RewriteFieldArgs
+  args: RewriteFieldArgs | RewriteSingleFieldArgs
 ): Promise<MutationResult<FieldRewriteResult>> {
   const config = mergeConfig(ctx.defaultConfig, args);
   // The request is the call's own fields alone: the instance's default
   // language would otherwise reach a shared field, which takes none.
   const request = parseFieldRewrite({
-    collection: args.collection,
-    id: args.id,
+    ...("single" in args
+      ? { single: args.single }
+      : { collection: args.collection, id: args.id }),
     field: args.field,
     ...(args.locale === undefined ? {} : { locale: args.locale }),
     expectedVersion: args.expectedVersion,
@@ -734,18 +738,35 @@ export async function rewriteField(
     reason: args.reason,
   });
   const access = accessOptions(config);
-  const result = await ctx.collectionsHandler.rewriteField({
-    request,
+  const caller = {
     user: access.user,
     // Trusted unless the call says otherwise, as every Direct API call is.
     overrideAccess: access.overrideAccess !== false,
     authenticatedScope: access.authenticatedScope,
+  };
+  // A Single's rewrite goes through the Single's own write path.
+  if (rewritesSingle(request)) {
+    const result = await ctx.singleEntryService.rewriteField({
+      request,
+      ...caller,
+    });
+    if (!result.success) {
+      throw createErrorFromSingleResult(result);
+    }
+    return {
+      message: buildMutationMessage(request.single, "updated"),
+      item: result.data as FieldRewriteResult,
+    };
+  }
+  const result = await ctx.collectionsHandler.rewriteField({
+    request,
+    ...caller,
   });
   if (!result.success) {
     throw createErrorFromResult(result);
   }
   return {
-    message: buildMutationMessage(args.collection, "updated"),
+    message: buildMutationMessage(request.collection, "updated"),
     item: result.data as FieldRewriteResult,
   };
 }

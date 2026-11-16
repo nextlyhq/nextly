@@ -132,6 +132,11 @@ export const NEXTLY_ERROR_STATUS = {
   // its bounds, and stopped. 409 like the schema lock's refusal: another
   // session holds what the change needs, and it can run once that ends.
   NEXTLY_TABLE_BUSY: 409,
+  // A write made inside a schema change's own SQLite transaction, on another
+  // connection to the same database, waited for the write lock that
+  // transaction holds. 500, not 409: this process holds the lock, no other
+  // session does, so nothing can end that a retry would wait for.
+  NEXTLY_LOCK_HELD_BY_THIS_PROCESS: 500,
   NEXTLY_BASELINE_LOCK_NOT_HELD: 409,
   NEXTLY_RESOLVE_LOCK_NOT_HELD: 409,
   // Boot refused to serve: the migrate lock stayed held past the wait deadline,
@@ -150,6 +155,12 @@ export const NEXTLY_ERROR_STATUS = {
   // database is migrated, and running `nextly migrate` is the recovery.
   NEXTLY_DATABASE_NOT_MIGRATED: 503,
   NEXTLY_CORE_DESTRUCTIVE_REFUSED: 409,
+  // A core upgrade drizzle-kit cannot plan from this database, refused
+  // before any statement: the database is as it was, and an earlier release
+  // takes it the first step.
+  NEXTLY_CORE_UPGRADE_UNSUPPORTED: 409,
+  // A core upgrade that ran and still left a declared column or table out.
+  NEXTLY_CORE_UPGRADE_INCOMPLETE: 500,
   NEXTLY_MIGRATION_DRIFT: 409,
   NEXTLY_MIGRATION_APPLY_FAILED: 500,
   // A SQLite migration unit would leave a row referencing a row that does
