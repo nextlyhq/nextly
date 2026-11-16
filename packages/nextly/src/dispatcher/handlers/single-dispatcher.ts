@@ -59,6 +59,7 @@ import { entityRelations } from "../../domains/schema/builder-save/single-relati
 import { singleEntity } from "../../domains/schema/builder-save/stored-entity";
 import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
+import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
@@ -113,7 +114,9 @@ import {
   builderSchemaPush,
   leavingSettingsStep,
   pushAndReconcileCompanion,
+  reconcileBuilderCompanion,
   refuseRefusedLeavingSettings,
+  type BuilderCompanionReconcile,
 } from "../helpers/builder-schema-push";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
@@ -126,6 +129,7 @@ import {
   getSingleMetadataServiceFromDI,
   getSingleRegistryFromDI,
 } from "../helpers/di";
+import { pushCarriesValues } from "../helpers/push-carries-values";
 import { readRequestLocalized } from "../helpers/request-localized";
 import {
   offsetPaginationToMeta,
@@ -1558,50 +1562,50 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // changes (mirrors collections).
           // The change applied by the push and written as the Single's migration, so its table
           // stands on record for every migration after it, as a collection's Builder save leaves it.
+          const companion: BuilderCompanionReconcile = {
+            slug,
+            tableName,
+            oldFields: single.fields as unknown as FieldDefinition[],
+            newFields: fields as unknown as FieldDefinition[],
+            localized: layout.isStored,
+            wasLocalized: layout.wasStored,
+            // Read from the same persisted record as `wasLocalized`: the companion's per-language
+            // `_status` before and after this apply.
+            status: layout.isPublishedPerLanguage,
+            wasStatus: layout.wasPublishedPerLanguage,
+            statusFromEntryInEveryLanguage:
+              layout.statusFromEntryInEveryLanguage,
+            adapter,
+            renamed: companionRename ?? undefined,
+            // The settings the first push left off, once the shared columns hold the default
+            // language's values. A new desired schema rather than an edit of the first: the pipeline
+            // keeps the last one it applied, by reference, to skip a push that changes nothing.
+            settleLeaving: settingsDeferred
+              ? leavingSettingsStep({
+                  adapter,
+                  entity: slug,
+                  tableName,
+                  builtBy: "collection",
+                  oldFields: single.fields as unknown as FieldDefinition[],
+                  newFields: fields as unknown as FieldDefinition[],
+                  renamed: companionRename,
+                  push: () =>
+                    push({
+                      ...desired,
+                      singles: {
+                        ...desired.singles,
+                        [slug]: {
+                          ...desired.singles[slug],
+                          fields: fields as DesiredSingle["fields"],
+                        },
+                      },
+                    }),
+                })
+              : undefined,
+          };
           await writeBuilderSchemaChange(
             builderSave,
-            () =>
-              pushAndReconcileCompanion(push, desired, "single", {
-                slug,
-                tableName,
-                oldFields: single.fields as unknown as FieldDefinition[],
-                newFields: fields as unknown as FieldDefinition[],
-                localized: layout.isStored,
-                wasLocalized: layout.wasStored,
-                // Read from the same persisted record as `wasLocalized`: the companion's per-language
-                // `_status` before and after this apply.
-                status: layout.isPublishedPerLanguage,
-                wasStatus: layout.wasPublishedPerLanguage,
-                statusFromEntryInEveryLanguage:
-                  layout.statusFromEntryInEveryLanguage,
-                adapter,
-                renamed: companionRename ?? undefined,
-                // The settings the first push left off, once the shared columns hold the default
-                // language's values. A new desired schema rather than an edit of the first: the pipeline
-                // keeps the last one it applied, by reference, to skip a push that changes nothing.
-                settleLeaving: settingsDeferred
-                  ? leavingSettingsStep({
-                      adapter,
-                      entity: slug,
-                      tableName,
-                      builtBy: "collection",
-                      oldFields: single.fields as unknown as FieldDefinition[],
-                      newFields: fields as unknown as FieldDefinition[],
-                      renamed: companionRename,
-                      push: () =>
-                        push({
-                          ...desired,
-                          singles: {
-                            ...desired.singles,
-                            [slug]: {
-                              ...desired.singles[slug],
-                              fields: fields as DesiredSingle["fields"],
-                            },
-                          },
-                        }),
-                    })
-                  : undefined,
-              }),
+            () => pushAndReconcileCompanion(push, desired, "single", companion),
             {
               kind: "single",
               slug,
@@ -1629,7 +1633,25 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                     fields as unknown as FieldDefinition[]
                   )),
             },
-            landing.landed
+            landing.landed,
+            {
+              // The push where the save carries values across its change; its own migration file,
+              // run in tries as `nextly migrate` runs it, where it carries none.
+              pushWhen: () =>
+                pushCarriesValues({
+                  oldFields: single.fields as unknown as FieldDefinition[],
+                  newFields: fields as unknown as FieldDefinition[],
+                  wasStored: layout.wasStored,
+                  isStored: layout.isStored,
+                  wasStatus: layout.wasPublishedPerLanguage,
+                  status: layout.isPublishedPerLanguage,
+                  renamed: companionRename,
+                  liveTable: async () =>
+                    (await introspectLiveSnapshot(db, dialect, [tableName]))
+                      .tables[0],
+                }),
+              afterFile: () => reconcileBuilderCompanion("single", companion),
+            }
           );
 
           const newSchemaVersion = currentVersion + 1;

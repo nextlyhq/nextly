@@ -49,6 +49,7 @@ import { entityRelations } from "../../domains/schema/builder-save/single-relati
 import { fieldGroupEntity } from "../../domains/schema/builder-save/stored-entity";
 import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
+import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
@@ -84,6 +85,8 @@ import {
   builderSchemaPush,
   leavingSettingsStep,
   pushAndReconcileCompanion,
+  reconcileBuilderCompanion,
+  type BuilderCompanionReconcile,
 } from "../helpers/builder-schema-push";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
@@ -93,6 +96,7 @@ import {
   getFieldGroupMetadataServiceFromDI,
   getLoggerFromDI,
 } from "../helpers/di";
+import { pushCarriesValues } from "../helpers/push-carries-values";
 import { readRequestLocalized } from "../helpers/request-localized";
 import { requireParam, toNumber } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
@@ -905,46 +909,47 @@ export const COMPONENTS_METHODS: Record<
           // changes.
           // The change applied by the push and written as the field group's migration, so its table
           // stands on record for every migration after it, as a collection's Builder save leaves it.
+          const companion: BuilderCompanionReconcile = {
+            slug,
+            tableName,
+            oldFields: component.fields as unknown as FieldDefinition[],
+            newFields: fields as unknown as FieldDefinition[],
+            localized: isStored,
+            wasLocalized: wasStored,
+            adapter,
+            renamed: companionRename ?? undefined,
+            // The settings the first push left off, once the shared columns hold the default
+            // language's values. A new desired schema rather than an edit of the first: the
+            // pipeline keeps the last one it applied, by reference, to skip a push that changes
+            // nothing.
+            settleLeaving: settingsDeferred
+              ? leavingSettingsStep({
+                  adapter,
+                  entity: slug,
+                  tableName,
+                  builtBy: "fieldGroup",
+                  oldFields: (component.fields ??
+                    []) as unknown as FieldDefinition[],
+                  newFields: fields as unknown as FieldDefinition[],
+                  renamed: companionRename,
+                  push: () =>
+                    push({
+                      ...desired,
+                      components: {
+                        ...desired.components,
+                        [slug]: {
+                          ...desired.components[slug],
+                          fields: fields as DesiredFieldGroup["fields"],
+                        },
+                      },
+                    }),
+                })
+              : undefined,
+          };
           await writeBuilderSchemaChange(
             builderSave,
             () =>
-              pushAndReconcileCompanion(push, desired, "component", {
-                slug,
-                tableName,
-                oldFields: component.fields as unknown as FieldDefinition[],
-                newFields: fields as unknown as FieldDefinition[],
-                localized: isStored,
-                wasLocalized: wasStored,
-                adapter,
-                renamed: companionRename ?? undefined,
-                // The settings the first push left off, once the shared columns hold the default
-                // language's values. A new desired schema rather than an edit of the first: the
-                // pipeline keeps the last one it applied, by reference, to skip a push that changes
-                // nothing.
-                settleLeaving: settingsDeferred
-                  ? leavingSettingsStep({
-                      adapter,
-                      entity: slug,
-                      tableName,
-                      builtBy: "fieldGroup",
-                      oldFields: (component.fields ??
-                        []) as unknown as FieldDefinition[],
-                      newFields: fields as unknown as FieldDefinition[],
-                      renamed: companionRename,
-                      push: () =>
-                        push({
-                          ...desired,
-                          components: {
-                            ...desired.components,
-                            [slug]: {
-                              ...desired.components[slug],
-                              fields: fields as DesiredFieldGroup["fields"],
-                            },
-                          },
-                        }),
-                    })
-                  : undefined,
-              }),
+              pushAndReconcileCompanion(push, desired, "component", companion),
             {
               kind: "fieldGroup",
               slug,
@@ -973,7 +978,25 @@ export const COMPONENTS_METHODS: Record<
                     fields as unknown as FieldDefinition[]
                   )),
             },
-            landing.landed
+            landing.landed,
+            {
+              // The push where the save carries values across its change; its own migration file,
+              // run in tries as `nextly migrate` runs it, where it carries none.
+              pushWhen: () =>
+                pushCarriesValues({
+                  oldFields: (component.fields ??
+                    []) as unknown as FieldDefinition[],
+                  newFields: fields as unknown as FieldDefinition[],
+                  wasStored,
+                  isStored,
+                  renamed: companionRename,
+                  liveTable: async () =>
+                    (await introspectLiveSnapshot(db, dialect, [tableName]))
+                      .tables[0],
+                }),
+              afterFile: () =>
+                reconcileBuilderCompanion("component", companion),
+            }
           );
 
           const newSchemaVersion = currentVersion + 1;
