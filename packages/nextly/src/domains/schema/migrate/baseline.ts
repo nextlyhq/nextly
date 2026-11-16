@@ -26,11 +26,167 @@
  *
  * @module domains/schema/migrate/baseline
  */
+import { NextlyError } from "../../../errors";
+import { isPluginLedgerRow } from "../events/ledger-scope";
+import { standingsByFilename } from "../events/migration-state";
+import type { SchemaEventRow } from "../events/schema-events-repository";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import type { NextlySchemaSnapshot, Operation } from "../pipeline/diff/types";
 
 /** The snapshot a first migration is diffed against when none exists. */
 export const EMPTY_SNAPSHOT: NextlySchemaSnapshot = { tables: [] };
+
+/** A ledger row as the baseline's history rules read it. */
+export type LedgerRow = Pick<
+  SchemaEventRow,
+  "eventType" | "status" | "startedAt" | "filename" | "supersededEventIds"
+>;
+
+/** Each app migration's standing, a plugin's rows left to its own stream. */
+function appStandings(rows: readonly LedgerRow[]) {
+  return standingsByFilename(rows.filter(r => !isPluginLedgerRow(r.filename)));
+}
+
+/**
+ * The app migrations a baseline counts as history: those whose latest outcome
+ * is applied, as every rule judges a migration's state (`migrationStanding`),
+ * whatever records that are not outcomes follow it (an accepted checksum, a
+ * removal recorded, an attempt). A migration rolled back is no history, file
+ * present or not, and neither is a plugin's row.
+ */
+export function appliedAppMigrations(rows: readonly LedgerRow[]): string[] {
+  return [...appStandings(rows)]
+    .filter(([, standing]) => standing.state === "applied")
+    .map(([filename]) => filename)
+    .sort();
+}
+
+/** An app migration's attempt that failed or recorded no outcome, and nothing has resolved. */
+export interface OpenAttempt {
+  filename: string;
+  /** The file's UP, or its down section. */
+  direction: "up" | "down";
+  /** False when the attempt recorded no outcome. */
+  failed: boolean;
+}
+
+/** Every app migration with an unresolved attempt, by filename. */
+export function openAttempts(rows: readonly LedgerRow[]): OpenAttempt[] {
+  const open: OpenAttempt[] = [];
+  for (const [filename, { unresolvedAttempt }] of appStandings(rows)) {
+    if (unresolvedAttempt === undefined) continue;
+    open.push({
+      filename,
+      direction:
+        unresolvedAttempt.eventType === "file_rollback" ? "down" : "up",
+      failed: unresolvedAttempt.status === "failed",
+    });
+  }
+  return open.sort((a, b) => a.filename.localeCompare(b.filename));
+}
+
+/**
+ * The refusal over an unresolved attempt the shared check let through
+ * (`assertAppHistoryHolds`, which runs first): one it judged to have left
+ * nothing, because it ran inside a transaction the database undid whole.
+ * A baseline still waits for it: it adopts the database as the
+ * history's start, which it cannot do while that history has an attempt no
+ * one has said how it ended. Worded as the shared refusal is, so the CLI reads
+ * it the same way (`unfinishedAttemptParts`): what stopped, why, ending "so it
+ * is not run again.", then what to do.
+ */
+export function undoneAttemptRefusal(
+  command: string,
+  attempts: readonly OpenAttempt[]
+): NextlyError {
+  const names = attempts.map(a => a.filename);
+  const [only] = attempts;
+  const what =
+    attempts.length === 1 && only !== undefined
+      ? `${command} stops before changing anything: ${only.filename} has an unresolved attempt at its ${sectionOf(only)}.`
+      : `${command} stops before changing anything: ${String(attempts.length)} migrations have an unresolved attempt (${names.join(", ")}).`;
+  const why = attempts.map(undoneSentence).join(" ");
+  const next = attempts.map(cleanupStep).join(" ");
+  return new NextlyError({
+    code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+    publicMessage: `${what} ${why} A baseline adopts the database as the start of its history, so it waits until every attempt is recorded resolved; nothing is adopted or run, so it is not run again. ${next}`,
+    logContext: {
+      source: names.join(", "),
+      reason: "partially-applied",
+      attempts: attempts.map(a => ({ ...a })),
+    },
+  });
+}
+
+function sectionOf(attempt: OpenAttempt): string {
+  return attempt.direction === "up" ? "UP" : "down section";
+}
+
+function undoneSentence(attempt: OpenAttempt): string {
+  const ended = attempt.failed
+    ? "failed inside a transaction"
+    : "recorded no outcome, and it ran inside a transaction";
+  return `The attempt at ${attempt.filename}'s ${sectionOf(attempt)} ${ended}, which the database undoes whole, so none of it stayed.`;
+}
+
+function cleanupStep(attempt: OpenAttempt): string {
+  const step = `\`nextly migrate:resolve --failed-cleanup ${attempt.filename}\``;
+  return attempt.direction === "up"
+    ? `Record that with ${step}.`
+    : `Record that with ${step}; the migration stays applied.`;
+}
+
+/** A migration a baseline counts as history, and where it is counted from. */
+export interface HistoryMigration {
+  filename: string;
+  /** Its file is in the build's migrations folder. */
+  inFolder: boolean;
+  /** Its latest outcome in the ledger is applied (`appliedAppMigrations`). */
+  applied: boolean;
+}
+
+/**
+ * The lines a refused baseline prints over a history with no starting point:
+ * each migration it counted, with the step that clears it. A migration the
+ * ledger records applied is recorded rolled back, which runs nothing: its
+ * tables stay, and the baseline adopts them. Never `migrate:down`, which
+ * would drop them.
+ */
+export function historyRefusalLines(
+  history: readonly HistoryMigration[]
+): string[] {
+  const width = Math.max(...history.map(m => m.filename.length));
+  return [
+    "This project already has migration history but no starting point, so a",
+    "baseline would put a second origin after it. Nothing was written.",
+    "",
+    ...history.flatMap(m => clearingLines(m, width)),
+    "",
+    "If these migrations are this database's real history, don't baseline: keep",
+    "their files in the folder, restoring any that are gone, and run",
+    "`nextly migrate`. Otherwise clear each as shown and baseline again: it",
+    "adopts the tables as they stand.",
+  ];
+}
+
+function clearingLines(m: HistoryMigration, width: number): string[] {
+  const name = `  ${m.filename.padEnd(width)}  `;
+  const indent = " ".repeat(name.length);
+  const record = `nextly migrate:resolve --rolled-back ${m.filename} --file-missing`;
+  if (!m.applied) {
+    return [
+      `${name}in the migrations folder, not applied: move it out of the folder,`,
+      `${indent}and after the baseline write what it does as a new migration`,
+    ];
+  }
+  if (!m.inFolder) {
+    return [`${name}recorded applied, its file gone: ${record}`];
+  }
+  return [
+    `${name}in the migrations folder and recorded applied: move it out of the folder, then`,
+    `${indent}${record}`,
+  ];
+}
 
 /**
  * What a baseline run should do, decided before anything is written.
@@ -54,7 +210,8 @@ export type BaselinePlan =
        * against tables the baseline has not created yet.
        */
       kind: "history-not-empty";
-      filename: string;
+      /** Every migration counted, by filename, each once. */
+      history: HistoryMigration[];
     }
   | {
       /** No managed tables, so there is nothing to adopt. */
@@ -80,15 +237,15 @@ export interface PlanBaselineArgs {
    */
   latestSnapshotName?: string;
   /**
-   * Any migration `.sql` already on disk, when the project has one.
+   * The migration `.sql` files already on disk.
    *
    * Checked separately from the snapshot because the two can disagree: a
    * `--blank` migration is written with no snapshot beside it, so a project
    * carrying only those has a real history and no starting point.
    */
-  existingMigrationFile?: string;
+  migrationFiles?: readonly string[];
   /**
-   * A filename the ledger already records as applied, when it has one.
+   * The app migrations the ledger records as applied (`appliedAppMigrations`).
    *
    * Checked separately from the files because the two can disagree in the
    * damaging direction: a project whose migrations were deleted from disk
@@ -96,7 +253,18 @@ export interface PlanBaselineArgs {
    * Writing an origin there leaves the database with two, and the old rows
    * become applied migrations whose files are gone.
    */
-  appliedMigration?: string;
+  appliedMigrations?: readonly string[];
+}
+
+/** The files and the applied migrations as one list, by filename, each once. */
+function historyOf(args: PlanBaselineArgs): HistoryMigration[] {
+  const files = new Set(args.migrationFiles);
+  const applied = new Set(args.appliedMigrations);
+  return [...new Set([...files, ...applied])].sort().map(filename => ({
+    filename,
+    inFolder: files.has(filename),
+    applied: applied.has(filename),
+  }));
 }
 
 /**
@@ -119,9 +287,9 @@ export function planBaseline(args: PlanBaselineArgs): BaselinePlan {
   // Disk and ledger are both asked, because either can carry the history on
   // its own: files without snapshots come from `--blank`, and applied rows
   // without files come from a project whose migrations were deleted.
-  const existing = args.existingMigrationFile ?? args.appliedMigration;
-  if (existing !== undefined) {
-    return { kind: "history-not-empty", filename: existing };
+  const history = historyOf(args);
+  if (history.length > 0) {
+    return { kind: "history-not-empty", history };
   }
 
   if (args.live.tables.length === 0) {

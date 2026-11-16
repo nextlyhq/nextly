@@ -8,8 +8,17 @@
  */
 import { describe, expect, it } from "vitest";
 
+import type { SchemaEventRow } from "../../events/schema-events-repository";
 import type { NextlySchemaSnapshot } from "../../pipeline/diff/types";
-import { isUnadoptedDatabase, planBaseline } from "../baseline";
+import {
+  appliedAppMigrations,
+  historyRefusalLines,
+  isUnadoptedDatabase,
+  openAttempts,
+  planBaseline,
+  undoneAttemptRefusal,
+  type LedgerRow,
+} from "../baseline";
 import { migrationDriftError } from "../drift-error";
 
 const table = (name: string): NextlySchemaSnapshot["tables"][number] =>
@@ -73,11 +82,17 @@ describe("planBaseline", () => {
     expect(
       planBaseline({
         live: snapshot("dc_posts"),
-        existingMigrationFile: "20260101000000_custom.sql",
+        migrationFiles: ["20260101000000_custom.sql"],
       })
     ).toEqual({
       kind: "history-not-empty",
-      filename: "20260101000000_custom.sql",
+      history: [
+        {
+          filename: "20260101000000_custom.sql",
+          inFolder: true,
+          applied: false,
+        },
+      ],
     });
   });
 
@@ -89,11 +104,32 @@ describe("planBaseline", () => {
     expect(
       planBaseline({
         live: snapshot("dc_posts"),
-        appliedMigration: "20260101000000_init.sql",
+        appliedMigrations: ["20260101000000_init.sql"],
       })
     ).toEqual({
       kind: "history-not-empty",
-      filename: "20260101000000_init.sql",
+      history: [
+        { filename: "20260101000000_init.sql", inFolder: false, applied: true },
+      ],
+    });
+  });
+
+  it("carries every file and every applied migration, once each, in order", () => {
+    // The refusal names each with the step that clears it, so all of them
+    // are carried, not only the first: one run shows the whole history.
+    const plan = planBaseline({
+      live: snapshot("dc_posts"),
+      migrationFiles: ["20260103_tags.sql", "20260101_init.sql"],
+      appliedMigrations: ["20260102_posts.sql", "20260101_init.sql"],
+    });
+
+    expect(plan).toEqual({
+      kind: "history-not-empty",
+      history: [
+        { filename: "20260101_init.sql", inFolder: true, applied: true },
+        { filename: "20260102_posts.sql", inFolder: false, applied: true },
+        { filename: "20260103_tags.sql", inFolder: true, applied: false },
+      ],
     });
   });
 
@@ -104,7 +140,7 @@ describe("planBaseline", () => {
     const plan = planBaseline({
       live: snapshot("dc_posts"),
       latestSnapshotName: "20260101000000_init.snapshot.json",
-      existingMigrationFile: "20260101000000_init.sql",
+      migrationFiles: ["20260101000000_init.sql"],
     });
 
     expect(plan.kind).toBe("already-baselined");
@@ -117,7 +153,7 @@ describe("planBaseline", () => {
     expect(
       planBaseline({
         live: snapshot(),
-        existingMigrationFile: "20260101000000_custom.sql",
+        migrationFiles: ["20260101000000_custom.sql"],
       }).kind
     ).toBe("history-not-empty");
   });
@@ -132,6 +168,230 @@ describe("planBaseline", () => {
     });
 
     expect(plan.kind).toBe("already-baselined");
+  });
+});
+
+/** Ledger rows in the order written, each a second after the one before. */
+function ledger() {
+  let at = 0;
+  return (
+    filename: string,
+    eventType: SchemaEventRow["eventType"],
+    status: SchemaEventRow["status"],
+    supersededEventIds: string[] | null = null
+  ): LedgerRow => ({
+    filename,
+    eventType,
+    status,
+    supersededEventIds,
+    startedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, ++at)),
+  });
+}
+
+describe("appliedAppMigrations", () => {
+  it("counts an app migration whose latest outcome is applied", () => {
+    const row = ledger();
+    expect(
+      appliedAppMigrations([row("1_init.sql", "file_apply", "applied")])
+    ).toEqual(["1_init.sql"]);
+  });
+
+  it("does not count one whose latest outcome is rolled back, file present or not", () => {
+    // A migration rolled back, whose file was then deleted, blocked the
+    // baseline for good, since every row of any kind counted.
+    const row = ledger();
+    expect(
+      appliedAppMigrations([
+        row("1_init.sql", "file_apply", "applied"),
+        row("1_init.sql", "file_apply", "rolled_back", ["1"]),
+      ])
+    ).toEqual([]);
+  });
+
+  it("does not count a plugin's rows, applied or not", () => {
+    const row = ledger();
+    expect(
+      appliedAppMigrations([
+        row(
+          "plugin:@acme/nextly-plugin-auth/0001_init",
+          "file_apply",
+          "applied"
+        ),
+      ])
+    ).toEqual([]);
+  });
+
+  it("does not count a migration that was only attempted", () => {
+    // Pending by its latest outcome: an attempt that failed or recorded no outcome is no
+    // outcome. Its unresolved attempt is refused on its own (`openAttempts`).
+    const row = ledger();
+    expect(
+      appliedAppMigrations([
+        row("1_init.sql", "file_apply", "failed"),
+        row("2_posts.sql", "file_apply", "in_progress"),
+      ])
+    ).toEqual([]);
+  });
+
+  it("keeps counting an applied migration whatever non-outcome records follow it", () => {
+    // A removal recorded, a down section's failed attempt, and an attempt
+    // cleared by `migrate:resolve --failed-cleanup` are no outcomes, so the
+    // migration stays applied.
+    const row = ledger();
+    expect(
+      appliedAppMigrations([
+        row("1_init.sql", "file_apply", "applied"),
+        row("1_init.sql", "file_removed", "recorded"),
+        row("2_posts.sql", "file_apply", "applied"),
+        row("2_posts.sql", "file_rollback", "failed"),
+        row("3_tags.sql", "file_apply", "applied"),
+        row("3_tags.sql", "file_apply", "rolled_back", []),
+      ])
+    ).toEqual(["1_init.sql", "2_posts.sql", "3_tags.sql"]);
+  });
+
+  it("counts a migration applied again after a rollback once", () => {
+    const row = ledger();
+    expect(
+      appliedAppMigrations([
+        row("1_init.sql", "file_apply", "applied"),
+        row("1_init.sql", "file_apply", "rolled_back", ["1"]),
+        row("1_init.sql", "file_apply", "applied"),
+      ])
+    ).toEqual(["1_init.sql"]);
+  });
+});
+
+describe("openAttempts", () => {
+  it("finds an app migration's failed attempt and one that recorded no outcome", () => {
+    const row = ledger();
+    expect(
+      openAttempts([
+        row("1_init.sql", "file_apply", "failed"),
+        row("2_posts.sql", "file_apply", "in_progress"),
+      ])
+    ).toEqual([
+      { filename: "1_init.sql", direction: "up", failed: true },
+      { filename: "2_posts.sql", direction: "up", failed: false },
+    ]);
+  });
+
+  it("finds a down section's failed attempt", () => {
+    const row = ledger();
+    expect(
+      openAttempts([
+        row("1_init.sql", "file_apply", "applied"),
+        row("1_init.sql", "file_rollback", "failed"),
+      ])
+    ).toEqual([{ filename: "1_init.sql", direction: "down", failed: true }]);
+  });
+
+  it("passes over an attempt an outcome or a cleanup resolved, and a plugin's", () => {
+    const row = ledger();
+    expect(
+      openAttempts([
+        row("1_init.sql", "file_apply", "failed"),
+        row("1_init.sql", "file_apply", "applied"),
+        row("2_posts.sql", "file_apply", "rolled_back", []),
+        row("plugin:acme/0001_init", "file_apply", "failed"),
+      ])
+    ).toEqual([]);
+  });
+
+  it("keeps an attempt a removal record follows open", () => {
+    const row = ledger();
+    expect(
+      openAttempts([
+        row("1_init.sql", "file_apply", "failed"),
+        row("1_init.sql", "file_removed", "recorded"),
+      ])
+    ).toEqual([{ filename: "1_init.sql", direction: "up", failed: true }]);
+  });
+});
+
+describe("the refusal over an attempt a transaction undid", () => {
+  const refusal = (attempts: Parameters<typeof undoneAttemptRefusal>[1]) =>
+    undoneAttemptRefusal("nextly migrate:baseline", attempts);
+
+  it("names the migration, says none of it stayed, and gives the resolve step", () => {
+    const error = refusal([
+      { filename: "1_init.sql", direction: "up", failed: true },
+    ]);
+
+    expect(error.code).toBe("NEXTLY_MIGRATION_PARTIALLY_APPLIED");
+    expect(error.logContext).toMatchObject({
+      reason: "partially-applied",
+      source: "1_init.sql",
+    });
+    const message = error.publicMessage;
+    expect(message).toMatch(
+      /^nextly migrate:baseline stops before changing anything: 1_init\.sql has an unresolved attempt at its UP\. /
+    );
+    expect(message).toContain("failed inside a transaction");
+    expect(message).toContain("none of it stayed");
+    // Never told the database may hold part of it: here it cannot.
+    expect(message).not.toContain("may hold part");
+    // The CLI splits the message where this sentence ends (`unfinishedAttemptParts`).
+    expect(message).toContain("so it is not run again.");
+    expect(message.split("so it is not run again.")[1]).toContain(
+      "`nextly migrate:resolve --failed-cleanup 1_init.sql`"
+    );
+  });
+
+  it("says a down section's migration stays applied once the attempt is cleared", () => {
+    const message = refusal([
+      { filename: "1_init.sql", direction: "down", failed: true },
+    ]).publicMessage;
+
+    expect(message).toContain("at its down section");
+    expect(message).toContain("the migration stays applied");
+  });
+
+  it("says when an attempt recorded no outcome", () => {
+    expect(
+      refusal([{ filename: "1_init.sql", direction: "up", failed: false }])
+        .publicMessage
+    ).toContain("recorded no outcome");
+  });
+
+  it("names every migration when there are several", () => {
+    const message = refusal([
+      { filename: "1_init.sql", direction: "up", failed: true },
+      { filename: "2_posts.sql", direction: "up", failed: true },
+    ]).publicMessage;
+
+    expect(message).toContain(
+      "2 migrations have an unresolved attempt (1_init.sql, 2_posts.sql)."
+    );
+    expect(message).toContain("--failed-cleanup 1_init.sql");
+    expect(message).toContain("--failed-cleanup 2_posts.sql");
+  });
+});
+
+describe("the refusal over a history with no starting point", () => {
+  it("names each counted migration with the step that clears it", () => {
+    const text = historyRefusalLines([
+      { filename: "1_init.sql", inFolder: true, applied: false },
+      { filename: "2_posts.sql", inFolder: false, applied: true },
+      { filename: "3_tags.sql", inFolder: true, applied: true },
+    ]).join("\n");
+
+    expect(text).toContain("Nothing was written.");
+    // A file not applied: out of the folder, and written again after.
+    expect(text).toMatch(
+      /1_init\.sql\s+in the migrations folder, not applied: move it out of the folder/
+    );
+    // A ledger row whose file is gone: recorded rolled back, said explicitly.
+    expect(text).toMatch(
+      /2_posts\.sql\s+recorded applied, its file gone: nextly migrate:resolve --rolled-back 2_posts\.sql --file-missing/
+    );
+    // Both: the file moved first, then the same record.
+    expect(text).toMatch(
+      /3_tags\.sql\s+in the migrations folder and recorded applied: move it out of the folder, then\s+nextly migrate:resolve --rolled-back 3_tags\.sql --file-missing/
+    );
+    // Never `migrate:down`, which would drop the tables a baseline adopts.
+    expect(text).not.toContain("migrate:down");
+    expect(text).toContain("real history");
   });
 });
 

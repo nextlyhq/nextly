@@ -412,6 +412,133 @@ describe.each(LOCK_DIALECTS)(
       expect(await databaseState()).toEqual(unrecorded);
     }, 240_000);
 
+    describe("migrate:baseline's history", () => {
+      /** A table a baseline adopts once nothing stands in its way. */
+      const posts = `dc_${P}_posts`;
+
+      beforeEach(async () => {
+        await adapter.executeQuery(
+          `CREATE TABLE ${posts} (id varchar(36) PRIMARY KEY)`
+        );
+      });
+
+      /**
+       * Both migrations rolled back, TWO by `migrate:down` and ONE as the
+       * operator records it, and then their files taken out of the folder.
+       */
+      async function rollBackAndRemoveBoth(): Promise<void> {
+        await migrateDown();
+        await resolveFile("rolled-back", ONE);
+        rmSync(path(ONE));
+        rmSync(path(TWO));
+      }
+
+      it("adopts the database past rolled-back migrations whose files are gone, and a plugin's applied module", async () => {
+        await rollBackAndRemoveBoth();
+        // A plugin's module is its own stream's history, never the app's.
+        await repo().insertEvent({
+          eventType: "file_apply",
+          status: "applied",
+          source: "cli-migrate",
+          filename: `plugin:acme-${P}/0001_init`,
+          sha256: "a".repeat(64),
+        });
+
+        expect(await baseline()).toMatchObject({
+          kind: "baselined",
+          tableCount: 1,
+        });
+      }, 240_000);
+
+      it("still counts an applied migration whose edit was accepted, and one whose removal was recorded", async () => {
+        // ONE edited and the edit accepted: its checksum recorded in place.
+        writeFile(
+          ONE,
+          [`CREATE TABLE ${P}_one (id integer)`],
+          [`DROP TABLE IF EXISTS ${P}_one`]
+        );
+        await resolveFile("applied", ONE);
+        // TWO's file removed on purpose, and the removal recorded.
+        rmSync(path(TWO));
+        await resolveFile("removed", TWO);
+        const before = await databaseState();
+
+        // Both stay applied by their latest outcome, so both are history,
+        // TWO from the ledger alone.
+        expect(await baseline()).toEqual({
+          kind: "history-not-empty",
+          history: [
+            { filename: `${ONE}.sql`, inFolder: true, applied: true },
+            { filename: `${TWO}.sql`, inFolder: false, applied: true },
+          ],
+        });
+        expect(await databaseState()).toEqual(before);
+      }, 240_000);
+
+      it("refuses over a failed attempt on every dialect, changing nothing, until it is recorded rolled back", async () => {
+        await rollBackAndRemoveBoth();
+        if (dialect === "mysql") {
+          // A real failure: its first statement stays.
+          await failPartWay();
+        } else {
+          // On PostgreSQL and SQLite a file run in a transaction that fails
+          // now leaves no ledger row; a build from before attempts were
+          // recorded that way left a failed one, with the file's checksum.
+          // The transaction undid the whole file, so the shared check lets
+          // it through, and the baseline still waits for it.
+          writeFile(
+            THREE,
+            [`CREATE TABLE ${P}_three (id integer)`],
+            [`DROP TABLE ${P}_three`]
+          );
+          await repo().insertEvent({
+            eventType: "file_apply",
+            status: "failed",
+            source: "cli-migrate",
+            filename: `${THREE}.sql`,
+            sha256: checksumOf(readFileSync(path(THREE), "utf8")),
+          });
+        }
+        const before = await databaseState();
+
+        for (const dryRun of [true, false]) {
+          const refused = await baselineCore({
+            adapter: adapter as never,
+            db: adapter.getDrizzle(),
+            dialect,
+            migrationsDir,
+            logger,
+            dryRun,
+          }).then(
+            () => undefined,
+            (thrown: unknown) => thrown
+          );
+          expect(refused).toMatchObject({
+            code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+            publicMessage: expect.stringContaining(`${THREE}.sql`),
+          });
+          expect((refused as NextlyError).publicMessage).toContain(
+            dialect === "mysql"
+              ? "part of it may have stayed applied"
+              : "none of it stayed"
+          );
+          expect(await databaseState()).toEqual(before);
+        }
+
+        // The operator reverses what of it ran, takes the file out, and
+        // records it rolled back: the baseline adopts the database.
+        if (dialect === "mysql") {
+          await adapter.executeQuery(`DROP TABLE ${P}_three`);
+        }
+        rmSync(path(THREE));
+        await resolveFile("rolled-back", THREE, true);
+        expect(await baseline()).toMatchObject({
+          kind: "baselined",
+          tableCount: 1,
+        });
+      }, 240_000);
+    });
+
     it("never runs a removed migration again when its file returns, and checks it against its recorded checksum", async () => {
       const text = readFileSync(path(TWO), "utf8");
       rmSync(path(TWO));

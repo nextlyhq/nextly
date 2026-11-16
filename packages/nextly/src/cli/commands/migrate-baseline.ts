@@ -43,8 +43,14 @@ import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-dd
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
 import { checksumOf } from "../../domains/schema/migrate/applied-checksums";
 import {
+  appliedAppMigrations,
   EMPTY_SNAPSHOT,
+  historyRefusalLines,
+  openAttempts,
   planBaseline,
+  undoneAttemptRefusal,
+  type HistoryMigration,
+  type LedgerRow,
 } from "../../domains/schema/migrate/baseline";
 import {
   readOldBuilderLedger,
@@ -175,15 +181,15 @@ async function listMigrationFiles(
 }
 
 /**
- * A migration the ledger already records, when there is one.
+ * The ledger's attempt and outcome rows for the app's migrations, read once
+ * for both of the baseline's own questions: is an attempt unresolved, and
+ * which migrations are history (`openAttempts`, `appliedAppMigrations`).
  *
  * A database managed by `db:sync` has never run `migrate`, so its ledger holds
  * no `file_apply` rows — and on the oldest such databases the table does not
- * exist at all, which is why a failure here reads as "no history" rather than
- * propagating. Anything that DOES have rows has a history, whatever the
- * migrations directory currently contains.
+ * exist at all, which reads as "no history" rather than failing.
  */
-async function firstAppliedMigration(
+async function readAppLedger(
   repo: SchemaEventsRepository,
   adapter: CLIDatabaseAdapter,
   folder: {
@@ -191,22 +197,43 @@ async function firstAppliedMigration(
     dialect: SupportedDialect;
     declared: DeclaredNames | undefined;
   }
-): Promise<string | undefined> {
-  if (!(await ledgerExists(adapter))) return undefined;
+): Promise<LedgerRow[]> {
+  if (!(await ledgerExists(adapter))) return [];
   // Past the existence check, a failure is a real one — permissions, a wrong
   // schema, a broken table. Swallowing it would read as "never migrated" and
   // write a second origin beside whatever history the ledger already holds.
-  const all = await repo.listFileApplies();
+  // A down section's attempts too, as every history check reads them.
+  const all = [
+    ...(await repo.listFileApplies()),
+    ...(await repo.listFailedRollbacks()),
+  ];
   // An old Schema Builder file's rows are no history (`readOldBuilderLedger`).
   const { ignoredRows } = await readOldBuilderLedger(folder, repo, all);
-  const rows = all.filter(
-    r => r.filename === null || !ignoredRows.has(r.filename)
-  );
-  const names = rows
-    .map(r => (r as { filename?: string | null }).filename)
-    .filter((n): n is string => typeof n === "string" && n.length > 0)
-    .sort();
-  return names[0];
+  return all.filter(r => r.filename === null || !ignoredRows.has(r.filename));
+}
+
+/**
+ * The app migrations the ledger counts as history (`appliedAppMigrations`),
+ * once no attempt stands unresolved.
+ *
+ * Runs after the shared history checks (`assertAppHistoryHolds`), which
+ * refuse an attempt that may have stopped part-way and one at a file the
+ * folder lacks, saying the database may hold part of it. An unresolved
+ * attempt that reaches here ran inside a transaction the database undid, and
+ * a baseline still waits for it: it adopts the database as the start
+ * of a history whose every attempt is settled.
+ */
+async function ledgerHistory(
+  repo: SchemaEventsRepository,
+  adapter: CLIDatabaseAdapter,
+  folder: Parameters<typeof readAppLedger>[2]
+): Promise<string[]> {
+  const ledger = await readAppLedger(repo, adapter, folder);
+  const open = openAttempts(ledger);
+  if (open.length > 0) {
+    throw undoneAttemptRefusal("nextly migrate:baseline", open);
+  }
+  return appliedAppMigrations(ledger);
 }
 
 /** Whether the migration ledger table is there at all. */
@@ -468,7 +495,7 @@ export interface ContributionMismatch {
 
 export type BaselineCoreResult =
   | { kind: "already-baselined"; snapshotName: string }
-  | { kind: "history-not-empty"; filename: string }
+  | { kind: "history-not-empty"; history: HistoryMigration[] }
   | { kind: "empty-database" }
   | { kind: "companion-mismatch"; mismatches: CompanionMismatch[] }
   | { kind: "contribution-mismatch"; mismatches: ContributionMismatch[] }
@@ -515,7 +542,7 @@ function notAdopting(
     return { kind: "already-baselined", snapshotName: plan.snapshotName };
   }
   if (plan.kind === "history-not-empty") {
-    return { kind: "history-not-empty", filename: plan.filename };
+    return { kind: "history-not-empty", history: plan.history };
   }
   return { kind: "empty-database" };
 }
@@ -723,6 +750,12 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
   const { adapter, db, dialect, migrationsDir } = deps;
   const metaDir = resolve(migrationsDir, "meta");
   const repo = new SchemaEventsRepository(db, dialect);
+  // Before anything else is judged: an unresolved attempt refuses first.
+  const appliedMigrations = await ledgerHistory(repo, adapter, {
+    migrationsDir,
+    dialect,
+    declared: deps.declared,
+  });
   const latest = await loadLatestSnapshot(metaDir);
   const existingMigrations = await listMigrationFiles(
     migrationsDir,
@@ -789,12 +822,8 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
   let plan = planBaseline({
     live,
     latestSnapshotName: latest?.filename,
-    existingMigrationFile: existingMigrations[0],
-    appliedMigration: await firstAppliedMigration(repo, adapter, {
-      migrationsDir,
-      dialect,
-      declared: deps.declared,
-    }),
+    migrationFiles: existingMigrations,
+    appliedMigrations,
   });
   // Already-baselined or existing-history projects are settled before orphan
   // checks: a recorded snapshot already retains any withdrawn contribution so
@@ -1295,12 +1324,7 @@ function refusalLines(
   >
 ): string[] {
   if (result.kind === "history-not-empty") {
-    return [
-      `This project already has migrations (${result.filename}), but no starting point.`,
-      "Adopting now would put the baseline after them, and a fresh database would",
-      "replay them against tables it has not created yet. Move them aside, baseline,",
-      "then re-apply what they did as a new migration.",
-    ];
+    return historyRefusalLines(result.history);
   }
   if (result.kind === "contribution-mismatch") {
     return [
