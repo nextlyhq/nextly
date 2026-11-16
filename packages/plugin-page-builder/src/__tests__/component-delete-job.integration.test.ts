@@ -1523,13 +1523,30 @@ describe.each(getConfiguredTestDialects())(
         switches.onLayoutRead = atLastCheck;
         const timer = setTimeout(() => release(), 2000);
 
-        const answered = await deleteToTheEnd(cookie, cardId).finally(() =>
-          clearTimeout(timer)
-        );
+        // Stepped by hand: the step that reaches the component's own delete
+        // answers that delete's refusal.
+        let answered: Answer | undefined;
+        try {
+          for (let step = 0; step < 8; step += 1) {
+            answered = await call(cookie, cardId, "POST", {});
+            if (
+              answered.status !== 200 ||
+              !["preflight", "running"].includes(answered.item.status)
+            ) {
+              break;
+            }
+          }
+        } finally {
+          clearTimeout(timer);
+        }
         await save;
 
-        expect(answered.item.status, JSON.stringify(answered.body)).not.toBe(
-          "done"
+        expect(answered?.status, JSON.stringify(answered?.body)).toBe(409);
+        const refusal = answered?.body as
+          | { error?: { message?: string } }
+          | undefined;
+        expect(refusal?.error?.message).toContain(
+          'the Layout "Racing" uses it'
         );
         expect(await exists(t, cardId)).toBe(true);
         expect(await layoutsNaming(t, cardId)).toEqual(["Racing"]);
