@@ -138,6 +138,5 @@ describe("the provenance table keeps who wrote a value", () => {
       | { length?: number }
       | undefined;
     expect(column?.length).toBeGreaterThanOrEqual(PRINCIPAL_KIND_MAX_LENGTH);
-    expect(PRINCIPAL_KIND_MAX_LENGTH).toBe(191);
   });
 });

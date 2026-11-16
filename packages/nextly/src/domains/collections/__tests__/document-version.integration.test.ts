@@ -27,6 +27,7 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 import { statementsOf } from "../../../database/__tests__/integration/helpers/count-statements";
 import { discardWorkingDraft } from "../../versions/discard-working-draft";
 import type { CollectionService } from "../services/collection-service";
+import { PRINCIPAL_KIND_MAX_LENGTH } from "../../../plugins/principals/registry";
 
 /** The statement that reads translation counters on their own. */
 const COUNTER_READ =
@@ -1153,6 +1154,38 @@ describe.each(getConfiguredTestDialects())(
         )
       ).toEqual([]);
       expect(read._revision).toBeUndefined();
+    });
+
+    it("saves for a plugin-defined person whose kind is as long as a kind may be", async () => {
+      // The row names its last changer in the same statement as the save, so
+      // a kind longer than that column fails the save itself on PostgreSQL and
+      // MySQL. Registration refuses any kind longer than this one, so the
+      // longest kind it accepts must fit, on every dialect.
+      const t = await boot(dialect);
+      const id = idOf(
+        await handlerOf(t).createEntry(
+          { collectionName: DOCS, overrideAccess: true, locale: "en" },
+          { title: "hello", note: "n" }
+        )
+      );
+      const longest = `${"p".repeat(PRINCIPAL_KIND_MAX_LENGTH - ":member".length)}:member`;
+      expect(longest).toHaveLength(PRINCIPAL_KIND_MAX_LENGTH);
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: DOCS,
+          entryId: id,
+          overrideAccess: true,
+          locale: "en",
+          actor: { type: "principal", principal: { kind: longest, id: "m-1" } },
+        },
+        { note: "by the longest kind", _overwrite: true }
+      );
+      const row = await rowOf(t, `dc_${DOCS}`, { id });
+      expect([row._changed_by_kind, row._changed_by_principal_kind]).toEqual([
+        "principal",
+        longest,
+      ]);
+      expect(row.note).toBe("by the longest kind");
     });
   }
 );
