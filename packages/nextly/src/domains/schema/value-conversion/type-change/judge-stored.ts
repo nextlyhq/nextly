@@ -210,6 +210,8 @@ export function judgeStoredTypeChange(args: {
   keyedBy: KeyedBy;
   from: FieldTypeOnDialect;
   to: FieldTypeOnDialect;
+  /** The new field's own validation, asked of each kept or changed value (`fieldAccepts`). */
+  accepts?: (readsAs: string) => Promise<boolean>;
 }): Promise<StoredTypeChangeJudgement> {
   return collectTypeChange(
     args.from,
@@ -219,6 +221,7 @@ export function judgeStoredTypeChange(args: {
       column: args.column,
       keyedBy: args.keyedBy,
       toJson: false,
-    })
+    }),
+    args.accepts
   );
 }
