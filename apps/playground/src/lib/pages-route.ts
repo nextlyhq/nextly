@@ -19,7 +19,12 @@ import {
 import { notFoundLogged } from "@nextlyhq/plugin-seo/next";
 
 import { pageBuilderPlugin } from "../../nextly.config";
-import { siteReader, SITE_STYLE_CONTEXT, SITE_STYLES } from "./site-content";
+import {
+  pageTitle,
+  siteReader,
+  SITE_STYLE_CONTEXT,
+  SITE_STYLES,
+} from "./site-content";
 
 export const pagesRoute: BlocksPageConfig = {
   // The collection the page builder plugin contributes. It already carries
@@ -55,7 +60,8 @@ export const pagesRoute: BlocksPageConfig = {
   // same reader as the page, so the default comes from the same instance.
   layouts: pageBuilderLayouts({ nextly: siteReader }),
   metadata: (entry, _context, derived) => ({
-    title: derived.title ?? (entry.title as string | undefined),
+    // The page's own title, never a heading its blocks offer: see `pageTitle`.
+    title: pageTitle(entry),
     description: derived.description,
     // `derived.canonical` is the entry's path within its collection, already
     // rooted. The root route serves it at that path, so both routes name it:
