@@ -19,6 +19,7 @@ import {
   companionHasColumn,
   companionHasStatusColumn,
   type CompanionIntrospectAdapter,
+  liveColumnsOf,
 } from "./companion-io";
 
 /**
@@ -78,13 +79,14 @@ export async function moveValuesOfFieldsJoiningTranslation(
       present.add(column);
     }
   }
-  const plan =
-    present.size > 0
-      ? buildFieldsJoiningTranslationStatements({
-          ...planArgs,
-          companionColumns: present,
-        })
-      : first;
+  // The plan that runs is built over the main table as the database has it, so each companion
+  // column it adds or creates takes what its main column carries (`carriedDefinition`): read only
+  // once a field is known to join.
+  const plan = buildFieldsJoiningTranslationStatements({
+    ...planArgs,
+    liveMain: await liveColumnsOf(adapter, args.tableName),
+    ...(present.size > 0 ? { companionColumns: present } : {}),
+  });
   for (const statement of plan.statements) {
     await adapter.executeQuery(statement);
   }
