@@ -35,7 +35,11 @@ vi.mock("@aws-sdk/client-s3", () => {
     S3Client,
     GetObjectCommand: class {},
     HeadObjectCommand: class {},
-    PutObjectCommand: class {},
+    // Keeps what it was built with, for the cases that check the key and
+    // type a file is written under.
+    PutObjectCommand: class {
+      constructor(readonly input: unknown) {}
+    },
     DeleteObjectCommand: class {},
     DeleteObjectsCommand: class {},
     ListObjectsV2Command: class {},
@@ -437,5 +441,37 @@ describe("S3StorageAdapter — configuration is checked at first use", () => {
     const url = adapter.getPublicUrl("f.woff2");
     expect(url).toBe("https://test-bucket.s3.us-east-1.amazonaws.com/f.woff2");
     expect((adapter as unknown as { client: unknown }).client).toBeNull();
+  });
+});
+
+describe("S3StorageAdapter.uploadAt", () => {
+  it("writes the bytes at exactly the key it is given, with their type", async () => {
+    const { adapter, send } = adapterWithSend();
+    send.mockResolvedValueOnce({});
+    const key = "media/2026/11/0b6f-photo.jpg.w640.webp";
+
+    const result = await adapter.uploadAt(key, Buffer.from("copy"), {
+      mimeType: "image/webp",
+    });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    const input = (send.mock.calls[0][0] as { input: Record<string, unknown> })
+      .input;
+    expect(input).toMatchObject({
+      Bucket: "test-bucket",
+      Key: key,
+      ContentType: "image/webp",
+    });
+    expect(result).toEqual({ url: adapter.getPublicUrl(key), path: key });
+  });
+
+  it("fails when the bucket refuses the write, so nothing is reported kept", async () => {
+    const { adapter, send } = adapterWithSend();
+    send.mockRejectedValueOnce(new Error("AccessDenied"));
+    await expect(
+      adapter.uploadAt("media/a.jpg.w96.jpg", Buffer.from("x"), {
+        mimeType: "image/jpeg",
+      })
+    ).rejects.toThrow("AccessDenied");
   });
 });

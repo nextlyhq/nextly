@@ -5,7 +5,7 @@
 // Code-first entities show a "Read-only" badge next to the name. Their Save
 // stays disabled, but Settings stays enabled so the config can be inspected
 // read-only.
-import { Badge, Button } from "@nextlyhq/ui";
+import { Badge, Button, buttonVariants } from "@nextlyhq/ui";
 import { ChevronLeft } from "lucide-react";
 import type { JSX } from "react";
 
@@ -34,6 +34,11 @@ type Props = {
   onAddField: () => void;
   onOpenSettings: () => void;
   onSave: () => void;
+  /**
+   * Where the Page Builder opens for this entity, for one laid out from blocks
+   * and saved; absent, nothing is offered.
+   */
+  pageBuilderHref?: string;
 };
 
 /**
@@ -68,6 +73,7 @@ export function BuilderToolbar({
   onAddField,
   onOpenSettings,
   onSave,
+  pageBuilderHref,
 }: Props): JSX.Element {
   const saveDisabled = unsavedCount === 0 || locked;
   const lockedSaveTitle = locked
@@ -126,6 +132,16 @@ export function BuilderToolbar({
             <Plus className="h-4 w-4" />
             <span className="hidden sm:inline">Add field</span>
           </Button>
+        )}
+        {/* The way from the schema to the pages it lays out: a link through the
+            admin's history, so leaving with changes pending asks first. */}
+        {pageBuilderHref !== undefined && (
+          <Link
+            href={pageBuilderHref}
+            className={buttonVariants({ variant: "outline", size: "sm" })}
+          >
+            Open the Page Builder
+          </Link>
         )}
         {/* Settings stays enabled when locked so the config can be viewed
             read-only; only Save is gated. */}

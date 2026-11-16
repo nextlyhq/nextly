@@ -25,7 +25,6 @@ import type {
   ComponentDocument,
   ComponentExposure,
   PlanWarning,
-  SpacingMode,
 } from "@nextlyhq/blocks-engine";
 import type { SavedComponent, SavedPattern } from "@nextlyhq/builder";
 import type { HookWarning } from "nextly/config";
@@ -799,29 +798,11 @@ export interface StoredSiteStyle {
   readonly classes: unknown;
   readonly breakpoints: unknown;
   /**
-   * The site's recorded spacing model, `classic` or `gaps`, or `null` when
-   * none is recorded and the engine's default applies. Kept in the plugin's own
-   * table rather than the Single; optional so a record without it reads as
-   * nothing recorded.
-   */
-  readonly spacingMode?: unknown;
-  /**
    * The Single's version, as the same read gave it: what a save of a section
    * made from this read sends back, so a save made in between refuses it
    * rather than being overwritten. Absent where the server gives none.
    */
   readonly _rev?: string;
-}
-
-/**
- * Where the owner chooses the site's spacing model: `POST` with
- * `{ mode: "classic" | "gaps" }`, answered with `{ message, item: { spacingMode } }`.
- */
-export const SPACING_MODE_ROUTE_PATH = "/site/style/spacing-mode";
-
-/** What the spacing-model route answers inside its mutation envelope's `item`. */
-export interface SpacingModeResult {
-  readonly spacingMode: SpacingMode;
 }
 
 /** Where Settings' Site tab reads what it shows and what this caller may change. */

@@ -22,6 +22,7 @@ import {
   type TrustedHtml,
 } from "./services/liquid-engine";
 import { escapeHtml } from "./services/template-engine";
+import { WRITTEN_LINK_CLASS } from "./written/document";
 
 // ============================================================
 // Email-safe fonts
@@ -289,7 +290,8 @@ function write(value: unknown): string {
  */
 export function brandVariables(
   settings: BrandSettings,
-  chrome: LayoutChrome
+  chrome: LayoutChrome,
+  options: { writtenLinks?: boolean } = {}
 ): BrandVariables {
   const stack = fontStack(settings.fontFamily);
   return {
@@ -305,7 +307,7 @@ export function brandVariables(
           : escapeHtml(settings.footerText).replace(/\r?\n/g, "<br>")
       ),
       links: markHtml(linksMarkup(settings, stack)),
-      darkMode: markHtml(darkModeRules(settings)),
+      darkMode: markHtml(darkModeRules(settings, options.writtenLinks)),
     },
   };
 }
@@ -316,8 +318,13 @@ export function brandVariables(
  * colour the site chose is the site's in dark mode too, since the settings
  * have no dark palette, and the card's light text goes with the card's
  * colour so it is never set on a background it was not chosen for.
+ *
+ * A written email's links (`writtenLinks`) are in the accent, which at its
+ * starting colour is all but invisible on the dark card, so they take the
+ * card's light text while both are the starting ones. Only a written email
+ * asks for that rule: every other email's layout is unchanged.
  */
-function darkModeRules(settings: BrandSettings): string {
+function darkModeRules(settings: BrandSettings, writtenLinks = false): string {
   const rules: string[] = [];
   if (settings.backgroundColor === STARTING_BRAND.backgroundColor) {
     rules.push(".email-bg { background-color: #1a1a2e !important; }");
@@ -327,6 +334,11 @@ function darkModeRules(settings: BrandSettings): string {
       ".email-card { background-color: #27272a !important; }",
       ".email-card h1, .email-card h2, .email-card p { color: #fafafa !important; }"
     );
+    if (writtenLinks && settings.accentColor === STARTING_BRAND.accentColor) {
+      rules.push(
+        `.email-card .${WRITTEN_LINK_CLASS} { color: #fafafa !important; }`
+      );
+    }
   }
   // Indented as the rules sit in the layout's style block.
   return rules.join("\n      ");

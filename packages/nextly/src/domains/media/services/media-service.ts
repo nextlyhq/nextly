@@ -51,6 +51,8 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
+import { visitorReadsSystemResource } from "../../../auth/resource-readable";
+import { SYSTEM_READ_POLICY } from "../../../domains/auth/system-write-policy";
 import type { RetentionRunner } from "../../../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../../../domains/webhooks/after-drain";
 import { isUnscopedRecordingActive } from "../../../domains/webhooks/recording-activation";
@@ -91,6 +93,13 @@ import {
   type MediaView,
   type Media as LegacyMedia,
 } from "../../../types/media";
+import {
+  copyOfMedia,
+  mediaCopyStorage,
+  mediaIdOfCopySource,
+  type MediaCopy,
+  type MediaCopySource,
+} from "../copies/media-copies";
 import type { MediaLibraryCounts } from "../media-library-query";
 import type { DeleteClaim, PendingMediaDeletes } from "../pending-delete";
 import { withMediaRevalidationBatch } from "../revalidate-media";
@@ -625,6 +634,53 @@ export class MediaService {
     }
 
     return this.mapToMediaFile(result.data);
+  }
+
+  /**
+   * A resized copy of an image, by its address, at the allowed width nearest
+   * `width`: made the first time it is fetched and kept beside the original.
+   * `null` when no copy can be had, and the original is to be used: an
+   * address that is not a media item's, an image type that is not resized, a
+   * storage that cannot keep copies, or an install without the image library.
+   *
+   * Reads like `findById`, so a missing item is NOT_FOUND. Whoever calls it
+   * has decided the caller may read the item; the copy route serves it only
+   * to whoever may read the item.
+   *
+   * @experimental
+   */
+  async copyOf(
+    source: MediaCopySource,
+    width: number,
+    context: RequestContext = {}
+  ): Promise<MediaCopy | null> {
+    const id = mediaIdOfCopySource(source);
+    if (id === undefined) return null;
+    let item: MediaFile;
+    try {
+      item = await this.findById(id, context);
+    } catch (error) {
+      // An address naming an item that is gone is used as it is, like any
+      // other address that is not a media item's; an id asked for directly
+      // is not found, as `findById` answers.
+      if ("url" in source && NextlyError.isNotFound(error)) return null;
+      throw error;
+    }
+    // A copy's address is on the public media route, which serves copies
+    // only while a visitor may read media. Where one may not, the address
+    // could never load, so the original is used as it is.
+    if (
+      !(await visitorReadsSystemResource(
+        SYSTEM_READ_POLICY.media.read.resource
+      ))
+    ) {
+      return null;
+    }
+    return await copyOfMedia(item, width, {
+      storage: mediaCopyStorage(),
+      processor: this.imageProcessor,
+      logger: this.logger,
+    });
   }
 
   /**

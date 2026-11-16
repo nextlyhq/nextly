@@ -14,7 +14,22 @@ import type { IStorageAdapter, UploadOptions } from "../types";
 /** The stand-in storage, by the adapter it keys and addresses files as. */
 export class Bucket implements IStorageAdapter {
   readonly files = new Map<string, Buffer>();
-  constructor(private readonly scheme: "s3" | "vercel-blob" | "uploadthing") {}
+  /**
+   * Writing at a key of core's choosing, as the S3 and Vercel Blob adapters
+   * can; UploadThing chooses every key itself, so its stand-in has none.
+   */
+  readonly uploadAt?: IStorageAdapter["uploadAt"];
+  constructor(private readonly scheme: "s3" | "vercel-blob" | "uploadthing") {
+    if (scheme !== "uploadthing") {
+      this.uploadAt = async (filePath, buffer) => {
+        this.files.set(filePath, buffer);
+        return { url: this.getPublicUrl(filePath), path: filePath };
+      };
+    }
+  }
+  async read(filePath: string) {
+    return this.files.get(filePath) ?? null;
+  }
 
   async upload(buffer: Buffer, options: UploadOptions) {
     if (this.scheme === "s3") {

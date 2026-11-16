@@ -31,9 +31,6 @@ vi.mock("../site-style-client", () => ({
   useSaveSiteStyle: () => ({
     save: vi.fn(() => Promise.resolve({ saved: true, issues: [] })),
   }),
-  useSaveSpacingMode: () => ({
-    save: () => Promise.resolve({ saved: true, refreshed: true }),
-  }),
   useHeldSiteStyle: () => ({ extend: () => {}, release: async () => {} }),
   useFontCatalogueClient: () => ({
     load: async () => ({ families: [], previewBase: "", fetchedAt: "" }),

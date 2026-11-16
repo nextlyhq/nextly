@@ -407,7 +407,7 @@ function headlineToEnd(prev: BuilderField[]): BuilderField[] {
     prev,
     field("headline").id,
     {},
-    { entityReadOnly: false, topLevelReservesNames: true }
+    { entityReadOnly: false, surface: "collection" }
   );
   return verdict.allowed ? verdict.fields : prev;
 }

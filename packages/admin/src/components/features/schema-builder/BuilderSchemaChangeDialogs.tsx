@@ -19,6 +19,7 @@ import type {
 } from "@admin/services/schemaApi";
 
 import type { BuilderKind } from "./builder-config";
+import { CreateEntityConfirmDialog } from "./CreateEntityConfirmDialog";
 import { SafeChangeConfirmDialog } from "./SafeChangeConfirmDialog";
 import { SchemaChangeDialog } from "./SchemaChangeDialog";
 import type { SchemaChangeConfirmation } from "./types";
@@ -38,6 +39,11 @@ type Props = {
     resolutions: Record<string, FieldResolution>,
     renameResolutions: SchemaRenameResolution[]
   ) => void;
+  /**
+   * The entity is not on the server yet, so this save is its create. Its
+   * review says what will be created, rather than judging a change.
+   */
+  creating?: boolean;
 };
 
 /**
@@ -65,10 +71,26 @@ export function BuilderSchemaChangeDialogs({
   kind,
   entityName,
   onConfirm,
+  creating = false,
 }: Props): JSX.Element | null {
   const { preview, previewId, isOpen, isApplying, setOpen } = confirmation;
 
   if (!preview) return null;
+
+  if (creating) {
+    return (
+      <CreateEntityConfirmDialog
+        key={previewId}
+        open={isOpen}
+        onOpenChange={setOpen}
+        kind={kind}
+        entityName={entityName}
+        changes={preview.changes}
+        onConfirm={() => onConfirm({}, [])}
+        isApplying={isApplying}
+      />
+    );
+  }
 
   if (isSafeChange(preview)) {
     return (
