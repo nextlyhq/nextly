@@ -937,16 +937,23 @@ export class EmailService extends BaseService {
       // strings, so only a string reaches it.
       const text = (value: unknown) =>
         typeof value === "string" ? value : undefined;
-      const result = codeFn({
-        user: {
-          name: text(variables.userName) ?? null,
-          // A code-first template renders for one user; with several `to`
-          // addresses it is given the first, and `send` delivers to all.
-          email: firstAddress(to),
-        },
-        token: text(variables.token),
-        url: text(variables.resetLink) ?? text(variables.verifyLink),
-      });
+      // A code version that throws is the template's failure, as a stored
+      // template that cannot render is.
+      let result: ReturnType<typeof codeFn>;
+      try {
+        result = codeFn({
+          user: {
+            name: text(variables.userName) ?? null,
+            // A code-first template renders for one user; with several `to`
+            // addresses it is given the first, and `send` delivers to all.
+            email: firstAddress(to),
+          },
+          token: text(variables.token),
+          url: text(variables.resetLink) ?? text(variables.verifyLink),
+        });
+      } catch (error) {
+        throw templateCaused(error);
+      }
 
       // The code supplies the content; how it is delivered (provider, From,
       // Reply-To, attachments) stays the stored template's settings, which

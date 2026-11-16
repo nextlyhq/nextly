@@ -141,6 +141,8 @@ export interface QueuedEmailDetail extends QueuedEmailActivity {
   templateVersion: DeliveryTemplateVersionRead | null;
   /** Every delivery its attempts recorded, oldest first. */
   timeline: DeliveryAttempt[];
+  /** Whether the timeline stopped at its limit, its oldest left out. */
+  timelineTruncated: boolean;
 }
 
 /** @experimental One queued email, as Activity lists it. */
@@ -209,8 +211,16 @@ export interface QueuedEmailOverdue {
 /** The longest page a list returns. */
 const MAX_LIMIT = 100;
 const DEFAULT_LIMIT = 50;
-/** The most delivery records one timeline reads. */
+/** The most records one recipient's timeline reads: far past any attempt limit. */
 const MAX_ATTEMPT_ROWS = 500;
+/** Records read per page of a queued email's timeline. */
+const TIMELINE_PAGE = 500;
+/**
+ * The most records a queued email's timeline returns: every attempt of the
+ * largest send the queue takes, many times over; past it, the answer says
+ * the timeline was cut.
+ */
+const MAX_TIMELINE_ROWS = 10_000;
 /** The most templates one last-sent read names. */
 const MAX_SLUGS = 200;
 
@@ -561,18 +571,18 @@ export class EmailDeliveryActivity {
     const id = given.toLowerCase();
     const [record] = await this.deliveries.list({ id, limit: 1 });
     if (!record) return null;
-    const timeline = record.queuedId
-      ? (
-          await this.deliveries.list({
+    // The same recipient's records across its queued email's attempts, by
+    // the stored digest. An erased recipient has none left to match by, and
+    // every erased one would read alike, so its record stands alone.
+    const timeline =
+      record.queuedId && record.recipientHash !== null
+        ? await this.deliveries.list({
             queuedId: record.queuedId,
+            recipientHash: record.recipientHash,
+            recipientKind: record.recipientKind,
             limit: MAX_ATTEMPT_ROWS,
           })
-        ).filter(
-          other =>
-            other.recipientKind === record.recipientKind &&
-            other.recipientHash === record.recipientHash
-        )
-      : [record];
+        : [record];
     return {
       ...deliveryOf(record),
       providerMessageId: record.messageId,
@@ -593,19 +603,47 @@ export class EmailDeliveryActivity {
     const [row] = await this.queueRows([eq(queue.id, id)], 1);
     if (!row) return null;
     const jobs = await this.jobsOf(row.jobId ? [row.jobId] : []);
-    const attempts = [
-      ...(await this.deliveries.list({
-        queuedId: row.id,
-        limit: MAX_ATTEMPT_ROWS,
-      })),
-    ].reverse();
+    const { records, truncated } = await this.timelineOf(row.id);
+    const attempts = [...records].reverse();
     const latest = attempts.at(-1);
     return {
       ...queuedOf(row, row.jobId ? jobs.get(row.jobId) : undefined),
       templateCaused: templateCausedOf(row.failure),
       templateVersion: latest ? latest.templateVersion : null,
       timeline: attempts.map(attemptOf),
+      timelineTruncated: truncated,
     };
+  }
+
+  /**
+   * Every delivery record of a queued email, newest first, read a page at a
+   * time up to `MAX_TIMELINE_ROWS`; past it, the newest are kept and the
+   * answer says it stopped.
+   */
+  private async timelineOf(
+    queuedId: string
+  ): Promise<{ records: EmailDeliveryRecord[]; truncated: boolean }> {
+    const records: EmailDeliveryRecord[] = [];
+    let before: { createdAt: Date; id: string } | undefined;
+    for (;;) {
+      const page = await this.deliveries.list({
+        queuedId,
+        before,
+        limit: TIMELINE_PAGE + 1,
+      });
+      records.push(...page.slice(0, TIMELINE_PAGE));
+      if (page.length <= TIMELINE_PAGE) {
+        return { records, truncated: false };
+      }
+      if (records.length >= MAX_TIMELINE_ROWS) {
+        return {
+          records: records.slice(0, MAX_TIMELINE_ROWS),
+          truncated: true,
+        };
+      }
+      const last = records[records.length - 1];
+      before = { createdAt: last.createdAt, id: last.id };
+    }
   }
 
   /** The attempt counts and due times of the jobs `ids`, by id. */

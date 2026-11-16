@@ -347,5 +347,59 @@ for (const dialect of getConfiguredTestDialects()) {
         ).toBeNull();
       }
     });
+
+    it("keeps two erased recipients' timelines apart", async () => {
+      const t = await boot(dialect);
+      const queued = await t.nextly.email.queue({
+        to: ["first@example.com", "second@example.com"],
+        subject: SUBJECT,
+        html: BODY,
+      });
+      const deliveries = t.getService(
+        "emailDeliveryService"
+      ) as unknown as EmailDeliveryService;
+      await deliveries.eraseRecipient("first@example.com");
+      await deliveries.eraseRecipient("second@example.com");
+
+      const { items } = await t.nextly.emailDeliveries.find({});
+      const ours = items.filter(item => item.queuedId === queued.id);
+      expect(ours).toHaveLength(2);
+      for (const item of ours) {
+        expect(item.erased).toBe(true);
+        const detail = await t.nextly.emailDeliveries.findByID({ id: item.id });
+        // Its own record alone: nothing left says which attempts were its.
+        expect(detail?.timeline.map(attempt => attempt.id)).toEqual([item.id]);
+      }
+    });
+
+    it("reads a queued email's whole timeline, past one page of records", async () => {
+      const t = await boot(dialect);
+      const queued = await t.nextly.email.queue({
+        to: "dana@example.com",
+        subject: SUBJECT,
+        html: BODY,
+      });
+      // As many records as a page and more, each naming this email.
+      const deliveries = t.getService(
+        "emailDeliveryService"
+      ) as unknown as EmailDeliveryService;
+      await deliveries.recordAll(
+        Array.from({ length: 600 }, (_, n) => ({
+          to: `r${n}@example.com`,
+          providerType: "scripted-activity",
+          status: "sent" as const,
+          queuedId: queued.id,
+        }))
+      );
+
+      const detail = await t.nextly.emailDeliveries.findQueuedByID({
+        id: queued.id,
+      });
+      expect(detail?.timeline).toHaveLength(601);
+      expect(detail?.timelineTruncated).toBe(false);
+      expect(new Set(detail?.timeline.map(attempt => attempt.id)).size).toBe(
+        601
+      );
+    }, 120_000);
   });
 }

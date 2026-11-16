@@ -238,6 +238,12 @@ export interface ListDeliveriesOptions {
   id?: string;
   /** The attempts of one queued email. */
   queuedId?: string;
+  /**
+   * One recipient's records, by the digest as stored and their kind: the
+   * same recipient across a queued email's attempts. Never an address.
+   */
+  recipientHash?: string;
+  recipientKind?: EmailDeliveryRecipientKind;
   /** Hash of the address to look for; callers pass an address, not a hash. */
   recipient?: string;
   status?: EmailDeliveryStatus;
@@ -994,6 +1000,12 @@ export class EmailDeliveryService extends BaseService {
       options.id !== undefined ? eq(this.deliveries.id, options.id) : undefined,
       options.queuedId !== undefined
         ? eq(this.deliveries.queuedId, options.queuedId)
+        : undefined,
+      options.recipientHash !== undefined
+        ? eq(this.deliveries.recipientHash, options.recipientHash)
+        : undefined,
+      options.recipientKind !== undefined
+        ? eq(this.deliveries.recipientKind, options.recipientKind)
         : undefined,
       options.templateSlug !== undefined
         ? eq(this.deliveries.templateSlug, options.templateSlug)
