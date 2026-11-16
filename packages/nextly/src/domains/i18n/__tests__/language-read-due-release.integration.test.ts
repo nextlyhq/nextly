@@ -146,17 +146,15 @@ describe.each(getConfiguredTestDialects())(
     it("finds a document a due release publishes with the language filter", async () => {
       const t = await boot(dialect);
       const id = await draftInRelease(t, PAST);
-      const listed = async (state: string) =>
+      const listed = async (state: "published" | "missing") =>
         (
-          (
-            await handlerOf(t).listEntries({
-              collectionName: SLUG,
-              locale: "en",
-              where: { _translated: { locale: "es", state } },
-              limit: 50,
-            })
-          ).data?.docs ?? []
-        ).map(row => (row as { id: string }).id);
+          await t.nextly.find({
+            collection: SLUG,
+            locale: "en",
+            status: "published",
+            where: { _translated: { locale: "es", state } } as never,
+          })
+        ).items.map(item => item.id);
       expect(await listed("published")).toEqual([id]);
       expect(await listed("missing")).toEqual([]);
     }, 90_000);
