@@ -392,8 +392,9 @@ describeEachDialect(
 
     // MySQL and SQLite compare column names without regard to case, so a column spelled
     // `HEADLINE` is the column a rename to `headline` would collide with. PostgreSQL keeps the two
-    // apart; there the hand-made `HEADLINE` column is one the save's own migration file finds the
-    // table holding beside its snapshot, so the save is refused as drift, with nothing changed.
+    // apart (the rule itself: rename-target.test.ts); there the hand-made `HEADLINE` column is one
+    // the save's own migration file finds the table holding beside its snapshot, so the save is
+    // refused as drift, with nothing changed.
     it("judges a column in the way by the database's rule for the case of a name", async () => {
       await hero(false);
       await query(
@@ -421,32 +422,6 @@ describeEachDialect(
       expect(await registeredFieldNames()).toEqual(["heading", "body"]);
       expect(await headingRead(false)).toBe("Kept");
     });
-
-    // PostgreSQL only. A save that carries values (translation turned on here) keeps the service's
-    // own statements, which judge the hand-made `HEADLINE` column by PostgreSQL's case rule, apart
-    // from `headline`, and the rename goes through.
-    it.skipIf(dialect !== "postgresql")(
-      "lets a rename past a column that differs only in case on PostgreSQL, in a save that carries values",
-      async () => {
-        await hero(false);
-        await query(
-          `ALTER TABLE ${q("single_hero")} ADD COLUMN ${q("HEADLINE")} TEXT`
-        );
-
-        const refused = await refusal(
-          save(
-            [
-              { name: "headline", type: "text" },
-              { name: "body", type: "text" },
-            ],
-            { localized: true }
-          )
-        );
-
-        expect(refused).toBeUndefined();
-        expect(await registeredFieldNames()).toEqual(["headline", "body"]);
-      }
-    );
 
     it("saves a rename this database already made", async () => {
       await hero(false);

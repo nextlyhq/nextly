@@ -236,10 +236,12 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
       ]);
     }
   );
-  // MySQL only: it commits each schema statement, so a rename can land before a later statement
-  // of the same save is refused. PostgreSQL rolls the whole save back, and SQLite skips the name.
+  // MySQL only, where it commits each schema statement. A hand-made index in the Single's table
+  // holds the name the save's unique index takes: the save's own migration file finds the table
+  // differing from its snapshot and is refused as drift before its rename runs, so nothing lands
+  // part-way, and the save goes through once the hand-made index is gone.
   it.skipIf(dialect !== "mysql")(
-    "finishes a save whose rename landed before a later statement was refused",
+    "refuses as drift a rename beside a hand-made index, changing nothing, and saves it once the index is gone",
     async () => {
       await heroWith(
         [
@@ -260,8 +262,8 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
       ];
 
       const refused = await refusal(save(fields));
-      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
-      expect(await columnsOf("single_hero")).toContain("headline");
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+      expect(await columnsOf("single_hero")).not.toContain("headline");
 
       await query(`DROP INDEX ${q(blocking)} ON ${q("single_hero")}`);
       await save(fields);
@@ -277,11 +279,11 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
     }
   );
 
-  // MySQL only, as above. The index this save adds is refused after the rename lands and before
-  // the unique index is dropped; the retry has to find that index on the renamed column, where it
-  // keeps the name it was created under.
+  // MySQL only, as above: a hand-made index holding the name the save's index takes refuses the
+  // save as drift before its rename runs. Once it is gone, the save renames the column and takes
+  // its Unique off, the index found on the renamed column under the name it was created with.
   it.skipIf(dialect !== "mysql")(
-    "turns Unique off on the retry of a save whose rename landed before a later statement was refused",
+    "refuses as drift a rename turning Unique off beside a hand-made index, then turns it off once the index is gone",
     async () => {
       await heroWith(
         [
@@ -302,8 +304,8 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
       ];
 
       const refused = await refusal(save(fields));
-      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
-      expect(await columnsOf("single_hero")).toContain("sku");
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+      expect(await columnsOf("single_hero")).not.toContain("sku");
 
       await query(`DROP INDEX ${q(blocking)} ON ${q("single_hero")}`);
       await save(fields);
