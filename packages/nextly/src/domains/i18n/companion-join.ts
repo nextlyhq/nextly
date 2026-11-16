@@ -25,6 +25,11 @@ import { DOCUMENT_REVISION_COLUMN } from "../versions/document-revision";
 import { draftsKeptByPart } from "../versions/part-drafts";
 
 import { COMPANION_UPDATED_AT_COLUMN } from "./companion-columns";
+import {
+  documentLanguageKey,
+  languageOutOfDate,
+  type FieldProvenance,
+} from "./provenance/field-status";
 import type { CompanionReadiness } from "./runtime/companion-readiness";
 import { buildCompanionStampTable } from "./runtime/companion-stamp-table";
 import type { TranslationFilterState } from "./translation-filter-states";
@@ -1012,8 +1017,20 @@ export interface LocaleTranslationMeta {
    * what does not apply — and here the distinction carries weight, because "not stale" and "no
    * timestamps to compare" are different answers and only one of them is a claim about the
    * content. A row written before `_updated_at` existed is unknown, never up to date.
+   *
+   * Where the language's values have a recorded origin, it is decided field by field instead
+   * (`fields`): stale when any field's source changed after it was made from it, and not stale
+   * when every translated field is known to be current, whatever the stamps say.
    */
   stale?: boolean;
+  /**
+   * Where each of this language's values came from, by field name, and whether its source changed
+   * since (`outOfDate`). Absent where nothing is recorded for the language: values written before
+   * origins were recorded, or a site whose table is not there yet.
+   *
+   * @experimental Until per-field provenance is complete.
+   */
+  fields?: Record<string, FieldProvenance>;
 }
 
 export interface TranslationStatusArgs {
@@ -1038,6 +1055,11 @@ export interface TranslationStatusArgs {
    * is known — never that everything is current.
    */
   staleness?: { companionTableName: string; dialect: SupportedDialect };
+  /**
+   * Each row's fields' provenance by language, keyed by `documentLanguageKey`
+   * (`fieldProvenanceOf`). Omitted, every language is judged by its stamp alone.
+   */
+  fieldProvenance?: ReadonlyMap<string, Record<string, FieldProvenance>>;
   idKey?: string;
   /** See `readiness` on {@link PopulateCompanionArgs}. */
   readiness: CompanionReadiness | undefined;
@@ -1239,6 +1261,9 @@ export async function populateTranslationStatus(
         statusValues: args.statusValues,
         isStale: (locale: string) =>
           staleKeys.has(`${String(row[idKey])}::${locale}`),
+        fields: args.fieldProvenance?.get(
+          documentLanguageKey(String(row[idKey]), code)
+        ),
       });
     }
     markPendingChanges(
@@ -1361,6 +1386,8 @@ function buildLocaleMeta(args: {
    * for, and the answer to both is the same — do not mark it.
    */
   isStale: (locale: string) => boolean;
+  /** The language's fields' provenance, where recorded. */
+  fields?: Record<string, FieldProvenance>;
 }): LocaleTranslationMeta {
   const { code, perLocaleRows, localizedFields, defaultLocale, hasStatus } =
     args;
@@ -1386,7 +1413,19 @@ function buildLocaleMeta(args: {
   // same-second writes would make every source locale report itself stale — so the state the
   // guard asserts is spelled out rather than inferred. No test separates the two mechanisms, and
   // none can while both hold.
-  if (code !== defaultLocale && hasContent && args.isStale(code)) {
+  if (args.fields !== undefined) entry.fields = args.fields;
+  // Field by field where the origins are known; the language-level stamp only where they are not.
+  const translatedFields = companionRow
+    ? localizedFields
+        .filter(f => !isBlank(companionRow[f.column]))
+        .map(f => f.name)
+    : [];
+  const byFields = languageOutOfDate(args.fields, translatedFields);
+  if (
+    code !== defaultLocale &&
+    hasContent &&
+    (byFields ?? args.isStale(code))
+  ) {
     entry.stale = true;
   }
   return entry;

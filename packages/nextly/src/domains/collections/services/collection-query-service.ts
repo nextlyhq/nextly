@@ -178,6 +178,8 @@ import {
   localizationNow,
 } from "../../i18n/localization-source";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
+import { fieldProvenanceOf } from "../../i18n/provenance/field-status";
+import { translationProvenancePresent } from "../../i18n/provenance/record-provenance";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   isCompanionReady,
@@ -1333,10 +1335,25 @@ export class CollectionQueryService extends BaseService {
       this.adapter,
       companion
     );
+    // Each row's fields' provenance, for the page in one read: where it is
+    // there, each language is judged field by field rather than by its stamp.
+    const fieldProvenance = (await translationProvenancePresent(
+      this.adapter,
+      this.logger
+    ))
+      ? await fieldProvenanceOf(
+          this.adapter,
+          { scopeKind: "collection", scopeSlug: collectionName },
+          rows
+            .map(r => r.id)
+            .filter((id): id is string => typeof id === "string")
+        )
+      : undefined;
     await populateTranslationStatus({
       db: this.db as never,
       companionTable: companion.table,
       pendingChangeLocales,
+      fieldProvenance,
       readiness,
       localizedFields: companion.localizedFields,
       rows,

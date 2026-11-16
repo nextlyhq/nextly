@@ -150,6 +150,8 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
+import { fieldProvenanceOf } from "../../i18n/provenance/field-status";
+import { translationProvenancePresent } from "../../i18n/provenance/record-provenance";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
@@ -1897,10 +1899,22 @@ export class SingleQueryService extends BaseService {
       this.adapter,
       companion
     );
+    // The document's fields' provenance: where it is there, each language is
+    // judged field by field rather than by its stamp, as on a collection.
+    const fieldProvenance =
+      typeof docId === "string" &&
+      (await translationProvenancePresent(this.adapter, this.logger))
+        ? await fieldProvenanceOf(
+            this.adapter,
+            { scopeKind: "single", scopeSlug: slug },
+            [docId]
+          )
+        : undefined;
     await populateTranslationStatus({
       db: this.adapter.getDrizzle(),
       companionTable: companion.table,
       pendingChangeLocales,
+      fieldProvenance,
       localizedFields: companion.localizedFields,
       rows: [doc],
       locales: this.localization.locales.map(l => l.code),
