@@ -50,6 +50,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 
 import { isCliEntry } from "./cli-entry.mjs";
 
@@ -187,65 +188,63 @@ const n = value => value.toLocaleString("en-US");
  * @returns {{ problems: string[], lowerable: string[], counted: number, listed: number, leftOut: Record<string, number> }}
  */
 export function judge(files, entries, { limit = LIMIT, packages = PACKAGES, list = ALLOWLIST } = {}) {
-  const problems = [];
-  const lowerable = [];
-  const byPath = new Map(files.map(file => [file.path, file]));
+  const options = { limit, packages, list };
+  const countedFiles = files.filter(file => file.reason === null);
   const tally = {};
-
-  for (const pkg of packages) {
-    if (!files.some(file => file.reason === null && file.path.startsWith(`${pkg}/`))) {
-      problems.push(
-        `${pkg} has no source file this check counts, so nothing in it was checked. If the package moved or was renamed, update PACKAGES in scripts/check-source-size.mjs.`
-      );
-    }
-  }
-
   for (const file of files) {
-    if (file.reason !== null) {
-      tally[file.reason] = (tally[file.reason] ?? 0) + 1;
-      continue;
-    }
-    const entry = entries.get(file.path);
-    if (file.lines <= limit) continue;
-    if (!entry) {
-      problems.push(
-        `${file.path} has ${n(file.lines)} lines, over the limit of ${n(limit)}. Split it into files of ${n(limit)} lines or fewer, each holding one area of what it does; keep this file as the entry that imports or re-exports the parts, so nothing that uses it has to change. Do not add it to ${list}: that list only shrinks.`
-      );
-    } else if (file.lines > entry.lines) {
-      problems.push(
-        `${file.path} has ${n(file.lines)} lines, ${n(file.lines - entry.lines)} more than the ${n(entry.lines)} ${list} allows it until it is split. A listed file may shrink but not grow: put the new code in a new file beside it, or take out as many lines as you added.`
-      );
-    } else if (file.lines < entry.lines) {
-      lowerable.push(
-        `${file.path} is down to ${n(file.lines)} lines; its line in ${list} (line ${entry.at}) can be lowered from ${entry.lines} to ${file.lines}.`
-      );
-    }
+    if (file.reason !== null) tally[file.reason] = (tally[file.reason] ?? 0) + 1;
   }
+  const verdicts = countedFiles.map(file => fileVerdict(file, entries.get(file.path), options));
+  const byPath = new Map(files.map(file => [file.path, file]));
+  const problems = [
+    ...packages.filter(pkg => !countedFiles.some(file => file.path.startsWith(`${pkg}/`))).map(
+      pkg => `${pkg} has no source file this check counts, so nothing in it was checked. If the package moved or was renamed, update PACKAGES in scripts/check-source-size.mjs.`
+    ),
+    ...verdicts.flatMap(verdict => verdict.problem ?? []),
+    ...[...entries].flatMap(([path, entry]) => entryProblem(path, entry, byPath.get(path), options) ?? []),
+  ];
+  const lowerable = verdicts.flatMap(verdict => verdict.lowerable ?? []);
+  return { problems, lowerable, counted: countedFiles.length, listed: entries.size, leftOut: tally };
+}
 
-  for (const [path, entry] of entries) {
-    const file = byPath.get(path);
-    const where = `${list} line ${entry.at}`;
-    if (!packages.some(pkg => path.startsWith(`${pkg}/`))) {
-      problems.push(
-        `${path} is listed (${where}) but is outside the packages this check reads (${packages.join(", ")}). Delete its line.`
-      );
-    } else if (!file) {
-      problems.push(
-        `${path} is listed (${where}) but no longer exists. If it was split or deleted, delete its line; if it moved and is still over ${n(limit)} lines, split it rather than listing the new path.`
-      );
-    } else if (file.reason !== null) {
-      problems.push(
-        `${path} is listed (${where}) but is not a file this check counts (it is ${file.reason === "not source" ? "not a script or stylesheet" : `a ${file.reason} file`}). Delete its line.`
-      );
-    } else if (file.lines <= limit) {
-      problems.push(
-        `${path} now has ${n(file.lines)} lines, within the limit of ${n(limit)}, so it leaves the list. Delete its line (${where}), and leave the blank lines around it in place.`
-      );
-    }
+/** What a counted file's size says against its allowlist entry, if it has one. */
+function fileVerdict(file, entry, { limit, list }) {
+  if (file.lines <= limit) return {};
+  if (!entry) {
+    return {
+      problem: `${file.path} has ${n(file.lines)} lines, over the limit of ${n(limit)}. Split it into files of ${n(limit)} lines or fewer, each holding one area of what it does; keep this file as the entry that imports or re-exports the parts, so nothing that uses it has to change. Do not add it to ${list}: that list only shrinks.`,
+    };
   }
+  if (file.lines > entry.lines) {
+    return {
+      problem: `${file.path} has ${n(file.lines)} lines, ${n(file.lines - entry.lines)} more than the ${n(entry.lines)} ${list} allows it until it is split. A listed file may shrink but not grow: put the new code in a new file beside it, or take out as many lines as you added.`,
+    };
+  }
+  if (file.lines < entry.lines) {
+    return {
+      lowerable: `${file.path} is down to ${n(file.lines)} lines; its line in ${list} (line ${entry.at}) can be lowered from ${entry.lines} to ${file.lines}.`,
+    };
+  }
+  return {};
+}
 
-  const counted = files.filter(file => file.reason === null).length;
-  return { problems, lowerable, counted, listed: entries.size, leftOut: tally };
+/** Why an allowlist entry should come out, or null while it still earns its place. */
+function entryProblem(path, entry, file, { limit, packages, list }) {
+  const where = `${list} line ${entry.at}`;
+  if (!packages.some(pkg => path.startsWith(`${pkg}/`))) {
+    return `${path} is listed (${where}) but is outside the packages this check reads (${packages.join(", ")}). Delete its line.`;
+  }
+  if (!file) {
+    return `${path} is listed (${where}) but no longer exists. If it was split or deleted, delete its line; if it moved and is still over ${n(limit)} lines, split it rather than listing the new path.`;
+  }
+  if (file.reason !== null) {
+    const kind = file.reason === "not source" ? "not a script or stylesheet" : `a ${file.reason} file`;
+    return `${path} is listed (${where}) but is not a file this check counts (it is ${kind}). Delete its line.`;
+  }
+  if (file.lines <= limit) {
+    return `${path} now has ${n(file.lines)} lines, within the limit of ${n(limit)}, so it leaves the list. Delete its line (${where}), and leave the blank lines around it in place.`;
+  }
+  return null;
 }
 
 function trackedFiles(base) {
@@ -310,10 +309,13 @@ export function main(base = root) {
 }
 
 if (isCliEntry(import.meta.url)) {
-  const at = process.argv.indexOf("--root");
-  if (at !== -1 && !process.argv[at + 1]) {
-    console.error("usage: node scripts/check-source-size.mjs [--root <dir>]");
+  let values;
+  try {
+    ({ values } = parseArgs({ options: { root: { type: "string" } } }));
+  } catch (error) {
+    // parseArgs refuses `--root` without a value, and any other option.
+    console.error(`${error.message}\nusage: node scripts/check-source-size.mjs [--root <dir>]`);
     process.exit(64);
   }
-  process.exit(main(at === -1 ? root : resolve(process.argv[at + 1])));
+  process.exit(main(values.root === undefined ? root : resolve(values.root)));
 }
