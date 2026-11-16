@@ -33,7 +33,13 @@ const WITH_EXTRA: Field[] = [...FIELDS, { name: "extra", type: "text" }];
 /** What the preview tells the Builder's review. */
 interface Preview {
   schemaVersion: number;
-  conversions?: { table: string; column: string; from: string; to: string }[];
+  conversions?: {
+    table: string;
+    column: string;
+    from: string;
+    to: string;
+    change: string;
+  }[];
   notices: string[];
 }
 
@@ -177,6 +183,16 @@ for (const kind of KINDS) {
         const shown = await preview();
         const keys = (shown.conversions ?? []).map(c => c.column).sort();
         expect(keys.length, JSON.stringify(shown)).toBeGreaterThan(0);
+        // Worded once, in plain words: the review's line reads the same phrase the conversion carries.
+        expect(shown.conversions).toContainEqual(
+          expect.objectContaining({
+            table: kind.table,
+            change: "adds an index on created_at",
+          })
+        );
+        expect(shown.notices).toContain(
+          `${kind.table} was made by an earlier Nextly version. This save brings it up to date: adds an index on created_at.`
+        );
 
         const refusal = await kind
           .apply(WITH_EXTRA, { schemaVersion: shown.schemaVersion })

@@ -487,9 +487,15 @@ export async function previewCollectionSave(
 /** A column a save brings from how an earlier version made it to the one mapping. */
 export interface ColumnConversion {
   table: string;
+  /** The key a save confirms the conversion by (`acknowledgedConversions`). */
   column: string;
   from: string;
   to: string;
+  /**
+   * What the conversion does, in plain words ("adds an index on created_at"): the review's line
+   * and the refusal's both read it as it is, so a conversion is worded in one place.
+   */
+  change: string;
 }
 
 /** What a save would do, for the person to review before confirming it. */
@@ -586,14 +592,65 @@ async function adoptionFor(
     conversions:
       mapped === undefined
         ? []
-        : diffSnapshots({ tables: [live] }, { tables: [mapped] }).map(op =>
-            conversionOf(table, op)
-          ),
+        : diffSnapshots({ tables: [live] }, { tables: [mapped] }).map(op => ({
+            ...conversionOf(table, op),
+            change: changePhraseOf(op),
+          })),
   };
 }
 
-/** One difference between an adopted table and the mapping, as a conversion. */
-function conversionOf(table: string, op: Operation): ColumnConversion {
+/** The columns an index covers, or what it covers when it is over an expression. */
+const indexedOn = (index: { columns: string[] }) =>
+  index.columns.length > 0 ? index.columns.join(", ") : "an expression";
+
+/**
+ * What each kind of difference does, in plain words, completing "Saving brings it up to date:".
+ * Keyed by every operation type, so a new one cannot reach the review unworded.
+ */
+const CHANGE_PHRASES: {
+  [K in Operation["type"]]: (op: Extract<Operation, { type: K }>) => string;
+} = {
+  add_table: op => `creates the table ${op.table.name}`,
+  drop_table: op => `removes the table ${op.tableName}`,
+  rename_table: op => `renames the table ${op.fromName} to ${op.toName}`,
+  add_column: op => `adds the column ${op.column.name}`,
+  drop_column: op => `removes the column ${op.columnName}`,
+  rename_column: op => `renames ${op.fromColumn} to ${op.toColumn}`,
+  change_column_type: op =>
+    `changes ${op.columnName} from ${op.fromType} to ${op.toType}`,
+  change_column_nullable: op =>
+    op.toNullable
+      ? `lets ${op.columnName} be empty`
+      : `requires a value in ${op.columnName}`,
+  change_column_default: op =>
+    op.toDefault === undefined
+      ? `removes the default of ${op.columnName}`
+      : `sets the default of ${op.columnName} to ${op.toDefault}`,
+  add_index: op =>
+    `adds ${op.index.unique ? "a unique index" : "an index"} on ${indexedOn(op.index)}`,
+  drop_index: op =>
+    `removes the ${op.index.unique ? "unique index" : "index"} on ${indexedOn(op.index)}`,
+  add_check: op => `adds the check ${op.check.name}`,
+  drop_check: op => `removes the check ${op.check.name}`,
+  add_foreign_key: op =>
+    `adds a reference from ${op.foreignKey.columns.join(", ")} to ${op.foreignKey.referencesTable}`,
+  drop_foreign_key: op =>
+    `removes the reference from ${op.foreignKey.columns.join(", ")} to ${op.foreignKey.referencesTable}`,
+  change_foreign_key_action: op =>
+    `changes what ${op.columnName} does when the ${op.referencesTable} row it points to is deleted or updated`,
+};
+
+/** What `op` does, in plain words: a conversion's `change`. */
+function changePhraseOf(op: Operation): string {
+  const phrase = CHANGE_PHRASES[op.type] as (op: Operation) => string;
+  return phrase(op);
+}
+
+/** One difference between an adopted table and the mapping, as a conversion keyed for confirming. */
+function conversionOf(
+  table: string,
+  op: Operation
+): Omit<ColumnConversion, "change"> {
   switch (op.type) {
     case "change_column_type":
       return { table, column: op.columnName, from: op.fromType, to: op.toType };
@@ -810,9 +867,9 @@ function refuseUnenforceableUniques(
   }
 }
 
-/** The line the review shows for a conversion. */
+/** The line the review and the refusal show for a conversion, around its `change` as it is. */
 function conversionNotice(conversion: ColumnConversion): string {
-  return `This save also converts ${conversion.column} from ${conversion.from} to ${conversion.to}, from an earlier Nextly version.`;
+  return `${conversion.table} was made by an earlier Nextly version. This save brings it up to date: ${conversion.change}.`;
 }
 
 /**
