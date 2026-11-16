@@ -92,6 +92,7 @@ import {
   useHostCommit,
   useSavePoint,
 } from "./use-host-commit";
+import { useDropKeptReadsOnSave } from "./canvas-source-check";
 import { useOpenAtSection } from "./use-open-at-section";
 import {
   useBoundCanvasRender,
@@ -358,6 +359,9 @@ function EditorBody<TFieldValues extends FieldValues>({
    * form's own dirtiness, which is what a reading of the whole document needs.
    */
   const savePoint = useSavePoint(editor);
+  // A save made here drops what the canvas kept at once: the page's own
+  // entry is among what it reads.
+  useDropKeptReadsOnSave(savePoint.savedAt);
   const documentDirty = useDocumentDirty(
     control,
     hasUnsavedWork(editor, inline, savePoint.savedAt)

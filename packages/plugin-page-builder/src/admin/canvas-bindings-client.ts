@@ -58,6 +58,7 @@ import {
   type CanvasEntryRead,
 } from "./editor/canvas-entry";
 import { onCanvasSourcesChanged } from "./canvas-sources";
+import { useCanvasSourceCheck } from "./editor/canvas-source-check";
 /**
  * What each answer's reads cost the page's allowance, by the bindings it
  * gave, so the editor's read meter adds the binding reads as the route made
@@ -466,6 +467,9 @@ export function useCanvasBindings(
   );
   // The ask as text: a new document that asks the same reads nothing new.
   const key = request === undefined ? "" : JSON.stringify(request);
+  // Saves made elsewhere to what this reads: asked once a minute at most
+  // while the builder is in sight, so a kept answer never outlives its data.
+  useCanvasSourceCheck(request, userId);
   const [answer, setAnswer] = useState<{
     readonly key: string;
     readonly userId: string;
