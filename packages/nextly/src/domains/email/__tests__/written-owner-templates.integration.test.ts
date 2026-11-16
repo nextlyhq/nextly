@@ -513,9 +513,11 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
       // As an override kept before base copies held their blocks.
       const { blocks: _blocks, ...withoutBlocks } = (await rows.getRow(id))
         .baseVersion;
-      const json = JSON.stringify(withoutBlocks).replace(/'/g, "''");
+      // Bound, not spliced into the SQL: MySQL reads a backslash in a string
+      // literal as an escape, which breaks the JSON's own `\n`.
       await store.exec(
-        `UPDATE ${store.q("email_templates")} SET ${store.q("base_version")} = '${json}' WHERE ${store.q("slug")} = 'orders-paid'`
+        `UPDATE ${store.q("email_templates")} SET ${store.q("base_version")} = ? WHERE ${store.q("slug")} = ?`,
+        [JSON.stringify(withoutBlocks), "orders-paid"]
       );
       const service = await boot(V2);
 
