@@ -145,6 +145,14 @@ export interface UseFieldBuilderReturn<T extends FieldValues = FieldValues> {
   /** The fields and settings shown, as the history holds them. */
   snapshot: BuilderSnapshot;
   /**
+   * Change every state the history holds alike, adding no step: a change that
+   * is no edit, such as an unsaved entity's address moving, which Undo must
+   * not take back.
+   */
+  rewriteSnapshots: (
+    change: (snapshot: BuilderSnapshot) => BuilderSnapshot
+  ) => void;
+  /**
    * Show `fields` with no history before them: a load, or a discard. With
    * `settings`, those are shown too; without, the settings shown stay.
    */
@@ -509,6 +517,13 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
     []
   );
 
+  const rewriteSnapshots = useCallback(
+    (change: (snapshot: BuilderSnapshot) => BuilderSnapshot) => {
+      setHistory(prev => ({ ...prev, states: prev.states.map(change) }));
+    },
+    []
+  );
+
   const clearHistory = useCallback((saved?: BuilderSnapshot, step?: number) => {
     setHistory(prev =>
       saved === undefined
@@ -591,6 +606,7 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
     settings,
     setSettings,
     snapshot,
+    rewriteSnapshots,
     resetFields,
     clearHistory,
     historyStep: currentId(history),

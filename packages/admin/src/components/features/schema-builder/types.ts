@@ -488,6 +488,9 @@ export interface BuilderFieldsApi {
   settings: BuilderSnapshot["settings"];
   setSettings: (next: BuilderSettingsValues) => void;
   snapshot: BuilderSnapshot;
+  rewriteSnapshots: (
+    change: (snapshot: BuilderSnapshot) => BuilderSnapshot
+  ) => void;
   resetFields: (
     fields: BuilderField[],
     settings?: BuilderSnapshot["settings"]

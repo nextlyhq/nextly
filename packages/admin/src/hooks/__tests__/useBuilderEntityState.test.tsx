@@ -70,6 +70,7 @@ function makeBuilder() {
         if (nextSettings !== undefined) settings = nextSettings;
       }
     ),
+    rewriteSnapshots: vi.fn(),
     clearHistory: vi.fn(),
     historyStep: 0,
     canUndo: false,

@@ -36,6 +36,7 @@ import {
 } from "@admin/hooks/queries";
 import { useBuilderEntityState } from "@admin/hooks/useBuilderEntityState";
 import { useBuilderFieldActions } from "@admin/hooks/useBuilderFieldActions";
+import { useBuilderSettingsChange } from "@admin/hooks/useBuilderSettingsChange";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
 import { useSchemaChangeConfirmation } from "@admin/hooks/useSchemaChangeConfirmation";
@@ -114,7 +115,9 @@ function singleSettings(single: ApiSingle): BuilderSettingsValues {
  */
 function unsavedSingle(entity: UnsavedEntity): ApiSingle {
   return {
-    id: `unsaved:single:${entity.address}`,
+    // The token, not the address: it is kept when the address moves, so
+    // the editor knows the entity as the same one under its new address.
+    id: `unsaved:single:${entity.token}`,
     slug: entity.address,
     label: entity.settings.singularName,
     tableName: "",
@@ -175,6 +178,7 @@ export default function SingleBuilderEditPage({
     savedFieldIds,
     pinFields,
     pinSettings,
+    moveAddress,
   } = useBuilderEntityState({
     entity: single,
     builder,
@@ -186,6 +190,18 @@ export default function SingleBuilderEditPage({
     // id tells them apart, so once saved the editor loads the server's afresh.
     identity: loaded => (unsaved ? loaded.id : loaded.slug),
     unsaved: unsaved !== undefined,
+  });
+
+  // A change of the settings is a step; an unsaved single's address
+  // moves it at once, outside the history.
+  const { onSettingsChange, unsavedAddress } = useBuilderSettingsChange({
+    kind: "single",
+    unsaved,
+    settings,
+    setSettings,
+    moveAddress,
+    editRoute: address =>
+      buildRoute(ROUTES.BUILDER_SINGLES_EDIT, { slug: address }),
   });
 
   const isLocked = single?.locked === true;
@@ -449,7 +465,8 @@ export default function SingleBuilderEditPage({
       savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}
-      onSettingsChange={setSettings}
+      onSettingsChange={onSettingsChange}
+      unsavedAddress={unsavedAddress}
       active={active}
       onActiveChange={setActive}
       onDuplicateField={handleDuplicateField}

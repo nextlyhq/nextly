@@ -11,7 +11,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 
-import { unsavedAddresses } from "@admin/lib/builder/unsaved-entities";
+import { unsavedAddressesBesides } from "@admin/lib/builder/unsaved-entities";
 import {
   addressCheckApi,
   type AddressCheckAnswer,
@@ -91,9 +91,7 @@ export async function checkAddressAgain(
   kind: BuilderKind,
   address: string
 ): Promise<string | null> {
-  const others = unsavedAddresses().filter(
-    held => !(held.kind === CHECK_KIND[kind] && held.address === address)
-  );
+  const others = unsavedAddressesBesides(kind, address);
   const answer = await addressCheckApi.check(CHECK_KIND[kind], address, others);
   return refusalWords(kind, answer);
 }

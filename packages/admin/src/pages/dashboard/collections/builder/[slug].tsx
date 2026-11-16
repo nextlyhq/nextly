@@ -42,6 +42,7 @@ import {
 } from "@admin/hooks/queries";
 import { useBuilderEntityState } from "@admin/hooks/useBuilderEntityState";
 import { useBuilderFieldActions } from "@admin/hooks/useBuilderFieldActions";
+import { useBuilderSettingsChange } from "@admin/hooks/useBuilderSettingsChange";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
 import { useSchemaChangeConfirmation } from "@admin/hooks/useSchemaChangeConfirmation";
@@ -145,7 +146,9 @@ function collectionSettings(
 function unsavedCollection(entity: UnsavedEntity): Collection {
   const { settings } = entity;
   return {
-    id: `unsaved:collection:${entity.address}`,
+    // The token, not the address: it is kept when the address moves, so
+    // the editor knows the entity as the same one under its new address.
+    id: `unsaved:collection:${entity.token}`,
     name: entity.address,
     slug: entity.address,
     label: settings.pluralName || settings.singularName,
@@ -212,6 +215,7 @@ export default function CollectionBuilderEditPage({
     savedFieldIds,
     pinFields,
     pinSettings,
+    moveAddress,
   } = useBuilderEntityState({
     entity: collection,
     builder,
@@ -226,6 +230,18 @@ export default function CollectionBuilderEditPage({
     // equally stable and only one is guaranteed present.
     identity: loaded => loaded.id,
     unsaved: unsaved !== undefined,
+  });
+
+  // A change of the settings is a step; an unsaved collection's address
+  // moves it at once, outside the history.
+  const { onSettingsChange, unsavedAddress } = useBuilderSettingsChange({
+    kind: "collection",
+    unsaved,
+    settings,
+    setSettings,
+    moveAddress,
+    editRoute: address =>
+      buildRoute(ROUTES.BUILDER_COLLECTIONS_EDIT, { slug: address }),
   });
 
   const isLocked = collection?.locked === true;
@@ -500,7 +516,8 @@ export default function CollectionBuilderEditPage({
       savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}
-      onSettingsChange={setSettings}
+      onSettingsChange={onSettingsChange}
+      unsavedAddress={unsavedAddress}
       storedHooks={collection.hooks}
       active={active}
       onActiveChange={setActive}

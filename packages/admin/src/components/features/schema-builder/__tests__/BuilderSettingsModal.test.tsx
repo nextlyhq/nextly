@@ -467,7 +467,7 @@ describe("BuilderSettingsModal — the address", () => {
     refusals = {
       articles: { code: "DUPLICATE", message: "Resource already exists." },
     };
-    const others = [{ kind: "collection", address: "drafts" }];
+    const others = [{ kind: "collection" as const, address: "drafts" }];
     render(
       <BuilderSettingsModal
         open

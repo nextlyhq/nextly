@@ -123,6 +123,12 @@ export interface BuilderEntityState {
   /** Re-pin the settings baseline. Called when the write lands, not when it is
    *  sent — clearing first would show a clean form over stale stored values. */
   pinSettings: (saved: BuilderSettingsValues) => void;
+  /**
+   * An unsaved entity's address moved: every state the history holds, and the
+   * settings it is measured from, take the new address. No step, so Undo does
+   * not take the move back and nothing pending is counted for it.
+   */
+  moveAddress: (address: string) => void;
 }
 
 /** One empty list, so a page with nothing loaded keeps one baseline object. */
@@ -244,6 +250,19 @@ export function useBuilderEntityState<TEntity>({
     setOriginalSettings(saved);
   }, []);
 
+  const { rewriteSnapshots } = builder;
+  const moveAddress = useCallback(
+    (address: string) => {
+      rewriteSnapshots(snapshot =>
+        snapshot.settings
+          ? { ...snapshot, settings: { ...snapshot.settings, slug: address } }
+          : snapshot
+      );
+      setOriginalSettings(prev => (prev ? { ...prev, slug: address } : prev));
+    },
+    [rewriteSnapshots]
+  );
+
   return {
     pending,
     settings,
@@ -253,6 +272,7 @@ export function useBuilderEntityState<TEntity>({
     savedFieldIds,
     pinFields,
     pinSettings,
+    moveAddress,
   };
 }
 
