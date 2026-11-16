@@ -139,28 +139,30 @@ test.describe("the Page Builder's own screen", () => {
     await recorded;
 
     // Reloaded without saving: the stored page still holds both blocks, and
-    // the save chip offers the work the reload would otherwise have lost,
-    // with no banner above the editor saying it a second time.
+    // Save offers the work the reload would otherwise have lost, with no
+    // banner above the editor saying it a second time.
     await page.reload();
     await expect(block(page, "goes")).toBeVisible({ timeout: 30_000 });
-    const chip = page.getByTestId("save-state-indicator");
-    await expect(chip).toContainText("Unsaved changes");
+    const save = page.locator('[data-topbar="end"] [data-action="save"]');
+    await expect(save).toHaveText("Save");
     await expect(
       page
         .getByRole("status")
         .filter({ hasText: /You have unsaved changes from/ })
     ).toHaveCount(0);
 
-    await chip
-      .getByRole("button", { name: "Unsaved changes: restore options" })
-      .click();
-    await expect(page.getByText(/You have unsaved changes from/)).toBeVisible();
-    await page.getByRole("button", { name: "Restore", exact: true }).click();
+    // Save says what is waiting, and keeps it.
+    await save.click();
+    const offer = page.getByRole("dialog");
+    await expect(
+      offer.getByText("Changes from your last visit aren't saved yet.")
+    ).toBeVisible();
+    await offer.getByRole("button", { name: "Save", exact: true }).click();
 
     await expect(block(page, "goes")).toHaveCount(0);
     await expect(block(page, "stays")).toBeVisible();
 
-    // Restored as one edit the author can undo: Undo brings the stored page
+    // Kept as one edit the author can undo: Undo brings the stored page
     // back, rather than being disabled by a fresh editor.
     const undo = page.getByRole("button", { name: "Undo" });
     await expect(undo).toBeEnabled();
