@@ -1418,6 +1418,40 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
     expect((await states(id)).es).toBe("published");
   });
 
+  // An untranslated collection has no languages of its own to move: publishing it whole tells the
+  // gate of its shared part alone, early and under the lock, whatever languages the site has.
+  it("tells the gate only the shared part of an untranslated collection published whole", async () => {
+    await boot(posts({ localized: false }));
+    const created = await t!.nextly.create({
+      collection: "posts",
+      data: { title: "Hello" },
+    });
+    const id = String(created.item.id);
+    const asked: unknown[] = [];
+    container.registerSingleton<PublishGate>("publishGate", () => ({
+      refusals: question => {
+        asked.push(question.parts);
+        return Promise.resolve([]);
+      },
+      judge: (_tx, question) => {
+        asked.push(question.parts);
+        return Promise.resolve({
+          refusals: [],
+          settle: () => Promise.resolve(),
+        });
+      },
+    }));
+
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+
+    expect(asked).toEqual([[{ kind: "shared" }], [{ kind: "shared" }]]);
+  });
+
   // Unpublishing is never gated: a gate that holds every part back is not asked of a takedown, and
   // the language goes down.
   it("never asks the gate of an unpublish", async () => {

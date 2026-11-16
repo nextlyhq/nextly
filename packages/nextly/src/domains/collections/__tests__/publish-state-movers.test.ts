@@ -17,7 +17,11 @@ import { fileURLToPath } from "node:url";
 
 import { parseSource } from "@nextlyhq/module-specifiers/parse-source";
 import { Visitor } from "oxc-parser";
-import type { MethodDefinition, ObjectProperty } from "oxc-parser";
+import type {
+  MemberExpression,
+  MethodDefinition,
+  ObjectProperty,
+} from "oxc-parser";
 import { describe, expect, it } from "vitest";
 
 /** The package's whole source tree. */
@@ -204,18 +208,15 @@ function scanFile(
     }
     return "(module)";
   };
-  const memberName = (callee: {
-    computed: boolean;
-    property: { type: string; name?: string; value?: unknown };
-  }): string | null =>
-    callee.computed
-      ? callee.property.type === "Literal" &&
-        typeof callee.property.value === "string"
-        ? callee.property.value
-        : null
-      : callee.property.type === "Identifier"
-        ? (callee.property.name ?? null)
+  const memberName = (callee: MemberExpression): string | null => {
+    const property = callee.property;
+    if (callee.computed) {
+      return property.type === "Literal" && typeof property.value === "string"
+        ? property.value
         : null;
+    }
+    return property.type === "Identifier" ? property.name : null;
+  };
   new Visitor({
     FunctionDeclaration: node => enclosing.push(node.id?.name ?? null),
     "FunctionDeclaration:exit": () => enclosing.pop(),

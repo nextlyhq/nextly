@@ -808,6 +808,10 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
   // What publishing every language would do, without doing it. A read, but
   // admitted on the publish grant as the publish is (LIFECYCLE_ROUTE_ACTIONS).
   "previewPublishAllSingleLocales",
+  // Publishing or unpublishing chosen parts of the Single: admitted on the grant of that action,
+  // as a collection entry's are (LIFECYCLE_ROUTE_ACTIONS), never on a definition's.
+  "publishSingleParts",
+  "unpublishSingleParts",
   // Discarding the working draft reverts the document to its live row. Left out
   // of the read branch below so it resolves to `update-{slug}`: a caller who may
   // not update the document may not throw away its pending edits either.
@@ -993,6 +997,8 @@ const LIFECYCLE_ROUTE_ACTIONS: Readonly<
   unpublishParts: "unpublish",
   publishAllSingleLocales: "publish",
   previewPublishAllSingleLocales: "publish",
+  publishSingleParts: "publish",
+  unpublishSingleParts: "unpublish",
   previewPublishAllLocales: "publish",
 };
 

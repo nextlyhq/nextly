@@ -7,9 +7,11 @@
  * The plausible broken implementation asks the gate only where a publish of chosen parts is
  * requested, so a save naming `status: "published"` puts an entry live past a gate that holds it.
  */
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 import { container } from "../../../di/container";
+import { DynamicCollectionService } from "../../dynamic-collections/services/dynamic-collection-service";
+import { CollectionFileManager } from "../../../services/collection-file-manager";
 import { defineCollection, text } from "../../../config";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
@@ -64,6 +66,12 @@ describeEachDialect(
             slug: "notes",
             status: true,
             fields: [text({ name: "title" })],
+          }),
+          // A field of the author's own that happens to be called what the gate's option once was.
+          defineCollection({
+            slug: "memos",
+            status: true,
+            fields: [text({ name: "title" }), text({ name: "withoutReview" })],
           }),
         ],
         localization: { locales: ["en", "es"], defaultLocale: "en" },
@@ -297,6 +305,94 @@ describeEachDialect(
       expect(await mainStatus("dc_notes", id)).toBe("draft");
     });
 
+    // The option a save names a publish made without review under is a system key, `_withoutReview`,
+    // as `_rev` and `_overwrite` are: a field of the author's own called `withoutReview` is a value
+    // like any other, saved as it was sent.
+    it("saves a field of its own called withoutReview as a value", async () => {
+      await boot();
+      const created = await t!.nextly.create({
+        collection: "memos",
+        data: { title: "Memo", withoutReview: "kept" },
+      } as never);
+      const id = String(created.item.id);
+
+      await t!.nextly.update({
+        collection: "memos",
+        id,
+        data: { withoutReview: "kept again", _overwrite: true },
+      } as never);
+      const [row] = await t!.adapter.executeQuery<{ value: string }>(
+        `SELECT ${q("without_review")} AS value FROM ${q("dc_memos")} WHERE ${q("id")} = '${id}'`
+      );
+
+      expect(row?.value).toBe("kept again");
+    });
+
+    // What the gate is told of the collection is resolved before the save's transaction opens:
+    // nothing judged under the row lock reads on the pool, where on PostgreSQL and MySQL it would
+    // wait for a connection the transaction may be holding.
+    it("reads nothing on the pool for the gate while its transaction is open", async () => {
+      await boot();
+      const id = await draftNote();
+      const seen = heldUnlessWithoutReview();
+      let depth = 0;
+      const adapter = t!.adapter as unknown as {
+        transaction: (
+          work: (tx: unknown) => Promise<unknown>,
+          ...rest: unknown[]
+        ) => Promise<unknown>;
+      };
+      const open = adapter.transaction.bind(adapter);
+      vi.spyOn(adapter, "transaction").mockImplementation((work, ...rest) =>
+        open(
+          async tx => {
+            depth += 1;
+            try {
+              return await work(tx);
+            } finally {
+              depth -= 1;
+            }
+          },
+          ...rest
+        )
+      );
+      const poolReadsInside: string[] = [];
+      const getCollection = DynamicCollectionService.prototype.getCollection;
+      vi.spyOn(
+        DynamicCollectionService.prototype,
+        "getCollection"
+      ).mockImplementation(function (this: DynamicCollectionService, ...args) {
+        if (depth > 0 && args[1] === undefined) {
+          poolReadsInside.push("getCollection");
+        }
+        return getCollection.apply(this, args);
+      });
+      const loadCompanion = CollectionFileManager.prototype.loadCompanionSchema;
+      vi.spyOn(
+        CollectionFileManager.prototype,
+        "loadCompanionSchema"
+      ).mockImplementation(function (this: CollectionFileManager, ...args) {
+        if (depth > 0 && args[1] === undefined) {
+          poolReadsInside.push("loadCompanionSchema");
+        }
+        return loadCompanion.apply(this, args);
+      });
+
+      await t!.nextly.update({
+        collection: "notes",
+        id,
+        data: {
+          status: "published",
+          _withoutReview: { reason: "Correcting a date" },
+          _overwrite: true,
+        },
+      } as never);
+
+      expect(seen.judged).toHaveLength(1);
+      expect(poolReadsInside).toEqual([]);
+      vi.restoreAllMocks();
+    });
+
     // Unpublishing is never gated: a save that takes an entry down is not held back.
     it("never asks the gate of a save that unpublishes", async () => {
       await boot();
@@ -330,7 +426,7 @@ describeEachDialect(
         id,
         data: {
           status: "published",
-          withoutReview: { reason: "Correcting a date" },
+          _withoutReview: { reason: "Correcting a date" },
           _overwrite: true,
         },
       } as never);

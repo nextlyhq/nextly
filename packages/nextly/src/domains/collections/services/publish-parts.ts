@@ -298,8 +298,13 @@ async function gateIssues(
 ): Promise<Issue[]> {
   // Unpublishing is never gated: what holds a publish back does not keep a part live.
   if (judged.direction !== "publish") return [];
+  // Languages only where the entry keeps them: an untranslated one moves its shared part alone,
+  // whatever languages the site has.
   const parts: PublishPart[] = [
-    ...judged.chosen.map(locale => ({ kind: "language" as const, locale })),
+    ...(judged.reads.state.translated ? judged.chosen : []).map(locale => ({
+      kind: "language" as const,
+      locale,
+    })),
     ...(judged.sharedPart ? [{ kind: "shared" as const }] : []),
   ];
   const { state } = judged.reads;

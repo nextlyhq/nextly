@@ -139,8 +139,13 @@ export async function judgeStatusSave(
   return () => verdict.settle();
 }
 
-/** The key a save names a publish made without review under, beside its values. */
-export const WITHOUT_REVIEW_KEY = "withoutReview";
+/**
+ * The key a save names a publish made without review under, beside its values. A system key, as
+ * `_rev` and `_overwrite` are, so it can never be taken for a field of the author's own: a
+ * collection may have a field called `withoutReview`. A publish or unpublish of chosen parts names
+ * it `withoutReview`, since its body is no document.
+ */
+export const WITHOUT_REVIEW_KEY = "_withoutReview";
 
 const WithoutReview = z
   .object({ reason: z.string().trim().min(1).max(2000) })

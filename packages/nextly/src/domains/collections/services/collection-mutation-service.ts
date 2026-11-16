@@ -9175,14 +9175,15 @@ export class CollectionMutationService extends BaseService {
         // the transaction commits, below.
         const createdSave =
           finalData.status === "published"
-            ? await this.statusSaveOf(
+            ? this.statusSaveOf(
                 { ...params, entryId: String(entry.id) },
                 {
                   status: finalData.status,
                   locale: params.locale,
                   everyLanguage: false,
                   withoutReview,
-                }
+                },
+                collection
               )
             : null;
         const settleCreateGate = createdSave
@@ -11194,8 +11195,10 @@ export class CollectionMutationService extends BaseService {
         // it. A part held back refuses the whole move, before anything is written.
         const gateDirection =
           direction.nextStatus === "published" ? "publish" : "unpublish";
+        // Languages only where the collection keeps a status per language: an untranslated one
+        // moves its shared part alone, whatever languages the site has.
         const gateParts: PublishPart[] = [
-          ...(this.localization?.locales ?? [])
+          ...(companionPublishable ? (this.localization?.locales ?? []) : [])
             .map(language => language.code)
             .filter(locale => movesLanguage(params.parts, locale))
             .map(locale => ({ kind: "language" as const, locale })),
@@ -12479,33 +12482,24 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * Every stored translation's committed `_status`, read on `tx`, or none
-   * where the entry's translations carry no status of their own.
-   *
-   * The reader already tolerates a translations table that is not there, so
-   * anything thrown is a real database failure, normalized to the canonical
-   * internal error: the driver's message can carry schema or connection
-   * details that must not reach the caller through the service's result.
-   */
-  /**
    * What of an entry is live, as `reader` reads it: each language whose own status is published,
    * and whether the entry's own status (the shared part) is. Told to the publish gate as the parts
    * live before a move: on the pool for its early answer, on the move's transaction under the lock
-   * for its verdict.
+   * for its verdict. Reads only on `reader`: the translations table is resolved before the
+   * transaction opens, so nothing under the row lock reaches back to the pool.
    */
   private async livePartsOn(
     reader: Pick<TransactionContext, "getDrizzle">,
-    args: { collectionName: string; entryId: string; mainStatus: unknown }
+    args: {
+      collectionName: string;
+      entryId: string;
+      mainStatus: unknown;
+      /** The entry's translations table, where it keeps a status per language; else null. */
+      companion: CompanionSchema | null;
+    }
   ): Promise<{ languages: string[]; shared: boolean }> {
-    const companion = await this.fileManager.loadCompanionSchema(
-      args.collectionName
-    );
-    const publishable =
-      !!companion &&
-      companion.hasStatus &&
-      (await isCompanionReady(this.adapter, companion.companionTableName));
     const statuses = await this.priorCompanionStatusesOnTx(reader, {
-      companion: publishable ? companion : null,
+      companion: args.companion?.hasStatus ? args.companion : null,
       collectionName: args.collectionName,
       entryId: args.entryId,
     });
@@ -12521,7 +12515,7 @@ export class CollectionMutationService extends BaseService {
    * The publish gate's view of a save that names a lifecycle status, or null where it names none
    * or the collection has no lifecycle: which parts it moves follows from its status and language.
    */
-  private async statusSaveOf(
+  private statusSaveOf(
     params: {
       collectionName: string;
       entryId: string;
@@ -12535,20 +12529,20 @@ export class CollectionMutationService extends BaseService {
       locale: string | undefined;
       everyLanguage: boolean;
       withoutReview: { reason: string } | undefined;
-    }
-  ): Promise<StatusSave | null> {
+    },
+    /** The collection, as its caller resolved it before any row lock: never read here. */
+    collection: unknown
+  ): StatusSave | null {
     if (!isLifecycleStatus(save.status)) return null;
-    const collection = (await this.collectionService.getCollection(
-      params.collectionName
-    )) as { status?: boolean; localized?: boolean };
-    if (collection.status !== true) return null;
+    const shape = collection as { status?: boolean; localized?: boolean };
+    if (shape.status !== true) return null;
     return {
       scope: { kind: "collection", slug: params.collectionName },
       entryId: params.entryId,
       status: save.status,
       locale: save.locale,
       everyLanguage: save.everyLanguage,
-      translated: collection.localized === true && !!this.localization,
+      translated: shape.localized === true && !!this.localization,
       configured: (this.localization?.locales ?? []).map(l => l.code),
       defaultLocale: this.localization?.defaultLocale,
       caller: publishCallerOf(params),
@@ -12559,6 +12553,15 @@ export class CollectionMutationService extends BaseService {
     };
   }
 
+  /**
+   * Every stored translation's committed `_status`, read on `tx`, or none
+   * where the entry's translations carry no status of their own.
+   *
+   * The reader already tolerates a translations table that is not there, so
+   * anything thrown is a real database failure, normalized to the canonical
+   * internal error: the driver's message can carry schema or connection
+   * details that must not reach the caller through the service's result.
+   */
   private async priorCompanionStatusesOnTx(
     tx: Pick<TransactionContext, "getDrizzle">,
     args: {
@@ -16335,12 +16338,24 @@ export class CollectionMutationService extends BaseService {
       // A save that names a status changes what readers see, so the publish gate is asked of it
       // as a publish of chosen parts is: its early answer here, before any hook runs, and its
       // verdict under the row lock below.
-      const earlySave = await this.statusSaveOf(params, {
-        status: body.status,
-        locale: params.locale,
-        everyLanguage: sweepAllLocales,
-        withoutReview,
-      });
+      // What the gate is told of the collection is resolved here, on the pool and before the
+      // transaction opens, so nothing judged under the row lock reaches back to the pool.
+      const gateCollection = await this.collectionService.getCollection(
+        params.collectionName
+      );
+      const gateCompanion = await this.fileManager.loadCompanionSchema(
+        params.collectionName
+      );
+      const earlySave = this.statusSaveOf(
+        params,
+        {
+          status: body.status,
+          locale: params.locale,
+          everyLanguage: sweepAllLocales,
+          withoutReview,
+        },
+        gateCollection
+      );
       if (earlySave) {
         await refuseStatusSaveEarly(
           earlySave,
@@ -16349,6 +16364,7 @@ export class CollectionMutationService extends BaseService {
             entryId: params.entryId,
             mainStatus: (existingEntry as { status?: unknown } | undefined)
               ?.status,
+            companion: gateCompanion,
           })
         );
       }
@@ -17151,12 +17167,16 @@ export class CollectionMutationService extends BaseService {
         // entry is locked: judged on the status its hooks left, of what is live as this lock reads
         // it. A part held back refuses the save before anything is written; what the verdict
         // started is settled once the save is written, below.
-        const lockedSave = await this.statusSaveOf(params, {
-          status: intendedStatus,
-          locale: params.locale,
-          everyLanguage: sweepAllLocales,
-          withoutReview,
-        });
+        const lockedSave = this.statusSaveOf(
+          params,
+          {
+            status: intendedStatus,
+            locale: params.locale,
+            everyLanguage: sweepAllLocales,
+            withoutReview,
+          },
+          gateCollection
+        );
         const settleGate = lockedSave
           ? await judgeStatusSave(
               tx,
@@ -17166,6 +17186,7 @@ export class CollectionMutationService extends BaseService {
                 entryId: params.entryId,
                 mainStatus: (preUpdateRow as { status?: unknown } | undefined)
                   ?.status,
+                companion: gateCompanion,
               })
             )
           : undefined;
@@ -22511,14 +22532,15 @@ export class CollectionMutationService extends BaseService {
       // locked: a write made on a transaction it was handed has no moment before one, so this is
       // its only ask. It names no language, so it moves the entry's own status, as the default
       // language's save does. Settled once the item is written, below.
-      const itemSave = await this.statusSaveOf(
+      const itemSave = this.statusSaveOf(
         { ...params, entryId },
         {
           status: finalData.status,
           locale: undefined,
           everyLanguage: false,
           withoutReview,
-        }
+        },
+        collection
       );
       const settleItemGate = itemSave
         ? await judgeStatusSave(
@@ -22527,6 +22549,11 @@ export class CollectionMutationService extends BaseService {
             await this.livePartsOn(tx, {
               collectionName: params.collectionName,
               entryId,
+              // Read on the caller's transaction, as everything this write reads.
+              companion: await this.fileManager.loadCompanionSchema(
+                params.collectionName,
+                tx.getDrizzle()
+              ),
               mainStatus: (
                 await tx.selectOne<{ status?: unknown }>(tableName, {
                   columns: ["status"],
