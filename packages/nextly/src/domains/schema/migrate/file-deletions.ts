@@ -452,9 +452,9 @@ const NOT_HOLDING = new Set([
 ]);
 
 /**
- * The name a view, a sequence or an index the statement makes, or renames another onto, takes:
- * `CREATE [OR REPLACE] [MATERIALIZED] VIEW | SEQUENCE | [UNIQUE] INDEX [CONCURRENTLY]
- * [IF NOT EXISTS] name`, and `ALTER [MATERIALIZED] VIEW | SEQUENCE | INDEX … RENAME TO name`.
+ * The name a view, a sequence, an index or a foreign table the statement makes, or renames
+ * another onto, takes: `CREATE [OR REPLACE] [MATERIALIZED] VIEW | SEQUENCE | [UNIQUE] INDEX
+ * [CONCURRENTLY] [IF NOT EXISTS] name`, `CREATE FOREIGN TABLE [IF NOT EXISTS] name`, and `ALTER [MATERIALIZED] VIEW | SEQUENCE | INDEX … RENAME TO name`.
  * A `CREATE TABLE IF NOT EXISTS` of it later in the run then makes nothing. A schema-qualified
  * name holds its unqualified part, which a later unqualified create may mean. Undefined for any
  * other statement, a table's own definition (an index it names inline) included.
@@ -472,6 +472,8 @@ function nameHeldBy(tokens: readonly Token[]): string | undefined {
     return cursor.qualifiedName()?.name;
   };
   if (tokens[0] === "CREATE") {
+    // PostgreSQL's foreign table is a relation of its own kind under a table's name.
+    if (tokens[1] === "FOREIGN" && tokens[2] === "TABLE") return nameAt(3);
     const at = tokens.findIndex(
       (token, i) =>
         i > 0 &&

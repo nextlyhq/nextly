@@ -279,6 +279,10 @@ describe("tables dropped", () => {
     ["a sequence", "CREATE SEQUENCE IF NOT EXISTS recent"],
     ["an index", "CREATE UNIQUE INDEX CONCURRENTLY recent ON posts (id)"],
     ["a view renamed onto it", "ALTER VIEW older RENAME TO recent"],
+    [
+      "a foreign table",
+      "CREATE FOREIGN TABLE IF NOT EXISTS recent (id integer) SERVER elsewhere",
+    ],
   ])(
     "keeps a name %s the run made earlier live, when the file creates a table of it IF NOT EXISTS",
     (_what, earlier) => {
