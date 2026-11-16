@@ -147,7 +147,7 @@ for (const scheme of ["light", "dark"] as const) {
     await expectNoAxeViolations(page, scope);
 
     // Its options open, so their switches and the description are scanned.
-    await dialog.locator("[aria-expanded]").click();
+    await dialog.getByRole("button", { name: /^More options/ }).click();
     await expect(dialog.getByLabel("Description")).toBeVisible();
     await expectNoAxeViolations(page, scope);
 
