@@ -233,6 +233,7 @@ const UPDATABLE_FIELDS = [
   "providerId",
   "attachments",
   "description",
+  "format",
   "blocks",
 ] as const satisfies ReadonlyArray<keyof UpdateEmailTemplateInput>;
 
