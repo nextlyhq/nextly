@@ -495,7 +495,11 @@ export interface BuilderFieldsApi {
     fields: BuilderField[],
     settings?: BuilderSnapshot["settings"]
   ) => void;
-  clearHistory: (saved?: BuilderSnapshot, step?: number) => void;
+  clearHistory: (
+    saved?: BuilderSnapshot,
+    step?: number,
+    before?: BuilderSnapshot
+  ) => void;
   historyStep: number;
   canUndo: boolean;
   canRedo: boolean;

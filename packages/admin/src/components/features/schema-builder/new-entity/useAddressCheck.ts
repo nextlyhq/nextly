@@ -89,9 +89,12 @@ function stateOf(
  */
 export async function checkAddressAgain(
   kind: BuilderKind,
-  address: string
+  address: string,
+  // The address this entity holds now, left out of what it is checked
+  // against. The address asked about, unless the entity is moving to it.
+  ownAddress: string = address
 ): Promise<string | null> {
-  const others = unsavedAddressesBesides(kind, address);
+  const others = unsavedAddressesBesides(kind, ownAddress);
   const answer = await addressCheckApi.check(CHECK_KIND[kind], address, others);
   return refusalWords(kind, answer);
 }

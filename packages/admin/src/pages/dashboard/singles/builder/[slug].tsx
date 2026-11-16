@@ -200,6 +200,7 @@ export default function SingleBuilderEditPage({
     settings,
     setSettings,
     moveAddress,
+    busy: confirmation.isBusy,
     editRoute: address =>
       buildRoute(ROUTES.BUILDER_SINGLES_EDIT, { slug: address }),
   });
@@ -372,7 +373,7 @@ export default function SingleBuilderEditPage({
     [settings, entitySlug]
   );
 
-  const { handleSave, confirmApply } = useSchemaSave({
+  const { handleSave, confirmApply, reviewedSettingChanges } = useSchemaSave({
     slug,
     missingSlugMessage: "Single slug is missing",
     label: displayLabel(settings, entitySlug),
@@ -483,7 +484,7 @@ export default function SingleBuilderEditPage({
         entityName={slug}
         onConfirm={confirmApply}
         creating={unsaved !== undefined}
-        settingChanges={pending.settingChanges}
+        settingChanges={reviewedSettingChanges}
       />
     </BuilderPageLayout>
   );

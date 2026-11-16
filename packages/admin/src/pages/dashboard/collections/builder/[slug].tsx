@@ -240,6 +240,7 @@ export default function CollectionBuilderEditPage({
     settings,
     setSettings,
     moveAddress,
+    busy: confirmation.isBusy,
     editRoute: address =>
       buildRoute(ROUTES.BUILDER_COLLECTIONS_EDIT, { slug: address }),
   });
@@ -417,7 +418,7 @@ export default function CollectionBuilderEditPage({
 
   // i18n: preview and apply carry the same toggle, so the resolutions the user
   // is asked for match the DDL that actually runs.
-  const { handleSave, confirmApply } = useSchemaSave({
+  const { handleSave, confirmApply, reviewedSettingChanges } = useSchemaSave({
     slug,
     missingSlugMessage: "Collection slug is missing",
     label: displayLabel(settings, entitySlug),
@@ -535,7 +536,7 @@ export default function CollectionBuilderEditPage({
         entityName={slug}
         onConfirm={confirmApply}
         creating={unsaved !== undefined}
-        settingChanges={pending.settingChanges}
+        settingChanges={reviewedSettingChanges}
       />
     </BuilderPageLayout>
   );
