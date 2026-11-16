@@ -153,15 +153,20 @@ describe("the picker's fields", () => {
     expect(note?.preview).toBeUndefined();
   });
 
-  it("previews a published value, and marks a draft's instead of showing it", async () => {
+  it("previews a published value, and a draft's as the person editing reads it, marked", async () => {
     const post = fieldsOf(await ask("p1"), "Post");
     expect(named(post, "title")).toMatchObject({
       public: true,
       preview: "Spring sale",
     });
+    expect(named(post, "title")?.draft).toBeUndefined();
+    // The author sees what they wrote, and that it isn't live yet.
     const lede = named(named(post, "meta")?.fields ?? [], "lede");
-    expect(lede).toMatchObject({ public: true, draft: true });
-    expect(lede?.preview).toBeUndefined();
+    expect(lede).toMatchObject({
+      public: true,
+      draft: true,
+      preview: "Thirty per cent off (draft)",
+    });
   });
 
   it("follows a relation one step in, as the entry it names is read", async () => {
@@ -362,8 +367,12 @@ describe("the picker's fields", () => {
       named(fieldsOf(answer, "Post"), "author")?.fields ?? [],
       "name"
     );
-    expect(name).toMatchObject({ public: true, draft: true });
-    expect(name?.preview).toBeUndefined();
+    // The relation's field, as the person editing reads it, marked a draft's.
+    expect(name).toMatchObject({
+      public: true,
+      draft: true,
+      preview: "Ada Lovelace",
+    });
   });
 
   it("counts the timestamps public where visitors may read the entry", async () => {
