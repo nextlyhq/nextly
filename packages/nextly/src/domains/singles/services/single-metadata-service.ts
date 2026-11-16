@@ -1621,11 +1621,11 @@ export class SingleMetadataService {
     const notUnique = (f: FieldDefinition): FieldDefinition => {
       const options = f.options as { relationType?: unknown } | undefined;
       return f.type === "relationship" && options?.relationType === "oneToOne"
-        ? ({
+        ? {
             ...f,
             unique: false,
             options: { ...options, relationType: "manyToOne" },
-          } as FieldDefinition)
+          }
         : { ...f, unique: false };
     };
     const lengthOnly = (f: FieldDefinition): FieldDefinition =>
