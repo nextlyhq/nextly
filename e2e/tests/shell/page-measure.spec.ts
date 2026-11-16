@@ -31,18 +31,23 @@ test.describe.configure({ lock: [LOCK.siteSettings] });
  * Routes rendering the measured frame, reachable with no fixture beyond the
  * seeded dev user.
  *
- * `awaitLoaded` is not a convenience here. Every one of these routes renders
- * `.nx-page-shell` in its LOADING state too, so waiting for the shell says
- * nothing about whether the editor is on screen — and the editors are what
- * this frame exists for. Measured without it, the sweep read the skeletons on
- * both form routes and would have stayed green while `EntryForm` itself bled
- * out of its column.
+ * Form pages: since the admin's pages each take a type, a form page is the
+ * one drawn in `.nx-page-shell`'s columns. A list insets its rows with padding
+ * and an editor runs edge to edge with its own field column, so neither has a
+ * column for a child to escape.
+ *
+ * `awaitLoaded` is not a convenience here. These routes render
+ * `.nx-page-shell` in their LOADING state too, so waiting for the shell says
+ * nothing about whether the form is on screen. Measured without it, a sweep
+ * reads a skeleton and stays green while the form itself bleeds out of its
+ * column.
  */
 const MEASURED_ROUTES = [
   "/settings",
-  "/settings/api-keys",
-  "/collections/posts/create",
-  "/singles/site-settings",
+  "/settings/api-keys/create",
+  "/security/roles/create",
+  "/users/create",
+  "/account",
 ];
 
 const shellOf = (page: Page) => page.locator(".nx-page-shell");
@@ -80,11 +85,10 @@ const aControl = (page: Page) =>
  * The page failed instead of rendering, in either shape the admin uses.
  *
  * Two, because measurement showed one is not enough. `Alert` defaults to
- * `role="alert"` and the entry and single routes use it; `/settings/api-keys`
- * hands its query failure to `PageErrorFallback`, which renders an error PAGE
- * and so carries no alert role at all. Measured in that state: zero skeletons,
- * zero alerts, three controls still mounted — indistinguishable from a loaded
- * page by everything this file checked before.
+ * `role="alert"` and the user and role forms use it; a page that hands its
+ * query failure to `PageErrorFallback` renders an error PAGE and so carries
+ * no alert role at all, with its controls still mounted — indistinguishable
+ * from a loaded page by everything this file checked before.
  *
  * `page-error` is page-scoped rather than shell-scoped because the fallback
  * replaces the page's content, including the shell it was rendered in.
@@ -293,16 +297,15 @@ test.describe("a measured page keeps its children inside the page", () => {
   }
 
   // Readiness is the part of this file that has been wrong most often, and
-  // always the same way: satisfied by a page that was not the editor. These
-  // force the states it must refuse.
+  // always the same way: satisfied by a page that was not the form. These
+  // force the states it must refuse, on `/users/create`: a form page whose
+  // reads, held, draw a skeleton and, refused, an alert.
   //
-  // Both use `/settings/api-keys` deliberately. It is the route whose loading
-  // AND error branches keep a control mounted — its Create API Key button
-  // lives in the layout, outside the part that varies — so each test can only
-  // pass by way of the clause it is named for. On the entry route the skeleton
-  // renders no control at all, so `aControl` alone would reject it and the
-  // skeleton clause would go unexercised.
-  const holdApiKeys = (page: Page, respond: "delay" | "fail") =>
+  // Each asserts WHICH clause refused, by the locator its error names. The
+  // loading form draws no control while its skeleton shows, so `aControl`
+  // would reject it too, and a readiness that lost its skeleton clause would
+  // still throw: only the clause named in the error tells the two apart.
+  const holdReads = (page: Page, respond: "delay" | "fail") =>
     page.route("**/admin/api/**", async route => {
       const url = route.request().url();
       if (/me\/permissions|dev-reload|\/me$|auth/.test(url))
@@ -319,53 +322,49 @@ test.describe("a measured page keeps its children inside the page", () => {
     });
 
   test("readiness refuses a page that is still loading", async ({ page }) => {
-    await holdApiKeys(page, "delay");
-    await gotoAdmin(page, "/settings/api-keys");
-    // The control this route keeps mounted while loading, so the rejection
-    // below cannot come from `aControl`.
-    await expect(aControl(page)).toBeVisible();
+    await holdReads(page, "delay");
+    await gotoAdmin(page, "/users/create");
+    await expect(skeletons(page).first()).toBeVisible();
 
-    await expect(awaitLoaded(page, 2_000)).rejects.toThrow();
+    await expect(awaitLoaded(page, 2_000)).rejects.toThrow(/skeleton/);
   });
 
   test("readiness refuses a page that failed to load", async ({ page }) => {
-    await holdApiKeys(page, "fail");
-    await gotoAdmin(page, "/settings/api-keys");
-    // `PageErrorFallback`, which carries no alert role — the shape that got
-    // past the previous version of this check.
-    await expect(page.locator('[data-slot="page-error"]')).toBeVisible();
+    await holdReads(page, "fail");
+    await gotoAdmin(page, "/users/create");
+    // The failure, with no skeleton left and its controls mounted: only the
+    // error clause can refuse it.
+    await expect(shellOf(page).getByRole("alert")).toBeVisible();
     await expect(skeletons(page)).toHaveCount(0);
+    await expect(aControl(page)).toBeVisible();
 
-    await expect(awaitLoaded(page, 2_000)).rejects.toThrow();
+    await expect(awaitLoaded(page, 2_000)).rejects.toThrow(/page-error|alert/);
   });
 
   test("the loading skeleton keeps its children inside the page", async ({
     page,
   }) => {
-    // The skeleton is its own layout, not a blurred copy of the editor, and it
-    // is the state that regressed: its main pane was `flex-1` with no
-    // `min-w-0`, so it would not shrink and pushed the fixed-width rail 4px out
-    // of the column. Measured at 1180px because that is the panel width where
-    // the column is narrow enough for the rail to overflow it.
+    // The skeleton is its own layout, not a blurred copy of the form, so it is
+    // measured in its own right: a loading state that pushed a box out of the
+    // column is as visible as a loaded one. Measured at 1180px, where the
+    // column is narrowest beside the panel.
     await page.setViewportSize({ width: 1180, height: 900 });
 
-    // Held open deliberately. On a warm dev server the skeleton lasts a few
-    // frames, so a test that merely navigated would race it and read the
-    // editor instead — passing while measuring the wrong state.
-    await page.route("**/api/collections/schema/**", async route => {
-      await new Promise(resolve => setTimeout(resolve, 5_000));
-      await route.continue();
-    });
+    // Held open deliberately. On a warm server the skeleton lasts a few
+    // frames, so a test that merely navigated would race it and read the form
+    // instead — passing while measuring the wrong state.
+    await holdReads(page, "delay");
 
-    await gotoAdmin(page, "/collections/posts/create");
+    await gotoAdmin(page, "/users/create");
     await expect(shellOf(page)).toBeVisible();
     // The skeleton IS what is on screen — asserted, not assumed, so this
-    // cannot quietly become a second measurement of the loaded editor.
+    // cannot quietly become a second measurement of the loaded form.
     await expect(skeletons(page).first()).toBeVisible();
 
     const m = await measure(page);
     expect(m.tracks).toHaveLength(3);
-    expect(m.inFlow).toBeGreaterThan(10);
+    // The form's skeleton is a handful of boxes, each of them measured.
+    expect(m.inFlow).toBeGreaterThanOrEqual(4);
     expect(m.escapes, "at 1180px, loading").toEqual([]);
   });
 

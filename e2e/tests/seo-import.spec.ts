@@ -9,7 +9,7 @@
  * page's SEO tab then shows as typed for the page. A file that is not an
  * export gets one notice and goes nowhere.
  */
-import { expect } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
@@ -48,6 +48,17 @@ test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
 });
 
+/**
+ * Wait until the file step takes a file: it reads one in the site's language,
+ * which the page knows once the site's groups are read, and until then the
+ * drop area is turned off and a file set on it is let go unread.
+ */
+async function fileStepReady(page: Page): Promise<void> {
+  await expect(
+    page.getByRole("button", { name: /^Choose the export file/ })
+  ).toBeEnabled();
+}
+
 test("a WordPress export is read, checked and imported in one step", async ({
   page,
 }) => {
@@ -62,6 +73,7 @@ test("a WordPress export is read, checked and imported in one step", async ({
     page.getByRole("heading", { name: "Import SEO values" })
   ).toBeVisible();
   await page.getByRole("radio", { name: /WordPress/ }).check();
+  await fileStepReady(page);
   await page.locator('input[type="file"]').setInputFiles({
     name: "old.WordPress.xml",
     mimeType: "application/xml",
@@ -92,6 +104,7 @@ test("a file that is not an export gets one notice and is not sent", async ({
 }) => {
   await gotoAdmin(page, IMPORT);
   await page.getByRole("radio", { name: /WordPress/ }).check();
+  await fileStepReady(page);
   await page.locator('input[type="file"]').setInputFiles({
     name: "notes.txt",
     mimeType: "text/plain",

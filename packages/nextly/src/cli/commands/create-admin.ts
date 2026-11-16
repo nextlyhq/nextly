@@ -52,6 +52,10 @@ import {
 } from "../../auth/setup-token/setup-token";
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
+import {
+  appPasswordRule,
+  useLoadedPasswordHasher,
+} from "../../di/password-digester";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { MetaService } from "../../domains/meta/services/meta-service";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
@@ -419,7 +423,12 @@ export async function runCreateAdmin(
     // minimum the password rule judges against — so the check runs after it,
     // not before, or an install that raised its minimum would be judged by
     // the default.
-    const strength = validatePasswordStrength(details.password);
+    // Judged by the configured hasher the connect published, which hashes
+    // the account: its reach in place of bcrypt's 72 bytes.
+    const strength = validatePasswordStrength(
+      details.password,
+      appPasswordRule()
+    );
     if (dryRun) {
       reportDryRun(
         logger,
@@ -471,6 +480,10 @@ export async function connectToInstall(
     loadConfigResult.config.auth?.minPasswordLength ??
       DEFAULT_MIN_PASSWORD_LENGTH
   );
+  // And the configured hasher: the account services hash with the app's
+  // digester, which without registered services would be core's bcrypt, and
+  // an account the app's sign-in cannot verify.
+  useLoadedPasswordHasher(loadConfigResult.config.auth?.passwordHasher);
   // The settings are the operator's own, so the error names the first one to fix, under the
   // code every command reports it with.
   const database = databaseEnvOrThrow();

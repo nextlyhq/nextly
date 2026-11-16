@@ -40,7 +40,14 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import { isWithinLifetime, monotonicNow } from "../../shared/lib/lifetime";
+import {
+  followedState,
+  followValue,
+  markFollowedChanged,
+  type FollowedState,
+} from "../../shared/lib/followed-value";
+
+import type { StoredSchemaVersion } from "./schema-version";
 
 /**
  * How long one read of the stored count is reused by this process: the bound,
@@ -52,40 +59,16 @@ export const SCHEMA_VERSION_READ_INTERVAL_MS = 2000;
 /** What a database handle must offer for its stored count to be read. */
 type VersionSource = Pick<DrizzleAdapter, "getDrizzle" | "getCapabilities">;
 
-/** This process's last read of one database's count. */
-interface SeqReading {
-  /** The count read, or undefined where it could not be read. */
-  seq: number | undefined;
-  /** When that read finished, on a clock that never steps back. */
-  readAt: number | undefined;
-  /** How many changes this process had marked when that read began. */
-  marks: number;
-  /** The read under way, which callers arriving meanwhile share. */
-  inFlight: Promise<number | undefined> | null;
-  /** How many changes had been marked when the read under way began. */
-  inFlightMarks: number;
-}
-
-interface SeqState {
-  /** Moved by {@link markSchemaChanged}: a read begun before a mark is stale. */
-  marks: number;
-  /** One reading per database handle, gone with it. */
-  byDatabase: WeakMap<object, SeqReading>;
-}
-
-// On `globalThis`: a Next.js server holds several copies of a package's
-// modules, and a reading per copy would be several reads per interval, each
-// marked only by the writes made through its own copy.
-const globalForSeq = globalThis as unknown as {
-  __nextly_storedSchemaSeq?: SeqState;
-};
-
-function seqState(): SeqState {
-  globalForSeq.__nextly_storedSchemaSeq ??= {
-    marks: 0,
-    byDatabase: new WeakMap(),
-  };
-  return globalForSeq.__nextly_storedSchemaSeq;
+/**
+ * This process's readings of each database's count, followed as every
+ * install-wide value is (`shared/lib/followed-value`). Kept on `globalThis`
+ * under the name the readings have always had, with the followed value's
+ * version added to it: the readings kept before they moved onto it had
+ * another shape, and a dev server reloaded across the change still holds
+ * them under the bare name.
+ */
+function seqState(): FollowedState<number> {
+  return followedState<number>("__nextly_storedSchemaSeq");
 }
 
 /** Whether `database` is a handle the stored count can be read through. */
@@ -103,7 +86,7 @@ function isVersionSource(database: object): database is VersionSource {
  * stored rather than the one read before it.
  */
 export function markSchemaChanged(): void {
-  seqState().marks += 1;
+  markFollowedChanged(seqState());
 }
 
 /**
@@ -120,52 +103,41 @@ export async function storedSchemaSeq(
   options: { fresh?: boolean; followedOnly?: boolean } = {}
 ): Promise<number | undefined> {
   if (!isVersionSource(database)) return undefined;
-  const state = seqState();
-  let reading = state.byDatabase.get(database);
-  if (reading === undefined) {
-    if (options.followedOnly === true) return undefined;
-    reading = {
-      seq: undefined,
-      readAt: undefined,
-      marks: -1,
-      inFlight: null,
-      inFlightMarks: -1,
-    };
-    state.byDatabase.set(database, reading);
-  }
-  if (reading.inFlight !== null && reading.inFlightMarks === state.marks) {
-    return reading.inFlight;
-  }
-  if (
-    options.fresh !== true &&
-    reading.marks === state.marks &&
-    isWithinLifetime(reading.readAt, SCHEMA_VERSION_READ_INTERVAL_MS)
-  ) {
-    return reading.seq;
-  }
-  const held = reading;
-  const marks = state.marks;
-  const inFlight: Promise<number | undefined> = readStoredSeq(database)
-    .then(seq => {
-      held.seq = seq;
-      // Timed from when the read finished: a slow read answers its callers
-      // and only schedules the next one.
-      held.readAt = monotonicNow();
-      held.marks = marks;
-      return seq;
-    })
-    .finally(() => {
-      if (held.inFlight === inFlight) held.inFlight = null;
-    });
-  held.inFlight = inFlight;
-  held.inFlightMarks = marks;
-  return inFlight;
+  return followValue(seqState(), database, () => readStoredSeq(database), {
+    intervalMs: SCHEMA_VERSION_READ_INTERVAL_MS,
+    ...options,
+  });
+}
+
+/**
+ * The whole stored version each database's last read found, with how many changes this process
+ * had marked when that read began (`latestStoredSchemaVersion`).
+ */
+const lastRead = new WeakMap<
+  object,
+  { stored: StoredSchemaVersion; marks: number }
+>();
+
+/**
+ * The stored version as this process last read it for `database`, the migration it names
+ * included: undefined where it has not been read, or where this process marked a change since that
+ * read began (its own registry write, or boot migrations storing a new version), which the read
+ * may not hold. A start compares its build with this rather than reading the same row again.
+ */
+export function latestStoredSchemaVersion(
+  database: object
+): StoredSchemaVersion | undefined {
+  const reading = lastRead.get(database);
+  return reading !== undefined && reading.marks === seqState().marks
+    ? reading.stored
+    : undefined;
 }
 
 /** One read of the stored count, or undefined where it cannot be read. */
 async function readStoredSeq(
   database: VersionSource
 ): Promise<number | undefined> {
+  const marks = seqState().marks;
   try {
     // Imported when first needed: the version's module reaches the registry
     // row cache, which asks here.
@@ -174,6 +146,7 @@ async function readStoredSeq(
       database.getDrizzle(),
       database.getCapabilities().dialect
     );
+    lastRead.set(database, { stored, marks });
     // No stored version: no registry write has recorded one yet.
     return stored.present ? (stored.version?.seq ?? 0) : 0;
   } catch {

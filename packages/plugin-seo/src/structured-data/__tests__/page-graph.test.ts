@@ -26,6 +26,7 @@ import { describe, expect, it, vi } from "vitest";
 import { keepRecord } from "../../address-record/__tests__/record-double";
 import { sha256 } from "../../address-record/rows";
 import { buildStructuredData, type StructuredDataNode } from "../graph";
+import { structuredDataRulesOf } from "../../settings/structured-data-rules";
 import { rulesFromOptions, type StructuredDataRules } from "../rules";
 
 vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
@@ -450,6 +451,36 @@ describe("the page's trail", () => {
 });
 
 describe("the site's own nodes", () => {
+  it("are the same whether the brand facts are given in code or saved in the settings", async () => {
+    const { founders: _codeOnly, ...saved } = BRAND;
+    const inSettings = structuredDataRulesOf(
+      { origin: ORIGIN, brand: { founders: BRAND.founders }, types: {} },
+      {
+        brand: {
+          ...saved,
+          otherNames: [...(saved.otherNames ?? [])],
+          profiles: (saved.profiles ?? []).map(profile => ({
+            network: "X",
+            url: profile.url,
+          })),
+          contactPoints: [...(saved.contactPoints ?? [])],
+        },
+        types: {},
+      }
+    );
+    const graph = async (from: StructuredDataRules) =>
+      (
+        await buildStructuredData(
+          context(),
+          singleInput("about", { id: "a1" }),
+          answerAt("/about", "About"),
+          from
+        )
+      ).nodes;
+
+    expect(await graph(inSettings)).toEqual(await graph(rules()));
+  });
+
   it("state every brand fact given, at the one spelling of the site's address", async () => {
     const { nodes } = await buildStructuredData(
       context(),
@@ -549,6 +580,29 @@ describe("a page's dates", () => {
       datePublished: "2026-09-01",
       dateModified: "2026-11-12T00:00:00.000Z",
     });
+  });
+
+  it("fall through an empty mapped field to the page's last change, its own last save where no content date is kept", async () => {
+    const { nodes } = await buildStructuredData(
+      context(),
+      entryInput("posts", { ...POST, correctedAt: undefined, correctedOn: "" }),
+      answerAt("/blog/jasper-vs-rext-ai", "Jasper vs Rext AI"),
+      rules({
+        types: {
+          posts: {
+            type: "blogPosting",
+            details: { blogPosting: { dateModified: "correctedOn" } },
+          },
+        },
+      })
+    );
+
+    for (const node of [
+      nodeOf(nodes, "WebPage"),
+      nodeOf(nodes, "BlogPosting"),
+    ]) {
+      expect(node).toMatchObject({ dateModified: "2026-11-12T00:00:00.000Z" });
+    }
   });
 });
 
@@ -850,18 +904,62 @@ describe("questions and answers", () => {
     expect(nodeOf(nodes, "FAQPage")?.mainEntity).toEqual(AS_NODES);
   });
 
-  it("are described beside a page of another kind that shows them", async () => {
+  // Questions and answers markup only where someone chose the kind: a page
+  // of another kind gets none beside it, from its route or from a field.
+  it.each([
+    [
+      "from its route",
+      singleInput("home", { id: "h1" }, { questions: QUESTIONS }),
+    ],
+    ["from a field", singleInput("home", { id: "h1", faq: QUESTIONS })],
+  ])(
+    "are not described beside a page of another kind showing them %s",
+    async (_, input) => {
+      const { nodes, problems } = await buildStructuredData(
+        context(),
+        input,
+        answerAt("/", "Rext AI"),
+        rules()
+      );
+
+      expect(nodeOf(nodes, "WebPage")).toBeDefined();
+      expect(nodeOf(nodes, "FAQPage")).toBeUndefined();
+      expect(JSON.stringify(nodes)).not.toContain("Question");
+      expect(problems).toEqual([]);
+    }
+  );
+
+  it("are not described beside a page whose content type chose another kind", async () => {
     const { nodes } = await buildStructuredData(
       context(),
-      singleInput("home", { id: "h1" }, { questions: QUESTIONS }),
-      answerAt("/", "Rext AI"),
+      singleInput(
+        "about",
+        { id: "a1", faq: QUESTIONS },
+        { questions: QUESTIONS }
+      ),
+      answerAt("/about", "About"),
+      rules({ types: { "single:about": { type: "aboutPage" } } })
+    );
+
+    expect(nodeOf(nodes, "AboutPage")).toBeDefined();
+    expect(JSON.stringify(nodes)).not.toContain("FAQPage");
+  });
+
+  it("are described on a page whose own choice is Questions and answers", async () => {
+    const { nodes } = await buildStructuredData(
+      context(),
+      singleInput("help", {
+        id: "h1",
+        title: "Help",
+        faq: QUESTIONS,
+        seo: { structuredDataType: "faqPage" },
+      }),
+      answerAt("/help", "Help"),
       rules()
     );
 
-    expect(nodeOf(nodes, "WebPage")).toBeDefined();
-    expect(nodeOf(nodes, "FAQPage")).toEqual({
-      "@type": "FAQPage",
-      "@id": `${ORIGIN}/#faq`,
+    expect(nodeOf(nodes, "FAQPage")).toMatchObject({
+      "@id": `${ORIGIN}/help#webpage`,
       mainEntity: AS_NODES,
     });
   });
@@ -879,6 +977,113 @@ describe("questions and answers", () => {
     expect(problems.map(problem => problem.message)).toEqual([
       "Missing: questions and answers.",
     ]);
+  });
+});
+
+describe("an FAQ section on a page of any kind", () => {
+  const QUESTIONS = [
+    { question: "Is the path open in winter?", answer: "Yes, every day." },
+    { question: "Can I bring a dog?", answer: "On a lead." },
+  ];
+  const AS_NODES = QUESTIONS.map(each => ({
+    "@type": "Question",
+    name: each.question,
+    acceptedAnswer: { "@type": "Answer", text: each.answer },
+  }));
+
+  it("is described as a part of the page where its route declares one, the page keeping its kind", async () => {
+    const { nodes, problems } = await buildStructuredData(
+      context(),
+      singleInput(
+        "home",
+        { id: "h1" },
+        { questions: QUESTIONS, faqSection: true }
+      ),
+      answerAt("/", "Harbour Walks"),
+      rules()
+    );
+
+    expect(problems).toEqual([]);
+    const page = nodeOf(nodes, "WebPage");
+    expect(page).toMatchObject({
+      "@id": `${ORIGIN}/#webpage`,
+      hasPart: { "@id": `${ORIGIN}/#faq` },
+    });
+    expect(nodeOf(nodes, "FAQPage")).toEqual({
+      "@type": "FAQPage",
+      "@id": `${ORIGIN}/#faq`,
+      isPartOf: { "@id": `${ORIGIN}/#webpage` },
+      mainEntity: AS_NODES,
+      inLanguage: "en",
+    });
+  });
+
+  it("is described where the page's content type declares one, its questions read from a field", async () => {
+    const { nodes } = await buildStructuredData(
+      context(),
+      singleInput("about", { id: "a1", title: "About", faq: QUESTIONS }),
+      answerAt("/about", "About"),
+      rules({
+        types: { "single:about": { type: "aboutPage", faqSection: true } },
+      })
+    );
+
+    expect(nodeOf(nodes, "AboutPage")).toMatchObject({
+      hasPart: { "@id": `${ORIGIN}/about#faq` },
+    });
+    expect(nodeOf(nodes, "FAQPage")?.mainEntity).toEqual(AS_NODES);
+  });
+
+  it("reads its questions from the field the content type maps for Questions and answers", async () => {
+    const { nodes } = await buildStructuredData(
+      context(),
+      singleInput("pricing", { id: "p1", askedOften: QUESTIONS }),
+      answerAt("/pricing", "Pricing"),
+      rules({
+        types: {
+          "single:pricing": {
+            faqSection: true,
+            details: { faqPage: { questions: "askedOften" } },
+          },
+        },
+      })
+    );
+
+    expect(nodeOf(nodes, "FAQPage")?.mainEntity).toEqual(AS_NODES);
+  });
+
+  it("is never made up: a page declaring one but showing no questions has none, and nothing points at it", async () => {
+    const { nodes, problems } = await buildStructuredData(
+      context(),
+      singleInput("home", { id: "h1" }, { faqSection: true }),
+      answerAt("/", "Harbour Walks"),
+      rules()
+    );
+
+    expect(nodeOf(nodes, "FAQPage")).toBeUndefined();
+    expect(nodeOf(nodes, "WebPage")).not.toHaveProperty("hasPart");
+    expect(problems).toEqual([]);
+  });
+
+  it("is not added to a Questions and answers page, whose questions are already its subject", async () => {
+    const { nodes } = await buildStructuredData(
+      context(),
+      singleInput(
+        "faq",
+        { id: "f1", title: "FAQ" },
+        { questions: QUESTIONS, faqSection: true }
+      ),
+      answerAt("/faq", "FAQ"),
+      rules({ types: { "single:faq": { type: "faqPage" } } })
+    );
+
+    const faqs = nodes.filter(each => each["@type"] === "FAQPage");
+    expect(faqs).toHaveLength(1);
+    expect(faqs[0]).toMatchObject({
+      "@id": `${ORIGIN}/faq#webpage`,
+      mainEntity: AS_NODES,
+    });
+    expect(faqs[0]).not.toHaveProperty("hasPart");
   });
 });
 

@@ -157,6 +157,40 @@ describe("NeedsAttention's release rows", () => {
     ).toBeInTheDocument();
   });
 
+  // The names arrive on a read of their own after the card has drawn. The
+  // property separating this from a plausible broken card is that the line
+  // is in place, empty and of the names' own classes, before they arrive: a
+  // card that drew nothing until then would push every row under the release
+  // row down when the names land.
+  it("holds the names' line, empty, while their read is on its way, and draws the names in it", async () => {
+    let answer: (value: ReleaseListResponse) => void = () => {};
+    releaseReads.fetchReleases.mockImplementation(
+      () =>
+        new Promise<ReleaseListResponse>(resolve => {
+          answer = resolve;
+        })
+    );
+    draw([STOPPED, SEO]);
+    const [stopped] = screen.getAllByTestId("needs-attention-item");
+    const held = stopped.querySelector(
+      "[aria-hidden='true'].pb-2.pl-9.text-xs"
+    );
+    expect(held).not.toBeNull();
+    expect(held?.textContent?.trim()).toBe("");
+
+    answer(
+      releasesAnswer([{ id: "r-1", title: "Autumn launch", state: "blocked" }])
+    );
+    const names = await within(stopped).findByRole("list", {
+      name: "Stopped releases",
+    });
+    // The same line: the classes that size it are the held one's.
+    expect(names.className).toContain("pb-2 pl-9 text-xs");
+    expect(
+      stopped.querySelector("[aria-hidden='true'].pb-2.pl-9.text-xs")
+    ).toBeNull();
+  });
+
   it("reads no releases for a row that is not about releases", () => {
     draw([SEO]);
     expect(releaseReads.fetchReleases).not.toHaveBeenCalled();

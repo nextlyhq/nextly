@@ -8,9 +8,13 @@
  * table and refuse a delete, how many rows of each point at this entry, and the collection and
  * field each row belongs to. The message names them, so an editor knows what to change first.
  *
+ * Every read goes through the Drizzle handle the caller passes. A caller inside a transaction
+ * passes that transaction's handle, so the reads see its own uncommitted writes (a referring row
+ * it already deleted is gone) and, on PostgreSQL and MySQL, run on its connection rather than
+ * taking a second one from the pool.
+ *
  * @module domains/collections/services/entry-still-referenced
  */
-import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
@@ -34,15 +38,12 @@ interface RefusingKey {
   column: string;
 }
 
-type Registry = Pick<DrizzleAdapter, "select" | "getDrizzle" | "dialect">;
-
 /** The single-column keys referencing `table` whose delete action refuses the delete. */
 async function refusingKeys(
-  adapter: Registry,
+  db: unknown,
   dialect: SupportedDialect,
   table: string
 ): Promise<RefusingKey[]> {
-  const db = adapter.getDrizzle();
   if (dialect === "sqlite") {
     // One join over `sqlite_master` reads every table's outgoing keys (as `readReferencingTables`
     // does); a key of several columns has a row per column, so only one-column keys are kept.
@@ -87,13 +88,13 @@ function refuses(action: string): boolean {
 
 /** How many rows of `key`'s table point at `entryId`. */
 async function countPointing(
-  adapter: Registry,
+  db: unknown,
   dialect: SupportedDialect,
   key: RefusingKey,
   entryId: string
 ): Promise<number> {
   const [row] = await querySqlRows<{ n: number | string }>(
-    adapter.getDrizzle(),
+    db,
     dialect,
     sql`SELECT COUNT(*) AS n FROM ${sql.identifier(key.table)}
         WHERE ${sql.identifier(key.column)} = ${entryId}`
@@ -115,29 +116,38 @@ function parsed<T>(value: unknown): T | undefined {
  * What still points at `entryId` in `table` and refuses its delete: each referring collection's
  * field, with how many of its entries hold this one. A key on a table that is not a collection is
  * left out, since its rows are nobody's to change by hand.
+ *
+ * @param db - The Drizzle handle every read goes through: a transaction's, inside one
  */
 export async function referrersHolding(
-  adapter: Registry,
+  db: unknown,
   dialect: SupportedDialect,
   table: string,
   entryId: string
 ): Promise<EntryReferrer[]> {
-  const keys = await refusingKeys(adapter, dialect, table);
+  const keys = await refusingKeys(db, dialect, table);
   if (keys.length === 0) return [];
-  const collections = await adapter.select<{
-    tableName: string;
+  // The collections' registry, read through `db` like the keys and counts, so all of the answer
+  // comes from one connection and one view of the data. JSON columns arrive parsed or as text by
+  // dialect; `parsed` reads either.
+  const collections = await querySqlRows<{
+    table_name: string;
     labels: unknown;
     fields: unknown;
     slug: string;
-  }>("dynamic_collections", {
-    columns: ["slug", "tableName", "labels", "fields"],
-  });
-  const byTable = new Map(collections.map(c => [c.tableName, c]));
+  }>(
+    db,
+    dialect,
+    sql`SELECT ${sql.identifier("slug")}, ${sql.identifier("table_name")},
+               ${sql.identifier("labels")}, ${sql.identifier("fields")}
+        FROM ${sql.identifier("dynamic_collections")}`
+  );
+  const byTable = new Map(collections.map(c => [c.table_name, c]));
   const referrers: EntryReferrer[] = [];
   for (const key of keys) {
     const collection = byTable.get(key.table);
     if (collection === undefined) continue;
-    const count = await countPointing(adapter, dialect, key, entryId);
+    const count = await countPointing(db, dialect, key, entryId);
     if (count === 0) continue;
     const labels = parsed<{ singular?: string; plural?: string }>(
       collection.labels

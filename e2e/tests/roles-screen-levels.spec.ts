@@ -203,9 +203,17 @@ test("marks a collection whose code narrows it, naming what the code limits", as
 test("folds a plugin under its name and saves its collections' levels and its own permission", async ({
   page,
 }) => {
-  // The form builder contributes forms and submissions, and declares an
-  // export permission of its own, outside both collections.
-  const roleId = await roleHolding(["read-forms", "read-form-submissions"]);
+  // The form builder contributes forms, submissions, their sends and resends
+  // and the files sent with them, and declares an export permission of its
+  // own, outside every collection. A role that may read each of them holds
+  // one level across the plugin.
+  const roleId = await roleHolding([
+    "read-forms",
+    "read-form-submissions",
+    "read-form-submission-sends",
+    "read-form-submission-resends",
+    "read-form-uploads",
+  ]);
 
   await gotoAdmin(page, `/security/roles/edit/${roleId}`);
   const plugins = page.getByRole("region", { name: "Plugins" });

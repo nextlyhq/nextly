@@ -3,12 +3,17 @@
  * the table of a plugin it depends on, and the ownership it records, on
  * every configured dialect, through the command's entry point.
  *
- * Its module runs outside a transaction, so its ledger row and its owner
- * rows are written one after the other. A process that stops between the
- * two leaves the module recorded applied and nothing claimed. Each run of
- * the install must leave the plugin owning its own table AND the elements
- * it added to the other plugin's table, the second time as much as the
- * first, since the run after a stop skips the module it recorded. And an
+ * Its module runs outside a transaction. On SQLite its ledger row and its
+ * owner rows are then written one after the other, and a process that stops
+ * between the two leaves the module recorded applied and nothing claimed. On
+ * PostgreSQL and MySQL the install waits for a busy table in tries, which
+ * writes the two in one short transaction after the module's statements: a
+ * stop there leaves the module's attempt unfinished and nothing claimed, the
+ * statements having committed as they ran. Each run of the install must leave
+ * the plugin owning its own table AND the elements it added to the other
+ * plugin's table, the second time as much as the first, without running the
+ * module again: the run after a stop skips the module it recorded, or records
+ * the one whose statements already stand without running it. And an
  * install applying a later module that stops adding them must retire those
  * claims, or a column of the same name the other plugin adds afterwards is
  * read as the first plugin's, and the other plugin's next module is refused
@@ -516,13 +521,16 @@ describe.each(getConfiguredTestDialects())(
         .sort();
     }
 
-    /** The newest ledger status of the adding plugin's module. */
+    /** The adding plugin's module's ledger rows. */
+    function adderModuleRows() {
+      return new SchemaEventsRepository(db(), dialect).findFileApplies(
+        `plugin:${ADDER}/${modules?.adder.name ?? ""}`
+      );
+    }
+
+    /** Each ledger status of the adding plugin's module, sorted. */
     async function adderModuleStatus(): Promise<string[]> {
-      const rows = await new SchemaEventsRepository(
-        db(),
-        dialect
-      ).findFileApplies(`plugin:${ADDER}/${modules?.adder.name ?? ""}`);
-      return rows.map(row => row.status);
+      return (await adderModuleRows()).map(row => row.status).sort();
     }
 
     /** The name the compiler gave the index the adding plugin declares. */
@@ -562,9 +570,9 @@ describe.each(getConfiguredTestDialects())(
 
     /**
      * Stands in for the process dying as it writes the adding plugin's owner
-     * rows, after its module ran and was recorded applied: that write and
-     * every later ledger write of the run fail, as a dead process writes
-     * nothing more.
+     * rows, after its module ran and, on SQLite, was recorded applied: that
+     * write and every later ledger write of the run fail, as a dead process
+     * writes nothing more.
      */
     function stopAtTheAdderOwnerRows(): void {
       let stopped = false;
@@ -615,15 +623,28 @@ describe.each(getConfiguredTestDialects())(
       vi.restoreAllMocks();
       await endStoppedProcess();
 
-      // The state the stop left: its module ran and is recorded applied,
-      // and nothing it made is claimed.
-      expect(await adderModuleStatus()).toEqual(["applied"]);
+      // The state the stop left: its module ran, and nothing it made is
+      // claimed. SQLite recorded the module applied before the owner rows;
+      // the servers write the two together, so the stop took the applied row
+      // with it and left the attempt unfinished.
+      const recorded = dialect === "sqlite" ? "applied" : "in_progress";
+      expect(await adderModuleStatus()).toEqual([recorded]);
       expect(await claimsOf(ADDER)).toEqual([]);
 
       await install(ADDER);
 
-      // Not run a second time: still one attempt, applied.
-      expect(await adderModuleStatus()).toEqual(["applied"]);
+      if (dialect === "sqlite") {
+        // Not run a second time: still one attempt, applied.
+        expect(await adderModuleStatus()).toEqual(["applied"]);
+      } else {
+        // Not run a second time: its statements stand, so it is recorded
+        // applied with none of them run, beside the attempt that stopped.
+        const rows = await adderModuleRows();
+        expect(await adderModuleStatus()).toEqual(["applied", "in_progress"]);
+        expect(
+          rows.find(row => row.status === "applied")?.statementsExecuted
+        ).toBe(0);
+      }
       expect(await claimsOf(ADDER)).toEqual(
         [
           "table ad__marks v1",

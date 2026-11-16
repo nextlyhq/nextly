@@ -20,7 +20,7 @@ async function rewritesOf(config: Record<string, unknown>): Promise<Rewrites> {
 const sources = (rules: Rewrite[]) => rules.map(rule => rule.source);
 
 describe("withNextly serves the site's root files from plugins", () => {
-  it("rewrites robots.txt, sitemap.xml and llms.txt to the API handler, after the site's own files", async () => {
+  it("rewrites robots.txt, sitemap.xml, llms.txt and llms-full.txt to the API handler, after the site's own files", async () => {
     const { afterFiles, beforeFiles, fallback } = await rewritesOf(
       withNextly({})
     );
@@ -29,6 +29,7 @@ describe("withNextly serves the site's root files from plugins", () => {
       { source: "/robots.txt", destination: "/admin/api/robots.txt" },
       { source: "/sitemap.xml", destination: "/admin/api/sitemap.xml" },
       { source: "/llms.txt", destination: "/admin/api/llms.txt" },
+      { source: "/llms-full.txt", destination: "/admin/api/llms-full.txt" },
     ]);
     expect(beforeFiles).toEqual([]);
     expect(fallback).toEqual([]);
@@ -68,7 +69,7 @@ describe("withNextly serves the site's root files from plugins", () => {
     );
     expect(fromPhases.beforeFiles).toEqual([own]);
     expect(fromPhases.afterFiles[0]).toEqual(own);
-    expect(fromPhases.afterFiles).toHaveLength(4);
+    expect(fromPhases.afterFiles).toHaveLength(5);
     expect(fromPhases.fallback).toEqual([own]);
   });
 
@@ -81,7 +82,11 @@ describe("withNextly serves the site's root files from plugins", () => {
 
     // Next asks afterFiles before fallback: an entry of ours would win.
     expect(sources(afterFiles)).not.toContain("/robots.txt");
-    expect(sources(afterFiles)).toEqual(["/sitemap.xml", "/llms.txt"]);
+    expect(sources(afterFiles)).toEqual([
+      "/sitemap.xml",
+      "/llms.txt",
+      "/llms-full.txt",
+    ]);
     expect(fallback).toEqual([theirs]);
   });
 
@@ -108,6 +113,7 @@ describe("withNextly serves the site's root files from plugins", () => {
       "/robots.txt",
       "/sitemap.xml",
       "/llms.txt",
+      "/llms-full.txt",
     ]);
   });
 

@@ -44,6 +44,7 @@ import { eq, sql } from "drizzle-orm";
 import { container } from "../../di/container";
 import { getAuthLogger } from "../../lib/logger";
 import { RBAC_EPOCH_ROW_ID, rbacEpochTables } from "../../schemas/rbac-epoch";
+import { coalesce } from "../../shared/lib/coalesce";
 
 /**
  * How long a read of the shared counter is reused.
@@ -85,7 +86,21 @@ interface EpochState {
    * and issues its own query before any of them finishes, so a burst turns one
    * read per second into one per request — the cost this design exists to avoid.
    *
-   * A forced caller does not join it; see {@link refreshEpoch}.
+   * A forced caller does not join it; see {@link refreshEpoch}. Held as the
+   * one entry of a map of shared reads (`coalesce`, the shared helper every
+   * followed value reads through), under {@link EPOCH_READ}.
+   */
+  readsUnderWay: Map<typeof EPOCH_READ, Promise<string>>;
+
+  /**
+   * The same read under way, as module builds from before {@link readsUnderWay}
+   * keep it. A dev server keeps this state across a module reload, and an
+   * older build of this module may still be running beside this one, its own
+   * read still pending. So this build both honours a read it finds here (it
+   * joins or waits it out exactly as one of its own) and mirrors its own read
+   * here (so an older build joins it in turn): only ever one read at a time,
+   * whichever build began it, which is what {@link persistPendingBumps} and
+   * the epoch's order rely on.
    */
   inFlight: Promise<string> | null;
 
@@ -160,6 +175,7 @@ function freshState(): EpochState {
     revision: 0,
     generation: "",
     readAt: 0,
+    readsUnderWay: new Map(),
     inFlight: null,
     pendingBumps: 0,
     observed: true,
@@ -174,6 +190,13 @@ const globalForEpoch = globalThis as unknown as {
   __nextly_rbacEpoch?: EpochState;
 };
 const state = (globalForEpoch.__nextly_rbacEpoch ??= freshState());
+// A dev server keeps `globalThis` across a module reload, so the state may
+// have been made by an older build of this module, which held its shared read
+// as `inFlight` alone. The map this build keeps its own read in is added
+// where the state lacks it; a read the older build left under way stays in
+// `inFlight`, where `readUnderWay` finds it.
+(state as Partial<EpochState>).readsUnderWay ??= new Map();
+(state as Partial<EpochState>).inFlight ??= null;
 
 /**
  * The narrow view of the query builder this module uses.
@@ -371,23 +394,44 @@ export async function refreshEpoch(options?: {
   // post-write verification. So a forced caller waits out the reads ahead of it
   // and then makes one of its own.
   if (!force) {
-    if (state.inFlight) return state.inFlight;
+    const running = readUnderWay();
+    if (running) return running;
   } else {
     // Sequential by design: each read ahead of this one has to finish before a
     // new observation may start, or the observation is not a new one.
-    let ahead = state.inFlight;
+    let ahead = readUnderWay();
     while (ahead) {
       await ahead;
-      ahead = state.inFlight;
+      ahead = readUnderWay();
     }
   }
 
-  const reading = readShared().finally(() => {
-    if (state.inFlight === reading) state.inFlight = null;
-  });
+  // A new read every caller after it joins, mirrored where an older build of
+  // this module looks for one (see `inFlight`).
+  const reading = coalesce(state.readsUnderWay, EPOCH_READ, readShared);
   state.inFlight = reading;
+  reading.then(
+    () => forgetMirror(reading),
+    () => forgetMirror(reading)
+  );
   return reading;
 }
+
+/**
+ * The read under way, whichever build of this module began it: this build's
+ * own, or one an older build still running left in `inFlight`.
+ */
+function readUnderWay(): Promise<string> | undefined {
+  return state.readsUnderWay.get(EPOCH_READ) ?? state.inFlight ?? undefined;
+}
+
+/** Clear the mirrored read once it settles, unless another replaced it. */
+function forgetMirror(reading: Promise<string>): void {
+  if (state.inFlight === reading) state.inFlight = null;
+}
+
+/** The key the epoch's one shared read is held under. */
+const EPOCH_READ = "epoch";
 
 async function readShared(): Promise<string> {
   // Which of the two degraded reports a failure below belongs to. Once the row
@@ -476,9 +520,11 @@ async function readShared(): Promise<string> {
  *
  * What rules that out is not a lock here but the shape of the only path in.
  * This is called from one place, the top of {@link readShared}; `readShared` is
- * called from one place, {@link refreshEpoch}; and that call sits between a
- * check of `inFlight` and its assignment with no await in between, so a second
- * read cannot start while one is running. A second caller added anywhere else
+ * called from one place, {@link refreshEpoch}, through `coalesce`, which
+ * checks for a read under way and registers a new one with no await in
+ * between, so a second read cannot start while one is running; a read an
+ * older build of this module left under way (`inFlight`) is joined or waited
+ * out the same way. A second caller added anywhere else
  * would need its own answer to this, and the subtraction is where it would go
  * wrong.
  *

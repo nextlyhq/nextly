@@ -5413,7 +5413,9 @@ export function assertNoForeignDrops(args: {
    * change, never a drop or a rename. The caller decides the value family the
    * change must stay within; this guard does not read the column types.
    */
-  columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
+  columnOverrides?:
+    | ReadonlyArray<{ table: string; column: string }>
+    | undefined;
 }): void {
   const read = readOrRefuse(args);
   const holders = new OwnershipView(args);
@@ -6036,7 +6038,9 @@ function refuseInPlaceChanges(
     stream: MigrationStream;
     source: string;
     liveIndexTables?: ReadonlyMap<string, string>;
-    columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
+    columnOverrides?:
+      | ReadonlyArray<{ table: string; column: string }>
+      | undefined;
   }
 ): void {
   for (const change of read.alteredColumns) {
@@ -6163,7 +6167,9 @@ function refuseIndexNamed(
 function overridden(
   args: {
     stream: MigrationStream;
-    columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
+    columnOverrides?:
+      | ReadonlyArray<{ table: string; column: string }>
+      | undefined;
   },
   table: string,
   column: string
@@ -6308,13 +6314,34 @@ export async function pluginMigratedTableSet(
       SCHEMA_OWNERS_TABLE,
     ]);
     if (registry.length === 0) return undefined;
-    const rows = await new SchemaOwnersRepository(db, dialect).read();
-    return new Set(
-      rows
-        .filter(row => row.migratedBy.startsWith("plugin:"))
-        .map(row => row.tableName.toLowerCase())
+    return pluginMigratedTablesOf(
+      await new SchemaOwnersRepository(db, dialect).read()
     );
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The tables whose own owner row names a plugin's migration stream,
+ * lower-cased.
+ *
+ * Table-level rows only. An element row says who added a column, index, key
+ * or check to a table, not who carries the table: read as a table claim, a
+ * plugin's column on the app's table made every drop of that table count as a
+ * plugin table's, the drop inside a SQLite rebuild of it included, which then
+ * left the rebuild's twin with nowhere to be renamed to.
+ */
+export function pluginMigratedTablesOf(
+  rows: readonly OwnerRecord[]
+): Set<string> {
+  return new Set(
+    rows
+      .filter(
+        row =>
+          (row.elementKind ?? "table") === "table" &&
+          row.migratedBy.startsWith("plugin:")
+      )
+      .map(row => row.tableName.toLowerCase())
+  );
 }

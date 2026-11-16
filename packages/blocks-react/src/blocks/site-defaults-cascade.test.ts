@@ -15,9 +15,8 @@ import { resolvePageStylesWithTrace } from "../styles";
 import { coreBlocks } from "./index";
 
 /*
- * Where the site's edit of a block type's own look stands, under the Classic
- * spacing mode, which swaps in the frozen block bases: over the base, under a
- * look, a shared style and the block's own values. The edit is a default look
+ * Where the site's edit of a block type's own look stands: over the base,
+ * under a look, a shared style and the block's own values. The edit is a default look
  * in the site's class library, as a site stores it. Read off the compiled
  * trace by the engine's own cascade reader.
  */
@@ -78,7 +77,6 @@ function compiled(
     undefined,
     {
       breakpoints: BREAKPOINTS,
-      spacingMode: "classic",
       namedClasses: [...library, ...classes],
     } satisfies StyleCompileContext,
     resolver,
@@ -110,10 +108,10 @@ function from(
   return { tier, value: entry.value };
 }
 
-describe("the site's edit of a block's own look, in Classic spacing", () => {
+describe("the site's edit of a block's own look", () => {
   const edited = [primary];
 
-  it("is over the frozen base, and under a look, a shared style and the block's own value", () => {
+  it("is over the block's base, and under a look, a shared style and the block's own value", () => {
     expect(from("color", edited, [outline, cta], colour("#aa0000"))?.tier).toBe(
       "node"
     );
@@ -123,7 +121,7 @@ describe("the site's edit of a block's own look, in Classic spacing", () => {
       tier: "blockType",
       value: "#aa00aa",
     });
-    // The control: without the edit, the frozen base's own colour shows.
+    // The control: without the edit, the base's own colour shows.
     const unedited = from("color", [], []);
     expect(unedited?.tier).toBe("blockType");
     expect(unedited?.value).not.toBe("#aa00aa");

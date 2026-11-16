@@ -112,7 +112,7 @@ export function VariableRowCount({
  * The row's count in words, as the editor's tooltip: shown when the row is
  * pointed at or takes focus, so keyboard and touch users meet it too, not a
  * title on the hidden count. Above the row and at its end, over the count.
- * The row alone until its usage is read.
+ * Closed until its usage is read.
  */
 export function CountTip({
   reach,
@@ -121,13 +121,16 @@ export function CountTip({
   reach: VariableReach | undefined;
   children: React.ReactElement;
 }): React.JSX.Element {
-  if (reach === undefined) return children;
+  // Wrapped whether or not the count has arrived, and only closed until it
+  // has: wrapping the row once its count arrived replaced the row's button,
+  // and the keyboard's focus on the row went with it.
   return (
     <TooltipProvider delayDuration={300}>
       <ChromeTooltip
         side="top"
         align="end"
-        content={variableCount(reach).words}
+        content={reach === undefined ? null : variableCount(reach).words}
+        disabled={reach === undefined}
       >
         {children}
       </ChromeTooltip>

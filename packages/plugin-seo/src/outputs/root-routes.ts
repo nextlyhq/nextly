@@ -12,9 +12,12 @@ import {
   retryFailedCatchUp,
 } from "../address-record/catch-up";
 import type { CodeRoute } from "../code-pages/routes";
+import type { SiteRules } from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
+import { ROBOTS_SERVED_BY_HEADER } from "../settings/robots-rules";
+import type { ReadStructuredDataRules } from "../structured-data/rules";
 
-import { llmsTxtOf } from "./ai-outputs";
+import { llmsFullTxtOf, llmsTxtOf, type AiOutputsConfig } from "./ai-outputs";
 import { listPages } from "./listing";
 import { robotsTxt, type AiCrawlerChoice } from "./robots";
 import { siteOriginFor } from "./site-origin";
@@ -29,6 +32,8 @@ export interface RootFilesConfig {
    */
   origin?: string;
   readRules: ReadRules;
+  /** Structured data's rules, for the images a content type maps. */
+  readStructuredDataRules?: ReadStructuredDataRules;
   /** Whether the sitemap is served, and what it lists and splits by. */
   sitemap?: { collections?: readonly string[]; limits: SitemapLimits };
   /** Whether robots.txt is served, and what it asks AI crawlers. */
@@ -57,6 +62,20 @@ async function originOf(
 }
 
 const notFound = () => new Response("Not found", { status: 404 });
+
+/**
+ * The warnings already given, so one about stored rules that are not served
+ * is logged once per process, not on every robots.txt request. Bounded, so a
+ * value edited again and again cannot grow it without end.
+ */
+const warned = new Set<string>();
+
+/** Logs `message` the first time it is seen. */
+function warnOnce(message: string, warn: (message: string) => void): void {
+  if (warned.has(message) || warned.size >= 20) return;
+  warned.add(message);
+  warn(message);
+}
 
 /**
  * The answer while the address record catches up, or after a catch-up that
@@ -102,6 +121,9 @@ export async function sitemapResponse(
   const { pages } = await listPages(ctx, {
     origin,
     readRules: config.readRules,
+    ...(config.readStructuredDataRules === undefined
+      ? {}
+      : { readStructuredDataRules: config.readStructuredDataRules }),
     ...(config.codeRoutes === undefined
       ? {}
       : { codeRoutes: config.codeRoutes }),
@@ -147,28 +169,75 @@ export function rootFileRoutes(config: RootFilesConfig): PluginRoute[] {
           "text/plain; charset=utf-8"
         );
         // The site's own choice where it has made one, else the plugin's.
-        const { aiCrawlers } = await config.readRules(ctx, undefined);
+        const { aiCrawlers, robotsRules, robotsRulesRefused } =
+          await config.readRules(ctx, undefined);
+        if (robotsRulesRefused !== undefined) {
+          warnOnce(
+            `The SEO settings' own robots.txt rules are not served: ${robotsRulesRefused} Save them again on Settings, Search engines and AI.`,
+            message => ctx.logger.warn(message)
+          );
+        }
         const body = robotsTxt({
           aiCrawlers: aiCrawlers ?? robots.aiCrawlers,
           ...(sitemap === undefined
             ? {}
             : { sitemap: `${origin}/sitemap.xml` }),
+          ...(robotsRules === undefined ? {} : { ownRules: robotsRules.text }),
         });
-        return new Response(body, { headers });
+        // Says the file is the plugin's, so the settings screen can tell a
+        // site that serves its own robots.txt instead.
+        return new Response(body, {
+          headers: { ...headers, [ROBOTS_SERVED_BY_HEADER]: "plugin-seo" },
+        });
       },
     });
   }
-  routes.push({
+  routes.push(
+    llmsRoute(
+      "/llms.txt",
+      "list of pages",
+      config,
+      rules => rules.llmsTxt === true,
+      llmsTxtOf
+    ),
+    // Every listed page's words in one file: only beside llms.txt.
+    llmsRoute(
+      "/llms-full.txt",
+      "file of every page",
+      config,
+      rules => rules.llmsTxt === true && rules.llmsFullTxt === true,
+      llmsFullTxtOf
+    )
+  );
+  return routes;
+}
+
+/**
+ * A route serving one of the llms files, only once switched on in the SEO
+ * settings, so it is not found until then; it lists what the sitemap lists,
+ * narrowed as it is.
+ */
+function llmsRoute(
+  path: string,
+  what: string,
+  config: RootFilesConfig,
+  on: (rules: SiteRules) => boolean,
+  write: (
+    ctx: PluginRouteContext,
+    origin: string,
+    outputs: AiOutputsConfig,
+    rules: SiteRules
+  ) => Promise<string | null>
+): PluginRoute {
+  return {
     method: "GET",
-    path: "/llms.txt",
+    path,
     mount: "root",
     public: true,
-    // Served only once switched on in the SEO settings, so it is not found
-    // until then; it lists what the sitemap lists, narrowed as it is.
     handler: async (req, ctx) => {
       const rules = await config.readRules(ctx, undefined);
-      if (rules.llmsTxt !== true) return notFound();
-      const waiting = catchingUp("list of pages");
+      if (!on(rules)) return notFound();
+      const waiting = catchingUp(what);
       if (waiting !== null) return waiting;
       const { origin, headers } = await originOf(
         req,
@@ -176,7 +245,7 @@ export function rootFileRoutes(config: RootFilesConfig): PluginRoute[] {
         config,
         "text/plain; charset=utf-8"
       );
-      const body = await llmsTxtOf(
+      const body = await write(
         ctx,
         origin,
         {
@@ -184,14 +253,13 @@ export function rootFileRoutes(config: RootFilesConfig): PluginRoute[] {
           ...(config.codeRoutes === undefined
             ? {}
             : { codeRoutes: config.codeRoutes }),
-          ...(sitemap?.collections === undefined
+          ...(config.sitemap?.collections === undefined
             ? {}
-            : { collections: sitemap.collections }),
+            : { collections: config.sitemap.collections }),
         },
         rules
       );
       return body === null ? notFound() : new Response(body, { headers });
     },
-  });
-  return routes;
+  };
 }

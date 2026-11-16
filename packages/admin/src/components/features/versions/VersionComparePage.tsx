@@ -24,6 +24,13 @@ import { navigateTo } from "@admin/lib/navigation";
 import type { VersionScope } from "@admin/services/versionApi";
 
 import { VersionDiffView } from "./diff/VersionDiffView";
+import {
+  HISTORY_FRAME,
+  HISTORY_HEAD,
+  HISTORY_RAIL,
+  HISTORY_SPLIT,
+  HISTORY_TITLES,
+} from "./history-layout";
 import { predecessorOf, type PairResolution } from "./version-pairing";
 import { resolvePair, type ComparisonFrom } from "./version-search-params";
 import { versionsHref } from "./versions-href";
@@ -123,7 +130,14 @@ function ComparisonPane({
     // are different situations and a reader acts differently on each.
     return (
       <div className="px-4 py-8 text-center">
-        <p className="text-sm text-muted-foreground">
+        {/* Keyed by what it says, so the answer replaces the loading line as a
+            new line rather than rewriting its text in place: centred text
+            rewritten in place starts at a new point, which the browser counts
+            as the line moving. */}
+        <p
+          key={isLoading ? "loading" : pair.kind}
+          className="text-sm text-muted-foreground"
+        >
           {isLoading ? "Loading history…" : NO_PAIR_MESSAGE[pair.kind]}
         </p>
       </div>
@@ -223,8 +237,8 @@ export function VersionComparePage({
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center gap-3 border-b border-border px-4 py-3">
+    <div className={HISTORY_FRAME}>
+      <header data-frame-part="history-head" className={HISTORY_HEAD}>
         <Button
           variant="ghost"
           size="sm"
@@ -233,15 +247,18 @@ export function VersionComparePage({
         >
           <ArrowLeft className="h-4 w-4" />
         </Button>
-        <div className="min-w-0">
+        <div className={HISTORY_TITLES}>
           <h1 className="truncate text-base font-semibold text-foreground">
             Version history
           </h1>
-          {documentTitle ? (
-            <p className="truncate text-xs text-muted-foreground">
-              {documentTitle}
-            </p>
-          ) : null}
+          {/* The document's name keeps its line while it is read, so the
+              header does not grow under the reader when the name arrives. */}
+          <p
+            className="truncate text-xs text-muted-foreground"
+            aria-hidden={documentTitle ? undefined : true}
+          >
+            {documentTitle || "\u00a0"}
+          </p>
         </div>
       </header>
 
@@ -252,8 +269,8 @@ export function VersionComparePage({
           the same breakpoint, so the split is what has to give, not the
           content beside it. Stacked, the rail keeps a bounded height so the
           comparison is reachable without scrolling past the whole history. */}
-      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <aside className="max-h-[40vh] shrink-0 overflow-y-auto border-b border-border lg:max-h-none lg:w-72 lg:border-r lg:border-b-0">
+      <div className={HISTORY_SPLIT}>
+        <aside className={HISTORY_RAIL}>
           <VersionTimelineRail
             scope={scope}
             versions={versions}

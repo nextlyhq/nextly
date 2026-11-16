@@ -21,8 +21,8 @@ import type { MinimalUser } from "@nextly/types/auth";
 
 // PR 4 of unified-error-system migration: ServiceError result-shapes →
 // NextlyError throws. Methods now return data directly or throw.
-import { isPasswordHash } from "../../../auth/password/index";
 import { toDbError } from "../../../database/errors";
+import { appPasswordDigester } from "../../../di/password-digester";
 import { NextlyError } from "../../../errors";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
@@ -31,6 +31,7 @@ import { parseInterfaceLanguage } from "../interface-language";
 
 import {
   passwordColumns,
+  storeRehashedPassword,
   updateUserEndingSessions,
   type PasswordWriteTx,
 } from "./password-write";
@@ -195,10 +196,10 @@ export class UserAccountService extends BaseService {
     // Before any read: the one password write whose hash comes from outside,
     // so it must be one. A raw password sent here was stored as given; it is
     // refused now as invalid input, never echoed or logged, and before the
-    // catch around the write could report it as a database failure. A bcrypt
-    // hash, what core's sign-in verifies; an app with its own hasher sets
-    // passwords through the service, which hashes them with it.
-    if (!isPasswordHash(passwordHash)) {
+    // catch around the write could report it as a database failure. A hash
+    // the app's sign-in verifies: core's bcrypt, or one the app's own hasher
+    // recognises.
+    if (!appPasswordDigester().isHash(passwordHash)) {
       throw NextlyError.validation({
         errors: [
           {
@@ -242,6 +243,31 @@ export class UserAccountService extends BaseService {
       });
     } catch (err) {
       // Normalise raw driver errors so the kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
+    }
+  }
+
+  /**
+   * Store a proven password again with the app's hasher, in place of the
+   * bcrypt value core stored before the app configured it: only while the
+   * stored value is still `from`, and only the hash.
+   *
+   * @throws NextlyError on DB errors via fromDatabaseError.
+   */
+  async storeRehashedPassword(
+    userId: string,
+    from: string,
+    to: string
+  ): Promise<void> {
+    try {
+      await this.withTransaction(async tx => {
+        await storeRehashedPassword(tx as PasswordWriteTx, this.tables, {
+          userId,
+          from,
+          to,
+        });
+      });
+    } catch (err) {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
     }
   }

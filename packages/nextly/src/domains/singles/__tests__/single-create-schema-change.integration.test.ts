@@ -25,14 +25,20 @@
  * makes that claim worth anything is that a create can be issued again over storage a previous
  * attempt left behind: an empty table standing at the create's name is rebuilt from the retried
  * request's fields, never adopted as it stands, and one holding rows refuses the create before
- * anything is dropped or written. The repair cases are exercised directly: the registry row is
- * removed while the table stays, and a create is issued again — with the same fields, with
- * different fields, and against a table that holds data.
+ * anything is dropped or written. The repair cases are exercised directly: the tables an earlier
+ * attempt left stand with no row describing them, and a create is issued again — with the same
+ * fields, with different fields, and against a table that holds data.
  *
  * Self-skips per dialect on the standard rule: SQLite always runs, the servers run when their URL
  * is set. Each dialect gets its own throwaway database.
+ *
+ * Every case runs as a development server does, where a Builder save applies its migration at
+ * once. Anywhere else a create writes the migration, records the Single pending and applies
+ * nothing, for the deploy's `nextly migrate` to run; `field-group-and-single-saves` holds that
+ * case.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, text } from "../../../config";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
@@ -41,11 +47,21 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { tableHasRows } from "../../schema/pipeline/live-table-facts";
+import { applyMigrationStatements } from "../../schema/services/apply-migration-statements";
+import { reconcileSingleCompanion } from "../services/reconcile-single-companion";
 let current: TestNextly | undefined;
 
+// Development, where a Builder create applies its table and records it applied.
+beforeEach(() => {
+  vi.stubEnv("NODE_ENV", "development");
+});
+
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await current?.destroy();
   current = undefined;
 });
@@ -70,6 +86,51 @@ async function columnsOf(
       .find(spec => spec.name === table)
       ?.columns.map(column => column.name) ?? []
   );
+}
+
+/**
+ * The tables an interrupted create of `slug` left standing, with no row describing them and no
+ * migration recording them.
+ *
+ * Made as a create applied them before it wrote its migration: the Builder creator's own
+ * statements, then a translated Single's companion. Stopped before its row, such a create left
+ * exactly this. A create through the Builder save writer runs its table and its row in one file,
+ * which records them both, so a Builder create followed by deleting the row would leave a table
+ * the migration history still records, which is not the wreckage the repair is for.
+ */
+async function leftoverOfEarlierCreate(
+  instance: TestNextly,
+  slug: string,
+  fields: Record<string, unknown>[],
+  localized = false
+): Promise<void> {
+  const adapter = instance.adapter as unknown as DrizzleAdapter;
+  const tableName = `single_${slug}`;
+  const definitions = fields as unknown as FieldDefinition[];
+  await applyMigrationStatements(
+    adapter,
+    new DynamicCollectionSchemaService(
+      undefined,
+      adapter.getCapabilities().dialect
+    ).generateMigrationSQL(tableName, definitions, {
+      isSingle: true,
+      hasStatus: false,
+      localized,
+    })
+  );
+  if (localized) {
+    await reconcileSingleCompanion({
+      slug,
+      tableName,
+      oldFields: [],
+      newFields: definitions,
+      localized: true,
+      wasLocalized: false,
+      status: false,
+      wasStatus: false,
+      adapter,
+    });
+  }
 }
 
 /** The registry's own view of a slug, or undefined when it holds none. */
@@ -193,15 +254,10 @@ for (const dialect of getConfiguredTestDialects()) {
         fields: [{ name: "body", type: "text" }],
       };
 
-      await dispatchSingles("createSingle", {}, payload);
-      expect(await current.adapter.tableExists(`single_${plain}`)).toBe(true);
-
       // The interrupted state the guarantee is about: the table landed, the row describing it did
-      // not survive. Recovery has to be able to finish the operation over what is already there.
-      const registry = current.getService("singleRegistryService");
-      // `force` because a Single is site-wide configuration the registry refuses to drop casually;
-      // here the row is being removed on purpose to recreate an interrupted create.
-      await registry.deleteSingle(plain, { force: true });
+      // not. Recovery has to be able to finish the operation over what is already there.
+      await leftoverOfEarlierCreate(current, plain, payload.fields);
+      expect(await current.adapter.tableExists(`single_${plain}`)).toBe(true);
       expect(await registryRow(current, plain)).toBeUndefined();
 
       await dispatchSingles("createSingle", {}, payload);
@@ -226,20 +282,11 @@ for (const dialect of getConfiguredTestDialects()) {
       const slug = `${plain}_retry`;
       const table = `single_${slug}`;
 
-      await dispatchSingles(
-        "createSingle",
-        {},
-        {
-          slug,
-          label: "Retry",
-          fields: [{ name: "body", type: "text" }],
-        }
-      );
-      expect(await current.adapter.tableExists(table)).toBe(true);
-
       // The interrupted state: the table stands, the row describing it does not.
-      const registry = current.getService("singleRegistryService");
-      await registry.deleteSingle(slug, { force: true });
+      await leftoverOfEarlierCreate(current, slug, [
+        { name: "body", type: "text" },
+      ]);
+      expect(await current.adapter.tableExists(table)).toBe(true);
 
       await dispatchSingles(
         "createSingle",
@@ -499,29 +546,16 @@ for (const dialect of getConfiguredTestDialects()) {
       // The generator's convention: source and target table names sorted, then the field name.
       const junction = `dc_tags_${table}_tags`;
 
-      await dispatchSingles(
-        "createSingle",
-        {},
-        {
-          slug,
-          label: "Jn",
-          fields: [
-            {
-              name: "tags",
-              type: "relationship",
-              options: { relationType: "manyToMany", target: "tags" },
-            },
-          ],
-        }
-      );
-      expect((await registryRow(current, slug))?.migrationStatus).toBe(
-        "applied"
-      );
-      expect(await current.adapter.tableExists(junction)).toBe(true);
-
       // The interrupted state again: tables stand, the row describing them does not.
-      const registry = current.getService("singleRegistryService");
-      await registry.deleteSingle(slug, { force: true });
+      await leftoverOfEarlierCreate(current, slug, [
+        {
+          name: "tags",
+          type: "relationship",
+          options: { relationType: "manyToMany", target: "tags" },
+        },
+      ]);
+      expect(await registryRow(current, slug)).toBeUndefined();
+      expect(await current.adapter.tableExists(junction)).toBe(true);
 
       await dispatchSingles(
         "createSingle",
@@ -614,12 +648,9 @@ for (const dialect of getConfiguredTestDialects()) {
         ],
       };
 
-      await dispatchSingles("createSingle", {}, payload);
+      await leftoverOfEarlierCreate(current, localized, payload.fields, true);
       const table = `single_${localized}`;
       expect(await current.adapter.tableExists(`${table}_locales`)).toBe(true);
-
-      const registry = current.getService("singleRegistryService");
-      await registry.deleteSingle(localized, { force: true });
 
       await dispatchSingles("createSingle", {}, payload);
 

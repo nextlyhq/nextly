@@ -20,7 +20,11 @@
  *   gives search engines are kept;
  * - a page the answer gives no canonical keeps the route's own;
  * - a worker where nothing has started Nextly yet starts it before asking,
- *   rather than serving the route's own head.
+ *   rather than serving the route's own head;
+ * - in production, `next build` included, a Nextly that is unavailable (its
+ *   start failed, the database busy or unreachable) fails the render rather
+ *   than serving the page without its head, while a failure of the answer's
+ *   own still falls back; in development both fall back.
  */
 import type { Metadata } from "next";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,6 +38,8 @@ import {
   clearPluginServices,
   registerPluginService,
 } from "../../../plugins/services/plugin-services-registry";
+import { NextlyError } from "../../../errors/nextly-error";
+import { consoleLogger } from "../../../shared/types";
 import { metadataFromAnswer } from "../answer-metadata";
 import type {
   PageMetadataAnswer,
@@ -64,19 +70,40 @@ vi.mock("../../cache/cached-find", () => ({
 
 // Nextly's start in this process, stood in for: what it does when asked (a
 // boot records the providers), how often it was asked, and whether it fails.
+// A start that fails is recorded as one, as `getCachedNextly` records it; a
+// read that finds nothing to start (`nothingToStart`) is not, as there.
 const start = vi.hoisted(() => ({
   boot: undefined as (() => void) | undefined,
   calls: 0,
   fails: false,
+  nothingToStart: false,
+  throws: undefined as unknown,
 }));
-vi.mock("../../../init", () => ({
-  getCachedNextly: async () => {
-    start.calls += 1;
-    if (start.fails) throw new Error("the database is unreachable");
-    start.boot?.();
-    return {};
-  },
-}));
+vi.mock("../../../init", async () => {
+  const { markStartFailure } = await import("../../../init/start-failure");
+  const { NextlyError: Refusal } = await import("../../../errors/nextly-error");
+  return {
+    getCachedNextly: async () => {
+      start.calls += 1;
+      if (start.nothingToStart) {
+        throw Refusal.configuration({
+          logMessage: "getCachedNextly() called before initialization.",
+        });
+      }
+      if (start.throws !== undefined) {
+        markStartFailure(start.throws);
+        throw start.throws;
+      }
+      if (start.fails) {
+        const failure = new Error("the database is unreachable");
+        markStartFailure(failure);
+        throw failure;
+      }
+      start.boot?.();
+      return {};
+    },
+  };
+});
 
 const { pageMetadataFor, pageStructuredDataFor } = await import(
   "../page-metadata"
@@ -118,11 +145,14 @@ beforeEach(() => {
   start.boot = undefined;
   start.calls = 0;
   start.fails = false;
+  start.nothingToStart = false;
+  start.throws = undefined;
 });
 
 afterEach(() => {
   recordCapabilityProviders([]);
   clearPluginServices();
+  vi.unstubAllEnvs();
 });
 
 describe("metadataFromAnswer", () => {
@@ -200,6 +230,16 @@ describe("metadataFromAnswer", () => {
 
   it("leaves out everything the answer does not state", () => {
     expect(metadataFromAnswer({})).toEqual({});
+  });
+
+  it("names the site's X account on the card, as twitter:site", () => {
+    const metadata = metadataFromAnswer({
+      title: "T",
+      social: { xAccount: "@example" },
+    });
+    expect(metadata.twitter).toEqual({ title: "T", site: "@example" });
+    // Open Graph has no such tag, so the account is the X card's alone.
+    expect(metadata.openGraph).toEqual({ title: "T" });
   });
 });
 
@@ -321,6 +361,24 @@ describe("pageMetadataFor with a provider", () => {
     expect(metadata.openGraph).toMatchObject({
       type: "article",
       title: { absolute: "Answered card" },
+    });
+  });
+
+  it("serves the site's X account the answer names, past the route's own card", async () => {
+    provide({
+      resolve: () => ({
+        title: "Answered",
+        social: { xAccount: "@example" },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: { twitter: { creator: "@writer" } },
+      tags: [],
+    });
+    expect(metadata.twitter).toMatchObject({
+      site: "@example",
+      creator: "@writer",
     });
   });
 
@@ -659,6 +717,197 @@ describe("the route's own robots", () => {
   });
 });
 
+describe("the answer's display controls", () => {
+  it("places each control in the head as Google spells it", () => {
+    const metadata = metadataFromAnswer({
+      robots: {
+        index: true,
+        follow: true,
+        maxImagePreview: "standard",
+        maxSnippet: 80,
+        nosnippet: true,
+        noimageindex: true,
+        unavailableAfter: "2026-12-31T23:59:00.000Z",
+        noarchive: true,
+        nocache: true,
+      },
+    });
+    expect(metadata.robots).toEqual({
+      index: true,
+      follow: true,
+      "max-image-preview": "standard",
+      "max-snippet": 80,
+      nosnippet: true,
+      noimageindex: true,
+      unavailable_after: "2026-12-31T23:59:00.000Z",
+      noarchive: true,
+      nocache: true,
+    });
+  });
+
+  it("serves the answer's controls where the route gives none", async () => {
+    provide({
+      resolve: () => ({
+        robots: { index: true, follow: true, maxImagePreview: "large" },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: undefined,
+      tags: [],
+    });
+    expect(metadata.robots).toEqual({
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+    });
+  });
+
+  it("serves the stricter of the route's and the answer's limits", async () => {
+    provide({
+      resolve: () => ({
+        robots: {
+          index: true,
+          follow: true,
+          maxImagePreview: "large",
+          maxSnippet: 120,
+          unavailableAfter: "2027-01-01T00:00:00.000Z",
+        },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: {
+        robots:
+          "max-image-preview:standard, max-snippet:50, noarchive, unavailable_after: 2026-06-01T00:00:00.000Z",
+      },
+      tags: [],
+    });
+    expect(metadata.robots).toEqual({
+      index: true,
+      follow: true,
+      "max-image-preview": "standard",
+      "max-snippet": 50,
+      noarchive: true,
+      unavailable_after: "2026-06-01T00:00:00.000Z",
+    });
+  });
+
+  it("lets a page's own stricter choice win over the route's looser one", async () => {
+    provide({
+      resolve: () => ({
+        robots: {
+          index: true,
+          follow: true,
+          maxImagePreview: "none",
+          maxSnippet: 30,
+          nosnippet: true,
+        },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: {
+        robots: {
+          index: true,
+          follow: true,
+          "max-image-preview": "large",
+          "max-snippet": -1,
+        },
+      },
+      tags: [],
+    });
+    expect(metadata.robots).toEqual({
+      index: true,
+      follow: true,
+      "max-image-preview": "none",
+      "max-snippet": 30,
+      nosnippet: true,
+    });
+  });
+
+  it.each([
+    [
+      "an image preview size Google has no name for",
+      { maxImagePreview: "huge" },
+    ],
+    ["a snippet length that is not a whole number", { maxSnippet: 2.5 }],
+    ["a snippet length below no limit", { maxSnippet: -2 }],
+    ["a switch that is not on or off", { nosnippet: "yes" }],
+    ["a date that is not text", { unavailableAfter: 20261231 }],
+  ])("refuses an answer with %s", async (_, controls) => {
+    provide({
+      resolve: () =>
+        ({
+          title: "Answered",
+          robots: { index: true, follow: true, ...controls },
+        }) as unknown as PageMetadataAnswer,
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: { title: "Own" },
+      tags: [],
+    });
+    expect(metadata.title).toBe("Own");
+  });
+});
+
+describe("a date to leave results that is not one", () => {
+  it.each([
+    ["text that names no date", "not-a-date"],
+    ["a day the calendar does not have", "2026-02-30T00:00:00Z"],
+    ["a time the clock does not have", "2026-12-31T25:00:00Z"],
+    ["a date with no time", "2026-12-31"],
+    ["a time with no zone", "2026-12-31T23:59:00"],
+  ])("leaves out %s, keeps the rest, and says so once", async (_, value) => {
+    const warn = vi.spyOn(consoleLogger, "warn").mockImplementation(() => {});
+    provide({
+      resolve: () => ({
+        title: "Answered",
+        robots: {
+          index: true,
+          follow: true,
+          maxImagePreview: "large",
+          unavailableAfter: value,
+        },
+      }),
+    });
+    const first = await pageMetadataFor({ ...page, code: undefined, tags: [] });
+    await pageMetadataFor({ ...page, code: undefined, tags: [] });
+    expect(first.title).toEqual({ absolute: "Answered" });
+    expect(first.robots).toEqual({
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+    });
+    const said = warn.mock.calls.filter(([message]) =>
+      String(message).includes(value)
+    );
+    expect(said).toHaveLength(1);
+    warn.mockRestore();
+  });
+
+  it("serves a date and time with its zone, as Google reads it", async () => {
+    provide({
+      resolve: () => ({
+        robots: {
+          index: true,
+          follow: true,
+          unavailableAfter: "2026-12-31T23:59:00+05:00",
+        },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: undefined,
+      tags: [],
+    });
+    expect(metadata.robots).toMatchObject({
+      unavailable_after: "2026-12-31T23:59:00+05:00",
+    });
+  });
+});
+
 describe("the route's own canonical", () => {
   it("is kept where the answer has none, such as a type with no public address", async () => {
     provide({ resolve: () => ({ title: "Feature" }) });
@@ -728,11 +977,276 @@ describe("a worker where nothing has started Nextly yet", () => {
     expect(start.calls).toBe(0);
   });
 
-  it("serves the route's own metadata where Nextly cannot be started", async () => {
+  it("serves the route's own metadata in development where Nextly cannot be started", async () => {
+    vi.stubEnv("NODE_ENV", "development");
     forgetCapabilityProviders();
     start.fails = true;
     const code: Metadata = { title: "Own" };
     expect(await pageMetadataFor({ ...page, code, tags: [] })).toBe(code);
     expect(start.calls).toBe(1);
+  });
+});
+
+describe("a production render where Nextly is unavailable", () => {
+  const code: Metadata = { title: "Own" };
+  const request = { ...page, code, tags: [] };
+
+  /** A provider whose every answer fails with `error`. */
+  const failingWith = (error: unknown): void =>
+    provide({
+      resolve: () => {
+        throw error;
+      },
+    });
+
+  beforeEach(() => {
+    vi.stubEnv("NODE_ENV", "production");
+  });
+
+  it("fails the head where Nextly cannot be started, as SERVICE_UNAVAILABLE carrying the start's error", async () => {
+    forgetCapabilityProviders();
+    start.fails = true;
+    const failed = await pageMetadataFor(request).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    expect(NextlyError.isCode(failed, "SERVICE_UNAVAILABLE")).toBe(true);
+    expect((failed as Error).cause).toMatchObject({
+      message: "the database is unreachable",
+    });
+  });
+
+  it("fails the structured data where Nextly cannot be started", async () => {
+    forgetCapabilityProviders();
+    start.fails = true;
+    await expect(pageStructuredDataFor(request)).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+    });
+  });
+
+  it("fails while `next build` prerenders under another NODE_ENV", async () => {
+    // `next build` keeps a NODE_ENV the environment set, and sets NEXT_PHASE.
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("NEXT_PHASE", "phase-production-build");
+    forgetCapabilityProviders();
+    start.fails = true;
+    await expect(pageMetadataFor(request)).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+    });
+  });
+
+  it("fails the head and the structured data where the database is busy, with that error", async () => {
+    const busy = NextlyError.databaseBusy();
+    failingWith(busy);
+    await expect(pageMetadataFor(request)).rejects.toBe(busy);
+    await expect(pageStructuredDataFor(request)).rejects.toBe(busy);
+  });
+
+  it("fails where a read lost its database connection, however the service wrapped it", async () => {
+    // An adapter's connection error, as `@nextlyhq/adapter-drizzle` builds
+    // one, wrapped by a service as a generic database error.
+    const lost = Object.assign(new Error("Connection terminated"), {
+      name: "DatabaseError",
+      kind: "connection",
+    });
+    failingWith(
+      new NextlyError({
+        code: "DATABASE_ERROR",
+        publicMessage: "A temporary database error occurred.",
+        cause: lost,
+      })
+    );
+    await expect(pageMetadataFor(request)).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+    });
+  });
+
+  it("still serves the route's own metadata for an answer of the wrong shape", async () => {
+    provide({
+      resolve: () => ({ title: 42 }) as unknown as PageMetadataAnswer,
+    });
+    expect(await pageMetadataFor(request)).toEqual(code);
+  });
+
+  it("still serves the route's own metadata for a provider's own bug", async () => {
+    failingWith(new TypeError("cannot read properties of undefined"));
+    expect(await pageMetadataFor(request)).toEqual(code);
+    expect(await pageStructuredDataFor(request)).toBeUndefined();
+  });
+
+  it("passes a Next.js control-flow signal from the start through untouched", async () => {
+    // A start that reads a dynamic API while a page prerenders throws
+    // Next.js's own signal, which Next.js must receive as it was thrown.
+    const signal = Object.assign(new Error("Dynamic server usage: headers"), {
+      digest: "DYNAMIC_SERVER_USAGE",
+    });
+    forgetCapabilityProviders();
+    start.throws = signal;
+    await expect(pageMetadataFor(request)).rejects.toBe(signal);
+  });
+
+  it("still serves the route's own metadata where nothing can start Nextly, which no start failed", async () => {
+    forgetCapabilityProviders();
+    start.nothingToStart = true;
+    expect(await pageMetadataFor(request)).toBe(code);
+  });
+});
+
+describe("a development render where Nextly is unavailable", () => {
+  it("passes a Next.js control-flow signal from the start through untouched", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const signal = Object.assign(new Error("Dynamic server usage: headers"), {
+      digest: "DYNAMIC_SERVER_USAGE",
+    });
+    forgetCapabilityProviders();
+    start.throws = signal;
+    await expect(
+      pageMetadataFor({ ...page, code: { title: "Own" }, tags: [] })
+    ).rejects.toBe(signal);
+  });
+
+  it("serves the route's own metadata where the database is busy", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    provide({
+      resolve: () => {
+        throw NextlyError.databaseBusy();
+      },
+    });
+    const code: Metadata = { title: "Own" };
+    expect(await pageMetadataFor({ ...page, code, tags: [] })).toEqual(code);
+  });
+});
+
+describe("the answer's other forms of the page", () => {
+  it("are placed as alternate links by media type, beside the canonical", () => {
+    expect(
+      metadataFromAnswer({
+        canonical: "/blog/hello",
+        formats: { "text/markdown": "/blog/hello.md" },
+      }).alternates
+    ).toEqual({
+      canonical: "/blog/hello",
+      types: { "text/markdown": "/blog/hello.md" },
+    });
+  });
+
+  it("are nothing where the answer has none, or an empty set", () => {
+    expect(metadataFromAnswer({ formats: {} }).alternates).toBeUndefined();
+  });
+
+  it("replace the route's own link for their media type only, keeping its others and its language links", async () => {
+    provide({
+      resolve: () => ({
+        canonical: "/blog/hello",
+        formats: { "text/markdown": "/blog/hello.md" },
+      }),
+    });
+    const meta = await pageMetadataFor({
+      ...page,
+      code: {
+        alternates: {
+          languages: { de: "/de/blog/hello" },
+          types: {
+            "text/markdown": "/old.md",
+            "application/rss+xml": "/blog/feed.xml",
+          },
+        },
+      },
+      tags: [],
+    });
+    expect(meta.alternates).toEqual({
+      canonical: "/blog/hello",
+      languages: { de: "/de/blog/hello" },
+      types: {
+        "text/markdown": "/blog/hello.md",
+        "application/rss+xml": "/blog/feed.xml",
+      },
+    });
+  });
+
+  it("refuse the answer whole where one is keyed by anything but a media type", async () => {
+    provide({
+      resolve: () => ({
+        title: "Answered",
+        formats: { "markdown copy": "/blog/hello.md" },
+      }),
+    });
+    const code: Metadata = { title: "Own" };
+    expect(await pageMetadataFor({ ...page, code, tags: [] })).toEqual(code);
+  });
+});
+
+describe("the answer's verification tags", () => {
+  it("are placed as meta tags by name", () => {
+    expect(
+      metadataFromAnswer({
+        verification: {
+          "msvalidate.01": "8A2F61C4",
+          "p:domain_verify": "a91c7e04",
+        },
+      })
+    ).toEqual({
+      verification: {
+        other: { "msvalidate.01": "8A2F61C4", "p:domain_verify": "a91c7e04" },
+      },
+    });
+  });
+
+  it("are nothing where the answer has none, or an empty set", () => {
+    expect(metadataFromAnswer({}).verification).toBeUndefined();
+    expect(
+      metadataFromAnswer({ verification: {} }).verification
+    ).toBeUndefined();
+  });
+
+  it("join the route's own, keeping both where they share a name", async () => {
+    provide({
+      resolve: () => ({
+        verification: {
+          "msvalidate.01": "ANSWERED",
+          "yandex-verification": "y1",
+        },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: {
+        verification: { google: "g1", other: { "msvalidate.01": "OWN" } },
+      },
+      tags: [],
+    });
+    expect(metadata.verification).toEqual({
+      google: "g1",
+      other: {
+        "msvalidate.01": ["OWN", "ANSWERED"],
+        "yandex-verification": "y1",
+      },
+    });
+  });
+
+  it("keep the route's own where the answer has none", async () => {
+    provide({ resolve: () => ({ title: "Answered" }) });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: { verification: { google: "g1" } },
+      tags: [],
+    });
+    expect(metadata.verification).toEqual({ google: "g1" });
+  });
+
+  it("refuse an answer naming a tag by something that is not a meta name", async () => {
+    provide({
+      resolve: () => ({
+        title: "Answered",
+        verification: { 'x" onload="alert(1)': "a" },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: { title: "Own" },
+      tags: [],
+    });
+    expect(metadata.verification).toBeUndefined();
+    expect(cacheOutcomes).toEqual([{ refused: true }]);
   });
 });

@@ -149,6 +149,32 @@ export function assertValidFieldsPayload(
 }
 
 /**
+ * Refuses a list of an entity's fields in which a top-level entry has no name.
+ *
+ * A collection's and a Single's API take only named fields at the top level: the row's columns,
+ * its system-column choices and its translations are all named by them, and a group with no name
+ * there is a shape only the definition file holds, which the column builders read through
+ * (`fieldsStoredOnRow`) so that file cannot stop a save. A group with no name inside a named group
+ * or a repeater stays legal everywhere. One rule for every road that takes such a list, so the
+ * collection and Single APIs refuse it in the same words.
+ */
+export function assertTopLevelFieldsNamed(fields: readonly unknown[]): void {
+  const unnamed = fields.findIndex(
+    field => typeof (field as { name?: unknown } | null)?.name !== "string"
+  );
+  if (unnamed === -1) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: `fields[${unnamed}].name`,
+        code: "REQUIRED",
+        message: "Each field requires a name.",
+      },
+    ],
+  });
+}
+
+/**
  * The Draft/Published lifecycle a schema save asks it be judged under, read from the request's
  * `status`: the Builder sends its pending toggle with the fields, because it saves its settings
  * only once the fields have applied. Undefined when the request says nothing. A value that is not a
