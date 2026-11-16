@@ -21,7 +21,6 @@
  * Trusted server code (`overrideAccess`) is the caller's to skip, before this.
  *
  * @module domains/content-events/deleted-document-access
- * @experimental
  */
 
 import {

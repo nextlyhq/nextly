@@ -6,7 +6,6 @@
  * and commit or roll back with it.
  *
  * @module domains/content-events/record
- * @experimental
  */
 
 import { NextlyError } from "../../errors";
@@ -41,8 +40,6 @@ export type ContentEventSubject =
 
 /**
  * One event to record.
- *
- * @experimental
  */
 export interface ContentEventInput {
   subject: ContentEventSubject;
@@ -68,8 +65,6 @@ export interface ContentEventInput {
 
 /**
  * What a write reads besides its transaction.
- *
- * @experimental
  */
 export interface RecordContentEventOptions {
   /**
@@ -290,8 +285,6 @@ async function intoRecord<T>(
 /**
  * Record one event and its parts on `tx`, the transaction of the change it
  * records. Returns the event's id, which is time-ordered.
- *
- * @experimental
  */
 export async function recordContentEvent(
   tx: VersionsDbApi,

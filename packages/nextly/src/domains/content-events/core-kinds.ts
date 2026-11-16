@@ -7,7 +7,6 @@
  * Workflows register their own kinds beside these.
  *
  * @module domains/content-events/core-kinds
- * @experimental
  */
 
 import { z } from "zod";
@@ -20,8 +19,6 @@ import {
 
 /**
  * Each core kind, by the name a writer uses for it.
- *
- * @experimental
  */
 export const CORE_CONTENT_EVENT_KINDS = {
   created: { name: "created", label: "Created by {actor}" },
@@ -84,6 +81,12 @@ export const CORE_CONTENT_EVENT_KINDS = {
       .strict(),
   },
   deleted: { name: "deleted", label: "Deleted by {actor}", endsSubject: true },
+  /**
+   * Retention removing older versions. Retention is about to be kept per version part, which may
+   * change what this event records.
+   *
+   * @experimental
+   */
   versionsRemoved: {
     name: "versions-removed",
     label: "{count} older versions removed",
@@ -93,8 +96,6 @@ export const CORE_CONTENT_EVENT_KINDS = {
 
 /**
  * A core kind's key in {@link CORE_CONTENT_EVENT_KINDS}.
- *
- * @experimental
  */
 export type CoreContentEventKind = keyof typeof CORE_CONTENT_EVENT_KINDS;
 

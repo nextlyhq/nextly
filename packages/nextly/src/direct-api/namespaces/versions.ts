@@ -17,7 +17,6 @@
  * however it is called.
  *
  * @module direct-api/namespaces/versions
- * @experimental Until the history feature is complete.
  */
 
 import type { ComparisonQuery } from "../../api/versions-access";
@@ -82,7 +81,6 @@ async function historyFunctions() {
   };
 }
 
-/** @experimental */
 export interface VersionsNamespace {
   /** A page of the document's versions, newest first, without snapshots. */
   list(

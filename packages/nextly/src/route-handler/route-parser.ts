@@ -854,8 +854,6 @@ function parseCollectionEntryPublishAllRoute(
  * `GET /singles/{slug}/events`: a document's events, nested under it like its
  * version history so the document's `read-{slug}` permission guards them with
  * no separate authorization branch.
- *
- * @experimental
  */
 function parseDocumentEventRoutes(
   resource: string,
