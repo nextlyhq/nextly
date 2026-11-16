@@ -3,6 +3,8 @@
  * the format it is written in, upright whatever its camera wrote, and never
  * made from an original past the pixel limit.
  */
+import { crc32 } from "node:zlib";
+
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 
@@ -19,6 +21,82 @@ async function photo(
   return options.orientation === undefined
     ? await image.toBuffer()
     : await image.withMetadata({ orientation: options.orientation }).toBuffer();
+}
+
+const PNG_SIGNATURE = Buffer.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+]);
+
+/** One PNG chunk: its length, type, data and checksum. */
+function pngChunk(type: string, data: Buffer): Buffer {
+  const head = Buffer.alloc(8);
+  head.writeUInt32BE(data.length, 0);
+  head.write(type, 4, "latin1");
+  const sum = Buffer.alloc(4);
+  sum.writeUInt32BE(crc32(Buffer.concat([head.subarray(4), data])) >>> 0, 0);
+  return Buffer.concat([head, data, sum]);
+}
+
+/** The chunks of a PNG, in order. */
+function pngChunks(png: Buffer): Array<{ type: string; data: Buffer }> {
+  const chunks: Array<{ type: string; data: Buffer }> = [];
+  for (let at = 8; at + 8 <= png.length; ) {
+    const length = png.readUInt32BE(at);
+    chunks.push({
+      type: png.toString("latin1", at + 4, at + 8),
+      data: png.subarray(at + 8, at + 8 + length),
+    });
+    at += 12 + length;
+  }
+  return chunks;
+}
+
+/** An APNG frame control: frame `sequence`, the whole 40 by 10 canvas. */
+function frameControl(sequence: number): Buffer {
+  const data = Buffer.alloc(26);
+  data.writeUInt32BE(sequence, 0);
+  data.writeUInt32BE(40, 4);
+  data.writeUInt32BE(10, 8);
+  data.writeUInt16BE(1, 20);
+  data.writeUInt16BE(10, 22);
+  return data;
+}
+
+/**
+ * A real two-frame animated PNG, red then blue: the first frame is the PNG's
+ * own image data, the second follows as frame data, as every APNG encoder
+ * writes them.
+ */
+async function animatedPng(): Promise<Buffer> {
+  const frame = (background: string) =>
+    sharp({ create: { width: 40, height: 10, channels: 4, background } })
+      .png()
+      .toBuffer();
+  const first = pngChunks(await frame("#f00"));
+  const second = pngChunks(await frame("#00f"));
+  const header = first.find(chunk => chunk.type === "IHDR");
+  if (!header) throw new Error("sharp wrote a PNG with no header");
+  const control = Buffer.alloc(8);
+  control.writeUInt32BE(2, 0);
+  let sequence = 2;
+  return Buffer.concat([
+    PNG_SIGNATURE,
+    pngChunk("IHDR", header.data),
+    pngChunk("acTL", control),
+    pngChunk("fcTL", frameControl(0)),
+    ...first
+      .filter(chunk => chunk.type === "IDAT")
+      .map(chunk => pngChunk("IDAT", chunk.data)),
+    pngChunk("fcTL", frameControl(1)),
+    ...second
+      .filter(chunk => chunk.type === "IDAT")
+      .map(chunk => {
+        const number = Buffer.alloc(4);
+        number.writeUInt32BE(sequence++, 0);
+        return pngChunk("fdAT", Buffer.concat([number, chunk.data]));
+      }),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
 }
 
 describe("ImageProcessor.copyAtWidth", () => {
@@ -126,6 +204,27 @@ describe("ImageProcessor.copyAtWidth", () => {
     expect(await processor.copyAtWidth(animated, 96, "webp")).toEqual({
       kind: "refused",
     });
+  });
+
+  it("sends an animated PNG as it is, though the image library reads it as one frame", async () => {
+    const animated = await animatedPng();
+    // The library sees only the first frame, so its page count cannot tell.
+    expect((await sharp(animated).metadata()).pages ?? 1).toBe(1);
+    for (const format of ["avif", "webp", "png"] as const) {
+      expect(await processor.copyAtWidth(animated, 96, format)).toEqual({
+        kind: "refused",
+      });
+    }
+  });
+
+  it("still copies a PNG with one frame", async () => {
+    const still = await sharp({
+      create: { width: 400, height: 100, channels: 4, background: "#0a0" },
+    })
+      .png()
+      .toBuffer();
+    const result = await processor.copyAtWidth(still, 160, "png");
+    expect(result.kind).toBe("made");
   });
 });
 

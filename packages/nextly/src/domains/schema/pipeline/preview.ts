@@ -35,6 +35,7 @@ import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "./classifier/count-helpers";
+import { typeChangeJudge } from "./classifier/judge-type-change";
 import { relationSwitches } from "./companion-shape-switches";
 import {
   buildDesiredSnapshot,
@@ -58,7 +59,7 @@ import type {
 } from "./pushschema-pipeline-interfaces";
 import { withRecordedShapes } from "./recorded-shapes";
 import { RegexRenameDetector } from "./rename-detector";
-import type { ClassifierEvent } from "./resolution/types";
+import type { ClassifierEvent, SafeConversion } from "./resolution/types";
 import type { DesiredSchema } from "./types";
 
 // Result of a preview-mode pipeline run. Mirrors the readable subset of
@@ -85,6 +86,9 @@ export interface PipelinePreviewResult {
   // queries against it without re-introspecting (the legacy translator
   // uses this to count rows on dropped fields).
   liveSnapshot: NextlySchemaSnapshot;
+
+  /** The type changes the conversion rule judged safe, where the preview judged them. */
+  safeConversions?: SafeConversion[];
 }
 
 // Optional deps for testing. Production callers omit and get the real
@@ -107,6 +111,12 @@ export interface PreviewDesiredSchemaArgs {
   dialect: SupportedDialect;
   /** As the apply's own (`PushSchemaPipeline.apply`), so the preview asks what the apply will. */
   defaultLocale?: string;
+  /**
+   * Given by a code-first preview (`db:sync --dry-run`): each type change is judged by the repair
+   * command's rule, as the code-first apply judges it, and a blocked one refused ending with this
+   * step. Absent (the Schema Builder's preview), a type change is listed as a warning, as before.
+   */
+  nextStep?: string;
 }
 
 /**
@@ -231,6 +241,18 @@ export async function previewDesiredSchema(
     countLongerThan: (table, column, length) =>
       countLongerThanHelper(db, dialect, table, column, length),
     dialect,
+    ...(args.nextStep !== undefined
+      ? {
+          judgeConversion: typeChangeJudge({
+            db,
+            dialect,
+            live: liveSnapshot,
+            expected: desiredSnapshot,
+            schema: desired,
+          }),
+          nextStep: args.nextStep,
+        }
+      : {}),
   });
 
   return {
@@ -239,5 +261,8 @@ export async function previewDesiredSchema(
     candidates,
     classification: classificationResult.level,
     liveSnapshot,
+    ...(classificationResult.safeConversions !== undefined
+      ? { safeConversions: classificationResult.safeConversions }
+      : {}),
   };
 }
