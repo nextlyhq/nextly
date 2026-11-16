@@ -162,7 +162,10 @@ export function VersionStoryRow(props: VersionStoryRowProps): JSX.Element {
           onClick={() => onSelect(versionNo)}
           className={cn(
             "grid w-full min-w-0 gap-0.5 rounded-md px-2.5 py-2 text-left text-[13px] leading-[18px] hover:bg-accent/60",
-            active && "bg-accent shadow-[inset_2px_0_0_var(--nx-foreground)]"
+            // The secondary text reads in the foreground colour on the
+            // selected row: the muted colour falls short of contrast on it.
+            active &&
+              "bg-accent shadow-[inset_2px_0_0_var(--nx-foreground)] [&_.text-muted-foreground]:text-foreground"
           )}
         >
           <VersionRowBody {...props} />
@@ -221,7 +224,8 @@ function RenameButton({
       type="button"
       onClick={() => onRename(versionNo)}
       aria-label={`Name version ${versionNo}`}
-      className="mt-1.5 shrink-0 rounded p-1 text-muted-foreground opacity-0 hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+      // At least 24px square: a target any smaller is hard to hit (WCAG 2.5.8).
+      className="mt-1.5 inline-flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded p-1 text-muted-foreground opacity-0 hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
     >
       <Pencil className="h-3.5 w-3.5" aria-hidden />
     </button>
@@ -238,7 +242,8 @@ function FoldedSaves(props: VersionStoryRowProps) {
         type="button"
         aria-expanded={open}
         onClick={() => setOpen(o => !o)}
-        className="mb-1 ml-1.5 inline-flex items-center gap-1 rounded px-1 py-0.5 text-xs font-medium text-muted-foreground hover:text-foreground"
+        // At least 24px tall, as a target must be (WCAG 2.5.8).
+        className="mb-1 ml-1.5 inline-flex min-h-6 items-center gap-1 rounded px-1 py-0.5 text-xs font-medium text-muted-foreground hover:text-foreground"
       >
         {open ? (
           <ChevronDown className="h-3 w-3" aria-hidden />
