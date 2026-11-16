@@ -9,6 +9,11 @@
  * type, so they offer what that block type supports; it takes no page edit,
  * so nothing the controls do can reach the page except through the look.
  *
+ * A look has no element of its own on the canvas, so its sides and corners
+ * are named in the site's own direction, read from the canvas root: the same
+ * Top, Right, Bottom, Left box a block of that site shows, mirrored on a
+ * right-to-left site.
+ *
  * @module look-inspector
  * @experimental Settles with the Design panel's Block looks group.
  */
@@ -34,6 +39,7 @@ import {
   type StyleInspectorPanelProps,
 } from "./style-inspector-panel";
 import { useLookTarget, type SharedStylesHost } from "./style-target";
+import { useSiteOrientation } from "./use-canvas-reading";
 
 /** What the host lends the inspector while a look is edited on its own. */
 export interface LookEditing {
@@ -44,14 +50,20 @@ export interface LookEditing {
 }
 
 export interface LookInspectorProps
-  extends Omit<StyleInspectorPanelProps, "editor" | "target"> {
+  extends Omit<
+    StyleInspectorPanelProps,
+    "editor" | "target" | "sideOrientation"
+  > {
   readonly editor: EditorState;
   readonly look: BlockLookRow;
   readonly host: SharedStylesHost | undefined;
   readonly onExit: () => void;
   /** The site's class library, which decides the look each block wears. */
   readonly library: readonly NamedClass[];
-  /** The canvas, where the blocks the edit reaches are marked. */
+  /**
+   * The canvas, where the blocks the edit reaches are marked, and whose root
+   * says which way the site runs.
+   */
   readonly canvasRoot?: HTMLElement | null;
 }
 
@@ -127,6 +139,15 @@ export function LookInspector({
     () => standInEditor(editor, look.blockType),
     [editor, look.blockType]
   );
+  // The site's direction names the look's sides, as a block's box names its
+  // own. Re-read on the signals that can restyle the page.
+  const sideOrientation = useSiteOrientation(canvasRoot, {
+    document: editor.document,
+    state: style.state,
+    breakpoint: style.breakpoint,
+    cascade: style.cascade,
+    previewContainer: style.previewContainer,
+  });
   const title = blockLabel(look.blockType);
   return (
     <div className="nx-inspector nx-look-inspector" data-look={look.id}>
@@ -149,7 +170,12 @@ export function LookInspector({
           }
         </p>
       ) : (
-        <StyleInspectorPanel {...style} editor={stand} target={target} />
+        <StyleInspectorPanel
+          {...style}
+          editor={stand}
+          target={target}
+          sideOrientation={sideOrientation}
+        />
       )}
     </div>
   );

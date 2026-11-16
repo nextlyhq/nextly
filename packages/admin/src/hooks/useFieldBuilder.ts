@@ -497,9 +497,11 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
   // fully functional. The validation paternalistically blocked the user's
   // reproduction: create → add field → save → remove field → save →
   // "Please add at least one field" (07-admin-bugs-feedback item 3).
+  // Judged against every field held, built-in ones included, since a
+  // condition may read one the user's fields leave out.
   const validateFields = useCallback(
-    (userFields: BuilderField[]) => validateBuilderFields(userFields),
-    []
+    (userFields: BuilderField[]) => validateBuilderFields(userFields, fields),
+    [fields]
   );
 
   // -------------------------------------------------------------------------

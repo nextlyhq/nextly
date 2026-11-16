@@ -166,6 +166,12 @@ export default function SingleBuilderEditPage({
           updates: {
             label: settings.singularName,
             description: settings.description,
+            // The icon, as the settings-only save sends it: without it an icon
+            // changed in the same save as a field never reached the server.
+            // Group and order stay unwritten, so code-first values survive.
+            admin: {
+              icon: settings.icon,
+            },
             status: settings.status === true,
             localized: settings.i18n === true,
             versions: settings.versions === true,

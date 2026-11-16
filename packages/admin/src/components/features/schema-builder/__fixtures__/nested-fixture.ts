@@ -199,6 +199,23 @@ export function nestedFixtureFieldGroups(): Map<string, LoadedFieldGroup> {
  * "acme/hero" is registered.
  */
 export function nestedFixtureBlockCatalogs(): Map<string, BlockCatalog> {
+  return blockCatalogsMatching(["core/heading"]);
+}
+
+/**
+ * The same listing with every entry of the blocks field's policy admitted by the heading, so the
+ * blocks field's rows show all its row says: what a blocks field Focus may show looks like.
+ */
+export function nestedFixtureBlockCatalogsAllMatched(): Map<
+  string,
+  BlockCatalog
+> {
+  return blockCatalogsMatching(["core/heading", "acme/hero"]);
+}
+
+function blockCatalogsMatching(
+  matchedBy: string[]
+): Map<string, BlockCatalog> {
   return new Map([
     [
       blockCatalogKey(["core/heading", "acme/hero"]),
@@ -210,7 +227,7 @@ export function nestedFixtureBlockCatalogs(): Map<string, BlockCatalog> {
             label: "Heading",
             description: "A section heading.",
             source: "@nextlyhq/plugin-page-builder",
-            matchedBy: ["core/heading"],
+            matchedBy,
             props: [
               { name: "text", label: "Text", type: "string" },
               { name: "level", label: "Level", type: "select" },

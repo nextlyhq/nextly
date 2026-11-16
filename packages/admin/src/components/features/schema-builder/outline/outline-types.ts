@@ -63,4 +63,6 @@ export interface OutlineActions extends OutlineFieldActions {
   ) => MoveVerdict | null;
   /** Carry a drop out if the rule allows, announced either way. */
   drop: (activeId: string, overId: string, levels: number) => void;
+  /** Show a container on its own (Focus); absent where the outline offers no Focus. */
+  focusContainer?: (id: string) => void;
 }
