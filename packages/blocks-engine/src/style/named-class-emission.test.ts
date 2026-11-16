@@ -268,6 +268,25 @@ describe("a node referencing a class that was never written", () => {
     expect(classes.get("n1")).toBe(classes.get("n1")?.split(" ")[0]);
     expect(warnings.map(w => w.code)).toContain("unknown-class");
   });
+
+  it("tells the author, in plain words, which style is missing and what to do", () => {
+    // The report is what the builder shows under the block's classes, so it is written for an
+    // author who knows blocks and styles, not the document's terms.
+    const { warnings } = compile(doc({ classes: ["c1", "ghost"] }), [card]);
+
+    const missing = warnings.find(w => w.code === "unknown-class");
+    expect(missing).toMatchObject({
+      path: "/nodes/0/classes/1",
+      severity: "warning",
+      message:
+        'This block uses the style "ghost", which this site doesn\'t have, so the page doesn\'t show it.',
+      suggestion:
+        "Remove the style from this block, or add a shared style with that name in Design.",
+    });
+    expect(`${missing?.message} ${missing?.suggestion}`).not.toMatch(
+      /\b(node|library|reference)\b/i
+    );
+  });
 });
 
 describe("two nodes sharing one id", () => {

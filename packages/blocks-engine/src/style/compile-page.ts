@@ -2662,12 +2662,15 @@ export function compilePageCss(
       reportedMissingClasses.set(path, reportedHere);
       if (reportedHere.has(id)) continue;
       reportedHere.add(id);
+      // Worded for the author, since the builder shows it under the block's classes: what is
+      // missing, what it costs the page, and the two ways to settle it.
       pushBoundedWarning(warningAllowance, warnings, {
         path: entryPath,
         code: "unknown-class",
         severity: "warning",
-        message: `This node lists the class ${describeValue(id)}, which the site library does not define, so it was not applied.`,
-        suggestion: "Remove the reference, or add the class to the library.",
+        message: `This block uses the style "${describeValue(id)}", which this site doesn't have, so the page doesn't show it.`,
+        suggestion:
+          "Remove the style from this block, or add a shared style with that name in Design.",
       });
     }
     // Two nodes sharing an id share one entry in this map, so a named class recorded here would
