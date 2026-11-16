@@ -7,6 +7,10 @@
  *
  * @module default-layout/install
  */
+import type {
+  FieldRewriteRequest,
+  FieldRewriteResult,
+} from "@nextlyhq/plugin-sdk";
 import type { PluginDatabase } from "@nextlyhq/plugin-sdk/schema";
 
 import { LAYOUTS_SLUG } from "../collections/layouts";
@@ -16,11 +20,23 @@ import { registerPageReferenceGuard } from "../layout-removal/page-reference-gua
 import { fenceOnExecutor, layoutRemovalStore } from "../layout-removal/store";
 
 import { registerDefaultLayoutGuard } from "./default-layout-guard";
+import {
+  emptySeedMark,
+  moveEmptySeedPages,
+  type EmptySeedParts,
+} from "./empty-seed";
+import { registerEmptySeedWriteHook } from "./empty-seed-write";
 import { ensureDefaultLayout, type EnsureDefaultDeps } from "./ensure-default";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./settings-single";
 
-/** What the repair needs from the installed plugin, the Direct API aside. */
-export type DefaultLayoutSetup = Omit<EnsureDefaultDeps, "nextly">;
+/**
+ * What the repair needs from the installed plugin, the Direct API aside, with
+ * what the move of pages off the empty seed writes with, always.
+ */
+export type DefaultLayoutSetup = Omit<
+  EnsureDefaultDeps,
+  "nextly" | "emptySeed"
+> & { readonly emptySeed: EmptySeedParts };
 
 /** The parts of the plugin context this wiring reads, named structurally. */
 interface InstallContext {
@@ -38,6 +54,14 @@ interface InstallContext {
   logger: { warn(message: string, meta?: Record<string, unknown>): void };
   db: PluginDatabase;
   dialect: Parameters<typeof layoutRemovalStore>[1];
+  services: {
+    collections: {
+      rewriteField(
+        request: FieldRewriteRequest,
+        opts: { as: "system" }
+      ): Promise<FieldRewriteResult>;
+    };
+  };
 }
 
 /**
@@ -61,6 +85,13 @@ export function installDefaultLayout(ctx: InstallContext): DefaultLayoutSetup {
     pagesSlug: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
     removals: layoutRemovalStore(ctx.db, ctx.dialect),
     warn: (message, meta) => ctx.logger.warn(message, meta),
+    emptySeed: {
+      mark: emptySeedMark(ctx.db, ctx.dialect),
+      // As the system, through the service bound to this plugin, so each
+      // moved page's history names the Page Builder and no person.
+      rewrite: request =>
+        ctx.services.collections.rewriteField(request, { as: "system" }),
+    },
   };
   registerDefaultLayoutGuard({ ctx, slugs: setup.slugs, warn: setup.warn });
   registerLayoutRemovalGuard({
@@ -79,12 +110,22 @@ export function installDefaultLayout(ctx: InstallContext): DefaultLayoutSetup {
     inTransaction: executor => fenceOnExecutor(ctx.db, executor),
     warn: setup.warn,
   });
+  // After the page side of the fence, so a write naming the empty seed is
+  // judged by the fence as sent and then stored as "Site default".
+  registerEmptySeedWriteHook({
+    ctx,
+    pages: setup.pagesSlug,
+    slugs: setup.slugs,
+    emptySeed: setup.emptySeed,
+    warn: setup.warn,
+  });
   return setup;
 }
 
 /**
  * Seed the default Layout once the boot has finished, so a fresh site has one
- * before its first page is drawn.
+ * before its first page is drawn, and then move pages off the empty seed
+ * until that has finished once.
  *
  * NOT awaited by the caller, and that is required rather than a shortcut:
  * `onReady` runs inside service registration, before the Direct API will serve,
@@ -99,7 +140,9 @@ export async function seedDefaultLayoutAtStart(
 ): Promise<void> {
   try {
     const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-    await ensureDefaultLayout({ ...setup, nextly: await getCachedNextly() });
+    const nextly = await getCachedNextly();
+    await ensureDefaultLayout({ ...setup, nextly });
+    await moveEmptySeedPages({ ...setup, nextly });
   } catch (error) {
     setup.warn(
       "[page-builder] the default Layout could not be checked at start; the jobs sweep will check it",
