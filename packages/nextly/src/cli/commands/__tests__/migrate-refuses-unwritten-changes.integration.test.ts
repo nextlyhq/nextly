@@ -11,7 +11,14 @@
  * Without the refusal, each run below printed "Nothing to migrate. Database is
  * up to date." and exited 0, the edit reaching no database.
  */
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -477,6 +484,43 @@ describe.each(getConfiguredTestDialects())(
       expect(dropped.code, dropped.said).toBeUndefined();
 
       const again = await migrate(both([TITLE], false));
+      expect(again.code, again.said).toBeUndefined();
+      expect(again.said).toContain(UP_TO_DATE);
+    });
+
+    it("a column a later hand-written migration dropped is not missing", async () => {
+      await migrateCreate(config([TITLE, BODY]), "create_posts");
+      expect((await migrate(config([TITLE, BODY]))).code).toBeUndefined();
+      // A blank migration, which has no snapshot, drops the column with SQL of its own: the newest
+      // applied snapshot still records it, and the database agrees with its ledger.
+      loaded.config = config([TITLE, BODY]);
+      clock += 1;
+      vi.setSystemTime(new Date(Date.UTC(2026, 10, 16, 12, 0, 0, clock)));
+      const { context } = command();
+      expect(
+        await exiting(() =>
+          runMigrateCreate("drop_body", { cwd: dir, blank: true }, context)
+        )
+      ).toBeUndefined();
+      const blank = readdirSync(join(dir, "migrations")).find(f =>
+        f.endsWith("_drop_body.sql")
+      )!;
+      const q = dialect === "mysql" ? "`" : '"';
+      const text = readFileSync(join(dir, "migrations", blank), "utf-8");
+      writeFileSync(
+        join(dir, "migrations", blank),
+        text.replace(
+          "-- UP\n",
+          `-- UP\nALTER TABLE ${q}${TABLE}${q} DROP COLUMN ${q}body${q};\n`
+        )
+      );
+      const dropped = await migrate(config([TITLE, BODY]), {
+        acceptDataLoss: true,
+      });
+      expect(dropped.code, dropped.said).toBeUndefined();
+      expect((await columns(instance!, dialect))?.has("body")).toBe(false);
+
+      const again = await migrate(config([TITLE, BODY]));
       expect(again.code, again.said).toBeUndefined();
       expect(again.said).toContain(UP_TO_DATE);
     });

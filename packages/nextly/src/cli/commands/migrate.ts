@@ -3259,21 +3259,21 @@ async function refuseDatabaseBehindLedger(
   deps: MigrateCoreDeps
 ): Promise<void> {
   if (deps.refuseDatabaseBehind !== true) return;
-  const applied = new Set(
-    (
-      await listMigrationFiles(
-        deps.adapter,
-        deps.db,
-        deps.dialect,
-        deps.migrationsDir,
-        deps.logger,
-        deps.declared
-      )
+  // The applied app migrations in run order, as the files are discovered.
+  const appliedInOrder = (
+    await listMigrationFiles(
+      deps.adapter,
+      deps.db,
+      deps.dialect,
+      deps.migrationsDir,
+      deps.logger,
+      deps.declared
     )
-      .filter(entry => entry.applied)
-      .map(entry => entry.file.name)
-  );
-  if (applied.size === 0) return;
+  )
+    .filter(entry => entry.applied)
+    .map(entry => entry.file.name);
+  if (appliedInOrder.length === 0) return;
+  const applied = new Set(appliedInOrder);
   const core = coreTableNames(deps.dialect);
   const snapshots = (
     await appliedSnapshotsOf(deps.migrationsDir, sql =>
@@ -3288,6 +3288,11 @@ async function refuseDatabaseBehindLedger(
   }));
   const newest = snapshots.at(-1);
   if (newest === undefined || newest.snapshot.tables.length === 0) return;
+  // An applied migration with no snapshot of its own (`migrate:create --blank`, a translations
+  // file) ordered after the newest applied snapshot may have dropped or renamed what that snapshot
+  // records, and no snapshot says what it left. The database's end state cannot be read from the
+  // files then, so nothing is named rather than a table or column it removed on purpose.
+  if (appliedInOrder.at(-1) !== newest.migration) return;
   const live = await liveColumnNames(
     deps.db,
     deps.dialect,
