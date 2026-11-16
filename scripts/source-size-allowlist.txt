@@ -11,7 +11,6 @@
 # cleanly, so delete only the entry's own line and leave the blank lines.
 # When a file shrinks, its count may be lowered to its new size.
 
-packages/blocks-engine/src/composition-planners.ts 4288
 
 packages/blocks-engine/src/document.ts 1543
 
