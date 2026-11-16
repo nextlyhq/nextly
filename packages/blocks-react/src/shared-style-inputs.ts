@@ -165,8 +165,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * `v8`: a flex item, and a block taken out of the flow, carry flags
  * the containment inset reads. A sheet stored before has neither, so a
  * contained item in a row is inset from the whole row: refused, not served.
+ *
+ * `v9`: a flex item that fills its row, and the children of a
+ * `display: contents` wrapper, carry flags of their own. A sheet stored
+ * before has neither: refused, not served.
  */
-const ENCODING = "v8";
+const ENCODING = "v9";
 
 /**
  * Whether a stored stamp was written under the current {@link ENCODING}.
