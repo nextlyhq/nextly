@@ -33,7 +33,6 @@ packages/blocks-engine/src/style/dtcg.ts 2362
 
 packages/builder/src/binding-controls.tsx 1632
 
-packages/builder/src/builder-shell.tsx 2301
 
 packages/builder/src/canvas-drag.tsx 1698
 
