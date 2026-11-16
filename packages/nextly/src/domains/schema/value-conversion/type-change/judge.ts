@@ -288,7 +288,7 @@ function judgeAs(
   if (value.kind === "list") return judgeListIntoOne(to, value, fromJson);
   const judge = INTO_FAMILY[to.family];
   return judge === undefined
-    ? { outcome: "blocked", reason: "kind-never-held" }
+    ? { outcome: "blocked", reason: "pair-blocked" }
     : judge(to, value, fromJson);
 }
 
@@ -362,7 +362,7 @@ function judgeIntoList(
 ): ValueVerdict {
   const item = to.item;
   if (item === undefined) {
-    return { outcome: "blocked", reason: "kind-never-held" };
+    return { outcome: "blocked", reason: "pair-blocked" };
   }
   if (value.kind === "list") return listIntoList(to, item, value, fromJson);
   if (value.kind === "document") return { outcome: "lost", reason: "object" };
@@ -460,7 +460,7 @@ function judgeIntoText(to: FieldTypeOnDialect, value: OldValue): ValueVerdict {
     case "document":
       return to.family === "text"
         ? textWriting(to, stableJson(value.value))
-        : { outcome: "blocked", reason: "kind-never-held" };
+        : { outcome: "blocked", reason: "pair-blocked" };
     default:
       return changedTo(
         judgeIntoText(to, { kind: "text", text: textOf(value) })
@@ -546,7 +546,7 @@ function judgeIntoNumber(
     default:
       return fromJson
         ? { outcome: "lost", reason: "kind-never-held" }
-        : { outcome: "blocked", reason: "kind-never-held" };
+        : { outcome: "blocked", reason: "pair-blocked" };
   }
 }
 
@@ -713,7 +713,7 @@ function judgeIntoDate(
   }
   return fromJson
     ? { outcome: "lost", reason: "kind-never-held" }
-    : { outcome: "blocked", reason: "kind-never-held" };
+    : { outcome: "blocked", reason: "pair-blocked" };
 }
 
 function instantInto(

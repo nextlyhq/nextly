@@ -113,7 +113,42 @@ export type ConversionReasonKind =
    * A value that would be cleared, where the new column does not allow a null: clearing it would
    * leave a null the column refuses, so a value would have to be invented.
    */
-  | "cleared-under-not-null";
+  | "cleared-under-not-null"
+  // A field's type change converts each value by its pair's rule, and gives these besides.
+  /** A value that is not a number would be cleared. */
+  | "not-a-number"
+  /** A value that is not an ISO 8601 date or date-time would be cleared. */
+  | "not-a-date"
+  /** A value the email field's rule refuses would be cleared. */
+  | "not-an-email"
+  /** A value that is not one of the field's options would be cleared. */
+  | "not-an-option"
+  /** A value other than `true`, `false`, `1` or `0` would be cleared. */
+  | "not-a-boolean"
+  /** A NaN or infinite number the new field cannot hold would be cleared. */
+  | "non-finite"
+  /** A JSON object, which only rich text or text can take, would be cleared. */
+  | "object"
+  /** A JSON value of a kind the new type could never hold would be cleared. */
+  | "kind-never-held"
+  /** A value the new column refuses outright would be cleared. */
+  | "column-refuses"
+  /** A value the new field's own validation refuses would be cleared. */
+  | "field-refuses"
+  /** The new type holds the value only rounded. */
+  | "rounded"
+  /** The value is outside the range the new type holds. */
+  | "out-of-range"
+  /** A date text names no time or no offset from UTC, and none is made up. */
+  | "no-time-or-offset"
+  /** A list of several items becoming one value, which cannot keep them. */
+  | "several-items"
+  /** A list holding an item the new list cannot hold; a list is never cut. */
+  | "item-not-held"
+  /** No value of the old type could ever be held by the new one. */
+  | "pair-blocked"
+  /** A value is stored in the new type's form, nothing of it lost. */
+  | "new-form";
 
 /** The rows one reason applies to: the first keys, up to a bound, and how many there are. */
 export interface AffectedRows {
