@@ -42,13 +42,12 @@ describe("toSnakeName", () => {
 
 describe("the save path (convertToFieldDefinition)", () => {
   /**
-   * A stored name is not a label: it is the field's identity, already
-   * accepted by the server as `^[a-z][a-z0-9_]*$`, and that pattern allows
-   * underscore runs and a trailing underscore. Re-deriving such a name would
-   * collapse `line__item` to `line_item` or trim `legacy_` to `legacy` during
-   * an unrelated save — silently renaming a database column and API key. The
-   * derivation is for labels; a legal name passes through verbatim, and only
-   * a name the server would reject is re-derived.
+   * A stored name is not a label: it is the field's identity. Re-deriving it
+   * would collapse `line__item` to `line_item`, trim `legacy_` to `legacy`, or
+   * turn a plugin's camelCase `metaTitle` into `meta_title` during an
+   * unrelated save, silently renaming a database column and API key. The
+   * derivation is for labels; every name is sent as it is, and a name the
+   * save refuses is refused there, naming the field.
    */
   const base = {
     id: "f-1",
@@ -66,11 +65,16 @@ describe("the save path (convertToFieldDefinition)", () => {
     );
   });
 
-  it("still re-derives a name the server would reject", () => {
-    // The control: preservation is reserved for legal names — an illegal one
-    // must not pass through just because the guard exists.
+  it("keeps a camelCase name a plugin declared verbatim", () => {
+    expect(convertToFieldDefinition({ ...base, name: "metaTitle" }).name).toBe(
+      "metaTitle"
+    );
+  });
+
+  it("sends a name the save refuses as it is, for the save to refuse naming the field", () => {
+    // Renamed here, it would reach the save as a field nobody named.
     expect(convertToFieldDefinition({ ...base, name: "My Field!" }).name).toBe(
-      "my_field"
+      "My Field!"
     );
   });
 

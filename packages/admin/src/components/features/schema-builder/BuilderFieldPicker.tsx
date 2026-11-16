@@ -32,9 +32,17 @@ import {
 import { distinguishEntities } from "@admin/lib/builder/distinguishing-label";
 import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
 import {
+  builderNameProblem,
+  nameIsTakenAt,
+  nameSurfaceOf,
+  type BuilderNamePlace,
+} from "@admin/lib/builder/field-name-check";
+import {
   insertField,
   type FieldInsertPosition,
 } from "@admin/lib/builder/insert-field";
+import { namingLevelFor } from "@admin/lib/builder/move-rule";
+import { fieldsWithDeleted } from "@admin/lib/builder/outline/pending-rows";
 import { UI_SCHEMA_FIELD_TYPES } from "@admin/lib/builder/ui-schema-mode";
 
 import { pickerExcludedTypes, type BuilderConfig } from "./builder-config";
@@ -63,15 +71,34 @@ type Props = {
   onFieldsChange: (next: BuilderField[]) => void;
   /** Called after each add, with the new field's id. */
   onAdded: (fieldId: string, how: { addAnother: boolean }) => void;
+  /**
+   * The fields as last saved. A field deleted but not yet saved still holds its name until the
+   * save, so a new field may not take it.
+   */
+  savedFields?: readonly BuilderField[];
+  /** Whether Draft/Published is on, as stored or as the pending settings set it. */
+  lifecycleEnabled?: boolean;
 };
 
-/** The fields a new field will sit beside at `position`. */
-function siblingsAt(
-  fields: BuilderField[],
-  position: FieldInsertPosition
-): BuilderField[] {
-  if (!position.parentFieldId) return fields;
-  return findFieldById(fields, position.parentFieldId)?.fields ?? [];
+/**
+ * Where a field added at `position` is named, by the save's own rules: the naming level it lands
+ * on (a layout container is part of the level holding it), and the names already there, with every
+ * pending delete put back where it was saved, since each still holds its name until the save.
+ */
+function namePlaceAt(
+  fields: readonly BuilderField[],
+  position: FieldInsertPosition,
+  savedFields: readonly BuilderField[] | undefined,
+  rules: Pick<BuilderNamePlace, "surface" | "lifecycleEnabled">
+): BuilderNamePlace {
+  const shown = savedFields ? fieldsWithDeleted(fields, savedFields) : fields;
+  const { level, siblings } = namingLevelFor(shown, position.parentFieldId);
+  return {
+    ...rules,
+    // Inside a named container the value is a key in that container's value.
+    nested: level !== null,
+    siblingNames: siblings.map(field => field.name),
+  };
 }
 
 export function BuilderFieldPicker({
@@ -82,6 +109,8 @@ export function BuilderFieldPicker({
   onCancel,
   onFieldsChange,
   onAdded,
+  savedFields,
+  lifecycleEnabled = false,
 }: Props): JSX.Element {
   const { data: fieldGroupData, isLoading: fieldGroupsLoading } =
     useFieldGroups({
@@ -93,7 +122,10 @@ export function BuilderFieldPicker({
   const parent = position.parentFieldId
     ? findFieldById(fields, position.parentFieldId)
     : undefined;
-  const siblingNames = siblingsAt(fields, position).map(f => f.name);
+  const place = namePlaceAt(fields, position, savedFields, {
+    surface: nameSurfaceOf(config.kind),
+    lifecycleEnabled,
+  });
 
   const fieldGroupOptions = useMemo(
     () =>
@@ -150,8 +182,15 @@ export function BuilderFieldPicker({
         mostUsed: MOST_USED_FIELD_TYPES,
         // A label with nothing the name rule keeps (a label in another
         // script, say) still gets a name, "field", which the editor can change.
+        // A derived name that is taken, by a sibling or as a built-in or Draft/Published name, gets
+        // the next free suffix; one the rules refuse for its spelling or length is shown as refused.
         deriveName: label =>
-          nextDuplicateName(toSnakeName(label) || "field", siblingNames),
+          nextDuplicateName(
+            toSnakeName(label) || "field",
+            place.siblingNames,
+            name => nameIsTakenAt(name, { ...place, siblingNames: [] })
+          ),
+        nameProblem: name => builderNameProblem(name, place),
         fieldGroups: FIELD_GROUP_TYPE
           ? {
               type: FIELD_GROUP_TYPE,
