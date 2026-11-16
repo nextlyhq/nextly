@@ -251,3 +251,103 @@ describe("copyOfMedia", () => {
     ).toBeNull();
   });
 });
+
+describe("copyOfMedia past the original's width", () => {
+  it("answers no copy, so the original is used at its own width", async () => {
+    const { storage } = memoryStorage();
+    const processor = new ImageProcessor();
+    const narrow = { ...ITEM, width: 500 };
+    expect(await copyOfMedia(narrow, 1920, { storage, processor })).toBeNull();
+    // 640 is past 500, even when asked for nearer 500.
+    expect(await copyOfMedia(narrow, 600, { storage, processor })).toBeNull();
+    expect(await copyOfMedia(narrow, 400, { storage, processor })).toEqual({
+      url: mediaCopyAddress(narrow, 320),
+      width: 320,
+    });
+  });
+});
+
+describe("copyBytesOf when storage fails", () => {
+  it("serves the original rather than an error when a read fails", async () => {
+    const { item } = await itemWithPhoto();
+    const failing: CopyStorage = {
+      getPublicUrl: path => `/uploads/${path}`,
+      read: async () => {
+        throw new Error("storage unreachable");
+      },
+      uploadAt: async (path: string) => ({ url: path, path }),
+    };
+    expect(
+      await copyBytesOf(item, 640, null, {
+        storage: failing,
+        processor: new ImageProcessor(),
+      })
+    ).toEqual({ kind: "original" });
+  });
+});
+
+describe("copyBytesOf under load", () => {
+  it("makes at most two different copies at once, and the rest wait their turn", async () => {
+    const { item, bytes } = await itemWithPhoto();
+    const { storage, written } = memoryStorage({ [item.filename]: bytes });
+    const processor = new ImageProcessor();
+    const make = processor.copyAtWidth.bind(processor);
+    let now = 0;
+    let most = 0;
+    vi.spyOn(processor, "copyAtWidth").mockImplementation(async (...args) => {
+      now += 1;
+      most = Math.max(most, now);
+      try {
+        return await make(...args);
+      } finally {
+        now -= 1;
+      }
+    });
+
+    const all = await Promise.all(
+      [96, 160, 240, 320, 640, 960].map(width =>
+        copyBytesOf(item, width, null, { storage, processor })
+      )
+    );
+
+    expect(most).toBe(2);
+    expect(all.every(served => served.kind === "copy")).toBe(true);
+    expect(written).toHaveLength(6);
+  });
+});
+
+describe("a copy finished after its original went", () => {
+  it("is removed again, since no delete will list it", async () => {
+    const { item, bytes } = await itemWithPhoto();
+    const { storage, held } = memoryStorage({ [item.filename]: bytes });
+    const removed: string[] = [];
+    const withDelete: CopyStorage = {
+      ...storage,
+      delete: async path => {
+        removed.push(path);
+        held.delete(path);
+      },
+    };
+
+    const served = await copyBytesOf(item, 160, null, {
+      storage: withDelete,
+      processor: new ImageProcessor(),
+      stillCurrent: async () => false,
+    });
+
+    expect(served.kind).toBe("copy");
+    expect(removed).toEqual([`${item.filename}.w160.jpg`]);
+    expect(held.has(`${item.filename}.w160.jpg`)).toBe(false);
+  });
+
+  it("is kept while its original is current", async () => {
+    const { item, bytes } = await itemWithPhoto();
+    const { storage, held } = memoryStorage({ [item.filename]: bytes });
+    await copyBytesOf(item, 160, null, {
+      storage: { ...storage, delete: async () => undefined },
+      processor: new ImageProcessor(),
+      stillCurrent: async () => true,
+    });
+    expect(held.has(`${item.filename}.w160.jpg`)).toBe(true);
+  });
+});

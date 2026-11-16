@@ -224,6 +224,20 @@ async function gateMediaRoute(
     if (!READ_ROUTE_TYPES.has(route.type)) {
       throwUnmatchedRoute(path, method);
     }
+    // A copy is an image's bytes, which no other read here hands out: it is
+    // served on this mount only while a visitor may read media, as the gated
+    // mount serves a visitor, so a copy is never more readable than its item.
+    if (route.type === "serve-media-copy") {
+      await ensureInitialized();
+      if (
+        !(await visitorReadsSystemResource(
+          SYSTEM_READ_POLICY.media.read.resource
+        ))
+      ) {
+        // Asked to sign in, as the gated mount asks a visitor it refuses.
+        throw NextlyError.authRequired();
+      }
+    }
     return {};
   }
 
@@ -1135,6 +1149,9 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
         // Bytes, not a JSON document, so it skips the date formatting the
         // other reads get.
         if (route.type === "serve-media-copy") {
+          // The copy reads the media service and storage directly, so this
+          // worker is set up first, as the raw route's is.
+          await ensureInitialized();
           return await handleServeMediaCopy(
             route.mediaId!,
             route.width!,

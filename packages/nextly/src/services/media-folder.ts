@@ -68,6 +68,7 @@ import {
 } from "../domains/media/revalidate-media";
 import { StoredFileSearchReader } from "../domains/media/stored-file-search";
 import {
+  copiesToRemove,
   storedFilesOf,
   type MediaFilesRecord,
 } from "../domains/media/stored-files";
@@ -203,7 +204,10 @@ function removeEveryStoredFile(storage: StoredFileRemover): RemoveStoredFiles {
  * recorded by URL alone that it serves is among them (`storageReadingOf`).
  */
 interface FolderStorageCleanup
-  extends Pick<StoredFileRemover, "getPublicUrl" | "getStorageType"> {
+  extends Pick<
+    StoredFileRemover,
+    "getPublicUrl" | "getStorageType" | "keepsCopies"
+  > {
   bulkDelete(
     filePaths: string[],
     collection?: string
@@ -292,7 +296,10 @@ function removalThrough(
         record,
         reading.locator
       );
-      filePaths.push(...paths.filter(filePath => !kept.has(filePath)));
+      filePaths.push(
+        ...paths.filter(filePath => !kept.has(filePath)),
+        ...copiesToRemove(record, cleanup.keepsCopies?.("media") ?? false, kept)
+      );
       for (const url of unlocated) warnUnlocated(url, record.id);
       for (const url of notHere) warnSizeNotHere(url, record.id);
     }

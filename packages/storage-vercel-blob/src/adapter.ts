@@ -209,7 +209,7 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
    * pathname with no random suffix, so the blob's URL is the key it was asked
    * for and the next read finds it; overwriting is allowed, since two requests
    * may make the same copy at once and write the same bytes. A key that is not
-   * one of this store's blob URLs is refused before anything is written.
+   * a Vercel Blob URL is refused before anything is written.
    *
    * @experimental
    */

@@ -87,16 +87,15 @@ describeEachDialect("a media delete while sizes is dropped", dialect => {
     }>("media", {
       where: { and: [{ column: "id", op: "=", value: uploaded.id }] },
     });
-    const copies = new Set(copyPathsOf(row));
     const files = storedFilesOf(row).paths;
     // The original and the thumbnail an upload stores, both there. Resized
     // copies are made when first asked for, so the upload stored none.
-    const stored = files.filter(file => !copies.has(file));
-    expect(stored).toHaveLength(2);
-    for (const file of stored) {
+    expect(files).toHaveLength(2);
+    for (const file of files) {
       expect(await getMediaStorage().exists(file, "media")).toBe(true);
     }
-    expect(copies.size).toBeGreaterThan(0);
+    const copies = copyPathsOf(row);
+    expect(copies.length).toBeGreaterThan(0);
     for (const copy of copies) {
       expect(await getMediaStorage().exists(copy, "media")).toBe(false);
     }

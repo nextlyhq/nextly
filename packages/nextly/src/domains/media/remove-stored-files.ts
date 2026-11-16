@@ -12,7 +12,11 @@ import {
 } from "./orphan-thumbnails";
 import { RETIRED_SIZES_COLUMN } from "./retired-image-sizes-constants";
 import type { SizeLocator } from "./size-location";
-import { storedFilesOf, type MediaFilesRecord } from "./stored-files";
+import {
+  copiesToRemove,
+  storedFilesOf,
+  type MediaFilesRecord,
+} from "./stored-files";
 
 /**
  * Removing a media item's stored files, once its record is gone: the one way
@@ -27,6 +31,11 @@ import { storedFilesOf, type MediaFilesRecord } from "./stored-files";
  */
 export interface StoredFileRemover {
   delete(filePath: string, collection?: string): Promise<void>;
+  /**
+   * Whether the collection's storage can keep resized copies beside its
+   * files. A remover that cannot say keeps none, and is asked to remove none.
+   */
+  keepsCopies?(collection?: string): boolean;
   getPublicUrl?(filePath: string, collection?: string): string;
   getStorageType?(collection?: string): string;
 }
@@ -339,7 +348,7 @@ export async function filesKeptByOthers(
 
 /**
  * Removes every file stored for a deleted item: the original, every image
- * size and the thumbnail made at upload, except any of them in `kept`, the
+ * size, the thumbnail made at upload and every resized copy, except any of them in `kept`, the
  * files another item still refers to. Each is removed on its own, retried
  * on a transient failure, so one that fails leaves the others to go, and is
  * named in the log with its item, so the leftover can be found. Never throws:
@@ -362,8 +371,13 @@ export async function removeStoredFiles(
   );
   for (const url of unlocated) warnUnlocated(url, mediaId);
   for (const url of notHere) warnSizeNotHere(url, mediaId);
+  const copies = copiesToRemove(
+    record,
+    storage.keepsCopies?.("media") ?? false,
+    kept
+  );
   const removed = await Promise.all(
-    paths
+    [...paths, ...copies]
       .filter(filePath => !kept.has(filePath))
       .map(async filePath => {
         try {

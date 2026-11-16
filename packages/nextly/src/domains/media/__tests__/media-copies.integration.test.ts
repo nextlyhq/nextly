@@ -190,6 +190,10 @@ describe.each(getConfiguredTestDialects())(
         const refusedCopy = await get([item.id, "copy", "240"]);
         expect(refusedItem.status).toBe(401);
         expect(refusedCopy.status).toBe(refusedItem.status);
+        // The public mount serves no bytes a visitor may not read either.
+        expect(
+          (await get([item.id, "copy", "240"], { gated: false })).status
+        ).toBe(401);
         expect(await mediaStorage().exists(`${item.filename}.w240.jpg`)).toBe(
           false
         );
@@ -247,6 +251,20 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await t.nextly.media.copyOf({ id: document.id, width: 640 })
       ).toBeNull();
+    });
+
+    it("answers no copy for an address naming an item that is gone, and not found for its id", async () => {
+      const item = await uploadPhoto();
+      await t.nextly.media.delete({ id: item.id });
+      expect(
+        await t.nextly.media.copyOf({
+          url: `/api/media/${item.id}/raw`,
+          width: 640,
+        })
+      ).toBeNull();
+      await expect(
+        t.nextly.media.copyOf({ id: item.id, width: 640 })
+      ).rejects.toMatchObject({ statusCode: 404 });
     });
 
     it("makes the old address stale when the file is replaced, and removes the old copies", async () => {

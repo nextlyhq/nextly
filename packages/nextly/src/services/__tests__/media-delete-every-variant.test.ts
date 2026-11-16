@@ -35,6 +35,7 @@ import {
   testLogger,
   type TestDb,
 } from "../../__tests__/fixtures/db";
+import { copyPathsOf } from "../../domains/media/copies/copy-rules";
 import { storedFilesOf } from "../../domains/media/stored-files";
 import { Bucket } from "../../storage/__tests__/stand-in-bucket";
 import { MediaService } from "../media";
@@ -558,7 +559,8 @@ describe("a file another item also refers to", () => {
         return result;
       }
     );
-    // The search reads exactly the columns `storedFilesOf` needs.
+    // The search reads exactly the columns `storedFilesOf` needs, and the
+    // type the resized copies an item can have are read from.
     vi.spyOn(db.adapter, "getDrizzle").mockImplementation(relations => {
       const drizzle = getDrizzle(relations);
       return new Proxy(drizzle, {
@@ -570,7 +572,7 @@ describe("a file another item also refers to", () => {
             const read = Object.keys(fields ?? {})
               .sort()
               .join(",");
-            if (read === "filename,sizes,thumbnailUrl,url") {
+            if (read === "filename,mimeType,sizes,thumbnailUrl,url") {
               lookedAfterCommit.push(committed);
             }
             return target.select(fields as never);
@@ -861,7 +863,12 @@ describe("a file the delete cannot remove", () => {
     const result = await service.deleteMedia("media-1");
 
     expect(result.success).toBe(true);
-    expect(removed.mock.calls.map(([p]) => p)).toEqual(["2026/10/a1-x.png"]);
+    // The original and the resized copies it can have, which the bucket
+    // keeps; never the thumbnail, whose location is not known.
+    expect(removed.mock.calls.map(([p]) => p)).toEqual([
+      "2026/10/a1-x.png",
+      ...copyPathsOf({ filename: "2026/10/a1-x.png", mimeType: "image/png" }),
+    ]);
     // Fields arrive as an object beside the message, so they are read as
     // JSON rather than as `[object Object]`.
     const said = warn.mock.calls
@@ -1059,7 +1066,11 @@ describe("deleting a folder with its contents", () => {
     });
     const folder = await newFolder();
     for (let i = 0; i < 3; i++) await uploadPhoto(folder);
-    const perItem = bucket.files.size / 3;
+    // An item's files are what it stored and the resized copies it can have,
+    // which the bucket keeps and a delete removes with it.
+    const perItem =
+      bucket.files.size / 3 +
+      copyPathsOf({ filename: "x.png", mimeType: "image/png" }).length;
     const remove = bucket.delete.bind(bucket);
     let inFlight = 0;
     let most = 0;

@@ -51,7 +51,8 @@ export async function handleServeMediaCopy(
   // A width that is not plain digits is a path this route does not have.
   if (width === undefined) throw NextlyError.notFound();
 
-  const media = await getService("mediaService").findById(mediaId, {});
+  const mediaService = getService("mediaService");
+  const media = await mediaService.findById(mediaId, {});
   const served = await copyBytesOf(
     media,
     width,
@@ -59,6 +60,17 @@ export async function handleServeMediaCopy(
     {
       storage: mediaCopyStorage(),
       processor: getImageProcessor(),
+      // Read again once a copy is kept: an item deleted or given a new file
+      // meanwhile no longer lists it. Only a definite answer removes it; a
+      // read that fails leaves the copy, since the item may still be there.
+      stillCurrent: async () => {
+        try {
+          const now = await mediaService.findById(mediaId, {});
+          return now.filename === media.filename;
+        } catch (error) {
+          return !NextlyError.isNotFound(error);
+        }
+      },
     }
   );
 

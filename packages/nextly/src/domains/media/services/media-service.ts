@@ -654,7 +654,16 @@ export class MediaService {
   ): Promise<MediaCopy | null> {
     const id = mediaIdOfCopySource(source);
     if (id === undefined) return null;
-    const item = await this.findById(id, context);
+    let item: MediaFile;
+    try {
+      item = await this.findById(id, context);
+    } catch (error) {
+      // An address naming an item that is gone is used as it is, like any
+      // other address that is not a media item's; an id asked for directly
+      // is not found, as `findById` answers.
+      if ("url" in source && NextlyError.isNotFound(error)) return null;
+      throw error;
+    }
     return await copyOfMedia(item, width, {
       storage: mediaCopyStorage(),
       processor: this.imageProcessor,

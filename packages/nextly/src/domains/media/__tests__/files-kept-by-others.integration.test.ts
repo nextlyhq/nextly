@@ -28,7 +28,6 @@ import {
 } from "../remove-stored-files";
 
 import { StoredFileSearchReader } from "../stored-file-search";
-import { copyPathsOf } from "../copies/copy-rules";
 import { storedFilesOf } from "../stored-files";
 
 /**
@@ -164,8 +163,6 @@ describeEachDialect("files another item refers to", dialect => {
     expect(kept).not.toBeNull();
     expect([...(kept ?? [])]).toEqual([otherOriginal]);
     expect(removed.sort()).toEqual([...files].sort());
-    // The original and its thumbnail, and every resized copy a PNG can
-    // have, each removed whether or not it was ever made.
-    expect(files).toHaveLength(2 + copyPathsOf(deleted).length);
+    expect(files).toHaveLength(2);
   });
 });

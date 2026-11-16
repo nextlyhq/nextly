@@ -23,6 +23,10 @@ import type {
   ImageProcessor,
 } from "../../../storage/image-processor";
 import {
+  keepsCopies,
+  type CopyKeepingStorage,
+} from "../../../storage/keeps-copies";
+import {
   readStoredMediaBytes,
   type StoredMediaSource,
 } from "../../../storage/read-stored-media";
@@ -52,8 +56,10 @@ export interface MediaCopy {
   width: MediaCopyWidth;
 }
 
-/** What of a storage copies are read from and kept by. */
-export type CopyStorage = StoredMediaSource & Pick<IStorageAdapter, "uploadAt">;
+/** What of a storage copies are read from, kept by and removed from. */
+export type CopyStorage = StoredMediaSource &
+  Pick<IStorageAdapter, "uploadAt"> &
+  Partial<Pick<IStorageAdapter, "delete">>;
 
 /** The collection whose storage holds media originals and their copies. */
 const MEDIA_COLLECTION = "media";
@@ -89,6 +95,12 @@ export interface CopyDeps {
   storage: CopyStorage | null;
   processor: ImageProcessor;
   logger?: Logger;
+  /**
+   * Whether the item still has the original a copy was made from, asked once
+   * the copy is kept. A copy finished after its original was deleted or
+   * replaced is removed again, since no delete will find it afterwards.
+   */
+  stillCurrent?: () => Promise<boolean>;
 }
 
 /** The media item a copy is of, as far as a copy reads it. */
@@ -97,28 +109,15 @@ export interface CopySource {
   /** The original's stored key. */
   filename: string;
   mimeType: string;
-}
-
-/** A storage that can both read an original and keep a copy beside it. */
-type KeepingStorage = CopyStorage &
-  Required<Pick<CopyStorage, "read" | "uploadAt">>;
-
-/**
- * Whether `storage` can keep copies: it must read the original back and write
- * at a key of core's choosing. A storage that serves only by URL, or chooses
- * every key itself, cannot.
- */
-function keepsCopies(storage: CopyStorage | null): storage is KeepingStorage {
-  return (
-    storage !== null &&
-    typeof storage.read === "function" &&
-    typeof storage.uploadAt === "function"
-  );
+  /** The original's width in pixels, when it is recorded. */
+  width?: number | null;
 }
 
 /**
  * The copy of `item` nearest `width` wide, by its address, or `null` when no
- * copy can be had and the original is to be used.
+ * copy can be had and the original is to be used. Also `null` past the
+ * original's own width: a copy is never enlarged, so one that wide would be
+ * the original at its own size, labelled with a width it does not have.
  *
  * @experimental
  */
@@ -129,6 +128,7 @@ export async function copyOfMedia(
 ): Promise<MediaCopy | null> {
   const snapped = nearestMediaCopyWidth(width);
   if (copyFormatsOf(item.mimeType).length === 0) return null;
+  if (typeof item.width === "number" && snapped > item.width) return null;
   if (!keepsCopies(deps.storage)) return null;
   if (!(await deps.processor.canProcess())) return null;
   return { url: mediaCopyAddress(item, snapped), width: snapped };
@@ -150,12 +150,72 @@ const IMAGE_FORMAT: Record<CopyFormat["ext"], ImageCopyFormat> = {
 };
 
 /**
+ * The most bytes a kept copy is read up to, and so the largest copy kept:
+ * twice the original's recorded size, with the default read cap beneath it.
+ * A copy is narrower than its original, so it is nearly always smaller; one
+ * past this is served once and not kept, so it is never kept beyond what can
+ * be read back.
+ */
+function copyReadCap(item: { size: number }): number {
+  return Math.max(DEFAULT_READ_MAX_BYTES, item.size * 2);
+}
+
+/**
  * Copies being made now, by key. A burst of asks for the same copy, as a page
  * with one image in many places makes on its first view, shares one resize
  * rather than running the image library once per ask. Per process: a copy
  * made twice in two processes is the same bytes written twice.
  */
 const inFlight = new Map<string, Promise<ServedCopy>>();
+
+/**
+ * How many copies one process makes at once. Decoding an original takes about
+ * four bytes a pixel, so asks for many different copies at once, as a page of
+ * new images or a caller walking the widths makes, wait their turn rather
+ * than decode side by side.
+ */
+const MAKING_AT_ONCE = 2;
+let making = 0;
+const waiting: Array<() => void> = [];
+
+/** Run `work` once fewer than {@link MAKING_AT_ONCE} copies are being made. */
+async function inTurn<T>(work: () => Promise<T>): Promise<T> {
+  if (making >= MAKING_AT_ONCE) {
+    await new Promise<void>(resolve => waiting.push(resolve));
+  }
+  making += 1;
+  try {
+    return await work();
+  } finally {
+    making -= 1;
+    waiting.shift()?.();
+  }
+}
+
+/**
+ * Read `path` from storage, or `null` when it cannot be read now: missing,
+ * past `cap`, or the storage failing. A failure is logged, and the caller
+ * answers with the original rather than an error, so an image still shows.
+ */
+async function readOrNull(
+  storage: KeepingStorage,
+  path: string,
+  cap: number,
+  deps: CopyDeps
+): Promise<Buffer | null> {
+  try {
+    return await readStoredMediaBytes(storage, path, cap);
+  } catch (error) {
+    (deps.logger ?? consoleLogger).warn("Could not read a stored image", {
+      path,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+/** A storage that can both read an original and keep a copy beside it. */
+type KeepingStorage = CopyKeepingStorage<CopyStorage>;
 
 /**
  * The bytes of `item`'s copy nearest `width` wide, in the best format the
@@ -176,18 +236,18 @@ export async function copyBytesOf(
   const snapped = nearestMediaCopyWidth(width);
   const key = copyPathOf(item.filename, snapped, format);
 
-  const kept = await readStoredMediaBytes(storage, key, DEFAULT_READ_MAX_BYTES);
+  const kept = await readOrNull(storage, key, copyReadCap(item), deps);
   if (kept !== null) {
     return { kind: "copy", bytes: kept, mimeType: format.mimeType };
   }
 
   const running = inFlight.get(key);
   if (running) return await running;
-  const making = makeCopy(item, snapped, format, key, storage, deps).finally(
-    () => inFlight.delete(key)
-  );
-  inFlight.set(key, making);
-  return await making;
+  const made = inTurn(() =>
+    makeCopy(item, snapped, format, key, storage, deps)
+  ).finally(() => inFlight.delete(key));
+  inFlight.set(key, made);
+  return await made;
 }
 
 /** Make one copy from the original, keep it, and hand back its bytes. */
@@ -199,13 +259,15 @@ async function makeCopy(
   storage: KeepingStorage,
   deps: CopyDeps
 ): Promise<ServedCopy> {
+  const logger = deps.logger ?? consoleLogger;
   // Bounded by the original's recorded size, with the default cap beneath it
   // for rows written before the size was taken from the stored bytes, as the
   // raw route reads.
-  const original = await readStoredMediaBytes(
+  const original = await readOrNull(
     storage,
     item.filename,
-    Math.max(DEFAULT_READ_MAX_BYTES, item.size)
+    Math.max(DEFAULT_READ_MAX_BYTES, item.size),
+    deps
   );
   if (original === null) return ORIGINAL;
 
@@ -215,6 +277,13 @@ async function makeCopy(
     IMAGE_FORMAT[format.ext]
   );
   if (made.kind !== "made") return ORIGINAL;
+  const served: ServedCopy = {
+    kind: "copy",
+    bytes: made.bytes,
+    mimeType: format.mimeType,
+  };
+  // Too large to read back: served this once, not kept.
+  if (made.bytes.byteLength > copyReadCap(item)) return served;
 
   try {
     await storage.uploadAt(key, made.bytes, { mimeType: format.mimeType });
@@ -222,11 +291,24 @@ async function makeCopy(
     // The copy is made, so this request is served it; the next ask makes it
     // again. Logged, since a storage that keeps refusing makes every ask pay
     // for a resize.
-    (deps.logger ?? consoleLogger).warn("Could not keep a resized copy", {
+    logger.warn("Could not keep a resized copy", {
       mediaId: item.id,
       key,
       error: error instanceof Error ? error.message : String(error),
     });
+    return served;
   }
-  return { kind: "copy", bytes: made.bytes, mimeType: format.mimeType };
+
+  // The original may have been deleted or replaced while the copy was made,
+  // and then no delete will ever list this key again.
+  if (deps.stillCurrent && !(await deps.stillCurrent())) {
+    await storage.delete?.(key).catch((error: unknown) => {
+      logger.warn("Could not remove a copy of a removed original", {
+        mediaId: item.id,
+        key,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+  return served;
 }
