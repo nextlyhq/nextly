@@ -23,11 +23,11 @@
  * without being asked for where it also has an effect on the block, which is
  * the engine's answer (`applies`), not this table's: the flex controls on a
  * flex container, the grid ones on a grid, a child's sizing inside a Row or a
- * Grid, an image's fit on a replaced element. Two tiers are the builder's own,
- * because they are about editing rather than CSS: the transition once a state
- * other than Normal is being edited, and an icon's position while an icon is
- * drawn. A property holding a value always shows, whatever its tier: a set
- * value is never hidden.
+ * Grid, an image's fit on a replaced element. Three tiers are the builder's
+ * own, because they are about editing rather than CSS: the transition once a
+ * state other than Normal is being edited, the outline while Focus is, and an
+ * icon's position while an icon is drawn. A property holding a value always
+ * shows, whatever its tier: a set value is never hidden.
  *
  * @module inspector-sections
  */
@@ -58,13 +58,17 @@ export type InspectorSectionKey =
  * - `icon-drawn`: while a disclosure draws an icon of its own (not the
  *   browser's marker, and not none), which is what a position moves.
  * - `state`: while a state other than Normal is being edited.
+ * - `focus-state`: while the Focus state is being edited, `more` in every
+ *   other state. An outline is mostly a focus ring, so that is where an
+ *   author looks for it.
  */
 export type PropertyTier =
   | "common"
   | "more"
   | "common-on-media"
   | "icon-drawn"
-  | "state";
+  | "state"
+  | "focus-state";
 
 export interface InspectorSectionDef {
   readonly key: InspectorSectionKey;
@@ -190,6 +194,7 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
     properties: [
       ["border", "common"],
       ["borderRadius", "common"],
+      ["outline", "focus-state"],
     ],
   },
   {
@@ -303,5 +308,7 @@ export function tierShows(tier: PropertyTier, context: TierContext): boolean {
       return !UNDRAWN_ICONS.has(context.disclosureIcon ?? "");
     case "state":
       return context.state !== "base";
+    case "focus-state":
+      return context.state === "focus";
   }
 }

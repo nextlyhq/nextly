@@ -37,8 +37,8 @@
 import {
   applyOps,
   planInsertPattern,
-  registryNestingSource,
   type BlockDocument,
+  type NestingSource,
   type BlockNode,
   type ComponentDocument,
   type NodeStyles,
@@ -651,7 +651,9 @@ function welcomePageBody(cardId: string): BlockNode[] {
  */
 export function welcomePageDocument(
   pattern: { id: string; document: BlockDocument },
-  cardId: string
+  cardId: string,
+  /** The site's nesting rules, which the insert is planned under. */
+  nesting: NestingSource
 ): BlockDocument {
   const body: BlockDocument = {
     formatVersion: 1,
@@ -662,7 +664,7 @@ export function welcomePageDocument(
     body,
     pattern,
     { index: 0 },
-    registryNestingSource()
+    nesting
   );
   if (plan.problem !== undefined) {
     throw new Error(
@@ -756,6 +758,8 @@ export async function seedCompositionDemo(
   options: {
     /** The hero's image id, asked for only when the page is to be made. */
     heroImage: () => Promise<string | null>;
+    /** The site's nesting rules, which the welcome page is planned under. */
+    nesting: NestingSource;
   }
 ): Promise<{ created: number }> {
   if ((await storedRow(nextly, "pages", DEMO_SLUGS.page)) !== undefined) {
@@ -805,7 +809,8 @@ export async function seedCompositionDemo(
     noHeaderFooter: false,
     content: welcomePageDocument(
       { id: pattern.id, document: pattern.content as BlockDocument },
-      feature.id
+      feature.id,
+      options.nesting
     ),
   }));
   return { created: page.created ? 1 : 0 };

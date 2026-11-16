@@ -1600,6 +1600,10 @@ const COLLECTIONS_METHODS: Record<
         sourceLocales: isTruthyParam(p["source-locales"]),
         // `?translations=all` attaches every language's values (`_allLocales`).
         translations: parseTranslationsParam(p.translations),
+        // `?details=1` attaches `_details` (address, who made and changed it),
+        // only for a signed-in admin user: anyone else gets the plain entry.
+        details:
+          isTruthyParam(p.details) && readAuthenticatedActor()?.type === "user",
       });
       const entry = unwrapServiceResult(result, {
         collectionName: p.collectionName,

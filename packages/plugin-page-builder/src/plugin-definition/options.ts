@@ -7,6 +7,7 @@
  */
 import {
   DEFAULT_LIMITS,
+  type AnyBlockDefinition,
   type DocumentLimits,
   type NamedQueryDefinition,
   type RemotePattern,
@@ -472,10 +473,11 @@ export interface PageBuilderOptions {
 export function refreshCodeTier(
   configStyle: SiteStyleData,
   configClassIds: Set<string>,
-  siteStyle: SiteStyleData | undefined
+  siteStyle: SiteStyleData | undefined,
+  registered: readonly AnyBlockDefinition[]
 ): void {
   configStyle.classes = resolveSiteStyle(
-    withRegisteredLooks(siteStyle)
+    withRegisteredLooks(siteStyle, registered)
   ).classes;
   configClassIds.clear();
   for (const entry of configStyle.classes ?? []) configClassIds.add(entry.id);

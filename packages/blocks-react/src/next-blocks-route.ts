@@ -74,7 +74,12 @@ import {
   routeReadSources,
   listBatchReads,
 } from "./next-read-sources";
-import { readerFor, dataFor } from "./next-readers";
+import {
+  readerFor,
+  dataFor,
+  siteBlocks,
+  siteBoundConfig,
+} from "./next-readers";
 import { metadataValuesOf, derivePageSeo } from "./next-seo";
 import {
   effectiveLimits,
@@ -90,7 +95,6 @@ import {
 } from "./page-read-stages";
 import { PageRenderer } from "./page-renderer";
 import { pageBindingRun } from "./prepare-document";
-import { registeredBlocks } from "./resolver";
 
 /**
  * Keys the CMS sets on the row it returns.
@@ -335,17 +339,20 @@ function cachedImageCopies(
 }
 
 export function blocksRouteConfig(
-  config: BlocksPageConfig,
+  given: BlocksPageConfig,
   isPublic: boolean,
   /**
    * How long the page's list reads may live: the route's own `revalidate`.
    * Its own argument because a Single's config withholds `revalidate` from
    * the page config it borrows, and its lists must not outlive it either.
    */
-  listWindow: number | false | undefined = config.revalidate,
+  listWindow: number | false | undefined = given.revalidate,
   /** A Single's page reads its entry as a Single, not from a collection. */
   entrySource: EntrySource = "collection"
 ): ContentRouteConfig<ReactElement> {
+  // Site-bound blocks and named queries, read through the started instance
+  // where their page builder did not start in this module copy.
+  const config = siteBoundConfig(given);
   const {
     field,
     blocks,
@@ -381,7 +388,7 @@ export function blocksRouteConfig(
   // One resolver object for the route, handed to both the preparation and the
   // renderer: the renderer reuses a preparation only for the very resolver it
   // was made with.
-  const resolver = blocks ?? registeredBlocks();
+  const resolver = blocks ?? siteBlocks();
   warnOfUnknownTimeZone(config.timeZone);
   // A public route reads its images inside the cache, as it reads the rest of
   // the page, within the page's own window; an access-enforced one reads them
