@@ -131,19 +131,23 @@ test("lists what the save brings up to date, and its Save confirms it by its key
     // Nothing to tick: Save confirms every conversion listed.
     await expect(section.getByRole("checkbox")).toHaveCount(0);
 
-    const applied = page.waitForRequest(request =>
-      request.url().endsWith(`/collections/schema/${slug}/apply`)
+    // Awaited to its answer, and the review to its close, so the save has finished before the
+    // collection is removed: the server refuses a change while a save's migration runs.
+    const applied = page.waitForResponse(response =>
+      response.url().endsWith(`/collections/schema/${slug}/apply`)
     );
     await page
       .getByRole("alertdialog")
       .getByRole("button", { name: /save changes/i })
       .click();
-    const body = (await applied).postDataJSON() as {
+    const response = await applied;
+    const body = response.request().postDataJSON() as {
       acknowledgedConversions?: string[];
     };
 
     expect(body.acknowledgedConversions).toEqual([`dc_${slug}`]);
     expect(applies).toHaveLength(1);
+    await expect(page.getByRole("alertdialog")).toBeHidden();
   });
 });
 
