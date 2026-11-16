@@ -75,6 +75,15 @@ const ALLOWED: Record<string, string> = {
     "REST's preview of publishing every language, not yet through the service",
   "domains/collections/services/collection-mutation-service.ts#sweepCompanionLifecycle -> writeCompanionStatus":
     "a save to every language (`*`) carrying a status, not yet through the service",
+  // A Single's publish of chosen parts: the same service, moving them through the Singles engine.
+  "domains/singles/services/single-entry-service.ts#publishParts -> publishPartsReads":
+    "the service reads the Single and asks every refusal",
+  "domains/singles/services/single-entry-service.ts#publishParts -> publishAllLocales":
+    "the Singles engine's publish, told which parts it moves",
+  "domains/singles/services/single-entry-service.ts#publishParts -> previewPublishAllLocales":
+    "the service describes a publish through that engine's own preview",
+  "dispatcher/handlers/single-dispatcher.ts#singlePartsLifecycle -> publishParts":
+    "REST's `publish` and `unpublish` routes of a Single",
   // Singles publish every language through an engine of their own.
   "domains/singles/services/single-entry-service.ts#publishAllLocales -> publishAllLocales":
     "a Single's publish of every language, through the Singles engine",
