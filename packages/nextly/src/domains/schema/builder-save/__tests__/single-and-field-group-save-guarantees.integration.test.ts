@@ -30,6 +30,7 @@ import type { CommandContext } from "../../../../cli/program";
 import { createLogger } from "../../../../cli/utils/logger";
 import { defineConfig } from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
+import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
 import {
@@ -38,6 +39,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
+import type { ServiceContainer } from "../../../../services";
 import { _resetEnvCache } from "../../../../shared/lib/env";
 import { readTableDefinition } from "../../__tests__/helpers/table-definition";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
@@ -534,6 +536,51 @@ describe.each(getConfiguredTestDialects())(
         );
         await nothingLeftToDo(t);
       }, 60_000);
+
+      // A Single's relationship to many entries keeps them in a junction table, which the save's
+      // file makes with its keys, as the file runs in place of the push.
+      it.runIf(kind.listed === "singles")(
+        "adds a relationship to many entries, its junction table made by the file",
+        async () => {
+          const t = await boot();
+          // Created as the Builder creates a collection.
+          await dispatchCollections(
+            {} as ServiceContainer,
+            "createCollection",
+            {},
+            { name: "authors", label: "Author", fields: [text("name")] }
+          );
+          await kind.create([text("heading")]);
+          const filesBefore = migrationFiles();
+
+          await kind.change(t, [
+            text("heading"),
+            {
+              name: "writers",
+              type: "relationship",
+              options: { relationType: "manyToMany", target: "authors" },
+            } as Field,
+          ]);
+
+          const up = migrationFiles()
+            .filter(f => !filesBefore.includes(f))
+            .map(
+              f =>
+                readFileSync(join(migrationsDir(), f), "utf-8").split(
+                  "-- DOWN"
+                )[0]!
+            )
+            .join("\n");
+          const junction =
+            /CREATE TABLE (?:IF NOT EXISTS )?["`]?(\w+)["`]?/i.exec(up)?.[1];
+          expect(junction, up).toBeDefined();
+          expect(await adapterOf(t).tableExists(junction!)).toBe(true);
+          // Every file recorded applied. The project-wide checks stay with the cases above: a
+          // collection created through the Builder fails `migrate:check` on its own settings.
+          expect(await appliedFiles(t)).toEqual(migrationFiles());
+        },
+        60_000
+      );
 
       it.skipIf(MODES_NOT_ENFORCED)(
         "refuses a change while the migrations folder cannot be written, and changes nothing",
