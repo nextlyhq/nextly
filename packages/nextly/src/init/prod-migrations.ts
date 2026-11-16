@@ -1,11 +1,15 @@
 // Production-only run-on-boot migrations (opt-in via db.runMigrationsOnBoot).
 //
 // The development sibling is `runBootTimeApplyIfDev` (boot-apply.ts), which
-// pushes code-first schema deltas in dev. This one applies COMMITTED migration
-// files in PRODUCTION, under the wait-mode lock, so N instances booting at once
-// don't race — one applies while the others wait, then all boot with the schema
-// ready. Failure-safe: it logs loudly but never throws past the boot (a thrown
-// migrateCore is caught here), so a bad migration doesn't take down the app.
+// pushes code-first schema deltas in dev. This one is `nextly migrate` run by a
+// production start: it applies COMMITTED migration files, under the wait-mode
+// lock, so N instances booting at once don't race — one applies while the
+// others wait, then all boot with the schema ready. It runs first in the start,
+// before anything of the registry is read, so an empty database is set up here
+// as the command sets it up, and the rest of the start reads what it wrote.
+// Failure-safe: a failed migration is logged and the app serves; an older
+// build's stop warns and the app serves. Only a run that cannot account for
+// the schema (a held lock, a busy table) refuses the start.
 
 import { resolve } from "node:path";
 
@@ -13,6 +17,7 @@ import {
   busyTableBounds,
   type BusyTableBounds,
 } from "../domains/schema/busy-table/bounds";
+import type { RecordedEntities } from "../domains/i18n/migration/recorded-before";
 import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import {
   pluginMigrationArgs,
@@ -112,6 +117,14 @@ export interface RunProdMigrationsArgs {
      */
     plugins?: readonly PluginDefinition[];
   };
+  /**
+   * The whole configuration this start serves, which the container's `config`
+   * service holds once registered. Handed in because the step runs first in
+   * the start, before that service exists: the access, the translation tables
+   * and the user fields are written for it, as `nextly migrate` writes them for
+   * the configuration it loads.
+   */
+  served: object;
   /** Plugin additions to Builder entities, when the caller has them. */
   deferredExtends?: readonly unknown[];
   /**
@@ -124,10 +137,11 @@ export interface RunProdMigrationsArgs {
   /** Injected for tests; defaults to the real migrateCore + ledger bootstrap. */
   migrateCore?: MigrateCoreLike;
   /**
-   * Injected for tests; defaults to provisioning the user fields' storage as
-   * `nextly migrate` does (`provisionStartUserFields`).
+   * Injected for tests; defaults to what `nextly migrate` does once its
+   * migrations have applied (`afterStartMigrations`): the translation tables,
+   * then the user fields' storage.
    */
-  provisionUserFields?: () => Promise<void>;
+  afterMigrations?: (recordedBefore: RecordedEntities | undefined) => Promise<void>;
 }
 
 /**
@@ -226,44 +240,57 @@ function migrateCoreFor(args: RunProdMigrationsArgs): MigrateCoreLike {
  */
 function startAccessSeeder(
   adapter: AdapterLike,
+  served: object,
   logger: LoggerLike
 ): () => Promise<void> {
   return async (): Promise<void> => {
-    const [{ seedAccessOnCommandConnection }, { getService }] =
-      await Promise.all([
-        import("../domains/schema/migrate/command-access"),
-        import("../di/service-access"),
-      ]);
+    const { seedAccessOnCommandConnection } = await import(
+      "../domains/schema/migrate/command-access"
+    );
     // The boot adapter and logger are the command's in all it uses, as for
     // `migrateCore` above.
     await seedAccessOnCommandConnection(
       adapter as never,
-      { config: getService("config") as never, configPath: null },
+      { config: served as never, configPath: null },
       logger as never
     );
   };
 }
 
 /**
- * The user fields' storage, as `nextly migrate` provisions it once its
- * migrations have applied (`provisionUserFieldTables`): the code-defined
- * fields synced into `user_field_definitions`, merged with the admin's, and a
- * `user_ext` column for each, for the configuration this start serves. A
- * production start only loads the merged fields, so a site that migrates at
- * start gets a newly declared field here.
+ * What `nextly migrate` does once its migrations have applied, for the
+ * configuration this start serves, in the command's order:
+ * - each translated entity's translations table (`ensureLocalizedCompanions`,
+ *   supervised, as the command runs it), judged against the registry as it
+ *   stood before the migrations;
+ * - the user fields' storage (`provisionUserFieldTables`): the code-defined
+ *   fields synced into `user_field_definitions`, merged with the admin's, and
+ *   a `user_ext` column for each.
+ * A production start writes neither itself, so a site that migrates at start
+ * gets them here.
  */
-async function provisionStartUserFields(
+async function afterStartMigrations(
   adapter: AdapterLike,
-  logger: LoggerLike
+  served: object,
+  logger: ReturnType<typeof bootCoreLogger>,
+  recordedBefore: RecordedEntities | undefined
 ): Promise<void> {
-  const [{ provisionUserFieldTables }, { getService }] = await Promise.all([
-    import("../cli/commands/migrate"),
-    import("../di/service-access"),
-  ]);
-  // The boot adapter and logger are the command's in all it uses, as for
+  const [{ ensureLocalizedCompanions }, { provisionUserFieldTables }] =
+    await Promise.all([
+      import("../cli/commands/dev-build"),
+      import("../cli/commands/migrate"),
+    ]);
+  // The boot adapter and logger are the command's in all they use, as for
   // `migrateCore` above.
+  await ensureLocalizedCompanions(
+    served as never,
+    adapter as never,
+    { logger } as never,
+    "afterApply",
+    { supervised: true, recordedBefore }
+  );
   await provisionUserFieldTables(
-    getService("config").users,
+    (served as { users?: never }).users,
     adapter as never,
     logger as never
   );
@@ -272,16 +299,19 @@ async function provisionStartUserFields(
 /** What one boot-migration run is handed besides the caller's arguments. */
 interface BootMigrationRun {
   core: MigrateCoreLike;
-  /** The user fields' storage once the migrations have applied. */
-  provisionUserFields: () => Promise<void>;
-  coreLogger: LoggerLike;
+  /** `nextly migrate`'s work once the migrations have applied. */
+  afterMigrations: (
+    recordedBefore: RecordedEntities | undefined
+  ) => Promise<void>;
+  coreLogger: ReturnType<typeof bootCoreLogger>;
   migrationsDir: string;
   ensureLedger: () => Promise<void>;
 }
 
 /**
  * Apply pending migrations under the wait-mode lock, refuse when the lock was
- * never acquired, and on success reload the registry and allow serving.
+ * never acquired, and on success do the rest of `nextly migrate`'s work and
+ * allow serving.
  */
 async function applyBootMigrations(
   args: RunProdMigrationsArgs,
@@ -292,6 +322,21 @@ async function applyBootMigrations(
   // the start before anything is read or changed.
   const bounds = busyTableBounds({ env: process.env });
   logger.info("[Nextly] Running production migrations on boot...");
+  // Every entity as the registry records it before any file applies, as the
+  // command reads it, so the translation tables after the migrations can tell
+  // a field newly translated from one translated before. Nothing on a new
+  // database.
+  const { readRecordedEntities } = await import(
+    "../domains/i18n/migration/recorded-before"
+  );
+  const recordedBefore = await readRecordedEntities(
+    adapter as never,
+    args.served as never,
+    error =>
+      logger.warn(
+        `[Nextly] The registry could not be read, so no translations column is judged this run: ${error instanceof Error ? error.message : String(error)}`
+      )
+  );
   const resolvedSchema = await resolveDeclaredSchema({
     projectRoot: process.cwd(),
     config: args.config,
@@ -343,7 +388,7 @@ async function applyBootMigrations(
     ensureLedger: run.ensureLedger,
     // The access `nextly migrate` adds once the registry rows are written:
     // a production start adds none, so these migrations are the deploy step.
-    seedPermissions: startAccessSeeder(adapter, run.coreLogger),
+    seedPermissions: startAccessSeeder(adapter, args.served, run.coreLogger),
   });
   // REFUSES rather than serving. A held lock no longer comes back as
   // `ran: false` (the lock throws `NEXTLY_MIGRATE_LOCK_BUSY`, which the
@@ -362,44 +407,14 @@ async function applyBootMigrations(
   if (!ran) {
     throw bootMigrationsNotRun();
   }
-  // After the migrations, as `nextly migrate` provisions them: the table
-  // follows the configuration's final schema.
-  await run.provisionUserFields();
+  // After the migrations, as `nextly migrate` does: the translation tables
+  // and the user fields follow the configuration's final schema.
+  await run.afterMigrations(recordedBefore);
   logger.info(`[Nextly] Boot migrations complete (${applied} applied).`);
 
-  /*
-   * 🔴 Reloaded whenever migrations RAN, never on how many entities this
-   * process registered. `registerServices` built this registry before the
-   * lock was ever taken, so it predates the rows regardless of who wrote
-   * them — and `migrateCore` reports `collectionsRegistered` for the work
-   * THIS process did, not for whether its own view is current.
-   *
-   * The two differ on a rolling deploy, which is the case that matters. A
-   * replica that waits on the lock and acquires it after another replica has
-   * already migrated runs `migrateCore` against a settled database: `ran` is
-   * true, `applied` and the registration counts are 0, and its registry is
-   * exactly as stale as the migrating replica's was. Gated on those counts it
-   * would never reload, and would serve the entities it can see but not
-   * query. `ran === true` is the condition every replica that goes on to
-   * SERVE satisfies — the ones that do not throw a few lines above rather
-   * than reaching here.
-   *
-   * Before `allowBootMigrations`, so nothing waiting on that gate is released
-   * onto a registry this boot already knows is behind. It cannot throw, which
-   * is what makes that ordering safe: an exception here would leave the gate
-   * closed and hang every consumer of it.
-   */
-  const { reloadDynamicTables } = await import("./reload-dynamic-tables");
-  const { loadingDefinitions } = await import(
-    "../route-handler/schema-version"
-  );
-  // Inside this step, which is `nextly migrate`'s: the one place a production
-  // start may create a translation table the migrations left missing. At the
-  // stored version read first, so the first follow does not load again.
-  await loadingDefinitions(() =>
-    reloadDynamicTables("[Nextly]", { createMissingCompanions: true })
-  );
-
+  // Nothing of the registry is reloaded: the step runs before the start reads
+  // any of it, so the start registers what the migrations left, as a start
+  // after `nextly migrate` does.
   allowBootMigrations();
 }
 
@@ -409,16 +424,15 @@ async function applyBootMigrations(
  *
  * The fatal shapes: the refusal itself; the schema lock's own refusal,
  * `NEXTLY_MIGRATE_LOCK_BUSY`, which it throws on every dialect when the wait
- * ends with the lock still held; and `MIGRATION_MISSING`, an older build
- * whose folder lacks a migration a newer build applied; a busy table waited
- * out (`NEXTLY_TABLE_BUSY`), and a busy-table bound set out of its range. Each
- * means this process would serve a schema it cannot account for.
+ * ends with the lock still held; a busy table waited out
+ * (`NEXTLY_TABLE_BUSY`), and a busy-table bound set out of its range. Each
+ * means this process would serve a schema it cannot account for. An older
+ * build's `MIGRATION_MISSING` is not among them: see
+ * {@link isOlderBuildStop}.
  */
 function fatalBootMigrationError(err: unknown): NextlyError | undefined {
   if (!(err instanceof NextlyError)) return undefined;
   if (err.code === "NEXTLY_BOOT_MIGRATIONS_NOT_RUN") return err;
-  // Refused as itself: its message names each missing migration and what to do.
-  if (err.code === "MIGRATION_MISSING") return err;
   if (err.code === "NEXTLY_MIGRATE_LOCK_BUSY") {
     return bootMigrationsNotRun(err);
   }
@@ -437,14 +451,39 @@ function fatalBootMigrationError(err: unknown): NextlyError | undefined {
 }
 
 /**
- * Settle the gate after a failed run: refuse for a fatal failure, otherwise
- * log it, reload the registry and allow serving.
+ * Whether the run stopped because the database holds applied migrations this
+ * build's folder lacks: an older build, such as a rollback or an old preview,
+ * against a database a newer build migrated.
+ *
+ * The stop comes before the run writes anything, so the newer build's state
+ * is already as it left it. The start then goes on and serves what the
+ * database holds, as a start without migrations at start does (D8); only a
+ * warning names the migrations.
  */
-async function settleFailedBootMigrations(
+function isOlderBuildStop(err: unknown): err is NextlyError {
+  return err instanceof NextlyError && err.code === "MIGRATION_MISSING";
+}
+
+/**
+ * Settle the gate after a failed run: refuse for a fatal failure, otherwise
+ * log it and allow serving. Nothing of the registry is reloaded: the start
+ * reads it after this step.
+ */
+function settleFailedBootMigrations(
   err: unknown,
   args: RunProdMigrationsArgs
-): Promise<void> {
+): void {
   const { logger } = args;
+  if (isOlderBuildStop(err)) {
+    // Its message names each migration the build lacks.
+    logger.warn(
+      `[Nextly] ${err.publicMessage} This build is older than the database: ` +
+        "the migrations at start wrote nothing, and the app starts on the " +
+        "database as the newer build left it."
+    );
+    allowBootMigrations();
+    return;
+  }
   // A refusal is not a failure to swallow. Every other error here is
   // recoverable by running `nextly migrate` against a database the app can
   // still usefully serve; this one means the app does not know what it is
@@ -463,28 +502,6 @@ async function settleFailedBootMigrations(
     `[Nextly] Boot migrations failed: ${
       err instanceof Error ? err.message : String(err)
     }. The app will continue; run \`nextly migrate\` to resolve.`
-  );
-
-  /*
-   * 🔴 Reloaded on the FAILING path too, because this process goes on to
-   * serve. `runFileMigrations` commits and records each migration file
-   * independently before propagating a later file's error, so a batch that
-   * failed part-way has already written whatever metadata its earlier files
-   * carried — and skipping the reload here served exactly those entities
-   * against the pre-migration registry, which is the defect this whole path
-   * exists to close, reached through the error branch instead of the happy
-   * one.
-   *
-   * Before `allowBootMigrations` for the same reason as the success path, and
-   * safe there for the same reason: the reload cannot throw.
-   */
-  const { reloadDynamicTables } = await import("./reload-dynamic-tables");
-  const { loadingDefinitions } = await import(
-    "../route-handler/schema-version"
-  );
-  // Still this step's, as on the success path.
-  await loadingDefinitions(() =>
-    reloadDynamicTables("[Nextly]", { createMissingCompanions: true })
   );
 
   // The app continues on this path, so the gate must open — a swallowed
@@ -529,16 +546,22 @@ export async function runProdMigrationsIfEnabled(
     coreLogger,
     ensureLedger: schemaLedgerEnsurer(args.adapter),
     core: migrateCoreFor(args),
-    provisionUserFields:
-      args.provisionUserFields ??
-      (() => provisionStartUserFields(args.adapter, coreLogger)),
+    afterMigrations:
+      args.afterMigrations ??
+      (recordedBefore =>
+        afterStartMigrations(
+          args.adapter,
+          args.served,
+          coreLogger,
+          recordedBefore
+        )),
   };
 
   try {
     await applyBootMigrations(args, run);
     return true;
   } catch (err) {
-    await settleFailedBootMigrations(err, args);
+    settleFailedBootMigrations(err, args);
     return false;
   }
 }
