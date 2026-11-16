@@ -136,7 +136,7 @@ Element.prototype.hasPointerCapture ??= () => false;
 Element.prototype.releasePointerCapture ??= () => {};
 Element.prototype.scrollIntoView ??= () => {};
 
-const LAYOUT_LABEL = "Pages without a Layout of their own use";
+const LAYOUT_LABEL = "Pages without a header & footer set of their own use";
 
 /** Choose a Layout in the default Layout's select, as an author does. */
 async function chooseLayout(title: string): Promise<void> {
@@ -568,7 +568,7 @@ describe("the Settings dialog", () => {
 
   it("says Not saved with Retry when the change is refused, and Retry tries again", async () => {
     writeAnswer = () =>
-      Promise.reject(new Error("This Layout is not published."));
+      Promise.reject(new Error("This header & footer set is not published."));
     show();
     await userEvent.click(screen.getByRole("tab", { name: "Site" }));
     await chooseLayout("No header or footer");
@@ -596,7 +596,7 @@ describe("the Settings dialog", () => {
     await chooseLayout("No header or footer");
     const question = await screen.findByRole("alertdialog");
     expect(question.textContent).toContain(
-      "This Layout uses 1 component that isn't published"
+      "This header & footer set uses 1 component that isn't published"
     );
     expect(asked).toEqual([{ documents: [], layout: "bare" }]);
     // Nothing is written while the author is being asked.
@@ -673,7 +673,9 @@ describe("the Settings dialog", () => {
     expect(select.hasAttribute("disabled")).toBe(true);
     await waitFor(() =>
       expect(
-        screen.getByText(/needs the rights to update and publish Layouts/)
+        screen.getByText(
+          /needs the rights to update and publish header & footer sets/
+        )
       ).toBeTruthy()
     );
   });

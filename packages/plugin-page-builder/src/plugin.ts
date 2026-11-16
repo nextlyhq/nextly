@@ -467,7 +467,7 @@ export const pageBuilder = (
           resource: "page-builder-site",
           label: "Manage page builder site settings",
           description:
-            "Change the site's breakpoints, and choose its default Layout.",
+            "Change the site's breakpoints, and choose its default header & footer set.",
         },
         // Locking a shared style is its own grant, distinct from changing
         // Design (`update-site-style`), so a lock protects a style from every

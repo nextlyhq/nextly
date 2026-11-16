@@ -528,7 +528,7 @@ export async function updatePatternFromSelection(
     asCaller(ctx)
   );
   return respondMutation<UpdatePatternResult>(
-    "The pattern was updated.",
+    "The saved section was updated.",
     result(false)
   );
 }

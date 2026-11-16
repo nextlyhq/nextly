@@ -99,7 +99,7 @@ describe("the editor's surfaces read the catalogue", () => {
     fireEvent.mouseDown(screen.getByRole("tab", { name: "«sections»" }), {
       button: 0,
     });
-    expect(screen.getByText("No «sections» are saved yet.")).toBeTruthy();
+    expect(screen.getByText("No «sections» yet.")).toBeTruthy();
     clearBlocks();
   });
 

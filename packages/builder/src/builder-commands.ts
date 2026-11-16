@@ -26,6 +26,7 @@
  */
 
 import type { BuilderCommand } from "./command-palette";
+import { CONVERSION_WORDS } from "./editor-words";
 import type { ToolbarAction, ToolbarActionId } from "./toolbar-actions";
 
 /** The verbs a palette command needs, as `BlockKeyboardActions` publishes them. */
@@ -123,12 +124,22 @@ const BLOCK_COMMAND_COPY: Record<
     label: "Duplicate block",
     keywords: ["duplicate", "copy", "clone", "repeat"],
   },
+  // The conversions are named with the bar's own words, so the palette and
+  // the menus offer one verb for each.
   "save-as-pattern": {
-    label: "Save block as pattern",
-    // "reuse" and "template" are what an author who has used another builder
-    // searches with; the taxonomy calls it a pattern and they need not know
-    // that before they can find it.
-    keywords: ["save", "pattern", "library", "reuse", "template", "snippet"],
+    label: CONVERSION_WORDS.saveAsSection,
+    // "pattern", "reuse" and "template" are what an author who has used
+    // another builder searches with; they find it by those words too.
+    keywords: [
+      "save",
+      "section",
+      "saved sections",
+      "pattern",
+      "library",
+      "reuse",
+      "template",
+      "snippet",
+    ],
   },
   "save-as-shared-style": {
     label: "Save block as shared style",
@@ -141,7 +152,7 @@ const BLOCK_COMMAND_COPY: Record<
   // One verb for both ways of making a component, so the palette finds it
   // by the words of either.
   "turn-into-component": {
-    label: "Turn into component…",
+    label: CONVERSION_WORDS.turnIntoComponent,
     keywords: [
       "turn into",
       "convert",
@@ -154,7 +165,7 @@ const BLOCK_COMMAND_COPY: Record<
     ],
   },
   "detach-component": {
-    label: "Detach from component",
+    label: CONVERSION_WORDS.detachFromComponent,
     keywords: ["detach", "unlink", "component", "plain", "break"],
   },
   "duplicate-component": {
@@ -162,8 +173,15 @@ const BLOCK_COMMAND_COPY: Record<
     keywords: ["duplicate", "copy", "component", "fork", "variant"],
   },
   "update-pattern": {
-    label: "Update a pattern from the selection",
-    keywords: ["update", "pattern", "replace", "overwrite", "save over"],
+    label: "Update a saved section from the selection",
+    keywords: [
+      "update",
+      "section",
+      "pattern",
+      "replace",
+      "overwrite",
+      "save over",
+    ],
   },
   delete: {
     label: "Delete block",
