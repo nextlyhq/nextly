@@ -47,6 +47,7 @@ import {
   removeUnsavedEntity,
 } from "@admin/lib/builder/unsaved-entities";
 
+import { ADVANCED_SWITCHES } from "../../builder-settings-modal/advanced-switches";
 import type { BuilderConfig } from "../../builder-config";
 import { NewEntityDialog } from "../NewEntityDialog";
 
@@ -201,6 +202,10 @@ describe("NewEntityDialog", () => {
         expect(addressInput()).toHaveAccessibleDescription(shown)
       );
       expect(createButton()).toBeDisabled();
+      // In the error text colour the admin's form messages use, which reads at
+      // 4.5:1 in both schemes; the destructive action colour does not in light.
+      expect(screen.getByText(shown)).toHaveClass("text-danger-text");
+      expect(screen.getByText(shown)).not.toHaveClass("text-destructive");
     }
   );
 
@@ -261,6 +266,46 @@ describe("NewEntityDialog", () => {
       "More options, on: version history, cache revalidation"
     );
   });
+
+  it.each([
+    ["collection", COLLECTION_BUILDER_CONFIG],
+    ["Single", SINGLE_BUILDER_CONFIG],
+  ] as const)(
+    "names as on exactly the switches a %s's options draw on, as each is turned",
+    async (_kind, config) => {
+      const { user } = renderDialog(config);
+      await user.click(screen.getByRole("button", { name: /More options/ }));
+      // The switches as drawn, read from the page, against the fold's name.
+      const drawn = () =>
+        ADVANCED_SWITCHES.flatMap(entry => {
+          const control = screen.queryByRole("switch", {
+            name: entry.ariaLabel,
+          });
+          return control ? [{ entry, control }] : [];
+        });
+      const expectNamedAsDrawn = () => {
+        const on = drawn()
+          .filter(
+            ({ control }) => control.getAttribute("aria-checked") === "true"
+          )
+          .map(({ entry }) => entry.summary);
+        expect(
+          screen.getByRole("button", { name: /More options/ })
+        ).toHaveAccessibleName(
+          on.length === 0
+            ? "More options, none on"
+            : `More options, on: ${on.join(", ")}`
+        );
+      };
+      expect(drawn().length).toBeGreaterThan(2);
+      expectNamedAsDrawn();
+      for (const { control } of drawn()) {
+        if (control.hasAttribute("disabled")) continue;
+        await user.click(control);
+        expectNamedAsDrawn();
+      }
+    }
+  );
 
   it("a Single", async () => {
     const { user } = renderDialog(SINGLE_BUILDER_CONFIG);

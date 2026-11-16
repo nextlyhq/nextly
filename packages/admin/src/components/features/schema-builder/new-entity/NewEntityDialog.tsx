@@ -34,11 +34,11 @@ import {
 } from "@admin/lib/builder/starting-field";
 import { useUnsavedAddresses } from "@admin/lib/builder/unsaved-entities";
 
+import { BUILDER_KIND_NOUN, type BuilderConfig } from "../builder-config";
 import {
-  type AdvancedField,
-  BUILDER_KIND_NOUN,
-  type BuilderConfig,
-} from "../builder-config";
+  ADVANCED_SWITCHES,
+  isSwitchOn,
+} from "../builder-settings-modal/advanced-switches";
 import { AdvancedTab } from "../builder-settings-modal/AdvancedTab";
 import {
   ICON_PICKER_ICONS,
@@ -65,21 +65,6 @@ type Props = {
   creating?: boolean;
 };
 
-/**
- * The options the fold names when they are on, in the words it uses, each with
- * what its switch shows while it holds no value: cache revalidation and webhook
- * recording are drawn on until turned off, so they are named on too.
- */
-const OPTION_WORDS: ReadonlyArray<
-  [AdvancedField & keyof BuilderSettingsValues, string, boolean]
-> = [
-  ["status", "drafts and publishing", false],
-  ["versions", "version history", false],
-  ["i18n", "translation", false],
-  ["revalidate", "cache revalidation", true],
-  ["webhooks", "webhook recording", true],
-];
-
 /** Why Create is not offered yet, or `null` when it is. */
 function createBlockedBy(
   values: BuilderSettingsValues,
@@ -103,11 +88,12 @@ function optionsName(
   config: BuilderConfig,
   values: BuilderSettingsValues
 ): string {
-  const on = OPTION_WORDS.filter(
-    ([key, , onWhenUnset]) =>
-      config.advancedFields.includes(key) &&
-      (values[key] ?? onWhenUnset) === true
-  ).map(([, words]) => words);
+  // From the switches' own descriptions, so the fold names an option as on
+  // exactly when its switch is drawn on.
+  const on = ADVANCED_SWITCHES.filter(
+    entry =>
+      config.advancedFields.includes(entry.key) && isSwitchOn(values, entry.key)
+  ).map(entry => entry.summary);
   return on.length === 0
     ? "More options, none on"
     : `More options, on: ${on.join(", ")}`;
@@ -329,14 +315,17 @@ function AddressField({
         onChange={e => onChange(e.target.value)}
       />
       {/* A live region: the check answers after typing stops, so its answer
-          is announced when it arrives, not only read with the field. */}
+          is announced when it arrives, not only read with the field. A
+          refusal is drawn in the error text colour the form messages use,
+          which reads at 4.5:1 in both schemes; the destructive action colour
+          is lighter than that in light. */}
       <p
         id={`${ids}-address-note`}
         role="status"
         aria-live="polite"
         className={
           note.refused
-            ? "text-xs text-destructive"
+            ? "text-xs text-danger-text"
             : "text-xs text-muted-foreground"
         }
       >
