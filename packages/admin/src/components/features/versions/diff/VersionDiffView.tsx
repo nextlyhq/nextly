@@ -18,7 +18,7 @@
  */
 
 import type { JSX } from "react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   Alert,
@@ -71,6 +71,13 @@ export interface VersionDiffViewProps {
    * absent, the switch is remembered as the reader's own choice.
    */
   onViewChange?: (layout: ChangesLayout) => void;
+  /**
+   * Hears this pair's comparison reach the screen, once its fields are drawn,
+   * and `null` once it no longer is. Told only from here, where the fields
+   * are drawn, so a host that marks what the reader has seen cannot mark a
+   * comparison it decided was showing while something else filled the space.
+   */
+  onShown?: (pair: { from: number; to: number } | null) => void;
 }
 
 function DiffSkeleton() {
@@ -202,6 +209,7 @@ export function VersionDiffView({
   to,
   view,
   onViewChange,
+  onShown,
 }: VersionDiffViewProps): JSX.Element {
   const [remembered, remember] = useChangesLayoutPreference();
   // The address's view wins over the remembered one, so a shared link opens
@@ -225,6 +233,27 @@ export function VersionDiffView({
     changes?.byField.values() ?? []
   );
   const nav = useChangeNavigation(order);
+  // Which of the body's states is drawn, decided once so the body and the
+  // report below cannot disagree about it.
+  const body = diff.isLoading
+    ? "loading"
+    : diff.isError
+      ? "error"
+      : diff.data
+        ? "fields"
+        : "empty";
+  // This pair is on screen only when its own fields are: another pair's
+  // answer kept while this one loads draws fields that are not this pair's.
+  const drawn = body === "fields" && !diff.isPlaceholderData;
+  // Read through a ref, so a host that hands a new callback each render does
+  // not report the same showing again.
+  const onShownRef = useRef(onShown);
+  onShownRef.current = onShown;
+  useEffect(() => {
+    if (!drawn) return;
+    onShownRef.current?.({ from, to });
+    return () => onShownRef.current?.(null);
+  }, [drawn, from, to]);
 
   return (
     // The container the field rows query. Their columns are a function of the
@@ -287,9 +316,9 @@ export function VersionDiffView({
         ) : null}
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {diff.isLoading ? (
+          {body === "loading" ? (
             <DiffSkeleton />
-          ) : diff.isError ? (
+          ) : body === "error" ? (
             <div className="p-4 flex flex-col gap-3">
               <Alert variant="destructive">
                 <AlertDescription>
@@ -305,7 +334,7 @@ export function VersionDiffView({
                 Try again
               </Button>
             </div>
-          ) : diff.data ? (
+          ) : body === "fields" ? (
             <SystemFieldsProvider value={showSystem}>
               <div className="flex flex-col px-4 pb-4">
                 {note ? (

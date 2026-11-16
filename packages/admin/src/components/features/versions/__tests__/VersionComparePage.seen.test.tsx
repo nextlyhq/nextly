@@ -20,10 +20,8 @@ const { useVersionsMock, markSeenMock, baselineDiffMock, versionDiffMock } =
     baselineDiffMock: vi.fn(),
   }));
 
-vi.mock("../diff/VersionDiffView", () => ({
-  VersionDiffView: () => <div data-testid="diff-view" />,
-}));
-
+// The diff view is the real one, drawn from the mocked comparison below, so a
+// mark can only follow its own report that the comparison is on screen.
 // The baseline comparison is the real hook, so what it keeps and refetches is
 // what these tests watch; only the API beneath it is replaced.
 vi.mock("@admin/hooks/queries/useVersions", async importOriginal => {
@@ -52,7 +50,7 @@ const scope = { kind: "collection" as const, slug: "posts", entryId: "e1" };
 /** The pair's comparison as the diff view reads it: arrived and drawn. */
 const DIFF_DRAWN = {
   // No field an editor wrote, so the history rail draws no summary line.
-  data: { from: 4, to: 5, fields: [] },
+  data: { from: 4, to: 5, locale: null, hasChanges: false, fields: [] },
   isSuccess: true,
   isPlaceholderData: false,
   isLoading: false,
@@ -152,6 +150,26 @@ describe("VersionComparePage, what it marks as seen", () => {
     expect(markSeenMock).not.toHaveBeenCalled();
   });
 
+  it("marks nothing when the history failed and only its failure is on screen", () => {
+    // The pair's own comparison would load, but the page shows the history's
+    // failure in its place, so none of the pair's fields were drawn.
+    useVersionsMock.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    });
+    render(page(4, 5));
+
+    expect(
+      screen.getByText("This document's history could not be loaded.")
+    ).toBeInTheDocument();
+    expect(markSeenMock).not.toHaveBeenCalled();
+  });
+
   it("marks the newer version once its comparison arrives", () => {
     versionDiffMock.mockReturnValue({
       data: undefined,
@@ -231,7 +249,7 @@ describe("VersionComparePage, a baseline comparison it marks as seen", () => {
       expect(baselineDiffMock).toHaveBeenCalledWith(other, "published", 5)
     );
 
-    expect(screen.queryByTestId("diff-view")).toBeNull();
+    expect(screen.queryByText(/Comparing version/)).toBeNull();
     expect(screen.getByText("Loading comparison…")).toBeInTheDocument();
     expect(markSeenMock).not.toHaveBeenCalledWith(other, expect.anything());
   });
@@ -265,7 +283,7 @@ describe("VersionComparePage, a baseline comparison it marks as seen", () => {
 
     render(baselinePage(scope, "last-viewed"));
     await waitFor(() => expect(markSeenMock).toHaveBeenCalledWith(scope, 5));
-    expect(screen.getByTestId("diff-view")).toBeInTheDocument();
+    expect(screen.getByText(/Comparing version/)).toBeInTheDocument();
 
     // The reader returns to the tab, and then the network comes back.
     act(() => {
@@ -278,7 +296,7 @@ describe("VersionComparePage, a baseline comparison it marks as seen", () => {
     // Given the chance to refetch: a refetch would have asked again by now.
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(baselineDiffMock).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId("diff-view")).toBeInTheDocument();
+    expect(screen.getByText(/Comparing version/)).toBeInTheDocument();
     expect(
       screen.queryByText("There is no earlier visit to compare with.")
     ).toBeNull();

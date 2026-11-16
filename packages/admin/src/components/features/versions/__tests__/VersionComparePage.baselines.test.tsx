@@ -25,17 +25,27 @@ const {
   diffMountMock: vi.fn(),
 }));
 
-vi.mock("../diff/VersionDiffView", () => ({
-  VersionDiffView: (props: {
-    from: number;
-    to: number;
-    view?: string;
-    onViewChange?: (layout: "inline" | "split") => void;
-  }) => {
-    diffMountMock(props);
-    return <div data-testid="diff-view">{`${props.from}-${props.to}`}</div>;
-  },
-}));
+// A stand-in for a comparison that has arrived and is drawn: it reports its
+// pair once on screen, as the real view does once its fields are.
+vi.mock("../diff/VersionDiffView", async () => {
+  const { useEffect } = await import("react");
+  return {
+    VersionDiffView: (props: {
+      from: number;
+      to: number;
+      view?: string;
+      onViewChange?: (layout: "inline" | "split") => void;
+      onShown?: (pair: { from: number; to: number } | null) => void;
+    }) => {
+      diffMountMock(props);
+      const { from, to, onShown } = props;
+      useEffect(() => {
+        onShown?.({ from, to });
+      }, [from, to, onShown]);
+      return <div data-testid="diff-view">{`${from}-${to}`}</div>;
+    },
+  };
+});
 
 vi.mock("@admin/hooks/queries/useVersions", () => ({
   useVersions: (...a: unknown[]) => useVersionsMock(...a),

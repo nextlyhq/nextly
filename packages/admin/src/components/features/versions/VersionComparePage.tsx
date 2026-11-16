@@ -15,7 +15,7 @@
 
 import { ArrowLeft } from "lucide-react";
 import type { JSX } from "react";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { Alert, AlertDescription, Button } from "@admin/components/ui";
 import { withQuery } from "@admin/constants/routes";
@@ -23,7 +23,6 @@ import { LOCALE_PARAM } from "@admin/constants/search-params";
 import {
   scopeKey,
   useBaselineDiff,
-  useVersionDiff,
   useVersions,
 } from "@admin/hooks/queries/useVersions";
 import { useCan } from "@admin/hooks/useCan";
@@ -156,6 +155,7 @@ function ComparisonPane({
   baselineDiff,
   view,
   onViewChange,
+  onShown,
   isError,
   isLoading,
   onRetry,
@@ -166,6 +166,8 @@ function ComparisonPane({
   baselineDiff: ReturnType<typeof useBaselineDiff>;
   view?: "inline" | "side";
   onViewChange: (layout: ChangesLayout) => void;
+  /** Hears the diff view report the comparison it has drawn. */
+  onShown: (pair: { from: number; to: number } | null) => void;
   isError: boolean;
   isLoading: boolean;
   onRetry: () => void;
@@ -221,6 +223,7 @@ function ComparisonPane({
           to={data.to}
           {...(view ? { view } : {})}
           onViewChange={onViewChange}
+          onShown={onShown}
         />
       </>
     );
@@ -260,6 +263,7 @@ function ComparisonPane({
       to={pair.to}
       {...(view ? { view } : {})}
       onViewChange={onViewChange}
+      onShown={onShown}
     />
   );
 }
@@ -315,25 +319,38 @@ export function VersionComparePage({
         : null,
     [pairFrom, pairTo]
   );
-  // The pair's own comparison, read from the same query the diff view draws
-  // from (same key, so one request serves both), to know when it is on screen.
-  const shownDiff = useVersionDiff({
-    scope,
-    from: shown?.from ?? null,
-    to: shown?.to ?? null,
-  });
-  // Seen means drawn: a comparison still loading or that failed, or another
-  // pair's answer standing in while this one loads, has shown none of this
-  // pair's fields, and marking it would move the reader's last-viewed version
-  // past changes they never saw.
-  const drawn =
-    shown !== null && shownDiff.isSuccess && !shownDiff.isPlaceholderData;
+  // Seen means drawn, and only the diff view knows when it has drawn a
+  // comparison's fields: anything the page could judge from (a query that
+  // loaded, a pair that resolved) also holds while the space shows a loading
+  // line, a failure, or another pair's answer instead. So the page marks only
+  // from the view's own report, tagged with the document it was made for.
+  const scopeId = scopeKey(scope).join(":");
+  const [reported, setReported] = useState<{
+    scopeId: string;
+    from: number;
+    to: number;
+  } | null>(null);
+  const onShown = useCallback(
+    (drawnPair: { from: number; to: number } | null) =>
+      setReported(drawnPair ? { scopeId, ...drawnPair } : null),
+    [scopeId]
+  );
+  // A report counts only for the document and pair now on screen, so one left
+  // over from a previous document or pair can never mark this one.
+  const seen =
+    reported !== null &&
+    shown !== null &&
+    reported.scopeId === scopeId &&
+    reported.from === shown.from &&
+    reported.to === shown.to
+      ? reported
+      : null;
   // The newer of the two is what the reader has now seen, whichever side it
   // is on, once per showing.
   useMarkVersionSeen(
     scope,
-    scopeKey(scope).join(":"),
-    drawn ? Math.max(shown.from, shown.to) : null
+    scopeId,
+    seen ? Math.max(seen.from, seen.to) : null
   );
 
   /** The same comparison, at another baseline or in another view. */
@@ -528,6 +545,7 @@ export function VersionComparePage({
             baselineDiff={baselineDiff}
             {...(view ? { view } : {})}
             onViewChange={onViewChange}
+            onShown={onShown}
             isError={historyUnavailable}
             isLoading={list.isLoading}
             onRetry={() => void list.refetch()}
