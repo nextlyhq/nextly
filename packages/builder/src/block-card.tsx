@@ -33,6 +33,7 @@ import * as React from "react";
 import { BlockIconMark } from "./block-icon";
 import { layersLockChangeable, type BlockLockStatus } from "./inspector";
 import type { SharedBlockVerbs } from "./keyboard-actions";
+import { useAskedSharedVerbs } from "./selection-offer";
 import type { ToolbarActionId } from "./toolbar-actions";
 
 /**
@@ -288,10 +289,11 @@ function VerbItems({
   offered: CardVerbs["actions"];
   verbs: CardVerbs | undefined;
 }): React.JSX.Element | null {
+  const all = useAskedSharedVerbs(verbs?.withLocks);
   if (offered.length === 0 || verbs === undefined) return null;
-  const asked = verbs
-    .withLocks()
-    .filter(action => offered.some(each => each.id === action.id));
+  const asked = all.filter(action =>
+    offered.some(each => each.id === action.id)
+  );
   return (
     <>
       <DropdownMenuSeparator />

@@ -1535,7 +1535,10 @@ interface OfferInputs {
   readonly components: ComponentLookup | undefined;
   readonly expansion: EntryPlacement["expansion"];
   /** The lock rules and caps a place's locks are read with (`insert-lock`). */
-  readonly editor: Pick<EditorState, "lockDefinitions" | "limits">;
+  readonly editor: Pick<
+    EditorState,
+    "lockDefinitions" | "limits" | "lockRefusalFor"
+  >;
   /** Whether the template's collection's blocks fields are known yet. */
   readonly entryFieldsKnown: boolean;
 }
@@ -1662,6 +1665,7 @@ function placeContext(
     definitions: inputs.editor.lockDefinitions,
     nesting: inputs.source,
     limits: inputs.editor.limits,
+    ask: inputs.editor.lockRefusalFor,
   });
   const asked: { answer?: LockRefusalFacts; done: boolean } = { done: false };
   return {

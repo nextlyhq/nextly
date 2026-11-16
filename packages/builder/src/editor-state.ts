@@ -670,10 +670,12 @@ function useLockQuestions(
   );
   const lockRefusalFor = useCallback(
     (ops: readonly BuilderOp[]): LockRefusalFacts | undefined => {
-      // Read at the question, as the apply reads it.
+      // Read at the question, as the apply reads it. The component names
+      // are not part of what is kept by: they only word a refusal, and a host
+      // may hand a new function on every render.
       const { componentName, definitions: components } = composition.current;
       const document = latestDocument.current;
-      return kept.answer(document, ops, [components, componentName], () =>
+      return kept.answer(document, ops, [components], () =>
         lockAnswerFor(document, ops, baseline, {
           locks: hostLocksOf(definitions, nesting),
           limits,

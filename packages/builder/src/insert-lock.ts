@@ -19,14 +19,16 @@
  *   putting back the block it is missing repairs it while any other block
  *   breaks it further.
  *
- * What it leaves to the insert: a lock a component places on its own content,
- * which only the composed page shows. The editor's apply asks the full lock
- * question when the block is added, and refuses with the lock's reason there.
+ * One more lock only shows on the composed page: a lock a component places on
+ * the content a page puts inside it. A place inside a placed component is
+ * therefore asked the editor's full lock question (`ask`), which composes
+ * the page; every other place is answered from its structure alone.
  *
  * @module insert-lock
  */
 
 import {
+  isComponentInstance,
   layersLockBreak,
   lockRefusal,
   slotLockOf,
@@ -39,13 +41,15 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { factsOfBreak, type LockRefusalFacts } from "./lock-refusal";
-import type { OpPosition } from "./op-vocabulary";
+import type { BuilderOp, OpPosition } from "./op-vocabulary";
 
 /** What the lock rules are read from: the editor's own lock sources. */
 export interface InsertLockSources {
   readonly definitions: SlotDefaultSource;
   readonly nesting?: NestingSource;
   readonly limits: DocumentLimits;
+  /** The editor's full lock question, for a place inside a placed component. */
+  readonly ask: (ops: readonly BuilderOp[]) => LockRefusalFacts | undefined;
 }
 
 /** One block on the path to a place, and the slot of it the path goes into. */
@@ -73,8 +77,10 @@ export function insertLockAt(
   // The path is read only for a place inside a block, and once.
   const path = at.parentId === undefined ? [] : pathTo(document.nodes, at);
   const locked = path.length > 0 && slotIsLocked(path, sources.definitions);
+  const composed = path.some(step => isComponentInstance(step.node));
   return {
     of: node => {
+      if (composed) return sources.ask([{ kind: "insert", node, at }]);
       // The destination's lock is the same for every block, so asked once.
       destination ??= {
         facts: destinationLock(document, { kind: "insert", node, at }),

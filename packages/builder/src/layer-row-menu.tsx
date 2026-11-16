@@ -32,6 +32,7 @@ import * as React from "react";
 import { isElement } from "./dom-kind";
 import { keyHint } from "./key-hint";
 import type { SharedBlockVerbs } from "./keyboard-actions";
+import { useAskedSharedVerbs } from "./selection-offer";
 
 /** One of the row's own verbs, as the menu offers it. */
 export interface RowMenuItem {
@@ -142,7 +143,7 @@ function SharedGroups({
 }: {
   verbs: SharedBlockVerbs | undefined;
 }): React.JSX.Element {
-  const shared = verbs?.withLocks() ?? [];
+  const shared = useAskedSharedVerbs(verbs?.withLocks);
   const deletion = shared.filter(action => action.id === "delete");
   const others = shared.filter(action => action.id !== "delete");
   return (

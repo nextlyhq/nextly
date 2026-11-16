@@ -61,7 +61,11 @@ import { BlockContextMenu } from "./block-context-menu";
 import { BlockToolbar } from "./block-toolbar";
 import { Canvas } from "./canvas";
 import { useEditorState, type EditorState } from "./editor-state";
-import { BlockKeyboardActions } from "./keyboard-actions";
+import {
+  BlockKeyboardActions,
+  type SharedBlockVerbs,
+} from "./keyboard-actions";
+import { LayerRowMenu } from "./layer-row-menu";
 import { lockRefusalWording } from "./lock-refusal";
 import type { BuilderOp } from "./op-vocabulary";
 
@@ -123,6 +127,9 @@ const PAGE: BlockDocument = {
   ],
 } as BlockDocument;
 
+/** A component library held steady, as a host holds its own. */
+const NO_COMPONENTS = new Map<string, BlockDocument>();
+
 /** Removing the held headline: the edit the row's lock refuses. */
 const REMOVE_HELD: readonly BuilderOp[] = [{ kind: "remove", id: "held" }];
 
@@ -165,6 +172,38 @@ describe("the editor keeps each lock answer for its document version", () => {
       "locked-slot-altered"
     );
     expect(trials.count).toBe(1);
+  });
+
+  it("asks again once the page is saved, since the saved page is what a lock keeps", () => {
+    const { result, rerender } = renderHook(
+      ({ stored }: { stored: BlockDocument }) =>
+        useEditorState({ initialDocument: PAGE, stored }),
+      { initialProps: { stored: PAGE } }
+    );
+    result.current.lockRefusalFor(REMOVE_HELD);
+    trials.count = 0;
+    rerender({ stored: { ...PAGE } });
+    expect(result.current.lockRefusalFor(REMOVE_HELD)?.code).toBe(
+      "locked-slot-altered"
+    );
+    expect(trials.count).toBe(1);
+  });
+
+  it("keeps the answer when a host hands new component names on every render", () => {
+    const { result, rerender } = renderHook(() =>
+      useEditorState({
+        initialDocument: PAGE,
+        definitions: NO_COMPONENTS,
+        componentName: id => id,
+      })
+    );
+    result.current.lockRefusalFor(REMOVE_HELD);
+    rerender();
+    trials.count = 0;
+    expect(result.current.lockRefusalFor(REMOVE_HELD)?.code).toBe(
+      "locked-slot-altered"
+    );
+    expect(trials.count).toBe(0);
   });
 });
 
@@ -257,5 +296,53 @@ describe("the lock is asked when the author can act on its answer", () => {
     expect(asksRemoveHeld()).toBe(true);
     expect(trials.count).toBe(0);
     expect(canvasBlock("held")).toBeTruthy();
+  });
+});
+
+/**
+ * The editor's keyboard layer sharing its verbs, as a host does, with the
+ * Layers row menu drawn outside it from what was shared.
+ */
+function RowMenuHost(): React.JSX.Element {
+  const state = useEditorState({ initialDocument: PAGE });
+  editorRef = state;
+  const [verbs, setVerbs] = React.useState<SharedBlockVerbs | undefined>();
+  return (
+    <ShortcutProvider>
+      <BlockKeyboardActions
+        onSaveAsPattern={() => undefined}
+        editor={state}
+        onShareVerbs={setVerbs}
+      />
+      <LayerRowMenu
+        rowOf={target =>
+          target instanceof Element
+            ? (target.closest("[data-row]")?.getAttribute("data-row") ?? null)
+            : null
+        }
+        selectedIds={state.selection.ids}
+        select={id => state.select(id)}
+        items={() => []}
+        verbs={verbs}
+        apple={false}
+      >
+        <div data-row="held">Held headline</div>
+        <div data-row="free">Free headline</div>
+      </LayerRowMenu>
+    </ShortcutProvider>
+  );
+}
+
+describe("a menu drawn outside the keyboard layer", () => {
+  it("asks the locks of the row it opens on, though that row was not yet selected", () => {
+    render(<RowMenuHost />);
+    act(() => editor().select("free"));
+    fireEvent.contextMenu(screen.getByText("Held headline"));
+
+    // The control: opening it selected the row it opened on.
+    expect(editor().selectedId).toBe("held");
+    const item = screen.getByRole("menuitem", { name: /^Delete/ });
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(item.textContent).toContain(lockedSentence(editor()));
   });
 });
