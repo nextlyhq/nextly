@@ -351,10 +351,8 @@ export type {
   EmailOverdueArgs,
   ActivityPage,
   DeliveryActivity,
-  DeliveryOutcome,
   QueuedEmailActivity,
   QueuedEmailOverdue,
-  TemplateLastSent,
   TemplatesLastSent,
 } from "./direct-api/types";
 

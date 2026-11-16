@@ -67,8 +67,8 @@ import type {
   EmailDeliveryService,
 } from "./services/email-delivery-service";
 
-/** @experimental What happened to one recipient of one send. */
-export type DeliveryOutcome = EmailDeliveryStatus;
+/** What happened to one recipient of one send: `DeliveryActivity["outcome"]`. */
+type DeliveryOutcome = EmailDeliveryStatus;
 
 /** @experimental One delivery record, as Activity lists it. */
 export interface DeliveryActivity {
@@ -125,8 +125,8 @@ export interface ActivityPage<T> {
   meta: PaginationMeta;
 }
 
-/** @experimental When one template was last sent. */
-export interface TemplateLastSent {
+/** When one template was last sent: `TemplatesLastSent["templates"][number]`. */
+interface TemplateLastSent {
   slug: string;
   lastSentAt: Date;
 }
@@ -581,7 +581,6 @@ function deliveryOf(record: EmailDeliveryRecord): DeliveryActivity {
 /** A queued email's row and its job as Activity lists them. */
 function queuedOf(row: QueueRow, job: JobRow | undefined): QueuedEmailActivity {
   const state = standingOf(row);
-  const awaiting = state === "waiting" || state === "retrying";
   return {
     id: row.id,
     createdAt: epoch(row.createdAt),
@@ -589,15 +588,30 @@ function queuedOf(row: QueueRow, job: JobRow | undefined): QueuedEmailActivity {
     settledAt: row.settledAt === null ? null : epoch(row.settledAt),
     state,
     attempts: job ? Number(job.attemptCount) : 0,
-    nextAttemptAt:
-      awaiting && job
-        ? (job.nextAttemptAt ?? job.runAt ?? job.createdAt)
-        : null,
+    nextAttemptAt: nextAttemptOf(state, job),
     lastFailure: storedFailureOf(row.failure) ?? null,
-    messageHeld: row.held === true || Number(row.held) === 1,
+    messageHeld: isHeld(row.held),
     templateSlug: row.templateSlug,
     queuedBy: row.scope,
   };
+}
+
+/**
+ * When a queued email's next attempt is due, while one is to follow: its
+ * job's retry time, else its schedule, else its creation, as the job queue
+ * reads them.
+ */
+function nextAttemptOf(
+  state: QueuedEmailStanding,
+  job: JobRow | undefined
+): Date | null {
+  if (!job || (state !== "waiting" && state !== "retrying")) return null;
+  return job.nextAttemptAt ?? job.runAt ?? job.createdAt;
+}
+
+/** Whether a message is held: a boolean on PostgreSQL, 0 or 1 elsewhere. */
+function isHeld(held: unknown): boolean {
+  return held === true || Number(held) === 1;
 }
 
 type QueueTable = ReturnType<typeof loadedDialect>["tables"]["emailQueue"];

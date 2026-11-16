@@ -174,10 +174,8 @@ export type {
   EmailOverdueArgs,
   ActivityPage,
   DeliveryActivity,
-  DeliveryOutcome,
   QueuedEmailActivity,
   QueuedEmailOverdue,
-  TemplateLastSent,
   TemplatesLastSent,
 } from "./email";
 

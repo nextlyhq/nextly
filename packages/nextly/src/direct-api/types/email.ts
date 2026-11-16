@@ -645,10 +645,8 @@ export type EmailOverdueArgs = DirectAPIConfig;
 export type {
   ActivityPage,
   DeliveryActivity,
-  DeliveryOutcome,
   QueuedEmailActivity,
   QueuedEmailOverdue,
-  TemplateLastSent,
   TemplatesLastSent,
 } from "../../domains/email/delivery-activity";
 
