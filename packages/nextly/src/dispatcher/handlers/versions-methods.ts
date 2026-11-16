@@ -320,8 +320,6 @@ export async function respondVersionPage(
  * A document's events as the dispatcher answers them: the read's query from
  * the params, the caller the route resolved, and private to that caller, as a
  * history page is. Collections and Singles answer through this.
- *
- * @experimental
  */
 export async function respondSubjectEvents(
   subject: Exclude<ContentEventSubject, { kind: "release" }>,
@@ -525,7 +523,7 @@ export async function getVersionDiffForDocument(
   args: VersionMethodArgs & {
     from?: number;
     to?: number;
-    /** @experimental A registered comparison baseline's name. */
+    /** A registered comparison baseline's name. */
     baseline?: string;
     modifiedOnly?: boolean;
   }

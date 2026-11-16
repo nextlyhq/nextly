@@ -13,7 +13,7 @@ process.env.NEXTLY_SECRET =
 import { randomUUID } from "node:crypto";
 
 import sharp from "sharp";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { createMediaHandlers } from "../../../api/media-handlers";
 import { Nextly } from "../../../direct-api/nextly";
@@ -225,6 +225,88 @@ describe.each(getConfiguredTestDialects())(
         (await get(["0b6f6c2e-3c3a-4b8e-9d2f-1f2e3d4c5b6a", "copy", "640"]))
           .status
       ).toBe(404);
+    });
+
+    it("lists every copy up to a width with one read and one check, storing nothing", async () => {
+      const item = await uploadPhoto("listed.jpg");
+      const service = t.nextly.mediaService;
+      const reads = vi.spyOn(service, "findById");
+      // The one place an item is read and judged for its copies.
+      const judged = vi.spyOn(
+        service as unknown as { copySourceItem: () => unknown },
+        "copySourceItem"
+      );
+      const stored = mediaStorage();
+      const writes = vi.spyOn(stored, "uploadAt");
+      try {
+        const copies = await t.nextly.media.copiesOf({
+          id: item.id,
+          upTo: 1000,
+        });
+        // Narrowest first, capped at `upTo`: every allowed width to 960.
+        expect(copies.map(copy => copy.width)).toEqual([
+          96, 160, 240, 320, 640, 960,
+        ]);
+        // The same addresses `copyOf` gives, one width at a time.
+        expect(copies[4]).toEqual(await service.copyOf({ id: item.id }, 640));
+        reads.mockClear();
+        judged.mockClear();
+        await t.nextly.media.copiesOf({ id: item.id, upTo: 4000 });
+        expect(reads).toHaveBeenCalledTimes(1);
+        expect(judged).toHaveBeenCalledTimes(1);
+        // Never wider than the 2200px original, and nothing resized or kept.
+        const widest = await t.nextly.media.copiesOf({
+          id: item.id,
+          upTo: 4000,
+        });
+        expect(widest.at(-1)?.width).toBe(1920);
+        expect(writes).not.toHaveBeenCalled();
+        expect(await stored.exists(`${item.filename}.w240.jpg`)).toBe(false);
+        // By its address on the media route too.
+        expect(
+          (
+            await t.nextly.media.copiesOf({
+              url: `/api/media/${item.id}/raw`,
+              upTo: 320,
+            })
+          ).map(copy => copy.width)
+        ).toEqual([96, 160, 240, 320]);
+      } finally {
+        reads.mockRestore();
+        judged.mockRestore();
+        writes.mockRestore();
+      }
+    });
+
+    it("lists no copies where none can be had", async () => {
+      expect(
+        await t.nextly.media.copiesOf({
+          url: "https://images.example.com/photo.jpg",
+          upTo: 640,
+        })
+      ).toEqual([]);
+      const pdf = pdfDocument("listed");
+      const document = await t.nextly.media.upload({
+        file: {
+          data: pdf,
+          name: "listed.pdf",
+          mimetype: "application/pdf",
+          size: pdf.length,
+        },
+      });
+      expect(
+        await t.nextly.media.copiesOf({ id: document.id, upTo: 640 })
+      ).toEqual([]);
+      const held = await publicHolds();
+      await setPublic(held.filter(slug => slug !== "read-media"));
+      try {
+        const item = await uploadPhoto("unread.jpg");
+        expect(
+          await t.nextly.media.copiesOf({ id: item.id, upTo: 640 })
+        ).toEqual([]);
+      } finally {
+        await setPublic(held);
+      }
     });
 
     it("gives the copy's address through the Direct API, and no copy where none can be had", async () => {

@@ -33,6 +33,7 @@ import type {
   NamedQueryLookup,
   ResolvedMedia,
 } from "./context";
+import type { ImageCopies } from "./image-slot";
 import type { BlocksLayoutsProvider } from "./next-layouts";
 import type { BlockResolver } from "./resolver";
 import type { PageStyles } from "./styles";
@@ -312,6 +313,18 @@ export interface BlocksPageConfig
    * @experimental
    */
   namedQueries?: NamedQueryLookup;
+  /**
+   * Resized copies of the site's images: `pageBuilderImageCopies(reader)` from
+   * `@nextlyhq/plugin-page-builder`, which asks the site's media for them
+   * through a reader carrying `media.copiesOf`.
+   * Given, each Image block offers copies sized to where it sits (`srcset`
+   * and `sizes`) and never sends one more than twice its widest drawn width,
+   * and the images in the page's first block load first. Absent, or for an
+   * image no copy can be had of, the original is drawn as it always was.
+   *
+   * @experimental
+   */
+  imageCopies?: ImageCopies;
   /**
    * The caps this site holds its documents to, used while repairing a stored
    * shape. Passed to the renderer AND used when deriving metadata, so a site

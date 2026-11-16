@@ -146,13 +146,20 @@ export interface InsertPanelProps {
   ) => void;
   /**
    * The container to add INSIDE, by id, when the author chose it with its
-   * "+". Absent, a block goes after the selection (or at the end of the page).
+   * "+": every block goes there, whatever its kind. Absent, where a block
+   * goes is the selection's and the block's to decide.
    *
-   * A prop rather than read from the selection, because selecting a container
-   * and adding still builds the page downward, beside it: going inside is a
-   * gesture of its own, and only the host knows the author made it.
+   * A prop rather than read from the selection, because a layout block added
+   * with a container selected goes after it: going inside, for any block, is
+   * a gesture of its own, and only the host knows the author made it.
    */
   inside?: string;
+  /**
+   * The block to add right AFTER, by id, when the author chose the gap below
+   * it with its "+": every block goes in that gap ("Adding between Hero and
+   * Pricing"), even where the rule would put a block inside the selection.
+   */
+  after?: string;
   /**
    * Draws a preview of an entry for the popover beside the panel, when the
    * host has one (a block's example, rendered). Answering nothing falls back

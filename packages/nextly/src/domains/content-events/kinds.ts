@@ -9,7 +9,6 @@
  * transaction, which belongs with the plugin SDK.
  *
  * @module domains/content-events/kinds
- * @experimental
  */
 
 import type { ZodType } from "zod";
@@ -18,8 +17,6 @@ import { NextlyError } from "../../errors";
 
 /**
  * A registered kind.
- *
- * @experimental
  */
 export interface ContentEventKind {
   /** Its name in the record: kebab-case, unique, at most 64 characters. */
@@ -61,8 +58,6 @@ function snapshot(kind: ContentEventKind): Readonly<ContentEventKind> {
  * (same name, label and ending flag) is accepted and takes its payload schema
  * from the new registration: a module reloaded in development builds a new,
  * equivalent schema object.
- *
- * @experimental
  */
 export function registerContentEventKind(kind: ContentEventKind): void {
   if (!KIND_NAME.test(kind.name) || kind.name.length > MAX_KIND_LENGTH) {

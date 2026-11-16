@@ -263,7 +263,7 @@ function PageLayoutSection<T extends FieldValues>({
           Header and footer
         </h3>
         <p className="text-xs text-muted-foreground">
-          Which Layout this page is drawn inside.
+          Which header & footer set this page is drawn inside.
         </p>
       </div>
       <PageLayoutPicker control={control} />
@@ -332,7 +332,7 @@ function Picker<T extends FieldValues>({
 
   return (
     <div className="flex min-w-0 flex-col gap-1.5" data-slot="page-layout">
-      <Label htmlFor={id}>Layout</Label>
+      <Label htmlFor={id}>Header & footer</Label>
       {capped ? (
         <SearchingPicker
           id={id}
@@ -360,7 +360,9 @@ function Picker<T extends FieldValues>({
           >
             <SelectValue
               placeholder={
-                state.kind === "pending" ? "Loading Layouts…" : undefined
+                state.kind === "pending"
+                  ? "Loading header & footer sets…"
+                  : undefined
               }
             />
           </SelectTrigger>
@@ -519,14 +521,18 @@ function SearchNote({
   if (failed) {
     return (
       <span className="flex items-center justify-center gap-2">
-        Couldn&apos;t search Layouts
+        Couldn&apos;t search header & footer sets
         <Button type="button" variant="ghost" size="sm" onClick={retry}>
           Try again
         </Button>
       </span>
     );
   }
-  return <>{searching && !answered ? "Searching…" : "No Layouts match."}</>;
+  return (
+    <>
+      {searching && !answered ? "Searching…" : "No header & footer sets match."}
+    </>
+  );
 }
 
 /**
@@ -570,7 +576,7 @@ function SearchingPicker({
         >
           <span className="min-w-0 truncate text-left">
             {current === undefined ? (
-              "Choose a Layout"
+              "Choose a header & footer set"
             ) : (
               <OptionText option={current} />
             )}
@@ -588,9 +594,9 @@ function SearchingPicker({
             answer, and a Layout past it is found only by asking. */}
         {/* The menu's label names its search field, which the field
             reads by reference rather than by a label of its own. */}
-        <Command shouldFilter={false} label="Search Layouts">
+        <Command shouldFilter={false} label="Search header & footer sets">
           <CommandInput
-            placeholder="Search Layouts"
+            placeholder="Search header & footer sets"
             value={typed}
             onValueChange={setTyped}
           />
@@ -654,7 +660,7 @@ function WhyLine({
         id={id}
         className="flex items-center gap-2 text-xs text-muted-foreground"
       >
-        Couldn&apos;t load Layouts
+        Couldn&apos;t load header & footer sets
         <Button type="button" variant="ghost" size="sm" onClick={retry}>
           Try again
         </Button>
@@ -663,7 +669,7 @@ function WhyLine({
   }
   return (
     <p id={id} className="text-xs text-muted-foreground" aria-live="polite">
-      {state.kind === "pending" ? "Loading Layouts…" : view.why}
+      {state.kind === "pending" ? "Loading header & footer sets…" : view.why}
     </p>
   );
 }
@@ -731,8 +737,8 @@ function regionsOf(
       area: region.area,
       document: regionDocument([region]),
       definitions,
-      label: `${areaName(region.area)}, from Layout ${effective.title}`,
-      badge: `${areaName(region.area)} · from Layout`,
+      label: `${areaName(region.area)}, from header & footer set ${effective.title}`,
+      badge: `${areaName(region.area)} · from header & footer set`,
       ...editOf(effective, meta),
       ...noteOf(effective, region, meta),
     })
@@ -741,7 +747,7 @@ function regionsOf(
     (region): LayersRegionRow => ({
       area: region.area,
       name: areaName(region.area),
-      origin: `from Layout ${effective.title}`,
+      origin: `from header & footer set ${effective.title}`,
       onActivate: () => {
         // Shown and focused on the canvas, where its tag says the rest.
         const drawn = canvasRoot?.querySelector<HTMLElement>(
@@ -764,8 +770,8 @@ function editOf(
   return {
     edit: {
       href: `/admin/collections/${encodeURIComponent(meta.layoutsCollection)}/${encodeURIComponent(effective.id)}`,
-      text: "Edit Layout ↗",
-      name: `Edit Layout ${effective.title} (opens in a new tab)`,
+      text: "Edit header & footer set ↗",
+      name: `Edit header & footer set ${effective.title} (opens in a new tab)`,
     },
   };
 }
@@ -777,7 +783,9 @@ function noteOf(
   meta: LayoutChoicesResponse["meta"]
 ): Pick<CanvasRegion, "note"> {
   if (effective.draftChangesNotLive) {
-    return { note: `Draft changes not live: Layout ${effective.title}` };
+    return {
+      note: `Draft changes not live: header & footer set ${effective.title}`,
+    };
   }
   return meta.regionComponents[region.componentId]?.draftChangesNotLive === true
     ? { note: `Draft changes not live: ${region.area} component` }

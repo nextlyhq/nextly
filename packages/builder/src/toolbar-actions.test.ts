@@ -168,7 +168,7 @@ describe("toolbarActions", () => {
     });
   });
 
-  describe("saving a selection to the pattern library", () => {
+  describe("saving a selection to Saved sections", () => {
     // A rule source of its own rather than the registry, so these assert the
     // toolbar's reading of a refusal and not which blocks happen to be
     // registered in this process.
@@ -572,7 +572,7 @@ describe("making a component from a selection", () => {
   });
 });
 
-describe("detach, duplicate and update a pattern", () => {
+describe("detach, duplicate and update a saved section", () => {
   const anyParent = { parentsOf: () => undefined };
   const card = {
     formatVersion: 1,
@@ -734,7 +734,7 @@ describe("detach, duplicate and update a pattern", () => {
     expect(actionOf(actions, "duplicate-component").enabled).toBe(true);
   });
 
-  it("offers Update a pattern for a savable run, dimmed without the grant", () => {
+  it("offers Update a saved section for a savable run, dimmed without the grant", () => {
     const document = documentOf([node("a"), node("b")]);
     const allowed = toolbarActions(
       document,
@@ -758,7 +758,8 @@ describe("detach, duplicate and update a pattern", () => {
     expect(actionOf(allowed, "update-pattern").enabled).toBe(true);
     expect(actionOf(refused, "update-pattern")).toMatchObject({
       enabled: false,
-      reason: "You do not have permission to update and publish patterns.",
+      reason:
+        "You do not have permission to update and publish saved sections.",
     });
   });
 });

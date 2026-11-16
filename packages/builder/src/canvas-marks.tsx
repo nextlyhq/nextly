@@ -617,11 +617,25 @@ interface MarkInputs {
  */
 interface Measured {
   readonly root: HTMLElement | null;
+  /** Every mark but the hovered block's. */
   readonly marks: readonly Mark[];
+  /** The block the hover marks were measured for, or `null`. */
+  readonly hoveredFor: string | null;
+  /**
+   * The hovered block's marks, held apart so a hover change measures them
+   * alone and keeps the rest.
+   */
+  readonly hovered: readonly Mark[];
   readonly atRest: readonly AtRestDraft[];
 }
 
-const NOTHING_MEASURED: Measured = { root: null, marks: NO_MARKS, atRest: [] };
+const NOTHING_MEASURED: Measured = {
+  root: null,
+  marks: NO_MARKS,
+  hoveredFor: null,
+  hovered: NO_MARKS,
+  atRest: [],
+};
 
 /** The marked elements of a canvas root, as the boxes to draw over them. */
 function marksOf(element: HTMLElement, inputs: MarkInputs): Measured {
@@ -750,52 +764,85 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): Measured {
       placementTagInside: ring.rect.y - onScreen.y < MARK_TAG_HEIGHT,
     });
   });
-  const { hovered } = inputs;
-  if (hovered !== null) {
-    /*
-     * Every rendering of the hovered block, found by its ADDRESS and the
-     * outermost element standing for it, as the selection is: a placement's
-     * component draws no element of its own, and a block drawn twice is
-     * pointed at twice. A block already selected keeps its ring alone.
-     */
-    root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(candidate => {
-      if (candidate.closest(`.${CANVAS_ROOT_CLASS}`) !== root) return;
-      if (candidate.hasAttribute(SELECTED_ATTRIBUTE)) return;
-      if (nodeAddressOf(candidate) !== hovered) return;
-      if (!isOutermostForAddress(candidate, hovered, root)) return;
-      const outline = outlineOf(candidate, root, space);
-      if (outline === null) return;
-      found.push({
-        ...outline,
-        kind: "hovered",
-        secondary: false,
-        component: candidate.hasAttribute(INSTANCE_ATTRIBUTE),
-        locked: false,
-        hidden: false,
-        tag: "below",
-        tagEdge: "left",
-        // In from the screen's left edge as far as the outline runs past it,
-        // so a block scrolled partly off the side keeps its name in view. Not
-        // for one wholly off it: there is nothing on screen to tag.
-        tagInset: {
-          bottom: 0,
-          side:
-            outline.rect.x + outline.rect.width > onScreen.x
-              ? Math.max(0, onScreen.x - outline.rect.x)
-              : 0,
-        },
-        hoveredAddress: hovered,
-        // From the top of what is on screen, as the placement's tag is.
-        hoverTagInside: outline.rect.y - onScreen.y < MARK_TAG_HEIGHT,
-        notQuoted: candidate.hasAttribute(NOT_QUOTED_ATTRIBUTE),
-      });
-    });
-  }
   return {
     root,
     marks: dimmedBesideEditing(found),
+    hoveredFor: inputs.hovered,
+    hovered: hoveredMarksOf(root, space, onScreen, inputs.hovered),
     atRest: atRestMarks(root, space, onScreen, toolbarAbove, inputs.shownLabel),
   };
+}
+
+/**
+ * The last measure with the hover's marks measured again for `hovered`, and
+ * nothing else measured: the other marks stay as the last full measure left
+ * them, which the canvas's watchers keep current. `undefined` when the layer
+ * no longer sits over the canvas last measured, which wants a full measure.
+ */
+function withHoverOf(
+  element: HTMLElement,
+  last: Measured,
+  hovered: string | null
+): Measured | undefined {
+  if (last.root === null) return undefined;
+  if (hovered === null) return { ...last, hoveredFor: null, hovered: NO_MARKS };
+  const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+  if (space === null || space.root !== last.root) return undefined;
+  return {
+    ...last,
+    hoveredFor: hovered,
+    hovered: hoveredMarksOf(space.root, space, onScreenOf(space), hovered),
+  };
+}
+
+/** The marks of the block pointed at, measured; none when none is. */
+function hoveredMarksOf(
+  root: HTMLElement,
+  space: OverlaySpace,
+  onScreen: Rect,
+  hovered: string | null
+): readonly Mark[] {
+  if (hovered === null) return NO_MARKS;
+  const found: Mark[] = [];
+  /*
+   * Every rendering of the hovered block, found by its ADDRESS and the
+   * outermost element standing for it, as the selection is: a placement's
+   * component draws no element of its own, and a block drawn twice is
+   * pointed at twice. A block already selected keeps its ring alone.
+   */
+  root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(candidate => {
+    if (candidate.closest(`.${CANVAS_ROOT_CLASS}`) !== root) return;
+    if (candidate.hasAttribute(SELECTED_ATTRIBUTE)) return;
+    if (nodeAddressOf(candidate) !== hovered) return;
+    if (!isOutermostForAddress(candidate, hovered, root)) return;
+    const outline = outlineOf(candidate, root, space);
+    if (outline === null) return;
+    found.push({
+      ...outline,
+      kind: "hovered",
+      secondary: false,
+      component: candidate.hasAttribute(INSTANCE_ATTRIBUTE),
+      locked: false,
+      hidden: false,
+      tag: "below",
+      tagEdge: "left",
+      // In from the screen's left edge as far as the outline runs past it,
+      // so a block scrolled partly off the side keeps its name in view. Not
+      // for one wholly off it: there is nothing on screen to tag.
+      tagInset: {
+        bottom: 0,
+        side:
+          outline.rect.x + outline.rect.width > onScreen.x
+            ? Math.max(0, onScreen.x - outline.rect.x)
+            : 0,
+      },
+      hoveredAddress: hovered,
+      // From the top of what is on screen, as the placement's tag is.
+      hoverTagInside: outline.rect.y - onScreen.y < MARK_TAG_HEIGHT,
+      notQuoted: candidate.hasAttribute(NOT_QUOTED_ATTRIBUTE),
+    });
+  });
+  return found;
 }
 
 /** What an element asks an at-rest mark to say, read off its attributes. */
@@ -1172,6 +1219,19 @@ export function CanvasMarks({
   // render does not re-measure every block. JSON, which spells any id
   // unambiguously.
   const revealedKey = JSON.stringify(revealed);
+  // What a measure reads, kept current after each render, so the measure and
+  // the watchers built on it stay the same functions through every hover and
+  // selection: a new measure would rebuild each watcher, observing every
+  // block on the page again.
+  const inputs = React.useRef({
+    hovered,
+    revealedKey,
+    hiddenLabel,
+    shownLabel,
+  });
+  React.useLayoutEffect(() => {
+    inputs.current = { hovered, revealedKey, hiddenLabel, shownLabel };
+  });
 
   // The last measure, which placing the at-rest tabs again reads: another
   // layer's post moves where they go, not what the canvas marks.
@@ -1180,9 +1240,10 @@ export function CanvasMarks({
   // The marks as last measured, the at-rest tabs where the board puts them
   // now: placed again whenever another layer's post changes the board.
   const placeTabs = React.useCallback(() => {
-    const { root, marks: drawn, atRest } = measured.current;
+    const { root, marks: drawn, hovered: pointed, atRest } = measured.current;
     const next = [
       ...drawn,
+      ...pointed,
       ...placedAtRest(
         atRest,
         root === null ? [] : tabBoardOf(root).placesOf("at-rest")
@@ -1192,29 +1253,67 @@ export function CanvasMarks({
   }, []);
   const postTabs = useTabPost("at-rest", placeTabs);
 
+  // The canvas root the last measure found, which the watchers are put on:
+  // a new root moves them, or they would go on hearing a root since removed.
+  const [watchedRoot, setWatchedRoot] = React.useState<HTMLElement | null>(
+    null
+  );
+
   const measure = React.useCallback(() => {
     const element = layer.current;
+    const now = inputs.current;
     measured.current =
       element === null
         ? NOTHING_MEASURED
         : marksOf(element, {
-            hovered,
-            revealed: new Set(JSON.parse(revealedKey) as string[]),
-            tagWidth: tagWidthOf(hiddenLabel),
-            shownLabel,
+            hovered: now.hovered,
+            revealed: new Set(JSON.parse(now.revealedKey) as string[]),
+            tagWidth: tagWidthOf(now.hiddenLabel),
+            shownLabel: now.shownLabel,
           });
     const { root, atRest } = measured.current;
+    setWatchedRoot(root);
     postTabs(root, { tabs: atRest.map(({ tab }) => tab), taken: [] });
     placeTabs();
-  }, [hovered, revealedKey, hiddenLabel, shownLabel, postTabs, placeTabs]);
+  }, [postTabs, placeTabs]);
 
+  // Measured in full when the canvas or what the marks say changes, and when
+  // the watchers move to a new root: what the old ones had not yet reported
+  // goes with them.
   React.useLayoutEffect(() => {
     measure();
-  }, [measure, canvasFrame]);
+  }, [measure, canvasFrame, watchedRoot, revealedKey, hiddenLabel, shownLabel]);
+
+  // Measured again whenever the layer finds itself over another canvas root:
+  // the page in a frame can mount the canvas again under a new root while
+  // this layer stays. Checked on every render, as nothing else reports it.
+  React.useLayoutEffect(() => {
+    const element = layer.current;
+    if (element === null) return;
+    const root = overlaySpaceOf(element, CANVAS_ROOT_CLASS)?.root ?? null;
+    if (root !== measured.current.root) measure();
+  });
+
+  // A hover change measures the block pointed at alone. Every other mark is
+  // as the last full measure left it, which the watchers keep current.
+  React.useLayoutEffect(() => {
+    const element = layer.current;
+    if (measured.current.hoveredFor === hovered) return;
+    const next =
+      element === null
+        ? undefined
+        : withHoverOf(element, measured.current, hovered);
+    if (next === undefined) {
+      measure();
+      return;
+    }
+    measured.current = next;
+    placeTabs();
+  }, [hovered, measure, placeTabs]);
 
   React.useEffect(
     () => watchCanvasFor(() => layer.current, measure),
-    [measure, canvasFrame]
+    [measure, canvasFrame, watchedRoot]
   );
 
   // And the scrolls that move what of the canvas is on screen, which the tags
@@ -1226,7 +1325,7 @@ export function CanvasMarks({
       element === null ? null : overlaySpaceOf(element, CANVAS_ROOT_CLASS);
     if (space === null) return;
     return watchScreenBand(space.root, space.frame, measure);
-  }, [measure, canvasFrame]);
+  }, [measure, canvasFrame, watchedRoot]);
 
   return (
     // Hidden from assistive technology: the selection is announced by the

@@ -689,11 +689,12 @@ export function addToken(
 /* ------------------------------------------------------------------ groups */
 
 /** The groups the Design panel shows variables in, in order. */
-export type VariableGroup = "colours" | "type" | "spacing" | "other";
+export type VariableGroup = "colours" | "type" | "fonts" | "spacing" | "other";
 
 const VARIABLE_GROUPS: readonly VariableGroup[] = [
   "colours",
   "type",
+  "fonts",
   "spacing",
   "other",
 ];
@@ -702,9 +703,48 @@ const VARIABLE_GROUPS: readonly VariableGroup[] = [
 const VARIABLE_GROUP_LABELS: Readonly<Record<VariableGroup, string>> = {
   colours: "Colours",
   type: "Type scale",
+  fonts: "Fonts and weights",
   spacing: "Spacing, radius & shadows",
-  other: "Other",
+  other: "Other values",
 };
+
+/** The Design panel's tabs, by kind, in the order they are shown. */
+export type DesignTab = "colours" | "type" | "spacing" | "styles";
+
+/**
+ * The variable groups each Design tab lists, in order: a font and a weight
+ * sit with the type sizes, and what belongs to no other group ends Spacing.
+ * Styles lists none.
+ */
+export const DESIGN_TAB_GROUPS: Readonly<
+  Record<DesignTab, readonly VariableGroup[]>
+> = {
+  colours: ["colours"],
+  type: ["type", "fonts"],
+  spacing: ["spacing", "other"],
+  styles: [],
+};
+
+/**
+ * The groups narrowed to a search, matched on the name shown only: the code
+ * name is hidden, so a match on it would list a row with nothing in it that
+ * matches what was typed. The one rule for a variable search, so a count
+ * beside a tab and the rows that tab lists cannot disagree.
+ */
+export function searchVariableGroups<
+  G extends { entries: readonly { label: string }[] },
+>(groups: readonly G[], needle: string): G[] {
+  const text = needle.trim().toLowerCase();
+  if (text === "") return [...groups];
+  return groups
+    .map(group => ({
+      ...group,
+      entries: group.entries.filter(entry =>
+        entry.label.toLowerCase().includes(text)
+      ),
+    }))
+    .filter(group => group.entries.length > 0);
+}
 
 /**
  * Every group with its heading, in the order the Design panel lists them, for
@@ -785,6 +825,9 @@ export function variableGroupOf(token: {
 }): VariableGroup {
   if (token.kind === "color") return "colours";
   if (token.kind === "shadow") return "spacing";
+  if (token.kind === "fontFamily" || token.kind === "fontWeight") {
+    return "fonts";
+  }
   const family = lengthFamilyOf(token);
   if (family === "font-size" || family === "line-height") return "type";
   if (family === "spacing" || family === "radius") return "spacing";
@@ -899,6 +942,28 @@ export function variableGroups(
       (byGroup.get(group) ?? []).filter(entry => !paired.has(entry.row))
     ),
   }));
+}
+
+/**
+ * How many variables a search matches in each Design tab that lists
+ * variables: the rows each tab would list, counted, through the same groups
+ * and the same search the tab draws with, so a count beside a tab and the
+ * rows under it cannot disagree.
+ */
+export function variableMatchesByTab(
+  tokens: SiteTokenSet | undefined,
+  needle: string
+): Readonly<Record<Exclude<DesignTab, "styles">, number>> {
+  const found = searchVariableGroups(variableGroups(tokens), needle);
+  const countOf = (tab: DesignTab): number =>
+    found
+      .filter(group => DESIGN_TAB_GROUPS[tab].includes(group.group))
+      .reduce((sum, group) => sum + group.entries.length, 0);
+  return {
+    colours: countOf("colours"),
+    type: countOf("type"),
+    spacing: countOf("spacing"),
+  };
 }
 
 /* ------------------------------------------------------------------ labels */
