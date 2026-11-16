@@ -300,6 +300,7 @@ import {
   NO_PART,
   partOfRewrittenField,
   partsCreated,
+  partsTogether,
   type ChangedParts,
 } from "../../versions/changed-parts";
 import {
@@ -356,6 +357,7 @@ import { languagesHoldingWorkingDrafts } from "../../versions/held-working-draft
 import { recordOverwriteIfAsked } from "../../versions/overwrite-record";
 import {
   combinedDraft,
+  draftSlotParts,
   draftsKeptByPart,
   findPartDrafts,
   holdsPendingChange,
@@ -11539,9 +11541,16 @@ export class CollectionMutationService extends BaseService {
               // so it holds no locale's translatable values. Claiming one
               // would tell a restore to write content it never captured.
               locale: null,
-              // The parts the publish put live, as its history event names
-              // them.
-              changedParts: partsMovesRecord(historyMoves),
+              // The parts the publish put live: the status moves its history
+              // event names, with each pending change it promoted, in the
+              // part that change's draft holds. A component's draft of a
+              // collection with no translated fields of its own moves no
+              // translation row, so the event names no language for it, yet
+              // the promotion wrote that language's component values.
+              changedParts: partsTogether([
+                partsMovesRecord(historyMoves),
+                ...promotions.map(promoted => draftSlotParts(promoted.locale)),
+              ]),
               maxPerDoc: versionsConfig.maxPerDoc,
             });
             publishVersionNo = capture.versionNo;
@@ -17604,11 +17613,16 @@ export class CollectionMutationService extends BaseService {
                   keys: await partKeysOf(fields, {
                     translated: Boolean(localizedUpdate),
                   }),
+                  // The language's own status rides its translation row; the
+                  // document's is the main row's, which a write in the
+                  // default language (or of a document without languages)
+                  // moves too, and which every language shows.
                   statusWritten:
-                    Object.prototype.hasOwnProperty.call(
-                      updatePayload,
-                      "status"
-                    ) || localizedUpdate?.companionData?._status !== undefined,
+                    localizedUpdate?.companionData?._status !== undefined,
+                  documentStatusWritten: Object.prototype.hasOwnProperty.call(
+                    updatePayload,
+                    "status"
+                  ),
                 }),
                 maxPerDoc: versionsConfig.maxPerDoc,
               });
@@ -22622,9 +22636,14 @@ export class CollectionMutationService extends BaseService {
                 ),
               }),
               keys: updateKeys,
+              // The language's own status rides its translation row; the
+              // document's is the main row's, which every language shows.
               statusWritten:
-                Object.prototype.hasOwnProperty.call(finalData, "status") ||
                 localizedUpdate?.companionData?._status !== undefined,
+              documentStatusWritten: Object.prototype.hasOwnProperty.call(
+                finalData,
+                "status"
+              ),
             }),
         });
         producedVersionNo = versionNo;

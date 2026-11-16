@@ -5371,9 +5371,14 @@ export class SingleMutationService extends BaseService {
                 keys: await partKeysOf(fieldConfigs, {
                   translated: Boolean(companion),
                 }),
-                statusWritten:
-                  companionStatus !== undefined ||
-                  Object.prototype.hasOwnProperty.call(mainPayload, "status"),
+                // The language's own status rides its translation row; the
+                // Single's is the main row's, which a write in the default
+                // language moves too, and which every language shows.
+                statusWritten: companionStatus !== undefined,
+                documentStatusWritten: Object.prototype.hasOwnProperty.call(
+                  mainPayload,
+                  "status"
+                ),
               }),
               maxPerDoc: versionsConfig.maxPerDoc,
             });

@@ -171,9 +171,10 @@ function touchesPart(
  * version records them: the language where the write set one of the
  * language's keys (a translated value or a component) or, `statusWritten`,
  * the language's own status, so a publish by status alone still names its
- * language; and the shared part where it set a shared key. A write that set
- * only shared values names no language, though the language's values are in
- * the snapshot it records.
+ * language; and the shared part where it set a shared key or,
+ * `documentStatusWritten`, the document's own status, which every language
+ * shows. A write that set only shared values names no language, though the
+ * language's values are in the snapshot it records.
  *
  * A write under no language is a write of a document kept as one part, which
  * is its shared part.
@@ -183,6 +184,7 @@ export function partsWritten(write: {
   touched: ReadonlySet<string>;
   keys: PartKeys;
   statusWritten?: boolean;
+  documentStatusWritten?: boolean;
 }): ChangedParts {
   if (write.locale === null) return SHARED_PART_ALONE;
   const language =
@@ -190,7 +192,9 @@ export function partsWritten(write: {
     touchesPart(write.touched, write.keys.language);
   return {
     locales: language ? [write.locale] : [],
-    shared: touchesPart(write.touched, write.keys.shared),
+    shared:
+      write.documentStatusWritten === true ||
+      touchesPart(write.touched, write.keys.shared),
   };
 }
 

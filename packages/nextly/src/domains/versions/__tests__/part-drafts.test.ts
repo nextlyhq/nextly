@@ -148,6 +148,18 @@ describe("partsWritten", () => {
     ).toEqual({ locales: ["es"], shared: false });
   });
 
+  it("names the shared part for a write of the document's own status", () => {
+    expect(
+      partsWritten({
+        locale: "en",
+        touched: new Set(["status"]),
+        keys,
+        statusWritten: true,
+        documentStatusWritten: true,
+      })
+    ).toEqual({ locales: ["en"], shared: true });
+  });
+
   it("names the shared part alone for a write under no language, whatever it set", () => {
     expect(
       partsWritten({ locale: null, touched: new Set(["title"]), keys })
