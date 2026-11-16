@@ -182,6 +182,7 @@ import {
   previewRequiredColumns,
   refuseRequiredColumnsOverNulls,
 } from "../../domains/schema/migrate/required-column-guard";
+import { refuseUnwrittenChanges } from "../../domains/schema/migrate/refuse-unwritten-changes";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
 import {
   constructsAdded,
@@ -633,6 +634,29 @@ export async function runMigrate(
       server: serverConstructs,
       logger: { warn: m => logger.warn(m) },
     });
+
+    // The configuration holding a change no migration records ends the run here, a dry run's too,
+    // naming each one, before the lock or anything else changes the database: the run would
+    // otherwise report a database as up to date that the configuration is ahead of.
+    try {
+      await refuseUnwrittenChanges({
+        config: configResult.config,
+        ...(configResult.deferredExtends === undefined
+          ? {}
+          : { deferredExtends: configResult.deferredExtends }),
+        projectRoot: cwd,
+        migrationsDir: appMigrationsDir,
+        dialect,
+        adapter: adapter as unknown as DrizzleAdapter,
+        logger: {
+          warn: m => logger.warn(m),
+          error: m => logger.error(m),
+          debug: m => logger.debug(m),
+        },
+      });
+    } catch (error) {
+      fail(error);
+    }
 
     if (options.dryRun) {
       await previewMigrate({
