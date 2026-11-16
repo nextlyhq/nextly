@@ -270,20 +270,27 @@ function barLockOf(
 function useTypingAside(
   bar: React.RefObject<HTMLDivElement | null>,
   inside: boolean,
-  selectedIds: readonly string[]
+  selectedIds: readonly string[],
+  canvasFrame: CanvasFrame
 ): boolean {
   const [aside, setAside] = React.useState(false);
   // Keyed on the ids, not the array, which a render may hand over afresh:
   // re-listening would bring the bar back mid-word.
   const selected = selectedIds.join("\n");
+  // The canvas's document, held by the frame's provider: a frame that loads
+  // another page replaces it, and the listeners move to the new one.
+  const canvas = canvasFrame.document;
   React.useEffect(() => {
     setAside(false);
     const element = bar.current;
     if (!inside || element === null) return;
-    const root = overlaySpaceOf(element, CANVAS_ROOT_CLASS)?.root;
-    if (root === undefined) return;
-    return listenForTyping(root, element, selected.split("\n"), setAside);
-  }, [bar, inside, selected]);
+    return listenForTyping(
+      canvas ?? element.ownerDocument,
+      element,
+      selected.split("\n"),
+      setAside
+    );
+  }, [bar, inside, selected, canvas]);
   return aside;
 }
 
@@ -312,12 +319,11 @@ function writesText(event: KeyboardEvent): boolean {
  * that element is watched, and the watch moves with the typing.
  */
 function listenForTyping(
-  root: HTMLElement,
+  canvas: Document,
   bar: HTMLElement,
   ids: readonly string[],
   aside: (value: boolean) => void
 ): () => void {
-  const canvas = root.ownerDocument;
   const documents = new Set([canvas, bar.ownerDocument]);
   let watched: { element: Element; observer: MutationObserver } | null = null;
   const back = (): void => {
@@ -338,6 +344,9 @@ function listenForTyping(
     watched = { element: typing, observer };
   };
   const typed = (event: KeyboardEvent): void => {
+    // The root as it is now, which a page loaded into the frame replaces.
+    const root = overlaySpaceOf(bar, CANVAS_ROOT_CLASS)?.root;
+    if (root === undefined) return;
     const typing = typingIn(event.target, root, ids);
     if (typing === null || !writesText(event)) return;
     aside(true);
@@ -679,7 +688,8 @@ export function BlockToolbar({
   const typingAside = useTypingAside(
     bar,
     placement?.side === "inside",
-    selectedIds
+    selectedIds,
+    canvasFrame
   );
 
   /*
