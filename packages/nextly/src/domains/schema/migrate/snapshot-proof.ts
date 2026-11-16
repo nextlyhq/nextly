@@ -649,19 +649,25 @@ function ownRowsCopy(
   const cursor = cursorOf(statement, dialect, EXACT);
   if (!cursor.accept("INSERT", "INTO")) return undefined;
   const twin = cursor.name();
-  if (twin === undefined || !cursor.accept("(")) return undefined;
+  const columns = sameColumnsCopied(cursor);
+  if (twin === undefined || columns === undefined) return undefined;
+  if (!cursor.accept("FROM")) return undefined;
+  const table = cursor.name();
+  return cursor.done() && twin === `__new_${table}`
+    ? { twin, columns }
+    : undefined;
+}
+
+/** `(a, b) SELECT a, b`: the columns, when both lists name the same ones in the same order. */
+function sameColumnsCopied(cursor: StatementCursor): string[] | undefined {
+  if (!cursor.accept("(")) return undefined;
   const into = cursor.names();
   if (into === undefined || !cursor.accept(")", "SELECT")) return undefined;
   const selected = cursor.names();
-  if (!cursor.accept("FROM")) return undefined;
-  const table = cursor.name();
   const same =
-    selected !== undefined &&
-    selected.length === into.length &&
+    selected?.length === into.length &&
     selected.every((column, at) => column === into[at]);
-  return same && cursor.done() && twin === `__new_${table}`
-    ? { twin, columns: into }
-    : undefined;
+  return same ? into : undefined;
 }
 
 /** `CREATE [UNIQUE] INDEX [CONCURRENTLY] [IF NOT EXISTS] n ON [ONLY] t ...`. */
@@ -887,48 +893,67 @@ function reasonsOf(
   reasons: UnprovenReasons,
   statements: readonly StatementProof[]
 ): string[] {
-  const why: string[] = [];
-  if (reasons.changed !== undefined) {
-    why.push(
-      reasons.changed.recorded === ""
+  return REASON_LINES.flatMap(line => line(reasons, statements) ?? []);
+}
+
+/** One reason's line, or undefined where it does not hold. */
+type ReasonLine = (
+  reasons: UnprovenReasons,
+  statements: readonly StatementProof[]
+) => string | undefined;
+
+/** The line for statements of one status, where any is. */
+const statusLine =
+  (
+    status: StatementProof["status"],
+    words: (count: number) => string
+  ): ReasonLine =>
+  (_reasons, statements) => {
+    const count = statements.filter(each => each.status === status).length;
+    return count > 0 ? words(count) : undefined;
+  };
+
+/** Each reason's line, in the order the refusal gives them. */
+const REASON_LINES: readonly ReasonLine[] = [
+  ({ changed }) =>
+    changed === undefined
+      ? undefined
+      : changed.recorded === ""
         ? "its snapshot records no checksum to show it is the file the snapshot was written with"
-        : `it has changed since its snapshot was written (checksum ${short(reasons.changed.checksum)}, the snapshot recorded ${short(reasons.changed.recorded)})`
-    );
-  }
-  if (reasons.attempt !== undefined) {
-    why.push(
-      reasons.attempt === "failed"
+        : `it has changed since its snapshot was written (checksum ${short(changed.checksum)}, the snapshot recorded ${short(changed.recorded)})`,
+  ({ attempt }) =>
+    attempt === undefined
+      ? undefined
+      : attempt === "failed"
         ? "its last attempt failed"
-        : "its last attempt recorded no outcome"
-    );
-  }
-  if (reasons.dangling !== undefined) {
-    const rows = reasons.dangling.reduce((sum, entry) => sum + entry.rows, 0);
-    why.push(
-      `the database holds ${rows} row(s) referencing rows that do not exist through a foreign key it adds (${reasons.dangling
-        .slice(0, 5)
-        .map(entry => `${entry.table} → ${entry.parent}`)
-        .join(", ")}), which a run of it would refuse`
-    );
-  }
-  const count = (status: StatementProof["status"]) =>
-    statements.filter(statement => statement.status === status).length;
-  if (count("unshown") > 0) {
-    why.push(
-      `its snapshot does not show what ${statementCount(count("unshown"))} ${count("unshown") === 1 ? "does" : "do"}`
-    );
-  }
-  if (count("unfilled") > 0) {
-    why.push(
-      `the database holds rows ${statementCount(count("unfilled"))} would have filled with ${count("unfilled") === 1 ? "its default" : "their defaults"}, still NULL`
-    );
-  }
-  if (count("not-done") > 0) {
-    why.push(
-      `the database does not stand as ${statementCount(count("not-done"))} ${count("not-done") === 1 ? "leaves" : "leave"} it`
-    );
-  }
-  return why;
+        : "its last attempt recorded no outcome",
+  ({ dangling }) =>
+    dangling === undefined ? undefined : danglingLine(dangling),
+  statusLine(
+    "unshown",
+    n =>
+      `its snapshot does not show what ${statementCount(n)} ${n === 1 ? "does" : "do"}`
+  ),
+  statusLine(
+    "unfilled",
+    n =>
+      `the database holds rows ${statementCount(n)} would have filled with ${n === 1 ? "its default" : "their defaults"}, still NULL`
+  ),
+  statusLine(
+    "not-done",
+    n =>
+      `the database does not stand as ${statementCount(n)} ${n === 1 ? "leaves" : "leave"} it`
+  ),
+];
+
+/** The line for rows dangling through a foreign key the file adds. */
+function danglingLine(dangling: readonly DanglingReference[]): string {
+  const rows = dangling.reduce((sum, entry) => sum + entry.rows, 0);
+  const pairs = dangling
+    .slice(0, 5)
+    .map(entry => `${entry.table} → ${entry.parent}`)
+    .join(", ");
+  return `the database holds ${rows} row(s) referencing rows that do not exist through a foreign key it adds (${pairs}), which a run of it would refuse`;
 }
 
 /**
