@@ -228,10 +228,12 @@ describe("generateMigration's deletions", () => {
           "translation turned on for docs; its values move to dc_docs_locales first",
       },
     ]);
+    // The translation table is the collection's own, so a consent naming its main table covers it.
     expect(await judgedFor(translated, plain)).toEqual([
       {
         kind: "table",
         table: "dc_docs_locales",
+        owner: "dc_docs",
         reason:
           "translation turned off for docs; the default language's values move back and the others are kept in the archive",
       },

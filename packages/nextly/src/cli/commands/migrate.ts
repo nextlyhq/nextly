@@ -103,6 +103,7 @@ import {
   reconcileFile,
   runRecordedAttempt,
 } from "../../domains/schema/migrate/drift-reconcile";
+import { withEntityCoverage } from "../../domains/schema/migrate/entity-shared-rows";
 import {
   readDeletionFacts,
   runDeletions,
@@ -1411,7 +1412,8 @@ export async function previewMigrate(args: {
   const judged = await pendingRunDeletions(
     [...moduleRuns, ...pendingFiles.map(file => fileUnit(file, dialect))],
     db,
-    dialect
+    dialect,
+    { adapter }
   );
   const moduleDeletions = new Map(
     judged
@@ -3341,7 +3343,8 @@ async function judgeFileDeletions(
   for (const { unit, deletions } of await pendingRunDeletions(
     units,
     deps.db,
-    deps.dialect
+    deps.dialect,
+    { adapter: deps.adapter }
   )) {
     const source = deletionSource(unit.label, unit.text);
     for (const deletion of deletions) sources.set(deletion, source);
@@ -3554,15 +3557,30 @@ function pluginModuleUnits(
  * (`runDeletions`): a unit is judged against the schema as the units before
  * it leave it, so a table an earlier one creates holds only what the run
  * put there. The live facts are read once, for every unit's statements.
+ *
+ * With `entities`, as `nextly migrate` judges its run, each deletion in a
+ * table a collection or Single owns belongs to its main table, and a unit
+ * dropping an entity's main table lists the entity's rows in shared tables,
+ * counted (`withEntityCoverage`): a consent naming the main table covers all
+ * of it. `entities.adapter` finds the field groups' tables.
  */
 async function pendingRunDeletions(
   units: readonly RunUnit[],
   db: unknown,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  entities?: { adapter?: unknown }
 ): Promise<{ unit: RunUnit; deletions: Deletion[] }[]> {
   const lists = units.map(unit => unit.statements);
   const facts = await readDeletionFacts(db, dialect, runStatements(lists));
-  const perUnit = runDeletions(lists, dialect, facts);
+  const read = runDeletions(lists, dialect, facts);
+  const perUnit =
+    entities === undefined
+      ? read
+      : await withEntityCoverage(read, {
+          db,
+          dialect,
+          adapter: entities.adapter,
+        });
   return units.map((unit, at) => ({ unit, deletions: perUnit[at] ?? [] }));
 }
 

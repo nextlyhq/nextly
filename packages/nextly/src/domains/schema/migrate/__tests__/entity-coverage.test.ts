@@ -1,0 +1,245 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  consentCovers,
+  resolveDataLossConsent,
+  type Deletion,
+} from "../data-loss-consent";
+import {
+  coveredEntity,
+  entityOwners,
+  withOwners,
+  type CoveredEntity,
+} from "../entity-coverage";
+import { coverRunDeletions, entityRowsOf } from "../entity-shared-rows";
+
+const manyToMany = (name: string, target: string, junctionTable?: string) => ({
+  name,
+  type: "relationship",
+  options: {
+    relationType: "manyToMany",
+    target,
+    ...(junctionTable === undefined ? {} : { junctionTable }),
+  },
+});
+
+const posts = coveredEntity({
+  kind: "collection",
+  slug: "posts",
+  tableName: "dc_posts",
+  source: "code",
+  fields: [
+    { name: "title", type: "text" },
+    manyToMany("tags", "tags"),
+    manyToMany("related", "pages", "posts_related_pages"),
+  ],
+}) as CoveredEntity;
+const home = coveredEntity({
+  kind: "single",
+  slug: "home",
+  tableName: "single_home",
+  source: "ui",
+  fields: "[]",
+}) as CoveredEntity;
+const pages = coveredEntity({
+  kind: "collection",
+  slug: "pages",
+  tableName: "dc_pages",
+  source: "code",
+  fields: [manyToMany("links", "posts")],
+}) as CoveredEntity;
+
+const table = (name: string): Deletion => ({ kind: "table", table: name });
+const consent = (targets: string) =>
+  resolveDataLossConsent({ flag: targets, env: {} });
+
+describe("what an entity owns", () => {
+  it("owns its main table, its translation table and its junction tables", () => {
+    expect(posts.tables).toEqual([
+      "dc_posts",
+      "dc_posts_locales",
+      "dc_posts_dc_tags_tags",
+      "posts_related_pages",
+    ]);
+    expect(home.tables).toEqual(["single_home", "single_home_locales"]);
+  });
+
+  it("reads a registry row's fields stored as text", () => {
+    const stored = coveredEntity({
+      kind: "collection",
+      slug: "posts",
+      tableName: "dc_posts",
+      source: "code",
+      fields: JSON.stringify([manyToMany("tags", "tags")]),
+    });
+    expect(stored?.tables).toContain("dc_posts_dc_tags_tags");
+  });
+
+  it("owns no junction when its fields cannot be read, never a guessed one", () => {
+    const unreadable = coveredEntity({
+      kind: "collection",
+      slug: "posts",
+      tableName: "dc_posts",
+      source: "code",
+      fields: "{not json",
+    });
+    expect(unreadable?.tables).toEqual(["dc_posts", "dc_posts_locales"]);
+  });
+
+  it("leaves out a plugin's entities and Nextly's own", () => {
+    for (const source of ["plugin:seo", "built-in"]) {
+      expect(
+        coveredEntity({
+          kind: "collection",
+          slug: "x",
+          tableName: "dc_x",
+          source,
+          fields: [],
+        })
+      ).toBeUndefined();
+    }
+  });
+});
+
+describe("whose a dropped table is", () => {
+  it("gives a table the entity owns its main table as owner, and the main table none", () => {
+    const owners = entityOwners([posts, home]);
+    expect(
+      withOwners(
+        [
+          table("dc_posts"),
+          table("dc_posts_locales"),
+          table("DC_POSTS_DC_TAGS_TAGS"),
+          { kind: "column", table: "dc_posts_locales", column: "title" },
+          { kind: "rows", table: "posts_related_pages" },
+          table("single_home_locales"),
+          table("dc_other"),
+        ],
+        owners
+      )
+    ).toEqual([
+      table("dc_posts"),
+      { kind: "table", table: "dc_posts_locales", owner: "dc_posts" },
+      { kind: "table", table: "DC_POSTS_DC_TAGS_TAGS", owner: "dc_posts" },
+      {
+        kind: "column",
+        table: "dc_posts_locales",
+        column: "title",
+        owner: "dc_posts",
+      },
+      { kind: "rows", table: "posts_related_pages", owner: "dc_posts" },
+      { kind: "table", table: "single_home_locales", owner: "single_home" },
+      table("dc_other"),
+    ]);
+  });
+
+  it("gives a table two entities claim no owner, so each must be named", () => {
+    const twin = coveredEntity({
+      kind: "collection",
+      slug: "pages",
+      tableName: "dc_pages",
+      source: "code",
+      fields: [manyToMany("x", "posts", "posts_related_pages")],
+    }) as CoveredEntity;
+    const owners = entityOwners([posts, twin]);
+    expect(withOwners([table("posts_related_pages")], owners)).toEqual([
+      table("posts_related_pages"),
+    ]);
+  });
+
+  it("keeps one entity the owner of a junction its fields name twice", () => {
+    // The recorded and the declared fields together can name one field twice.
+    const twice = coveredEntity({
+      kind: "collection",
+      slug: "posts",
+      tableName: "dc_posts",
+      source: "code",
+      fields: [manyToMany("tags", "tags"), manyToMany("tags", "tags")],
+    }) as CoveredEntity;
+    expect(
+      withOwners([table("dc_posts_dc_tags_tags")], entityOwners([twice]))
+    ).toEqual([
+      { kind: "table", table: "dc_posts_dc_tags_tags", owner: "dc_posts" },
+    ]);
+  });
+
+  it("never makes one entity's main table another's", () => {
+    const greedy = coveredEntity({
+      kind: "collection",
+      slug: "greedy",
+      tableName: "dc_greedy",
+      source: "code",
+      fields: [manyToMany("x", "posts", "dc_posts")],
+    }) as CoveredEntity;
+    const owners = entityOwners([posts, greedy]);
+    expect(withOwners([table("dc_posts")], owners)).toEqual([
+      table("dc_posts"),
+    ]);
+  });
+});
+
+describe("a run's deletions with the entities they remove", () => {
+  it("lists the entity's rows in shared tables under the file that drops its main table", () => {
+    const owners = entityOwners([posts, home, pages]);
+    const [first, second] = coverRunDeletions(
+      [
+        [table("dc_posts_dc_tags_tags")],
+        [table("dc_posts"), table("dc_posts_locales")],
+      ],
+      owners
+    );
+    expect(first).toEqual([
+      { kind: "table", table: "dc_posts_dc_tags_tags", owner: "dc_posts" },
+    ]);
+    expect(second).toEqual([
+      table("dc_posts"),
+      { kind: "table", table: "dc_posts_locales", owner: "dc_posts" },
+      ...entityRowsOf(posts),
+    ]);
+  });
+
+  it("lists every kind of row a removal of the entity takes, each belonging to it", () => {
+    const listed = entityRowsOf(home);
+    expect(listed.map(d => d.kind === "rows" && d.table)).toEqual([
+      "the field groups' tables",
+      "nextly_i18n_archive",
+      "nextly_versions",
+      "nextly_version_pins",
+      "nextly_version_views",
+      "nextly_dashboard_pins",
+      "nextly_media_usage",
+      "nextly_review_states",
+    ]);
+    for (const d of listed) {
+      expect(d).toMatchObject({
+        kind: "rows",
+        owner: "single_home",
+        of: { kind: "single", slug: "home" },
+      });
+    }
+  });
+
+  it("is covered whole by naming the main table, and by nothing narrower", () => {
+    const owners = entityOwners([posts, pages]);
+    const run = coverRunDeletions(
+      [
+        [
+          table("dc_posts"),
+          table("dc_posts_locales"),
+          table("dc_posts_dc_tags_tags"),
+        ],
+      ],
+      owners
+    ).flat();
+    expect(run.every(d => consentCovers(consent("dc_posts"), d))).toBe(true);
+    // Naming another collection's main table covers none of the removed one's.
+    expect(run.some(d => consentCovers(consent("dc_pages"), d))).toBe(false);
+  });
+
+  it("adds nothing for a table no registry row names as an entity's main table", () => {
+    const owners = entityOwners([posts]);
+    expect(coverRunDeletions([[table("dc_other")]], owners)).toEqual([
+      [table("dc_other")],
+    ]);
+  });
+});

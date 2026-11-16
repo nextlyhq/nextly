@@ -88,6 +88,7 @@ import {
 } from "../../i18n/per-language-storage";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
 import type { Deletion } from "../migrate/data-loss-consent";
+import { coveredEntity, type CoveredEntity } from "../migrate/entity-coverage";
 import { migrationCompanionSwitches } from "../pipeline/companion-shape-switches";
 import {
   buildDesiredTableFromComponentFields,
@@ -1381,6 +1382,10 @@ export async function generateMigration(
         .map(decision => decision.candidate),
       resolutions: args.resolutions,
       removedEntities: removedEntitiesOf(
+        args,
+        previous === null ? undefined : previous.data.entities
+      ),
+      entities: coveredEntitiesOf(
         args,
         previous === null ? undefined : previous.data.entities
       ),
@@ -3682,6 +3687,61 @@ function removedEntitiesOf(
       slug,
       table: resolveComponentTableName(slug),
     })),
+  ];
+}
+
+/**
+ * The collections and Singles a migration is planned against, each with every table it owns
+ * (`coveredEntity`): those the config declares, by the table it gives them, and those the latest
+ * snapshot records and the config no longer declares, by the table their name gives them, as
+ * `removedEntitiesOf` names them. A declared entity's fields are the config's and the snapshot's
+ * together, so a junction whose field the config just removed is still known as the entity's.
+ */
+function coveredEntitiesOf(
+  args: GenerateArgs,
+  recorded: EntitySettingsRecord | undefined
+): CoveredEntity[] {
+  const recordedFields = (
+    record: Record<string, RecordedEntitySettings> | undefined,
+    slug: string
+  ): unknown[] => {
+    const fields = record?.[slug]?.settings.fields;
+    return Array.isArray(fields) ? fields : [];
+  };
+  const of = (
+    kind: CoveredEntity["kind"],
+    declared: readonly MinimalConfigEntity[],
+    record: Record<string, RecordedEntitySettings> | undefined,
+    tableOf: (slug: string) => string
+  ): CoveredEntity[] =>
+    [
+      ...declared.map(entity =>
+        coveredEntity({
+          kind,
+          slug: entity.slug,
+          tableName: entity.tableName,
+          fields: [...entity.fields, ...recordedFields(record, entity.slug)],
+        })
+      ),
+      ...Object.entries(record ?? {})
+        .filter(([slug]) => !declared.some(entity => entity.slug === slug))
+        .map(([slug, entry]) =>
+          coveredEntity({
+            kind,
+            slug,
+            tableName: tableOf(slug),
+            fields: recordedFields(record, slug),
+            source: entry.source,
+          })
+        ),
+    ].filter((entity): entity is CoveredEntity => entity !== undefined);
+  return [
+    ...of("collection", args.collections, recorded?.collections, slug =>
+      resolveCollectionTableName(slug)
+    ),
+    ...of("single", args.singles, recorded?.singles, slug =>
+      resolveSingleTableName({ slug })
+    ),
   ];
 }
 

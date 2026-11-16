@@ -61,6 +61,7 @@ import {
   failedAttemptMayBePartial,
   isConcurrentRun,
 } from "../../domains/schema/migrate/drift-reconcile";
+import { withEntityCoverage } from "../../domains/schema/migrate/entity-shared-rows";
 import {
   readDeletionFacts,
   runDeletions,
@@ -163,6 +164,26 @@ export async function rollbackDeletions(
     (await readFacts?.(runStatements(lists))) ??
     unreadFacts(planned[0]?.liveColumns);
   return runDeletions(lists, dialect, facts);
+}
+
+/**
+ * What each target of `migrate:down` deletes (`rollbackDeletions`), with each
+ * deletion in a table a collection or Single owns belonging to its main
+ * table, and a target dropping an entity's main table listing the entity's
+ * rows in shared tables, counted (`withEntityCoverage`): what the rollback's
+ * consent judges, and its dry run lists.
+ */
+async function coveredRollbackDeletions(
+  planned: readonly Pick<PlannedDown, "statements" | "liveColumns">[],
+  deps: Pick<
+    MigrateDownCoreDeps,
+    "db" | "dialect" | "adapter" | "readDeletionFacts"
+  >
+): Promise<Deletion[][]> {
+  return withEntityCoverage(
+    await rollbackDeletions(planned, deps.dialect, deps.readDeletionFacts),
+    { db: deps.db, dialect: deps.dialect, adapter: deps.adapter }
+  );
 }
 
 /** The facts of a rollback with no reader: nothing live answered, so each question fails closed. */
@@ -953,11 +974,7 @@ async function planAndGuard(
   // Each deletion keeps the file it comes from, by identity, for the listing
   // and for binding an agreement to the file as it stands.
   const sources = new Map<Deletion, DeletionSource>();
-  const perTarget = await rollbackDeletions(
-    planned,
-    deps.dialect,
-    deps.readDeletionFacts
-  );
+  const perTarget = await coveredRollbackDeletions(planned, deps);
   planned.forEach((p, at) => {
     const source = deletionSource(p.filename, p.statements.join("\n;\n"));
     for (const deletion of perTarget[at] ?? []) sources.set(deletion, source);
@@ -997,11 +1014,7 @@ async function previewRollback(
       : await eventTriggerNotice(deps.readEventTriggers);
   if (notice !== undefined) deps.logger.info(`  ⚠ ${notice}`);
   // Judged as the real run judges them: every target's DOWN as one run.
-  const perTarget = await rollbackDeletions(
-    planned,
-    deps.dialect,
-    deps.readDeletionFacts
-  );
+  const perTarget = await coveredRollbackDeletions(planned, deps);
   for (const [at, p] of planned.entries()) {
     deps.logger.info(`  • ${p.filename}`);
     const refusal = refusalOf(p, deps);

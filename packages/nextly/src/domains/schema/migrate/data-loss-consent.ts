@@ -83,6 +83,14 @@ const ENV_SPELLINGS: ReadonlySet<EarlierSpelling> = new Set([
  * `reason` says why it goes, where the command knows (`no longer in the
  * config`, `rename to excerpt declined`), so the person asked can tell a
  * deletion they meant from one they did not.
+ *
+ * `owner` is the main table of the collection or Single the deletion belongs
+ * to, the one its registry row names, where it is not that table itself: a
+ * deletion in another table the entity owns (its translation table, its
+ * junction tables), or the entity's rows in a table every entity shares. A
+ * consent naming the owner covers it, as naming its own table does
+ * (`entity-coverage.ts`). A `rows` deletion with `of` is only that entity's
+ * rows in a shared table, and its `count` is theirs, never the table's.
  */
 export type Deletion =
   | {
@@ -92,6 +100,7 @@ export type Deletion =
       count?: number;
       alongside?: string;
       reason?: string;
+      owner?: string;
     }
   | {
       kind: "column";
@@ -100,6 +109,7 @@ export type Deletion =
       core?: boolean;
       count?: number;
       reason?: string;
+      owner?: string;
     }
   | {
       kind: "rows";
@@ -107,6 +117,8 @@ export type Deletion =
       core?: boolean;
       count?: number;
       reason?: string;
+      owner?: string;
+      of?: EntityRef;
     }
   | {
       kind: "unnamed";
@@ -114,6 +126,12 @@ export type Deletion =
       core?: boolean;
       fingerprint?: string;
     };
+
+/** A collection or a Single, as the listing names whose rows go from a shared table. */
+export interface EntityRef {
+  kind: "collection" | "single";
+  slug: string;
+}
 
 /** The tables and `table.column` pairs a consent names. */
 interface ConsentTargets {
@@ -275,25 +293,27 @@ export function deprecationNotices(consent: DataLossConsent): string[] {
   ];
 }
 
-/** A key that names one deletion, for telling two listings' entries apart. */
+/**
+ * A key that names one deletion, for telling two listings' entries apart. The
+ * owner is part of it, so an entity's rows in a shared table never share a key
+ * with a removal of that table's rows, and a deletion agreed to as one
+ * entity's is not taken for one that belongs to nobody.
+ */
 export function deletionKey(deletion: Deletion): string {
+  if (deletion.kind === "unnamed") {
+    return `unnamed:${deletion.description}:${deletion.fingerprint ?? ""}`;
+  }
+  const owned = deletion.owner === undefined ? "" : `@${deletion.owner}`;
   switch (deletion.kind) {
     case "table":
-      return `table:${deletion.table}`;
+      return `table:${deletion.table}${owned}`;
     case "column":
-      return `column:${deletion.table}.${deletion.column}`;
+      return `column:${deletion.table}.${deletion.column}${owned}`;
     case "rows":
-      return `rows:${deletion.table}`;
-    case "unnamed":
-      return `unnamed:${deletion.description}:${deletion.fingerprint ?? ""}`;
+      return `rows:${deletion.table}${owned}`;
   }
 }
 
-/**
- * Whether the consent covers one deletion: an earlier spelling for what it
- * covered before, the consent without targets for everything, and a list for
- * the deletions in a table it names or of a column it names.
- */
 /**
  * Whether only the consent without targets covers `deletion`: one its
  * command cannot name, or one on a schema-qualified table, which a target
@@ -303,6 +323,13 @@ function onlyBlanketCovers(deletion: Deletion): boolean {
   return deletion.kind === "unnamed" || deletion.table.includes(".");
 }
 
+/**
+ * Whether the consent covers one deletion: an earlier spelling for what it
+ * covered before, the consent without targets for everything, and a list for
+ * the deletions in a table it names or of a column it names. Naming an
+ * entity's main table also covers every deletion that table owns (`owner`):
+ * the entity's other tables and its rows in shared tables, and nothing else.
+ */
 export function consentCovers(
   consent: DataLossConsent,
   deletion: Deletion
@@ -316,6 +343,8 @@ export function consentCovers(
   if (given.targets === "all") return true;
   if (deletion.kind === "unnamed" || onlyBlanketCovers(deletion)) return false;
   if (given.targets.tables.has(deletion.table)) return true;
+  if (deletion.owner !== undefined && given.targets.tables.has(deletion.owner))
+    return true;
   return (
     deletion.kind === "column" &&
     given.targets.columns.has(`${deletion.table}.${deletion.column}`)
@@ -345,21 +374,46 @@ function describeWhat(deletion: Deletion): string {
         deletion.count === undefined
           ? `table ${deletion.table}`
           : `table ${deletion.table} (${plural(deletion.count, "row", "rows")})`;
-      return deletion.alongside === undefined
-        ? counted
-        : `${counted}, with ${deletion.alongside}`;
+      const alongside =
+        deletion.alongside === undefined
+          ? counted
+          : `${counted}, with ${deletion.alongside}`;
+      return belonging(alongside, deletion.owner);
     }
     case "column":
-      return deletion.count === undefined
-        ? `column ${deletion.table}.${deletion.column}`
-        : `column ${deletion.table}.${deletion.column} (${plural(deletion.count, "non-empty value", "non-empty values")})`;
-    case "rows":
-      return deletion.count === undefined
-        ? `rows of ${deletion.table}`
-        : `rows of ${deletion.table} (the table has ${plural(deletion.count, "row", "rows")})`;
+      return belonging(
+        deletion.count === undefined
+          ? `column ${deletion.table}.${deletion.column}`
+          : `column ${deletion.table}.${deletion.column} (${plural(deletion.count, "non-empty value", "non-empty values")})`,
+        deletion.owner
+      );
+    case "rows": {
+      if (deletion.of !== undefined) {
+        const whose = `rows of ${entityLabel(deletion.of)} in ${deletion.table}`;
+        return deletion.count === undefined
+          ? whose
+          : `${whose} (${plural(deletion.count, "row", "rows")})`;
+      }
+      return belonging(
+        deletion.count === undefined
+          ? `rows of ${deletion.table}`
+          : `rows of ${deletion.table} (the table has ${plural(deletion.count, "row", "rows")})`,
+        deletion.owner
+      );
+    }
     case "unnamed":
       return deletion.description;
   }
+}
+
+/** A collection or Single as a listing names it: `collection "posts"`, `Single "home"`. */
+export function entityLabel(entity: EntityRef): string {
+  return `${entity.kind === "single" ? "Single" : "collection"} "${entity.slug}"`;
+}
+
+/** `what`, saying which entity's main table it belongs to, where it belongs to one. */
+function belonging(what: string, owner: string | undefined): string {
+  return owner === undefined ? what : `${what}, belonging to ${owner}`;
 }
 
 /**
@@ -394,9 +448,27 @@ function consentHint(
   const columns = new Set(
     named === undefined || named === "all" ? [] : named.columns
   );
+  // An entity's rows in a shared table are named by the entity's main table:
+  // naming the shared table would agree to every other entity's rows there.
+  // Its other deletions are named by their own table, the narrowest
+  // consent, unless the owner is named already.
+  const owned: Deletion[] = [];
   for (const d of deletions) {
+    if (d.kind === "unnamed") continue;
+    if (d.kind === "rows" && d.of !== undefined && d.owner !== undefined) {
+      tables.add(d.owner);
+    } else if (d.owner !== undefined) {
+      owned.push(d);
+    } else if (d.kind === "column") {
+      columns.add(`${d.table}.${d.column}`);
+    } else {
+      tables.add(d.table);
+    }
+  }
+  for (const d of owned) {
+    if (d.kind === "unnamed" || tables.has(d.owner ?? "")) continue;
     if (d.kind === "column") columns.add(`${d.table}.${d.column}`);
-    else if (d.kind !== "unnamed") tables.add(d.table);
+    else tables.add(d.table);
   }
   const tokens = [
     ...tables,
@@ -540,7 +612,13 @@ export async function countDeletions(
 ): Promise<Deletion[]> {
   const counted: Deletion[] = [];
   for (const deletion of deletions) {
-    if (deletion.kind === "unnamed" || deletion.count !== undefined) {
+    // An entity's rows in a shared table are counted by what reads them
+    // (`entity-shared-rows.ts`): the table's count would overstate them.
+    if (
+      deletion.kind === "unnamed" ||
+      deletion.count !== undefined ||
+      (deletion.kind === "rows" && deletion.of !== undefined)
+    ) {
       counted.push(deletion);
       continue;
     }
