@@ -146,31 +146,35 @@ const MYSQL: JsonDialect = {
   },
   fromJson: (c, k, target) => {
     const value = `JSON_EXTRACT(${c}, ${dollarPath(k)})`;
-    const text = `JSON_UNQUOTE(${value})`;
-    switch (target.kind) {
-      case "json":
-        return value;
-      case "boolean":
-        return `IF(${text} IN ('true', '1'), 1, 0)`;
-      case "timestamp": {
-        // The column holds UTC: the local part is read, then moved from its offset to UTC.
-        const offset = `REGEXP_SUBSTR(${text}, ${ISO_OFFSET})`;
-        const local = `CAST(REPLACE(REGEXP_REPLACE(${text}, ${ISO_OFFSET}, ''), 'T', ' ') AS DATETIME(3))`;
-        return `CONVERT_TZ(${local}, IF(${offset} IS NULL OR ${offset} = 'Z', '+00:00', ${offset}), '+00:00')`;
-      }
-      case "integer":
-      case "bigint":
-      case "smallint":
-        return `CAST(${text} AS SIGNED)`;
-      case "double":
-      case "real":
-        return `CAST(${text} AS DOUBLE)`;
-      case "decimal":
-        return `CAST(${text} AS ${target.columnType})`;
-      default:
-        return text;
-    }
+    const read = MYSQL_READS[target.kind] ?? (text => text);
+    return read(`JSON_UNQUOTE(${value})`, value, target);
   },
+};
+
+/**
+ * How MySQL reads a value out of JSON into a column of each kind, from its unquoted text (or, for
+ * a JSON column, the JSON value itself); a kind not named here is stored as the text.
+ */
+const MYSQL_READS: Partial<
+  Record<
+    ColumnKind,
+    (text: string, value: string, target: MoveColumn) => string
+  >
+> = {
+  json: (_, value) => value,
+  boolean: text => `IF(${text} IN ('true', '1'), 1, 0)`,
+  timestamp: text => {
+    // The column holds UTC: the local part is read, then moved from its offset to UTC.
+    const offset = `REGEXP_SUBSTR(${text}, ${ISO_OFFSET})`;
+    const local = `CAST(REPLACE(REGEXP_REPLACE(${text}, ${ISO_OFFSET}, ''), 'T', ' ') AS DATETIME(3))`;
+    return `CONVERT_TZ(${local}, IF(${offset} IS NULL OR ${offset} = 'Z', '+00:00', ${offset}), '+00:00')`;
+  },
+  integer: text => `CAST(${text} AS SIGNED)`,
+  bigint: text => `CAST(${text} AS SIGNED)`,
+  smallint: text => `CAST(${text} AS SIGNED)`,
+  double: text => `CAST(${text} AS DOUBLE)`,
+  real: text => `CAST(${text} AS DOUBLE)`,
+  decimal: (text, _, target) => `CAST(${text} AS ${target.columnType})`,
 };
 
 const SQLITE: JsonDialect = {
