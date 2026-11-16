@@ -194,6 +194,7 @@ import {
   companionFoundMissing,
   companionNotReadyMessage,
   resolveCompanionReadiness,
+  resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { languageIsLive } from "../../i18n/runtime/language-lifecycle";
 import { stopReleasesHolding } from "../../releases/early-stop";
@@ -753,6 +754,30 @@ export class SingleMutationService extends BaseService {
       if (value !== undefined) translated[field.name] = value;
     }
     return { ...args.stored, ...translated };
+  }
+
+  /**
+   * `row` with the translated values `writeLocale` holds, read now on the
+   * pool: the Single as a hook is handed it, in the language its write is
+   * for. The row itself is not changed; as it is where the Single keeps no
+   * translations.
+   */
+  private async inLanguageWritten<R extends Record<string, unknown>>(
+    row: R,
+    companion: CompanionSchema | null,
+    writeLocale: string | undefined
+  ): Promise<R> {
+    if (!companion || writeLocale === undefined) return row;
+    const copy = { ...row };
+    await populateCompanionFields({
+      db: this.adapter.getDrizzle(),
+      companionTable: companion.table,
+      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
+      localizedFields: companion.localizedFields,
+      rows: [copy],
+      localeChain: [writeLocale],
+    });
+    return copy;
   }
 
   private translationsOf(
@@ -2675,10 +2700,17 @@ export class SingleMutationService extends BaseService {
 
       // What every before-phase of this update is told: the same phases, run
       // by the same functions, as a publish of every language runs.
+      // The Single as its hooks are handed it: in the language this write is
+      // for, its translated values included, rather than its own row alone.
+      const hookOriginal = await this.inLanguageWritten(
+        existingDeserialized,
+        companion,
+        writeLocale
+      );
       const beforeCall: SingleBeforeHookCall = {
         slug,
         id: existingDoc.id,
-        originalData: existingDeserialized,
+        originalData: hookOriginal,
         user: options.user,
         context: sharedContext,
         req: requestFacts,
@@ -6008,8 +6040,13 @@ export class SingleMutationService extends BaseService {
             this.hookRegistry,
             {
               slug,
-              data: committed,
-              originalData: existingDeserialized,
+              // As it now stands in the language written.
+              data: await this.inLanguageWritten(
+                committed,
+                companion,
+                writeLocale
+              ),
+              originalData: hookOriginal,
               user: options.user ?? undefined,
               context: sharedContext,
               req: requestFacts,

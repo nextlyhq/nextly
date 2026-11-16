@@ -27,19 +27,39 @@ interface Told {
   locale: unknown;
   locales: unknown;
   shared: unknown;
+  /** The translated values the hook's documents held, after and before. */
+  data?: { title?: unknown; body?: unknown };
+  originalData?: { title?: unknown; body?: unknown };
 }
+
+/** A document's translated values, as a hook was handed them. */
+const translatedOf = (doc: unknown) =>
+  doc !== null && typeof doc === "object"
+    ? {
+        title: (doc as Record<string, unknown>).title,
+        body: (doc as Record<string, unknown>).body,
+      }
+    : undefined;
 
 const told: Told[] = [];
 
 /** Records what a hook's context says, under the hook's name. */
 const record =
   (hook: string) =>
-  (context: { locale?: unknown; locales?: unknown; shared?: unknown }) => {
+  (context: {
+    locale?: unknown;
+    locales?: unknown;
+    shared?: unknown;
+    data?: unknown;
+    originalData?: unknown;
+  }) => {
     told.push({
       hook,
       locale: context.locale,
       locales: context.locales,
       shared: context.shared,
+      data: translatedOf(context.data),
+      originalData: translatedOf(context.originalData),
     });
   };
 
@@ -94,6 +114,8 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
               ...fieldHook("posts", "afterRead"),
             },
           }),
+          // Translated too, and left alone by the updates below.
+          text({ name: "body" }),
           // Shared: one value for every language.
           text({ name: "code", localized: false }),
         ],
@@ -107,6 +129,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         hooks: everyHook("site"),
         fields: [
           text({ name: "title" }),
+          text({ name: "body" }),
           text({ name: "code", localized: false }),
         ],
       }),
@@ -125,14 +148,24 @@ async function publishedInBoth(t: TestNextly): Promise<string> {
   const created = await t.nextly.create({
     collection: POSTS,
     locale: "en",
-    data: { title: "Harbour", code: "a", status: "published" },
+    data: {
+      title: "Harbour",
+      body: "English body",
+      code: "a",
+      status: "published",
+    },
   });
   const id = String(created.item.id);
   await t.nextly.update({
     collection: POSTS,
     id,
     locale: "es",
-    data: { title: "Puerto", status: "published", _overwrite: true },
+    data: {
+      title: "Puerto",
+      body: "Cuerpo",
+      status: "published",
+      _overwrite: true,
+    },
   });
   told.length = 0;
   return id;
@@ -169,6 +202,57 @@ describe.each(getConfiguredTestDialects())(
           shared: false,
         });
       }
+    }, 90_000);
+
+    // A hook handed a document sees it in the language written: the values
+    // of that language, the ones this write leaves alone included, before
+    // and after it.
+    it("hands an update's hooks the document in its language, before and after", async () => {
+      const t = await boot(dialect);
+      const id = await publishedInBoth(t);
+      await t.nextly.update({
+        collection: POSTS,
+        id,
+        locale: "es",
+        data: { title: "Puerto 2", _overwrite: true },
+      });
+      const before = toldBy("posts:beforeChange")[0];
+      const after = toldBy("posts:afterChange")[0];
+      expect(before?.originalData).toEqual({ title: "Puerto", body: "Cuerpo" });
+      expect(after?.data).toEqual({ title: "Puerto 2", body: "Cuerpo" });
+      expect(after?.originalData).toEqual({ title: "Puerto", body: "Cuerpo" });
+    }, 90_000);
+
+    it("hands a Single's update hooks the document in its language, before and after", async () => {
+      const t = await boot(dialect);
+      const singles = t.getService("singleEntryService") as unknown as {
+        update(
+          slug: string,
+          data: Record<string, unknown>,
+          options: Record<string, unknown>
+        ): Promise<{ success: boolean }>;
+      };
+      for (const [locale, data] of [
+        ["en", { title: "Site", body: "English body" }],
+        ["es", { title: "Sitio", body: "Cuerpo" }],
+      ] as const) {
+        const saved = await singles.update(
+          SITE,
+          { ...data, _overwrite: true },
+          { locale, overrideAccess: true }
+        );
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+      }
+      told.length = 0;
+      await singles.update(
+        SITE,
+        { title: "Sitio 2", _overwrite: true },
+        { locale: "es", overrideAccess: true }
+      );
+      const before = toldBy("site:beforeChange")[0];
+      const after = toldBy("site:afterChange")[0];
+      expect(before?.originalData).toEqual({ title: "Sitio", body: "Cuerpo" });
+      expect(after?.data).toEqual({ title: "Sitio 2", body: "Cuerpo" });
     }, 90_000);
 
     it("tells an update's hooks it moves the shared part when it sets a shared field", async () => {

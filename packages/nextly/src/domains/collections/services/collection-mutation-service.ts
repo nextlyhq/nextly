@@ -246,6 +246,7 @@ import {
 } from "../../i18n/companion-columns";
 import {
   companionRowExists,
+  populateCompanionFields,
   populateCompanionFieldsAllLocales,
   populateCompanionFieldsByLanguage,
   readCompanionLocaleStatus,
@@ -301,6 +302,7 @@ import {
   companionNotReadyMessage,
   isCompanionReady,
   resolveCompanionReadiness,
+  resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
@@ -15832,6 +15834,35 @@ export class CollectionMutationService extends BaseService {
     );
   }
 
+  /**
+   * `row` with the translated values `locale` holds (the default language
+   * where none is named), read now on the pool: the document a hook is
+   * handed, in the language its write is for. The row itself is not
+   * changed. As it is where the site keeps no languages or the collection no
+   * translations.
+   */
+  private async inLanguageWritten<R extends Record<string, unknown>>(
+    collectionName: string,
+    row: R,
+    locale: string | undefined
+  ): Promise<R> {
+    const language = locale ?? this.localization?.defaultLocale;
+    if (language === undefined) return row;
+    const companion =
+      await this.fileManager.loadCompanionSchema(collectionName);
+    if (!companion) return row;
+    const copy = { ...row };
+    await populateCompanionFields({
+      db: this.db as never,
+      companionTable: companion.table,
+      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
+      localizedFields: companion.localizedFields,
+      rows: [copy],
+      localeChain: [language],
+    });
+    return copy;
+  }
+
   /** Whether an update of `body` in `locale` moves the collection's shared part. */
   private async writePartsOf(
     collectionName: string,
@@ -16239,11 +16270,18 @@ export class CollectionMutationService extends BaseService {
 
       // `beforeOperation`, then the code and stored `beforeUpdate` hooks: the
       // hooks before validation, which can modify the incoming data.
+      // The entry as its hooks are handed it: in the language this write is
+      // for, its translated values included, rather than the main row alone.
+      const hookOriginal = await this.inLanguageWritten(
+        params.collectionName,
+        existingEntry as Record<string, unknown>,
+        params.locale
+      );
       let finalData = await this.beforeUpdateHooks({
         collectionName: params.collectionName,
         entryId: params.entryId,
         body,
-        existingEntry,
+        existingEntry: hookOriginal,
         user: params.user,
         storedHooks,
         sharedContext,
@@ -16347,7 +16385,7 @@ export class CollectionMutationService extends BaseService {
         collection: params.collectionName,
         operation: "update",
         data: finalData,
-        originalData: existingEntry,
+        originalData: hookOriginal,
         ...(storedStatus === undefined ? {} : { storedStatus }),
         storedHooks,
         queryDatabase: this.queryDatabaseFn,
@@ -18631,13 +18669,21 @@ export class CollectionMutationService extends BaseService {
         const afterContext = this.hookService.buildHookContext({
           collection: params.collectionName,
           operation: "update" as const,
-          data: committed,
+          // The entry as it now stands in the language written, its
+          // translated values included; a held draft as it is.
+          data: workingDraftDocument
+            ? committed
+            : await this.inLanguageWritten(
+                params.collectionName,
+                committed,
+                params.locale
+              ),
           // On a repeat status-less save `responseSource` is the accumulated draft,
           // so diff it against the prior draft rather than the unchanged published
           // row; otherwise a hook reports an earlier save's fields as changing again.
           originalData: priorWorkingDraftDocument
             ? markedDraft(priorWorkingDraftDocument)
-            : existingEntry,
+            : hookOriginal,
           user: params.user,
           context: sharedContext, // Pass shared context from beforeUpdate
           req: requestFacts,
