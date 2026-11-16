@@ -60,9 +60,7 @@ packages/builder/src/shared-styles-panel.tsx 1643
 
 
 
-packages/plugin-page-builder/src/admin/editor/BlocksEditor.tsx 2099
 
 
 
 
-packages/plugin-page-builder/src/plugin.ts 4723
