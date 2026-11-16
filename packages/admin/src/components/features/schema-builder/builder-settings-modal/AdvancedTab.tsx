@@ -39,6 +39,10 @@ import {
 } from "../builder-config";
 import type { BuilderSettingsValues } from "../BuilderSettingsModal";
 
+// Each switch's name and its state while unset come from its description,
+// which the new-entity dialog's folded options read too.
+import { advancedSwitch, isSwitchOn } from "./advanced-switches";
+
 const SHOW_SYSTEM_STORAGE_KEY = "builder.showSystemInternals";
 
 type Props = {
@@ -85,24 +89,24 @@ export function AdvancedTab({
 
       {fields.includes("status") && (
         <SwitchRow
-          ariaLabel="Status"
-          label="Status (Draft / Published)"
+          ariaLabel={advancedSwitch("status").ariaLabel}
+          label={advancedSwitch("status").label}
           help="Records get a status column. Public callers see only published."
-          checked={values.status ?? false}
+          checked={isSwitchOn(values, "status")}
           onChange={v => set("status", v)}
         />
       )}
 
       {fields.includes("i18n") && (
         <SwitchRow
-          ariaLabel="Internationalization"
-          label="Internationalization"
+          ariaLabel={advancedSwitch("i18n").ariaLabel}
+          label={advancedSwitch("i18n").label}
           help={
             i18nLocked
               ? "Requires a `localization` block (locales + defaultLocale) in nextly.config. Add it and restart the dev server to enable per-language content."
               : "Store translatable fields per language. Text fields localize by default; toggle each field's Localized setting to override. Applying this runs a migration to create the translations table."
           }
-          checked={values.i18n ?? false}
+          checked={isSwitchOn(values, "i18n")}
           onChange={v => set("i18n", v)}
           disabled={i18nLocked}
           badge={i18nLocked ? "Not configured" : undefined}
@@ -112,10 +116,10 @@ export function AdvancedTab({
       {fields.includes("versions") && (
         <div className="space-y-3">
           <SwitchRow
-            ariaLabel="Version history"
-            label="Version history"
+            ariaLabel={advancedSwitch("versions").ariaLabel}
+            label={advancedSwitch("versions").label}
             help="Record every save so earlier versions can be previewed and restored. Turning it off keeps the versions already recorded but stops new ones; it does not add drafts."
-            checked={values.versions ?? false}
+            checked={isSwitchOn(values, "versions")}
             onChange={v => set("versions", v)}
           />
           {/* Retention, shown only when history is on: how many durable versions
@@ -134,10 +138,10 @@ export function AdvancedTab({
         // explicitly false; turning it off stops this entity from busting cache
         // tags on write.
         <SwitchRow
-          ariaLabel="Cache revalidation"
-          label="Cache revalidation"
+          ariaLabel={advancedSwitch("revalidate").ariaLabel}
+          label={advancedSwitch("revalidate").label}
           help="Bust cached pages when an entry changes so published edits appear without a redeploy. On by default; turn off for content that never renders on cached pages."
-          checked={values.revalidate ?? true}
+          checked={isSwitchOn(values, "revalidate")}
           onChange={v => set("revalidate", v)}
         />
       )}
@@ -147,12 +151,12 @@ export function AdvancedTab({
         // explicitly false; turning it off keeps this entity's writes out of
         // the webhook outbox and therefore out of every delivery.
         <SwitchRow
-          ariaLabel="Webhook recording"
-          label="Webhook recording"
+          ariaLabel={advancedSwitch("webhooks").ariaLabel}
+          label={advancedSwitch("webhooks").label}
           // Names the kind rather than "entity", which is not a word the
           // person configuring it uses for what they are editing.
           help={`Send this ${BUILDER_KIND_NOUN[kind]}'s changes to subscribed webhook endpoints. On by default; turn it off for content that holds personal data, such as form submissions, so payloads never leave your app.`}
-          checked={values.webhooks ?? true}
+          checked={isSwitchOn(values, "webhooks")}
           onChange={v => set("webhooks", v)}
         />
       )}
