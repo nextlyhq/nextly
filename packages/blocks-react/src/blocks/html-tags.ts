@@ -1,6 +1,6 @@
 /**
  * The words an author picks a container's HTML tag by, the tag itself shown
- * beside them (`showOptionValue`): "Generic box", not "div", for an author
+ * beside them (the prop's `code`): "Generic box", not "div", for an author
  * who does not read HTML, with the tag still there for one who does.
  *
  * One map for every container, so a tag reads the same on a section, a box
@@ -29,7 +29,8 @@ export function htmlTagProp(options: readonly string[]): PropSchema {
   return {
     label: "HTML tag",
     optionLabels: HTML_TAG_LABELS,
-    showOptionValue: true,
+    // What each choice writes: the tag itself.
+    code: Object.fromEntries(options.map(tag => [tag, tag])),
     display: "menu",
     type: "select",
     options: [...options],

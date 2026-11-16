@@ -58,8 +58,12 @@ async function openDesign(page: Page): Promise<void> {
   await expect(panel).toBeVisible();
 }
 
-/** Add a spacing variable from the Design panel, and answer its editor. */
+/** Add a spacing variable from the Design panel's Spacing tab, and answer its editor. */
 async function addSpacing(page: Page) {
+  await page
+    .getByRole("region", { name: "Design panel" })
+    .getByRole("tab", { name: /^Spacing/ })
+    .click();
   await page
     .getByRole("button", { name: "Add spacing, radius or shadow" })
     .click();
