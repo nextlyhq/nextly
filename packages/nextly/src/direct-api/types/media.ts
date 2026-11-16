@@ -108,6 +108,23 @@ export interface FindMediaByIDArgs extends DirectAPIConfig {
 }
 
 /**
+ * Arguments for a resized copy of an image: the image, by a media item's id
+ * or by an address, and the width it is shown at.
+ *
+ * @experimental
+ *
+ * @example
+ * ```typescript
+ * const copy = await nextly.media.copyOf({ id: "media-1", width: 700 });
+ * // { url: "/api/media/media-1/copy/640?v=…", width: 640 }, or null
+ * ```
+ */
+export type MediaCopyArgs = DirectAPIConfig & {
+  /** The width the image is shown at, in pixels; snapped to an allowed one. */
+  width: number;
+} & ({ id: string; url?: never } | { url: string; id?: never });
+
+/**
  * Arguments for finding several media files by their ids, in one read.
  *
  * @experimental

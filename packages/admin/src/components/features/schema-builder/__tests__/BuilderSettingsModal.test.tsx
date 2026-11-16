@@ -7,7 +7,15 @@
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { fireEvent, render, screen, waitFor } from "@admin/__tests__/utils";
+import {
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@admin/__tests__/utils";
+import { useBuilderEntityState } from "@admin/hooks/useBuilderEntityState";
+import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
 
 import {
   BuilderSettingsModal,
@@ -467,7 +475,7 @@ describe("BuilderSettingsModal — the address", () => {
     refusals = {
       articles: { code: "DUPLICATE", message: "Resource already exists." },
     };
-    const others = [{ kind: "collection", address: "drafts" }];
+    const others = [{ kind: "collection" as const, address: "drafts" }];
     render(
       <BuilderSettingsModal
         open
@@ -524,5 +532,73 @@ describe("BuilderSettingsModal — the address", () => {
     // Nothing to save or cancel: the footer only closes.
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+  });
+});
+
+// What the settings hand back is what the editor counts and lists: each
+// setting changed in them is a pending change of its own, translation turned
+// off among them.
+describe("BuilderSettingsModal — its changes, pending", () => {
+  it("each setting becomes a pending change, translation turned off among them", async () => {
+    const user = userEvent.setup();
+    const entity = {
+      slug: "posts",
+      settings: {
+        singularName: "Post",
+        pluralName: "Posts",
+        slug: "posts",
+        description: "",
+        icon: "FileText",
+        i18n: true,
+      } satisfies BuilderSettingsValues,
+    };
+    const editor = renderHook(() => {
+      const builder = useFieldBuilder({
+        resolver: async values => ({ values, errors: {} }),
+        defaultValues: {},
+      });
+      return useBuilderEntityState({
+        entity,
+        builder,
+        toFields: () => [],
+        toSettings: loaded => loaded.settings,
+        onLoad: () => {},
+        identity: loaded => loaded.slug,
+      });
+    });
+    await waitFor(() => expect(editor.result.current.settings).not.toBeNull());
+
+    render(
+      <BuilderSettingsModal
+        open
+        mode="edit"
+        config={collectionConfig}
+        initialValues={editor.result.current.settings}
+        onCancel={vi.fn()}
+        onSubmit={next => editor.result.current.setSettings(next)}
+      />
+    );
+    const name = screen.getByLabelText("Singular name");
+    await user.clear(name);
+    await user.type(name, "Article");
+    await user.click(screen.getByRole("tab", { name: "Advanced" }));
+    await user.click(
+      screen.getByRole("switch", { name: "Internationalization" })
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(
+        editor.result.current.pending.settingChanges.map(
+          change => `${change.label}: ${change.from} → ${change.to}`
+        )
+      ).toEqual([
+        "name: Post → Article",
+        // The plural the name derived follows it; the fixed address does not.
+        "plural name: Posts → Articles",
+        "translation: on → off",
+      ])
+    );
+    expect(editor.result.current.unsavedCount).toBe(3);
   });
 });

@@ -90,6 +90,28 @@ beforeEach(() => {
           json({ ...PREVIEW, hasChanges: previewFindsChanges }, 200)
         );
       }
+      if (url.endsWith("/field-groups/hero/used-by")) {
+        return Promise.resolve(
+          json(
+            {
+              items: [
+                {
+                  entityType: "collection",
+                  entitySlug: "pages",
+                  fieldPath: "hero",
+                },
+                {
+                  entityType: "single",
+                  entitySlug: "home",
+                  fieldPath: "banner",
+                },
+              ],
+              meta: { total: 2 },
+            },
+            200
+          )
+        );
+      }
       if (url.endsWith("/field-groups/schema/hero/apply")) {
         applied.push(JSON.parse(String(init?.body ?? "{}")));
         return Promise.resolve(
@@ -210,5 +232,27 @@ describe("a field group's settings saved on their own", () => {
       expect.objectContaining({ description: "Top" })
     );
     expect(applied).toHaveLength(0);
+  });
+});
+
+describe("a saved field group's address", () => {
+  it("is fixed, saying the fields that use it refer to it, and how many", async () => {
+    const user = userEvent.setup();
+    render(
+      <RestartProvider>
+        <FieldGroupBuilderEditPage params={{ slug: "hero" }} />
+        <Toaster />
+      </RestartProvider>
+    );
+    await screen.findByTestId("field-row-heading");
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    const settings = await screen.findByRole("dialog");
+    const address = within(settings).getByLabelText("Slug");
+    expect(address).toHaveAttribute("readonly");
+    await waitFor(() =>
+      expect(address).toHaveAccessibleDescription(
+        "Fixed once saved: the fields that use this field group refer to it by this address. Used in 2 places."
+      )
+    );
   });
 });

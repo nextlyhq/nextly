@@ -93,6 +93,7 @@ function makeBuilder(): BuilderFieldsApi {
     settings: null,
     setSettings: vi.fn(),
     snapshot: { fields: [], settings: null },
+    rewriteSnapshots: vi.fn(),
     clearHistory: vi.fn(),
     historyStep: 0,
     canUndo: false,

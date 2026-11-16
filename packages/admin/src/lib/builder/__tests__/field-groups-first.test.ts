@@ -41,6 +41,8 @@ function group(
   return {
     kind: "field-group",
     address,
+    // As the store gives one; adding it gives a fresh one.
+    token: `token-${address}`,
     settings: { singularName: label, slug: address, icon: "Box" },
     fields: [],
     ...(ownedBy ? { ownedBy } : {}),

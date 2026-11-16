@@ -44,6 +44,7 @@ import {
   markPending,
 } from "@admin/lib/builder/outline/pending-rows";
 import { navigateTo } from "@admin/lib/navigation";
+import type { PendingAddress } from "@admin/services/addressCheckApi";
 import type { StoredHookConfig } from "@admin/types/collection";
 
 import type { BuilderConfig } from "./builder-config";
@@ -87,6 +88,10 @@ type Props = {
   lifecycleEnabled?: boolean;
   /** A collection's stored hooks, shown read-only in its settings modal. */
   storedHooks?: readonly StoredHookConfig[];
+  /** An unsaved entity's address stays editable, checked against these. */
+  unsavedAddress?: { otherAddresses: readonly PendingAddress[] };
+  /** How many places use a field group, said beside its fixed address. */
+  usedByCount?: number;
   active: ActiveOverlay;
   onActiveChange: (next: ActiveOverlay) => void;
   /** Copy a field to right after itself, named clear of what is beside it. */
@@ -123,6 +128,8 @@ export function BuilderPageLayout(props: Props): JSX.Element {
     settings,
     onSettingsChange,
     storedHooks,
+    unsavedAddress,
+    usedByCount,
     active,
     onActiveChange,
     isSaving,
@@ -168,6 +175,8 @@ export function BuilderPageLayout(props: Props): JSX.Element {
           onSettingsChange={onSettingsChange}
           readOnly={locked}
           storedHooks={storedHooks}
+          unsavedAddress={unsavedAddress}
+          usedByCount={usedByCount}
           savedFields={pending.saved}
           lifecycleEnabled={props.lifecycleEnabled}
         />

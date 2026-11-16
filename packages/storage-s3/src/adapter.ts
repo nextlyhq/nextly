@@ -290,6 +290,37 @@ export class S3StorageAdapter implements IStorageAdapter {
   }
 
   /**
+   * Write bytes at exactly `filePath`, beside a file already in the bucket.
+   *
+   * Core uses it to keep a file made from a stored one, such as a resized
+   * copy of an image, under a key derived from the original's. One request,
+   * since such a file is small, with the same cache setting and access as an
+   * upload, so it is served the way its original is.
+   *
+   * @experimental
+   */
+  async uploadAt(
+    filePath: string,
+    buffer: Buffer,
+    options: { mimeType: string }
+  ): Promise<UploadResult> {
+    const client = this.ensureClient();
+    const params: PutObjectCommandInput = {
+      Bucket: this.resolvedConfig.bucket,
+      Key: filePath,
+      Body: buffer,
+      ContentType: options.mimeType,
+      CacheControl: this.resolvedConfig.cacheControl,
+    };
+    // R2 ignores ACL settings, as for an upload.
+    if (!this.isR2) {
+      params.ACL = this.resolvedConfig.acl;
+    }
+    await client.send(new PutObjectCommand(params));
+    return { url: this.getPublicUrl(filePath), path: filePath };
+  }
+
+  /**
    * Delete file from S3.
    *
    * @param filePath - Storage path/key to delete
