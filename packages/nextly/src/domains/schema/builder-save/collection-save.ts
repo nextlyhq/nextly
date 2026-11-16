@@ -53,6 +53,11 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { AddressKind } from "../../../shared/address-rule";
 import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
+import {
+  resolveFieldGroupStorageNames,
+  underNaming,
+  type FieldGroupNaming,
+} from "../../field-groups/services/field-group-storage-names";
 import { appLanguageOrder } from "../../i18n/configured-locales";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
 import { mainTableFields } from "../../i18n/per-language-storage";
@@ -530,9 +535,14 @@ async function planSave(
     }),
     save
   );
-  // Named as the generator names it (`uiToMinimal`), so the scope is the
-  // table the migration writes.
-  const table = uiToMinimal(collectionOf(save), kind.prefix).tableName;
+  // Named as the generator names it (`uiToMinimal`, and for a field group the
+  // naming the site's storage is on), so the scope is the table the migration
+  // writes.
+  const derived = uiToMinimal(collectionOf(save), kind.prefix).tableName;
+  const table =
+    kind.kind === "fieldGroup"
+      ? underNaming(await fieldGroupNamingOf(deps), derived)
+      : derived;
   return {
     current,
     next: (save.removedTogether ?? []).reduce(
@@ -566,7 +576,7 @@ async function adoptionFor(
   if (live === undefined) return null;
   const kind = kindOf(save);
   const inputs = await appMigrationInputs({
-    ...inputsArgs(deps, save, [save.previous]),
+    ...(await inputsArgs(deps, save, [save.previous])),
     manifest: withEntity(current, kind, save.slug, save.previous),
   });
   const declared = inputs[kind.manifest].find(c => c.slug === save.slug);
@@ -1181,7 +1191,7 @@ async function generateFor(
 ): Promise<string[]> {
   const dialect = deps.adapter.getCapabilities().dialect;
   const inputs = await appMigrationInputs({
-    ...inputsArgs(deps, args.save, args.held),
+    ...(await inputsArgs(deps, args.save, args.held)),
     manifest: args.manifest,
   });
   const before = new Set(await sqlFiles(deps.migrationsDir));
@@ -1376,14 +1386,25 @@ function placedJunctions(
       };
 }
 
+/**
+ * The naming the site's field-group storage is on, read from the database the save writes to, so
+ * the migration it writes names each field group's table and registry as the database holds them.
+ */
+async function fieldGroupNamingOf(
+  deps: CollectionSaveDeps
+): Promise<FieldGroupNaming> {
+  return (await resolveFieldGroupStorageNames(deps.adapter)).naming;
+}
+
 /** What `appMigrationInputs` is asked with for this app, its definition aside. */
-function inputsArgs(
+async function inputsArgs(
   deps: CollectionSaveDeps,
   save: CollectionSave,
   held: readonly UiSchemaEntity[] = []
-): AppMigrationInputsArgs {
+): Promise<AppMigrationInputsArgs> {
   const { kind } = kindOf(save);
   return {
+    fieldGroupNaming: await fieldGroupNamingOf(deps),
     ...(held.length === 0
       ? {}
       : { held: held.map((entity): HeldEntity => ({ kind, entity })) }),

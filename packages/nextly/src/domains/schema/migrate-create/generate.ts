@@ -29,6 +29,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { typeColumnForNewTable } from "../../field-groups/storage/resolve-storage-names";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import type { JoinRetries } from "../../i18n/migration/archive-preflight";
 import { carriedDefinition } from "../../i18n/migration/carried-definition";
@@ -3335,6 +3336,9 @@ export function buildDesiredSnapshotFromConfig(
         buildDesiredTableFromComponentFields(c.tableName, c.fields, dialect, {
           builtBy: columnOriginOf(c, "fieldGroup"),
           localized: storesPerLanguage(c),
+          // The discriminator a table under this name carries: the migrated column for a group
+          // on the current names, the legacy one otherwise.
+          typeColumn: typeColumnForNewTable(c.tableName),
         }),
         c,
         "fieldGroup",

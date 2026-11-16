@@ -58,7 +58,6 @@ import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-c
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
-import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 // From the types module, not the barrel, which loads every dialect's tables.
@@ -416,9 +415,8 @@ export const COMPONENTS_METHODS: Record<
         assertLocalizationConfigured("component", b.slug);
       }
       const schemaHash = calculateSchemaHash(b.fields);
-      // Canonical name derivation, shared with the registry sync and
-      // migrate:create paths, so the created table and the registry row agree.
-      const tableName = resolveComponentTableName(b.slug);
+      // The table is named by the service, under the naming the site's storage is on, so the
+      // created table and the registry row agree.
 
       // The table-name conflict is refused inside the service, alongside the DDL it guards, so all
       // three create transports get it rather than this one alone.
@@ -439,7 +437,6 @@ export const COMPONENTS_METHODS: Record<
         await metadata.createFieldGroup({
           slug: b.slug,
           label: b.label || b.slug,
-          tableName,
           fields: b.fields,
           admin: b.admin,
           description: b.description,

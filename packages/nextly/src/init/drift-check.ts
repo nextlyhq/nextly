@@ -170,11 +170,41 @@ export type RunDriftCheckResult =
   | { kind: "drift"; pending: number }
   | { kind: "clean" };
 
+/**
+ * The field groups to ask about, each under the name it is stored by on this site: its derived
+ * name moved to the naming the site's registry is on (`field-group-storage-names`). On a site whose
+ * storage moved to the current names, the derived legacy name addresses no table, and the preview
+ * would describe a group that does not exist. A catalog that cannot answer leaves the names as
+ * derived, as before.
+ */
+async function onSiteNaming(
+  adapter: AdapterLike,
+  groups: readonly DriftCheckEntity[]
+): Promise<DriftCheckEntity[]> {
+  if (groups.length === 0) return [];
+  const [
+    { resolveRegistryNameFromCatalog },
+    { namingOfRegistry, underNaming },
+  ] = await Promise.all([
+    import("../domains/field-groups/storage/resolve-storage-names"),
+    import("../domains/field-groups/services/field-group-storage-names"),
+  ]);
+  const naming = await resolveRegistryNameFromCatalog({
+    dialect: adapter.dialect,
+    getDrizzle: <T>() => adapter.getDrizzle() as T,
+  }).then(namingOfRegistry, () => "legacy" as const);
+  return groups.map(group => ({
+    ...group,
+    tableName: underNaming(naming, group.tableName),
+  }));
+}
+
 export async function runDriftCheck(
   args: RunDriftCheckArgs
 ): Promise<RunDriftCheckResult> {
   const { adapter, collections, logger } = args;
   const deps = await resolveDeps(args.deps);
+  const fieldGroups = await onSiteNaming(adapter, args.fieldGroups ?? []);
 
   // Every preview also compares the tables plugins and the app declare, so with
   // no entity to ask about (a development start that skips every unchanged
@@ -185,7 +215,7 @@ export async function runDriftCheck(
       kind: "single" as const,
       entity,
     })),
-    ...(args.fieldGroups ?? []).map(entity => ({
+    ...fieldGroups.map(entity => ({
       kind: "fieldGroup" as const,
       entity,
     })),

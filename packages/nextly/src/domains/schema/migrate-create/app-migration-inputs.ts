@@ -20,8 +20,13 @@ import type {
   UiSchemaEntity,
   UiSchemaManifest,
 } from "../../../schemas/_zod/ui-schema";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { assertPluginFieldDeclarations } from "../../../shared/lib/assert-plugin-field-declarations";
+import {
+  storageNamesFor,
+  underNaming,
+  type FieldGroupNaming,
+  type FieldGroupStorageNames,
+} from "../../field-groups/services/field-group-storage-names";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
 import { loadUiSchema } from "../ui-schema/loader";
 import {
@@ -102,6 +107,13 @@ export interface AppMigrationInputsArgs {
   dialect: SupportedDialect;
   /** Where each warning goes, and the lines a refusal names before it is thrown. */
   logger: { warn(message: string): void; error(message: string): void };
+  /**
+   * The naming the site's field-group storage is on (`field-group-storage-names`): the table each
+   * field group is generated under, and the registry its Builder row is upserted into. A Builder
+   * save reads it from the database it writes to. Absent, the legacy names, which every migration
+   * history this release writes is on.
+   */
+  fieldGroupNaming?: FieldGroupNaming;
 }
 
 /** The inputs `generateMigration` takes, as `appMigrationInputs` prepares them. */
@@ -157,12 +169,16 @@ export async function appMigrationInputs(
     input.deferredExtends ?? []
   );
 
-  const merged = mergeUiEntities({
-    codeCollections,
-    codeSingles,
-    codeComponents,
-    manifest,
-  });
+  const fieldGroupNames = storageNamesFor(input.fieldGroupNaming ?? "legacy");
+  const merged = withFieldGroupTables(
+    mergeUiEntities({
+      codeCollections,
+      codeSingles,
+      codeComponents,
+      manifest,
+    }),
+    fieldGroupNames
+  );
   for (const slug of merged.droppedUiSlugs) {
     logger.warn(
       `ui-schema.json entry '${slug}' is shadowed by a code-first collection of the same slug; the code definition wins.`
@@ -219,7 +235,8 @@ export async function appMigrationInputs(
       singles: survivingOf(manifest.singles, config.singles ?? []),
       components: survivingOf(manifest.components, config.fieldGroups ?? []),
     },
-    dialect
+    dialect,
+    fieldGroupNames
   );
 
   // The APP stream's extension schema, compiled the way boot compiles it:
@@ -293,7 +310,8 @@ export async function appMigrationInputs(
   // way down. A snapshot with no settings record has none to offer.
   const previousMetadataUpserts = builderMetadataUpserts(
     builderEntriesOf(latest?.data.entities),
-    dialect
+    dialect,
+    fieldGroupNames
   );
   const nothing = nothingToGenerate({
     entityCount: collections.length + singles.length + components.length,
@@ -403,6 +421,29 @@ export function nothingToGenerate(input: {
 }
 
 /**
+ * The merged entities with each field group's table under `names`' prefix.
+ *
+ * Every field group's name is derived as the legacy prefix and the slug's table form, by its own
+ * kind's rule (`resolveComponentTableName` for code-first, `uiToMinimal` for Builder groups), so
+ * moving it to the current names swaps the prefix and keeps that form. The storage migration moves
+ * a derived name the same way (`fg_` + the slug's form), so a site that migrated holds exactly
+ * these names.
+ */
+function withFieldGroupTables<T extends { components: MinimalConfigEntity[] }>(
+  merged: T,
+  names: FieldGroupStorageNames
+): T {
+  if (names.naming === "legacy") return merged;
+  return {
+    ...merged,
+    components: merged.components.map(component => ({
+      ...component,
+      tableName: underNaming(names.naming, component.tableName),
+    })),
+  };
+}
+
+/**
  * The registry-row upserts for UI-built entities (spec §4.12.7), keyed by data
  * table. The caller hands in only the entries no code-first entity of the
  * same kind shadows.
@@ -413,12 +454,12 @@ function builderMetadataUpserts(
     singles: readonly UiSchemaEntity[];
     components: readonly UiSchemaEntity[];
   },
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  /** The field-group registry each Builder group's row goes to, and the prefix its table carries. */
+  fieldGroupNames: FieldGroupStorageNames
 ): { tableName: string; sql: string }[] {
-  const tn = (
-    slug: string,
-    prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix
-  ) => `${prefix}${slug.replace(/-/g, "_")}`;
+  const tn = (slug: string, prefix: string) =>
+    `${prefix}${slug.replace(/-/g, "_")}`;
   const upserts: { tableName: string; sql: string }[] = [];
   for (const c of entries.collections) {
     upserts.push({
@@ -434,8 +475,12 @@ function builderMetadataUpserts(
   }
   for (const cp of entries.components) {
     upserts.push({
-      tableName: tn(cp.slug, STORAGE_FORMAT.tablePrefix),
-      sql: buildComponentMetadataUpsert(cp, dialect),
+      tableName: tn(cp.slug, fieldGroupNames.tablePrefix),
+      sql: buildComponentMetadataUpsert(
+        cp,
+        dialect,
+        fieldGroupNames.registryTable
+      ),
     });
   }
   return upserts;

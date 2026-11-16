@@ -102,6 +102,7 @@ import {
   overriddenColumnsFor,
   withColumnOverride,
 } from "../../schema/services/runtime-schema-generator";
+import { typeColumnForNewTable } from "../storage/resolve-storage-names";
 
 import { componentFieldHasColumn } from "./field-group-utils";
 
@@ -186,7 +187,7 @@ function createdAtIndexName(tableName: string): string {
  * it compile and then silently project a column that is not there. Required
  * makes the type checker the completeness proof. Callers supply either the
  * resolved name from the catalog or, for a table this process just created,
- * `STORAGE_FORMAT.columns.type` — the same constant the DDL just wrote.
+ * `typeColumnForNewTable(tableName)` — the same column the DDL just wrote.
  */
 export interface RuntimeSchemaOptions {
   localized?: boolean;
@@ -309,8 +310,11 @@ export class FieldGroupSchemaService {
     lines.push(
       `  ${this.q}${STORAGE_FORMAT.columns.order}${this.q} ${types.integer} DEFAULT ${structuralDefaults.get(STORAGE_FORMAT.columns.order)},`
     );
+    // The discriminator a table created under this name carries: the migrated column for a table
+    // created under the current names, the legacy one otherwise (`typeColumnForNewTable`), so the
+    // DDL, the pipeline and the runtime binding agree on it.
     lines.push(
-      `  ${this.q}${STORAGE_FORMAT.columns.type}${this.q} ${types.varchar(255)},`
+      `  ${this.q}${typeColumnForNewTable(tableName)}${this.q} ${types.varchar(255)},`
     );
 
     // Only fields that own a column on this row (`columnFields`): a nested

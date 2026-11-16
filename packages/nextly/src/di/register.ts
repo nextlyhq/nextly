@@ -4869,16 +4869,16 @@ async function syncCodeFirstComponents(
     ...componentSyncResult.updated,
   ];
 
-  // Shared resolver so the existence probe below, the DDL path further down and
-  // the migration CLI all produce identical component table names.
-  const { resolveComponentTableName } = await import(
-    "../domains/schema/utils/resolve-table-name"
-  );
+  // The table each group's registry row names after the sync, so the probe below and the create
+  // further down address the group's own storage. Derived again from the slug, the name would be
+  // the legacy one on a site whose storage moved to the current names, and the probe would queue a
+  // `comp_` table to be created beside the group's real one.
+  const tableNameOf = (slug: string): string | undefined =>
+    componentSyncResult.tableNames[slug];
 
   for (const slug of componentSyncResult.unchanged) {
-    // The physical name normalizes the slug, so probing the raw slug would
-    // never find the table and would queue a redundant sync on every boot.
-    const tableName = resolveComponentTableName(slug);
+    const tableName = tableNameOf(slug);
+    if (tableName === undefined) continue;
     try {
       const tableExists = await adapter.tableExists(tableName);
       if (!tableExists) {
@@ -4908,10 +4908,11 @@ async function syncCodeFirstComponents(
     const compConfig = transformedConfig.fieldGroups.find(c => c.slug === slug);
     if (!compConfig) continue;
 
-    const tableName = resolveComponentTableName(slug);
+    const tableName = tableNameOf(slug);
+    if (tableName === undefined) continue;
 
-    // i18n: a localized component omits its translatable columns from the main comp_
-    // table and gets a companion `comp_<slug>_locales` (created below).
+    // i18n: a localized component omits its translatable columns from the main
+    // table and gets a companion `<table>_locales` (created below).
     // Where its translatable columns live: its companion, for a translatable component or for every
     // component on a site that keeps every translatable field per language.
     const compLocalized = storesPerLanguage(compConfig);
@@ -6303,12 +6304,25 @@ async function refuseMixedStorageInConfig(
   const [
     { refuseMixedStorage },
     { resolveSingleTableName },
-    { resolveCollectionTableName, resolveComponentTableName },
+    { resolveCollectionTableName },
+    { fieldGroupTableNameFor, resolveFieldGroupStorageNames },
   ] = await Promise.all([
     import("../domains/i18n/per-language-storage-layout"),
     import("../domains/singles/services/resolve-single-table-name"),
     import("../domains/schema/utils/resolve-table-name"),
+    import("../domains/field-groups/services/field-group-storage-names"),
   ]);
+  // A declared field group's table under the naming this site's storage is on, so it is matched
+  // with its own registry row below rather than judged a second time as a Builder entity. Only
+  // asked when the configuration declares one. A catalog that cannot answer is left to the
+  // registry scan below, which refuses naming the registry it could not read.
+  const fieldGroupNaming =
+    (config.fieldGroups ?? []).length === 0
+      ? "legacy"
+      : await resolveFieldGroupStorageNames(adapter).then(
+          names => names.naming,
+          () => "legacy" as const
+        );
   type Entity = Parameters<typeof refuseMixedStorage>[1][number];
   const fieldsOf = (entity: { fields?: unknown }) =>
     (entity.fields ?? []) as Entity["fields"];
@@ -6341,7 +6355,7 @@ async function refuseMixedStorageInConfig(
       (g): Entity => ({
         kind: "component",
         slug: g.slug,
-        tableName: resolveComponentTableName(g.slug),
+        tableName: fieldGroupTableNameFor(fieldGroupNaming, g.slug),
         fields: fieldsOf(g),
         localized: (g as { localized?: unknown }).localized,
       })

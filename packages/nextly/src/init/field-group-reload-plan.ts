@@ -20,13 +20,17 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import { MIGRATION_TARGET } from "../domains/field-groups/migration/manifest";
+import {
+  fieldGroupTableNameFor,
+  namingOfRegistry,
+  type FieldGroupNaming,
+} from "../domains/field-groups/services/field-group-storage-names";
 import { resolveFieldGroupRegistryName } from "../domains/field-groups/storage/resolve-storage-names";
 import { readIdentifierCaseRules } from "../domains/schema/utils/read-identifier-case";
 import {
   indexCatalog,
   resolveCatalogName,
 } from "../domains/schema/utils/resolve-catalog-name";
-import { resolveComponentTableName } from "../domains/schema/utils/resolve-table-name";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 
 /**
@@ -75,12 +79,29 @@ export interface StoredFieldGroupTables {
    */
   usable: boolean;
   /**
+   * The naming the registry read is on (`field-group-storage-names`): the name a
+   * group the registry does not hold yet is created under. Legacy where no
+   * registry could be read.
+   */
+  naming: FieldGroupNaming;
+  /**
    * Why the read failed, when it did.
    *
    * Present only on the failure path, and carried so the caller's log can name
    * the cause rather than only the symptom.
    */
   reason?: string;
+}
+
+/**
+ * The table a field group is stored under: the one the registry records, or,
+ * for a group it does not hold yet, the one it is created under on this site.
+ */
+export function storedOrNewTableName(
+  stored: Pick<StoredFieldGroupTables, "tables" | "naming">,
+  slug: string
+): string {
+  return stored.tables.get(slug) ?? fieldGroupTableNameFor(stored.naming, slug);
 }
 
 /**
@@ -112,7 +133,7 @@ export async function readStoredFieldGroupTables(
         tables.set(row.slug, row.table_name);
       }
     }
-    return { tables, usable: true };
+    return { tables, usable: true, naming: namingOfRegistry(registryTable) };
   } catch (error) {
     // The reason travels with the verdict. Without it the caller can only say
     // "could not read stored field-group table names", which tells an operator
@@ -122,6 +143,7 @@ export async function readStoredFieldGroupTables(
     return {
       tables,
       usable: (await registryIsAbsent(adapter)) === true,
+      naming: "legacy",
       reason: error instanceof Error ? error.message : String(error),
     };
   }
@@ -211,8 +233,7 @@ export async function planFieldGroupReload(
     }
     targets.push({
       slug: group.slug,
-      tableName:
-        stored.tables.get(group.slug) ?? resolveComponentTableName(group.slug),
+      tableName: storedOrNewTableName(stored, group.slug),
       fields: (group.fields ?? []) as MinimalField[],
       // Carried so the diff omits translatable columns from the group's main
       // table and registers its companion.
