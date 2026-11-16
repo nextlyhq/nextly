@@ -104,6 +104,10 @@ describe("writing a colour", () => {
     expect(hsl).toEqual({ h: 0, s: 1, l: 0.5 });
     const back = hslToRgb(hsl);
     expect(back).toEqual({ r: 1, g: 0, b: 0 });
-    expect(rgbToHsl({ r: 0.5, g: 0.5, b: 0.5 })).toEqual({ h: 0, s: 0, l: 0.5 });
+    expect(rgbToHsl({ r: 0.5, g: 0.5, b: 0.5 })).toEqual({
+      h: 0,
+      s: 0,
+      l: 0.5,
+    });
   });
 });

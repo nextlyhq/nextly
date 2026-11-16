@@ -211,9 +211,7 @@ describe("the eyedropper", () => {
           }}
         />
       );
-      fireEvent.click(
-        screen.getByRole("button", { name: "Pick from screen" })
-      );
+      fireEvent.click(screen.getByRole("button", { name: "Pick from screen" }));
       await new Promise(resolve => setTimeout(resolve, 10));
     } finally {
       process.off("unhandledRejection", capture);
@@ -239,9 +237,7 @@ describe("the eyedropper", () => {
     const onColorChange = vi.fn();
     try {
       render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
-      fireEvent.click(
-        screen.getByRole("button", { name: "Pick from screen" })
-      );
+      fireEvent.click(screen.getByRole("button", { name: "Pick from screen" }));
       await new Promise(resolve => setTimeout(resolve, 10));
     } finally {
       process.off("unhandledRejection", capture);
