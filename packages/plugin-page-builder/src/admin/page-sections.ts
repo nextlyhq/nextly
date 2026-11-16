@@ -34,14 +34,17 @@
  * ## One answer for each part
  *
  * The name is `layerLabel`, so a section reads the same here and in Layers. The
- * first line is the search-metadata derivation run over the section alone:
- * "the first heading, else the first prose" is exactly what a page's title and
- * description are drawn from, and a second walk deciding which props count as
- * text would come to disagree with it.
+ * first line is the search-metadata derivation run over the section alone,
+ * "the first heading, else the first prose", so a second walk deciding which
+ * blocks are drawn and which props count as text cannot come to disagree with
+ * it. A heading offers no title to a page's metadata (a page's title is its
+ * SEO title or its title pattern), so the walk is handed a lookup in which the
+ * heading offers its words as this list's line (`sectionLineBlocks`).
  *
  * @module @nextlyhq/plugin-page-builder/admin/page-sections
  */
 import {
+  authoredText,
   deriveSeoFromDocument,
   type BlockDocument,
   type BlockNode,
@@ -106,13 +109,14 @@ export function pageSections(
   if (prepared === null) return [];
 
   const lookup = (type: string) => resolver.get(type);
+  const lines = sectionLineBlocks(lookup);
   const stored = new Map(documentNodes(value).map(node => [node.id, node]));
   return groupByTarget(prepared.nodes).map(({ target, nodes }, index) => {
     // Every node is offered: the tree was already gated above, so nothing left
     // in it is withheld from the reader this describes.
     const text = deriveSeoFromDocument(
       { ...prepared, nodes },
-      lookup,
+      lines,
       () => true
     );
     const first = nodes[0];
@@ -125,6 +129,30 @@ export function pageSections(
       firstLine: text.title ?? text.description ?? "",
     };
   });
+}
+
+/** The block whose words lead a section's line. */
+const HEADING_TYPE = "core/heading";
+
+/**
+ * The block lookup a section's line is read with: every block as the page
+ * draws it, except that a heading offers its words, normalized as it renders
+ * them, as the line's title. Only this list reads it; a page's metadata asks
+ * the heading itself, which offers nothing.
+ */
+function sectionLineBlocks(
+  lookup: (type: string) => ReturnType<BlockResolver["get"]>
+): (type: string) => ReturnType<BlockResolver["get"]> {
+  return type => {
+    const definition = lookup(type);
+    if (type !== HEADING_TYPE || definition === undefined) return definition;
+    return {
+      ...definition,
+      seo: (props: object) => ({
+        title: authoredText((props as { text?: unknown }).text),
+      }),
+    };
+  };
 }
 
 /**

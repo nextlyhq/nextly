@@ -1,6 +1,7 @@
 /**
- * The share preview: the SEO fields, then what the page offers, then its
- * title, with only what every visitor sees speaking for the page.
+ * The share preview: the SEO fields, then what the page offers (never its
+ * title), then its title, with only what every visitor sees speaking for the
+ * page.
  */
 import type {
   BlockDocument,
@@ -38,7 +39,9 @@ const hero = {
 };
 
 describe("the share preview", () => {
-  it("takes what the page offers when there are no SEO fields", () => {
+  it("takes what the page offers when there are no SEO fields, but never its title", () => {
+    // The title is the page's own, as the published page's is: nothing in the
+    // design offers it, even a block that answers with one.
     expect(
       sharePreview({
         seo: undefined,
@@ -47,7 +50,7 @@ describe("the share preview", () => {
         definitions,
       })
     ).toEqual({
-      title: "Who we are",
+      title: "About us",
       description: "We build tools people keep.",
       image: { kind: "url", url: "/uploads/team.jpg" },
     });
