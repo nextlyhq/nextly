@@ -1235,8 +1235,14 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
             .filter(part =>
               held.includes(part.kind === "shared" ? "shared" : part.locale)
             )
-            .map(part => ({ part, message: "Waiting for approval." }))
+            .map(part => ({
+              part,
+              code: "NOT_APPROVED" as const,
+              message: "Waiting for approval.",
+            }))
         ),
+      judge: () =>
+        Promise.resolve({ refusals: [], settle: () => Promise.resolve() }),
     }));
   }
 
@@ -1252,6 +1258,8 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
         asked.push(question);
         return Promise.resolve([]);
       },
+      judge: () =>
+        Promise.resolve({ refusals: [], settle: () => Promise.resolve() }),
     }));
     const permissions = ["read-posts", "update-posts", "publish-posts"];
     const handler = t!.getService("collectionsHandler") as unknown as {
