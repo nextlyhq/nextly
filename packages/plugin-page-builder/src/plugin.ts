@@ -295,6 +295,7 @@ import {
 } from "./retired-exposure-hooks";
 import { reconcileRetired, retiredHistoryMemo } from "./retired-history";
 import { retiredPins, type RetiredPins } from "./retired-pins";
+import { registerRetiredSpacingOptionCleanup } from "./retired-spacing-option";
 import { allRetired, retiredStore } from "./retired-store";
 import { savePatternRoute } from "./save-pattern-route";
 import {
@@ -346,15 +347,17 @@ import {
   type BreakpointsRouteContext,
   type SiteSettingsRouteContext,
 } from "./site-settings";
-import { resolveSiteStyle, siteBreakpoints } from "./site-style";
-import type { SiteStyleData } from "./site-style";
-import { siteStyleExpiry } from "./site-style-expiry";
+import {
+  removedSiteStyleOption,
+  resolveSiteStyle,
+  siteBreakpoints,
+  type SiteStyleData,
+} from "./site-style";
 import {
   registerSiteStyleRemovalLock,
   type SiteStyleRemovalLockSetup,
 } from "./site-style-removal-lock";
 import {
-  blocksSurvey,
   builderCollectionsIn,
   builderSinglesIn,
   siteLocales as siteLocalesOf,
@@ -368,21 +371,6 @@ import {
   suppliedVariableIds,
   type VariablesInUseCheck,
 } from "./site-style-storage";
-import {
-  configuredSpacingMode,
-  readJoiningDecision,
-  settleSpacingModeAfterBoot,
-  spacingModeJob,
-  spacingModeRunInFlight,
-  type SpacingModeAtStartDeps,
-  type SpacingModeSlugs,
-} from "./spacing-mode-at-start";
-import {
-  SPACING_MODE_SERVICE,
-  type SpacingModeReader,
-} from "./spacing-mode-reader";
-import { spacingModeRoute } from "./spacing-mode-route";
-import { spacingModeStore, type SpacingModeStore } from "./spacing-mode-store";
 import { storedDocumentsOnTransaction } from "./stored-documents-on-transaction";
 import {
   holdTemplateCollection,
@@ -1967,50 +1955,6 @@ export const pageBuilder = (
   };
 
   /**
-   * What the spacing-model step and its reader need from the installed
-   * plugin: the store over the plugin's own table and the RESOLVED slugs it
-   * reads. Published by `init` for the reason `defaultLayoutSetup` is.
-   */
-  let spacingSetup: {
-    store: SpacingModeStore;
-    slugs: SpacingModeSlugs;
-    survey: SpacingModeAtStartDeps["survey"];
-    siteStyle: string;
-    warn: (message: string, meta?: Record<string, unknown>) => void;
-  } | null = null;
-
-  /** The installed spacing-model store, or a refusal naming why it is missing. */
-  const requireSpacingSetup = (): NonNullable<typeof spacingSetup> => {
-    if (spacingSetup === null) {
-      throw new Error(
-        "[page-builder] the site's spacing model was asked for before the plugin was installed"
-      );
-    }
-    return spacingSetup;
-  };
-
-  /**
-   * The start's decision while it runs: the default-Layout seed, then the
-   * spacing step. `null` once it has settled.
-   */
-  let spacingStartup: Promise<void> | null = null;
-
-  /** The step's deps for one run, the Direct API resolved at call time. */
-  const spacingModeDeps = async (): Promise<SpacingModeAtStartDeps> => {
-    const { store, slugs, survey, siteStyle, warn } = requireSpacingSetup();
-    const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
-    const configured = configuredSpacingMode(opts.siteStyle);
-    return {
-      store,
-      slugs,
-      survey,
-      ...(configured === undefined ? {} : { configured }),
-      nextly: await getCachedNextly(),
-      expire: () => siteStyleExpiry(warn)(siteStyle),
-    };
-  };
-
-  /**
    * How the blocks field judges composition, once the plugin is installed.
    * Until then only a document's own rules run: nothing is installed to read
    * the library through.
@@ -2859,25 +2803,6 @@ export const pageBuilder = (
       // queue the repair when a write gets past that.
       defaultLayoutSetup = installDefaultLayout(ctx);
 
-      // The site's spacing model, kept in the plugin's own table, and the
-      // RESOLVED slugs the one-time step reads to tell an existing site from
-      // a fresh one.
-      spacingSetup = {
-        store: spacingModeStore(ctx.db, ctx.dialect),
-        slugs: {
-          layouts: defaultLayoutSetup.slugs.layouts,
-          settings: defaultLayoutSetup.slugs.settings,
-        },
-        // Where block documents may live: the registry's survey of every
-        // collection and live Single holding a blocks field the builder opens,
-        // the same survey the editor's style route asks.
-        survey: () => blocksSurvey(ctx),
-        // The RESOLVED Site Style slug, whose cached reads a recorded model
-        // expires.
-        siteStyle: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
-        warn: (message, meta) => ctx.logger.warn(message, meta),
-      };
-
       // How a blocks value is judged as a reader would receive it: where
       // components live, the caps, who places a component, and where to say
       // so when some of those could not be judged. Set here because the
@@ -3054,6 +2979,9 @@ export const pageBuilder = (
         () => composition,
         () => siteLocalesOf(ctx.config)
       );
+      // The spacing model an earlier release recorded, cleared with the site
+      // style's next save, inside that save's transaction.
+      registerRetiredSpacingOptionCleanup(ctx);
       // What a variable's in-use check reads: the variable index, the block
       // types the pages are rendered with (read per check), and the stored
       // documents. It names no document, since the write's author is not a
@@ -3825,13 +3753,14 @@ export const pageBuilder = (
       // operator should learn that from the log before an author meets it in
       // the form.
       warnNestedBlocksFields(ctx.config, message => ctx.logger.warn(message));
+      // A `siteStyle.spacingMode` left in a host's options (a type error,
+      // so only an untyped host gets here) is ignored, and said so once.
+      const removed = removedSiteStyleOption(opts.siteStyle);
+      if (removed !== undefined) ctx.logger.warn(removed);
     },
     // Seed the default Layout once the system is assembled, so a fresh site
     // has one before its first page is drawn. Deliberately not awaited:
     // `seedDefaultLayoutAtStart` says why, and catches every failure itself.
-    //
-    // Then record the site's spacing model, once: AFTER the seed, so the seed
-    // is recorded and not taken for content. Neither step throws.
     onReady: async () => {
       // A collection given a template address that cannot have a template
       // refuses to start, naming it: checked once every plugin's
@@ -3854,20 +3783,7 @@ export const pageBuilder = (
         });
       }
       const setup = defaultLayoutSetup;
-      const spacing = spacingSetup;
-      const seeded =
-        setup === null ? Promise.resolve() : seedDefaultLayoutAtStart(setup);
-      if (spacing !== null) {
-        // Not awaited, so the boot is not held; a style read made meanwhile
-        // joins it instead (see the spacing-model service below).
-        const startup = seeded.then(() =>
-          settleSpacingModeAfterBoot(spacingModeDeps, spacing.warn)
-        );
-        spacingStartup = startup;
-        void startup.finally(() => {
-          if (spacingStartup === startup) spacingStartup = null;
-        });
-      }
+      if (setup !== null) void seedDefaultLayoutAtStart(setup);
     },
     // Moves with every migration of the plugin's own tables below.
     schemaVersion: pageBuilderSchemaPlugin.schemaVersion,
@@ -3920,13 +3836,6 @@ export const pageBuilder = (
         // Taking a component's retired field values out of every document
         // still holding them; the sweep below drives it.
         [RETIRED_CLEANUP_SERVICE]: () => requireRetiredCleanup(),
-        // The site's spacing model, for a render that holds only the Direct
-        // API: `loadSiteStyle` reads it through this service. Resolved per
-        // call, so a read before `init` refuses rather than answering a
-        // default the site never chose.
-        // A read finding no model while this process is still deciding one,
-        // at start or in a sweep, waits for that decision, so a first render
-        // is not drawn under a default the site is about to replace.
         // The composition API for code serving a request of its own (another
         // plugin's route, the MCP endpoint): the manifest and the page and
         // definition actions, each the function its route runs, as the
@@ -3980,13 +3889,6 @@ export const pageBuilder = (
               });
             },
           }),
-        [SPACING_MODE_SERVICE]: (): SpacingModeReader => ({
-          read: () =>
-            readJoiningDecision(
-              requireSpacingSetup().store,
-              () => spacingStartup ?? spacingModeRunInFlight()
-            ),
-        }),
       },
       // The backfill sweep. Contributed unconditionally beside the index it
       // fills: the work is owed from the moment this plugin meets existing
@@ -4008,9 +3910,6 @@ export const pageBuilder = (
         // and every jobs pass confirms the site still has a published default,
         // whatever path took it away; the guards also queue it directly.
         defaultLayoutJob(defaultLayoutDeps),
-        // The spacing-model step, retried on every pass until a model is
-        // recorded; then one indexed read per pass.
-        spacingModeJob(spacingModeDeps),
         // The cleanup of retired field values, owed whenever a component's
         // retired ids hold more than its last walk was for. A pass with none
         // owed reads the retired table and each such component's run.
@@ -4458,13 +4357,6 @@ export const pageBuilder = (
         // The editor's read of the stored site style, for anyone who may
         // edit something the builder opens: the canvas cannot draw without it.
         siteStyleRoute(componentStoreOf(opts)),
-        // The owner's choice of how blocks are spaced, asked of the same
-        // permission a Site Style write needs.
-        // A choice expires the cached pages that read the site style, and says
-        // so in the plugin's log when it cannot.
-        spacingModeRoute(slug =>
-          siteStyleExpiry(requireSpacingSetup().warn)(slug)
-        ),
         // Design → Fonts' catalogue: read it, and add a family to the site.
         ...fonts.routes,
         // The Design panel's shared styles: lock and unlock one, how widely
