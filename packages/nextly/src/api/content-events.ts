@@ -7,7 +7,6 @@
  * authenticates and resolves who is asking.
  *
  * @module api/content-events
- * @experimental
  */
 
 import { apiKeyScopeFrom } from "../auth/authenticated-scope";

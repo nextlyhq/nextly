@@ -130,15 +130,9 @@ export function serverOnlyKind(specifier: string): string | null {
  * 2026-10-15:
  */
 const REVIEWED_BROWSER_PACKAGES: readonly string[] = [
-  // Through `@nextlyhq/blocks-engine`. These two subpaths walk 79 files that import no package and
-  // never reach `lib/data.js` or `lib/version.js`, the only files using Node's `module`, which the
-  // package's `browser` field swaps for prebuilt `dist/` files anyway.
-  "css-tree/parser@2.3.1",
-  "css-tree/walker@2.3.1",
-  // Through `@nextlyhq/blocks-engine`. It imports no Node built-in, and reads `process.platform`
-  // only behind a `typeof process` guard. 4.0.7 read 2026-10-22: against 4.0.5 it changes only glob
-  // parsing in `lib/parse.js` and `lib/scan.js`, and adds no import.
-  "picomatch@4.0.7",
+  // The client entries reach only the block engine's narrow `./contrast`, `./format` and
+  // `./named-query` entries, which import no package, so neither `css-tree` nor `picomatch` is
+  // reached through it.
   // Validation with no runtime dependencies, written to run in browsers. 4.6.7 read 2026-10-25:
   // against 4.6.2 it imports nothing but itself and no Node built-in; the changes are its own
   // check and schema logic.
