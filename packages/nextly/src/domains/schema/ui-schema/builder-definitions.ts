@@ -28,6 +28,7 @@ import type {
 } from "../../../schemas/_zod/ui-schema";
 import { assertPluginFieldDeclarations } from "../../../shared/lib/assert-plugin-field-declarations";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
+import type { JudgedEntity } from "../migrate-create/addresses";
 import { toMinimalEntities } from "../migrate-create/config-entities";
 import type { EntitySettingsRecord } from "../migrate-create/entity-settings";
 import type { MinimalConfigEntity } from "../migrate-create/generate";
@@ -180,33 +181,54 @@ export async function readBuilderDefinitions(
  *
  * A Builder entity the definition lost is refused first: an entry removed by hand that another
  * entry still relates to is that loss, and restoring the file is its fix, not creating the target.
- * Then the surviving entries' relationship targets. A Builder save writing one entity's migration
- * asks neither (`unscoped: false`): it holds the definition it writes, its own delete included,
- * and the save's own validation judges the entity it writes, so an unrelated entry never refuses
- * it.
+ * Then the surviving entries' relationship targets.
+ *
+ * A Builder save writing one entity's migration (`judged`) has no loss to judge: it holds the
+ * definition it writes, its own delete included. It judges the relationships of the entity it
+ * saves alone, against every collection declared, before anything is written: an unrelated entry
+ * is not its to refuse, and the next full run judges that one.
  */
 export function judgeBuilderDefinitions(args: {
   definitions: BuilderDefinitions;
   /** The newest snapshot's settings record; absent where it has none. */
   recorded: EntitySettingsRecord | undefined;
-  /** Whether the run plans or checks every entity, rather than one save's. */
-  unscoped: boolean;
+  /** The one entity a Builder save writes; absent, every entity is judged. */
+  judged?: JudgedEntity;
 }): void {
-  const { definitions, recorded } = args;
-  if (!args.unscoped) return;
-  assertBuilderDefinitionsKept({
-    recorded,
-    merged: definitions.merged,
-    definitionFile: definitions.definitionFile,
-  });
+  const { definitions, recorded, judged } = args;
+  if (judged === undefined) {
+    assertBuilderDefinitionsKept({
+      recorded,
+      merged: definitions.merged,
+      definitionFile: definitions.definitionFile,
+    });
+  }
+  // Only the entries the merge kept: a shadowed one is ignored, its
+  // relationships included.
+  const { surviving } = definitions;
   assertRelationTargetsDeclared({
     codeCollectionSlugs: definitions.codeCollectionSlugs,
-    // Only the entries the merge kept: a shadowed one is ignored, its
-    // relationships included.
-    manifest: { ...definitions.manifest, ...definitions.surviving },
+    manifest: { ...definitions.manifest, ...surviving },
+    ...(judged === undefined
+      ? {}
+      : {
+          judged: surviving[SURVIVING_KEY[judged.kind]].filter(
+            e => e.slug === judged.slug
+          ),
+        }),
     definitionFile: definitions.definitionFile,
   });
 }
+
+/** Each kind's list among the surviving entries. */
+const SURVIVING_KEY: Record<
+  JudgedEntity["kind"],
+  keyof BuilderDefinitions["surviving"]
+> = {
+  collection: "collections",
+  single: "singles",
+  fieldGroup: "components",
+};
 
 /**
  * Refuse a relationship or upload in the definition whose target neither the configuration nor
@@ -215,13 +237,17 @@ export function judgeBuilderDefinitions(args: {
  */
 export function assertRelationTargetsDeclared(args: {
   codeCollectionSlugs: string[];
+  /** The definition; its collections are the Builder's valid targets. */
   manifest: UiSchemaManifest;
+  /** The entries whose relationships are judged; absent, every entry. */
+  judged?: ReadonlyArray<{ slug: string; fields: unknown }>;
   /** `db.uiSchemaFile`, as the configuration names it. */
   definitionFile: string;
 }): void {
   const issues = validateCrossFile({
     codeCollectionSlugs: args.codeCollectionSlugs,
     manifest: args.manifest,
+    ...(args.judged === undefined ? {} : { judged: args.judged }),
   });
   if (issues.length === 0) return;
   throw NextlyError.validation({

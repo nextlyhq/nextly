@@ -169,11 +169,12 @@ export async function appMigrationInputs(
   // The definitions judged against that snapshot, as `migrate:check` judges
   // them: a Builder entity the file lost (the drop below would take its
   // table), then each relationship's target. A save writing one entity's
-  // migration asks neither (`judgeBuilderDefinitions`).
+  // migration judges that entity's relationships alone, and no loss
+  // (`judgeBuilderDefinitions`).
   judgeBuilderDefinitions({
     definitions,
     recorded: latest?.data.entities,
-    unscoped: input.judged === undefined,
+    ...(input.judged === undefined ? {} : { judged: input.judged }),
   });
 
   // Before the app stream compiles: a plugin hook still extending a removed

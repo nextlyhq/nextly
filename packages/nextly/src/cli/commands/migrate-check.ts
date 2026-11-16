@@ -435,7 +435,6 @@ export async function runChecks(args: {
       judgeBuilderDefinitions({
         definitions: args.definitions,
         recorded: latest?.data.entities,
-        unscoped: true,
       });
     } catch (error) {
       return exitWithError(logger, error);

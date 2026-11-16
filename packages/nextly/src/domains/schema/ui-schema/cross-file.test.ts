@@ -132,6 +132,31 @@ describe("validateCrossFile", () => {
     ).toHaveLength(1);
   });
 
+  // A relationship retargeted in the Builder is saved with its new `relationTo` and the options it
+  // was read with, the earlier target among them. Reads take `relationTo` over `options.target`
+  // (`relationshipTargetSlug`), so the stale one is no target to judge.
+  it("judges relationTo, not a stale options.target beside it", () => {
+    const manifest = uiSchemaManifest.parse({
+      collections: [
+        { slug: "authors", fields: [{ name: "name", type: "text" }] },
+        {
+          slug: "events",
+          fields: [
+            {
+              name: "owner",
+              type: "relationship",
+              relationTo: "authors",
+              options: { target: "people" },
+            },
+          ],
+        },
+      ],
+    });
+    expect(validateCrossFile({ codeCollectionSlugs: [], manifest })).toEqual(
+      []
+    );
+  });
+
   it("accepts relationTo pointing at a core table (users/media)", () => {
     const manifest = uiSchemaManifest.parse({
       collections: [

@@ -42,15 +42,52 @@ export interface CrossFileIssue {
 export interface ValidateCrossFileArgs {
   /** Slugs of code-first collections (from `nextly.config.ts`). */
   codeCollectionSlugs: string[];
+  /** The definition; its collections are the Builder's valid targets. */
   manifest: UiSchemaManifest;
+  /**
+   * The entries whose relationships are judged. Absent, every entry of the
+   * definition is; a Builder save judges only the entity it saves.
+   */
+  judged?: ReadonlyArray<{ slug: string; fields: unknown }>;
+}
+
+/**
+ * A field list with each relationship's target as reads take it
+ * (`relationshipTargetSlug`): `relationTo` when the field names one or a list,
+ * else `options.target`. A field retargeted in the Builder is saved with its
+ * new `relationTo` and the options it was read with, the earlier target among
+ * them; that stale one points at nothing the field uses, so it is not judged.
+ */
+function withTargetsAsRead(fields: unknown): unknown {
+  if (!Array.isArray(fields)) return fields;
+  return fields.map((field: unknown) => {
+    if (field === null || typeof field !== "object") return field;
+    const record = field as Record<string, unknown>;
+    const { relationTo, options } = record;
+    const named =
+      (typeof relationTo === "string" && relationTo !== "") ||
+      Array.isArray(relationTo);
+    let read = record;
+    if (named && typeof options === "object" && options !== null) {
+      read = {
+        ...record,
+        options: Object.fromEntries(
+          Object.entries(options).filter(([key]) => key !== "target")
+        ),
+      };
+    }
+    return Array.isArray(read.fields)
+      ? { ...read, fields: withTargetsAsRead(read.fields) }
+      : read;
+  });
 }
 
 export function validateCrossFile(
   args: ValidateCrossFileArgs
 ): CrossFileIssue[] {
   const issues: CrossFileIssue[] = [];
-  // Every entity across the manifest, each of whose fields may name a target.
-  const manifestEntities = [
+  // Every entry judged, each of whose fields may name a target.
+  const manifestEntities = args.judged ?? [
     ...args.manifest.collections,
     ...args.manifest.singles,
     ...args.manifest.components,
@@ -63,12 +100,15 @@ export function validateCrossFile(
     ...BUILT_IN_RELATION_TARGETS,
   ]);
   for (const e of manifestEntities) {
-    // Every field that points at a collection, read as the delete checks and
-    // the generator read it: `relationTo` (one target or a polymorphic list)
-    // or the earlier Builder's `options.target`, inside repeaters and groups
-    // too. A narrower reader let a target the generator keys a column to go
-    // unjudged, and the migration then failed where it was applied.
-    for (const { path, targets } of referencingFields(e.fields)) {
+    // Every field that points at a collection, walked as the delete checks
+    // walk it (`referencingFields`), inside repeaters and groups too, with its
+    // target as reads take it: `relationTo` (one target or a polymorphic
+    // list), else the earlier Builder's `options.target`. A narrower reader
+    // let a target the generator keys a column to go unjudged, and the
+    // migration then failed where it was applied.
+    for (const { path, targets } of referencingFields(
+      withTargetsAsRead(e.fields)
+    )) {
       for (const target of new Set(targets)) {
         if (!validTargets.has(target)) {
           issues.push({
