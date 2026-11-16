@@ -6,6 +6,7 @@ import type { PluginRoute } from "@nextlyhq/plugin-sdk";
 
 import { siteCodeRoutes } from "../site-code/route";
 import { MANAGE_SITE_PERMISSION } from "../site-settings";
+
 import type { Definition } from "./state";
 
 /** The routes site code contributes, by name. */
