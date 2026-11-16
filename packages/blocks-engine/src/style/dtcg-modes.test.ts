@@ -447,6 +447,47 @@ describe("the theme file beside variables the format types in one mode only", ()
     expect(sorted(back.tokens)).toEqual(sorted(MIXED.tokens));
   });
 
+  it("reads the carried variables a dark source file supplies itself", () => {
+    // A theme file of another arrangement: separate light and dark token
+    // files, each exported from here, so each carries its own `em` value.
+    const one = (light: string) =>
+      JSON.parse(
+        JSON.stringify(
+          tokensToDtcg({
+            tokens: [
+              { name: "space.gap", kind: "dimension", values: { light } },
+            ],
+          }).document
+        )
+      );
+    const resolver = {
+      version: "2025.10",
+      sets: { base: { sources: [{ $ref: "light.tokens.json" }] } },
+      modifiers: {
+        theme: {
+          contexts: { light: [], dark: [{ $ref: "dark.tokens.json" }] },
+          default: "light",
+        },
+      },
+      resolutionOrder: [{ $ref: "#/sets/base" }, { $ref: "#/modifiers/theme" }],
+    };
+    const back = resolverToTokens(
+      resolver,
+      new Map([
+        ["light.tokens.json", one("1em")],
+        ["dark.tokens.json", one("2em")],
+      ])
+    );
+    expect(back.issues).toEqual([]);
+    expect(back.tokens).toEqual([
+      {
+        name: "space.gap",
+        kind: "dimension",
+        values: { light: "1em", dark: "2em" },
+      },
+    ]);
+  });
+
   it("takes a dark value edited in the theme file", () => {
     const { base, resolver } = files();
     const dark = (

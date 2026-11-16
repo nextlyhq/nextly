@@ -123,14 +123,17 @@ export function resolverToTokens(
   const base = mergeSources(baseSources(resolver), files, issues);
   const modes = themeContexts(resolver);
   const light = mergeTrees(base, mergeSources(modes.light, files, issues));
-  // The dark tree without the token file's own extension: the variables it
-  // carries are read once, from the light tree, with their exact dark values,
-  // and a dark value the theme file types for one of them is not a second one.
+  // The dark tree takes the base without its own extension: the variables the
+  // base carries are read once, from the light tree, with their exact dark
+  // values, and a dark value the theme file types for one of them is not a
+  // second one. A dark source's OWN extension stays, so the variables a
+  // separate dark file carries are read as its dark values.
   const dark =
     modes.dark === undefined
       ? undefined
-      : withoutRootExtensions(
-          mergeTrees(base, mergeSources(modes.dark, files, issues))
+      : mergeTrees(
+          withoutRootExtensions(base),
+          mergeSources(modes.dark, files, issues)
         );
   const read = combineModes(light, dark);
   return { tokens: read.tokens, issues: [...issues, ...read.issues] };
