@@ -32,6 +32,8 @@ export interface VersionComparisonBarProps {
   changes: ChangesState;
   /** Which change is current, counted from zero. */
   position: number;
+  /** The change the position is on, named as its field is, for the move's announcement. */
+  currentLabel?: string;
   /** Moves to the previous (-1) or next (1) change. */
   onMove: (delta: -1 | 1) => void;
   /** Shows the history list again, where the panel stepped aside. */
@@ -158,6 +160,7 @@ export function VersionComparisonBar({
   comparedWith,
   changes,
   position,
+  currentLabel,
   onMove,
   onBackToHistory,
   onOpenComparison,
@@ -218,6 +221,7 @@ export function VersionComparisonBar({
             changed={changed}
             position={position}
             onMove={onMove}
+            currentLabel={currentLabel}
             className="hidden sm:flex"
           />
         ) : null}

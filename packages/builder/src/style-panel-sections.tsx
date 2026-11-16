@@ -51,7 +51,6 @@ import type { StyleTarget } from "./style-target";
  */
 export function StyleSections({
   sections,
-  nodeId,
   open,
   onOpen,
   readOnlyReason,
@@ -59,7 +58,6 @@ export function StyleSections({
   fit,
 }: {
   sections: readonly StyleSection[];
-  nodeId: string;
   open: string;
   onOpen: (group: string) => void;
   readOnlyReason: React.ComponentProps<
@@ -75,11 +73,12 @@ export function StyleSections({
       <Accordion type="single" collapsible value={open} onValueChange={onOpen}>
         {sections.map(section => (
           <StyleSectionItem
-            // Keyed by node AND group: a bare group would let React reuse one
-            // block's inputs for the next block's same-named section, so a
-            // field would keep the previous block's uncommitted text.
-            key={`${nodeId}:${section.key}`}
+            // Keyed by group alone, so a closed section whose heading reads
+            // the same is kept as it is for the next block. What a field
+            // holds is keyed by node inside it (`SectionBody`).
+            key={section.key}
             section={section}
+            open={open === section.key}
             readOnlyReason={readOnlyReason}
             {...surroundings}
           />
@@ -115,15 +114,81 @@ export function rendersMedia(
   return renderedTag !== undefined && REPLACED_ELEMENTS.has(renderedTag);
 }
 
+/** The props one section is drawn from. */
+type StyleSectionItemProps = {
+  section: StyleSection;
+  /** Whether it is the section open, whose fields are drawn. */
+  open: boolean;
+  /** Why every control is read-only, which also withholds "+ More". */
+  readOnlyReason: string | undefined;
+} & StyleFieldSurroundings;
+
+/** Whether any of a section's properties holds a value. */
+function holdsValues(section: StyleSection): boolean {
+  return section.properties.some(property => property.set);
+}
+
 /**
- * One section: its common properties, any that hold a value, and the rest
- * behind "+ More".
+ * Whether a section draws nothing new: closed both times, it draws only its
+ * heading, so it is drawn again only when what the heading says changes. An
+ * open section draws its fields, which read everything, and is always drawn.
+ */
+function sameClosedSection(
+  before: StyleSectionItemProps,
+  after: StyleSectionItemProps
+): boolean {
+  if (before.open || after.open) return false;
+  return (
+    before.section.key === after.section.key &&
+    before.section.label === after.section.label &&
+    holdsValues(before.section) === holdsValues(after.section)
+  );
+}
+
+/**
+ * One section: its heading, and while it is open, its fields.
  *
  * **The header marks a section that holds values** with a dot and the words
  * "has values" for a screen reader, so an author can see which sections they
  * have touched without opening each one, and the dot is never colour alone.
+ *
+ * Kept as it is while it stays closed and its heading reads the same, so a
+ * selection rebuilds only the sections that change: the open one, and any
+ * whose dot comes or goes.
  */
-function StyleSectionItem({
+const StyleSectionItem: React.NamedExoticComponent<StyleSectionItemProps> =
+  React.memo(function StyleSectionItem({
+    section,
+    open: _open,
+    readOnlyReason,
+    ...surroundings
+  }: StyleSectionItemProps): React.JSX.Element {
+    return (
+      <AccordionItem value={section.key} data-section={section.key}>
+        <SectionHeading
+          label={section.label}
+          holdsValues={holdsValues(section)}
+        />
+        <AccordionContent>
+          <SectionBody
+            // Keyed by node: what a field holds, and what "+ More" brought
+            // out, stay with the block they were for, and the next block's
+            // fields start from its own values.
+            key={surroundings.nodeId}
+            section={section}
+            readOnlyReason={readOnlyReason}
+            {...surroundings}
+          />
+        </AccordionContent>
+      </AccordionItem>
+    );
+  }, sameClosedSection);
+
+/**
+ * An open section's fields: its common properties, any that hold a value,
+ * and the rest behind "+ More".
+ */
+function SectionBody({
   section,
   readOnlyReason,
   orientation,
@@ -138,15 +203,11 @@ function StyleSectionItem({
   editing,
   onChooseForm,
   breakpoints,
-}: {
-  section: StyleSection;
-  /** Why every control is read-only, which also withholds "+ More". */
-  readOnlyReason: string | undefined;
-} & StyleFieldSurroundings): React.JSX.Element {
+}: Omit<StyleSectionItemProps, "open">): React.JSX.Element {
   const readOnly = readOnlyReason !== undefined;
   /*
-   * What the author brought out from "+ More". Held here, by a section keyed
-   * by node and section, so it lasts while this block stays selected and
+   * What the author brought out from "+ More". Held here, in a body keyed by
+   * node inside its section, so it lasts while this block stays selected and
    * starts empty for the next. Panel state, like the open section: what the
    * author chose to look at, not anything the page stores — and a property
    * holding a value shows whatever this says, so it can hide nothing set.
@@ -155,7 +216,6 @@ function StyleSectionItem({
     () => new Set()
   );
   const isRevealed = (property: string) => revealed.has(property);
-  const holdsValues = section.properties.some(property => property.set);
   const shown = section.properties.filter(
     property => property.common || isRevealed(property.property)
   );
@@ -177,26 +237,23 @@ function StyleSectionItem({
     breakpoints,
   };
   return (
-    <AccordionItem value={section.key} data-section={section.key}>
-      <SectionHeading label={section.label} holdsValues={holdsValues} />
-      <AccordionContent>
-        <SectionFields
-          sectionKey={section.key}
-          shown={shown}
-          readOnly={readOnly}
-          surroundings={surroundings}
+    <>
+      <SectionFields
+        sectionKey={section.key}
+        shown={shown}
+        readOnly={readOnly}
+        surroundings={surroundings}
+      />
+      {readOnly || more.length === 0 ? null : (
+        <MoreProperties
+          sectionLabel={section.label}
+          properties={more}
+          onReveal={property =>
+            setRevealed(current => new Set(current).add(property))
+          }
         />
-        {readOnly || more.length === 0 ? null : (
-          <MoreProperties
-            sectionLabel={section.label}
-            properties={more}
-            onReveal={property =>
-              setRevealed(current => new Set(current).add(property))
-            }
-          />
-        )}
-      </AccordionContent>
-    </AccordionItem>
+      )}
+    </>
   );
 }
 
