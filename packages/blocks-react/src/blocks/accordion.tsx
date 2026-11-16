@@ -63,7 +63,6 @@ import {
   ACCORDION_TITLE_LEVELS,
 } from "./accordion-item";
 import { INTERACTIVE } from "./categories";
-import { libraryDefinition } from "./classic-spacing";
 import {
   CONTAINER_SUPPORTS,
   containerContentModel,
@@ -92,8 +91,7 @@ export const ACCORDION_BASE_STYLES = {
       // a stored artifact handed back with no context included.
       gap: { $token: "space.stack" },
       // A chevron at the end of each title, the same in every browser, which
-      // an author changes like any value. A site built before these choices
-      // keeps the browser's marker through its classic base instead.
+      // an author changes like any value.
       disclosureIcon: "chevron",
       disclosurePosition: "after",
     },
@@ -122,70 +120,68 @@ function renderAccordion(args: BlockRenderArgs<AccordionProps>): ReactElement {
 }
 
 export const accordion: BlockDefinition<AccordionProps, PageContext> =
-  libraryDefinition(
-    defineBlock<AccordionProps, PageContext>({
-      name: ACCORDION_BLOCK,
-      version: 1,
-      // What an author reads, in the Add panel and the block card: one plain
-      // line. What the block does, for whoever maintains it: A group of
-      // disclosure sections. Restricts its slot to core/accordion-item so a stray
-      // block cannot render outside every section and stay permanently visible.
-      description: "Questions or topics that open and close.",
-      // Palette metadata. The category is imported rather than spelled here so
-      // nineteen blocks cannot drift into nineteen headings; keywords are what
-      // let a search for a word the description never uses still find this.
-      editor: {
-        label: "Accordion",
-        icon: "accordion",
-        category: INTERACTIVE,
-        keywords: ["disclosure", "faq", "collapse", "toggle"],
-      },
-      props: {
-        as: htmlTagProp(["div", "section", "article"]),
-        contained: { label: "Constrain content width", type: "checkbox" },
-        // What the titles ARE, for screen readers and search engines: their
-        // place in the page's outline. How they look is the Style tab's.
-        titlesAs: {
-          label: "Titles as",
-          type: "select",
-          options: [...ACCORDION_TITLE_LEVELS],
-          optionLabels: {
-            text: "Text",
-            h2: "Heading 2",
-            h3: "Heading 3",
-            h4: "Heading 4",
-            h5: "Heading 5",
-            h6: "Heading 6",
-          },
+  defineBlock<AccordionProps, PageContext>({
+    name: ACCORDION_BLOCK,
+    version: 1,
+    // What an author reads, in the Add panel and the block card: one plain
+    // line. What the block does, for whoever maintains it: A group of
+    // disclosure sections. Restricts its slot to core/accordion-item so a stray
+    // block cannot render outside every section and stay permanently visible.
+    description: "Questions or topics that open and close.",
+    // Palette metadata. The category is imported rather than spelled here so
+    // nineteen blocks cannot drift into nineteen headings; keywords are what
+    // let a search for a word the description never uses still find this.
+    editor: {
+      label: "Accordion",
+      icon: "accordion",
+      category: INTERACTIVE,
+      keywords: ["disclosure", "faq", "collapse", "toggle"],
+    },
+    props: {
+      as: htmlTagProp(["div", "section", "article"]),
+      contained: { label: "Constrain content width", type: "checkbox" },
+      // What the titles ARE, for screen readers and search engines: their
+      // place in the page's outline. How they look is the Style tab's.
+      titlesAs: {
+        label: "Titles as",
+        type: "select",
+        options: [...ACCORDION_TITLE_LEVELS],
+        optionLabels: {
+          text: "Text",
+          h2: "Heading 2",
+          h3: "Heading 3",
+          h4: "Heading 4",
+          h5: "Heading 5",
+          h6: "Heading 6",
         },
       },
-      defaultProps: { as: "div", contained: false, titlesAs: "text" },
-      example: { props: { as: "div" } },
-      // The parent half of the nesting rule. `block.ts` is explicit that a slot
-      // naming a type does NOT confine that type to this slot; the item states its
-      // own side in `accordion-item.tsx`.
-      slots: {
-        children: {
-          allow: [ACCORDION_ITEM_BLOCK],
-          // One section to start, because an empty accordion is unusable in the
-          // precise sense a row is: this slot admits only `core/accordion-item`,
-          // and that block names this one as its only parent, so the single block
-          // that may go here can be placed nowhere else on the page.
-          //
-          // ONE rather than the row's two, and the difference is the same rule read
-          // the other way. A row of one is a box, and `core/box` already exists, so
-          // one column is a degenerate spelling of a block the author could have
-          // reached for instead. An accordion of one is not a spelling of anything:
-          // a lone `core/accordion-item` cannot stand on a page at all, so a single
-          // disclosure REQUIRES this wrapper and is a finished document.
-          defaultBlock: [{ type: ACCORDION_ITEM_BLOCK }],
-        },
+    },
+    defaultProps: { as: "div", contained: false, titlesAs: "text" },
+    example: { props: { as: "div" } },
+    // The parent half of the nesting rule. `block.ts` is explicit that a slot
+    // naming a type does NOT confine that type to this slot; the item states its
+    // own side in `accordion-item.tsx`.
+    slots: {
+      children: {
+        allow: [ACCORDION_ITEM_BLOCK],
+        // One section to start, because an empty accordion is unusable in the
+        // precise sense a row is: this slot admits only `core/accordion-item`,
+        // and that block names this one as its only parent, so the single block
+        // that may go here can be placed nowhere else on the page.
+        //
+        // ONE rather than the row's two, and the difference is the same rule read
+        // the other way. A row of one is a box, and `core/box` already exists, so
+        // one column is a degenerate spelling of a block the author could have
+        // reached for instead. An accordion of one is not a spelling of anything:
+        // a lone `core/accordion-item` cannot stand on a page at all, so a single
+        // disclosure REQUIRES this wrapper and is a finished document.
+        defaultBlock: [{ type: ACCORDION_ITEM_BLOCK }],
       },
-      baseStyles: ACCORDION_BASE_STYLES,
-      // A container's supports, and the icon its sections draw.
-      supports: { ...CONTAINER_SUPPORTS, disclosure: true },
-      // What it is as HTML follows the tag it renders.
-      contentModel: containerContentModel,
-      render: renderAccordion,
-    })
-  );
+    },
+    baseStyles: ACCORDION_BASE_STYLES,
+    // A container's supports, and the icon its sections draw.
+    supports: { ...CONTAINER_SUPPORTS, disclosure: true },
+    // What it is as HTML follows the tag it renders.
+    contentModel: containerContentModel,
+    render: renderAccordion,
+  });

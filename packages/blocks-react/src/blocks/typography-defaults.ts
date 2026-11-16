@@ -56,8 +56,6 @@
  */
 import type { NodeStyles, StyleCompileContext } from "@nextlyhq/blocks-engine";
 
-import { CLASSIC_ELEMENT_BASES } from "./classic-spacing";
-
 /**
  * No outer margin on the block axis: what every element here carries, and
  * all that a paragraph, a list, a figure, a quotation and a rule carry.
@@ -174,13 +172,6 @@ export function withTypographyDefaults(
   context: StyleCompileContext
 ): StyleCompileContext {
   if (context.elementBases !== undefined) return context;
-  // The baseline of the context's spacing model: a classic site keeps the
-  // element margins it was built with.
-  return {
-    ...context,
-    elementBases:
-      context.spacingMode === "classic"
-        ? CLASSIC_ELEMENT_BASES
-        : TYPOGRAPHY_DEFAULTS,
-  };
+  // One baseline for every site: no element carries an outer margin.
+  return { ...context, elementBases: TYPOGRAPHY_DEFAULTS };
 }
