@@ -281,18 +281,32 @@ function siteStylesKey(
 function cachedImageCopies(
   config: BlocksPageConfig,
   isPublic: boolean,
-  window: number | false | undefined
+  window: number | false | undefined,
+  budget: QueryBudget
 ): ImageCopies | undefined {
   const copies = config.imageCopies;
-  if (copies === undefined || !isPublic) return copies;
+  if (copies === undefined) return undefined;
+  // The page's own allowance, claimed by the lookups a kept answer does not
+  // cover: every one on a preview, and a public page's on a miss.
+  if (!isPublic) return async (source, upTo) => copies(source, upTo, budget);
   const media = config.mediaCollection ?? MEDIA_TAG_COLLECTION;
   return async (source, upTo) => {
     const named = "id" in source ? `id:${source.id}` : `url:${source.url}`;
-    return await cachedFind(async () => [...(await copies(source, upTo))], {
-      tags: "id" in source ? nextlyTags(media, source.id) : nextlyTags(media),
-      keyParts: ["page-builder-image-copies", named, String(upTo)],
-      revalidate: await releaseBoundedRevalidate(window),
-    });
+    return await cachedFind(
+      async () => [...(await copies(source, upTo, budget))],
+      {
+        tags: "id" in source ? nextlyTags(media, source.id) : nextlyTags(media),
+        // Under the route's cache scope, as its other kept reads are: two sites
+        // served from one process keep their own answers for the same id.
+        keyParts: [
+          "page-builder-image-copies",
+          config.cacheScope ?? "",
+          named,
+          String(upTo),
+        ],
+        revalidate: await releaseBoundedRevalidate(window),
+      }
+    );
   };
 }
 
@@ -741,7 +755,7 @@ export function blocksRouteConfig(
           // write expires them, the slot each device draws at the top of the
           // page, and the first top-level block, whose images load first.
           ...imageSizingFor(
-            cachedImageCopies(config, isPublic, listWindow),
+            cachedImageCopies(config, isPublic, listWindow, budget),
             siteBreakpoints,
             document.nodes
           ),

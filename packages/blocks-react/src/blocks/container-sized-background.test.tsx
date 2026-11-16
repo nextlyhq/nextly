@@ -70,9 +70,11 @@ async function render(
         ? undefined
         : async (source, upTo): Promise<readonly ImageCopy[]> => {
             asked.push(source);
-            if (!("url" in source) || source.url !== PHOTO) return [];
+            if (!("url" in source) || !source.url.startsWith("/media/hero")) {
+              return [];
+            }
             return KEPT.filter(width => width <= upTo).map(width => ({
-              url: `/media/hero-${width}.webp`,
+              url: `${source.url.replace(/\.jpg$/, "")}-${width}.webp`,
               width,
             }));
           },
@@ -212,12 +214,46 @@ describe("the first section's background", () => {
       ],
       // Beside custom CSS.
       [section("hero", withBackground(), { customCss: "color: red;" })],
+      // Drawn at the image's own size, which a narrower copy would shrink.
+      [section("hero", { base: { base: { background: { url: PHOTO } } } })],
+      [
+        section("hero", {
+          base: { base: { background: { url: PHOTO, size: "auto" } } },
+        }),
+      ],
+      [
+        section("hero", {
+          base: { base: { background: { url: PHOTO, size: "auto auto" } } },
+        }),
+      ],
     ];
     for (const nodes of cases) {
       const { head } = await render(nodes);
       expect(preloadsOf(head)).toEqual([]);
       expect(head).not.toContain("background-image");
     }
+  });
+
+  it("is sized wherever the box sets the image's size", async () => {
+    for (const size of ["contain", "100% auto", "auto 480px", "50%"]) {
+      const { head } = await render([
+        section("hero", {
+          base: { base: { background: { url: PHOTO, size } } },
+        }),
+      ]);
+      expect(preloadsOf(head), size).toHaveLength(2);
+    }
+  });
+
+  it("names its rules by what they say, so changed rules replace the old", async () => {
+    const hrefOf = async (url: string): Promise<string> => {
+      const { head } = await render([section("hero", withBackground(url))]);
+      return /<style[^>]*data-href="([^"]+)"/.exec(head)?.[1] ?? "";
+    };
+    const first = await hrefOf(PHOTO);
+    expect(first).toMatch(/^nx-pb-sized-background-/);
+    expect(await hrefOf(PHOTO)).toBe(first);
+    expect(await hrefOf("/media/hero-other.jpg")).not.toBe(first);
   });
 
   it("is drawn as it is where no copy can be had", async () => {

@@ -37,6 +37,10 @@ export interface ImageCopySite {
   };
 }
 
+/** Why copies were not looked up: the page has no reads left to spend. */
+const READS_SPENT =
+  "The page has spent its reads, so its images are drawn as they are.";
+
 /**
  * The route option that sizes a page's images: `imageCopies` on a
  * `createBlocksPage` config, answered by the site the reader reads.
@@ -45,15 +49,22 @@ export interface ImageCopySite {
  * narrowest first, and the first width no copy can be had at ends the list,
  * since a wider one cannot be had either: past the original's own width, an
  * address on another host, or a storage that cannot make copies. A failure is
- * no copies, so the page draws the original.
+ * no copies, so the page draws the original. Each width asked claims one of
+ * the page's reads, where the route hands them over.
  *
  * @experimental
  */
 export function pageBuilderImageCopies(site: ImageCopySite): ImageCopies {
-  return async (source, upTo) => {
+  return async (source, upTo, reads) => {
     const copies: ImageCopy[] = [];
     for (const width of MEDIA_COPY_WIDTHS) {
       if (width > upTo) break;
+      // Each width is one read of the site's media. Refused, not cut short,
+      // where the page has spent its reads: a route keeps an answer, and a
+      // shorter list kept would send softer images until the image changed.
+      if (reads?.take({ kind: "image" }) === false) {
+        throw new Error(READS_SPENT);
+      }
       const asked: ImageCopyRequest =
         "id" in source ? { id: source.id, width } : { url: source.url, width };
       const copy = await site.media.copyOf(asked).catch(() => null);

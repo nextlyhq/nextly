@@ -270,7 +270,8 @@ pixels wide and never wider than the upload. With the option set:
   once and with high priority. Every other image keeps its lazy loading.
 - **The first section's background image is sized and found early.** Where the first
   top-level block sets a background image once, for every device and in its resting
-  state, each device draws a copy about twice its width. The page's `<head>` preloads
+  state, at a size the box sets (`cover`, `contain` or a length), each device draws a
+  copy about twice its width. The page's `<head>` preloads
   each copy for the viewports it is drawn at, so the browser starts on it before the
   stylesheet arrives.
 - **Each image's copies are looked up once,** then kept until the image or its copies
@@ -282,8 +283,9 @@ The original is drawn as it always was when:
 - the image is an address on another site, or your storage keeps no resized copies;
 - the upload is narrower than the smallest copy, or the lookup fails;
 - for the background, its address is not the media route's (`/api/media/<id>/raw`), so
-  no media item is named by it; or it changes by device or on hover, it is layered with
-  a gradient, or the block has custom CSS.
+  no media item is named by it; it is drawn at the image's own size (no size, or
+  `auto`), which a narrower copy would shrink; or it changes by device or on hover, it
+  is layered with a gradient, or the block has custom CSS.
 
 ### One process, several sites
 

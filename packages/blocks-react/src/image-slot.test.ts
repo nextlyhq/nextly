@@ -36,7 +36,10 @@ describe("an image's slot", () => {
   it("divides a row of columns by how many sit side by side on each device", () => {
     // Columns wrap at 240px each, so a phone fits fewer than a desktop.
     const slot = narrowForColumns(rootImageSlot(BREAKPOINTS), 4);
-    expect(slot.devices.map(device => device.width)).toEqual([480, 256, 320]);
+    // A device's slot covers every viewport up to its widest: a tablet's row
+    // of four wraps to two, and a phone's to one, on its way down, and a
+    // column just before a row of two wraps is 480px wide.
+    expect(slot.devices.map(device => device.width)).toEqual([480, 480, 480]);
     // One column is the whole width, and no column count changes nothing.
     expect(
       narrowForColumns(rootImageSlot(BREAKPOINTS), 1).devices[0]?.width
@@ -63,7 +66,7 @@ describe("an image's slot", () => {
   it("writes sizes from the narrowest device up", () => {
     const slot = narrowForColumns(rootImageSlot(BREAKPOINTS), 2);
     expect(sizesFor(slot)).toBe(
-      "(max-width: 640px) 320px, (max-width: 1024px) 512px, 960px"
+      "(max-width: 640px) 480px, (max-width: 1024px) 512px, 960px"
     );
   });
 
@@ -84,10 +87,30 @@ describe("a container's children", () => {
       type: "core/columns",
       slots: { children: [{}, {}] },
     });
-    expect(row?.imageSlot?.devices.map(d => d.width)).toEqual([960, 512, 320]);
+    expect(row?.imageSlot?.devices.map(d => d.width)).toEqual([960, 512, 480]);
     expect(row?.imageSlot?.eager).toBe(true);
     const later = childImageContext(ctx, { id: "later", type: "core/box" });
     expect(later?.imageSlot?.eager).toBeUndefined();
+  });
+
+  it("are not divided by a row whose layout the author changed", () => {
+    // A grid the author set, a direction, or a named class may draw the
+    // columns at any width, so the row's own width is the bound.
+    for (const changed of [
+      { styles: { base: { base: { gridTemplateColumns: "1fr 3fr" } } } },
+      { styles: { hover: { mobile: { display: "flex" } } } },
+      { classes: ["wide-row"] },
+    ]) {
+      const row = childImageContext(ctx, {
+        id: "row",
+        type: "core/columns",
+        slots: { children: [{}, {}] },
+        ...changed,
+      });
+      expect(row?.imageSlot?.devices.map(d => d.width)).toEqual([
+        1920, 1024, 640,
+      ]);
+    }
   });
 
   it("are handed nothing where the page sizes no images", () => {

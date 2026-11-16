@@ -199,6 +199,19 @@ export function linkableContentModel(props: ContainerProps): ContentModel {
 export const LINKABLE_BASE_STYLE = { display: "block" } as const;
 
 /**
+ * A short key for a stylesheet's text. React keeps a hoisted stylesheet by its
+ * `href` and never replaces its contents, so the key changes whenever the
+ * rules do: a page drawn again with another background gets its new rules.
+ */
+function contentKey(css: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < css.length; index += 1) {
+    hash = Math.imul(hash ^ css.charCodeAt(index), 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+/**
  * The first section's background as copies sized to each device, where the
  * page sizes it (`image-sources`): one rule per device and one preload per
  * copy, both hoisted by React into the page's head, so nothing is added among
@@ -231,7 +244,7 @@ async function SizedFirstBackground({
         />
       ))}
       <style
-        href={`nx-pb-sized-background-${node.id ?? className}`}
+        href={`nx-pb-sized-background-${contentKey(sized.css)}`}
         precedence="default"
       >
         {sized.css}

@@ -1076,6 +1076,61 @@ describe("a routed page's bindings", () => {
     expect(other.tags).toEqual(nextlySingleTags("campaign-style"));
   });
 
+  it("keeps a public route's image copies under its cache scope, charged to the page's reads", async () => {
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "pic",
+          type: "core/image",
+          version: 1,
+          props: { src: "/media/a.jpg", alt: "A view" },
+        },
+      ],
+    };
+    const asked: { upTo: number; reads: unknown }[] = [];
+    const imageCopies = vi.fn(
+      async (_source: unknown, upTo: number, reads?: unknown) => {
+        asked.push({ upTo, reads });
+        return [];
+      }
+    );
+    const keyOf = async (cacheScope: string) => {
+      runtime.reads = [];
+      await renderedPage(
+        createPublicBlocksPage,
+        {
+          collections: ["pages"],
+          field: "content",
+          blocks,
+          cacheScope,
+          imageCopies,
+        },
+        instance(page)
+      );
+      const read = runtime.reads.find(
+        entry => entry.keyParts[0] === "page-builder-image-copies"
+      );
+      if (read === undefined) throw new Error("no cached image-copy read");
+      return read.keyParts;
+    };
+    const first = await keyOf("site-a");
+    const again = await keyOf("site-a");
+    const other = await keyOf("site-b");
+    // The same route names one entry; another site's never shares it.
+    expect(again).toEqual(first);
+    expect(other).not.toEqual(first);
+    expect(first).toContain("site-a");
+    // Each lookup is handed the page's read allowance to claim from.
+    expect(asked.length).toBeGreaterThan(0);
+    for (const { reads } of asked) {
+      expect(typeof (reads as { take?: unknown } | undefined)?.take).toBe(
+        "function"
+      );
+    }
+  });
+
   it("prepares each document once per render, and the renderer reuses that preparation", async () => {
     const element = await throughBoundary<PageRendererProps>(
       createBlocksPage({

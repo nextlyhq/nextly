@@ -117,7 +117,8 @@ function imgOf(html: string): Record<string, string> {
 
 describe("an Image block's sources", () => {
   it("offer copies sized to the slot on every device, never wider than twice it", async () => {
-    // Half of a two-column row: 960px on a desktop, 512 on a tablet, 320 on a phone.
+    // Half of a two-column row: 960px on a desktop and 512 on a tablet; on a
+    // phone the row wraps to one column below 480px, so 480 bounds it there.
     const { html, asked } = await render([
       box("intro", []),
       box(
@@ -131,7 +132,7 @@ describe("an Image block's sources", () => {
     ]);
     const img = imgOf(html);
     expect(img.sizes).toBe(
-      "(max-width: 640px) 320px, (max-width: 1024px) 512px, 960px"
+      "(max-width: 640px) 480px, (max-width: 1024px) 512px, 960px"
     );
     expect(asked).toEqual([{ source: { id: "photo" }, upTo: 1920 }]);
     const widths = (img.srcset ?? "")

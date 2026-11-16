@@ -48,6 +48,17 @@ describe("a page builder's image copies", () => {
     expect(asked).toEqual([{ url: "https://x/y.jpg", width: 96 }]);
   });
 
+  it("claims one of the page's reads per width, and refuses once none is left", async () => {
+    let left = 3;
+    const reads = { take: () => left-- > 0 };
+    const asked: ImageCopyRequest[] = [];
+    await expect(
+      pageBuilderImageCopies(site(asked))({ id: "p" }, 1000, reads)
+    ).rejects.toThrow("spent its reads");
+    // Three widths were read before the allowance ran out; none after it.
+    expect(asked.map(args => args.width)).toEqual([96, 160, 240]);
+  });
+
   it("offers none when the site's media fails", async () => {
     const failing = {
       media: {

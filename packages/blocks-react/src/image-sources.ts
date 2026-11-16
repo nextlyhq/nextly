@@ -4,8 +4,9 @@
  * browser starts on it from the HTML rather than once the stylesheet arrives.
  *
  * Only a background the page states once is sized: set on the first top-level
- * block, at the base breakpoint, in its resting state, with no gradient and no
- * custom CSS beside it. Anything else (a background that changes by device or
+ * block, at the base breakpoint, in its resting state, drawn at a size of its
+ * own (`cover`, `contain` or a length, not the image's own size), with no
+ * gradient and no custom CSS beside it. Anything else (a background that changes by device or
  * on hover, a gradient layered with it) is left exactly as the page's own
  * stylesheet draws it, since a copy chosen for one of those cases would be
  * wrong in another.
@@ -88,10 +89,32 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+/**
+ * Whether a `background-size` draws the image at a size of its own rather
+ * than at the image's: `cover`, `contain`, or one or two lengths of which at
+ * least one is not `auto`. An image drawn at its intrinsic size (no size, or
+ * `auto`) would be drawn smaller from a narrower copy, so it is left as it is.
+ */
+function sizedByBox(size: unknown): boolean {
+  if (typeof size !== "string") return false;
+  const parts = size.trim().toLowerCase().split(/\s+/);
+  if (parts.length === 1 && (parts[0] === "cover" || parts[0] === "contain")) {
+    return true;
+  }
+  return (
+    parts.length <= 2 &&
+    parts.some(part => part !== "auto" && part !== "") &&
+    !parts.includes("cover") &&
+    !parts.includes("contain")
+  );
+}
+
 /** The image address one breakpoint's values set, or `undefined` if none. */
 function layerUrl(values: Record<string, unknown>): string | undefined {
   if (values.backgroundGradient !== undefined) return undefined;
-  const url = recordOf(values.background)?.url;
+  const background = recordOf(values.background);
+  if (!sizedByBox(background?.size)) return undefined;
+  const url = background?.url;
   return typeof url === "string" && url !== "none" ? url : undefined;
 }
 

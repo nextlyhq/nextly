@@ -34,11 +34,16 @@ export interface ImageCopy {
  * image is to be used as it is (an address on another host, a storage that
  * cannot make copies, an original narrower than any copy).
  *
+ * `reads`, where given, is the page's read allowance: one read is claimed for
+ * each lookup the answer needs, and an answer that cannot claim one is refused
+ * rather than cut short, so a page never keeps a partial list.
+ *
  * @experimental
  */
 export type ImageCopies = (
   source: { readonly id: string } | { readonly url: string },
-  upTo: number
+  upTo: number,
+  reads?: { take(claim?: { readonly kind?: "image" }): boolean }
 ) => Promise<readonly ImageCopy[]>;
 
 /** How wide an image may be drawn on one device. */
@@ -85,14 +90,54 @@ export function narrowForColumns(slot: ImageSlot, count: number): ImageSlot {
   if (!Number.isInteger(count) || count <= 1) return slot;
   return {
     ...slot,
-    devices: slot.devices.map(device => {
-      const perRow = Math.max(
-        1,
-        Math.min(count, Math.floor(device.width / COLUMN_MIN_WIDTH))
-      );
-      return { ...device, width: Math.ceil(device.width / perRow) };
-    }),
+    devices: slot.devices.map(device => ({
+      ...device,
+      width: widestColumn(device.width, count),
+    })),
   };
+}
+
+/**
+ * The widest one of `count` columns is drawn anywhere up to a row `width`
+ * wide. Below that width the row wraps, one column fewer each time a column
+ * would fall under its minimum, so a column is widest either at the full
+ * width or just before a row of two wraps to one: twice the minimum. A
+ * device's slot covers every viewport up to its maximum, so both count.
+ */
+function widestColumn(width: number, count: number): number {
+  const perRow = Math.max(
+    1,
+    Math.min(count, Math.floor(width / COLUMN_MIN_WIDTH))
+  );
+  const atFullWidth = Math.ceil(width / perRow);
+  if (perRow === 1) return width;
+  return Math.max(atFullWidth, Math.min(width, COLUMN_MIN_WIDTH * 2));
+}
+
+/** The style properties an author can redraw a row of columns with. */
+const COLUMN_LAYOUT = [
+  "display",
+  "gridTemplateColumns",
+  "gridAutoFlow",
+  "flexDirection",
+] as const;
+
+/**
+ * Whether a row of columns is laid out as the block lays it out: no layout
+ * property set on it at any state or breakpoint, and no named class, which
+ * could set one. Only then can its columns' width be judged.
+ */
+function columnsLaidOutByDefault(node: SizedNode): boolean {
+  if (Array.isArray(node.classes) && node.classes.length > 0) return false;
+  for (const byPoint of Object.values(recordOf(node.styles) ?? {})) {
+    for (const values of Object.values(recordOf(byPoint) ?? {})) {
+      const set = recordOf(values) ?? {};
+      if (COLUMN_LAYOUT.some(property => set[property] !== undefined)) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 /** One length this can read: a number and its unit. */
@@ -213,6 +258,7 @@ interface SizedNode {
   readonly type: string;
   readonly styles?: unknown;
   readonly slots?: unknown;
+  readonly classes?: unknown;
 }
 
 /**
@@ -229,7 +275,7 @@ export function childImageContext<
     return undefined;
   }
   let next = narrowForOwnSize(slot, node.styles);
-  if (node.type === COLUMNS_TYPE) {
+  if (node.type === COLUMNS_TYPE && columnsLaidOutByDefault(node)) {
     const children = recordOf(node.slots)?.children;
     next = narrowForColumns(
       next,
