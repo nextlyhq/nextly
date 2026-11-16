@@ -27,6 +27,8 @@ import type { DocumentViewMount } from "@admin/components/features/entries/Entry
 import { documentViewMount } from "@admin/components/features/entries/EntryForm/document-view-mount";
 import { DOCUMENT_COLUMN_INSET } from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
 import { DocumentViewGate } from "@admin/components/features/entries/EntryForm/DocumentViewGate";
+import { usePublishPartsAction } from "@admin/components/features/entries/publish-parts/usePublishPartsAction";
+import { languageLabelOf } from "@admin/components/features/entries/publishAllOutcomes";
 import {
   isRemovedFromCode,
   removedEntityHasNoTable,
@@ -221,6 +223,24 @@ export default function SingleEditPage({
         : undefined,
   });
 
+  // "Choose what to publish…", on the Publish split: each language of a translated Single, and
+  // separately its shared fields; a Single that is not translated offers its shared fields, which
+  // are the whole document.
+  const publishParts = usePublishPartsAction({
+    target: slug && document ? { kind: "single", slug } : undefined,
+    lifecycleEnabled: schema?.status,
+    languages:
+      localizationEnabled && schema?.localized === true
+        ? locales.map(each => each.code)
+        : [],
+    labelOf: languageLabelOf(locales),
+    currentLocale: locale,
+    defaultLocale,
+    sharedPending:
+      (document as { _sharedChangesPending?: unknown } | undefined)
+        ?._sharedChangesPending === true,
+  });
+
   // Update mutation — routes the save to the active language's companion row.
   const { mutateAsync: updateDocument, isPending: isUpdating } =
     useUpdateSingleDocument(slug || "", locale);
@@ -392,6 +412,7 @@ export default function SingleEditPage({
           measure while the entry editor beside it took the whole panel. */}
         <MeasuredPageFrame contentCarriesMeasure>
           {schedule.dialog}
+          {publishParts.dialog}
           <SingleForm
             revealOutline={<SingleEditPageSkeleton />}
             revealWaiting={partsStartup.pending}
@@ -436,6 +457,9 @@ export default function SingleEditPage({
               removedFromCode
                 ? []
                 : [
+                    ...(publishParts.contributed === null
+                      ? []
+                      : [publishParts.contributed]),
                     ...(schedule.contributed === null
                       ? []
                       : [schedule.contributed]),
