@@ -643,7 +643,8 @@ function isEmpty(value: unknown): boolean {
   );
 }
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// The email field's rule, which a type change into an email field asks of each value too.
+export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * Extract select/radio option values, tolerating both stored shapes:
@@ -651,7 +652,8 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * `options` storage-object (whose choices, when present, ride the same
  * key as an array).
  */
-function selectOptionValues(field: ValidatableField): string[] {
+// The option values a value must be one of, which a type change into a choice asks too.
+export function selectOptionValues(field: ValidatableField): string[] {
   const raw = field.options;
   if (!Array.isArray(raw)) return [];
   return raw
