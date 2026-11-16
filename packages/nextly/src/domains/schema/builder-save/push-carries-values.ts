@@ -11,6 +11,7 @@ import { fieldsJoiningTranslation } from "../../i18n/migration/field-joins-trans
 import type { FieldRename } from "../../i18n/migration/reconcile-companion";
 import type { TableSpec } from "../pipeline/diff/types";
 import { reachesRelationStorage } from "../pipeline/recorded-shapes";
+import { toSnakeCase } from "../services/field-column-descriptor";
 
 /**
  * Whether the save carries values across its change, which the dialog's push does and the file,
@@ -19,7 +20,8 @@ import { reachesRelationStorage } from "../pipeline/recorded-shapes";
  * columns from the ones they replace; a field joining translation or leaving it, its values moved
  * between the main table and the companion (judged under `renamed`, the companion rename the save
  * makes, as the preflights judge it); a translated field renamed or removed, its companion column
- * judged against the companion as it stands; and a change reaching a relation's storage
+ * judged against the companion as it stands; a field new to a Single's table that its row is
+ * filled in; and a change reaching a relation's storage
  * (`reachesRelationStorage`), which the push plans from the live table.
  *
  * Any other save moves no value, and its file applies it, in tries over a busy table and on SQLite
@@ -38,6 +40,18 @@ export async function pushCarriesValues(args: {
   renamed: FieldRename | null | undefined;
   /** The entity's main table as the database holds it. */
   liveTable: () => Promise<TableSpec | undefined>;
+  /**
+   * A Single's one row, which a field new to its table is filled in where the field is required
+   * or states a default the row takes (`singleRowFillValue`). A field group has none.
+   */
+  singleRow?: {
+    /** The columns the save renames onto, which keep their values rather than being filled. */
+    renamedTo: readonly string[];
+    /** Whether the row is filled in for `field`, new to the table. */
+    fills: (field: FieldDefinition) => boolean;
+    /** Whether the table holds its row. */
+    holdsRow: () => Promise<boolean>;
+  };
 }): Promise<boolean> {
   if (args.wasStored !== args.isStored) return true;
   if (args.isStored && args.wasStatus !== args.status) return true;
@@ -58,11 +72,37 @@ export async function pushCarriesValues(args: {
   // the push against the companion as it stands, so a save made again after one that stopped part
   // way finishes it. The file, planned from the companion's history, would rename or drop it again.
   if (args.wasStored && translatedFieldRenamedOrRemoved(args)) return true;
+  // A Single's row filled in for a field new to its table: the push writes the value with the
+  // column, where the file adds the column alone, refused when required and empty otherwise.
+  if (
+    args.singleRow !== undefined &&
+    (await fillsSingleRow(args, args.singleRow))
+  ) {
+    return true;
+  }
   return reachesRelationStorage({
     before: args.oldFields,
     after: args.newFields,
     liveTable: args.liveTable,
   });
+}
+
+/** Whether a field new to a Single's table is filled in its row, which the table holds. */
+async function fillsSingleRow(
+  args: {
+    oldFields: readonly FieldDefinition[];
+    newFields: readonly FieldDefinition[];
+  },
+  row: NonNullable<Parameters<typeof pushCarriesValues>[0]["singleRow"]>
+): Promise<boolean> {
+  const kept = new Set([
+    ...args.oldFields.map(field => toSnakeCase(field.name)),
+    ...row.renamedTo,
+  ]);
+  const filled = args.newFields.some(
+    field => !kept.has(toSnakeCase(field.name)) && row.fills(field)
+  );
+  return filled && (await row.holdsRow());
 }
 
 /** Whether a field translated before the save is renamed, or is gone from the fields after it. */
