@@ -663,11 +663,9 @@ function useLockQuestions(
   // surface asking once per store asks again.
   const definitions = locks?.definitions;
   const nesting = locks?.nesting;
-  // Kept per document version and edit, and dropped with the inputs above.
-  const kept = useMemo(
-    () => keptLockAnswers(),
-    [limits, baseline, definitions, nesting]
-  );
+  // Kept per document version and edit, and dropped when anything else the
+  // answer reads changes (the scope below).
+  const [kept] = useState(keptLockAnswers);
   const lockRefusalFor = useCallback(
     (ops: readonly BuilderOp[]): LockRefusalFacts | undefined => {
       // Read at the question, as the apply reads it. The component names
@@ -675,7 +673,8 @@ function useLockQuestions(
       // may hand a new function on every render.
       const { componentName, definitions: components } = composition.current;
       const document = latestDocument.current;
-      return kept.answer(document, ops, [components], () =>
+      const scope = [components, baseline, definitions, nesting, limits];
+      return kept.answer(document, ops, scope, () =>
         lockAnswerFor(document, ops, baseline, {
           locks: hostLocksOf(definitions, nesting),
           limits,

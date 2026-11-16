@@ -164,8 +164,9 @@ const NO_VERBS: readonly ToolbarAction[] = [];
  * Read when the menu opens, and read again once the page has settled: a menu
  * opened on a block that was not selected selects it as it opens, and the
  * provider takes in the new selection after this menu has first drawn, so
- * the first reading can be the previous block's. Each offer answers with the
- * same list each time, so a reading that has not changed draws nothing more.
+ * the first reading can be the previous block's. Read again too whenever the
+ * provider shares its verbs anew. Each offer answers with the same list each
+ * time, so a reading that has not changed draws nothing more.
  */
 export function useAskedSharedVerbs(
   withLocks: (() => readonly ToolbarAction[]) | undefined
@@ -174,6 +175,6 @@ export function useAskedSharedVerbs(
   React.useEffect(() => {
     const now = withLocks?.() ?? NO_VERBS;
     if (now !== asked) setAsked(now);
-  });
+  }, [withLocks, asked]);
   return asked;
 }
