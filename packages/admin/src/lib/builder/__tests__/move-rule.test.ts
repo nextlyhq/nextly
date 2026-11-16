@@ -14,11 +14,20 @@ import { convertToBuilderField } from "../field-transformers";
 import {
   judgeMove,
   moveDestinations,
+  savedContainerIdsFrom,
+  savedFieldsOffTheirLevel,
   type MoveContext,
   type MoveVerdict,
 } from "../move-rule";
 
-const ctx: MoveContext = { entityReadOnly: false, topLevelReservesNames: true };
+// The rule's whole answer, every change of container included: what it says
+// once a save keeps values across containers. The refusal it gives until then
+// is tested on its own, below.
+const ctx: MoveContext = {
+  entityReadOnly: false,
+  topLevelReservesNames: true,
+  containerChanges: true,
+};
 
 /** A plain field, as the Builder holds one. */
 function plain(
@@ -531,6 +540,84 @@ describe("Move to…'s places", () => {
   });
 });
 
+describe("while a save cannot keep values across containers", () => {
+  // What the Builder asks today: the switch as it ships.
+  const today: MoveContext = {
+    entityReadOnly: false,
+    topLevelReservesNames: true,
+  };
+  const NOT_YET =
+    "Moving a field into or out of a group or repeating rows is not available yet.";
+
+  it.each([
+    ["into a group", "f-summary-a", { parentFieldId: "f-meta" }],
+    ["out of a group", "f-meta-title", {}],
+    ["into repeating rows", "f-summary-a", { parentFieldId: "f-sections" }],
+    [
+      "into a group inside repeating rows",
+      "f-sections-heading",
+      { parentFieldId: "f-items-cta" },
+    ],
+  ])("refuses a move %s, saying so", (_, id, target) => {
+    expect(
+      refusal(judgeMove(nestedFixtureFields(), id, target, today))
+    ).toEqual({ reason: "not-available-yet", message: NOT_YET });
+  });
+
+  it("still reorders within the top level and within a nested group", () => {
+    const top = moved(
+      judgeMove(
+        nestedFixtureFields(),
+        "f-summary-b",
+        { beforeFieldId: "f-summary-a" },
+        today
+      )
+    );
+    expect(namesIn(top).slice(0, 3)).toEqual([
+      "title",
+      "summary_b",
+      "summary_a",
+    ]);
+    const inGroup = moved(
+      judgeMove(
+        nestedFixtureFields(),
+        "f-cta-kind",
+        { parentFieldId: "f-items-cta", beforeFieldId: "f-cta-label" },
+        today
+      )
+    );
+    expect(namesIn(inGroup, "f-items-cta")).toEqual(["kind", "label"]);
+  });
+
+  it("keeps the lasting refusals ahead of it, which say more", () => {
+    const answer = (target: { parentFieldId?: string }) =>
+      refusal(judgeMove(nestedFixtureFields(), "f-summary-a", target, today))
+        .reason;
+    expect(answer({ parentFieldId: "f-body" })).toBe("into-blocks");
+    expect(answer({ parentFieldId: "f-seo" })).toBe("into-field-group");
+    expect(
+      refusal(judgeMove(nestedFixtureFields(), "f-cta-label", {}, today)).reason
+    ).toBe("out-of-repeating-rows");
+  });
+
+  it("offers only the field's own container in Move to…", () => {
+    const answers = moveDestinations(
+      nestedFixtureFields(),
+      "f-summary-a",
+      today
+    ).map(place => [
+      place.parentFieldId ?? "top",
+      place.verdict.allowed ? "ok" : place.verdict.reason,
+    ]);
+    expect(Object.fromEntries(answers)).toMatchObject({
+      top: "ok",
+      "f-meta": "not-available-yet",
+      "f-sections": "not-available-yet",
+      "f-items-cta": "not-available-yet",
+    });
+  });
+});
+
 describe("what a move takes with it, and where it arrives", () => {
   it("reorders among siblings whose names already clash in the saved definition", () => {
     // A clash the server already holds is kept allowed on save, and a reorder
@@ -717,5 +804,165 @@ describe("leaving repeating rows before the save", () => {
         judgeMove(wrapped, "f-wrap", {}, savedIn({ "f-kept": ["f-rows"] }))
       ).reason
     ).toBe("out-of-repeating-rows");
+  });
+});
+
+describe("which moves wait for a save that keeps values", () => {
+  // As the Builder asks today: container changes not yet allowed, with the
+  // saved placements the editor knows.
+  const NOT_YET =
+    "Moving a field into or out of a group or repeating rows is not available yet.";
+  const fields = () => [
+    plain("f-top", "top"),
+    plain("f-layout", "", {
+      type: "group",
+      fields: [plain("f-inside", "inside")],
+    }),
+    plain("f-rows", "rows", {
+      type: "repeater",
+      fields: [plain("f-kept", "kept"), plain("f-new", "fresh")],
+    }),
+  ];
+  const today = (saved: Record<string, string[]>): MoveContext => ({
+    entityReadOnly: false,
+    topLevelReservesNames: true,
+    savedContainerIdsOf: id => saved[id] ?? null,
+  });
+  const saved = {
+    "f-top": [],
+    "f-layout": [],
+    "f-inside": ["f-layout"],
+    "f-rows": [],
+    "f-kept": ["f-rows"],
+  };
+
+  it("lets a field never saved move into and out of repeating rows", () => {
+    const out = moved(judgeMove(fields(), "f-new", {}, today(saved)));
+    expect(namesIn(out)).toContain("fresh");
+    const unsavedTop = [...fields(), plain("f-draft", "draft")];
+    const into = moved(
+      judgeMove(
+        unsavedTop,
+        "f-draft",
+        { parentFieldId: "f-rows" },
+        today(saved)
+      )
+    );
+    expect(namesIn(into, "f-rows")).toEqual(["kept", "fresh", "draft"]);
+  });
+
+  it("refuses a saved field's move to another level, saying it is not available yet", () => {
+    expect(
+      refusal(
+        judgeMove(fields(), "f-top", { parentFieldId: "f-rows" }, today(saved))
+      )
+    ).toEqual({ reason: "not-available-yet", message: NOT_YET });
+  });
+
+  it("refuses an unsaved layout group carrying a saved field to another level", () => {
+    // The group was added in this draft, but the field inside it is saved on
+    // the top level: moving the group into repeating rows takes that field's
+    // values along, which a save would not keep.
+    const carrying = [
+      plain("f-new-layout", "", {
+        type: "group",
+        fields: [plain("f-old", "old")],
+      }),
+      plain("f-rows", "rows", { type: "repeater", fields: [] }),
+    ];
+    expect(
+      refusal(
+        judgeMove(
+          carrying,
+          "f-new-layout",
+          { parentFieldId: "f-rows" },
+          today({ "f-old": [], "f-rows": [] })
+        )
+      )
+    ).toEqual({ reason: "not-available-yet", message: NOT_YET });
+  });
+
+  it("allows a saved field's move into and out of a layout group, which keeps its level", () => {
+    const into = moved(
+      judgeMove(fields(), "f-top", { parentFieldId: "f-layout" }, today(saved))
+    );
+    expect(namesIn(into, "f-layout")).toEqual(["inside", "top"]);
+    const out = moved(judgeMove(fields(), "f-inside", {}, today(saved)));
+    expect(namesIn(out)).toContain("inside");
+  });
+});
+
+describe("savedContainerIdsFrom", () => {
+  const saved = [
+    plain("f-top", "top"),
+    plain("f-g", "group", {
+      type: "group",
+      fields: [
+        plain("f-rows", "rows", {
+          type: "repeater",
+          fields: [plain("f-deep", "deep")],
+        }),
+      ],
+    }),
+  ];
+
+  it("answers each saved field's containers, outermost first", () => {
+    const of = savedContainerIdsFrom(saved);
+    expect(of("f-top")).toEqual([]);
+    expect(of("f-rows")).toEqual(["f-g"]);
+    expect(of("f-deep")).toEqual(["f-g", "f-rows"]);
+  });
+
+  it("answers null for a field the saved definition does not hold", () => {
+    expect(savedContainerIdsFrom(saved)("f-draft")).toBeNull();
+  });
+});
+
+describe("savedFieldsOffTheirLevel", () => {
+  const saved = [
+    plain("f-body", "body"),
+    plain("f-layout", "", { type: "group", fields: [] }),
+    plain("f-g", "group", { type: "group", fields: [plain("f-in", "inner")] }),
+  ];
+
+  it("finds a saved field a renamed layout group took to another level", () => {
+    const current = [
+      plain("f-layout", "box", {
+        type: "group",
+        fields: [plain("f-body", "body")],
+      }),
+      plain("f-g", "group", {
+        type: "group",
+        fields: [plain("f-in", "inner")],
+      }),
+    ];
+    expect(savedFieldsOffTheirLevel(saved, current).map(f => f.id)).toEqual([
+      "f-body",
+    ]);
+  });
+
+  it("finds the fields of a group whose name was taken away", () => {
+    const current = [
+      plain("f-body", "body"),
+      plain("f-layout", "", { type: "group", fields: [] }),
+      plain("f-g", "", { type: "group", fields: [plain("f-in", "inner")] }),
+    ];
+    expect(savedFieldsOffTheirLevel(saved, current).map(f => f.id)).toEqual([
+      "f-in",
+    ]);
+  });
+
+  it("finds nothing for a move within a level, or a field never saved", () => {
+    const current = [
+      plain("f-layout", "", {
+        type: "group",
+        fields: [plain("f-body", "body"), plain("f-new", "fresh")],
+      }),
+      plain("f-g", "group", {
+        type: "group",
+        fields: [plain("f-in", "inner"), plain("f-new2", "fresh2")],
+      }),
+    ];
+    expect(savedFieldsOffTheirLevel(saved, current)).toEqual([]);
   });
 });
