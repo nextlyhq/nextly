@@ -96,6 +96,12 @@ export interface ConditionSource {
   /** What to show in the dropdown. Falls back to `name` when absent. */
   label?: string;
   /**
+   * What tells this field apart from another of the same label, shown after
+   * the label: two sources may share a label and a type, and the dropdown
+   * would otherwise list them as the same choice.
+   */
+  description?: string;
+  /**
    * The field's type, which decides the operators offered and the value editor
    * shown. An unrecognised type is not an error — it gets the equality
    * operators, which every type supports.
@@ -345,6 +351,14 @@ export function ConditionRow({
           {sources.map(entry => (
             <SelectItem key={entry.name} value={entry.name}>
               {entry.label ?? entry.name}
+              {entry.description && (
+                <>
+                  {" "}
+                  <span className="text-xs text-muted-foreground">
+                    {entry.description}
+                  </span>
+                </>
+              )}
             </SelectItem>
           ))}
         </SelectContent>

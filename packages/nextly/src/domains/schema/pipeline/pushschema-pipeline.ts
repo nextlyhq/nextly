@@ -79,11 +79,20 @@ import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 
 import { withoutKeysOnKeylessRenames } from "./builder-foreign-keys";
 import {
+  asLateValueFailure,
+  convertingColumns,
+  type ConvertingColumn,
+} from "./classifier/conversion-refusal";
+import {
   countLongerThan as countLongerThanHelper,
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
   querySqlRows,
 } from "./classifier/count-helpers";
+import {
+  typeChangeJudge,
+  type TypeChangeJudge,
+} from "./classifier/judge-type-change";
 import { relationSwitches } from "./companion-shape-switches";
 import { withoutCopyOnlyRebuilds, type LiveTable } from "./copy-only-rebuilds";
 import {
@@ -101,7 +110,12 @@ import {
   introspectLiveSnapshot,
   introspectSqliteRebuildLosses,
 } from "./diff/introspect-live";
-import type { Operation, NextlySchemaSnapshot, TableSpec } from "./diff/types";
+import type {
+  DropIndexOp,
+  Operation,
+  NextlySchemaSnapshot,
+  TableSpec,
+} from "./diff/types";
 import { refuseEnumNarrowingsOverRows } from "./enum-narrowing-refusal";
 import { describePrecondition } from "./errors";
 // Index restore uses the all-dialect templates, not ddl-emitter/: that module
@@ -131,6 +145,7 @@ import {
   liveUniqueConstraintsToKeep,
   renamesOf,
   uniqueColumnsToKeep,
+  withoutUniquesAlreadyEnforced,
 } from "./live-uniques";
 import { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable } from "./managed-tables";
 import {
@@ -138,10 +153,16 @@ import {
   operationsToJudge,
   planCompanionMoves,
 } from "./moved-to-companion";
+import {
+  keyIndexDropsHeldForUnique,
+  uniqueCreatedBeforeKeyIndexDrop,
+  withHeldKeyIndexDrops,
+} from "./mysql-unique-before-key-index";
 import { pushInActiveSchema } from "./pg-active-schema-push";
 import {
   assertLiveCounts,
   assertPreCleanupAccepted,
+  clearConsentedValues,
   withAddedColumnsLeftToTighten,
 } from "./pre-cleanup/executor";
 import { applyMakeOptionalToOperations } from "./pre-cleanup/snapshot-patch";
@@ -169,7 +190,11 @@ import type {
 import { withRecordedShapes } from "./recorded-shapes";
 import { builtByFor } from "./registered-collections";
 import { refuseNotNullOverNulls } from "./required-column-gate";
-import type { ClassifierEvent, Resolution } from "./resolution/types";
+import type {
+  ClassificationResult,
+  ClassifierEvent,
+  Resolution,
+} from "./resolution/types";
 import { withRetainedSizesColumn } from "./retained-core-columns";
 import { assertSchemaLockHeld, schemaLockConfirmedUntil } from "./schema-lock";
 import {
@@ -751,8 +776,14 @@ export class PushSchemaPipeline {
      * caller of the pipeline waits in bounded tries without passing anything.
      */
     busyTable?: PipelineBusyTable;
+    /**
+     * The step that tries a refused type change again, which a code-first apply's refusals end
+     * with: `db:sync` says "run db:sync again". Absent, the development push's step.
+     */
+    nextStep?: string;
   }): Promise<PipelineResult> {
     const { db, dialect, source, promptChannel, databaseName } = args;
+    const nextStep = nextStepOf(args);
     // Merged HERE rather than at each call site. `apply` has many callers —
     // HMR, the collection/single/component dispatchers, the dev server, the
     // DI registration — and adding extensions at each would miss some: a UI
@@ -853,6 +884,10 @@ export class PushSchemaPipeline {
       batch: source === "code" ? -1 : undefined,
     });
 
+    // The type changes this apply judged by the conversion rule and goes on to make (safe, or
+    // cleared under consent): a statement the database refuses over a value written after they
+    // were judged is reported naming them, not as its own error (`lateValueFailure`).
+    let converting: ConvertingColumn[] = [];
     try {
       // Each question Phase B asks is asked once for the whole apply: a try that re-plans after one
       // that waited out its bound reads the answers given to the first.
@@ -1030,7 +1065,13 @@ export class PushSchemaPipeline {
         // operations here, so the confirmation, the refusals and the apply read one set, as the
         // preview does (`relationSwitches`).
         const liveWithShapes = withRecordedShapes(liveSnapshot, desired);
-        const diffed = diffSnapshots(liveWithShapes, snapshotBeforeRenames);
+        // Less the unique indexes a column already has, which SQLite's snapshot cannot show: an
+        // inline constraint is backed by an index the snapshot leaves out
+        // (`withoutUniquesAlreadyEnforced`).
+        const diffed = await withoutUniquesAlreadyEnforced(
+          diffSnapshots(liveWithShapes, snapshotBeforeRenames),
+          { db, dialect, live: liveSnapshot }
+        );
         const switches = await relationSwitches({
           db,
           dialect,
@@ -1101,6 +1142,15 @@ export class PushSchemaPipeline {
           // "Fill with one value" is not offered for a column the schema makes unique.
           isUnique: uniqueColumnLookup(snapshotBeforeRenames, desired),
           dialect,
+          // `db:sync` and the development push judge each type change by the repair command's
+          // rule, from the rows the live column holds. A Schema Builder save offers it as before.
+          ...conversionRuleFor(source, nextStep, {
+            db,
+            dialect,
+            live: liveSnapshot,
+            expected: snapshotBeforeRenames,
+            schema: desired,
+          }),
         });
 
         // Drops that have a rename candidate are resolved by the
@@ -1136,6 +1186,14 @@ export class PushSchemaPipeline {
         if (!dispatchResult.proceed) {
           throw new PromptCancelledError();
         }
+
+        // A safe conversion goes ahead without a question, said as it is made; a lossy one goes
+        // ahead only where its clearing was consented to, which the dispatcher has answered.
+        converting = convertingColumns(
+          classificationResult,
+          dispatchResult.clearing
+        );
+        reportSafeConversions(classificationResult);
 
         // F5 PR 4: patch desired.collections inline for make_optional
         // resolutions BEFORE building drizzleSchema, so pushSchema sees the
@@ -1383,6 +1441,8 @@ export class PushSchemaPipeline {
 
         // The lifted foreign keys a failed MySQL apply has to add back (`kitRouteConstraintStatements`).
         let liftedKeysOwed: string[] = [];
+        // The key indexes the pre-resolution pass leaves to the batch (`keyIndexDropsHeldForUnique`).
+        let heldKeyIndexDrops: DropIndexOp[] = [];
         const runApply = async (tx: unknown): Promise<number> => {
           // Route: fast in-memory DDL emission for the common Builder op set
           // on PostgreSQL (skips drizzle-kit's ~10s catalog re-introspection),
@@ -1466,6 +1526,7 @@ export class PushSchemaPipeline {
             assertPreCleanupAccepted({
               resolutions: dispatchResult.resolutions,
               events: classificationResult.events,
+              clearing: dispatchResult.clearing,
               fields: aggregatedFields,
               desiredSnapshot,
               dialect,
@@ -1491,6 +1552,14 @@ export class PushSchemaPipeline {
           const preResExecutor =
             this.testHooks._executePreResolutionOverride ??
             executePreResolutionOps;
+          // On MySQL, a key's plain index that a unique one replaces is dropped in the apply's batch,
+          // after that unique index is created, rather than here ahead of every create
+          // (`keyIndexDropsHeldForUnique`).
+          heldKeyIndexDrops = keyIndexDropsHeldForUnique(
+            resolvedOps,
+            dialect,
+            liveSnapshot.tables
+          );
           // From here until the batch that adds them back, the keys lifted for a MySQL type change may
           // be dropped, and MySQL commits the drop as it runs.
           liftedKeysOwed = constraints.liftRestores;
@@ -1507,7 +1576,12 @@ export class PushSchemaPipeline {
             nextIsSchema = schemaAt(0);
             const preResolved = await preResExecutor(
               tx,
-              withoutSqliteDropsLeftToRebuild(resolvedOps, dialect),
+              withoutSqliteDropsLeftToRebuild(
+                resolvedOps.filter(
+                  op => !heldKeyIndexDrops.some(held => held === op)
+                ),
+                dialect
+              ),
               dialect,
               leading,
               () => {
@@ -1549,6 +1623,7 @@ export class PushSchemaPipeline {
               operations: resolvedOps,
               fields: aggregatedFields,
               dialect,
+              clearing: dispatchResult.clearing,
             });
           } catch (err) {
             // PromptCancelledError from abort is not a DDL failure — let it
@@ -1954,11 +2029,20 @@ export class PushSchemaPipeline {
             useFastPath ? [] : resolvedOps
           );
           try {
-            await executor.executeStatements(tx, [
-              ...safe,
-              ...restore,
-              ...constraints.after,
-            ]);
+            // On MySQL a unique index replacing a key's plain index is created before that index
+            // is dropped: the kit's drop comes ahead of the restored create, and MySQL refuses to
+            // drop the last index a foreign key can use (`uniqueCreatedBeforeKeyIndexDrop`).
+            await executor.executeStatements(
+              tx,
+              uniqueCreatedBeforeKeyIndexDrop(
+                withHeldKeyIndexDrops(
+                  [...safe, ...restore, ...constraints.after],
+                  heldKeyIndexDrops
+                ),
+                dialect,
+                liveSnapshot.tables
+              )
+            );
             liftedKeysOwed = [];
           } catch (err) {
             throw new DdlExecutionError(
@@ -1980,6 +2064,17 @@ export class PushSchemaPipeline {
           // lock while its last statement ran changes nothing. MySQL's DDL has
           // committed as it ran, and SQLite runs without a transaction, so there
           // a refusal here would report an apply that already landed.
+          // SQLite applies without a transaction, so a lossy type change's consented clearing waits
+          // for its rebuild to succeed (`clearConsentedValues`): the values are only cleared in a
+          // column that was converted.
+          if (dialect === "sqlite") {
+            await clearConsentedValues({
+              tx,
+              dialect,
+              events: classificationResult.events,
+              clearing: dispatchResult.clearing,
+            });
+          }
           if (dialect === "postgresql") await assertSchemaLockHeld();
           return (
             safe.length +
@@ -2160,7 +2255,8 @@ export class PushSchemaPipeline {
         // render an admin toast like "1 field added, 1 renamed".
         summary,
       };
-    } catch (err) {
+    } catch (caught) {
+      const err = asLateValueFailure(caught, converting, nextStep);
       const code = this.classifyErrorCode(err);
       // A refused precondition carries its subject in the payload, not in the message: the
       // validation factory sets a deliberately generic public message. Reading `err.message` here
@@ -2690,6 +2786,37 @@ async function refuseKitRebuildsLosingConstraints(
   }
 }
 
+/**
+ * The step that tries a refused type change again, which a code-first apply's refusals end with:
+ * the caller's (`db:sync` says "run db:sync again"), else the development push's.
+ */
+function nextStepOf(args: { nextStep?: string }): string {
+  return args.nextStep ?? "save nextly.config.ts again";
+}
+
+/**
+ * The repair command's rule for the classifier, for a code-first apply (`db:sync`, the development
+ * push); nothing for a Schema Builder save, which offers a type change as before.
+ */
+function conversionRuleFor(
+  source: "ui" | "code",
+  nextStep: string,
+  bound: Parameters<typeof typeChangeJudge>[0]
+): { judgeConversion?: TypeChangeJudge; nextStep?: string } {
+  return source === "code"
+    ? { judgeConversion: typeChangeJudge(bound), nextStep }
+    : {};
+}
+
+/** Each type change judged safe, said as the apply makes it: no one was asked about it. */
+function reportSafeConversions(classification: ClassificationResult): void {
+  for (const safe of classification.safeConversions ?? []) {
+    consoleLogger.info(
+      `[Nextly schema] ${safe.tableName}.${safe.columnName}: ${safe.fromType} -> ${safe.toType}, safe (rows checked: ${String(safe.rowsChecked)}).`
+    );
+  }
+}
+
 /** A rename candidate as a question: its table and its pair of columns. */
 function candidateKey(candidate: RenameCandidate): string {
   return `${candidate.tableName}::${candidate.fromColumn}::${candidate.toColumn}`;
@@ -2707,6 +2834,7 @@ function askingOnce(inner: PromptDispatcher): PromptDispatcher {
   const askedEvents = new Set<string>();
   const confirmed = new Map<string, RenameCandidate>();
   const resolutions = new Map<string, Resolution>();
+  const clearing = new Set<string>();
   const remember = (
     asked: Parameters<PromptDispatcher["dispatch"]>[0],
     answer: PromptDispatchResult
@@ -2721,6 +2849,7 @@ function askingOnce(inner: PromptDispatcher): PromptDispatcher {
     for (const resolution of answer.resolutions) {
       resolutions.set(resolution.eventId, resolution);
     }
+    for (const eventId of answer.clearing ?? []) clearing.add(eventId);
   };
   return {
     async dispatch(args) {
@@ -2751,6 +2880,9 @@ function askingOnce(inner: PromptDispatcher): PromptDispatcher {
           const answered = resolutions.get(event.id);
           return answered === undefined ? [] : [answered];
         }),
+        clearing: args.events
+          .filter(event => clearing.has(event.id))
+          .map(event => event.id),
       };
     },
   };

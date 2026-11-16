@@ -71,6 +71,7 @@ import {
 import {
   archiveFieldsLeavingTranslation,
   fieldsLeavingTranslationUnder,
+  refuseTranslationMovesLosingDefinition,
 } from "../../i18n/migration/archive-preflight";
 import {
   leavingFieldConstraints,
@@ -1236,9 +1237,12 @@ export class SingleMetadataService {
   private async assertFieldsMayLeaveTranslation(
     input: UpdateSingleSchemaInput
   ): Promise<void> {
+    if (!input.wasLocalized && !input.isLocalized) return;
+    // A save that sends no fields moves nothing unless it turns translation on or off, and with no
+    // adapter none of it runs: neither is asked anything.
     if (
-      input.fields === undefined ||
-      (!input.wasLocalized && !input.isLocalized)
+      input.fields === undefined &&
+      (input.wasLocalized === input.isLocalized || !this.adapter)
     ) {
       return;
     }
@@ -1249,6 +1253,25 @@ export class SingleMetadataService {
           slug: input.slug,
         },
       });
+    }
+    if (input.fields === undefined) {
+      // A save that sends no fields still moves every translated field's values as it turns
+      // translation on or off, through the companion transition after it, so their columns are
+      // asked here what the move would lose.
+      const fields = (input.existing.fields ??
+        []) as unknown as FieldDefinition[];
+      await refuseTranslationMovesLosingDefinition({
+        adapter: this.adapter,
+        // Singles are built by the collection schema service.
+        builtBy: "collection",
+        tableName: input.existing.tableName,
+        oldFields: fields,
+        newFields: fields,
+        wasLocalized: input.wasLocalized,
+        isLocalized: input.isLocalized,
+        surface: "builder",
+      });
+      return;
     }
     // The site's default language as it is now, the same one the Single's companion reconcile reads.
     const defaultLocale = appLocalization()?.defaultLocale ?? "en";
@@ -1449,6 +1472,15 @@ export class SingleMetadataService {
       schemaService
     );
 
+    // A junction carried to a name the database already holds would meet that table at apply,
+    // after earlier statements ran. Asked on the full lists, the ones the junctions are planned on.
+    await schemaService.refuseJunctionMovesOntoLiveTables(
+      tableName,
+      startingFields,
+      fields,
+      table => adapter.tableExists(table)
+    );
+
     if (liveFacts.tableHasRows !== false) {
       await refuseFillsTheirFieldsRefuse(
         alterInput.oldFields,
@@ -1487,6 +1519,10 @@ export class SingleMetadataService {
           isSingle: true,
           wasStatus,
           hasStatus,
+          // The junction tables are decided on the full lists, as a collection's save decides
+          // them: a translated many-to-many sits in neither list the main diff sees and still
+          // has one.
+          junctionFields: { old: startingFields, new: fields },
           tableHasRows: liveFacts.tableHasRows,
           foreignKeysByColumn: liveFacts.foreignKeysByColumn,
           indexNames: liveFacts.indexNames,
@@ -1615,8 +1651,21 @@ export class SingleMetadataService {
         .filter(f => isFieldLocalized(f, change.wasLocalized))
         .map(f => f.name)
     );
+    // Not unique by either rule (`builderColumnIsUnique`): neither its mark nor a one-to-one's
+    // cardinality, so a translated relationship made one-to-one is not grouped by its column alone
+    // when its index is per language.
+    const notUnique = (f: FieldDefinition): FieldDefinition => {
+      const options = f.options as { relationType?: unknown } | undefined;
+      return f.type === "relationship" && options?.relationType === "oneToOne"
+        ? {
+            ...f,
+            unique: false,
+            options: { ...options, relationType: "manyToOne" },
+          }
+        : { ...f, unique: false };
+    };
     const lengthOnly = (f: FieldDefinition): FieldDefinition =>
-      isFieldLocalized(f, change.isLocalized) ? { ...f, unique: false } : f;
+      isFieldLocalized(f, change.isLocalized) ? notUnique(f) : f;
     return {
       main: {
         oldFields: change.previousFields.filter(
@@ -1632,7 +1681,7 @@ export class SingleMetadataService {
         ),
         newFields: change.fields
           .filter(f => translatedBefore.has(f.name))
-          .map(f => ({ ...f, unique: false })),
+          .map(notUnique),
       },
     };
   }

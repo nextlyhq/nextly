@@ -50,6 +50,21 @@ import type {
   ResolvedVercelBlobConfig,
 } from "./types";
 
+/**
+ * The host this store's blobs are served from, `<store id>.<access>.blob.vercel-storage.com`,
+ * from the store id a read-write token carries (`vercel_blob_rw_<store id>_<secret>`).
+ * Hosts are lowercase, as the store's own blob URLs are. `undefined` for a
+ * token naming no store.
+ */
+function blobStoreHost(token: string, access: string): string | undefined {
+  const [prefix, kind, mode, storeId] = token.split("_");
+  if (prefix !== "vercel" || kind !== "blob" || !mode || !storeId) {
+    return undefined;
+  }
+  if (!/^[a-z0-9]+$/i.test(storeId)) return undefined;
+  return `${storeId.toLowerCase()}.${access}.blob.vercel-storage.com`;
+}
+
 // ============================================================
 // Vercel Blob Storage Adapter
 // ============================================================
@@ -197,6 +212,61 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
       url,
       path: result.url,
     };
+  }
+
+  /**
+   * Write bytes at exactly the blob `filePath` names, beside one already in
+   * the store.
+   *
+   * A stored path here is the blob's full URL, so `filePath` is one too: a
+   * stored blob's URL with a suffix core derived from it, for a file made from
+   * that blob, such as a resized copy of an image. Written under that URL's
+   * pathname with no random suffix, so the blob's URL is the key it was asked
+   * for and the next read finds it; overwriting is allowed, since two requests
+   * may make the same copy at once and write the same bytes.
+   *
+   * A key on any host but this store's is refused before anything is
+   * written, so core keeps no copy of it and serves the original. Writes go
+   * to the token's store whatever host the key names, so a key on another
+   * store's host, as an item moved from another store has, would otherwise
+   * be written where its next read never looks.
+   *
+   * @experimental
+   */
+  async uploadAt(
+    filePath: string,
+    buffer: Buffer,
+    options: { mimeType: string }
+  ): Promise<UploadResult> {
+    const token = this.ensureToken();
+    const located = URL.canParse(filePath) ? new URL(filePath) : undefined;
+    const storeHost = blobStoreHost(token, this.resolvedConfig.access);
+    if (
+      located === undefined ||
+      located.protocol !== "https:" ||
+      storeHost === undefined ||
+      located.hostname !== storeHost
+    ) {
+      throw NextlyError.internal({
+        logContext: {
+          adapter: "vercel-blob",
+          reason: "upload-at-key-not-in-this-store",
+        },
+      });
+    }
+    const result = await put(
+      decodeURIComponent(located.pathname.replace(/^\/+/, "")),
+      buffer,
+      {
+        access: this.resolvedConfig.access,
+        token,
+        contentType: options.mimeType,
+        addRandomSuffix: false,
+        allowOverwrite: true,
+        cacheControlMaxAge: this.resolvedConfig.cacheControlMaxAge,
+      }
+    );
+    return { url: result.url, path: result.url };
   }
 
   /**

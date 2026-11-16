@@ -51,6 +51,20 @@ export interface LocalizedFieldRef {
   name: string;
   /** Physical companion column — snake_case (e.g. `meta_title`). Used for SQL/lookup. */
   column: string;
+  /**
+   * The field is unique. A unique value identifies one document in one
+   * language, so it is read in the requested language alone and never filled
+   * from a fallback language: filled, a read would show a value its own
+   * language's lookup can never find.
+   */
+  unique?: boolean;
+  /**
+   * The column does not store text: a number, a boolean, a date, a decimal or
+   * JSON. Such a value is never an empty string, and comparing the column with
+   * one fails the query on PostgreSQL and is coerced on MySQL (where `0` or
+   * `false` would read as blank), so it is non-blank when not null.
+   */
+  nonText?: boolean;
 }
 
 /** Blank = "not translated": null, undefined, or empty string fall back. 0/false are real values. */
@@ -67,12 +81,27 @@ export function resolveLocalizedValue(
   perLocale: Record<string, unknown>,
   chain: string[]
 ): unknown {
+  return resolveLocalizedSource(perLocale, chain).value;
+}
+
+/**
+ * {@link resolveLocalizedValue}, with the language the value came from: the
+ * first language of `chain` holding a non-blank value, or `null` where none
+ * does. The one walk both answer from.
+ */
+export function resolveLocalizedSource(
+  perLocale: Record<string, unknown>,
+  chain: readonly string[]
+): { value: unknown; locale: string | null } {
   for (const code of chain) {
     const value = perLocale[code];
-    if (!isBlank(value)) return value;
+    if (!isBlank(value)) return { value, locale: code };
   }
-  return null;
+  return { value: null, locale: null };
 }
+
+/** The key a read's per-field source languages are attached under (`sources`). */
+export const SOURCE_LOCALES_KEY = "_sources";
 
 /** A minimal Drizzle-select surface so this helper stays adapter/dialect agnostic. */
 interface SelectableDb {
@@ -113,6 +142,20 @@ export interface PopulateCompanionArgs {
    * would silently treat every row in the other states as non-matching.
    */
   statusValues?: readonly string[];
+  /**
+   * The documents a due release has made public that this read admits (the
+   * release decisions' `reveal`). A release publishes each language's row as
+   * it stands, so a revealed document's rows are read whatever their status,
+   * as the release will publish them. Left out, a document the read admits
+   * shows no translated value until the release is applied.
+   */
+  revealed?: ReadonlySet<unknown>;
+  /**
+   * Also attach, on each row, the language each translatable value came from
+   * (`_sources`, {@link SOURCE_LOCALES_KEY}): `null` for a value no language
+   * holds.
+   */
+  sources?: boolean;
   /**
    * Also take each translation row's version counter, for a read whose version comes out of this
    * statement rather than one of its own: the translation table's runtime model does not declare
@@ -206,10 +249,12 @@ export async function populateCompanionFieldsByLanguage(
     fillCompanionFields({
       localizedFields,
       statusValues: args.statusValues,
+      revealed: args.revealed,
       idKey: args.idKey,
       rows: language.rows,
       localeChain: language.localeChain,
       companionRows,
+      sources: args.sources,
     });
   }
   return companionRows;
@@ -453,23 +498,35 @@ export function fillCompanionFields(args: {
   localizedFields: LocalizedFieldRef[];
   localeChain: string[];
   statusValues?: readonly string[];
+  /** See `revealed` on {@link PopulateCompanionArgs}. */
+  revealed?: ReadonlySet<unknown>;
   idKey?: string;
+  /** Also attach each value's source language (`PopulateCompanionArgs.sources`). */
+  sources?: boolean;
 }): void {
   const idKey = args.idKey ?? "id";
   const byParent = indexCompanionRowsByParent(
     args.companionRows,
-    args.statusValues
+    args.statusValues,
+    args.revealed
   );
 
+  // A unique field is read in the requested language alone (`LocalizedFieldRef.unique`).
+  const ownLanguage = args.localeChain.slice(0, 1);
   for (const row of args.rows) {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
+    const found: Record<string, string | null> = {};
     for (const field of args.localizedFields) {
+      const chain = field.unique === true ? ownLanguage : args.localeChain;
       const perLocaleValue: Record<string, unknown> = {};
-      for (const code of args.localeChain) {
+      for (const code of chain) {
         perLocaleValue[code] = perLocaleRows[code]?.[field.column];
       }
-      row[field.name] = resolveLocalizedValue(perLocaleValue, args.localeChain);
+      const picked = resolveLocalizedSource(perLocaleValue, chain);
+      row[field.name] = picked.value;
+      if (args.sources) found[field.name] = picked.locale;
     }
+    if (args.sources) row[SOURCE_LOCALES_KEY] = found;
   }
 }
 
@@ -639,6 +696,8 @@ export interface PopulateCompanionAllArgs {
    * draft translation. Undefined = no filter (admin / no per-locale status).
    */
   statusValues?: readonly string[];
+  /** See `revealed` on {@link PopulateCompanionArgs}. */
+  revealed?: ReadonlySet<unknown>;
   /** See `readiness` on {@link PopulateCompanionArgs}. */
   readiness: CompanionReadiness | undefined;
   /** See {@link CompanionReadBudget.maxParams}. */
@@ -676,7 +735,11 @@ export async function populateCompanionFieldsAllLocales(
   });
   if (companionRows === undefined) return;
 
-  const byParent = indexCompanionRowsByParent(companionRows, args.statusValues);
+  const byParent = indexCompanionRowsByParent(
+    companionRows,
+    args.statusValues,
+    args.revealed
+  );
 
   for (const row of rows) {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
@@ -688,6 +751,19 @@ export async function populateCompanionFieldsAllLocales(
       row[field.name] = keyed;
     }
   }
+}
+
+/**
+ * `column` in `states`: an equality for one, a set for several, and no row
+ * for none (an empty `IN ()` two dialects refuse).
+ */
+function statusIn(column: SQL, states: readonly string[]): SQL {
+  if (states.length === 0) return sql`1=0`;
+  if (states.length === 1) return sql`${column} = ${states[0]}`;
+  return sql`${column} IN (${sql.join(
+    states.map(state => sql`${state}`),
+    sql`, `
+  )})`;
 }
 
 /**
@@ -708,6 +784,11 @@ export function buildLocalizedOrderExpr(args: {
    * otherwise).
    */
   statusValues?: readonly string[];
+  /**
+   * The column does not store text (`LocalizedFieldRef.nonText`): never blank,
+   * and never compared with an empty string.
+   */
+  nonText?: boolean;
 }): SQL {
   const {
     companionTableName,
@@ -719,10 +800,10 @@ export function buildLocalizedOrderExpr(args: {
   const t = sql.identifier(companionTableName);
   const col = sql.identifier(columnName);
   const statusPredicate = statusMembership(t, statusValues);
-  const perLocale = localeChain.map(
-    code =>
-      sql`NULLIF((SELECT ${t}.${col} FROM ${t} WHERE ${t}.${sql.identifier("_parent")} = ${mainIdColumn} AND ${t}.${sql.identifier("_locale")} = ${code}${statusPredicate}), '')`
-  );
+  const perLocale = localeChain.map(code => {
+    const value = sql`(SELECT ${t}.${col} FROM ${t} WHERE ${t}.${sql.identifier("_parent")} = ${mainIdColumn} AND ${t}.${sql.identifier("_locale")} = ${code}${statusPredicate})`;
+    return args.nonText === true ? value : sql`NULLIF(${value}, '')`;
+  });
   // One language, as a read with fallback off asks: its value alone. SQLite
   // refuses COALESCE with a single argument.
   if (perLocale.length === 1) return perLocale[0];
@@ -791,6 +872,12 @@ export function buildTranslationStatusCondition(args: {
   mainIdColumn: unknown;
   /** Localized companion columns (snake_case) for the non-blank test. */
   localizedColumns: string[];
+  /**
+   * Those of `localizedColumns` that do not store text
+   * (`LocalizedFieldRef.nonText`): non-blank when not null, never compared
+   * with an empty string.
+   */
+  nonTextColumns?: readonly string[];
   /** Whether the companion carries `_status` (draft/published filters need it). */
   hasStatus: boolean;
   /**
@@ -808,6 +895,12 @@ export function buildTranslationStatusCondition(args: {
    * `stale` then judges a language by its recorded values where it has any.
    */
   provenance?: ProvenanceScope;
+  /**
+   * The states the `published` filter counts as published: the workflow's
+   * public states, as a public read resolved them. Absent, the one state
+   * named `published`.
+   */
+  publicStates?: readonly string[];
 }): SQL | undefined {
   const {
     companionTableName,
@@ -825,12 +918,15 @@ export function buildTranslationStatusCondition(args: {
   // below needs the SAME non-blank rule applied to an ALIASED copy of this table. Two spellings of
   // "this locale has content" would let one filter disagree with another about the same row, which
   // is the two-tab defect this function already carries a fix for.
+  const nonText = new Set(args.nonTextColumns ?? []);
   const nonBlankOn = (ref: CompanionTableRef): SQL =>
     localizedColumns.length > 0
       ? sql.join(
           localizedColumns.map(c => {
             const col = sql.identifier(c);
-            return sql`(${ref}.${col} IS NOT NULL AND ${ref}.${col} <> '')`;
+            return nonText.has(c)
+              ? sql`(${ref}.${col} IS NOT NULL)`
+              : sql`(${ref}.${col} IS NOT NULL AND ${ref}.${col} <> '')`;
           }),
           sql` OR `
         )
@@ -862,7 +958,7 @@ export function buildTranslationStatusCondition(args: {
       // with non-blank content (spec §8's blank=untranslated rule), so a
       // status with nothing written is untranslated with a status attached,
       // not a draft translation.
-      return sql`EXISTS (${rowFor(sql`${t}.${sql.identifier("_status")} = ${state} AND (${nonBlank})`)})`;
+      return sql`EXISTS (${rowFor(sql`${statusIn(sql`${t}.${sql.identifier("_status")}`, state === "published" && args.publicStates ? args.publicStates : [state])} AND (${nonBlank})`)})`;
     case "stale":
       // Translated, but the source moved afterwards.
       //
@@ -1362,13 +1458,16 @@ export async function populateTranslationStatus(
  */
 function indexCompanionRowsByParent(
   companionRows: readonly Record<string, unknown>[],
-  statusValues: readonly string[] | undefined
+  statusValues: readonly string[] | undefined,
+  /** Parents a due release reveals: their rows are taken whatever their status. */
+  revealed?: ReadonlySet<unknown>
 ): Map<unknown, Record<string, Record<string, unknown>>> {
   const byParent = new Map<unknown, Record<string, Record<string, unknown>>>();
   for (const cr of companionRows) {
     if (
       statusValues !== undefined &&
-      !statusValues.includes(cr._status as string)
+      !statusValues.includes(cr._status as string) &&
+      revealed?.has(cr._parent) !== true
     ) {
       continue;
     }

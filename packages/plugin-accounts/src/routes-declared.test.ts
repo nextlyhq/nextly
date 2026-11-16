@@ -11,6 +11,8 @@ import { accounts } from "./plugin";
 
 describe("the plugin's routes", () => {
   it("each declare what reaching them takes, for a storefront", () => {
-    expect(undeclaredPluginRoutes(accounts({ origin: "https://shop.example.com" }))).toEqual([]);
+    expect(
+      undeclaredPluginRoutes(accounts({ origin: "https://shop.example.com" }))
+    ).toEqual([]);
   });
 });

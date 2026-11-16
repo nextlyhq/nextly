@@ -323,6 +323,18 @@ function patternLevel(
   });
 }
 
+/**
+ * A content type's patterns as the order fills them: the type's own, else the
+ * site's default, part by part. The one answer to which pattern gives a
+ * type's title, for the order and for whatever says which pattern it is.
+ */
+export function patternsOf(
+  rules: SiteRules,
+  key: string
+): { title?: string; description?: string } {
+  return { ...rules.defaultPatterns, ...rules.patterns[key] };
+}
+
 /** What every level holds for the page `input` names. */
 export async function levelsOf(
   ctx: PluginContext,
@@ -352,8 +364,7 @@ export async function levelsOf(
     code: input.code,
     template: input.derived,
     pattern: patternLevel(
-      // The type's own patterns, else the site's default for that part.
-      { ...rules.defaultPatterns, ...rules.patterns[key] },
+      patternsOf(rules, key),
       defined({ title: content.title?.value, siteName: rules.siteName }),
       document
     ),

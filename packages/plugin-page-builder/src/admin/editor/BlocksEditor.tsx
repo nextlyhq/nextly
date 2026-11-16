@@ -79,7 +79,6 @@ import {
 import { siteSheet } from "../../site-style";
 import { bindingFieldsReader, unbindPlanner } from "../binding-fields-client";
 import { BindingsToFixChip } from "../bindings-report/BindingsToFixChip";
-import { siteTimeZoneFor } from "../canvas-bindings-client";
 import { ComponentActionPrompt } from "../ComponentActionPrompt";
 import { ComponentFromSelectionPrompt } from "../ComponentFromSelectionPrompt";
 import { contributedInspector } from "../contributed-blocks";
@@ -87,7 +86,10 @@ import { DocumentStatusPill } from "../DocumentStatusPill";
 import { findEntries } from "../entries-client";
 import { findLinkTargets, findLinkTargetsIn } from "../link-targets-client";
 import { canvasListReadsIn } from "../list-entries-client";
-import { listLoopCollections } from "../loop-collections-client";
+import {
+  listLoopCollections,
+  loopCollectionsIn,
+} from "../loop-collections-client";
 import { canvasNamedQueriesIn } from "../named-queries-client";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
@@ -127,6 +129,7 @@ import {
 } from "./page-conditions-read";
 import { PageReadMeter } from "./page-read-meter";
 import { PageTitleSwitcher } from "./page-title-switcher";
+import { pickerPreviewServices } from "./picker-previews";
 import { PreviewButton } from "./preview-button";
 import { recentIconsStore } from "./recent-icons-store";
 import { useReveal, type Reveal } from "./reveal-hidden";
@@ -386,7 +389,6 @@ function editorTopBar(
   topBarEnd: React.JSX.Element;
 } {
   const {
-    documentDirty,
     canvasRender,
     siteStylePending,
     siteStyleError,
@@ -417,7 +419,7 @@ function editorTopBar(
         {page.location === undefined ? null : (
           <FieldLocation location={page.location} />
         )}
-        <DocumentStatusPill isDirty={documentDirty} />
+        <DocumentStatusPill />
         {/* The page's bindings that no longer fit, beside its status: shown
             only when it has one. */}
         <BindingsToFixChip
@@ -492,33 +494,6 @@ type ContentServices = NonNullable<
 >;
 
 let contentServices: ContentServices | undefined;
-
-/** Each person's read of the loop collections, one function per language. */
-const loopCollectionReads = new Map<
-  string,
-  NonNullable<ContentServices["listLoopCollections"]>
->();
-
-/**
- * The read of the collections a list or condition may name, in a language:
- * the same function for every caller, so the inspector and the canvas's
- * condition badges share one read and one answer (`useLoopCollections`
- * shares a read by the function's identity).
- */
-function loopCollectionsIn(
-  locale: string | undefined,
-  userId: string | null
-): NonNullable<ContentServices["listLoopCollections"]> {
-  // Per person too: the answer is read with their access, and a read still in
-  // flight when one person signs out must never be handed to the next.
-  const key = JSON.stringify([locale ?? "", userId]);
-  let read = loopCollectionReads.get(key);
-  if (read === undefined) {
-    read = () => listLoopCollections(locale);
-    loopCollectionReads.set(key, read);
-  }
-  return read;
-}
 
 /**
  * What the inspector's Content tab borrows from the admin: the media library,
@@ -619,8 +594,16 @@ function servicesFor(
       // The fields a binding can read, as this author reads them, kept a
       // short while: the picker opens on every bindable prop.
       listBindingFields: bindingFieldsReader(binding.entry, locale, userId),
-      // The picker's previews in the canvas's language and the site's zone.
-      ...previewServices(passages, binding.canvas, userId, formatLocale),
+      // The picker's previews: the canvas's language, the site's zone, and
+      // the values of a list's first entry beside its item's fields.
+      ...pickerPreviewServices({
+        passages,
+        canvas: binding.canvas,
+        entryCollection,
+        userId,
+        formatLocale,
+        locale,
+      }),
       // An unbind's plan against the document the editor holds, by the same
       // decision as the page actions API's.
       ...withPlanUnbind(unbindPlanner(binding.page, locale)),
@@ -634,28 +617,6 @@ function servicesFor(
     byLocale.set(key, services);
   }
   return services;
-}
-
-/**
- * The language and zone the binding picker previews a date or a number in,
- * so it reads as the page shows it: the canvas's language, and the site's
- * zone, read when a picker first opens and once for this editor (its
- * passages), never on a canvas load: the canvas reads it only for a page
- * that already formats a date. No zone is read without an entry to ask for
- * or a person to ask as.
- */
-function previewServices(
-  passages: OpenPassages,
-  canvas: DocumentIdentity | null,
-  userId: string | null,
-  formatLocale: string | undefined
-): Pick<ContentServices, "bindingLocale" | "readSiteTimeZone"> {
-  return {
-    ...(formatLocale === undefined ? {} : { bindingLocale: formatLocale }),
-    ...(canvas === null || userId === null
-      ? {}
-      : { readSiteTimeZone: () => siteTimeZoneFor(passages, canvas, userId) }),
-  };
 }
 
 /** The unbind planner as a service member, absent where none can be planned. */

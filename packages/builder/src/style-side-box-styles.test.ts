@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
+
 /**
  * How the box of logical sides is placed, asserted against the sheet that does it.
  *
@@ -14,9 +16,8 @@ import { describe, expect, it } from "vitest";
  *
  * @module style-side-box-styles.test
  */
-const CHROME = readFileSync(
-  fileURLToPath(new URL("./styles/builder-chrome.css", import.meta.url)),
-  "utf8"
+const CHROME = chromeStylesheetSource(url =>
+  readFileSync(fileURLToPath(url), "utf8")
 );
 
 /**
@@ -257,10 +258,10 @@ describe("a box side in a narrow rail", () => {
     // every side is a labelled row: those two rows were crushed while the
     // other two stretched.
     expect(FLAT).toContain(
-      `@container nx-inspector-fields (max-width: 18rem) { ${BOX} { display: flex;`
+      `@container nx-inspector-fields (width < 16.5rem) { ${BOX} { display: flex;`
     );
     const fallback = FLAT.slice(
-      FLAT.lastIndexOf("@container nx-inspector-fields (max-width: 18rem)")
+      FLAT.lastIndexOf("@container nx-inspector-fields (width < 16.5rem)")
     );
     expect(fallback).toContain(
       `${BOX} > [data-side] { inline-size: auto; justify-self: stretch; }`

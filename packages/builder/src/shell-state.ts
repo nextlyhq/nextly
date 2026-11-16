@@ -116,7 +116,13 @@ export function isLeftPanel(value: unknown): value is LeftPanel {
  */
 export const PANEL_BOUNDS = {
   left: { min: 240, max: 480, initial: 300 },
-  inspector: { min: 280, max: 520, initial: 320 },
+  /*
+   * The inspector's minimum is the width its widest fixed control needs: the
+   * spacing box holds whole from a 264px field column (16.5rem), and the
+   * panel adds 24px of padding and up to 17px of classic scrollbar, which
+   * it keeps room for. Narrower, the box falls back to a list of rows.
+   */
+  inspector: { min: 308, max: 520, initial: 320 },
 } as const;
 
 /**

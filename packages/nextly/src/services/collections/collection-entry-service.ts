@@ -70,6 +70,11 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../../domains/i18n/localization-source";
+import {
+  readInFirstPublishedLanguage,
+  readOfEveryLanguage,
+} from "../../domains/i18n/read-in-language";
+import { resolveLocaleChain } from "../../domains/i18n/resolve-locale";
 import { releaseVisibilityFor } from "../../domains/releases/release-visibility";
 import type { RetentionRunner } from "../../domains/retention/runner";
 import type { FieldSources } from "../../domains/versions/restored-from";
@@ -81,6 +86,7 @@ import type {
   RevalidationIntent,
 } from "../../revalidation/types";
 import type { ValidationIssue } from "../../shared/lib/entry-validation";
+import { applyFieldWriteAccess } from "../../shared/lib/field-level-registry";
 import type { HiddenFieldPaths } from "../../shared/lib/filterable-fields";
 import type { PaginatedResponse } from "../../types/pagination";
 import { BaseService } from "../base-service";
@@ -327,6 +333,7 @@ export class CollectionEntryService extends BaseService {
     fallbackLocale?: string | false;
     translationStatus?: boolean;
     where?: unknown;
+    translations?: "all";
   }) {
     return readLanguagesFor(
       this.localization,
@@ -379,7 +386,7 @@ export class CollectionEntryService extends BaseService {
     return (
       refusedFilter(params.where) ??
       withRuleLanguage(this.readLanguages(params), () =>
-        this.queryService.listEntries(params)
+        this.queryService.listEntries(readOfEveryLanguage(params))
       )
     );
   }
@@ -438,7 +445,7 @@ export class CollectionEntryService extends BaseService {
     return (
       refusedFilter(params.where) ??
       withRuleLanguage(this.readLanguages(params), () =>
-        this.queryService.countEntries(params)
+        this.queryService.countEntries(readOfEveryLanguage(params))
       )
     );
   }
@@ -534,10 +541,35 @@ export class CollectionEntryService extends BaseService {
     authenticatedScope?: AuthenticatedScope;
     /** A grant waiving the collection's read hooks, honoured by the query service. */
     hookExemptRead?: HookExemptRead;
+    /**
+     * Whole-document fallback: where the entry is not found in the requested
+     * language, answer in the first language of its fallback chain that has
+     * it, and say which (`_locale`).
+     */
+    wholeDocumentFallback?: boolean;
+    /** Attach `_sources`: for each translatable field, the language its value came from. */
+    sourceLocales?: boolean;
+    /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
+    translations?: "all";
   }) {
-    return withRuleLanguage(this.readLanguages(params), () =>
-      this.queryService.getEntry(params)
-    );
+    // Rules are judged in the languages the read was asked in, `locale=all`
+    // included; the query reads what that request stands for.
+    const read = (locale: string | undefined) => {
+      const inLanguage = { ...params, locale };
+      return withRuleLanguage(this.readLanguages(inLanguage), () =>
+        this.queryService.getEntry(readOfEveryLanguage(inLanguage))
+      );
+    };
+    const chain = params.wholeDocumentFallback
+      ? resolveLocaleChain(
+          this.localization,
+          params.locale,
+          params.fallbackLocale
+        )
+      : null;
+    const [first, ...rest] = chain ?? [];
+    if (first === undefined) return read(params.locale);
+    return readInFirstPublishedLanguage([first, ...rest], read);
   }
 
   /**
@@ -1006,7 +1038,8 @@ export class CollectionEntryService extends BaseService {
         params.locale === EVERY_LOCALE
           ? "all"
           : [params.locale ?? this.localization?.defaultLocale ?? ""],
-        params.locale === EVERY_LOCALE ? undefined : sent
+        params.locale === EVERY_LOCALE ? undefined : sent,
+        params.locale
       );
       if (refusal) return refusal;
     }
@@ -1055,7 +1088,9 @@ export class CollectionEntryService extends BaseService {
       | "authenticatedScope"
     >,
     locales: readonly string[] | "all",
-    written?: Readonly<Record<string, unknown>>
+    written?: Readonly<Record<string, unknown>>,
+    /** The language the save writes, as it names it, which its field rules are asked in. */
+    writeLocale?: string
   ): Promise<CollectionServiceResult | null> {
     // Nothing to read where no value rule could refuse: most collections.
     if (
@@ -1068,24 +1103,62 @@ export class CollectionEntryService extends BaseService {
     // what the entry holds.
     const read = await this.mutationService.publishPartsReads(params, {
       action: "publish",
-      locales: locales === "all" ? [] : locales,
+      // Each language's rule, in that language: every language for a publish of all of them.
+      locales,
       shared: locales === "all",
     });
     if ("answer" in read) return null;
-    if (read.sharedRefusal !== null || read.languageRefusals.size > 0) {
+    const { state } = read;
+    // The languages the value rules judge: each one written, or, for every language, each stored
+    // one not yet live. Where the caller may not publish one of them, the transition refuses it as
+    // access, and the value rules say nothing of what the entry holds there. A language refused
+    // that is not judged here is not one this publish puts live.
+    const judged =
+      locales === "all"
+        ? state.configured.filter(locale => {
+            const stored = state.languages.get(locale);
+            return stored !== undefined && !stored.live;
+          })
+        : locales;
+    if (
+      read.sharedRefusal !== null ||
+      judged.some(locale => read.languageRefusals.has(locale))
+    ) {
       return null;
     }
-    const { state } = read;
     if (written === undefined || locales === "all") {
       return publishValueRefusal(state, locales);
+    }
+    // Only what the save may write counts: a value its field rules refuse is not written, so it
+    // cannot stand in for one the language lacks.
+    // A deep copy: the field write rules delete denied values in place, nested ones too, and the
+    // save and its hooks must still be handed what was submitted.
+    const writable = structuredClone({ ...written });
+    if (params.overrideAccess !== true) {
+      // Asked in the language the save writes, as the save itself asks them, so a field rule
+      // that answers by language answers here as it will there.
+      await withRuleLanguage(
+        writeLanguagesFor(this.localization, writeLocale),
+        () =>
+          applyFieldWriteAccess({
+            kind: "collection",
+            slug: params.collectionName,
+            data: writable,
+            operation: "update",
+            user: params.user,
+            authenticatedScope: params.authenticatedScope,
+            overrideAccess: false,
+            id: params.entryId,
+          })
+      );
     }
     const languages = new Map(state.languages);
     for (const locale of locales) {
       const stored = languages.get(locale);
       const own = Object.fromEntries(
         state.fields
-          .filter(field => field.translatable && field.name in written)
-          .map(field => [field.name, written[field.name]])
+          .filter(field => field.translatable && field.name in writable)
+          .map(field => [field.name, writable[field.name]])
       );
       languages.set(locale, {
         live: stored?.live ?? false,
@@ -1243,8 +1316,14 @@ export class CollectionEntryService extends BaseService {
   ): Promise<number> {
     // The draft is deleted under the language as named, so one the site no
     // longer configures is told every language, not the default.
+    // The shared part's draft shows in every language, so discarding it is judged in each.
     return withRuleLanguage(
-      writeAsNamedLanguagesFor(this.localization, params.locale ?? undefined),
+      params.shared === true
+        ? writeLanguagesFor(this.localization, EVERY_LOCALE)
+        : writeAsNamedLanguagesFor(
+            this.localization,
+            params.locale ?? undefined
+          ),
       () => this.mutationService.discardWorkingDraft(params)
     );
   }
