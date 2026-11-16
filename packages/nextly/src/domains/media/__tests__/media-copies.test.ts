@@ -313,23 +313,55 @@ describe("copyBytesOf when storage fails", () => {
   });
 });
 
+/** `count` items, each its own original holding the same photo. */
+async function itemsWithPhotos(count: number) {
+  const { item, bytes } = await itemWithPhoto();
+  const items = Array.from({ length: count }, (_, n) => ({
+    ...item,
+    filename: `media/2026/11/photo-${n}.jpg`,
+  }));
+  const files = Object.fromEntries(items.map(one => [one.filename, bytes]));
+  return { items, files };
+}
+
+/** Counts how many resizes run at once, the most at any moment. */
+function countingResizes(processor: ImageProcessor) {
+  const make = processor.copyAtWidth.bind(processor);
+  let now = 0;
+  let most = 0;
+  vi.spyOn(processor, "copyAtWidth").mockImplementation(async (...args) => {
+    now += 1;
+    most = Math.max(most, now);
+    try {
+      return await make(...args);
+    } finally {
+      now -= 1;
+    }
+  });
+  return { most: () => most };
+}
+
 describe("copyBytesOf under load", () => {
   it("makes at most two different copies at once, and the rest wait their turn", async () => {
+    const { items, files } = await itemsWithPhotos(6);
+    const { storage, written } = memoryStorage(files);
+    const processor = new ImageProcessor();
+    const counted = countingResizes(processor);
+
+    const all = await Promise.all(
+      items.map(item => copyBytesOf(item, 640, null, { storage, processor }))
+    );
+
+    expect(counted.most()).toBe(2);
+    expect(all.every(served => served.kind === "copy")).toBe(true);
+    expect(written).toHaveLength(6);
+  });
+
+  it("makes the copies of one original one after another", async () => {
     const { item, bytes } = await itemWithPhoto();
     const { storage, written } = memoryStorage({ [item.filename]: bytes });
     const processor = new ImageProcessor();
-    const make = processor.copyAtWidth.bind(processor);
-    let now = 0;
-    let most = 0;
-    vi.spyOn(processor, "copyAtWidth").mockImplementation(async (...args) => {
-      now += 1;
-      most = Math.max(most, now);
-      try {
-        return await make(...args);
-      } finally {
-        now -= 1;
-      }
-    });
+    const counted = countingResizes(processor);
 
     const all = await Promise.all(
       [96, 160, 240, 320, 640, 960].map(width =>
@@ -337,7 +369,7 @@ describe("copyBytesOf under load", () => {
       )
     );
 
-    expect(most).toBe(2);
+    expect(counted.most()).toBe(1);
     expect(all.every(served => served.kind === "copy")).toBe(true);
     expect(written).toHaveLength(6);
   });
@@ -500,16 +532,14 @@ describe("copyBytesOf with bounded waits", () => {
   });
 
   it("queues a bounded number of different copies, and serves the rest the original", async () => {
-    const { item, bytes } = await itemWithPhoto();
-    const { storage, written } = memoryStorage({ [item.filename]: bytes });
+    const { items, files } = await itemsWithPhotos(24);
+    const { storage, written } = memoryStorage(files);
     const processor = new ImageProcessor();
     const held = heldResizes(processor);
 
-    // Every width in three formats: 24 different copies at once.
-    const asks = [96, 160, 240, 320, 640, 960, 1280, 1920].flatMap(width =>
-      ["image/avif", "image/webp", null].map(accept =>
-        copyBytesOf(item, width, accept, { storage, processor })
-      )
+    // A copy of each of 24 originals at once.
+    const asks = items.map(item =>
+      copyBytesOf(item, 640, "image/webp", { storage, processor })
     );
     await settle();
     // Two being made, the queue full, and every ask past it answered now.
@@ -593,6 +623,31 @@ describe("a copy that could not be kept", () => {
         await copyBytesOf(item, width, accept, { storage, processor })
       ).toEqual({ kind: "original" });
     }
+    expect(resize).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads and tries a refused original once, however many widths are asked for at once", async () => {
+    const { item, bytes } = await itemWithPhoto();
+    const { storage } = memoryStorage({ [item.filename]: bytes });
+    let originalReads = 0;
+    const counting: CopyStorage = {
+      ...storage,
+      read: async path => {
+        if (path === item.filename) originalReads += 1;
+        return await storage.read!(path);
+      },
+    };
+    const processor = new ImageProcessor({ copyPixelLimit: 1000 });
+    const resize = vi.spyOn(processor, "copyAtWidth");
+
+    const served = await Promise.all(
+      [96, 160, 240, 320, 640, 960, 1280, 1920].map(width =>
+        copyBytesOf(item, width, "image/webp", { storage: counting, processor })
+      )
+    );
+
+    expect(served.every(one => one.kind === "original")).toBe(true);
+    expect(originalReads).toBe(1);
     expect(resize).toHaveBeenCalledTimes(1);
   });
 

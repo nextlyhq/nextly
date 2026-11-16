@@ -46,7 +46,12 @@ import {
   type CopyFormat,
   type MediaCopyWidth,
 } from "./copy-rules";
-import { copyInTurn, notAgainForAWhile, notTriedAgainYet } from "./copy-turns";
+import {
+  copyInTurn,
+  notAgainForAWhile,
+  notTriedAgainYet,
+  oneAtATimeFor,
+} from "./copy-turns";
 
 /**
  * A copy of a stored image, as a caller is told of it.
@@ -249,22 +254,44 @@ export async function copyBytesOf(
   if (kept !== null) {
     return { kind: "copy", bytes: kept, mimeType: format.mimeType };
   }
-  // A copy, or an original, that could not be kept or resized a moment ago
-  // is not tried again yet.
-  if (
-    notTriedAgainYet(copyMemoryKey(key)) ||
-    notTriedAgainYet(originalMemoryKey(item.filename))
-  ) {
-    return ORIGINAL;
-  }
+  if (rememberedAsNoCopy(item, key)) return ORIGINAL;
 
   // A burst of asks for the same copy, as a page with one image in many
   // places makes on its first view, shares one resize. Past the bounds on
-  // waiting, the ask is served the original rather than queued.
+  // waiting, the ask is served the original rather than queued. Copies of
+  // one original are made one after another, and each asks again, once its
+  // turn comes, what the one before it may have learned or kept.
   const made = copyInTurn(key, () =>
-    makeCopy(item, snapped, format, key, storage, deps)
+    oneAtATimeFor(item.filename, async () => {
+      if (rememberedAsNoCopy(item, key)) return ORIGINAL;
+      const keptMeanwhile = await readOrNull(
+        storage,
+        key,
+        copyReadCap(item),
+        deps
+      );
+      if (keptMeanwhile !== null) {
+        return {
+          kind: "copy",
+          bytes: keptMeanwhile,
+          mimeType: format.mimeType,
+        };
+      }
+      return await makeCopy(item, snapped, format, key, storage, deps);
+    })
   );
   return made === undefined ? ORIGINAL : await made;
+}
+
+/**
+ * Whether a copy, or its whole original, could not be kept or resized a
+ * moment ago, and so is not tried again yet.
+ */
+function rememberedAsNoCopy(item: CopySource, key: string): boolean {
+  return (
+    notTriedAgainYet(copyMemoryKey(key)) ||
+    notTriedAgainYet(originalMemoryKey(item.filename))
+  );
 }
 
 /** Make one copy from the original, keep it, and hand back its bytes. */

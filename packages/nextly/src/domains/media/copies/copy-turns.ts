@@ -10,7 +10,11 @@
  *   images, or a caller walking every width, holds a few requests open
  *   rather than an ever-longer queue;
  * - at most {@link SHARING_AT_MOST} asks wait on one copy being made, the
- *   first ask among them.
+ *   first ask among them;
+ * - copies of one original are made one after another
+ *   ({@link oneAtATimeFor}), so what one learns of the original, that it is
+ *   past the read cap or cannot be resized, reaches the next before it reads
+ *   the original again.
  *
  * A copy that could not be kept is not tried again for
  * {@link NOT_AGAIN_FOR_MS}: until then it is answered with the original
@@ -62,6 +66,35 @@ const running = new Map<string, { result: Promise<unknown>; asks: number }>();
 
 /** When each copy that could not be kept may be tried again, by key. */
 const notAgainUntil = new Map<string, number>();
+
+/** The last work queued for each original, by the original's key. */
+const lastFor = new Map<string, Promise<void>>();
+
+/**
+ * Run `work` once every work queued before it for the same `original` is
+ * done. Run inside a turn, so a copy waiting here holds its turn: copies of
+ * one original are made one after another, never side by side, and the
+ * bounds on turns and waiting are counted as before.
+ */
+export async function oneAtATimeFor<T>(
+  original: string,
+  work: () => Promise<T>
+): Promise<T> {
+  const before = lastFor.get(original) ?? Promise.resolve();
+  let finished = () => {};
+  const mine = new Promise<void>(resolve => {
+    finished = resolve;
+  });
+  const last = before.then(() => mine);
+  lastFor.set(original, last);
+  await before;
+  try {
+    return await work();
+  } finally {
+    finished();
+    if (lastFor.get(original) === last) lastFor.delete(original);
+  }
+}
 
 /** Run `work` once fewer than {@link MAKING_AT_ONCE} copies are being made. */
 async function inTurn<T>(work: () => Promise<T>): Promise<T> {
@@ -133,4 +166,5 @@ export function resetCopyTurnsForTests(): void {
   waiting.length = 0;
   running.clear();
   notAgainUntil.clear();
+  lastFor.clear();
 }
