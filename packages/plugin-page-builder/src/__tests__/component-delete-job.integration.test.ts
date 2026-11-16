@@ -1546,7 +1546,7 @@ describe.each(getConfiguredTestDialects())(
           | { error?: { message?: string } }
           | undefined;
         expect(refusal?.error?.message).toContain(
-          'the Layout "Racing" uses it'
+          'the header & footer set "Racing" uses it'
         );
         expect(await exists(t, cardId)).toBe(true);
         expect(await layoutsNaming(t, cardId)).toEqual(["Racing"]);
