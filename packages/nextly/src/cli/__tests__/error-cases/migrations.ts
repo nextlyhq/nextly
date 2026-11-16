@@ -27,6 +27,10 @@ import {
   resolveMigration,
   type ResolveMigrationArgs,
 } from "../../../domains/schema/migrate/resolve";
+import {
+  refuseUnlessProven,
+  statementsShownBySnapshot,
+} from "../../../domains/schema/migrate/snapshot-proof";
 import { parseSnapshotFile } from "../../../domains/schema/migrate-create/snapshot-io";
 import type { NextlySchemaSnapshot } from "../../../domains/schema/pipeline/diff/types";
 import { describeHolder } from "../../../domains/schema/pipeline/schema-lock";
@@ -78,6 +82,8 @@ async function refusedVerdict(flag: string | boolean | undefined) {
 
 /** An app migration's file, and the folder it is in. */
 const FILE = "20261020_120000_add_posts.sql";
+/** The checksum `FILE`'s snapshot recorded, which it still matches. */
+const POSTS_CHECKSUM = "5f0c".repeat(16);
 const MIGRATIONS = `${PROJECT}/migrations`;
 
 /** A Schema Builder save's file, named as a save names it. */
@@ -260,6 +266,29 @@ export const MIGRATION_CASES = {
       "nextly migrate",
       ["20261020_120000_add_posts.sql"],
       []
+    ),
+  // As `refuseUnlessProven` refuses a pending file that adds a column and backfills it, the
+  // column already brought to the database through `db:sync`.
+  MIGRATION_NOT_PROVEN: () =>
+    thrown(() =>
+      refuseUnlessProven({
+        file: { filename: FILE, sha256: POSTS_CHECKSUM },
+        proof: {
+          statements: statementsShownBySnapshot(
+            [
+              'ALTER TABLE "dc_posts" ADD COLUMN "slug" text',
+              `UPDATE "dc_posts" SET "slug" = 'untitled'`,
+            ],
+            "postgresql",
+            {
+              before: { tables: [{ name: "dc_posts", columns: [] }] },
+              target: { tables: [{ name: "dc_posts", columns: [] }] },
+            }
+          ),
+          recordedChecksum: POSTS_CHECKSUM,
+        },
+        findFileApplies: () => Promise.resolve([]),
+      })
     ),
   // As `oldBuilderFilesChanged` in `cli/commands/migrate.ts` raises it.
   OLD_BUILDER_FILE_SNAPSHOT_ADDED: () =>

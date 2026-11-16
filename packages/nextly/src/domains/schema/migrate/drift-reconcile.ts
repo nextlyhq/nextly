@@ -14,7 +14,10 @@
  *                            stopped part-way: it ran outside a transaction,
  *                            or on MySQL (`assertNotPartiallyApplied`), and
  *                            the snapshot does not prove its whole effect
- *                            (`schemaOnly`).
+ *                            (`schemaOnly`); and, for an app file
+ *                            `nextly migrate` hands its proof
+ *                            (`snapshotProof`), unless its snapshot proves
+ *                            all of it (`refuseUnlessProven`).
  *   - neither              → DRIFT: throw NEXTLY_MIGRATION_DRIFT.
  *
  * Two snapshots are equivalent when the diff engine finds no difference.
@@ -42,6 +45,7 @@ import {
   partiallyAppliedAdvice,
   type MigrationUnit,
 } from "./migration-transaction";
+import { refuseUnlessProven, type SnapshotProof } from "./snapshot-proof";
 
 export type ReconcileState = "in_sync" | "already_applied" | "drift";
 
@@ -169,6 +173,12 @@ export interface ReconcileFileArgs {
    * record is written as any other is.
    */
   recordStopped?: (write: (db: unknown) => Promise<void>) => Promise<void>;
+  /**
+   * For an app file `nextly migrate` runs: what proves the file may be recorded applied without
+   * running when the database stands at its end and not its start (`refuseUnlessProven`). Absent
+   * (a plugin module, or a Schema Builder save), such a file is recorded as before.
+   */
+  snapshotProof?: SnapshotProof;
   /** Dev/ui/db_sync event ids this file_apply supersedes (ALREADY_APPLIED). */
   supersedableEventIds?: () => Promise<string[]>;
   /**
@@ -734,6 +744,13 @@ export async function reconcileFile(
   if (equiv(live, target)) {
     if (file.schemaOnly !== true) {
       await assertNotPartiallyApplied(file, args.dialect, repo);
+    }
+    if (args.snapshotProof !== undefined) {
+      await refuseUnlessProven({
+        file,
+        proof: args.snapshotProof,
+        findFileApplies: filename => repo.findFileApplies(filename),
+      });
     }
     await adoptFile(args);
     return { state: "already_applied" };

@@ -1,0 +1,38 @@
+---
+title: MIGRATION_NOT_PROVEN
+description: "A pending migration's schema is already in the database, but its snapshot does not prove everything the file does, so it was not recorded as applied without running."
+---
+
+## Cause
+
+A pending migration's schema is already in the database, but its snapshot does not prove everything the file does, so it was not recorded as applied without running.
+
+The database can reach a migration's end without the migration running, for example after `nextly db:sync` on a shared database. `nextly migrate` then records the file as applied without running it, but only when its snapshot proves the file's whole effect:
+
+- every statement changes only what the snapshot records: tables, columns, indexes, constraints and foreign keys. A statement that reads or writes rows (an `UPDATE` that backfills a column, for example) or that changes anything else (a trigger, a view, a function, a sequence, an extension or a grant) is not shown by the snapshot;
+- the file's checksum matches the one recorded with its snapshot when `nextly migrate:create` wrote it, so it has not been edited since;
+- it has no attempt that failed or recorded no outcome.
+
+If any of these fails, recording the file would skip work the database may not have, so `nextly migrate` stops before running or recording it. The error lists each statement it would have skipped.
+
+A migration whose database stands where it starts always runs, data statements included.
+
+## Fix
+
+1. Run the statements the error marks as not shown by the snapshot by hand, or confirm they are not needed on this database.
+2. Record the file as applied: `nextly migrate:resolve --applied <migration>`.
+3. Run `nextly migrate` again.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ 20261020_120000_add_posts.sql is pending, and the database already stands where it ends, not where it starts.
+  Why:  It was neither run nor recorded as applied without running: its snapshot does not show what 1 statement does.
+        Statements it would have skipped:
+          1. ALTER TABLE "dc_posts" ADD COLUMN "slug" text (the database has it)
+          2. UPDATE "dc_posts" SET "slug" = (not shown by its snapshot)
+  Next: Run the statements its snapshot does not show by hand, or confirm they are not needed, then record the file with `nextly migrate:resolve --applied 20261020_120000_add_posts` and run `nextly migrate` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-not-proven  (MIGRATION_NOT_PROVEN)
+```

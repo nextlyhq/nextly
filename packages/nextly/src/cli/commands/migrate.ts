@@ -187,6 +187,7 @@ import {
   constructsAdded,
   refuseUnitTheServerCannotHold,
 } from "../../domains/schema/migrate/server-constructs";
+import { statementsShownBySnapshot } from "../../domains/schema/migrate/snapshot-proof";
 import {
   assertRunnableStatements,
   marksNoTransaction,
@@ -3960,11 +3961,13 @@ export function historyRefusalOf(error: unknown): string | undefined {
 
 /**
  * The exit code a command that checks the app's history ends with on `error`:
- * 2 for an applied file edited since it ran, 3 for an app migration the
- * folder lacks, the codes the guide documents, so a deploy script can tell
- * them from any other failure (1).
+ * 2 for an applied file edited since it ran, or a pending file the database
+ * stands at the end of whose snapshot does not prove all of it, 3 for an app
+ * migration the folder lacks, the codes the guide documents, so a deploy
+ * script can tell them from any other failure (1).
  */
 export function migrateExitCode(error: unknown): 1 | 2 | 3 {
+  if (NextlyError.isCode(error, "NEXTLY_MIGRATION_NOT_PROVEN")) return 2;
   if (!(error instanceof CliError)) return 1;
   if (error.code === "MIGRATION_TAMPERED") return 2;
   return error.code === "MIGRATION_MISSING" ? 3 : 1;
@@ -4694,6 +4697,16 @@ export async function runFileMigrations(args: {
         ...(withFile === undefined
           ? {}
           : { beforeRecorded: () => withFile(m.transaction) }),
+        // Where the database already stands at the file's end, it is recorded without running
+        // only when its snapshot proves all of it: each statement as written, judged against both
+        // sides whole, and the checksum the snapshot recorded when the file was written.
+        snapshotProof: {
+          statements: statementsShownBySnapshot(upStatements, dialect, {
+            before,
+            target,
+          }),
+          recordedChecksum: targetFile?.migrationHash ?? "",
+        },
       });
       applied++;
       lastApplied = filename;

@@ -289,6 +289,22 @@ function concurrentRunParts(error: NextlyError): CliErrorParts {
   };
 }
 
+/**
+ * A pending file refused for what its snapshot does not prove (`refuseUnlessProven`): its message's
+ * first sentence says where the database stands, the rest of that line why it was not recorded,
+ * the lines after it the statements a recording would have skipped, and the last line the step.
+ */
+function notProvenParts(error: NextlyError): CliErrorParts {
+  const lines = error.publicMessage.split("\n");
+  const [what, reasons] = splitFirst(lines[0] ?? error.publicMessage);
+  if (lines.length < 3) return { what, why: reasons, next: RUN_AGAIN };
+  return {
+    what,
+    why: [reasons, ...lines.slice(1, -1)].join("\n"),
+    next: lines[lines.length - 1],
+  };
+}
+
 /** How `assertNotPartiallyApplied` ends the sentence that says what it refuses. */
 const UNFINISHED_REFUSAL_ENDS = [
   "so it is not recorded as applied without running.",
@@ -658,6 +674,17 @@ export const MIGRATION_CODES = defineCodes({
   MIGRATION_MISSING: {
     cause:
       "A migration recorded as applied has no file in the migrations folder.",
+  },
+  MIGRATION_NOT_PROVEN: {
+    cause:
+      "A pending migration's schema is already in the database, but its snapshot does not prove everything the file does, so it was not recorded as applied without running.",
+    from: [
+      {
+        code: "NEXTLY_MIGRATION_NOT_PROVEN",
+        reason: "not-proven",
+        describe: notProvenParts,
+      },
+    ],
   },
   OLD_BUILDER_FILE_SNAPSHOT_ADDED: {
     cause:

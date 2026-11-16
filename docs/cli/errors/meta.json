@@ -75,6 +75,7 @@
     "migration-irreversible",
     "migration-missing",
     "migration-name-required",
+    "migration-not-proven",
     "migration-sql-uncheckable",
     "migration-tampered",
     "missing-migration",
