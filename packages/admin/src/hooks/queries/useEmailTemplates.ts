@@ -167,7 +167,9 @@ export function useEmailTemplate(
 
 /**
  * useTemplateSenders — Fetch what sends a template, read fresh for the
- * delete guard.
+ * delete guard. Stale the moment it lands: the answer decides what a
+ * deletion destroys, so the default five-minute freshness must not serve a
+ * cached check over a referencing rule added moments ago.
  */
 export function useTemplateSenders(
   id?: string | null,
@@ -183,6 +185,7 @@ export function useTemplateSenders(
       return getTemplateSenders(id);
     },
     enabled: Boolean(id),
+    staleTime: 0,
     ...options,
   });
 }

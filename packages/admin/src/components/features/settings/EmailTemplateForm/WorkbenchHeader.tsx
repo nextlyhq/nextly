@@ -131,12 +131,16 @@ function StateLine({
     ...(record.sentBy?.declared ?? []),
     ...(record.sentBy?.referenced ?? []),
   ];
-  const summary = senders.length > 0 ? senders.join(", ") : record.description;
+  const summary =
+    senders.length > 0 ? senders.join(", ") : (record.description ?? "");
   // Said beside whatever was checked, and instead of a plain description
-  // when nothing was: an unanswered plugin must not read as quiet.
+  // when nothing was: an unanswered plugin must not read as quiet. A blank
+  // template with nothing checked says only that.
   const incomplete = record.referencesComplete === false;
   const summaryText = incomplete
-    ? `${summary} · some senders couldn't be checked`
+    ? [summary, "some senders couldn't be checked"]
+        .filter(part => part.length > 0)
+        .join(" · ")
     : summary;
   return (
     <div className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs text-muted-foreground">
