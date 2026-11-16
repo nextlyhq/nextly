@@ -77,10 +77,14 @@ async function render(
             if (!("url" in source) || !source.url.startsWith("/media/hero")) {
               return [];
             }
-            return KEPT.filter(width => width <= upTo).map(width => ({
-              url: `${source.url.replace(/\.jpg$/, "")}-${width}.webp`,
-              width,
-            }));
+            // Never wider than the original: the small one's stop at 320.
+            const own = source.url.includes("small") ? 600 : 3000;
+            return KEPT.filter(width => width <= upTo && width <= own).map(
+              width => ({
+                url: `${source.url.replace(/\.jpg$/, "")}-${width}.webp`,
+                width,
+              })
+            );
           },
       BREAKPOINTS,
       nodes
@@ -260,16 +264,14 @@ describe("the first section's background", () => {
   });
 
   it("is sized by the width it is drawn at, wider than its box or not", async () => {
-    // 2000px wide on every device: twice that is past every copy, so each
-    // device draws the widest the site keeps, one copy for all.
+    // 2000px wide on every device: wider than every copy, so each device
+    // draws the original, which is then the sharpest there is.
     const { head } = await render([
       section("hero", {
         base: { base: { background: { url: PHOTO, size: "2000px auto" } } },
       }),
     ]);
-    expect(preloadsOf(head).map(link => link.href)).toEqual([
-      "/media/hero-1920.webp",
-    ]);
+    expect(preloadsOf(head).map(link => link.href)).toEqual([PHOTO]);
     // A quarter of the box: 480 on a desktop, 256 on a tablet, 160 on a phone.
     const quarter = await render([
       section("hero", {
@@ -280,6 +282,27 @@ describe("the first section's background", () => {
       "/media/hero-960.webp",
       "/media/hero-640.webp",
       "/media/hero-320.webp",
+    ]);
+  });
+
+  it("keeps its original where the copies stop short of the drawn width", async () => {
+    // A 600px upload has copies only to 320. Drawn at 600, the original is
+    // sharper than any of them.
+    const small = "/media/hero-small.jpg";
+    const { head } = await render([
+      section("hero", {
+        base: { base: { background: { url: small, size: "600px auto" } } },
+      }),
+    ]);
+    expect(preloadsOf(head).map(link => link.href)).toEqual([small]);
+    // Drawn at 150, a copy reaches it: the widest within twice that, 240.
+    const narrow = await render([
+      section("hero", {
+        base: { base: { background: { url: small, size: "150px auto" } } },
+      }),
+    ]);
+    expect(preloadsOf(narrow.head).map(link => link.href)).toEqual([
+      "/media/hero-small-240.webp",
     ]);
   });
 

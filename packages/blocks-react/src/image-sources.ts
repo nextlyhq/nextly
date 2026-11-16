@@ -13,7 +13,8 @@
  *
  * Each device gets the narrowest copy at least twice the width the background
  * is drawn at there, which a screen at twice the density draws sharply; where
- * none is that wide, the widest the site keeps. That width is the box's for
+ * none is that wide, the widest copy where it reaches the drawn width; and
+ * where none does, the original, which is then the sharpest there is. That width is the box's for
  * `cover` and `contain`, and the stated width for a length or a percentage. A
  * `cover` image in a box taller than the image's proportions is drawn wider
  * than the box, which only its height decides: sized by the box's width, as
@@ -217,14 +218,22 @@ function selectorFor(
 }
 
 /**
- * The copy a device draws: the narrowest at least twice its slot's width, or
- * the widest the site keeps where none is that wide.
+ * The address a device draws: the narrowest copy at least twice the width the
+ * background is drawn at there; else the widest copy, where it is at least
+ * that width; else the original. Copies are never wider than their original,
+ * so where none reaches the drawn width the original is the sharpest there is.
  */
-function copyFor(
+function sourceFor(
   device: SlotDevice,
-  copies: readonly ImageCopy[]
-): ImageCopy | undefined {
-  return copies.find(copy => copy.width >= device.width * 2) ?? copies.at(-1);
+  copies: readonly ImageCopy[],
+  original: string
+): string {
+  const sharp = copies.find(each => each.width >= device.width * 2);
+  if (sharp !== undefined) return sharp.url;
+  const widest = copies.at(-1);
+  return widest !== undefined && widest.width >= device.width
+    ? widest.url
+    : original;
 }
 
 /** The `background-image` the page's compiler writes for an address. */
@@ -318,16 +327,17 @@ async function fetchableCopies(
 /** Each device's copy, widest device first, or none where one has no copy. */
 function bandsOf(
   slot: ImageSlot,
-  copies: readonly ImageCopy[]
+  copies: readonly ImageCopy[],
+  original: string
 ): BackgroundBand[] | undefined {
+  if (copies.length === 0) return undefined;
   const bands: BackgroundBand[] = [];
   for (const device of slot.devices) {
-    const copy = copyFor(device, copies);
-    if (copy === undefined) return undefined;
+    const url = sourceFor(device, copies, original);
     bands.push(
       device.maxViewport === undefined
-        ? { url: copy.url }
-        : { maxViewport: device.maxViewport, url: copy.url }
+        ? { url }
+        : { maxViewport: device.maxViewport, url }
     );
   }
   return bands.sort(
@@ -406,7 +416,7 @@ export async function sizedFirstBackground(
     upTo,
     mayFetchUrl
   );
-  const bands = bandsOf(slot, copies);
+  const bands = bandsOf(slot, copies, original.url);
   const selector = selectorFor(nodeClass, page.pageScope);
   if (bands === undefined || selector === undefined) return undefined;
   const css = bandRules(bands, selector, mayFetchUrl);
