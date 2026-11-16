@@ -9,7 +9,7 @@ process.env.NEXTLY_SECRET =
   "test-secret-must-be-at-least-32-characters-long!!";
 
 import { randomBytes } from "node:crypto";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { cp, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -35,6 +35,9 @@ import {
 import type { ServiceContainer } from "../../../../services";
 import { _resetEnvCache } from "../../../../shared/lib/env";
 import { SchemaEventsRepository } from "../../../schema/events/schema-events-repository";
+import { migrateCore } from "../../../../cli/commands/migrate";
+import { createLogger } from "../../../../cli/utils/logger";
+import { NO_CONSENT } from "../../../schema/migrate/data-loss-consent";
 import { introspectLiveSnapshot } from "../../../schema/pipeline/diff/introspect-live";
 import { _resetApplyDesiredSchemaForTests } from "../../../schema/pipeline/index";
 
@@ -257,6 +260,14 @@ for (const dialect of getConfiguredTestDialects()) {
       _resetEnvCache();
     });
 
+    /** The posts table as `adapter`'s database holds it: its columns, keys and indexes. */
+    async function postsTable(adapter: DrizzleAdapter) {
+      const live = await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [
+        "dc_posts",
+      ]);
+      return live.tables[0];
+    }
+
     /** The foreign keys the live table declares, by the column they constrain. */
     async function foreignKeyColumns(table: string): Promise<string[]> {
       const live = await introspectLiveSnapshot(
@@ -310,7 +321,9 @@ for (const dialect of getConfiguredTestDialects()) {
       t: TestNextly,
       hasMany: boolean,
       relationTo: string | string[] = "authors",
-      required = false
+      required = false,
+      // Fields `posts` holds beside `author`, which a switch of `author` leaves as they are.
+      others: Record<string, unknown>[] = []
     ) {
       await createCollection("authors", [{ name: "name", type: "text" }]);
       await createCollection("tags", [{ name: "label", type: "text" }]);
@@ -323,6 +336,7 @@ for (const dialect of getConfiguredTestDialects()) {
           ...(required ? { required } : {}),
           options: { target: "authors", relationType: "manyToOne" },
         },
+        ...others,
       ]);
       const a = (
         await t.nextly.create({
@@ -831,6 +845,93 @@ for (const dialect of getConfiguredTestDialects()) {
             ).toBe(true);
           }
         });
+
+        // SQLite drops a key only by rebuilding its table, so the file the switch writes rebuilds it:
+        // replayed on an empty database, the files leave the table as it stood before the switch,
+        // with only the relationship's column, its key and its index changed as the switch changes
+        // them here. (This database takes the switch through the push, whose rebuild is judged
+        // elsewhere; the replay is the files' own.)
+        it.runIf(dialect === "sqlite" && road !== "the push")(
+          "rebuilds the table on replay when a switch to many drops the relationship's key, keeping everything else",
+          async () => {
+            const t = await boot();
+            // A second keyed relationship, which the rebuild must carry whole: a rebuild that
+            // dropped every key would otherwise pass as one that dropped only the switched one.
+            await postsWithAuthors(t, false, "authors", false, [
+              {
+                name: "editor",
+                type: "relationship",
+                relationTo: "authors",
+                hasMany: false,
+                options: { target: "authors", relationType: "manyToOne" },
+              },
+            ]);
+            expect(await foreignKeyColumns("dc_posts")).toEqual(
+              expect.arrayContaining(["author", "editor"])
+            );
+            const before = await postsTable(database.adapter);
+
+            expect(await switchAuthor(database.adapter, true)).toEqual({
+              accepted: true,
+            });
+            expect(await foreignKeyColumns("dc_posts")).not.toContain("author");
+            expect(await foreignKeyColumns("dc_posts")).toContain("editor");
+            const here = await postsTable(database.adapter);
+
+            // The folder a deploy receives, copied out before the next instance's boot replaces
+            // this one's project.
+            const { migrationsDir: written } = container.get<{
+              migrationsDir: string;
+            }>("builderSaveSetup");
+            const migrationsDir = await mkdtemp(
+              join(tmpdir(), "nextly-has-many-replay-")
+            );
+            await cp(written, migrationsDir, { recursive: true });
+            const files = (await readdir(migrationsDir)).filter(file =>
+              file.endsWith(".sql")
+            );
+            // A deploy's database: empty of the app's tables, with Nextly's own, as a booted
+            // instance leaves it.
+            const replay = await openDatabase(dialect);
+            try {
+              clearServices();
+              _resetApplyDesiredSchemaForTests();
+              await createTestNextly({ adapter: replay.adapter as never });
+              const replayed = await migrateCore({
+                extensionSchema: undefined,
+                dialect,
+                db: replay.adapter.getDrizzle(),
+                adapter: replay.adapter as never,
+                migrationsDir,
+                logger: createLogger({ quiet: true }),
+                lockMode: "fail-fast",
+                consent: NO_CONSENT,
+                interactive: false,
+              } as never);
+
+              expect({ applied: replayed.applied, ran: replayed.ran }).toEqual({
+                applied: files.length,
+                ran: true,
+              });
+              const replayedTable = await postsTable(replay.adapter);
+              const otherColumns = (table: typeof before) =>
+                table?.columns.filter(c => c.name !== "author");
+              const authorColumn = (table: typeof before) =>
+                table?.columns.find(c => c.name === "author");
+              // Every key the table keeps, as it stands here, and none on `author`.
+              expect(replayedTable?.foreignKeys).toEqual(here?.foreignKeys);
+              expect(
+                replayedTable?.foreignKeys?.flatMap(fk => fk.columns) ?? []
+              ).not.toContain("author");
+              expect(authorColumn(replayedTable)).toEqual(authorColumn(here));
+              expect(replayedTable?.indexes).toEqual(here?.indexes);
+              expect(otherColumns(replayedTable)).toEqual(otherColumns(before));
+            } finally {
+              await replay.close();
+              await rm(migrationsDir, { recursive: true, force: true });
+            }
+          }
+        );
 
         it("refuses many to one while a row holds several, naming the field and its rows", async () => {
           const t = await boot();

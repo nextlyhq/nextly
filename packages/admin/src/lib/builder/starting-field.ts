@@ -112,6 +112,17 @@ export function startingFieldName(type: string): string {
 const PAGE_BUILDER_FIELD_TYPE = "blocks";
 
 /**
+ * Whether an entity is laid out from blocks: the Page Builder's field at its
+ * top level, which a new entry or a Single's document opens the Page Builder
+ * on.
+ */
+export function hasPageBuilderField(
+  fields: readonly { name: string; type: string }[]
+): boolean {
+  return fields.some(field => field.type === PAGE_BUILDER_FIELD_TYPE);
+}
+
+/**
  * The starting-field choices in the new-entity dialog's words: what editors
  * will make. The standard fields are "Entries with fields" and the Page
  * Builder's field "Pages you design visually"; any other plugin's choice keeps

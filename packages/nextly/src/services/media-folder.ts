@@ -47,6 +47,7 @@ import {
   lockMediaItems,
 } from "../domains/media/lock-media-items";
 import {
+  filesToRemoveOf,
   errorForLog,
   filesKeptByOthers,
   removeStoredFiles,
@@ -68,6 +69,7 @@ import {
 } from "../domains/media/revalidate-media";
 import { StoredFileSearchReader } from "../domains/media/stored-file-search";
 import {
+  copiesToRemove,
   storedFilesOf,
   type MediaFilesRecord,
 } from "../domains/media/stored-files";
@@ -203,7 +205,10 @@ function removeEveryStoredFile(storage: StoredFileRemover): RemoveStoredFiles {
  * recorded by URL alone that it serves is among them (`storageReadingOf`).
  */
 interface FolderStorageCleanup
-  extends Pick<StoredFileRemover, "getPublicUrl" | "getStorageType"> {
+  extends Pick<
+    StoredFileRemover,
+    "getPublicUrl" | "getStorageType" | "keepsCopies"
+  > {
   bulkDelete(
     filePaths: string[],
     collection?: string
@@ -292,7 +297,15 @@ function removalThrough(
         record,
         reading.locator
       );
-      filePaths.push(...paths.filter(filePath => !kept.has(filePath)));
+      // Every file the item can have, then whichever another item refers to
+      // taken out, a copy as much as the original: a copy another item names
+      // as its own file stays.
+      filePaths.push(
+        ...[
+          ...paths,
+          ...copiesToRemove(record, reading.keepsCopies, kept),
+        ].filter(filePath => !kept.has(filePath))
+      );
       for (const url of unlocated) warnUnlocated(url, record.id);
       for (const url of notHere) warnSizeNotHere(url, record.id);
     }
@@ -1159,7 +1172,7 @@ export class MediaFolderService extends BaseService {
         const { reading } = files;
         const kept = await filesKeptByOthers(
           this.storedFileSearch,
-          run.flatMap(record => storedFilesOf(record, reading.locator).paths),
+          run.flatMap(record => filesToRemoveOf(record, reading)),
           ids,
           reading
         );

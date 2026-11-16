@@ -94,6 +94,7 @@ import {
 } from "../types/media";
 
 import { executeBulkDelete } from "./media-bulk";
+import { handleServeMediaCopy } from "./media-copy";
 import { listMediaOptionsFrom, mediaListResponse } from "./media-list";
 import { handleServeMediaBytes } from "./media-raw";
 import { readJsonBody } from "./read-json-body";
@@ -162,6 +163,8 @@ const MEDIA_ACTION_BY_ROUTE: Partial<
   "get-root-contents": "read",
   "media-counts": "read",
   "media-usage": "read",
+  // A copy is read as the item is, so it is never more readable than it.
+  "serve-media-copy": "read",
   "upload-media": "create",
   "create-folder": "create",
   "update-media": "update",
@@ -186,6 +189,7 @@ const READ_ROUTE_TYPES = new Set<ParsedMediaRoute["type"]>([
   "get-folder-contents",
   "get-root-contents",
   "media-counts",
+  "serve-media-copy",
 ]);
 
 /**
@@ -219,6 +223,20 @@ async function gateMediaRoute(
   if (!requireAuth) {
     if (!READ_ROUTE_TYPES.has(route.type)) {
       throwUnmatchedRoute(path, method);
+    }
+    // A copy is an image's bytes, which no other read here hands out: it is
+    // served on this mount only while a visitor may read media, as the gated
+    // mount serves a visitor, so a copy is never more readable than its item.
+    if (route.type === "serve-media-copy") {
+      await ensureInitialized();
+      if (
+        !(await visitorReadsSystemResource(
+          SYSTEM_READ_POLICY.media.read.resource
+        ))
+      ) {
+        // Asked to sign in, as the gated mount asks a visitor it refuses.
+        throw NextlyError.authRequired();
+      }
     }
     return {};
   }
@@ -310,6 +328,7 @@ interface ParsedMediaRoute {
     | "delete-media"
     | "move-media"
     | "serve-media-bytes"
+    | "serve-media-copy"
     | "bulk-delete-media"
     | "list-folders"
     | "create-folder"
@@ -326,6 +345,8 @@ interface ParsedMediaRoute {
     | "not-found";
   mediaId?: string;
   folderId?: string;
+  /** A copy's width, as the path wrote it. */
+  width?: string;
 }
 
 function parseMediaRoute(
@@ -398,6 +419,16 @@ function parseMediaRoute(
   if (segments.length === 2 && segments[1] === "raw") {
     if (method === "GET")
       return { type: "serve-media-bytes", mediaId: segments[0] };
+    return { type: "not-found" };
+  }
+
+  if (segments.length === 3 && segments[1] === "copy") {
+    if (method === "GET")
+      return {
+        type: "serve-media-copy",
+        mediaId: segments[0],
+        width: segments[2],
+      };
     return { type: "not-found" };
   }
 
@@ -1114,6 +1145,20 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
           requireAuth
         );
         if (gate instanceof Response) return gate;
+
+        // Bytes, not a JSON document, so it skips the date formatting the
+        // other reads get.
+        if (route.type === "serve-media-copy") {
+          // The copy reads the media service and storage directly, so this
+          // worker is set up first, as the raw route's is.
+          await ensureInitialized();
+          return await handleServeMediaCopy(
+            route.mediaId!,
+            route.width!,
+            request,
+            { privateCache: requireAuth }
+          );
+        }
 
         // The library's reads finish any delete whose window ended while no
         // timer was left to finish it.
