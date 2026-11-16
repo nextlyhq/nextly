@@ -866,6 +866,11 @@ export {
   MAX_TOKEN_LABEL_LENGTH,
   tokenDisplayLabel,
   tokenLabelIssue,
+  // The one rule for whether a value fits its token's kind, and what to type
+  // instead: an editor runs it before accepting a value, and a save runs it
+  // again, so the two cannot disagree.
+  checkTokenKind,
+  tokenKindExample,
   // Both halves of token identity, public for the same reason the types are:
   // an editor that offers rename has to pin the identity the way this package
   // pins it, and one that cannot reach these has no way to do that except to
