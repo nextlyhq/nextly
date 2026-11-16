@@ -296,6 +296,8 @@ async function gateIssues(
   judged: Judged,
   engines: PublishPartsEngines
 ): Promise<Issue[]> {
+  // Unpublishing is never gated: what holds a publish back does not keep a part live.
+  if (judged.direction !== "publish") return [];
   const parts: PublishPart[] = [
     ...judged.chosen.map(locale => ({ kind: "language" as const, locale })),
     ...(judged.sharedPart ? [{ kind: "shared" as const }] : []),

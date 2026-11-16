@@ -114,14 +114,17 @@ export async function refuseStatusSaveEarly(
   save: StatusSave,
   live: { languages: readonly string[]; shared: boolean }
 ): Promise<void> {
-  const refusals = await publishGate().refusals(questionOf(save, live));
+  const question = questionOf(save, live);
+  // Unpublishing is never gated.
+  if (question.direction !== "publish") return;
+  const refusals = await publishGate().refusals(question);
   if (refusals.length > 0) throw refusalOf(refusals);
 }
 
 /**
  * The gate's verdict on a status save, on its own transaction once the entry is locked: throws the
  * refusal where a part is held back, else returns what to settle before the transaction commits.
- * Settling is for a publish only; an unpublish closes no review.
+ * An unpublish is never gated: it is not asked, and has nothing to settle.
  */
 export async function judgeStatusSave(
   tx: TransactionContext,
@@ -129,11 +132,11 @@ export async function judgeStatusSave(
   live: { languages: readonly string[]; shared: boolean }
 ): Promise<() => Promise<void>> {
   const question = questionOf(save, live);
+  // Unpublishing is never gated: nothing is asked, and nothing settled.
+  if (question.direction !== "publish") return () => Promise.resolve();
   const verdict: PublishGateVerdict = await publishGate().judge(tx, question);
   if (verdict.refusals.length > 0) throw refusalOf(verdict.refusals);
-  return question.direction === "publish"
-    ? () => verdict.settle()
-    : () => Promise.resolve();
+  return () => verdict.settle();
 }
 
 /** The key a save names a publish made without review under, beside its values. */

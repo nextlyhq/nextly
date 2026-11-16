@@ -11121,24 +11121,28 @@ export class CollectionMutationService extends BaseService {
             .map(locale => ({ kind: "language" as const, locale })),
           ...(movesShared(params.parts) ? [{ kind: "shared" as const }] : []),
         ];
-        const gateVerdict = await publishGate().judge(tx, {
-          scope: { kind: "collection", slug: params.collectionName },
-          entryId: params.entryId,
-          direction: gateDirection,
-          parts: gateParts,
-          live: {
-            languages: [...priorCompanionStatuses]
-              .filter(([, status]) => status === "published")
-              .map(([locale]) => locale),
-            shared: lockedPreviousStatus === "published",
-          },
-          caller: publishCallerOf(params),
-          ...(params.actor === undefined ? {} : { actor: params.actor }),
-          ...(params.withoutReview === undefined
-            ? {}
-            : { withoutReview: params.withoutReview }),
-        });
-        if (gateVerdict.refusals.length > 0) {
+        // Unpublishing is never gated: only a publish asks the gate, and only it is settled.
+        const gateVerdict =
+          gateDirection !== "publish"
+            ? undefined
+            : await publishGate().judge(tx, {
+                scope: { kind: "collection", slug: params.collectionName },
+                entryId: params.entryId,
+                direction: gateDirection,
+                parts: gateParts,
+                live: {
+                  languages: [...priorCompanionStatuses]
+                    .filter(([, status]) => status === "published")
+                    .map(([locale]) => locale),
+                  shared: lockedPreviousStatus === "published",
+                },
+                caller: publishCallerOf(params),
+                ...(params.actor === undefined ? {} : { actor: params.actor }),
+                ...(params.withoutReview === undefined
+                  ? {}
+                  : { withoutReview: params.withoutReview }),
+              });
+        if (gateVerdict !== undefined && gateVerdict.refusals.length > 0) {
           const refusal = NextlyError.validation({
             errors: gateVerdict.refusals.map(({ part, code, message }) =>
               part.kind === "shared"
@@ -12068,7 +12072,7 @@ export class CollectionMutationService extends BaseService {
         // What the gate's verdict started is finished on this transaction, now the parts are
         // written and before it commits: a publish only, since an unpublish closes no review. A
         // gate that finds what it judged has changed throws, and the whole move rolls back.
-        if (gateDirection === "publish") await gateVerdict.settle();
+        if (gateVerdict !== undefined) await gateVerdict.settle();
       }, transactionOptions);
 
       // The entry was deleted out from under the publish: nothing was written or

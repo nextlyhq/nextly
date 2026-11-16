@@ -234,6 +234,27 @@ describeEachDialect(
       expect(rows).toHaveLength(0);
     });
 
+    // Unpublishing is never gated: a save that takes an entry down is not held back.
+    it("never asks the gate of a save that unpublishes", async () => {
+      await boot();
+      const created = await t!.nextly.create({
+        collection: "notes",
+        data: { title: "Live", status: "published" },
+      } as never);
+      const id = String((created as { item: { id: unknown } }).item.id);
+      const seen = heldUnlessWithoutReview();
+
+      await t!.nextly.update({
+        collection: "notes",
+        id,
+        data: { status: "draft", _overwrite: true },
+      } as never);
+
+      expect(seen.early).toHaveLength(0);
+      expect(seen.judged).toHaveLength(0);
+      expect(await mainStatus("dc_notes", id)).toBe("draft");
+    });
+
     // A save made without review says so in its body, beside the status: the gate is told, early and
     // under the lock, and the publish it lets through is settled once.
     it("tells the gate a save made without review, and settles the publish it lets through", async () => {
