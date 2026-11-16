@@ -19,7 +19,7 @@ export const JOBS_TRIGGER_DOCS =
 export const JOBS_TRIGGER_PATH = `${API_PATH_PREFIX}/jobs/run`;
 
 /** "3 queued emails", or "100+ queued emails" when the count stopped at its ceiling. */
-export function overdueCountText(overdue: QueuedEmailOverdue): string {
+function overdueCountText(overdue: QueuedEmailOverdue): string {
   const count = `${overdue.overdue}${overdue.capped ? "+" : ""}`;
   return overdue.overdue === 1 && !overdue.capped
     ? "1 queued email has"

@@ -72,22 +72,12 @@ export function providerChoices(
   rows: readonly ActivityRow[],
   chosen: ProviderChoice | undefined
 ): ProviderOption[] {
-  const byId = new Map<string, string>();
-  const notStored = new Set<string>();
-  if (stored) {
-    for (const provider of stored) byId.set(provider.id, provider.name);
+  const byId = storedProviderLabels(stored, rows);
+  const notStored = notStoredTypes(rows);
+  if (chosen && "id" in chosen && !byId.has(chosen.id)) {
+    byId.set(chosen.id, chosen.id);
   }
-  for (const row of rows) {
-    if (row.source !== "delivery") continue;
-    const { id, type } = row.provider;
-    if (id === null) notStored.add(type);
-    else if (!stored && !byId.has(id))
-      byId.set(id, unnamedStoredLabel(type, id));
-  }
-  if (chosen) {
-    if ("id" in chosen && !byId.has(chosen.id)) byId.set(chosen.id, chosen.id);
-    if ("type" in chosen) notStored.add(chosen.type);
-  }
+  if (chosen && "type" in chosen) notStored.add(chosen.type);
   const options: ProviderOption[] = [...byId]
     .map(([id, label]) => ({ choice: { id }, label }))
     .sort((a, b) => a.label.localeCompare(b.label));
@@ -95,4 +85,37 @@ export function providerChoices(
     options.push({ choice: { type }, label: notStoredLabel(type) });
   }
   return options;
+}
+
+/**
+ * Each stored provider's label by id: every stored one by name when the
+ * reader may read them, else each one the rows name, by type and id.
+ */
+function storedProviderLabels(
+  stored: ReadonlyArray<{ id: string; name: string }> | undefined,
+  rows: readonly ActivityRow[]
+): Map<string, string> {
+  if (stored)
+    return new Map(stored.map(provider => [provider.id, provider.name]));
+  const labels = new Map<string, string>();
+  for (const row of rows) {
+    if (row.source === "delivery" && row.provider.id !== null) {
+      labels.set(
+        row.provider.id,
+        unnamedStoredLabel(row.provider.type, row.provider.id)
+      );
+    }
+  }
+  return labels;
+}
+
+/** The types of the providers not stored that the rows name. */
+function notStoredTypes(rows: readonly ActivityRow[]): Set<string> {
+  const types = new Set<string>();
+  for (const row of rows) {
+    if (row.source === "delivery" && row.provider.id === null) {
+      types.add(row.provider.type);
+    }
+  }
+  return types;
 }

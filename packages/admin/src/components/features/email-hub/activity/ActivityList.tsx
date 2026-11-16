@@ -59,42 +59,64 @@ interface RowView {
   happened: ReturnType<typeof whatHappened>;
 }
 
+/** The email a row names: the template's name, else its slug, else that it had none. */
+function emailOf(
+  row: ActivityRow,
+  names: ActivityNames
+): { email: string; emailIsSlug: boolean } {
+  if (row.templateSlug === null) {
+    return {
+      email: row.source === "queued" ? "No template recorded" : "No template",
+      emailIsSlug: false,
+    };
+  }
+  const name = names.template(row.templateSlug);
+  return name === undefined
+    ? { email: row.templateSlug, emailIsSlug: true }
+    : { email: name, emailIsSlug: false };
+}
+
+/** Whether the send named a person on the site, or the recipient was erased since. */
+function personOf(row: ActivityRow): string | null {
+  if (row.source !== "delivery") return null;
+  if (row.erased) return "Erased";
+  return row.namedPerson ? "Named a person" : null;
+}
+
+/** The provider a delivery went through; a queued row has none to show yet. */
+function providerOf(row: ActivityRow, names: ActivityNames): string {
+  if (row.source !== "delivery") return "—";
+  const { id, type } = row.provider;
+  if (id === null) return notStoredLabel(type);
+  return names.provider(id) ?? type;
+}
+
+/** To, Cc or Bcc for a delivery; a queued row has none to show yet. */
+function recipientOf(row: ActivityRow): string {
+  return row.source === "delivery"
+    ? RECIPIENT_KIND_LABELS[row.recipientKind]
+    : "—";
+}
+
+/** Which attempt a queued email is on, once it has made one. */
+function attemptOf(row: ActivityRow): string | null {
+  return row.source === "queued" && row.attempts > 0
+    ? `Attempt ${row.attempts}`
+    : null;
+}
+
 function viewOf(row: ActivityRow, names: ActivityNames, now: Date): RowView {
-  const name = row.templateSlug ? names.template(row.templateSlug) : undefined;
-  const email =
-    name ??
-    row.templateSlug ??
-    (row.source === "queued" ? "No template recorded" : "No template");
   return {
     key: `${row.source}:${row.id}`,
     when: WHEN.format(row.at),
     ago: formatRelativeTime(row.at.toISOString(), now.getTime(), "short"),
     badge: outcomeBadge(row),
-    attempt:
-      row.source === "queued" && row.attempts > 0
-        ? `Attempt ${row.attempts}`
-        : null,
-    email,
-    emailIsSlug: name === undefined && row.templateSlug !== null,
+    attempt: attemptOf(row),
+    ...emailOf(row, names),
     queued: row.source === "queued",
-    person:
-      row.source === "delivery"
-        ? row.erased
-          ? "Erased"
-          : row.namedPerson
-            ? "Named a person"
-            : null
-        : null,
-    provider:
-      row.source === "delivery"
-        ? row.provider.id
-          ? (names.provider(row.provider.id) ?? row.provider.type)
-          : notStoredLabel(row.provider.type)
-        : "—",
-    recipient:
-      row.source === "delivery"
-        ? RECIPIENT_KIND_LABELS[row.recipientKind]
-        : "—",
+    person: personOf(row),
+    provider: providerOf(row, names),
+    recipient: recipientOf(row),
     happened: whatHappened(row, now),
   };
 }

@@ -243,7 +243,7 @@ export interface WhatHappened {
 }
 
 /** A span of time in the words the list uses: "10 min", "3 h", "2 days". */
-export function spanText(ms: number): string {
+function spanText(ms: number): string {
   const minutes = Math.max(1, Math.round(ms / 60_000));
   if (minutes < 60) return `${minutes} min`;
   const hours = Math.round(minutes / 60);

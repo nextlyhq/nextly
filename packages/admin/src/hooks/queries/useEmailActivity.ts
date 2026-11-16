@@ -34,6 +34,7 @@ import {
   type ActivityRow,
   type LoadedSource,
 } from "@admin/components/features/email-hub/activity/activity-model";
+import type { ListResponse } from "@admin/lib/api/response-types";
 import {
   getQueuedEmailOverdue,
   listDeliveryActivity,
@@ -55,7 +56,7 @@ const OVERDUE_POLL_MS = 60_000;
 
 type Sources = ReturnType<typeof sourcesFor>;
 
-export const emailActivityKeys = {
+const emailActivityKeys = {
   all: () => ["emailActivity"] as const,
   list: (sources: Sources) =>
     [...emailActivityKeys.all(), "list", sources] as const,
@@ -76,6 +77,52 @@ interface ActivityPage {
   deliveries: ActivityRow[];
   queued: ActivityRow[];
   next: ActivityCursor;
+}
+
+/**
+ * One list's next page, or `null` for a list the filters leave out or that
+ * has nothing more.
+ */
+function readListPage<Q extends object, T>(
+  query: Q | null,
+  cursor: string | undefined | null,
+  list: (
+    query: Q & { before?: string; limit: number }
+  ) => Promise<ListResponse<T>>
+): Promise<ListResponse<T> | null> {
+  if (query === null || cursor === null) return Promise.resolve(null);
+  return list({
+    ...query,
+    ...(cursor ? { before: cursor } : {}),
+    limit: ACTIVITY_PAGE_SIZE,
+  });
+}
+
+/** A page's rows as the list shows them, and where that list goes on from. */
+function rowsOf<T>(
+  page: ListResponse<T> | null,
+  toRow: (record: T) => ActivityRow
+): { rows: ActivityRow[]; next: string | null } {
+  if (page === null) return { rows: [], next: null };
+  return { rows: page.items.map(toRow), next: page.meta.nextBefore ?? null };
+}
+
+/** The next page of every list that has more, read together. */
+async function readActivityPage(
+  sources: Sources,
+  cursor: ActivityCursor
+): Promise<ActivityPage> {
+  const [deliveryPage, queuedPage] = await Promise.all([
+    readListPage(sources.deliveries, cursor.deliveries, listDeliveryActivity),
+    readListPage(sources.queued, cursor.queued, listQueuedEmailActivity),
+  ]);
+  const deliveries = rowsOf(deliveryPage, deliveryRow);
+  const queued = rowsOf(queuedPage, queuedRow);
+  return {
+    deliveries: deliveries.rows,
+    queued: queued.rows,
+    next: { deliveries: deliveries.next, queued: queued.next },
+  };
 }
 
 /** The merged list, and the paging the screen drives. */
@@ -122,32 +169,7 @@ export function useEmailActivity(
   >({
     queryKey: emailActivityKeys.list(sources),
     initialPageParam: firstPage,
-    queryFn: async ({ pageParam }): Promise<ActivityPage> => {
-      const [deliveries, queued] = await Promise.all([
-        pageParam.deliveries === null || sources.deliveries === null
-          ? null
-          : listDeliveryActivity({
-              ...sources.deliveries,
-              ...(pageParam.deliveries ? { before: pageParam.deliveries } : {}),
-              limit: ACTIVITY_PAGE_SIZE,
-            }),
-        pageParam.queued === null || sources.queued === null
-          ? null
-          : listQueuedEmailActivity({
-              ...sources.queued,
-              ...(pageParam.queued ? { before: pageParam.queued } : {}),
-              limit: ACTIVITY_PAGE_SIZE,
-            }),
-      ]);
-      return {
-        deliveries: deliveries?.items.map(deliveryRow) ?? [],
-        queued: queued?.items.map(queuedRow) ?? [],
-        next: {
-          deliveries: deliveries?.meta.nextBefore ?? null,
-          queued: queued?.meta.nextBefore ?? null,
-        },
-      };
-    },
+    queryFn: ({ pageParam }) => readActivityPage(sources, pageParam),
     getNextPageParam: last =>
       last.next.deliveries === null && last.next.queued === null
         ? undefined
