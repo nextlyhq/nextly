@@ -24,6 +24,7 @@
  * ```
  */
 
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -266,6 +267,34 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
     warnIfUploadUnserved(url, this.baseUrl);
 
     return { url, path: key };
+  }
+
+  /**
+   * Write a file at exactly `filePath`, beside a file already stored.
+   *
+   * Written to a temporary name and then renamed into place, so a request
+   * reading the file while another writes it sees the whole file or none,
+   * never part of one. The path is checked to stay inside the storage's
+   * folder, as every other path here is.
+   *
+   * @experimental
+   */
+  async uploadAt(
+    filePath: string,
+    buffer: Buffer,
+    _options: { mimeType: string }
+  ): Promise<UploadResult> {
+    const fullPath = this.resolveAndValidate(filePath);
+    await fs.mkdir(path.dirname(fullPath), { recursive: true });
+    const partial = `${fullPath}.${randomUUID()}.partial`;
+    try {
+      await fs.writeFile(partial, buffer);
+      await fs.rename(partial, fullPath);
+    } catch (error) {
+      await fs.rm(partial, { force: true });
+      throw error;
+    }
+    return { url: this.getPublicUrl(filePath), path: filePath };
   }
 
   /**

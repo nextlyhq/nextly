@@ -1,0 +1,254 @@
+/**
+ * Copies of stored images, made on request and kept beside the original: one
+ * made at a requested width and kept, the same one read back on the next ask,
+ * one resize for many asks at once, and the original wherever no copy can be
+ * had.
+ */
+import sharp from "sharp";
+import { describe, expect, it, vi } from "vitest";
+
+import { ImageProcessor } from "../../../storage/image-processor";
+import type { UploadResult } from "../../../storage/types";
+import { copyPathsOf, mediaCopyAddress } from "../copies/copy-rules";
+import {
+  copyBytesOf,
+  copyOfMedia,
+  type CopyStorage,
+} from "../copies/media-copies";
+
+/** A storage holding files in memory, recording every key it is asked to write. */
+function memoryStorage(files: Record<string, Buffer> = {}) {
+  const held = new Map(Object.entries(files));
+  const written: string[] = [];
+  const storage: CopyStorage = {
+    getPublicUrl: path => `/uploads/${path}`,
+    read: async path => held.get(path) ?? null,
+    uploadAt: async (
+      path: string,
+      buffer: Buffer
+    ): Promise<UploadResult> => {
+      written.push(path);
+      held.set(path, buffer);
+      return { url: `/uploads/${path}`, path };
+    },
+  };
+  return { storage, held, written };
+}
+
+async function jpeg(width: number, height: number): Promise<Buffer> {
+  return await sharp({
+    create: { width, height, channels: 3, background: "#cc6633" },
+  })
+    .jpeg()
+    .toBuffer();
+}
+
+const ITEM = {
+  id: "0b6f6c2e-3c3a-4b8e-9d2f-1f2e3d4c5b6a",
+  filename: "media/2026/11/0b6f6c2e-photo.jpg",
+  mimeType: "image/jpeg",
+  url: "/uploads/media/2026/11/0b6f6c2e-photo.jpg",
+};
+
+async function itemWithPhoto() {
+  const bytes = await jpeg(2200, 1100);
+  return { item: { ...ITEM, size: bytes.byteLength }, bytes };
+}
+
+describe("copyBytesOf", () => {
+  it("makes a copy at the snapped width, keeps it beside the original, and serves it", async () => {
+    const { item, bytes } = await itemWithPhoto();
+    const { storage, written } = memoryStorage({ [item.filename]: bytes });
+    const processor = new ImageProcessor();
+
+    const served = await copyBytesOf(item, 700, "image/webp", {
+      storage,
+      processor,
+    });
+
+    expect(served.kind).toBe("copy");
+    if (served.kind !== "copy") return;
+    expect(served.mimeType).toBe("image/webp");
+    const meta = await sharp(served.bytes).metadata();
+    expect(meta.width).toBe(640);
+    expect(meta.format).toBe("webp");
+    expect(served.bytes.byteLength).toBeLessThan(bytes.byteLength);
+    expect(written).toEqual([`${item.filename}.w640.webp`]);
+  });
+
+  it("reads the kept copy on a second ask, without resizing again", async () => {
+    const { item, bytes } = await itemWithPhoto();
+    const { storage } = memoryStorage({ [item.filename]: bytes });
+    const processor = new ImageProcessor();
+    const resize = vi.spyOn(processor, "copyAtWidth");
+
+    const first = await copyBytesOf(item, 640, null, { storage, processor });
+    const second = await copyBytesOf(item, 640, null, { storage, processor });
+
+    expect(resize).toHaveBeenCalledTimes(1);
+    expect(first.kind).toBe("copy");
+    expect(second).toEqual(first);
+  });
+
+  it("runs one resize for many asks for the same copy at once", async () => {
+    const { item, bytes } = await itemWithPhoto();
+    const { storage, written } = memoryStorage({ [item.filename]: bytes });
+    const processor = new ImageProcessor();
+    const resize = vi.spyOn(processor, "copyAtWidth");
+
+    const all = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        copyBytesOf(item, 960, "image/avif", { storage, processor })
+      )
+    );
+
+    expect(resize).toHaveBeenCalledTimes(1);
+    expect(written).toEqual([`${item.filename}.w960.avif`]);
+    expect(new Set(all.map(served => served.kind))).toEqual(new Set(["copy"]));
+  });
+
+  it("keeps each format apart, so a browser is never sent one it did not ask for", async () => {
+    const { item, bytes } = await itemWithPhoto();
+    const { storage, written } = memoryStorage({ [item.filename]: bytes });
+    const processor = new ImageProcessor();
+
+    const avif = await copyBytesOf(item, 320, "image/avif,image/webp", {
+      storage,
+      processor,
+    });
+    const plain = await copyBytesOf(item, 320, "*/*", { storage, processor });
+
+    expect(avif.kind === "copy" && avif.mimeType).toBe("image/avif");
+    expect(plain.kind === "copy" && plain.mimeType).toBe("image/jpeg");
+    expect(written).toEqual([
+      `${item.filename}.w320.avif`,
+      `${item.filename}.w320.jpg`,
+    ]);
+  });
+
+  it("writes only keys derived from the original, whatever is asked", async () => {
+    const { item, bytes } = await itemWithPhoto();
+    const { storage, written } = memoryStorage({ [item.filename]: bytes });
+    const processor = new ImageProcessor();
+    for (const width of [1, 97, 700, 5000]) {
+      for (const accept of [null, "image/avif", "image/webp", "../../x"]) {
+        await copyBytesOf(item, width, accept, { storage, processor });
+      }
+    }
+    const derived = new Set(copyPathsOf(item));
+    expect(written.length).toBeGreaterThan(0);
+    for (const key of written) expect(derived.has(key)).toBe(true);
+  });
+
+  it("serves the original when the storage cannot keep copies", async () => {
+    const { item, bytes } = await itemWithPhoto();
+    const { storage } = memoryStorage({ [item.filename]: bytes });
+    const withoutWrite: CopyStorage = {
+      getPublicUrl: storage.getPublicUrl,
+      read: storage.read,
+    };
+    expect(
+      await copyBytesOf(item, 640, null, {
+        storage: withoutWrite,
+        processor: new ImageProcessor(),
+      })
+    ).toEqual({ kind: "original" });
+  });
+
+  it("serves the original when the image library is not installed", async () => {
+    const { item, bytes } = await itemWithPhoto();
+    const { storage, written } = memoryStorage({ [item.filename]: bytes });
+    expect(
+      await copyBytesOf(item, 640, null, {
+        storage,
+        processor: new ImageProcessor({ loader: async () => null }),
+      })
+    ).toEqual({ kind: "original" });
+    expect(written).toEqual([]);
+  });
+
+  it("serves the original for an original past the pixel limit, keeping nothing", async () => {
+    const { item, bytes } = await itemWithPhoto();
+    const { storage, written } = memoryStorage({ [item.filename]: bytes });
+    expect(
+      await copyBytesOf(item, 640, null, {
+        storage,
+        processor: new ImageProcessor({ copyPixelLimit: 1000 }),
+      })
+    ).toEqual({ kind: "original" });
+    expect(written).toEqual([]);
+  });
+
+  it("serves the original for a type it does not resize", async () => {
+    const { storage } = memoryStorage({ "media/a.gif": Buffer.from("GIF89a") });
+    expect(
+      await copyBytesOf(
+        { ...ITEM, filename: "media/a.gif", mimeType: "image/gif", size: 6 },
+        640,
+        null,
+        { storage, processor: new ImageProcessor() }
+      )
+    ).toEqual({ kind: "original" });
+  });
+
+  it("serves the original when its file is missing from storage", async () => {
+    const { item } = await itemWithPhoto();
+    const { storage, written } = memoryStorage();
+    expect(
+      await copyBytesOf(item, 640, null, {
+        storage,
+        processor: new ImageProcessor(),
+      })
+    ).toEqual({ kind: "original" });
+    expect(written).toEqual([]);
+  });
+
+  it("still serves a copy it made when keeping it fails", async () => {
+    const { item, bytes } = await itemWithPhoto();
+    const { storage } = memoryStorage({ [item.filename]: bytes });
+    const failing: CopyStorage = {
+      ...storage,
+      uploadAt: async () => {
+        throw new Error("bucket unavailable");
+      },
+    };
+    const served = await copyBytesOf(item, 240, null, {
+      storage: failing,
+      processor: new ImageProcessor(),
+    });
+    expect(served.kind).toBe("copy");
+  });
+});
+
+describe("copyOfMedia", () => {
+  it("gives the copy's address at the snapped width", async () => {
+    const { storage } = memoryStorage();
+    expect(
+      await copyOfMedia(ITEM, 700, { storage, processor: new ImageProcessor() })
+    ).toEqual({ url: mediaCopyAddress(ITEM, 640), width: 640 });
+  });
+
+  it("answers no copy where none can be had", async () => {
+    const { storage } = memoryStorage();
+    const processor = new ImageProcessor();
+    expect(
+      await copyOfMedia({ ...ITEM, mimeType: "image/svg+xml" }, 640, {
+        storage,
+        processor,
+      })
+    ).toBeNull();
+    expect(
+      await copyOfMedia(ITEM, 640, {
+        storage: { getPublicUrl: storage.getPublicUrl, read: storage.read },
+        processor,
+      })
+    ).toBeNull();
+    expect(await copyOfMedia(ITEM, 640, { storage: null, processor })).toBeNull();
+    expect(
+      await copyOfMedia(ITEM, 640, {
+        storage,
+        processor: new ImageProcessor({ loader: async () => null }),
+      })
+    ).toBeNull();
+  });
+});
