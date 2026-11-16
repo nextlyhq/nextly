@@ -153,6 +153,17 @@ const HARD_WORDS: Record<
     text: "This document no longer exists",
     remedy: "remove",
   }),
+  // The entity the configuration no longer declares, named by the finding;
+  // nothing may write to it until it is declared again, so the way out here
+  // is taking the document out of the release.
+  ENTITY_REMOVED_FROM_CODE: finding => {
+    const kind = detailText(finding, "kind") ?? finding.scopeKind;
+    const slug = detailText(finding, "slug") ?? finding.scopeSlug;
+    return {
+      text: `Its ${kind === "single" ? "Single" : "collection"} “${slug}” was removed from code, so a release cannot move it`,
+      remedy: "remove",
+    };
+  },
   NO_LIFECYCLE: () => ({
     text: "Its collection has no drafts, so a release cannot move it",
     remedy: "remove",
