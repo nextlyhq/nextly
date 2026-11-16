@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   nestedFixtureBlockCatalogs,
+  nestedFixtureBlockCatalogsAllMatched,
   nestedFixtureFieldGroups,
   nestedFixtureFields,
 } from "@admin/components/features/schema-builder/__fixtures__/nested-fixture";
@@ -9,6 +10,7 @@ import {
 import type { RowMark } from "../../pending-changes";
 import {
   canFocus,
+  drawnAbove,
   endAddTarget,
   focusFallback,
   focusHolding,
@@ -24,11 +26,14 @@ import { markPending } from "../pending-rows";
 
 const typeLabel = (type: string) => type;
 
-function outline(): OutlineNode[] {
+/** The fixture's outline, its blocks field's policy wholly admitted unless `catalogs` says else. */
+function outline(
+  catalogs = nestedFixtureBlockCatalogsAllMatched()
+): OutlineNode[] {
   return buildOutline(nestedFixtureFields(), {
     entityReadOnly: false,
     fieldGroups: nestedFixtureFieldGroups(),
-    blockCatalogs: nestedFixtureBlockCatalogs(),
+    blockCatalogs: catalogs,
   });
 }
 
@@ -134,6 +139,25 @@ describe("a blocks field with no block rows", () => {
     expect(node(nodes, "f-body").children).toEqual([]);
     expect(canFocus(node(nodes, "f-body"))).toBe(false);
     expect(focusView(nodes, "f-body").focused).toBeNull();
+  });
+});
+
+describe("a blocks field whose policy names a block nothing registers", () => {
+  it("is not focused, so its own row keeps saying which entry admits no block", () => {
+    const nodes = outline(nestedFixtureBlockCatalogs());
+    expect(node(nodes, "f-body").children.length).toBeGreaterThan(0);
+    expect(node(nodes, "f-body").blocks?.unmatched).toEqual(["acme/hero"]);
+    expect(canFocus(node(nodes, "f-body"))).toBe(false);
+  });
+});
+
+describe("drawnAbove", () => {
+  it("is the nearest drawn row above the first id given that has one", () => {
+    const nodes = outline();
+    const drawn = (id: string) => id === "f-sections";
+    expect(drawnAbove(nodes, [null, "f-cta-label"], drawn)).toBe("f-sections");
+    expect(drawnAbove(nodes, ["f-gone"], drawn)).toBeNull();
+    expect(drawnAbove(nodes, ["f-meta-title"], drawn)).toBeNull();
   });
 });
 

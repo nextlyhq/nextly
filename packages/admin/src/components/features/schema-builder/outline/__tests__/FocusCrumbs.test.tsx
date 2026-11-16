@@ -104,8 +104,8 @@ function rect(
 function overAt(
   places: Record<string, ClientRect>,
   dragged: ClientRect,
-  x: number,
-  y: number
+  x: number | null,
+  y: number | null
 ): string[] {
   const ids = Object.keys(places);
   const containers = ids.map(
@@ -116,7 +116,7 @@ function overAt(
     collisionRect: dragged,
     droppableRects: new Map(ids.map(id => [id, places[id]])),
     droppableContainers: containers,
-    pointerCoordinates: { x, y },
+    pointerCoordinates: x === null || y === null ? null : { x, y },
   }).map(each => String(each.id));
 }
 
@@ -133,6 +133,13 @@ describe("crumbsByPointer", () => {
 
   it("is over the crumb under the pointer, whatever the dragged row overlaps most", () => {
     expect(overAt(places, dragged, 125, 10)).toEqual([
+      "focus-crumb:f-sections-items",
+    ]);
+  });
+
+  it("is over a crumb a drag by keys has moved the row onto, with no pointer", () => {
+    // The dragged row sits over the Items crumb alone.
+    expect(overAt(places, rect(95, 0, 60, 20), null, null)).toEqual([
       "focus-crumb:f-sections-items",
     ]);
   });

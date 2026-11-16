@@ -44,7 +44,18 @@ export function canFocus(node: OutlineNode): boolean {
     node.container !== null &&
     FOCUSABLE.has(node.container) &&
     !isPendingDelete(node) &&
-    !(node.container === "blocks" && node.children.length === 0)
+    !(node.container === "blocks" && !blocksAllShown(node))
+  );
+}
+
+/**
+ * Whether a blocks field's rows show everything its own row says: some block rows, and no entry
+ * of its policy that admits no registered block. Otherwise its row is where that is said, and
+ * Focus, which hides the row, would hide it.
+ */
+function blocksAllShown(node: OutlineNode): boolean {
+  return (
+    node.children.length > 0 && (node.blocks?.unmatched ?? []).length === 0
   );
 }
 
@@ -57,6 +68,25 @@ function chainTo(
     if (node.id === id) return [node];
     const below = chainTo(node.children, id);
     if (below) return [node, ...below];
+  }
+  return null;
+}
+
+/**
+ * The row keyboard focus goes to when none of `ids` is drawn (folded away, say): the nearest row
+ * above the first of them that is drawn, or null when none is.
+ */
+export function drawnAbove(
+  nodes: readonly OutlineNode[],
+  ids: readonly (string | null)[],
+  drawn: (id: string) => boolean
+): string | null {
+  for (const id of ids) {
+    if (id === null) continue;
+    const chain = chainTo(nodes, id) ?? [];
+    for (let at = chain.length - 2; at >= 0; at--) {
+      if (drawn(chain[at].id)) return chain[at].id;
+    }
   }
   return null;
 }

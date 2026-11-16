@@ -29,6 +29,7 @@ import {
 import { usePersistedStringSet } from "@admin/hooks/usePersistedState";
 import type { BuilderFieldError } from "@admin/lib/builder/field-validators";
 import {
+  drawnAbove,
   endAddTarget,
   focusHolding,
 } from "@admin/lib/builder/outline/focus-view";
@@ -147,9 +148,10 @@ function useRefocusAfterMove(
 }
 
 /**
- * Keyboard focus on the row a change of Focus asked for, once it is drawn. Where a focused
- * container draws none of them (an empty one), it goes to `fallback`, the breadcrumb's Exit
- * focus, rather than staying on a row the change took away.
+ * Keyboard focus on the row a change of Focus asked for, once it is drawn. Where none of them is
+ * drawn, it goes to the nearest drawn row above them (their containers folded away, say), else,
+ * while a container is focused, to `fallback`, the breadcrumb's Exit focus (an empty container),
+ * rather than staying on a row the change took away.
  */
 function useReturnAfterFocus(
   focus: OutlineFocus,
@@ -158,11 +160,16 @@ function useReturnAfterFocus(
   fallback: RefObject<HTMLButtonElement | null>
 ): void {
   useEffect(() => {
-    const { asked, id } = focus.takeReturn(target =>
-      rows.some(row => row.node.id === target)
-    );
-    if (id !== null) state.focusRow(id, true);
-    else if (asked && focus.view.focused) fallback.current?.focus();
+    const drawn = (target: string) => rows.some(row => row.node.id === target);
+    const { asked, id, candidates } = focus.takeReturn(drawn);
+    if (id !== null) {
+      state.focusRow(id, true);
+      return;
+    }
+    if (!asked) return;
+    const above = drawnAbove(focus.view.nodes, candidates, drawn);
+    if (above !== null) state.focusRow(above, true);
+    else if (focus.view.focused) fallback.current?.focus();
   });
 }
 

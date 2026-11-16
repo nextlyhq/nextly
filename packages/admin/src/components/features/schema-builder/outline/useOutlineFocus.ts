@@ -33,6 +33,8 @@ export interface OutlineFocus {
 export interface FocusReturn {
   asked: boolean;
   id: string | null;
+  /** The rows asked for, in order, so a row above them can be found when none is drawn. */
+  candidates: readonly (string | null)[];
 }
 
 export function useOutlineFocus(nodes: readonly OutlineNode[]): OutlineFocus {
@@ -62,12 +64,15 @@ export function useOutlineFocus(nodes: readonly OutlineNode[]): OutlineFocus {
     (drawn: (id: string) => boolean): FocusReturn => {
       const candidates = returning.current;
       returning.current = null;
-      if (candidates === null) return { asked: false, id: null };
+      if (candidates === null) {
+        return { asked: false, id: null, candidates: [] };
+      }
       return {
         asked: true,
         id:
           candidates.find((id): id is string => id !== null && drawn(id)) ??
           null,
+        candidates,
       };
     },
     []

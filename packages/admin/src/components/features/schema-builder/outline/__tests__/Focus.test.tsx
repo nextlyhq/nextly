@@ -10,8 +10,11 @@ import { describe, expect, it } from "vitest";
 import { render, screen } from "@admin/__tests__/utils";
 import type { MoveContext } from "@admin/lib/builder/move-rule";
 
+import type { BlockCatalog } from "@admin/lib/builder/outline/block-rows";
+
 import {
   nestedFixtureBlockCatalogs,
+  nestedFixtureBlockCatalogsAllMatched,
   nestedFixtureFieldGroups,
   nestedFixtureFields,
 } from "../../__fixtures__/nested-fixture";
@@ -25,14 +28,17 @@ const WHOLE: MoveContext = {
   containerChanges: true,
 };
 
-function setup(initial: BuilderField[] = nestedFixtureFields()) {
+function setup(
+  initial: BuilderField[] = nestedFixtureFields(),
+  blockCatalogs: Map<string, BlockCatalog> = nestedFixtureBlockCatalogsAllMatched()
+) {
   const probe = newProbe();
   render(
     <MoveHarness
       initial={initial}
       context={WHOLE}
       fieldGroups={nestedFixtureFieldGroups()}
-      blockCatalogs={nestedFixtureBlockCatalogs()}
+      blockCatalogs={blockCatalogs}
       probe={probe}
     />
   );
@@ -156,6 +162,24 @@ describe("Focus", () => {
     expect(drawn()).toEqual([]);
     await user.click(screen.getByRole("button", { name: "+ Add field" }));
     expect(probe.addsAt).toEqual([{ parentFieldId: "f-details" }]);
+  });
+
+  it("offers no Focus on a blocks field whose policy names a block nothing registers", async () => {
+    // "acme/hero" admits no registered block: the blocks field's own row says so.
+    const { user } = setup(nestedFixtureFields(), nestedFixtureBlockCatalogs());
+    await openMenu(user, "body");
+    expect(screen.queryByRole("menuitem", { name: "Focus" })).toBeNull();
+  });
+
+  it("returns keyboard focus to the nearest row drawn above when Exit leaves it folded away", async () => {
+    const { user } = setup();
+    await focusOn(user, "sections");
+    await focusOn(user, "sections/items");
+    await user.click(screen.getByRole("button", { name: "Fold all" }));
+    await user.click(screen.getByRole("button", { name: "Exit focus" }));
+    // Items, the container that was focused, is folded inside Sections.
+    expect(rowAt("sections/items")).toBeNull();
+    expect(rowAt("sections")).toHaveFocus();
   });
 
   it("puts keyboard focus on Exit focus when the focused container draws no row", async () => {

@@ -41,6 +41,9 @@ export function crumbTargetOf(dropId: string): FieldInsertPosition | null {
  * overlaps it most; anywhere else, the rows are judged by overlap as dnd-kit does by default.
  */
 export const crumbsByPointer: CollisionDetection = args => {
+  // A drag by keys has no pointer: there, a crumb is a place as a row is, by overlap, since the
+  // keys move the dragged row onto it.
+  if (args.pointerCoordinates === null) return rectIntersection(args);
   const onCrumb = pointerWithin(args).find(
     each => crumbTargetOf(String(each.id)) !== null
   );
