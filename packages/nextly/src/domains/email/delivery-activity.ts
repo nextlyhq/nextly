@@ -157,14 +157,28 @@ const DEFAULT_LIMIT = 50;
 /** The most templates one last-sent read names. */
 const MAX_SLUGS = 200;
 
+/**
+ * The times every dialect's columns can hold: MySQL's `datetime` runs from
+ * the year 1000 to 9999, the narrowest of the three, so a time outside it is
+ * refused here rather than compared differently by each database.
+ */
+const EARLIEST_MS = Date.UTC(1000, 0, 1);
+const LATEST_MS = Date.UTC(9999, 11, 31, 23, 59, 59, 999);
+const IN_RANGE = "A time between the years 1000 and 9999.";
+
 /** A time a caller gives: a `Date`, or an ISO 8601 instant. */
-const instant = z.union([
-  z.date(),
-  z
-    .string()
-    .datetime({ offset: true })
-    .transform(value => new Date(value)),
-]);
+const instant = z
+  .union([
+    z.date(),
+    z
+      .string()
+      .datetime({ offset: true })
+      .transform(value => new Date(value)),
+  ])
+  .refine(
+    date => date.getTime() >= EARLIEST_MS && date.getTime() <= LATEST_MS,
+    IN_RANGE
+  );
 
 const common = {
   template: z.string().min(1).max(255).optional(),
@@ -250,11 +264,11 @@ function encodeCursor(cursor: Cursor): string {
 }
 
 // Every record's id is a UUID, which PostgreSQL's columns hold as one.
-// The time is bounded to what a `Date` can hold, so a forged cursor is refused
-// here rather than reaching the database as an invalid date.
-const MAX_DATE_MS = 8.64e15;
+// The time is bounded to what every dialect's columns hold, so a forged
+// cursor is refused here rather than reaching a database that cannot store
+// it. Queued email keeps epoch milliseconds, which are never negative.
 const CURSOR = z.tuple([
-  z.number().int().nonnegative().max(MAX_DATE_MS),
+  z.number().int().nonnegative().max(LATEST_MS),
   z.string().uuid(),
 ]);
 

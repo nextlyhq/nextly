@@ -37,6 +37,8 @@ Staff can now read email deliveries and queued email through new routes and the 
 - `GET /api/email-deliveries/overdue` says how many queued emails are more than 15 minutes past due because the jobs trigger isn't running.
 - On the Direct API, the same reads are `nextly.emailDeliveries.find`, `findQueued`, `lastSent` and `overdue`. Their argument and result types are exported from `nextly`, marked experimental.
 
+A queued email cancelled while waiting now has its pending job retired with it, so no jobs run attempts it and the overdue count leaves it out.
+
 Each read needs the new `read-email-deliveries` permission, as does a checked Direct API call. `manage-email-deliveries` does not include it.
 
 Migration: `read-email-deliveries` is seeded on the next start and granted to super-admin only. The core reconcile adds two indexes on `email_deliveries` (template, status and time; provider type and time), and a nullable `template_slug` column on `email_queue` with two indexes (time, and template with time), in place and with existing rows kept. An email queued before this change shows no template, as does one queued with a template name longer than 255 characters, which no template can have.

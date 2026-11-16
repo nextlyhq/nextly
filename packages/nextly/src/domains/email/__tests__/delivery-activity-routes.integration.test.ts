@@ -25,7 +25,11 @@ import {
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { ServiceContainer } from "../../../services/index";
+import { env } from "../../../lib/env";
+import { rowLockServer } from "../../audit/audit-log-writer";
+import { pluginSettingsSecrets } from "../../plugins/settings-service";
 import { recipientDigests } from "../delivery-record";
+import { storeQueuedEmail } from "../queued-send";
 import type { EmailDeliveryService } from "../services/email-delivery-service";
 
 const ORIGIN = "http://localhost";
@@ -491,6 +495,9 @@ for (const dialect of getConfiguredTestDialects()) {
         `before=${Buffer.from(JSON.stringify([1, "not-a-uuid"])).toString("base64url")}`,
         // A time no date can hold.
         `before=${Buffer.from(JSON.stringify([1e100, "00000000-0000-4000-8000-000000000000"])).toString("base64url")}`,
+        // A time MySQL's columns cannot hold, past the year 9999 or before 1000.
+        `before=${Buffer.from(JSON.stringify([253402300800000, "00000000-0000-4000-8000-000000000000"])).toString("base64url")}`,
+        "from=0999-12-31T00:00:00.000Z",
       ]) {
         expect(
           (await get(`email-deliveries?${query}`, reader)).status,
@@ -639,6 +646,46 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(items.find(item => item.id === queued.id)).toMatchObject({
         state: "failed",
         templateSlug: null,
+      });
+    });
+
+    it("counts a cancelled email as neither overdue nor attempted", async () => {
+      // Stored 30 minutes ago and never attempted, as when the jobs trigger
+      // is not running: it is overdue.
+      const dialectName = t.adapter.getCapabilities().dialect;
+      const stored = await t.adapter.transaction(ctx =>
+        storeQueuedEmail(ctx, {
+          scope: "site",
+          message: {
+            kind: "message",
+            send: { to: "queued@example.com", subject: SUBJECT, html: BODY },
+          },
+          person: null,
+          secrets: pluginSettingsSecrets(env),
+          lockServer: rowLockServer(t.adapter, dialectName),
+          dialect: dialectName,
+          now: new Date(Date.now() - 30 * 60_000),
+        })
+      );
+      expect(await t.nextly.emailDeliveries.overdue()).toMatchObject({
+        overdue: 1,
+      });
+
+      await t.nextly.email.cancelQueued({ id: stored.id });
+
+      // Its job is retired: nothing counts it overdue, and a jobs run
+      // attempts nothing.
+      expect(await t.nextly.emailDeliveries.overdue()).toMatchObject({
+        overdue: 0,
+      });
+      const { items } = await t.nextly.emailDeliveries.findQueued({
+        state: "cancelled",
+      });
+      expect(items.find(item => item.id === stored.id)).toMatchObject({
+        state: "cancelled",
+        attempts: 0,
+        nextAttemptAt: null,
+        messageHeld: false,
       });
     });
   });
