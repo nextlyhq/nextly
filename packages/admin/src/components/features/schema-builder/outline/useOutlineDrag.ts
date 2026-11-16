@@ -10,6 +10,7 @@
 import { useDndMonitor, type DragMoveEvent } from "@dnd-kit/core";
 import { useState } from "react";
 
+import { crumbTargetOf } from "./FocusCrumbs";
 import type { OutlineActions } from "./outline-types";
 import { INDENT } from "./OutlineRow";
 
@@ -24,20 +25,32 @@ export function useOutlineDrag(actions: OutlineActions): string | null {
   useDndMonitor({
     onDragMove: event => {
       const { active, over } = event;
-      const verdict = over
-        ? actions.judgeDrop(String(active.id), String(over.id), levelsOf(event))
-        : null;
+      const crumb = over ? crumbTargetOf(String(over.id)) : null;
+      // Over a Focus crumb, the place is the end of that crumb's level.
+      const verdict = crumb
+        ? actions.judgeMoveTo(String(active.id), crumb)
+        : over
+          ? actions.judgeDrop(
+              String(active.id),
+              String(over.id),
+              levelsOf(event)
+            )
+          : null;
       setRefused(verdict && !verdict.allowed ? verdict.message : null);
     },
     onDragEnd: event => {
       setRefused(null);
       // Dropped over nothing: the drag context's own announcement says so.
       if (event.over) {
-        actions.drop(
-          String(event.active.id),
-          String(event.over.id),
-          levelsOf(event)
-        );
+        const crumb = crumbTargetOf(String(event.over.id));
+        if (crumb) actions.moveTo(String(event.active.id), crumb);
+        else {
+          actions.drop(
+            String(event.active.id),
+            String(event.over.id),
+            levelsOf(event)
+          );
+        }
       }
     },
     onDragCancel: () => setRefused(null),

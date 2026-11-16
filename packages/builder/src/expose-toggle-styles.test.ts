@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
+
 /**
  * Where the expose icon sits beside a property in a component's own view,
  * asserted against the sheet that decides it.
@@ -17,9 +19,8 @@ import { describe, expect, it } from "vitest";
  *
  * @module expose-toggle-styles.test
  */
-const CHROME = readFileSync(
-  fileURLToPath(new URL("./styles/builder-chrome.css", import.meta.url)),
-  "utf8"
+const CHROME = chromeStylesheetSource(url =>
+  readFileSync(fileURLToPath(url), "utf8")
 );
 
 /** The declarations of one rule, found by its exact selector. */

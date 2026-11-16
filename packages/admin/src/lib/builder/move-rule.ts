@@ -24,12 +24,12 @@
  * @module lib/builder/move-rule
  */
 import { builderColumnIsUnique, siblingNameClash } from "nextly/config";
-import type { SiblingClashKind } from "nextly/config";
+import type { FieldNameSurface } from "nextly/config";
 import { isFieldGroupFieldType } from "nextly/field-group-type";
 
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
-import { isReservedFieldName } from "./constants";
+import { CLASH_WORDS, nameRuleProblem } from "./field-name-check";
 import { convertToFieldDefinition } from "./field-transformers";
 import { insertField, type FieldInsertPosition } from "./insert-field";
 import {
@@ -41,8 +41,13 @@ import {
 export interface MoveContext {
   /** Whether the whole entity is read-only (code-first). */
   entityReadOnly: boolean;
-  /** Whether the entity's top level reserves built-in names (a collection or a Single). */
-  topLevelReservesNames: boolean;
+  /**
+   * The kind of entity, whose save judges a name that arrives somewhere new by its field-name rule:
+   * a collection's and a Single's top level hold built-in columns, a field group's none.
+   */
+  surface: FieldNameSurface;
+  /** Whether Draft/Published is on, as stored or as the pending settings set it. Absent is off. */
+  lifecycleEnabled?: boolean;
   /**
    * The names a container's pending deletes still hold until the save, keyed
    * by the container's id, or `""` for the top level.
@@ -100,6 +105,7 @@ export type MoveRefusalReason =
   | "excluded-type"
   | "name-clash"
   | "reserved-name"
+  | "name-invalid"
   | "ambiguous-place"
   | "not-available-yet";
 
@@ -161,6 +167,20 @@ export function namingSiblingsOf(
   const chain = chainTo(fields, fieldId);
   if (!chain) return null;
   const level = namingLevel(chain.slice(0, -1));
+  return { level, siblings: namedFieldsIn(siblingsIn(fields, level)) };
+}
+
+/**
+ * The naming level a field added to `containerId` is named on (null for the top level, as for no
+ * container or one no longer there), and the named fields already on it. A layout container is part
+ * of the level holding it, so a field added inside one is named beside the fields around it.
+ */
+export function namingLevelFor(
+  fields: readonly BuilderField[],
+  containerId: string | undefined
+): { level: BuilderField | null; siblings: BuilderField[] } {
+  const chain = containerId ? chainTo(fields, containerId) : null;
+  const level = chain ? namingLevel(chain) : null;
   return { level, siblings: namedFieldsIn(siblingsIn(fields, level)) };
 }
 
@@ -364,12 +384,6 @@ function crossingRefusal(
   return null;
 }
 
-const CLASH_WORDS: Record<SiblingClashKind, string> = {
-  "same-name": "the same name",
-  "same-name-ignoring-case": "the same name in other letter case",
-  "same-column": "a name that becomes the same column",
-};
-
 /** Where a field would arrive, as a sentence names it. */
 function placeName(container: BuilderField | null): string {
   return container ? called(container) : "the top level";
@@ -413,24 +427,33 @@ function heldNameRefusal(
   return null;
 }
 
-/** Why the field's name may not stand among the siblings it would join, if it may not. */
+/**
+ * Why the field's name may not stand among the siblings it would join, if it may not: a clash with
+ * one of them or with a name a pending delete there still holds, or the save's own field-name rule
+ * for the place, which a save asks of a name new at its place. A name a built-in column or
+ * Draft/Published holds is reserved there; one no database keeps whole, or spelled as the Builder
+ * never names a field, is invalid there.
+ */
 function nameRefusal(
   field: BuilderField,
   container: BuilderField | null,
   siblings: readonly BuilderField[],
   ctx: MoveContext
 ): MoveVerdict | null {
-  const reserved =
-    !container &&
-    ctx.topLevelReservesNames &&
-    isReservedFieldName(sentName(field));
+  const ruled = nameRuleProblem(sentName(field), {
+    surface: ctx.surface,
+    nested: container !== null,
+    lifecycleEnabled: ctx.lifecycleEnabled === true,
+  });
   return (
     siblingClashRefusal(field, container, siblings) ??
     heldNameRefusal(field, container, ctx) ??
-    (reserved
+    (ruled
       ? refuse(
-          "reserved-name",
-          `${sentName(field)} is reserved at the top level. Rename ${called(field)} first.`
+          ruled.kind === "reserved" || ruled.kind === "lifecycle"
+            ? "reserved-name"
+            : "name-invalid",
+          `${called(field)} cannot go to ${placeName(container)}: ${ruled.message}`
         )
       : null)
   );
@@ -459,11 +482,32 @@ function arrivalRefusal(
   return (
     containerChangeRefusal(field, ctx) ??
     lockedInsideRefusal(field, chain, ctx) ??
+    carriedClashRefusal(field, carried) ??
     carried.reduce<MoveVerdict | null>(
       (refusal, each) => refusal ?? nameRefusal(each, into, siblings, ctx),
       null
     )
   );
+}
+
+/**
+ * The refusal of a layout group carrying two names that clash with each other to another level.
+ * Where they stand the clash may be one the saved definition already holds; arriving together on a
+ * new level would make it anew, which the save refuses.
+ */
+function carriedClashRefusal(
+  field: BuilderField,
+  carried: readonly BuilderField[]
+): MoveVerdict | null {
+  for (let at = 1; at < carried.length; at++) {
+    const refusal = siblingClashRefusal(
+      carried[at],
+      field,
+      carried.slice(0, at)
+    );
+    if (refusal) return refusal;
+  }
+  return null;
 }
 
 /**
@@ -543,6 +587,7 @@ export function judgeMove(
   }
   const container = into ? into[into.length - 1] : null;
   const refusal =
+    ambiguousFieldRefusal(fields, field) ??
     ambiguousPlaceRefusal(fields, container) ??
     sourceRefusal(chain, ctx) ??
     containerRefusal(field, into, ctx) ??
@@ -575,6 +620,23 @@ export function judgeMove(
  * the field by its container's id, and a copy of a duplicated container keeps the ids inside it,
  * so the move could not tell the two apart.
  */
+/**
+ * The refusal of moving a field whose id another field shares: the move is asked by id, and the
+ * first field found would move whichever was meant. The Builder gives a copy, and everything inside
+ * it, ids of their own, so this answers only for fields that came to it sharing one.
+ */
+function ambiguousFieldRefusal(
+  fields: readonly BuilderField[],
+  field: BuilderField
+): MoveVerdict | null {
+  return fieldsWithId(fields, field.id) > 1
+    ? refuse(
+        "ambiguous-place",
+        `${called(field)} shares its id with another field, so a move could not tell the two apart.`
+      )
+    : null;
+}
+
 function ambiguousPlaceRefusal(
   fields: readonly BuilderField[],
   container: BuilderField | null

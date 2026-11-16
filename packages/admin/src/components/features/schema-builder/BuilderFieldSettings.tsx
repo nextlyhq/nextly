@@ -41,15 +41,21 @@ import {
 import { Trash2 } from "@admin/components/icons";
 import { toSnakeName } from "@admin/lib/builder";
 import {
+  builderNameProblem,
+  nameSurfaceOf,
+} from "@admin/lib/builder/field-name-check";
+import {
   findFieldPlacement,
   type FieldPlacement,
 } from "@admin/lib/builder/field-placement";
 import { isRepeatingContainer } from "@admin/lib/builder/is-inside-repeating-ancestor";
+import { namingLevelFor } from "@admin/lib/builder/move-rule";
 import {
   describeReadOnly,
   placementReadOnlyReason,
   type ReadOnlyReason,
 } from "@admin/lib/builder/outline/outline-model";
+import { fieldsWithDeleted } from "@admin/lib/builder/outline/pending-rows";
 
 import { BUILDER_KIND_NOUN, type BuilderKind } from "./builder-config";
 import { AdvancedTab } from "./builder-field-settings/AdvancedTab";
@@ -125,7 +131,62 @@ type Props = {
   readOnlyReason?: ReadOnlyReason | null;
   /** Open a field group in its own editor. */
   onOpenFieldGroup?: (slug: string) => void;
+  /**
+   * The fields as last saved: the name a saved field already has, which keeps working, and the
+   * names pending deletes still hold until the save.
+   */
+  savedFields?: readonly BuilderField[];
+  /** Whether Draft/Published is on, as stored or as the pending settings set it. */
+  lifecycleEnabled?: boolean;
 };
+
+/** The names of the named containers above a field, outermost first: the path the save finds it by. */
+function namedPath(ancestors: readonly BuilderField[]): string {
+  return ancestors
+    .filter(ancestor => Boolean(ancestor.name))
+    .map(ancestor => ancestor.name)
+    .join("/");
+}
+
+/**
+ * Why a name the field is given cannot be saved where it sits, judged by the save's own rules, or
+ * `null`. A name the field already has where it was saved is the save's to keep, not to judge. The
+ * save finds a kept field by name, its named containers' included, so once one of those containers
+ * is renamed or the field moves under another, its name is new there and judged as one.
+ */
+function nameCheckFor(
+  kind: BuilderKind,
+  placement: FieldPlacement,
+  fields: readonly BuilderField[],
+  savedFields: readonly BuilderField[] | undefined,
+  lifecycleEnabled: boolean
+): (name: string) => string | null {
+  const { field, ancestors } = placement;
+  const saved = savedFields ? findFieldPlacement(savedFields, field.id) : null;
+  // A pending delete still holds its name, so the level is read with them put back.
+  const shown = savedFields ? fieldsWithDeleted(fields, savedFields) : fields;
+  // The naming level the field sits on: a container without a name is part of the level holding
+  // it, so the field is named beside the fields around that container.
+  const { level, siblings } = namingLevelFor(
+    shown,
+    ancestors[ancestors.length - 1]?.id
+  );
+  const place = {
+    surface: nameSurfaceOf(kind),
+    // Inside a named container the field is a key in its value.
+    nested: level !== null,
+    lifecycleEnabled,
+    siblingNames: siblings
+      .filter(other => other.id !== field.id)
+      .map(other => other.name),
+  };
+  const keptHere =
+    saved !== null && namedPath(saved.ancestors) === namedPath(ancestors);
+  return name =>
+    keptHere && saved?.field.name === name
+      ? null
+      : builderNameProblem(name, place);
+}
 
 /**
  * The outline's own read-only rule, as the panel asks it: the answer the
@@ -145,6 +206,30 @@ function readOnlyReasonOf(
     placement.ancestors,
     entityReadOnly
   );
+}
+
+/**
+ * What the panel shows of a field's state: why it is read-only, if it is, whether it may be
+ * deleted (a system field never may), and the title it is called by.
+ */
+function panelStateOf(
+  placement: FieldPlacement,
+  given: ReadOnlyReason | null | undefined,
+  entityReadOnly: boolean
+): {
+  reason: ReadOnlyReason | null;
+  fieldReadOnly: boolean;
+  canDelete: boolean;
+  fieldTitle: string;
+} {
+  const reason = readOnlyReasonOf(placement, given, entityReadOnly);
+  const fieldReadOnly = reason !== null;
+  return {
+    reason,
+    fieldReadOnly,
+    canDelete: !fieldReadOnly && placement.field.isSystem !== true,
+    fieldTitle: placement.field.label || "Untitled field",
+  };
 }
 
 /**
@@ -189,16 +274,19 @@ export function BuilderFieldSettings({
   fallbackPlacement,
   readOnlyReason,
   onOpenFieldGroup,
+  savedFields,
+  lifecycleEnabled = false,
 }: Props): JSX.Element | null {
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const placement = findFieldPlacement(fields, fieldId) ?? fallbackPlacement;
   if (!placement) return null;
 
   const { field, ancestors, siblings } = placement;
-  const reason = readOnlyReasonOf(placement, readOnlyReason, readOnly);
-  const fieldReadOnly = reason !== null;
-  const canDelete = !fieldReadOnly && field.isSystem !== true;
-  const fieldTitle = field.label || "Untitled field";
+  const { reason, fieldReadOnly, canDelete, fieldTitle } = panelStateOf(
+    placement,
+    readOnlyReason,
+    readOnly
+  );
 
   const definedAt = (
     <DefinedAt reason={reason} onOpenFieldGroup={onOpenFieldGroup} />
@@ -206,7 +294,16 @@ export function BuilderFieldSettings({
 
   const panel = (
     <FieldSettingsPanel
-      surface={BUILDER_SURFACES[kind]}
+      surface={{
+        ...BUILDER_SURFACES[kind],
+        checkName: nameCheckFor(
+          kind,
+          placement,
+          fields,
+          savedFields,
+          lifecycleEnabled
+        ),
+      }}
       field={field}
       ancestors={ancestors}
       siblings={siblings}

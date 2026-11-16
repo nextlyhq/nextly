@@ -133,7 +133,7 @@
       "compiled": 6
     },
     "docs/guides/media-storage.mdx": {
-      "samples": 15,
+      "samples": 16,
       "compiled": 10
     },
     "docs/guides/production-migrations.mdx": {
@@ -269,8 +269,8 @@
       "compiled": 20
     },
     "docs/plugins/services.mdx": {
-      "samples": 18,
-      "compiled": 2
+      "samples": 19,
+      "compiled": 3
     },
     "docs/plugins/signed-in-people.mdx": {
       "samples": 10,

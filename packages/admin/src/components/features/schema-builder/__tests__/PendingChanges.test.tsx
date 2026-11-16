@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createTestQueryClient } from "@admin/__tests__/utils";
 import { useBuilderEntityState } from "@admin/hooks/useBuilderEntityState";
+import { useBuilderFieldActions } from "@admin/hooks/useBuilderFieldActions";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
 import { copyWithNewIds } from "@admin/lib/builder/copy-field";
 import { judgeMove } from "@admin/lib/builder/move-rule";
@@ -353,12 +354,16 @@ const layoutConfig: BuilderConfig = {
   picker: {},
 };
 
+/** What a page's save checks first: the fields it would send, or null when refused. */
+let saveCheck: () => FieldDefinition[] | null;
+
 /** The whole builder page frame, on the real hooks. */
 function LayoutHarness() {
   const fieldBuilder = useFieldBuilder({
     resolver: async values => ({ values, errors: {} }),
     defaultValues: {},
   });
+  saveCheck = useBuilderFieldActions(fieldBuilder).getValidatedFields;
   const state = useBuilderEntityState({
     entity,
     builder: fieldBuilder,
@@ -402,7 +407,7 @@ function headlineToEnd(prev: BuilderField[]): BuilderField[] {
     prev,
     field("headline").id,
     {},
-    { entityReadOnly: false, topLevelReservesNames: true }
+    { entityReadOnly: false, surface: "collection" }
   );
   return verdict.allowed ? verdict.fields : prev;
 }
@@ -497,5 +502,120 @@ describe("pending changes in the outline", () => {
     expect(place("add-inside-Address")).toBeNull();
     expect(place("add-before-Address")).toBeNull();
     expect(place("add-before-City")).toBeNull();
+  });
+});
+
+describe("a broken condition", () => {
+  /** Show `name` only while `source` equals `value`, as the panel sets it. */
+  const gate = (name: string, source: string, value = "x") =>
+    act(() =>
+      builder.handleFieldUpdate({
+        ...field(name),
+        admin: {
+          ...field(name).admin,
+          condition: { field: source, operator: "equals", value },
+        },
+      })
+    );
+  /** Move `name` out of the Address group, to the end of the top level. */
+  const moveToTop = (name: string) =>
+    act(() =>
+      builder.setFields(prev => [
+        ...prev.map(each =>
+          each.fields
+            ? { ...each, fields: each.fields.filter(f => f.name !== name) }
+            : each
+        ),
+        field(name),
+      ])
+    );
+  const marked = (name: string) =>
+    within(row(name)).queryByText("Has an error") !== null;
+
+  it("a condition broken by a move blocks saving until repaired", () => {
+    render(<LayoutHarness />, { wrapper: Providers });
+    // Street, in Address, is shown by City beside it.
+    gate("street", "city");
+    expect(saveCheck()).not.toBeNull();
+    moveToTop("city");
+    expect(marked("street")).toBe(true);
+    expect(saveCheck()).toBeNull();
+    // Kept, not dropped: the condition still names City until repointed.
+    expect(field("street").admin?.condition?.field).toBe("city");
+    gate("street", "zip");
+    expect(marked("street")).toBe(false);
+    expect(saveCheck()).not.toBeNull();
+  });
+
+  it("a condition broken by a move blocks saving until removed", () => {
+    render(<LayoutHarness />, { wrapper: Providers });
+    gate("street", "city");
+    moveToTop("city");
+    expect(saveCheck()).toBeNull();
+    act(() =>
+      builder.handleFieldUpdate({
+        ...field("street"),
+        admin: { ...field("street").admin, condition: undefined },
+      })
+    );
+    expect(marked("street")).toBe(false);
+    expect(saveCheck()).not.toBeNull();
+  });
+
+  it("a condition reading a built-in field is neither marked nor refused", () => {
+    render(<LayoutHarness />, { wrapper: Providers });
+    // Title is the builder's own row, which the user's fields leave out.
+    expect(builder.fields.some(f => f.isSystem && f.name === "title")).toBe(
+      true
+    );
+    gate("headline", "title");
+    expect(marked("headline")).toBe(false);
+    expect(saveCheck()).not.toBeNull();
+  });
+
+  it("a delete marks it broken; Undo clears it, and Redo marks it again", () => {
+    render(<LayoutHarness />, { wrapper: Providers });
+    gate("street", "city");
+    act(() => builder.handleFieldDelete(field("city").id));
+    expect(marked("street")).toBe(true);
+    act(() => {
+      builder.undo();
+    });
+    expect(marked("street")).toBe(false);
+    expect(saveCheck()).not.toBeNull();
+    act(() => {
+      builder.redo();
+    });
+    expect(marked("street")).toBe(true);
+    expect(saveCheck()).toBeNull();
+  });
+
+  it("a removed option marks it broken, and Undo clears it", () => {
+    render(<LayoutHarness />, { wrapper: Providers });
+    act(() =>
+      builder.handleFieldUpdate({
+        ...field("zip"),
+        type: "select",
+        options: [
+          { label: "North", value: "north" },
+          { label: "South", value: "south" },
+        ],
+      })
+    );
+    gate("street", "zip", "south");
+    expect(marked("street")).toBe(false);
+    act(() =>
+      builder.handleFieldUpdate({
+        ...field("zip"),
+        options: [{ label: "North", value: "north" }],
+      })
+    );
+    expect(marked("street")).toBe(true);
+    expect(saveCheck()).toBeNull();
+    act(() => {
+      builder.undo();
+    });
+    expect(marked("street")).toBe(false);
+    expect(saveCheck()).not.toBeNull();
   });
 });
