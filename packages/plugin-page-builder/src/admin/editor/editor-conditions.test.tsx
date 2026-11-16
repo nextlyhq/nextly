@@ -196,6 +196,22 @@ describe("Preview as visitor elsewhere", () => {
     expect(editorStrip(undefined, result.current)).toBeUndefined();
   });
 
+  it("on a collection template, stays on while another entry loads, even when only that entry's content held conditions", () => {
+    // The only conditioned blocks are the entry's own content: between
+    // entries the bare template holds none, and that is no removal.
+    const { result, rerender } = renderHook(
+      (props: { entry?: PreviewedEntry; held: typeof CONDITIONED }) =>
+        useSwitch({ kind: "template", preview: TEMPLATE, ...props }),
+      { initialProps: { entry: ENTRY, held: CONDITIONED } }
+    );
+    act(() => result.current.visitor.onChange(true));
+    rerender({ held: PLAIN });
+    expect(result.current.said).toBeUndefined();
+    rerender({ entry: ENTRY, held: CONDITIONED });
+    expect(result.current.visitor.on).toBe(true);
+    expect(result.current.said).toBe("1 block hidden for this post");
+  });
+
   it("on a collection template, checks against the entry being previewed", () => {
     const { result, rerender } = renderHook(
       (props: { entry?: PreviewedEntry }) =>

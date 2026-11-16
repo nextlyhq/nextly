@@ -90,7 +90,7 @@ function nothingHiddenWords(applied: AppliedConditions, noun: string): string {
 }
 
 /** What the strip says when what it checks against could not be read. */
-const FAILED_WORDS = "Couldn’t check this page. Stop, then try again.";
+const FAILED_WORDS = "Couldn’t load the visitor view. Stop, then try again.";
 
 /**
  * What the visitor strip says the conditions did: what was hidden, that the

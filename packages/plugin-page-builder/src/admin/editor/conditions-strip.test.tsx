@@ -112,7 +112,7 @@ describe("what the visitor strip says", () => {
     );
     expect(
       visitorStripWords({ applied: undefined, noun: "page", failed: true })
-    ).toBe("Couldn’t check this page. Stop, then try again.");
+    ).toBe("Couldn’t load the visitor view. Stop, then try again.");
   });
 });
 

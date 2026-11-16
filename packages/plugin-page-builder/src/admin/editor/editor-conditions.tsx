@@ -176,12 +176,14 @@ export function useAppliedConditionsSwitch(
     setOn(next);
   }, []);
   // A document left with no conditioned block turns the view off, so one
-  // added again later doesn't bring it back unasked. Kept on while only the
-  // entry is missing: a template switching entries keeps showing each as a
-  // visitor gets it.
+  // added again later doesn't bring it back unasked. Judged only with the
+  // entry in hand: between entries a template is drawn bare, without the
+  // entry's own content and any conditions in it, which is no removal, so a
+  // template switching entries keeps showing each as a visitor gets it.
+  const entryInHand = preview === undefined || entry?.kind === "entry";
   useEffect(() => {
-    if (!checks) setOn(false);
-  }, [checks]);
+    if (!checks && entryInHand) setOn(false);
+  }, [checks, entryInHand]);
   const unavailable = visitorUnavailable(
     kind,
     checks,
