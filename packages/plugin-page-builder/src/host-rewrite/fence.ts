@@ -28,8 +28,10 @@ import { and, eq, inArray, isNull } from "@nextlyhq/plugin-sdk/db";
 import {
   isUniqueViolation,
   type PluginDatabase,
+  type PluginTransaction,
 } from "@nextlyhq/plugin-sdk/schema";
 
+import { holdCompositionGraph } from "../composition-graph-lock";
 import { readStoredForms } from "../fields/lock-baselines";
 import { componentDeletionHosts, componentDeletions } from "../schema/tables";
 
@@ -308,11 +310,26 @@ export function fenceStore(
     advance: async (runId, from, to, cursor) => {
       // Every move writes a phase or a cursor it did not hold before, so the
       // count is the rows matched on MySQL too, which counts changed rows.
-      const r = columns();
-      const moved = await db
-        .update(componentDeletions, { phase: to, cursor })
-        .where(both(eq(r.id, runId), eq(r.phase, from)));
-      return moved > 0;
+      const move = async (
+        on: Pick<PluginTransaction, "update" | "table">
+      ): Promise<boolean> => {
+        const r = on.table(componentDeletions);
+        const moved = await on
+          .update(componentDeletions, { phase: to, cursor })
+          .where(both(eq(r.id, runId), eq(r.phase, from)));
+        return moved > 0;
+      };
+      if (to !== "deleting") return move(db);
+      // The move to the component's own delete takes the composition graph
+      // lock, as a Layout write adding a component takes it before reading
+      // the runs (`layout-area-guard.ts`). So a Layout write either commits
+      // before this move, and the delete's last check of the Layouts, made
+      // after it, sees the Layout; or it reads the run after the move, and is
+      // refused. Neither can leave a Layout naming a deleted component.
+      return db.transaction(async tx => {
+        await holdCompositionGraph(tx, dialect);
+        return move(tx);
+      });
     },
     fenced: async among => {
       // The runs of the components named, by the index on the component's
