@@ -740,9 +740,9 @@ const EMAIL_DELIVERY_READS: Record<
   lastSentByTemplate: async (activity, query) => {
     const slugs = query.getAll("slug");
     return respondData({
-      templates: await activity.lastSentByTemplate(
+      ...(await activity.lastSentByTemplate(
         slugs.length > 0 ? slugs : undefined
-      ),
+      )),
     });
   },
   overdueQueuedEmails: async activity =>

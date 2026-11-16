@@ -877,6 +877,22 @@ export class EmailDeliveryService extends BaseService {
   }
 
   /**
+   * The oldest time the log still answers for: records older than the
+   * retention window have been, or are about to be, pruned. Null when the
+   * install keeps every record, or has no retention policy, or it cannot be
+   * read.
+   */
+  keptSince(now: Date = new Date()): Date | null {
+    let maxAge: number | false | undefined;
+    try {
+      maxAge = this.retentionPolicy?.()?.maxAgeMs;
+    } catch {
+      return null;
+    }
+    return typeof maxAge === "number" ? new Date(now.getTime() - maxAge) : null;
+  }
+
+  /**
    * List recorded deliveries, newest first.
    *
    * `recipient` takes an ADDRESS and hashes it here, because a caller holding a

@@ -131,6 +131,17 @@ export interface TemplateLastSent {
   lastSentAt: Date;
 }
 
+/**
+ * @experimental When each template was last sent, as far back as the
+ * delivery log reaches: a template missing from `templates` has not been
+ * sent since `keptSince`, the start of the log's retention window, or ever
+ * when that is null.
+ */
+export interface TemplatesLastSent {
+  templates: TemplateLastSent[];
+  keptSince: Date | null;
+}
+
 /** @experimental Whether queued email is waiting on a jobs trigger that is not running. */
 export interface QueuedEmailOverdue {
   /** Queued emails more than `warningAfterMinutes` past due. */
@@ -239,7 +250,13 @@ function encodeCursor(cursor: Cursor): string {
 }
 
 // Every record's id is a UUID, which PostgreSQL's columns hold as one.
-const CURSOR = z.tuple([z.number().int().nonnegative(), z.string().uuid()]);
+// The time is bounded to what a `Date` can hold, so a forged cursor is refused
+// here rather than reaching the database as an invalid date.
+const MAX_DATE_MS = 8.64e15;
+const CURSOR = z.tuple([
+  z.number().int().nonnegative().max(MAX_DATE_MS),
+  z.string().uuid(),
+]);
 
 function decodeCursor(text: string | undefined): Cursor | undefined {
   if (text === undefined) return undefined;
@@ -472,16 +489,18 @@ export class EmailDeliveryActivity {
   /**
    * When each template was last sent: the newest delivery recorded `sent`
    * for it. Every template that has been sent, or only those among `slugs`.
-   * A template never sent is left out.
+   * The log is pruned by age, so a template is left out when it has not
+   * been sent since `keptSince`, which the answer says.
    *
    * @throws {NextlyError} `VALIDATION_ERROR` for more than 200 slugs.
    */
   async lastSentByTemplate(
     slugs?: readonly string[]
-  ): Promise<TemplateLastSent[]> {
+  ): Promise<TemplatesLastSent> {
     const names =
       slugs === undefined ? undefined : parsed(SLUGS, [...new Set(slugs)]);
-    if (names?.length === 0) return [];
+    const keptSince = this.deliveries.keptSince();
+    if (names?.length === 0) return { templates: [], keptSince };
     const table = deliveriesTableFor(this.dialect);
     const rows = (await this.run(() =>
       this.db
@@ -500,7 +519,7 @@ export class EmailDeliveryActivity {
         )
         .groupBy(table.templateSlug)
     )) as Array<{ slug: string; lastSentAt: Date | string | number }>;
-    return rows
+    const templates = rows
       .map(row => ({
         slug: row.slug,
         lastSentAt:
@@ -509,6 +528,7 @@ export class EmailDeliveryActivity {
             : new Date(row.lastSentAt),
       }))
       .sort((a, b) => a.slug.localeCompare(b.slug));
+    return { templates, keptSince };
   }
 
   /**

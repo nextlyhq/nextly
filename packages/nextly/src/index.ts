@@ -355,6 +355,7 @@ export type {
   QueuedEmailActivity,
   QueuedEmailOverdue,
   TemplateLastSent,
+  TemplatesLastSent,
 } from "./direct-api/types";
 
 // Email templates (experimental). Template data takes lists and objects;

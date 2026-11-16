@@ -489,6 +489,8 @@ for (const dialect of getConfiguredTestDialects()) {
         // refused alike on every dialect, not a database error on one.
         "providerId=not-a-uuid",
         `before=${Buffer.from(JSON.stringify([1, "not-a-uuid"])).toString("base64url")}`,
+        // A time no date can hold.
+        `before=${Buffer.from(JSON.stringify([1e100, "00000000-0000-4000-8000-000000000000"])).toString("base64url")}`,
       ]) {
         expect(
           (await get(`email-deliveries?${query}`, reader)).status,
@@ -553,6 +555,12 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(templates.map(entry => entry.slug)).not.toContain(
         "password-reset"
       );
+      // Said as far back as the log reaches: its retention window's start.
+      const keptSince = Date.parse(String(body.keptSince));
+      const ninetyDays = 90 * 24 * 60 * 60 * 1000;
+      expect(Math.abs(Date.now() - ninetyDays - keptSince)).toBeLessThan(
+        60_000
+      );
     });
 
     it("says whether queued email is overdue, and by how many", async () => {
@@ -575,11 +583,13 @@ for (const dialect of getConfiguredTestDialects()) {
         state: "failed",
       });
       expect(queued.items.map(item => item.id)).toEqual([failedQueuedId]);
-      expect(await t.nextly.emailDeliveries.lastSent()).toEqual(
+      const lastSent = await t.nextly.emailDeliveries.lastSent();
+      expect(lastSent.templates).toEqual(
         expect.arrayContaining([
           { slug: "welcome", lastSentAt: at("2026-11-01T10:00:00.000Z") },
         ])
       );
+      expect(lastSent.keptSince).toBeInstanceOf(Date);
       expect(await t.nextly.emailDeliveries.overdue()).toEqual({
         overdue: 0,
         capped: false,
@@ -617,6 +627,19 @@ for (const dialect of getConfiguredTestDialects()) {
       ]) {
         await expect(call()).rejects.toMatchObject({ code: "FORBIDDEN" });
       }
+    });
+
+    it("queues a template name longer than any template's as having no template, on every dialect", async () => {
+      const long = "x".repeat(300);
+      const queued = await t.nextly.email.queueWithTemplate({
+        template: long,
+        to: "queued@example.com",
+      });
+      const { items } = await t.nextly.emailDeliveries.findQueued({});
+      expect(items.find(item => item.id === queued.id)).toMatchObject({
+        state: "failed",
+        templateSlug: null,
+      });
     });
   });
 }
