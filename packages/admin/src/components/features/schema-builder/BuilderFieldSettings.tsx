@@ -143,6 +143,8 @@ type Props = {
   savedFields?: readonly BuilderField[];
   /** Whether Draft/Published is on, as stored or as the pending settings set it. */
   lifecycleEnabled?: boolean;
+  /** Opened from a row's Rename…: the rename is asked for at once, where it is offered. */
+  startRenaming?: boolean;
 };
 
 /** The names of the named containers above a field, outermost first: the path the save finds it by. */
@@ -254,6 +256,7 @@ function panelStateOf(
 function FieldActions({
   field,
   renamable,
+  startRenaming,
   checkName,
   onRename,
   canDelete,
@@ -261,6 +264,7 @@ function FieldActions({
 }: {
   field: BuilderField;
   renamable: boolean;
+  startRenaming: boolean;
   checkName: (name: string) => string | null;
   onRename: (name: string) => void;
   canDelete: boolean;
@@ -271,6 +275,7 @@ function FieldActions({
       {renamable && (
         <RenameFieldAction
           field={field}
+          initiallyOpen={startRenaming}
           checkName={checkName}
           onRename={onRename}
         />
@@ -335,6 +340,7 @@ export function BuilderFieldSettings({
   onOpenFieldGroup,
   savedFields,
   lifecycleEnabled = false,
+  startRenaming = false,
 }: Props): JSX.Element | null {
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const placement = findFieldPlacement(fields, fieldId) ?? fallbackPlacement;
@@ -377,6 +383,7 @@ export function BuilderFieldSettings({
         <FieldActions
           field={field}
           renamable={state.renamable}
+          startRenaming={startRenaming}
           checkName={checkName}
           onRename={name => onFieldChange({ ...field, name })}
           canDelete={canDelete}

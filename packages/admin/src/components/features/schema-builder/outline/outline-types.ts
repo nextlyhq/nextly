@@ -15,6 +15,11 @@ import type { BuilderField } from "../types";
 /** The changes a person can ask for on one field. */
 interface OutlineFieldActions {
   duplicate: (id: string) => void;
+  /**
+   * Open the field's settings with its rename asked for, where the field can be renamed. Absent,
+   * rows offer no Rename….
+   */
+  rename?: (id: string) => void;
   remove: (id: string) => void;
   setHidden: (id: string, hidden: boolean) => void;
   openFieldGroup: (slug: string) => void;

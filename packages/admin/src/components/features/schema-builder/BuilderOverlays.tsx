@@ -33,7 +33,8 @@ export type ActiveOverlay =
   | { kind: "none" }
   | { kind: "settings" }
   | { kind: "picker"; position: FieldInsertPosition }
-  | { kind: "edit"; fieldId: string };
+  /** `renaming`: opened from a row's Rename…, so its rename is asked for at once. */
+  | { kind: "edit"; fieldId: string; renaming?: boolean };
 
 type Props = {
   active: ActiveOverlay;

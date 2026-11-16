@@ -32,15 +32,18 @@ function renameProblem(
 
 export function RenameFieldAction({
   field,
+  initiallyOpen = false,
   checkName,
   onRename,
 }: {
   field: BuilderField;
+  /** Open with the dialog showing, as a row's Rename… asks. */
+  initiallyOpen?: boolean;
   /** The panel's check of a name new at the field's place. */
   checkName: (name: string) => string | null;
   onRename: (name: string) => void;
 }): JSX.Element {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initiallyOpen);
   const [name, setName] = useState(field.name);
   const inputId = useId();
   const problemId = useId();

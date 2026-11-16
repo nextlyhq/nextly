@@ -32,7 +32,8 @@ const BODY = text("f-body", "body", { label: "Body" });
 function panel(
   fields: BuilderField[],
   fieldId: string,
-  saved: string[] = ["f-summary", "f-body"]
+  saved: string[] = ["f-summary", "f-body"],
+  startRenaming = false
 ) {
   const onFieldChange = vi.fn();
   render(
@@ -45,6 +46,7 @@ function panel(
       docked
       savedFields={fields.filter(field => saved.includes(field.id))}
       lifecycleEnabled={false}
+      startRenaming={startRenaming}
       onFieldChange={onFieldChange}
       onFieldDelete={() => {}}
       onClose={() => {}}
@@ -97,6 +99,14 @@ describe("a saved field's name", () => {
       id: "f-summary",
       name: "abstract",
     });
+  });
+
+  // The row menu's Rename… opens the settings with the rename already asked for.
+  it("opens with its rename asked for, from the row's menu", () => {
+    panel([SUMMARY, BODY], "f-summary", undefined, true);
+    expect(
+      screen.getByRole("dialog", { name: /Rename Summary/ })
+    ).toBeInTheDocument();
   });
 
   it("is not offered Rename… inside a named group, and says why", () => {

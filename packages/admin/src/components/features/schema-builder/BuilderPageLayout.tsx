@@ -309,10 +309,12 @@ function EditedFieldSettings({
     <BuilderFieldSettings
       // Keyed by the field, so its tab and any half-typed list entry start
       // fresh when another field is selected.
-      key={active.fieldId}
+      // A row's Rename… on the field already open starts it afresh, with its rename asked for.
+      key={`${active.fieldId}:${active.renaming === true}`}
       kind={config.kind}
       fields={builder.fields}
       fieldId={active.fieldId}
+      startRenaming={active.renaming === true}
       savedFieldIds={savedFieldIds}
       readOnly={locked}
       docked={docked}
@@ -394,6 +396,8 @@ function FieldListRegion({
 
   const callbacks: OutlineCallbacks = {
     select: fieldId => onActiveChange({ kind: "edit", fieldId }),
+    rename: fieldId =>
+      onActiveChange({ kind: "edit", fieldId, renaming: true }),
     addAt: position => onActiveChange({ kind: "picker", position }),
     fields: builder.fields,
     judgeMove: (fieldId, target) =>
