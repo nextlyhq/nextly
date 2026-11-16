@@ -157,12 +157,19 @@ export function BuilderToolbar({
           <Settings className="h-4 w-4" />
         </Button>
         {/* Said where Save is, so a held Save is never a button that does
-            nothing without a reason. */}
-        {saveHeld !== undefined && (
-          <span role="status" className="text-xs text-muted-foreground">
-            {saveHeld}
-          </span>
-        )}
+            nothing without a reason. Mounted whether or not Save is held, and
+            only its text changes: a status region inserted with its message
+            already in it is not reliably announced. Visually hidden while
+            empty, so it takes no room beside Save. */}
+        <span
+          role="status"
+          data-testid="save-held-status"
+          className={
+            saveHeld === undefined ? "sr-only" : "text-xs text-muted-foreground"
+          }
+        >
+          {saveHeld ?? ""}
+        </span>
         <Button
           size="sm"
           disabled={saveDisabled}
