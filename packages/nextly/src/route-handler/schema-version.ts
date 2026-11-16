@@ -44,6 +44,7 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { markMemoSchemaChecked } from "../auth/access/request-memo";
 import { container } from "../di/container";
 import { isServicesRegistered } from "../di/service-access";
 import {
@@ -120,6 +121,15 @@ function registeredAdapter(): DrizzleAdapter | undefined {
  * this copy has, and is tried again after the interval.
  */
 export async function servedSchemaVersion(): Promise<number | undefined> {
+  const seq = await followedSchemaVersion();
+  // The request or Direct API call this runs in has its definitions up to date now: a Direct API
+  // call made inside it keeps them (`memoSchemaChecked`), never reloading them under it.
+  markMemoSchemaChecked();
+  return seq;
+}
+
+/** The stored schema version this copy serves, its definitions brought up to it first. */
+async function followedSchemaVersion(): Promise<number | undefined> {
   const adapter = registeredAdapter();
   if (adapter === undefined) return undefined;
   const state = served();

@@ -8,7 +8,11 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { runWithAccessMemo } from "../../auth/access/request-memo";
+import { withErrorHandler } from "../../api/with-error-handler";
+import {
+  markMemoSchemaChecked,
+  runWithAccessMemo,
+} from "../../auth/access/request-memo";
 import { container } from "../../di/container";
 import { runAsCaller, withLanguagesPinned } from "../namespaces/helpers";
 
@@ -100,12 +104,27 @@ describe("a Direct API call and the stored schema version", () => {
     expect(served).toHaveBeenCalledTimes(1);
   });
 
-  it("does not check it for a call made inside a request or another call", async () => {
+  it("does not check it for a call made inside a request that checked it", async () => {
     const forms = withLanguagesPinned({ find: async () => "found" });
     await runWithAccessMemo(async () => {
+      // The request's own check, as the REST request path makes it.
+      markMemoSchemaChecked();
       await runAsCaller({}, {}, async () => null);
       await forms.find();
     });
     expect(served).not.toHaveBeenCalled();
+  });
+
+  it("checks it for a call made inside a route that opened a memo without checking it", async () => {
+    // A route wrapped by `withErrorHandler` opens the request's memo and never checks the version.
+    const route = withErrorHandler(async (_request: Request) => {
+      await runAsCaller({}, {}, async () => null);
+      return new Response("ok");
+    });
+    const response = await route(
+      new Request("http://localhost/api/some-route")
+    );
+    expect(response.status).toBe(200);
+    expect(served).toHaveBeenCalledTimes(1);
   });
 });

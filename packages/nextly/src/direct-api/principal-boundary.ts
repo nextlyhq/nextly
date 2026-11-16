@@ -80,9 +80,7 @@ function refusingPrincipal(
     return namesPrincipal(args)
       ? Promise.reject(refusal(operation))
       : runAsPrincipal(null, () =>
-          // Opened as the boundary's memo: a call made on its own is still a top-level call, which
-          // checks the stored schema version (`withServedSchema`), where a request's memo is not.
-          runWithAccessMemo(() => method.apply(self, args), { boundary: true })
+          runWithAccessMemo(() => method.apply(self, args))
         );
   };
 }

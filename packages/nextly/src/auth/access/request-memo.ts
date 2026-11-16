@@ -120,40 +120,34 @@ const keptKeyOf = (caller: string, language: RuleLanguageOf): string =>
 export const JUDGED_OTHERWISE = "judged-otherwise";
 
 /**
- * Set while the memo open is one the Direct API's principal boundary opened for a call made on its
- * own: that call is still a top-level call, where one inside a request is not.
+ * The memos whose request or call checked the stored schema version (`servedSchemaVersion`): a
+ * Direct API call made inside one keeps the definitions it was checked against. Keyed by the memo
+ * itself, which every part of one request shares, so the mark reaches all of it; a memo opened by
+ * a route that never checked the version carries none.
  */
-const openedAtBoundary = new AsyncLocalStorage<true>();
+const schemaCheckedMemos = new WeakSet<object>();
 
-/**
- * Whether a request is under way: its memo is open. A Direct API call made inside one belongs to
- * it, and keeps what the request chose at its start. The memo the Direct API's principal boundary
- * opens for a call made on its own does not count.
- */
-export function insideAccessMemo(): boolean {
-  return (
-    lookups.getStore() !== undefined &&
-    openedAtBoundary.getStore() === undefined
-  );
+/** Marks the memo open now, if any, as one whose request checked the stored schema version. */
+export function markMemoSchemaChecked(): void {
+  const memo = lookups.getStore();
+  if (memo !== undefined) schemaCheckedMemos.add(memo);
+}
+
+/** Whether the memo open now is one whose request or call checked the stored schema version. */
+export function memoSchemaChecked(): boolean {
+  const memo = lookups.getStore();
+  return memo !== undefined && schemaCheckedMemos.has(memo);
 }
 
 /**
  * Runs `operation` with a memo for the request. A memo already open is kept,
  * so a route reached inside another request's handling shares its lookups.
  */
-export function runWithAccessMemo<T>(
-  operation: () => T,
-  options: {
-    /** The memo is the Direct API principal boundary's, for a call made on its own. */
-    boundary?: boolean;
-  } = {}
-): T {
+export function runWithAccessMemo<T>(operation: () => T): T {
   if (lookups.getStore()) return operation();
-  const open = () =>
-    lookups.run(new Map(), () =>
-      ruleOutcomes.run(new Map(), () => routeVerdicts.run(new Map(), operation))
-    );
-  return options.boundary === true ? openedAtBoundary.run(true, open) : open();
+  return lookups.run(new Map(), () =>
+    ruleOutcomes.run(new Map(), () => routeVerdicts.run(new Map(), operation))
+  );
 }
 
 /**

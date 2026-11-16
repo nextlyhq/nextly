@@ -12,7 +12,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import {
-  insideAccessMemo,
+  memoSchemaChecked,
   runWithAccessMemo,
 } from "../../auth/access/request-memo";
 import { readsAsVisitor } from "../../auth/access/resolve-actor";
@@ -130,12 +130,13 @@ const servedForCall = new AsyncLocalStorage<true>();
 /**
  * Brings this process's definitions up to the stored schema version before a Direct API call, as
  * a request's start does (`servedSchemaVersion`), so a change made on another server copy is
- * served by a process no request reaches. A call made inside a request (`insideAccessMemo`) or
- * inside another call that checked already keeps the definitions that one started with: they are
- * never reloaded under it.
+ * served by a process no request reaches. A call made inside a request or another call that
+ * checked the version already (`memoSchemaChecked`, or this call's own scope) keeps the
+ * definitions that one was checked against: they are never reloaded under it. A memo a route
+ * opened without checking carries no such mark, so a call inside it checks.
  */
 async function withServedSchema<T>(operation: () => Promise<T>): Promise<T> {
-  if (insideAccessMemo() || servedForCall.getStore()) return operation();
+  if (memoSchemaChecked() || servedForCall.getStore()) return operation();
   await servedSchemaVersion();
   return servedForCall.run(true, operation);
 }
