@@ -158,18 +158,21 @@ export function ChecklistItem({
     >
       <ChecklistMark status={status} />
       <div className="min-w-36 flex-1">
-        <p
+        {/* Divs, not paragraphs: a label or hint may be a block (the
+            outline's still bar), which a paragraph cannot hold. */}
+        <div
           className={cn(
             "text-[13.5px] leading-5 break-words",
             finished ? "text-muted-foreground" : "font-medium text-foreground",
             struck && "line-through"
           )}
+          data-checklist-label=""
         >
           {label}
           <span className="sr-only"> — {STATUS_TEXT[status]}</span>
-        </p>
+        </div>
         {hint !== undefined && (
-          <p
+          <div
             className={cn(
               "text-[12.5px] leading-[18px] text-muted-foreground",
               hintFailed && "text-danger-text"
@@ -177,7 +180,7 @@ export function ChecklistItem({
             data-checklist-hint=""
           >
             {hint}
-          </p>
+          </div>
         )}
         {children}
       </div>

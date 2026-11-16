@@ -322,6 +322,16 @@ describe("the Content overview", () => {
     expect(replaceTo).not.toHaveBeenCalled();
   });
 
+  it("names one draft in the singular and more in the plural", async () => {
+    state.stats.posts = { total: 12, drafts: 1, newest: RECENT };
+    await draw("all");
+
+    const posts = rowOf("Collections", "Posts");
+    expect(
+      await within(posts).findByRole("link", { name: "1 draft in Posts" })
+    ).toHaveAttribute("href", "/admin/collections/posts?status=draft");
+  });
+
   it("reads every row's figures in one request, however many collections there are", async () => {
     state.collections = Array.from({ length: 30 }, (_, i) => ({
       id: `c${i}`,
