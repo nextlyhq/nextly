@@ -141,6 +141,12 @@ export interface BlockBoundaryProps {
    * address an unstyled node and would resolve to the wrong one.
    */
   nodeAttribute?: boolean;
+  /**
+   * Keep each async block's output between draws, as `nodeAttribute` does,
+   * for an editor surface that addresses no node (see
+   * `PageRendererProps.keepAsyncOutputs`). Never on a published page.
+   */
+  keepAsyncOutputs?: boolean;
   /** The page's bindings, when the page has any to fill. */
   bindings?: BoundaryBindings;
   /** What the render decided about its conditioned blocks. */
@@ -223,6 +229,7 @@ export function BlockBoundary({
   fallback,
   hostPolicy,
   nodeAttribute,
+  keepAsyncOutputs,
   bindings,
   conditions,
 }: BlockBoundaryProps): ReactNode {
@@ -337,7 +344,9 @@ export function BlockBoundary({
   // An editor render reuses the output it already has for this block as it
   // stands: see `EDITOR_OUTPUTS`.
   const editorSlot = editorOutputSlot(
+    nodeAttribute === true || keepAsyncOutputs === true,
     nodeAttribute === true,
+    hostPolicy,
     context,
     definition.name,
     className,
@@ -391,6 +400,7 @@ export function BlockBoundary({
             fallback={fallback}
             {...(hostPolicy === undefined ? {} : { hostPolicy })}
             {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
+            {...(keepAsyncOutputs === true ? { keepAsyncOutputs } : {})}
             bindings={bindings}
             {...(conditions === undefined ? {} : { conditions })}
           />
@@ -464,6 +474,12 @@ export interface BlockListProps {
    * address an unstyled node and would resolve to the wrong one.
    */
   nodeAttribute?: boolean;
+  /**
+   * Keep each async block's output between draws, as `nodeAttribute` does,
+   * for an editor surface that addresses no node (see
+   * `PageRendererProps.keepAsyncOutputs`). Never on a published page.
+   */
+  keepAsyncOutputs?: boolean;
   /** The page's bindings, when the page has any to fill. */
   bindings?: BoundaryBindings;
   /** What the render decided about its conditioned blocks. */
@@ -485,6 +501,7 @@ export function BlockList({
   fallback,
   hostPolicy,
   nodeAttribute,
+  keepAsyncOutputs,
   bindings,
   conditions,
 }: BlockListProps): ReactNode {
@@ -501,6 +518,7 @@ export function BlockList({
         fallback={fallback}
         {...(hostPolicy === undefined ? {} : { hostPolicy })}
         {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
+        {...(keepAsyncOutputs === true ? { keepAsyncOutputs } : {})}
         {...(bindings === undefined ? {} : { bindings })}
         {...(conditions === undefined ? {} : { conditions })}
       />
