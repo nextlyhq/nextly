@@ -28,7 +28,7 @@
  *
  * @module style/contrast
  */
-import { asciiLower, decodeIdentifier } from "./css-value";
+import { asciiLower, decodeIdentifier } from "./css-identifier";
 
 /** Straight sRGB channels, 0-255, plus alpha 0-1. */
 export interface Rgb {

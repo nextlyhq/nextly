@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => {
   return {
     mediaService: {
       listMedia: vi.fn(),
+      findByIds: vi.fn(),
       countLibrary: vi.fn(),
       getFolderContents: vi.fn(),
       upload: vi.fn(),
@@ -15,6 +16,8 @@ const mocks = vi.hoisted(() => {
       delete: vi.fn(),
     },
     requirePermission: vi.fn(),
+    requireListRead: vi.fn(),
+    visitorReadsSystemResource: vi.fn(),
   };
 });
 
@@ -22,6 +25,37 @@ vi.mock("../init", () => ({
   getNextly: vi.fn(async () => ({})),
   getCachedNextly: vi.fn(async () => ({})),
 }));
+
+// The list's gate and the visitor check, driven from the test only where a
+// case sets them; otherwise the real ones run.
+vi.mock("../auth/list-read-gates", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("../auth/list-read-gates")>();
+  return {
+    ...actual,
+    requireListRead: (...args: Parameters<typeof actual.requireListRead>) =>
+      mocks.requireListRead.getMockImplementation() === undefined
+        ? actual.requireListRead(...args)
+        : (mocks.requireListRead(...args) as ReturnType<
+            typeof actual.requireListRead
+          >),
+  };
+});
+vi.mock("../auth/resource-readable", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("../auth/resource-readable")>();
+  return {
+    ...actual,
+    visitorReadsSystemResource: (
+      ...args: Parameters<typeof actual.visitorReadsSystemResource>
+    ) =>
+      mocks.visitorReadsSystemResource.getMockImplementation() === undefined
+        ? actual.visitorReadsSystemResource(...args)
+        : (mocks.visitorReadsSystemResource(...args) as ReturnType<
+            typeof actual.visitorReadsSystemResource
+          >),
+  };
+});
 
 vi.mock("../di", () => ({
   getService: vi.fn(() => mocks.mediaService),
@@ -219,6 +253,77 @@ describe("createMediaHandlers authorization", () => {
     // Another list says nothing of the record.
     mocks.mediaService.listMedia.mockResolvedValueOnce(page());
     expect(await list("")).not.toHaveProperty("usageRecorded");
+  });
+
+  it("reads the items a list names by id in one read, and refuses more than a page of ids", async () => {
+    container.registerSingleton("generalSettingsService", () => ({
+      getTimezone: async () => "UTC",
+    }));
+    const found = [
+      { id: "b", filename: "b.png" },
+      { id: "a", filename: "a.png" },
+    ];
+    mocks.mediaService.findByIds.mockResolvedValue(found);
+    const handlers = createMediaHandlers();
+    const get = (query: string) =>
+      handlers.GET(new Request(`http://localhost/api/media${query}`), {
+        params: Promise.resolve({}),
+      });
+
+    const response = await get("?ids=b,a&ids=missing");
+    expect(response.status).toBe(200);
+    // One read of every id asked, whatever their number; not the paged list.
+    expect(mocks.mediaService.findByIds).toHaveBeenCalledTimes(1);
+    expect(mocks.mediaService.findByIds).toHaveBeenCalledWith(
+      ["b", "a", "missing"],
+      expect.anything()
+    );
+    expect(mocks.mediaService.listMedia).not.toHaveBeenCalled();
+    const body = (await response.json()) as {
+      items: { id: string }[];
+      meta: Record<string, unknown>;
+    };
+    expect(body.items.map(item => item.id)).toEqual(["b", "a"]);
+    expect(body.meta).toMatchObject({ total: 2, page: 1, totalPages: 1 });
+
+    const tooMany = Array.from({ length: 101 }, (_, i) => `m${String(i)}`);
+    expect((await get(`?ids=${tooMany.join(",")}`)).status).toBe(400);
+    expect(mocks.mediaService.findByIds).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads by id only for a caller the media list's gate lets read media", async () => {
+    container.registerSingleton("generalSettingsService", () => ({
+      getTimezone: async () => "UTC",
+    }));
+    const handlers = createMediaHandlers({ requireAuth: true });
+    const get = () =>
+      handlers.GET(new Request("http://localhost/admin/api/media?ids=a,b"), {
+        params: Promise.resolve({}),
+      });
+
+    // Refused: a visitor whom no media read is granted to.
+    mocks.requireListRead.mockImplementation(async () => ({
+      success: false,
+      statusCode: 401,
+      message: "Authentication required",
+      error: "You must be logged in to access this resource",
+      data: null,
+      code: "AUTH_REQUIRED",
+    }));
+    mocks.visitorReadsSystemResource.mockImplementation(async () => false);
+    expect((await get()).status).toBe(401);
+    expect(mocks.mediaService.findByIds).not.toHaveBeenCalled();
+
+    // Allowed: a caller the same gate lets list media reads the items.
+    mocks.requireListRead.mockImplementation(async () => ({
+      userId: "u1",
+      permissions: [],
+    }));
+    mocks.mediaService.findByIds.mockResolvedValue([{ id: "a" }]);
+    expect((await get()).status).toBe(200);
+    expect(mocks.mediaService.findByIds).toHaveBeenCalledTimes(1);
+    mocks.requireListRead.mockReset();
+    mocks.visitorReadsSystemResource.mockReset();
   });
 
   it("asks for the folder page the query names, and refuses one past the limit", async () => {

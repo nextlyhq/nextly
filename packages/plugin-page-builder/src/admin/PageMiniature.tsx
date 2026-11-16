@@ -57,6 +57,7 @@
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import {
+  createStandaloneContext,
   NODE_ID_ATTRIBUTE,
   PageRenderer,
   previewContainerStyle,
@@ -454,6 +455,19 @@ function frameSize(
 }
 
 /**
+ * One page context for as long as the miniature is shown, unless the surface
+ * hands its own. The renderer keeps each async block's output per context, so
+ * a context made afresh per draw would run every image and button again when
+ * the content changes, and each would blink out while it settled.
+ */
+function useSteadyContext(
+  given: PageRendererProps["context"]
+): NonNullable<PageRendererProps["context"]> {
+  const own = useMemo(() => createStandaloneContext(), []);
+  return given ?? own;
+}
+
+/**
  * @param props - the document, the site's sheet, the width to compose at, and
  *   the sections a person may open
  * @returns a scaled, inert rendering of the page, with a link over each section
@@ -480,6 +494,8 @@ export function PageMiniature({
     sections
   );
 
+  const context = useSteadyContext(render.context);
+
   /*
    * Held apart from the measured scale, which changes on every frame of a
    * resize.
@@ -498,15 +514,20 @@ export function PageMiniature({
         // inputs describe this site's rendering, and a surface restating them
         // here would silently stop forwarding one it never heard of.
         {...render}
+        context={context}
         document={document}
         blocks={entryBlockResolver()}
         siteStyles={siteStyles}
         // Each block's id on its root element, so the links over the page can
         // find the section they stand for. Only where there are links to place.
         nodeAttribute={sections !== undefined}
+        // What async blocks drew is kept between draws, as on the canvas: a
+        // content change draws only the blocks it changed. This is the
+        // admin's picture of the page, never the published page.
+        keepAsyncOutputs
       />
     ),
-    [render, document, siteStyles, sections]
+    [render, context, document, siteStyles, sections]
   );
 
   const size = frameSize(composedHeight * scale, maxHeight);

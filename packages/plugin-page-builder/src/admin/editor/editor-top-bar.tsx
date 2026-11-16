@@ -22,7 +22,7 @@ import type { EditorView } from "./editor-view";
 import { HistoryButtons } from "./history-buttons";
 import { PageReadMeter } from "./page-read-meter";
 import { PageTitleSwitcher } from "./page-title-switcher";
-import { PreviewButton } from "./preview-button";
+import { PreviewButton, type VisitorPreview } from "./preview-button";
 import { siteStyleStatus } from "./site-style-studios";
 
 /**
@@ -62,13 +62,15 @@ export function editorTopBar(
   /**
    * The page's title as the form has it now, the field being edited by its
    * address, where that field sits in words when below the top level, and
-   * the canvas, which a binding's Select brings its block into view in.
+   * the canvas, which a binding's Select brings its block into view in,
+   * and "Preview as visitor", which Preview's menu holds.
    */
   page: {
     title: string | undefined;
     field: string;
     location?: string | undefined;
     canvas: HTMLElement | null;
+    visitor: VisitorPreview;
   }
 ): {
   topBar: React.JSX.Element;
@@ -165,7 +167,7 @@ export function editorTopBar(
           blocks, the page, other pages and commands, also on ⌘K. */}
         <SearchButton onOpen={() => view.search.setOpen(true)} />
         <DocumentSaveIndicator className="min-w-[9rem] shrink-0 justify-end text-sm @max-[1400px]/topbar:min-w-0" />
-        <PreviewButton />
+        <PreviewButton visitor={page.visitor} />
         {/* Last, at the bar's far end where the header kept them: the
           document's leading action with its other ways to publish on its
           arrow, which the builder's taking the window would otherwise leave

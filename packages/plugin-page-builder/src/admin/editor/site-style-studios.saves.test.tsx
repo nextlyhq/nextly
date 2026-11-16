@@ -121,8 +121,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   usePluginClientConfig: () => undefined,
 }));
 
-const { FontsPanelWithUpload, TokensStudio, VariablesTab, useClassSurface } =
-  await import("./site-style-studios");
+const { TokensStudio, VariablesTab, useClassSurface } = await import(
+  "./site-style-studios"
+);
+const { FontsPanelWithUpload } = await import("./site-style-fonts");
 
 const brand = {
   name: "color.brand",

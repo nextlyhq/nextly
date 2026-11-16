@@ -47,11 +47,8 @@ import {
 
 import { previewedCanvas, useCanvasPreviewMode } from "./canvas-preview-mode";
 import { DesignPanel } from "./design-panel";
-import {
-  FontsPanelWithUpload,
-  TokensStudio,
-  VariablesTab,
-} from "./site-style-studios";
+import { FontsPanelWithUpload } from "./site-style-fonts";
+import { TokensStudio, VariablesTab } from "./site-style-studios";
 
 afterEach(cleanup);
 

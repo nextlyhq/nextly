@@ -32,6 +32,7 @@ import * as React from "react";
 import { isElement } from "./dom-kind";
 import { keyHint } from "./key-hint";
 import type { SharedBlockVerbs } from "./keyboard-actions";
+import { useAskedSharedVerbs } from "./selection-offer";
 
 /** One of the row's own verbs, as the menu offers it. */
 export interface RowMenuItem {
@@ -133,6 +134,26 @@ function SharedItems({
   );
 }
 
+/**
+ * The shared block verbs, Delete last on its own, as the locks answer them:
+ * drawn only while the menu is open, so the locks are asked when it opens.
+ */
+function SharedGroups({
+  verbs,
+}: {
+  verbs: SharedBlockVerbs | undefined;
+}): React.JSX.Element {
+  const shared = useAskedSharedVerbs(verbs);
+  const deletion = shared.filter(action => action.id === "delete");
+  const others = shared.filter(action => action.id !== "delete");
+  return (
+    <>
+      <SharedItems actions={others} verbs={verbs} />
+      <SharedItems actions={deletion} verbs={verbs} />
+    </>
+  );
+}
+
 /** The row's own verbs, read when the menu's content is drawn. */
 function OwnItems({
   items,
@@ -194,9 +215,6 @@ export function LayerRowMenu({
   );
   const hint = (keys: string | undefined): string | null =>
     keys === undefined || apple === null ? null : keyHint(keys, apple);
-  const shared = verbs?.actions ?? [];
-  const deletion = shared.filter(action => action.id === "delete");
-  const others = shared.filter(action => action.id !== "delete");
   return (
     // Not modal, as the canvas menu is not: a modal menu marks the editor
     // around it aria-hidden while its controls stay focusable.
@@ -218,8 +236,7 @@ export function LayerRowMenu({
       </ContextMenuTrigger>
       <ContextMenuContent aria-label="Layer actions">
         <OwnItems items={items} target={target} hint={hint} />
-        <SharedItems actions={others} verbs={verbs} />
-        <SharedItems actions={deletion} verbs={verbs} />
+        <SharedGroups verbs={verbs} />
       </ContextMenuContent>
     </ContextMenu>
   );

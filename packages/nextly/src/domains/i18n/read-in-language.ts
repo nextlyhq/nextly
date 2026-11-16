@@ -46,14 +46,14 @@ export function publishedInLanguageCondition(args: {
   /** The read's language chain; its first language is the one requested. */
   localeChain: readonly string[] | null | undefined;
   mainIdColumn: unknown;
-  defaultLocale: string | undefined;
 }): SQL | undefined {
+  // A read with no language chain is one with localization off, or one of
+  // every language at once: neither asks for a language to be published.
   const requested = args.localeChain?.[0];
   if (
     args.statusFilter?.isPublicRead !== true ||
     args.companion?.hasStatus !== true ||
-    requested === undefined ||
-    args.defaultLocale === undefined
+    requested === undefined
   ) {
     return undefined;
   }
