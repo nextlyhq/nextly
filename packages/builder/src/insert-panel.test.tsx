@@ -40,6 +40,7 @@ import {
 
 import { NoticeSinkProvider } from "./builder-notices";
 import { InsertPanel } from "./insert-panel";
+import { besidePanel } from "./insert-panel-summon";
 import type { EditorState } from "./editor-state";
 import { EMPTY_SELECTION } from "./selection";
 import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
@@ -2261,5 +2262,97 @@ describe("the offer under the one placement rule", () => {
     // The query did narrow the rows, so the renders really happened.
     expect(screen.queryByRole("option", { name: "Button" })).toBeNull();
     expect(asked).toBe(before);
+  });
+});
+
+/*
+ * A press of an add control on the canvas: the panel shows that it heard,
+ * whether it just opened or was already open. Its search takes focus, its
+ * list goes back to the top, and the line naming the place is highlighted.
+ */
+describe("the panel answering an add control", () => {
+  /** The panel with one block, answering presses counted by `summoned`. */
+  function mountSummoned(summoned: number | undefined) {
+    registerBlocks(
+      [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
+      { source: "acme" }
+    );
+    const onSummoned = vi.fn();
+    const editor = editorSpy(documentOf());
+    const view = render(
+      <InsertPanel
+        editor={editor}
+        summoned={summoned}
+        onSummoned={onSummoned}
+      />
+    );
+    const rerender = (next: number | undefined) =>
+      view.rerender(
+        <InsertPanel editor={editor} summoned={next} onSummoned={onSummoned} />
+      );
+    return { onSummoned, rerender };
+  }
+
+  const search = () => screen.getByRole("combobox");
+  const list = () =>
+    document.querySelector<HTMLElement>(".nx-insert-panel__list");
+  const placement = () =>
+    document.querySelector<HTMLElement>(".nx-insert-panel__placement");
+
+  it("answers the press it opened for: search focused, list at the top, the place highlighted", () => {
+    const { onSummoned } = mountSummoned(1);
+    expect(document.activeElement).toBe(search());
+    expect(list()?.scrollTop).toBe(0);
+    expect(placement()?.hasAttribute("data-flash")).toBe(true);
+    // Said back, so the host does not answer the same press again.
+    expect(onSummoned).toHaveBeenCalledWith(1);
+  });
+
+  it("answers a press while it is already open, and only a new one", () => {
+    const { onSummoned, rerender } = mountSummoned(undefined);
+    // Opened from the rail: nothing to answer, focus left where it was.
+    expect(onSummoned).not.toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(search());
+    expect(placement()?.hasAttribute("data-flash")).toBe(false);
+
+    const scrolled = list();
+    if (scrolled !== null) scrolled.scrollTop = 240;
+    rerender(2);
+    expect(document.activeElement).toBe(search());
+    expect(list()?.scrollTop).toBe(0);
+    expect(placement()?.hasAttribute("data-flash")).toBe(true);
+    expect(onSummoned).toHaveBeenLastCalledWith(2);
+
+    // The same press drawn again is not a new one.
+    rerender(2);
+    expect(onSummoned).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets the highlight go after a moment", () => {
+    vi.useFakeTimers();
+    try {
+      mountSummoned(1);
+      expect(placement()?.hasAttribute("data-flash")).toBe(true);
+      act(() => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(placement()?.hasAttribute("data-flash")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("where a tile's card sits", () => {
+  it("is against the panel's right edge, level with the tile", () => {
+    const panel = new DOMRect(0, 40, 320, 900);
+    const tile = new DOMRect(16, 300, 140, 64);
+    const at = besidePanel(panel, tile);
+    // A point on the panel's edge, as tall as the tile: the card placed to
+    // its right sits outside the panel, never over the tiles beside it.
+    expect(at.left).toBe(320);
+    expect(at.width).toBe(0);
+    expect(at.top).toBe(300);
+    expect(at.height).toBe(64);
   });
 });

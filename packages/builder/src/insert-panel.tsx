@@ -62,7 +62,6 @@ import {
   allBlocks,
   asPermittedList,
   COMPONENT_INSTANCE_TYPE,
-  findNode,
   permittedLabel,
   placementSiteIn,
   planInsertPattern,
@@ -111,6 +110,9 @@ import {
   offeredIn,
   withEntryContentField,
 } from "./entry-content-rules";
+import { boxInFrameViewport } from "./geometry-dom";
+import { besidePanel, useSummonAnswer } from "./insert-panel-summon";
+import { placeParts, placementWords } from "./insert-placement-words";
 import {
   blockLabel,
   blockSourceFor,
@@ -138,7 +140,6 @@ import {
   type SavedComponent,
   type SavedPattern,
 } from "./inserter";
-import { layerLabel } from "./layers";
 import { lockRefusalWording, type LockRefusalFacts } from "./lock-refusal";
 import { refusalAnnouncement } from "./move-refusal";
 import type { BuilderOp } from "./op-vocabulary";
@@ -290,6 +291,17 @@ export interface InsertPanelProps {
    * does not hold.
    */
   renderPreview?: (entry: InsertEntry) => React.ReactNode;
+  /**
+   * How many times an add control on the canvas has asked for this panel,
+   * counted by the host. Each new count is a press the panel answers, so the
+   * author sees it heard them whether it just opened or was already open: the
+   * search takes focus, the list goes back to the top, and the line naming
+   * the place is highlighted for a moment. `undefined` while no press waits,
+   * as when the panel is opened from the rail.
+   */
+  summoned?: number;
+  /** Told each count the panel has answered, so the host asks no more. */
+  onSummoned?: (count: number) => void;
 }
 
 /** The panel's two tabs: blocks and the site's components, and patterns. */
@@ -581,6 +593,8 @@ const NOWHERE: Measurable = {
   getBoundingClientRect: () => new DOMRect(),
 };
 
+export { placementWords }; // For the importers of the panel's words.
+
 /**
  * The tile in the panel carrying a command value.
  *
@@ -613,8 +627,8 @@ function tileElement(
  * `aria-hidden`, and it never takes focus: everything it says is the tile's
  * own accessible description already, so a screen reader hears it on the
  * tile, and focus has to stay in the search for typing and the arrow keys to
- * keep working. Anchored to the tile itself, so it sits beside the one it
- * describes as the highlight moves down the grid.
+ * keep working. Anchored beside the panel at the tile's height, so it moves
+ * down with the highlight and never covers a tile.
  */
 function TilePopover({
   shown,
@@ -644,10 +658,19 @@ function TilePopover({
   // own effect reads it: layout effects run ahead of passive ones, so the
   // popover measures the tile it describes rather than the one before it.
   React.useLayoutEffect(() => {
+    const panel = root.current;
+    const tile =
+      entry === undefined ? null : tileElement(panel, tokens.get(entry.id));
+    // On the panel's right edge, level with the tile, so the card drawn to
+    // its right sits outside the panel, never over the tiles beside it.
     anchor.current =
-      entry === undefined
+      panel === null || tile === null
         ? NOWHERE
-        : (tileElement(root.current, tokens.get(entry.id)) ?? NOWHERE);
+        : {
+            // Measured through the module that reads boxes.
+            getBoundingClientRect: () =>
+              besidePanel(boxInFrameViewport(panel), boxInFrameViewport(tile)),
+          };
   });
   if (entry === undefined) return null;
   const offer = offers.get(entry.id);
@@ -736,6 +759,8 @@ function howToAdd(entry: InsertEntry): string {
  */
 function PlacementLine({
   document,
+  root,
+  summons,
   first,
   shown,
   groups,
@@ -743,6 +768,10 @@ function PlacementLine({
   offers,
 }: {
   document: BlockDocument;
+  /** The panel, whose search and list a press is answered in. */
+  root: React.RefObject<HTMLDivElement | null>;
+  /** A canvas press still to answer, and where to say it was answered. */
+  summons: Pick<InsertPanelProps, "summoned" | "onSummoned">;
   first: InsertionCandidate;
   shown: boolean;
   groups: readonly InsertGroup<InsertEntry>[];
@@ -750,6 +779,8 @@ function PlacementLine({
   offers: ReadonlyMap<string, EntryOffer>;
 }): React.JSX.Element {
   const highlighted = useCommandHighlight();
+  // The line answers a canvas press for the whole panel, highlighted for it.
+  const flash = useSummonAnswer(root, summons.summoned, summons.onSummoned);
   const entry = shown
     ? highlightedEntry(groups, tokens, highlighted)
     : undefined;
@@ -757,51 +788,16 @@ function PlacementLine({
     (entry === undefined ? undefined : offers.get(entry.id)?.place) ?? first;
   return (
     <p
+      // Keyed by the press, so a second press while one still shows starts
+      // the highlight again rather than continuing it.
+      key={flash ?? "rest"}
       className="nx-insert-panel__placement"
+      data-flash={flash === undefined ? undefined : ""}
       aria-live={entry === undefined ? "polite" : "off"}
     >
       <CornerDownRight aria-hidden="true" size={14} />
       <span>{placementWords("Adding", document, place)}</span>
     </p>
-  );
-}
-
-/**
- * Where a place is, in words: "after", "inside" or "at the end of the page",
- * and the block it is beside or in, named as Layers names it.
- */
-function placeParts(
-  document: BlockDocument,
-  candidate: InsertionCandidate
-): { where: string; name?: string } {
-  if (candidate.kind === "document-end") {
-    return { where: "at the end of the page" };
-  }
-  const inside = candidate.kind === "inside";
-  const id = inside ? candidate.insideId : candidate.afterId;
-  const node = id === undefined ? undefined : findNode(document.nodes, id);
-  // The guard is over an id the candidate was built from this same document,
-  // so it holds; the words still say something true if it ever does not.
-  return {
-    where: inside ? "inside" : "after",
-    name: node === undefined ? "the selected block" : layerLabel(node),
-  };
-}
-
-/** "Adding after Heading", say, with the block's name in bold. */
-export function placementWords(
-  lead: string,
-  document: BlockDocument,
-  candidate: InsertionCandidate
-): React.ReactNode {
-  const { where, name } = placeParts(document, candidate);
-  return name === undefined ? (
-    `${lead} ${where}`
-  ) : (
-    <>
-      {`${lead} ${where} `}
-      <b>{name}</b>
-    </>
   );
 }
 
@@ -1157,6 +1153,8 @@ export function InsertPanel({
   beginInsertDrag,
   inside,
   renderPreview,
+  // A canvas press to answer, handed to the line that answers it.
+  ...summons
 }: InsertPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
   // Blocks first: what an author adds most. Sections holds the patterns.
@@ -1311,6 +1309,8 @@ export function InsertPanel({
       />
       <PlacementLine
         document={editor.document}
+        root={root}
+        summons={summons}
         first={firstPlace}
         shown={moved !== null}
         groups={groups}
