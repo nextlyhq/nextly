@@ -41,6 +41,12 @@ type Props = {
    * would not stop the save, which could still keep the discarded values.
    */
   saving?: boolean;
+  /**
+   * Undo and Redo wait, by button and by key: an unsaved entity's address
+   * move, still being checked, records its settings when it ends, and would
+   * write over a step taken meanwhile.
+   */
+  held?: boolean;
 };
 
 /**
@@ -72,6 +78,7 @@ export function PendingChangesControls({
   count,
   locked = false,
   saving = false,
+  held = false,
 }: Props): JSX.Element | null {
   const [announcement, setAnnouncement] = useState("");
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
@@ -92,7 +99,9 @@ export function PendingChangesControls({
     if (said) announce(said);
   };
 
-  const noDialog = () => !dialogOpen();
+  // Not while a dialog is open over the builder, nor while the page holds
+  // Undo and Redo.
+  const noDialog = () => !held && !dialogOpen();
   // Not while typing: inside a text input these keys undo the text, which is
   // what a person typing expects them to do.
   useKeyboardShortcuts(
@@ -146,7 +155,7 @@ export function PendingChangesControls({
         size="icon-sm"
         aria-label="Undo"
         title="Undo"
-        disabled={!pending.canUndo}
+        disabled={held || !pending.canUndo}
         onClick={undo}
       >
         <Undo className="h-4 w-4" />
@@ -156,7 +165,7 @@ export function PendingChangesControls({
         size="icon-sm"
         aria-label="Redo"
         title="Redo"
-        disabled={!pending.canRedo}
+        disabled={held || !pending.canRedo}
         onClick={redo}
       >
         <Redo className="h-4 w-4" />
