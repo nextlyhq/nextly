@@ -278,6 +278,9 @@ describe("a value that cannot be its kind", () => {
     ["dimension", "large"],
     ["dimension", "thin"],
     ["dimension", "inherit"],
+    // The same words with an escaped letter, as CSS reads identifiers.
+    ["dimension", "a\\75 to"],
+    ["dimension", "in\\68 erit"],
     // A function this check does not know still passes: it may be next
     // year's CSS.
     ["dimension", "fit-content(20rem)"],

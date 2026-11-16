@@ -117,7 +117,9 @@ export function checkTokenKind(
 ): string | undefined {
   const text = value.trim();
   if (text === "" || OPAQUE_VALUE.test(text)) return undefined;
-  if (isCssWideKeyword(asciiLower(text))) return undefined;
+  // A keyword is an identifier, read as CSS reads one: `in\\68 erit` IS
+  // `inherit`.
+  if (isCssWideKeyword(wordOf(text))) return undefined;
 
   const measured = MEASUREMENT.exec(text);
   // Text plainly trying to be a number but failing to be one — `1.px`, `1..2` —
@@ -195,6 +197,11 @@ function readingOf(
   };
 }
 
+/** Text as the keyword it spells: escapes decoded, lower-cased as CSS compares. */
+function wordOf(text: string): string {
+  return asciiLower(decodeIdentifier(text));
+}
+
 /** Each kind's check, for the kinds that have one. */
 const KIND_CHECKS: Partial<
   Record<TokenKind, (reading: ValueReading) => string | undefined>
@@ -225,7 +232,7 @@ function lengthIssue(reading: ValueReading): string | undefined {
   // Not a measurement. A function may be one this does not know, so it
   // passes; a word passes only if some property reading the token takes it.
   if (unit === undefined) {
-    return text.includes("(") || LENGTH_TOKEN_KEYWORDS.has(asciiLower(text))
+    return text.includes("(") || LENGTH_TOKEN_KEYWORDS.has(wordOf(text))
       ? undefined
       : LENGTH_WORDS;
   }

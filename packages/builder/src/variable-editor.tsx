@@ -650,6 +650,18 @@ function ColourValue({
   }, []);
   // A picker still open when the popover closes writes what it showed.
   React.useEffect(() => flush, [flush]);
+  // The value it holds commits too while a refusal is shown: putting it
+  // back is how a refused value is corrected, and clears the refusal.
+  const commit = (typed: string): void => {
+    const next = typed.trim();
+    if (
+      !readOnly &&
+      next !== "" &&
+      (next !== value || refusedBy !== undefined)
+    ) {
+      onCommit(next);
+    }
+  };
   const { hex, paint, invalid, said } = colourFieldState(
     text.trim(),
     value,
@@ -702,20 +714,9 @@ function ColourValue({
             setShown(null);
           }}
           readOnly={readOnly}
-          onBlur={event => {
-            const next = event.currentTarget.value.trim();
-            if (!readOnly && next !== "" && next !== value) onCommit(next);
-          }}
+          onBlur={event => commit(event.currentTarget.value)}
           onKeyDown={event => {
-            const next = event.currentTarget.value.trim();
-            if (
-              event.key === "Enter" &&
-              !readOnly &&
-              next !== "" &&
-              next !== value
-            ) {
-              onCommit(next);
-            }
+            if (event.key === "Enter") commit(event.currentTarget.value);
           }}
         />
       </div>

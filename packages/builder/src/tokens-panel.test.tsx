@@ -184,6 +184,20 @@ describe("the rows", () => {
     }
   });
 
+  it("clears a colour's refusal once its stored value is typed back", async () => {
+    render(<Hosted tokens={SITE} />);
+    const colour = await openEditor(/^Brand/);
+    const light = within(colour).getByLabelText(/^Light/);
+    fireEvent.change(light, { target: { value: "#12345" } });
+    fireEvent.keyDown(light, { key: "Enter" });
+    expect(light.getAttribute("aria-invalid")).toBe("true");
+    // The value it held, put back, is the fix: the refusal goes.
+    fireEvent.change(light, { target: { value: "#1d2b6b" } });
+    fireEvent.keyDown(light, { key: "Enter" });
+    expect(light.getAttribute("aria-invalid")).toBeNull();
+    expect(within(colour).queryByText(/is not a hex colour/)).toBeNull();
+  });
+
   it("lets typing take over from a picker gesture", async () => {
     const onChange = vi.fn();
     render(<Hosted tokens={SITE} onChange={onChange} />);
