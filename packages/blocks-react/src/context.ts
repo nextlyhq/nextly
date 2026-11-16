@@ -11,6 +11,8 @@ import type {
 } from "@nextlyhq/blocks-engine";
 import type { ReactNode } from "react";
 
+import type { ImageCopies, ImageSlot } from "./image-slot";
+
 /**
  * What a block render receives, and where the renderer gets its data.
  *
@@ -854,6 +856,27 @@ export interface PageContext {
    * @experimental
    */
   diagnostics?: boolean;
+  /**
+   * Resized copies of the images this page draws, from the route's
+   * `imageCopies` option. Absent, every image is drawn from its original.
+   *
+   * @experimental
+   */
+  imageCopies?: ImageCopies;
+  /**
+   * The widest an image may be drawn on each device where it sits: the whole
+   * width at the top of the page, narrowed by the containers it is in.
+   *
+   * @experimental
+   */
+  imageSlot?: ImageSlot;
+  /**
+   * The page's first top-level block, whose images load eagerly and first,
+   * since it is the first thing a visitor sees.
+   *
+   * @experimental
+   */
+  firstBlockId?: string;
   /**
    * The site's IANA time zone, in which a list's date filter compares whole
    * days for a field holding an instant. UTC when absent.

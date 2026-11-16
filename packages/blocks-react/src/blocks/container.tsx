@@ -27,6 +27,7 @@ import type { ContentModel, TokenRef } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs } from "../context";
+import { childImageContext } from "../image-slot";
 
 import { url } from "./props";
 
@@ -204,7 +205,7 @@ export function renderLinkableContainer(
       : args.className;
   return (
     <a className={classes} href={href}>
-      {args.renderSlot("children")}
+      {args.renderSlot("children", childImageContext(args.ctx, args.node))}
     </a>
   );
 }
@@ -221,6 +222,8 @@ export function renderContainer({
   props,
   renderSlot,
   className,
+  ctx,
+  node,
 }: BlockRenderArgs<ContainerProps>): ReactElement {
   // Checked rather than trusted. The type says what an author may write; the
   // document says what is actually stored, and validation only asks that props
@@ -232,5 +235,10 @@ export function renderContainer({
     props.contained === true
       ? `${className} ${CONTENT_WIDTH_CLASS}`
       : className;
-  return <Tag className={classes}>{renderSlot("children")}</Tag>;
+  // The children's images are sized to the width this container leaves them.
+  return (
+    <Tag className={classes}>
+      {renderSlot("children", childImageContext(ctx, node))}
+    </Tag>
+  );
 }

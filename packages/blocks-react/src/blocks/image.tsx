@@ -14,6 +14,7 @@
  */
 import {
   type BlockDefinition,
+  type BlockNode,
   blockTypeClassName,
   defineBlock,
   type BoundValues,
@@ -27,6 +28,12 @@ import type {
   ReadClaim,
   ResolvedMedia,
 } from "../context";
+import {
+  copiesWantedUpTo,
+  type ImageCopy,
+  narrowForOwnSize,
+  sizesFor,
+} from "../image-slot";
 
 import { MEDIA } from "./categories";
 import { imageLooks } from "./looks";
@@ -140,7 +147,9 @@ export async function renderImage({
   // Nothing to show. An `<img>` with no `src` still requests the current page
   // in some browsers, so render nothing rather than a broken element.
   if (picture === undefined) return null;
-  const { src, record: usable } = picture;
+  const { record: usable } = picture;
+  // Sized to where it sits, where the site keeps copies; as it is otherwise.
+  const sized = await sizedPicture(picture, ctx, node, fetchable);
 
   const decorative = flag(props.decorative);
   // Three states, not two, and `text()` collapses two of them: it answers `""`
@@ -181,9 +190,15 @@ export async function renderImage({
        * class string put the rule one element above the thing it constrains.
        */
       className={pictureClass(className, caption, link, partClass)}
-      src={src}
+      src={sized.src}
+      {...(sized.srcSet === undefined
+        ? {}
+        : { srcSet: sized.srcSet, sizes: sized.sizes })}
       alt={alt}
-      loading={oneOf(props.loading, IMAGE_LOADING, "lazy")}
+      loading={
+        sized.eager ? "eager" : oneOf(props.loading, IMAGE_LOADING, "lazy")
+      }
+      {...(sized.eager ? { fetchPriority: "high" as const } : {})}
       // Intrinsic dimensions reserve the space before the file arrives, which
       // is what stops the text below it jumping when it loads.
       {...(usable?.width === undefined ? {} : { width: usable.width })}
@@ -209,6 +224,8 @@ type PictureCandidate = ImageValue;
 interface Picture {
   readonly src: string;
   readonly record: ResolvedMedia | null;
+  /** What the site's copies of it are asked for by: its id, or its address. */
+  readonly source: { readonly id: string } | { readonly url: string };
 }
 
 /**
@@ -256,7 +273,7 @@ async function firstDrawable(
   for (const candidate of candidates) {
     if (candidate.holds === "address") {
       const src = fetchable(candidate.value);
-      if (src !== undefined) return { src, record: null };
+      if (src !== undefined) return { src, record: null, source: { url: src } };
       continue;
     }
     // A resolver that throws must not take the page with it: media lives
@@ -266,9 +283,67 @@ async function firstDrawable(
       .resolveMedia(candidate.value, claim)
       .catch(() => null);
     const src = fetchable(record?.url);
-    if (record !== null && src !== undefined) return { src, record };
+    if (
+      record !== null &&
+      src !== undefined &&
+      typeof candidate.value === "string"
+    ) {
+      return { src, record, source: { id: candidate.value } };
+    }
   }
   return undefined;
+}
+
+/** The picture's sources as drawn: one address, or copies for its slot. */
+interface SizedPicture {
+  readonly src: string;
+  readonly srcSet?: string;
+  readonly sizes?: string;
+  /** In the page's first block: loaded at once and before other images. */
+  readonly eager: boolean;
+}
+
+/**
+ * The picture's sources, sized to the slot it is drawn in.
+ *
+ * Where the page sizes images, the site's copies no wider than twice the
+ * slot's widest width are offered as `srcset`, with `sizes` saying how wide it
+ * is drawn on each device, so a phone downloads a phone-sized copy. The widest
+ * copy is the `src` a browser without `srcset` takes. A copy the host list
+ * refuses is left out, as any other address would be. Where no copy can be
+ * had, or the lookup fails, the original is drawn as it always was: a page is
+ * never left without its image for want of a smaller one.
+ */
+async function sizedPicture(
+  picture: Picture,
+  ctx: PageContext,
+  node: BlockNode,
+  fetchable: (value: unknown) => string | undefined
+): Promise<SizedPicture> {
+  const slot = ctx.imageSlot;
+  const eager = slot?.eager === true || node.id === ctx.firstBlockId;
+  const original: SizedPicture = { src: picture.src, eager };
+  if (slot === undefined || ctx.imageCopies === undefined) return original;
+  const drawn = narrowForOwnSize(slot, node.styles);
+  const upTo = copiesWantedUpTo(drawn);
+  const copies = await ctx
+    .imageCopies(picture.source, upTo)
+    .catch((): readonly ImageCopy[] => []);
+  const usable = copies
+    .filter(copy => copy.width > 0 && copy.width <= upTo)
+    .flatMap(copy => {
+      const url = fetchable(copy.url);
+      return url === undefined ? [] : [{ url, width: copy.width }];
+    })
+    .sort((a, b) => a.width - b.width);
+  const widest = usable.at(-1);
+  if (widest === undefined) return original;
+  return {
+    src: widest.url,
+    srcSet: usable.map(copy => `${copy.url} ${copy.width}w`).join(", "),
+    sizes: sizesFor(drawn),
+    eager,
+  };
 }
 
 /**
