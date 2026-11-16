@@ -21,6 +21,8 @@ import type {
 
 import type { RequestActor } from "../../../auth/request-actor";
 import {
+  TRANSLATION_PROVENANCE_FIELD_PATH_LENGTH,
+  TRANSLATION_PROVENANCE_ROW_SEPARATOR as ROW_PATH_SEPARATOR,
   TRANSLATION_PROVENANCE_TABLE,
   type ProvenanceOrigin,
   type ProvenancePartState,
@@ -263,6 +265,28 @@ async function recordTranslationProvenance(
     ).map(row => [row.fieldPath, row.id])
   );
   const writtenAt = write.now ?? new Date();
+  const upsert = async (
+    fieldPath: string,
+    values: Record<string, unknown>
+  ): Promise<void> => {
+    const id = existing.get(fieldPath);
+    if (id !== undefined) {
+      await db.updateCount(TRANSLATION_PROVENANCE_TABLE, values, {
+        and: [{ column: "id", op: "=", value: id }],
+      });
+      return;
+    }
+    await db.insert(TRANSLATION_PROVENANCE_TABLE, {
+      id: randomUUID(),
+      scopeKind: write.scopeKind,
+      scopeSlug: write.scopeSlug,
+      entryId: write.entryId,
+      locale: write.locale,
+      partState: write.partState,
+      fieldPath,
+      ...values,
+    });
+  };
   for (const [field, origin] of origins) {
     const values = {
       valueFingerprint: valueFingerprint(write.values[field]),
@@ -277,24 +301,84 @@ async function recordTranslationProvenance(
       originRowId: null,
       writtenAt,
     };
-    const id = existing.get(field);
-    if (id !== undefined) {
-      await db.updateCount(TRANSLATION_PROVENANCE_TABLE, values, {
-        and: [{ column: "id", op: "=", value: id }],
-      });
-    } else {
-      await db.insert(TRANSLATION_PROVENANCE_TABLE, {
-        id: randomUUID(),
-        scopeKind: write.scopeKind,
-        scopeSlug: write.scopeSlug,
-        entryId: write.entryId,
-        locale: write.locale,
-        partState: write.partState,
-        fieldPath: field,
-        ...values,
-      });
-    }
+    await upsert(field, values);
+    await recordRowOrigins(db, {
+      field,
+      value: write.values[field],
+      claim: write.claims?.[field],
+      fieldValues: values,
+      existing,
+      upsert,
+    });
   }
+}
+
+/**
+ * The record of each row of a field with a structure per language (a translated repeater or
+ * blocks field): one row per row id, under `<field>#<row id>`, naming the source row it was made
+ * from (`originRowId`). A claim names each row's source row (`rows`); a copy keeps a row with no
+ * named source as the row of the same id it copied. A row still in the value that the claim does
+ * not name keeps the record it has, and a row no longer in it loses its record.
+ */
+async function recordRowOrigins(
+  db: ProvenanceDb,
+  args: {
+    field: string;
+    value: unknown;
+    claim: ProvenanceClaim | undefined;
+    fieldValues: Record<string, unknown>;
+    existing: ReadonlyMap<string, string>;
+    upsert: (
+      fieldPath: string,
+      values: Record<string, unknown>
+    ) => Promise<void>;
+  }
+): Promise<void> {
+  const prefix = `${args.field}${ROW_PATH_SEPARATOR}`;
+  const rows = rowsOf(writtenValueOf(args.value));
+  const claimedRows =
+    args.claim !== undefined && "rows" in args.claim
+      ? (args.claim.rows ?? {})
+      : {};
+  for (const [rowId, row] of rows) {
+    const fieldPath = `${prefix}${rowId}`;
+    if (fieldPath.length > TRANSLATION_PROVENANCE_FIELD_PATH_LENGTH) continue;
+    const originRowId =
+      claimedRows[rowId] ?? (args.claim?.origin === "copy" ? rowId : undefined);
+    if (originRowId === undefined) continue;
+    await args.upsert(fieldPath, {
+      ...args.fieldValues,
+      valueFingerprint: valueFingerprint(row),
+      // A row's own source value is not recorded: its row is.
+      sourceFingerprint: null,
+      originRowId,
+    });
+  }
+  const gone = [...args.existing]
+    .filter(
+      ([path]) =>
+        path.startsWith(prefix) && !rows.has(path.slice(prefix.length))
+    )
+    .map(([, id]) => id);
+  if (gone.length > 0) {
+    await db.delete(TRANSLATION_PROVENANCE_TABLE, {
+      and: [{ column: "id", op: "IN", value: gone }],
+    });
+  }
+}
+
+/** The rows of a structured value that carry an id, by id. */
+function rowsOf(value: unknown): Map<string, unknown> {
+  const rows = new Map<string, unknown>();
+  if (!Array.isArray(value)) return rows;
+  for (const row of value) {
+    const id =
+      typeof row === "object" && row !== null
+        ? (row as { id?: unknown }).id
+        : undefined;
+    if (typeof id === "string" && id !== "") rows.set(id, row);
+  }
+  return rows;
 }
 
 /** One document's language whose working draft goes live. */

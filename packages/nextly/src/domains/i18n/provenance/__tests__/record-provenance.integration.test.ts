@@ -12,6 +12,7 @@ import {
   defineCollection,
   defineSingle,
   json,
+  repeater,
   text,
 } from "../../../../config";
 import { container } from "../../../../di/container";
@@ -65,6 +66,18 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           json({ name: "meta", localized: true }),
         ],
       }),
+      // A structure per language: each language holds its own rows.
+      defineCollection({
+        slug: "menus",
+        localized: true,
+        fields: [
+          repeater({
+            name: "items",
+            localized: true,
+            fields: [text({ name: "label" })],
+          }),
+        ],
+      }),
     ],
     singles: [
       defineSingle({
@@ -89,6 +102,7 @@ interface Row {
   actorPrincipalKind: string | null;
   sourceLocale: string | null;
   sourceFingerprint: string | null;
+  originRowId: string | null;
 }
 
 /** The provenance rows of one document, by language, live rows before draft ones. */
@@ -121,6 +135,7 @@ async function rowsOf(
       actorPrincipalKind: row.actorPrincipalKind,
       sourceLocale: row.sourceLocale,
       sourceFingerprint: row.sourceFingerprint,
+      originRowId: row.originRowId,
     });
   }
   return out;
@@ -606,6 +621,84 @@ describe.each(getConfiguredTestDialects())(
         }),
       ]);
       expect(JSON.stringify(rows)).not.toContain("m-1@example.com");
+    });
+    it("records which row each row of a structure per language was translated or copied from", async () => {
+      await boot(dialect);
+      const created = (await t!.nextly.create({
+        collection: "menus",
+        locale: "en",
+        data: {
+          items: [
+            { id: "r1", label: "Home" },
+            { id: "r2", label: "About" },
+          ],
+        },
+      })) as { item: { id: string } };
+      const id = created.item.id;
+      const menus = { kind: "collection", slug: "menus" };
+      const rowOrigins = async (locale: string) =>
+        Object.fromEntries(
+          ((await rowsOf(id, menus))[locale] ?? [])
+            .filter(row => row.fieldPath.startsWith("items#"))
+            .map(row => [row.fieldPath, [row.origin, row.originRowId]])
+        );
+
+      // A machine translation names the row each of its rows was made from.
+      await save(
+        id,
+        "es",
+        {
+          items: [
+            { id: "s1", label: "Inicio" },
+            { id: "s2", label: "Acerca de" },
+          ],
+          _provenance: {
+            items: {
+              origin: "machine",
+              engine: "deepl",
+              rows: { s1: "r1", s2: "r2" },
+            },
+          },
+        },
+        undefined,
+        "menus"
+      );
+      expect(await rowOrigins("es")).toEqual({
+        "items#s1": ["machine", "r1"],
+        "items#s2": ["machine", "r2"],
+      });
+
+      // A copy from another language keeps each row as the row it copied.
+      await save(
+        id,
+        "fr",
+        {
+          items: [
+            { id: "r1", label: "Home" },
+            { id: "r2", label: "About" },
+          ],
+          _provenance: { items: { origin: "copy", sourceLocale: "en" } },
+        },
+        undefined,
+        "menus"
+      );
+      expect(await rowOrigins("fr")).toEqual({
+        "items#r1": ["copy", "r1"],
+        "items#r2": ["copy", "r2"],
+      });
+
+      // A row removed from the language takes its record with it.
+      await save(
+        id,
+        "fr",
+        {
+          items: [{ id: "r1", label: "Accueil" }],
+          _provenance: { items: { origin: "copy", sourceLocale: "en" } },
+        },
+        undefined,
+        "menus"
+      );
+      expect(await rowOrigins("fr")).toEqual({ "items#r1": ["copy", "r1"] });
     });
   }
 );

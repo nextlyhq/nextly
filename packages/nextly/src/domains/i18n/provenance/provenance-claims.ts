@@ -15,18 +15,31 @@ import type { RequestActor } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors/nextly-error";
 import { DOCUMENT_PROVENANCE_KEY } from "../../../lib/system-columns";
 
+/**
+ * For a field with a structure per language (a translated repeater or blocks field): which row of
+ * the source language each of the value's rows was made from, by row id.
+ */
+const RowOriginsSchema = z.record(
+  z.string().min(1).max(191),
+  z.string().min(1).max(191)
+);
+
 const ProvenanceClaimSchema = z.discriminatedUnion("origin", [
   z
     .object({
       origin: z.literal("machine"),
       engine: z.string().min(1).max(191),
+      rows: RowOriginsSchema.optional(),
     })
     .strict(),
-  z.object({ origin: z.literal("agent") }).strict(),
+  z
+    .object({ origin: z.literal("agent"), rows: RowOriginsSchema.optional() })
+    .strict(),
   z
     .object({
       origin: z.literal("copy"),
       sourceLocale: z.string().min(1).max(35),
+      rows: RowOriginsSchema.optional(),
     })
     .strict(),
   z.object({ origin: z.literal("original") }).strict(),

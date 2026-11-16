@@ -18,6 +18,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 
 import {
+  TRANSLATION_PROVENANCE_ROW_SEPARATOR,
   TRANSLATION_PROVENANCE_TABLE,
   translationProvenanceTables,
   type ProvenanceOrigin,
@@ -169,6 +170,10 @@ export async function fieldProvenanceOf(
       )
     );
   for (const row of rows) {
+    // A row's own record, in a field with a structure per language, is not a field's.
+    if (String(row.fieldPath).includes(TRANSLATION_PROVENANCE_ROW_SEPARATOR)) {
+      continue;
+    }
     const key = documentLanguageKey(String(row.entryId), String(row.locale));
     const fields = out.get(key) ?? {};
     fields[String(row.fieldPath)] = fieldStatusOf(row);

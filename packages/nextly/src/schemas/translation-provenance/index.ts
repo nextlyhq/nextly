@@ -7,7 +7,11 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { loadedDialect } from "../../database/dialect-tables";
 
-export { TRANSLATION_PROVENANCE_TABLE } from "./table-name";
+export {
+  TRANSLATION_PROVENANCE_FIELD_PATH_LENGTH,
+  TRANSLATION_PROVENANCE_ROW_SEPARATOR,
+  TRANSLATION_PROVENANCE_TABLE,
+} from "./table-name";
 export type {
   ProvenanceOrigin,
   ProvenancePartState,
