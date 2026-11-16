@@ -344,32 +344,62 @@ async function counted(
   const shared = SHARED_TABLES.find(s => s.table === deletion.table);
   if (shared === undefined || present === undefined) return [deletion];
   if (!present.has(shared.table)) return [];
-  const where = (entity: { kind: string; slug: string }) =>
-    sql.join(
-      [
-        sql`${sql.identifier(shared.kindColumn)} = ${entity.kind}`,
-        sql`${sql.identifier(shared.slugColumn)} = ${entity.slug}`,
-        ...(shared.only === undefined ? [] : [shared.only(reader.dialect)]),
-      ],
-      sql` AND `
-    );
-  if (shared.table === "nextly_i18n_archive") {
-    const unknown = await boundedCount(
+  if (await archiveOwnerUnknown(reader, shared, deletion.of, deadline)) {
+    return [deletion];
+  }
+  return withCount(
+    deletion,
+    await boundedCount(
       reader,
       shared.table,
-      where({ ...deletion.of, kind: UNKNOWN_ARCHIVE_KIND }),
+      entityWhere(reader, shared, deletion.of),
       deadline
-    );
-    // Rows of this slug whose kind is not yet known: the teardown labels
-    // them and may remove them, so the count cannot be told.
-    if (unknown === undefined || unknown > 0) return [deletion];
-  }
-  const count = await boundedCount(
+    )
+  );
+}
+
+/** The rows `shared` keys to `entity`, as the entity's delete selects them. */
+function entityWhere(
+  reader: SharedRowsReader,
+  shared: SharedTable,
+  entity: { kind: string; slug: string }
+): SQL {
+  return sql.join(
+    [
+      sql`${sql.identifier(shared.kindColumn)} = ${entity.kind}`,
+      sql`${sql.identifier(shared.slugColumn)} = ${entity.slug}`,
+      ...(shared.only === undefined ? [] : [shared.only(reader.dialect)]),
+    ],
+    sql` AND `
+  );
+}
+
+/**
+ * Whether the archive holds rows of the entity's slug whose kind an earlier release did not
+ * record, or cannot say in time: the teardown labels such rows and may remove them, so the
+ * entity's count cannot be told. Never for another shared table.
+ */
+async function archiveOwnerUnknown(
+  reader: SharedRowsReader,
+  shared: SharedTable,
+  entity: EntityRef,
+  deadline: number
+): Promise<boolean> {
+  if (shared.table !== "nextly_i18n_archive") return false;
+  const unknown = await boundedCount(
     reader,
     shared.table,
-    where(deletion.of),
+    entityWhere(reader, shared, { ...entity, kind: UNKNOWN_ARCHIVE_KIND }),
     deadline
   );
+  return unknown === undefined || unknown > 0;
+}
+
+/** An entry as counted: itself uncounted when the count failed, none when it found no rows. */
+function withCount(
+  deletion: EntityRows,
+  count: number | undefined
+): Deletion[] {
   if (count === undefined) return [deletion];
   return count === 0 ? [] : [{ ...deletion, count }];
 }

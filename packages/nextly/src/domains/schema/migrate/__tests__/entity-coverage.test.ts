@@ -2,6 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { SQL } from "drizzle-orm";
+import { SQLiteDialect } from "drizzle-orm/sqlite-core";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -382,5 +384,69 @@ describe("an entity's field-group values where the walk cannot read a table", ()
         reason: "the field-group values nested in them",
       },
     ]);
+  });
+});
+
+describe("counting an entity's rows in each shared table", () => {
+  const sqlite = new SQLiteDialect();
+  /**
+   * A SQLite connection answering the catalog with `present`, and each count with what `count`
+   * says of the table and the values bound into its condition (kind, slug, then any narrowing).
+   */
+  const connection = (
+    present: readonly string[],
+    count: (table: string, params: readonly unknown[]) => number
+  ) => ({
+    all: (query: SQL) => {
+      const { sql: text, params } = sqlite.sqlToQuery(query);
+      if (text.includes("sqlite_master"))
+        return present.map(name => ({ name }));
+      const table = /FROM "([^"]+)"/.exec(text)?.[1] ?? "";
+      return [{ n: count(table, params) }];
+    },
+  });
+  const [, archive, autosaves, pins, views] = entityRowsOf(posts);
+
+  it("counts the entity's own rows in each, and leaves out a table holding none or absent", async () => {
+    const db = connection(
+      ["nextly_i18n_archive", "nextly_versions", "nextly_version_pins"],
+      (table, params) => {
+        // Only the entity's rows are counted: its kind and slug are what the condition binds.
+        if (params[1] !== "posts") return 99;
+        if (table === "nextly_versions") return params[2] === 1 ? 2 : 99;
+        if (table === "nextly_i18n_archive")
+          return params[0] === "unknown" ? 0 : 1;
+        return 0;
+      }
+    );
+    expect(
+      await countEntityRows([archive, autosaves, pins, views], {
+        db,
+        dialect: "sqlite",
+      })
+    ).toEqual([
+      { ...archive, count: 1 },
+      { ...autosaves, count: 2 },
+    ]);
+  });
+
+  it("lists the archive's entry uncounted while rows of the slug have no recorded kind", async () => {
+    const db = connection(["nextly_i18n_archive"], (_table, params) =>
+      params[0] === "unknown" ? 3 : 1
+    );
+    expect(await countEntityRows([archive], { db, dialect: "sqlite" })).toEqual(
+      [archive]
+    );
+  });
+
+  it("lists every entry uncounted when the catalog cannot be read", async () => {
+    const db = {
+      all: () => {
+        throw new Error("no database");
+      },
+    };
+    expect(
+      await countEntityRows([archive, autosaves], { db, dialect: "sqlite" })
+    ).toEqual([archive, autosaves]);
   });
 });

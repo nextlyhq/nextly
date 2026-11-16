@@ -628,3 +628,37 @@ describe("countEntityComponentTree", () => {
     );
   });
 });
+
+describe("the walk over rows that point back at themselves", () => {
+  it("follows each instance once, so a cycle of rows ends", async () => {
+    // `comp_x`'s instance is its own parent's child: reading under it finds it again.
+    type Condition = { column: string; op?: string; value?: unknown };
+    const reads: string[] = [];
+    const adapter = {
+      dialect: "postgresql" as const,
+      listTables: vi.fn().mockResolvedValue(["comp_x"]),
+      tableExists: vi.fn().mockResolvedValue(false),
+      delete: vi.fn(),
+      executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
+      getDrizzle: vi.fn(),
+      select: vi.fn(
+        async (table: string, options?: { where?: { and?: Condition[] } }) => {
+          const conditions = options?.where?.and ?? [];
+          if (table !== "comp_x" || conditions.some(c => c.op === "IS NULL")) {
+            return [];
+          }
+          const parent = conditions.find(c => c.column === "_parent_table");
+          reads.push(String(parent?.value));
+          return [{ id: "x1" }];
+        }
+      ),
+    };
+    const counted = await countEntityComponentTree({
+      adapter: adapter as never,
+      parentTable: "dc_posts",
+    });
+    // Read under the entity, then once under `x1`, where it is found again and not followed.
+    expect(reads).toEqual(["dc_posts", "comp_x"]);
+    expect(counted).toEqual([{ table: "comp_x", rows: 2 }]);
+  });
+});

@@ -448,6 +448,22 @@ interface ReachedInstances {
   instanceIds: string[];
 }
 
+/** What the walk keeps from one level to the next. */
+interface WalkState {
+  adapter: TeardownComponentDataAdapter;
+  componentTables: readonly string[];
+  visit: (reached: ReachedInstances) => Promise<void>;
+  /**
+   * Whether each table can be addressed through the ORM. Resolvability is a property of the
+   * table, so it is established once, either way; whether an unresolvable table is SAFE to skip
+   * depends on the frontier and is re-checked at every level.
+   */
+  resolvable: Map<string, boolean>;
+  skippedTables: Set<string>;
+  /** The ids each table has handed on to the next level, so each instance is followed once. */
+  reached: Map<string, Set<string>>;
+}
+
 /**
  * The walk the teardown and its count share: every instance `parentTable` owns, level by level,
  * handed to `visit` once per parent and table, before the next level is read. Each instance is
@@ -459,107 +475,149 @@ async function walkEntityComponentRows(
   parentTable: string,
   visit: (reached: ReachedInstances) => Promise<void>
 ): Promise<{ skippedTables: string[] }> {
-  const skippedTables = new Set<string>();
-  // Resolvability is a property of the table, so it is established once, either way; whether an
-  // unresolvable table is SAFE to skip depends on the frontier and is re-checked at every level.
-  const unresolvable = new Set<string>();
-  const resolvable = new Set<string>();
-  // The entity's own table owns every instance pointing at it, hence `ids: null`.
+  const state: WalkState = {
+    adapter,
+    componentTables,
+    visit,
+    resolvable: new Map(),
+    skippedTables: new Set(),
+    reached: new Map(),
+  };
+  // The entity's own table owns every instance pointing at it, hence `ids: null`. Field groups
+  // nest to any depth, so the walk goes down until a level finds nothing.
   let frontier: Frontier[] = [{ table: parentTable, ids: null }];
-  // Field groups nest to any depth, so the walk goes down until a level finds nothing.
-  const reached = new Map<string, Set<string>>();
+  while (frontier.length > 0) frontier = await walkLevel(state, frontier);
+  return { skippedTables: [...state.skippedTables] };
+}
 
-  while (frontier.length > 0) {
-    const nextFrontier: Frontier[] = [];
-
-    // Every component table, at every level: a row's parent is where it was written, which a
-    // definition as it stands now cannot vouch for — one that has since stopped placing a field
-    // group leaves that field group's rows stored beneath its own. Each read is a lookup on the
-    // parent index.
-    for (const componentTable of componentTables) {
-      if (
-        !resolvable.has(componentTable) &&
-        (unresolvable.has(componentTable) ||
-          !(await isResolvable(adapter, componentTable)))
-      ) {
-        unresolvable.add(componentTable);
-        // Skipping is only safe when the table holds nothing owned by THIS level. An
-        // unaddressable table can hold nested instances parented to another component
-        // table, which only become visible once that level's ids are known — so every
-        // level is checked, not just the entity's own table. Any rows found fail the
-        // delete, since the caller would otherwise drop the parent and strand them.
-        for (const parent of frontier) {
-          await assertNoRowsForFrontier(adapter, componentTable, parent);
-        }
-        skippedTables.add(componentTable);
-        continue;
-      }
-      resolvable.add(componentTable);
-
-      for (const parent of frontier) {
-        // Match on parent id as well as parent table for nested levels — without it the
-        // sweep would take instances belonging to other entities using the same component.
-        const idGroups =
-          parent.ids === null ? [null] : chunk(parent.ids, ID_CHUNK_SIZE);
-
-        for (const ids of idGroups) {
-          if (ids !== null && ids.length === 0) continue;
-
-          const where: WhereClause = {
-            and: [
-              {
-                column: STORAGE_FORMAT.columns.parentTable,
-                op: "=",
-                value: parent.table,
-              },
-              ...(ids === null
-                ? []
-                : [
-                    {
-                      column: STORAGE_FORMAT.columns.parentId,
-                      op: "IN" as const,
-                      value: ids,
-                    },
-                  ]),
-            ],
-          };
-
-          // Read the ids first: they are needed to reach nested instances and companion
-          // rows, and the DELETE cannot return them portably across dialects. Errors here
-          // propagate — the table resolves, so a failure is a real database problem and
-          // must not be mistaken for "nothing to clean up".
-          const rows = await adapter.select<{ id: string }>(componentTable, {
-            where,
-          });
-          if (rows.length === 0) continue;
-
-          const instanceIds = rows
-            .map(r => r.id)
-            .filter((id): id is string => typeof id === "string");
-
-          await visit({
-            table: componentTable,
-            where,
-            rows: rows.length,
-            instanceIds,
-          });
-
-          let reachedHere = reached.get(componentTable);
-          if (reachedHere === undefined) {
-            reachedHere = new Set();
-            reached.set(componentTable, reachedHere);
-          }
-          const newIds = instanceIds.filter(id => !reachedHere.has(id));
-          for (const id of newIds) reachedHere.add(id);
-          if (newIds.length > 0) {
-            nextFrontier.push({ table: componentTable, ids: newIds });
-          }
-        }
-      }
+/**
+ * One level of the walk: every component table, under each parent of `frontier`, and the next
+ * level, the instances found here that are not yet followed.
+ *
+ * Every component table, at every level: a row's parent is where it was written, which a
+ * definition as it stands now cannot vouch for — one that has since stopped placing a field group
+ * leaves that field group's rows stored beneath its own. Each read is a lookup on the parent
+ * index.
+ */
+async function walkLevel(
+  state: WalkState,
+  frontier: readonly Frontier[]
+): Promise<Frontier[]> {
+  const next: Frontier[] = [];
+  for (const table of state.componentTables) {
+    if (!(await addressable(state, table, frontier))) continue;
+    for (const parent of frontier) {
+      next.push(...(await walkParent(state, table, parent)));
     }
-
-    frontier = nextFrontier;
   }
+  return next;
+}
 
-  return { skippedTables: [...skippedTables] };
+/**
+ * Whether `table` can be read through the ORM at this level. One that cannot is skipped only
+ * when it holds nothing owned by THIS level: an unaddressable table can hold nested instances
+ * parented to another component table, which only become visible once that level's ids are
+ * known, so every level is checked, not just the entity's own table. Any rows found fail the
+ * walk, since a delete would otherwise drop the parent and strand them.
+ */
+async function addressable(
+  state: WalkState,
+  table: string,
+  frontier: readonly Frontier[]
+): Promise<boolean> {
+  let resolvable = state.resolvable.get(table);
+  if (resolvable === undefined) {
+    resolvable = await isResolvable(state.adapter, table);
+    state.resolvable.set(table, resolvable);
+  }
+  if (resolvable) return true;
+  for (const parent of frontier) {
+    await assertNoRowsForFrontier(state.adapter, table, parent);
+  }
+  state.skippedTables.add(table);
+  return false;
+}
+
+/**
+ * The instances of `table` under one parent, read in chunks of the parent's ids below the
+ * entity, and what the next level follows from them. Matching on parent id as well as parent
+ * table for nested levels keeps instances belonging to other entities that use the same
+ * component out of the walk.
+ */
+async function walkParent(
+  state: WalkState,
+  table: string,
+  parent: Frontier
+): Promise<Frontier[]> {
+  const groups =
+    parent.ids === null ? [null] : chunk(parent.ids, ID_CHUNK_SIZE);
+  const next: Frontier[] = [];
+  for (const ids of groups) {
+    const followed = await walkGroup(state, table, parent.table, ids);
+    if (followed !== undefined) next.push(followed);
+  }
+  return next;
+}
+
+/**
+ * One read of `table` under `parentTable` (and, below the entity, under `ids`): the instances
+ * found are handed to the visit, and those not yet followed are the next level's entry.
+ */
+async function walkGroup(
+  state: WalkState,
+  table: string,
+  parentTable: string,
+  ids: string[] | null
+): Promise<Frontier | undefined> {
+  if (ids !== null && ids.length === 0) return undefined;
+  const where = parentWhere(parentTable, ids);
+  // Read the ids first: they are needed to reach nested instances and companion rows, and the
+  // DELETE cannot return them portably across dialects. Errors here propagate — the table
+  // resolves, so a failure is a real database problem and must not be mistaken for "nothing to
+  // clean up".
+  const rows = await state.adapter.select<{ id: string }>(table, { where });
+  if (rows.length === 0) return undefined;
+  const instanceIds = rows
+    .map(r => r.id)
+    .filter((id): id is string => typeof id === "string");
+  await state.visit({ table, where, rows: rows.length, instanceIds });
+  return followOnce(state.reached, table, instanceIds);
+}
+
+/** The instances under `parentTable`, and under the parent ids `ids` where the walk has them. */
+function parentWhere(parentTable: string, ids: string[] | null): WhereClause {
+  return {
+    and: [
+      {
+        column: STORAGE_FORMAT.columns.parentTable,
+        op: "=",
+        value: parentTable,
+      },
+      ...(ids === null
+        ? []
+        : [
+            {
+              column: STORAGE_FORMAT.columns.parentId,
+              op: "IN" as const,
+              value: ids,
+            },
+          ]),
+    ],
+  };
+}
+
+/**
+ * The next level's entry for `table`: the ids of `instanceIds` not followed from it before,
+ * each marked followed. None when every one was, which is how a walk over a cycle of rows ends.
+ */
+function followOnce(
+  reached: Map<string, Set<string>>,
+  table: string,
+  instanceIds: readonly string[]
+): Frontier | undefined {
+  const seen = reached.get(table) ?? new Set<string>();
+  reached.set(table, seen);
+  const fresh = instanceIds.filter(id => !seen.has(id));
+  for (const id of fresh) seen.add(id);
+  return fresh.length > 0 ? { table, ids: fresh } : undefined;
 }
