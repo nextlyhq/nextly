@@ -109,11 +109,13 @@ describe("the canvas's frame as a sheet on the editor's surface", () => {
      * The surface around the frame is deliberately one step off the background
      * so it recedes, so the two alone are close by design. The edge is what
      * makes the page separable regardless of which of the two is lighter,
-     * which the palette inverts between modes.
+     * which the palette inverts between modes. Drawn in the frame-edge
+     * token, which follows the border and takes the system's text colour in
+     * forced colours.
      */
     const frame = ruleFor(".nx-canvas-frame");
     expect(declared(frame, "outline")).toBe(
-      "1px solid var(--nx-builder-border)"
+      "1px solid var(--nx-builder-frame-edge)"
     );
     expect(declared(frame, "box-shadow")).toBe("var(--shadow-md)");
   });
