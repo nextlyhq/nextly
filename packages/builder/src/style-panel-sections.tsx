@@ -158,32 +158,33 @@ function sameClosedSection(
  * selection rebuilds only the sections that change: the open one, and any
  * whose dot comes or goes.
  */
-const StyleSectionItem = React.memo(function StyleSectionItem({
-  section,
-  open: _open,
-  readOnlyReason,
-  ...surroundings
-}: StyleSectionItemProps): React.JSX.Element {
-  return (
-    <AccordionItem value={section.key} data-section={section.key}>
-      <SectionHeading
-        label={section.label}
-        holdsValues={holdsValues(section)}
-      />
-      <AccordionContent>
-        <SectionBody
-          // Keyed by node: what a field holds, and what "+ More" brought
-          // out, stay with the block they were for, and the next block's
-          // fields start from its own values.
-          key={surroundings.nodeId}
-          section={section}
-          readOnlyReason={readOnlyReason}
-          {...surroundings}
+const StyleSectionItem: React.NamedExoticComponent<StyleSectionItemProps> =
+  React.memo(function StyleSectionItem({
+    section,
+    open: _open,
+    readOnlyReason,
+    ...surroundings
+  }: StyleSectionItemProps): React.JSX.Element {
+    return (
+      <AccordionItem value={section.key} data-section={section.key}>
+        <SectionHeading
+          label={section.label}
+          holdsValues={holdsValues(section)}
         />
-      </AccordionContent>
-    </AccordionItem>
-  );
-}, sameClosedSection);
+        <AccordionContent>
+          <SectionBody
+            // Keyed by node: what a field holds, and what "+ More" brought
+            // out, stay with the block they were for, and the next block's
+            // fields start from its own values.
+            key={surroundings.nodeId}
+            section={section}
+            readOnlyReason={readOnlyReason}
+            {...surroundings}
+          />
+        </AccordionContent>
+      </AccordionItem>
+    );
+  }, sameClosedSection);
 
 /**
  * An open section's fields: its common properties, any that hold a value,

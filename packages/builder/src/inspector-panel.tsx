@@ -900,7 +900,9 @@ function SelectionInspector({
  * selected. Its fields' handlers keep the block they were drawn for, so a
  * value committed from a hidden field lands on that block.
  */
-const HiddenContentTab = React.memo(
+const HiddenContentTab: React.NamedExoticComponent<
+  React.ComponentProps<typeof ContentTab>
+> = React.memo(
   ContentTab,
   (before, after) => !before.onScreen && !after.onScreen
 );

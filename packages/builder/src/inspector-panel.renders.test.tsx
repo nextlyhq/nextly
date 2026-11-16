@@ -26,7 +26,13 @@ import {
   type BlockInspectorProps,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import * as React from "react";
 import {
   afterAll,
@@ -168,7 +174,10 @@ function heading(id: string, name: string, size: string): BlockNode {
 const PAGE: BlockDocument = {
   formatVersion: 1,
   kind: "page",
-  nodes: [heading("first", "Intro", "20px"), heading("second", "Outro", "32px")],
+  nodes: [
+    heading("first", "Intro", "20px"),
+    heading("second", "Outro", "32px"),
+  ],
 } as BlockDocument;
 
 let editorRef: EditorState | null = null;
@@ -179,11 +188,7 @@ function editor(): EditorState {
 }
 
 /** The real editor and its settings panel, as the page builder mounts them. */
-function Host({
-  page = PAGE,
-}: {
-  page?: BlockDocument;
-}): React.JSX.Element {
+function Host({ page = PAGE }: { page?: BlockDocument }): React.JSX.Element {
   const state = useEditorState({ initialDocument: page });
   editorRef = state;
   return <InspectorPanel editor={state} inspectors={inspectors} />;
