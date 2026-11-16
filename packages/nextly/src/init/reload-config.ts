@@ -1506,9 +1506,11 @@ async function ensureLocalizedCompanionsForReload(
   }
 
   // Each translated date column an earlier release made with a time zone, of every entity the
-  // registry holds, converted as the development sync converts it, once this pass refused
-  // nothing and brought every translations table into step. Best-effort like the rest of the reload: a failure is told, and the next one retries.
+  // registry holds, converted as the development sync converts it: only after the apply (or on a
+  // reload with no schema change), so a reload whose apply is then refused has converted nothing,
+  // and only once this pass refused nothing and brought every translations table into step. Best-effort like the rest of the reload: a failure is told, and the next one retries.
   if (
+    phase === "afterApply" &&
     !companionRefused &&
     preservationFailed.length === 0 &&
     restoreFailed.length === 0

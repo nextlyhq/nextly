@@ -24,8 +24,11 @@ vi.mock("../../cli/utils/config-loader", async importOriginal => ({
 const SLUG = "rlzoned";
 const COMPANION = `dc_${SLUG}_locales`;
 
-/** The collection with a translated date, and with or without a newly translated `code`. */
-const configWith = (code: boolean) =>
+/**
+ * The collection with a translated date, with or without a newly translated `code`, and with or
+ * without a shared `note`.
+ */
+const configWith = (code: boolean, note = false) =>
   defineConfig({
     localization: { locales: ["en", "es"], defaultLocale: "en" },
     collections: [
@@ -36,6 +39,7 @@ const configWith = (code: boolean) =>
           { name: "title", type: "text", localized: true },
           { name: "published", type: "date", localized: true },
           ...(code ? [{ name: "code", type: "text", localized: true }] : []),
+          ...(note ? [{ name: "note", type: "text", localized: false }] : []),
         ] as never,
       }),
     ],
@@ -54,11 +58,11 @@ describe.runIf(process.env.TEST_POSTGRES_URL)(
     });
 
     /** The collection booted and reloaded once, its date column then made as an earlier release made it. */
-    async function withOldDateColumn(): Promise<TestNextly> {
+    async function withOldDateColumn(note = false): Promise<TestNextly> {
       handle = await createTestNextly({ dialect: "postgresql" });
       // The reload runs its schema work only under next dev.
       vi.stubEnv("NODE_ENV", "development");
-      loaded.config = configWith(false);
+      loaded.config = configWith(false, note);
       await reloadNextlyConfig();
       await handle.adapter.executeQuery(
         `ALTER TABLE "${COMPANION}" ALTER COLUMN published TYPE timestamp with time zone`
@@ -81,6 +85,28 @@ describe.runIf(process.env.TEST_POSTGRES_URL)(
       await reloadNextlyConfig();
 
       expect(await dateColumnType()).toBe("timestamp without time zone");
+    });
+
+    // The pass before the apply runs before the apply is judged; a reload whose apply is refused,
+    // here a shared field holding a value that the config drops, which nothing confirms, converts
+    // no date.
+    it("converts nothing when the reload's apply is refused", async () => {
+      await withOldDateColumn(true);
+      await handle!.adapter.executeQuery(
+        `INSERT INTO "dc_${SLUG}" (id, slug, note) VALUES ('r1', 'r1', 'kept')`
+      );
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      loaded.config = configWith(false, false);
+
+      await reloadNextlyConfig().catch(() => undefined);
+
+      // The apply was refused: the shared field's column, and its value, are still there.
+      const [row] = (await handle!.adapter.executeQuery(
+        `SELECT note FROM "dc_${SLUG}" WHERE id = 'r1'`
+      )) as Array<{ note: string }>;
+      expect(row?.note).toBe("kept");
+      expect(await dateColumnType()).toBe("timestamp with time zone");
     });
 
     it("converts nothing when the reload leaves a translations column refused", async () => {
