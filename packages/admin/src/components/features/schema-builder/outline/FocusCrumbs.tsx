@@ -32,6 +32,14 @@ function crumbName(node: OutlineNode): string {
   return node.field.label || node.field.name || "Untitled";
 }
 
+/**
+ * A crumb's ink: the muted text the page's own breadcrumb trail uses, darkening on hover. Not
+ * the primary colour, which a site's branding sets and so is not sure to be readable on the
+ * Builder's canvas.
+ */
+const CRUMB_INK =
+  "text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline";
+
 /** Separators are drawn, not read: each crumb's text is its name alone. */
 const SEPARATED =
   "flex items-center before:mx-1 before:text-muted-foreground before:content-['›'] first:before:content-none";
@@ -53,7 +61,7 @@ function CrumbButton({
       ref={setNodeRef}
       type="button"
       onClick={onGo}
-      className={`rounded-sm px-1 text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+      className={`rounded-sm px-1 ${CRUMB_INK} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
         isOver ? "ring-2 ring-primary" : ""
       }`}
     >
@@ -96,7 +104,10 @@ export function FocusCrumbs({
             </li>
           ))}
           <li className={SEPARATED}>
-            <span aria-current="location" className="px-1 font-medium">
+            <span
+              aria-current="location"
+              className="px-1 font-medium text-foreground"
+            >
               {crumbName(focused)}
             </span>
           </li>

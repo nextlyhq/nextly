@@ -98,6 +98,28 @@ describe("Focus", () => {
     ).toEqual(["All fields", "Sections", "Items", "Call to action"]);
   });
 
+  it("writes its crumbs in the muted and foreground ink, never the brand's primary", async () => {
+    // A site's branding sets the primary colour, so it is not sure to be readable on the
+    // Builder's canvas; the muted and foreground inks are held to the admin's contrast in
+    // both colour schemes. jsdom draws no colour, so the classes are what can be read here.
+    const { user } = setup();
+    await focusOn(user, "sections");
+    await focusOn(user, "sections/items");
+    const nav = crumbs();
+    const links = within(nav).getAllByRole("button");
+    expect(links.map(link => link.textContent)).toEqual([
+      "All fields",
+      "Sections",
+    ]);
+    for (const link of links) {
+      expect(link.classList).toContain("text-muted-foreground");
+      expect(link.classList).not.toContain("text-primary");
+    }
+    const here = within(nav).getByText("Items");
+    expect(here).toHaveAttribute("aria-current", "location");
+    expect(here.classList).toContain("text-foreground");
+  });
+
   it("shows a blocks field's accepted blocks and their props", async () => {
     const { user } = setup();
     await focusOn(user, "body");
