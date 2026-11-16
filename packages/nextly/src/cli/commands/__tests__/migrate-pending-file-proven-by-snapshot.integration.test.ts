@@ -66,7 +66,7 @@ const entity = (withSummary: boolean): MinimalConfigEntity => ({
   tableName: TABLE,
   fields: [
     { name: "title", type: "text" },
-    ...(withSummary ? [{ name: "summary", type: "text" }] : []),
+    ...(withSummary ? [{ name: "summary", type: "text", index: true }] : []),
   ],
 });
 
@@ -78,7 +78,7 @@ const config = (withSummary: boolean) =>
         slug: SLUG,
         fields: [
           text({ name: "title" }),
-          ...(withSummary ? [text({ name: "summary" })] : []),
+          ...(withSummary ? [text({ name: "summary", index: true })] : []),
         ],
       }),
     ],
@@ -337,6 +337,30 @@ describe.each(getConfiguredTestDialects())(
               );
       expect(triggers).toEqual([]);
     });
+
+    it.runIf(dialect === "postgresql")(
+      "refuses a file whose index the database holds but cannot use",
+      async () => {
+        await dbSync(true);
+        // What an interrupted CREATE INDEX CONCURRENTLY leaves: the index, marked invalid. The
+        // snapshot comparison reads it as there; the file's statement would have built it whole.
+        const target = await targetOf(two);
+        const index = target.tables
+          .find(table => table.name === TABLE)
+          ?.indexes?.find(each => each.columns.includes("summary"));
+        expect(index).toBeDefined();
+        await query(
+          `UPDATE pg_index SET indisvalid = false WHERE indexrelid = '${q(index!.name)}'::regclass`
+        );
+
+        const error = await refusal();
+        expect(error.code).toBe("NEXTLY_MIGRATION_NOT_PROVEN");
+        expect(error.publicMessage).toContain(
+          "(the database does not stand as it leaves it)"
+        );
+        expect(await ledger(two)).toEqual([]);
+      }
+    );
 
     it("runs the edited file whole where the database stands at its start, backfilling the column", async () => {
       const backfill = `UPDATE ${q(TABLE)} SET ${q("summary")} = 'backfilled'`;

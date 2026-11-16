@@ -1110,12 +1110,18 @@ describe("reconcileFile — an app file nextly migrate hands its snapshot proof"
   const CHECKSUM = "ab".repeat(32);
   const app = { ...file, sha256: CHECKSUM };
   const proof =
-    (statements: Array<{ label: string; shown: boolean }>) => () => ({
+    (
+      statements: Array<{
+        label: string;
+        status: "shown" | "unshown" | "not-done";
+      }>
+    ) =>
+    async () => ({
       statements,
       recordedChecksum: CHECKSUM,
     });
-  const ADD = { label: "CREATE TABLE b", shown: true };
-  const BACKFILL = { label: 'UPDATE "b" SET', shown: false };
+  const ADD = { label: "CREATE TABLE b", status: "shown" as const };
+  const BACKFILL = { label: 'UPDATE "b" SET', status: "unshown" as const };
 
   it("records a file its snapshot proves without running it", async () => {
     const repo = fakeRepo();

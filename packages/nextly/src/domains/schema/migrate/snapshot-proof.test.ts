@@ -38,7 +38,9 @@ function shown(
   statement: string,
   dialect: SupportedDialect = "postgresql"
 ): boolean {
-  return statementsShownBySnapshot([statement], dialect, sides)[0].shown;
+  return (
+    statementsShownBySnapshot([statement], dialect, sides)[0].status === "shown"
+  );
 }
 
 const CHECKSUM = "ab".repeat(32);
@@ -114,8 +116,12 @@ describe("refuseUnlessProven", () => {
       expect(error?.publicMessage).toContain(
         "it has changed since its snapshot was written (checksum cdcdcdcdcdcd…, the snapshot recorded abababababab…)"
       );
+      // The column is in the database whatever the edit did, so it is never offered to be run again.
       expect(error?.publicMessage).toContain(
-        '1. ALTER TABLE "dc_posts" ADD COLUMN "slug" text (not shown by its snapshot)'
+        '1. ALTER TABLE "dc_posts" ADD COLUMN "slug" text (the database has it)'
+      );
+      expect(error?.publicMessage).toContain(
+        "Check that what the file does is in the database, then record the file"
       );
     });
 
@@ -148,6 +154,66 @@ describe("refuseUnlessProven", () => {
         "its last attempt recorded no outcome"
       );
     });
+  });
+});
+
+describe("statementsShownBySnapshot: the live database's own word", () => {
+  const INDEX =
+    'CREATE UNIQUE INDEX "dc_posts_slug_key" ON "dc_posts" ("slug")';
+  const judged = (
+    verdict: "done" | "not_done" | "unknown",
+    reason?: "mixed" | "undone"
+  ) => [
+    {
+      number: 1,
+      label: "",
+      verdict,
+      ...(reason === undefined ? {} : { reason }),
+    },
+  ];
+
+  it("is not proven where the database does not stand as the statement leaves it", () => {
+    // An index left invalid by an interrupted concurrent build, or a constraint not validated:
+    // the snapshot comparison cannot see either; the judgement can.
+    for (const verdict of [judged("not_done"), judged("unknown", "mixed")]) {
+      expect(
+        statementsShownBySnapshot([INDEX], "postgresql", sides, verdict)[0]
+          .status
+      ).toBe("not-done");
+    }
+  });
+
+  it("stays proven where the judgement agrees or cannot tell", () => {
+    for (const verdict of [judged("done"), judged("unknown", "undone"), []]) {
+      expect(
+        statementsShownBySnapshot([INDEX], "postgresql", sides, verdict)[0]
+          .status
+      ).toBe("shown");
+    }
+  });
+
+  it("names such a statement in the refusal", () => {
+    let error: unknown;
+    try {
+      refuseUnlessProven({
+        file: { filename: "20261116_add_slug.sql", sha256: CHECKSUM },
+        proof: {
+          statements: statementsShownBySnapshot(
+            [INDEX],
+            "postgresql",
+            sides,
+            judged("not_done")
+          ),
+          recordedChecksum: CHECKSUM,
+        },
+        attempt: undefined,
+      });
+    } catch (thrown) {
+      error = thrown;
+    }
+    expect((error as NextlyError).publicMessage).toContain(
+      'CREATE UNIQUE INDEX "dc_posts_slug_key" ON "dc_posts" (the database does not stand as it leaves it)'
+    );
   });
 });
 
@@ -288,7 +354,9 @@ describe("statementsShownBySnapshot: what passes the first condition", () => {
       'ALTER TABLE IF EXISTS "tmp_posts" RENAME TO "dc_posts"',
     ];
     expect(
-      statementsShownBySnapshot(pg, "postgresql", sides).map(s => s.shown)
+      statementsShownBySnapshot(pg, "postgresql", sides).map(
+        s => s.status === "shown"
+      )
     ).toEqual([true, true, true]);
     const mysql = [
       "CREATE TABLE `tmp_posts` (`id` varchar(36))",
@@ -296,7 +364,9 @@ describe("statementsShownBySnapshot: what passes the first condition", () => {
       "RENAME TABLE `tmp_posts` TO `dc_posts`",
     ];
     expect(
-      statementsShownBySnapshot(mysql, "mysql", sides).map(s => s.shown)
+      statementsShownBySnapshot(mysql, "mysql", sides).map(
+        s => s.status === "shown"
+      )
     ).toEqual([true, true, true]);
   });
 
@@ -340,7 +410,9 @@ describe("statementsShownBySnapshot: what passes the first condition", () => {
       "PRAGMA foreign_key_check",
     ];
     expect(
-      statementsShownBySnapshot(statements, "sqlite", sides).map(s => s.shown)
+      statementsShownBySnapshot(statements, "sqlite", sides).map(
+        s => s.status === "shown"
+      )
     ).toEqual(statements.map(() => true));
   });
 
@@ -361,7 +433,9 @@ describe("statementsShownBySnapshot: what passes the first condition", () => {
       );
       const read = statementsShownBySnapshot(statements, dialect, sides);
       expect(
-        read.filter(statement => !statement.shown).map(s => s.label),
+        read
+          .filter(statement => statement.status !== "shown")
+          .map(s => s.label),
         dialect
       ).toEqual([]);
     }

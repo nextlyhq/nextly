@@ -53,15 +53,27 @@ import {
   StatementCursor,
   type StatementToken,
 } from "./statement-cursor";
-import { labelOf } from "./statement-judgement";
+import { labelOf, type JudgedStatement } from "./statement-judgement";
 import { registryRowWrittenBy } from "./statement-targets";
 
 /** One statement of a pending file, as the refusal names it. */
 interface StatementProof {
   /** The statement's leading text, with no string literal's content (`labelOf`). */
   label: string;
-  /** Whether the snapshot shows what it does, so the database standing at the end shows it done. */
-  shown: boolean;
+  /**
+   * `shown`: the snapshot shows what it does, and the database has it. `unshown`: the snapshot
+   * cannot show what it does. `not-done`: the snapshot shows its kind, but the live database does
+   * not stand as it leaves it (`judgeStatements`): an index left invalid, a constraint not
+   * validated, an object absent.
+   */
+  status: "shown" | "unshown" | "not-done";
+}
+
+/** Verdicts of the live database that say a statement's effect is not there (`judgeStatements`). */
+function liveDisagrees(judged: JudgedStatement | undefined): boolean {
+  if (judged === undefined) return false;
+  if (judged.verdict === "not_done") return true;
+  return judged.reason === "mixed" || judged.reason === "no_table";
 }
 
 /** The names a file's two snapshot sides record, lower-cased. */
@@ -155,7 +167,13 @@ function known(table: string | undefined, file: FileContext): boolean {
 export function statementsShownBySnapshot(
   statements: readonly string[],
   dialect: SupportedDialect,
-  sides: { before: NextlySchemaSnapshot; target: NextlySchemaSnapshot }
+  sides: { before: NextlySchemaSnapshot; target: NextlySchemaSnapshot },
+  /**
+   * The same statements judged against the live database (`judgeStatements`): a schema statement
+   * the snapshot shows is still not proven where the database does not stand as it leaves it,
+   * which the snapshot comparison cannot see (an index left invalid, a constraint not validated).
+   */
+  judged: readonly JudgedStatement[] = []
 ): StatementProof[] {
   const objects = objectsOf([sides.before, sides.target]);
   const shown = statements.map(() => false);
@@ -181,7 +199,11 @@ export function statementsShownBySnapshot(
   });
   return statements.map((statement, at) => ({
     label: labelOf(statement, dialect),
-    shown: shown[at],
+    status: !shown[at]
+      ? "unshown"
+      : liveDisagrees(judged[at])
+        ? "not-done"
+        : "shown",
   }));
 }
 
@@ -614,27 +636,22 @@ interface UnprovenReasons {
 const short = (checksum: string): string =>
   checksum.length > 12 ? `${checksum.slice(0, 12)}…` : checksum;
 
-/**
- * The refusal for a pending file the database stands at the end of whose snapshot does not prove
- * all of it, before anything of the file runs or is recorded: it names each statement a recording
- * would have skipped. Its message is read back by the CLI's describer (`notProvenParts`): the
- * first sentence, the reasons and the statements, then the next step on the last line.
- */
-function notProvenError(args: {
-  filename: string;
-  statements: readonly StatementProof[];
-  reasons: UnprovenReasons;
-}): NextlyError {
-  const { filename, reasons } = args;
-  const name = filename.replace(/\.sql$/, "");
-  // A changed file, or one an attempt may have reached, proves nothing by its snapshot.
-  const trusted =
-    reasons.changed === undefined && reasons.attempt === undefined;
-  const statements = args.statements.map(statement => ({
-    ...statement,
-    shown: trusted && statement.shown,
-  }));
-  const unshown = statements.filter(statement => !statement.shown).length;
+/** How the refusal marks each statement, by its status. */
+const MARKS: Record<StatementProof["status"], string> = {
+  shown: "the database has it",
+  unshown: "not shown by its snapshot",
+  "not-done": "the database does not stand as it leaves it",
+};
+
+/** `n` statements, in words. */
+const statementCount = (n: number): string =>
+  n === 1 ? "1 statement" : `${n} statements`;
+
+/** Each reason the file is not proven, as the refusal words it. */
+function reasonsOf(
+  reasons: UnprovenReasons,
+  statements: readonly StatementProof[]
+): string[] {
   const why: string[] = [];
   if (reasons.changed !== undefined) {
     why.push(
@@ -650,22 +667,60 @@ function notProvenError(args: {
         : "its last attempt recorded no outcome"
     );
   }
-  if (trusted) {
+  const count = (status: StatementProof["status"]) =>
+    statements.filter(statement => statement.status === status).length;
+  if (count("unshown") > 0) {
     why.push(
-      `its snapshot does not show what ${unshown === 1 ? "1 statement does" : `${unshown} statements do`}`
+      `its snapshot does not show what ${statementCount(count("unshown"))} ${count("unshown") === 1 ? "does" : "do"}`
     );
   }
+  if (count("not-done") > 0) {
+    why.push(
+      `the database does not stand as ${statementCount(count("not-done"))} ${count("not-done") === 1 ? "leaves" : "leave"} it`
+    );
+  }
+  return why;
+}
+
+/**
+ * The step the refusal names: the statements to look at by hand, where any is marked, or else the
+ * change or attempt the reasons name; then the record.
+ */
+function nextStepOf(
+  name: string,
+  statements: readonly StatementProof[]
+): string {
+  const record = `then record the file with \`nextly migrate:resolve --applied ${name}\` and run \`nextly migrate\` again.`;
+  return statements.some(statement => statement.status !== "shown")
+    ? `Run the statements not marked "the database has it" by hand, or confirm they are not needed, ${record}`
+    : `Check that what the file does is in the database, ${record}`;
+}
+
+/**
+ * The refusal for a pending file the database stands at the end of whose snapshot does not prove
+ * all of it, before anything of the file runs or is recorded: it names each statement a recording
+ * would have skipped, marked by what the database shows of it. Its message is read back by the
+ * CLI's describer (`notProvenParts`): the first sentence, the reasons and the statements, then the
+ * next step on the last line.
+ */
+function notProvenError(args: {
+  filename: string;
+  statements: readonly StatementProof[];
+  reasons: UnprovenReasons;
+}): NextlyError {
+  const { filename, statements } = args;
+  const name = filename.replace(/\.sql$/, "");
   const listed = statements.map(
     (statement, at) =>
-      `  ${at + 1}. ${statement.label} (${statement.shown ? "the database has it" : "not shown by its snapshot"})`
+      `  ${at + 1}. ${statement.label} (${MARKS[statement.status]})`
   );
   return new NextlyError({
     code: "NEXTLY_MIGRATION_NOT_PROVEN",
     publicMessage: [
-      `${filename} is pending, and the database already stands where it ends, not where it starts. It was neither run nor recorded as applied without running: ${why.join("; ")}.`,
+      `${filename} is pending, and the database already stands where it ends, not where it starts. It was neither run nor recorded as applied without running: ${reasonsOf(args.reasons, statements).join("; ")}.`,
       "Statements it would have skipped:",
       ...listed,
-      `Run the statements its snapshot does not show by hand, or confirm they are not needed, then record the file with \`nextly migrate:resolve --applied ${name}\` and run \`nextly migrate\` again.`,
+      nextStepOf(name, statements),
     ].join("\n"),
     logContext: {
       source: filename,
@@ -708,7 +763,7 @@ export function refuseUnlessProven(args: {
   const proven =
     reasons.changed === undefined &&
     reasons.attempt === undefined &&
-    proof.statements.every(statement => statement.shown);
+    proof.statements.every(statement => statement.status === "shown");
   if (proven) return;
   throw notProvenError({
     filename: file.filename,

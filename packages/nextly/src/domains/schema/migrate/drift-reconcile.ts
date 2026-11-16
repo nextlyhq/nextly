@@ -178,7 +178,7 @@ export interface ReconcileFileArgs {
    * running when the database stands at its end and not its start (`refuseUnlessProven`). Absent
    * (a plugin module, or a Schema Builder save), such a file is recorded as before.
    */
-  snapshotProof?: () => SnapshotProof;
+  snapshotProof?: () => Promise<SnapshotProof>;
   /** Dev/ui/db_sync event ids this file_apply supersedes (ALREADY_APPLIED). */
   supersedableEventIds?: () => Promise<string[]>;
   /**
@@ -759,7 +759,7 @@ export async function reconcileFile(
     if (args.snapshotProof !== undefined) {
       refuseUnlessProven({
         file,
-        proof: args.snapshotProof(),
+        proof: await args.snapshotProof(),
         attempt: await unresolvedAttemptOf(file.filename, repo),
       });
     }

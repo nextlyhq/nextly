@@ -195,7 +195,10 @@ import {
   statementRefusals,
 } from "../../domains/schema/migrate/split-sql";
 import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
-import { readLiveSchema } from "../../domains/schema/migrate/statement-judgement";
+import {
+  judgeStatements,
+  readLiveSchema,
+} from "../../domains/schema/migrate/statement-judgement";
 import {
   adoptUniqueIndexesAlreadyThere,
   type AdoptedUniqueIndex,
@@ -4835,12 +4838,20 @@ export async function runFileMigrations(args: {
         // Where the database already stands at the file's end, it is recorded without running
         // only when its snapshot proves all of it: each statement as written, judged against both
         // sides whole, and the checksum the snapshot recorded when the file was written.
-        // Read only where the database stands at the file's end.
-        snapshotProof: () => ({
-          statements: statementsShownBySnapshot(upStatements, dialect, {
-            before,
-            target,
-          }),
+        // Read only where the database stands at the file's end, with each statement judged
+        // against the live database too: the snapshot comparison cannot see an index left invalid
+        // or a constraint not validated.
+        snapshotProof: async () => ({
+          statements: statementsShownBySnapshot(
+            upStatements,
+            dialect,
+            { before, target },
+            judgeStatements(
+              upStatements,
+              dialect,
+              await readLiveSchema(db, dialect, upStatements)
+            )
+          ),
           recordedChecksum: targetFile?.migrationHash ?? "",
         }),
       });
