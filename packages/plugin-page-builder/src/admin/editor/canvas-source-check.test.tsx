@@ -161,6 +161,22 @@ describe("the canvas's change check", () => {
     expect(ask).toHaveBeenCalledTimes(3);
   });
 
+  it("drops what was kept when the check that was to take the first mark failed", async () => {
+    const ask = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue("saved elsewhere meanwhile");
+    renderHook(() => useCanvasSourceCheck(ASKED, "u1", ask));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dropped).toBe(0);
+    // The next check's mark cannot be compared with what was kept: it drops.
+    await vi.advanceTimersByTimeAsync(SOURCE_CHECK_EVERY_MS);
+    expect(dropped).toBe(1);
+    // Then it compares as usual.
+    await vi.advanceTimersByTimeAsync(SOURCE_CHECK_EVERY_MS);
+    expect(dropped).toBe(1);
+  });
+
   it("changes nothing when a check fails, and compares the next with the last mark it read", async () => {
     let answer: () => Promise<string> = async () => "before";
     const ask = vi.fn(() => answer());

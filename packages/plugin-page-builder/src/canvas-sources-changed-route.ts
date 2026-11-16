@@ -71,6 +71,7 @@ const CanvasSourcesChangedBody = z.object({
     })
     .optional(),
   locale: z.string().min(1).max(35).optional(),
+  site: z.literal(true).optional(),
 });
 
 /** The mark of a source the caller may not read, or one that is gone. */
@@ -85,6 +86,11 @@ export interface SourcesChangedReads {
   entry(collection: string, id: string, depth: 0 | 1): Promise<unknown>;
   /** A Single's document, or nothing; `depth` as for an entry. */
   single(slug: string, depth: 0 | 1): Promise<unknown>;
+  /**
+   * The site's public settings (its name, address, logo and time zone):
+   * the same for every reader, and holding nothing private.
+   */
+  site(): Promise<unknown>;
   /**
    * A collection's most recently saved entries, newest first and at most
    * {@link NEWEST_MARKED} of them, and how many entries it holds.
@@ -204,6 +210,15 @@ export async function sourcesChangedStamp(
           )
         ).then(mark => `single:${slug}=${mark}`)
       ),
+    // The settings carry no save time, so their values are their mark:
+    // public, and four short values.
+    ...(ask.site === true
+      ? [
+          markOf(async () => JSON.stringify(await reads.site())).then(
+            mark => `site=${mark}`
+          ),
+        ]
+      : []),
     ...[...new Set(ask.lists)].sort().map(slug =>
       markOf(async () => {
         const { newest, total } = await reads.collection(slug);
@@ -271,6 +286,7 @@ async function directSourcesChangedReads(
       nextly.findByID({ collection, id, depth, ...asEditing }),
     single: async (slug, depth) =>
       nextly.findSingle({ slug, depth, ...asEditing }),
+    site: async () => nextly.publicSiteSettings(),
     collection: async slug => {
       const newestFirst = { sort: ["-updatedAt", "id"], depth: 0 as const };
       const found = await nextly.find({

@@ -28,6 +28,7 @@ interface Stored {
   entries: Record<string, Doc>;
   singles: Record<string, Doc>;
   lists: Record<string, Doc[]>;
+  site: { applicationName: string | null; timezone: string | null };
   refused: Set<string>;
   broken: Set<string>;
 }
@@ -57,6 +58,7 @@ function readsOf(stored: Stored): SourcesChangedReads {
       depths.push(depth);
       return atDepth(stored.singles[slug], depth);
     },
+    site: async () => stored.site,
     collection: async slug => {
       guard(slug);
       const rows = stored.lists[slug] ?? [];
@@ -89,6 +91,7 @@ function stored(): Stored {
         { id: "d", _rev: 1 },
       ],
     },
+    site: { applicationName: "Acme", timezone: "Europe/Paris" },
     refused: new Set(),
     broken: new Set(),
   };
@@ -195,6 +198,18 @@ describe("the change check's mark", () => {
     expect(new Set(depths)).toEqual(new Set([0]));
   });
 
+  it("marks the site's settings where the page reads them, and only there", async () => {
+    const reading = { ...ASK, site: true as const };
+    const before = await sourcesChangedStamp(reading, readsOf(stored()));
+    const moved = stored();
+    moved.site = { ...moved.site, timezone: "Asia/Karachi" };
+    expect(await sourcesChangedStamp(reading, readsOf(moved))).not.toBe(before);
+    // CONTROL: a page that reads no setting is not moved by one.
+    expect(await sourcesChangedStamp(ASK, readsOf(moved))).toBe(
+      await sourcesChangedStamp(ASK, readsOf(stored()))
+    );
+  });
+
   it("marks a followed entry the caller may not read by its id alone", async () => {
     const following = { ...ASK, follows: { entry: ["author"], singles: {} } };
     // Unread, the relation comes back as the id it stores.
@@ -251,5 +266,26 @@ describe("the change check's ask", () => {
       follows: { entry: ["author"], singles: { footer: ["owner"] } },
       locale: "fr",
     });
+  });
+
+  it("names the site's settings where a binding reads one or a date shows in its zone", () => {
+    const request = {
+      source: { kind: "single" as const, slug: "home" },
+      demand: { singles: {}, site: false, formatsDates: false },
+      lists: [],
+    };
+    expect(sourcesChangedAskOf(request).site).toBeUndefined();
+    expect(
+      sourcesChangedAskOf({
+        ...request,
+        demand: { ...request.demand, site: true },
+      }).site
+    ).toBe(true);
+    expect(
+      sourcesChangedAskOf({
+        ...request,
+        demand: { ...request.demand, formatsDates: true },
+      }).site
+    ).toBe(true);
   });
 });

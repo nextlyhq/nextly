@@ -74,6 +74,7 @@ function namesNewSource(
     new Set([
       JSON.stringify(ask.source),
       `locale:${ask.locale ?? ""}`,
+      ...(ask.site === true ? ["site"] : []),
       ...ask.singles.map(slug => `single:${slug}`),
       ...ask.lists.map(slug => `list:${slug}`),
       ...(ask.follows?.entry ?? []).map(field => `follow::${field}`),
@@ -109,6 +110,9 @@ export function useCanvasSourceCheck(
     // The mark last read; `undefined` until one is, and after the canvas's
     // reads were dropped for another reason, until the check that drop asks.
     let known: string | undefined;
+    // The check that was to take the mark compared with failed, so what was
+    // kept may be older than the next mark read: that one drops it.
+    let baselineMissed = false;
     let telling = false;
     let next: ReturnType<typeof setTimeout> | undefined;
     const check = async (whenHidden: boolean) => {
@@ -119,8 +123,9 @@ export function useCanvasSourceCheck(
       try {
         const mark = await ask(sources);
         if (cancelled) return;
-        const changed = known !== undefined && mark !== known;
+        const changed = known === undefined ? baselineMissed : mark !== known;
         known = mark;
+        baselineMissed = false;
         if (changed) {
           telling = true;
           try {
@@ -130,7 +135,10 @@ export function useCanvasSourceCheck(
           }
         }
       } catch {
-        // A failed check changes nothing: the next one asks again.
+        // A failed check changes nothing: the next one asks again. Had it
+        // been the one to take the first mark, the next one drops what was
+        // kept rather than take its mark as the first.
+        if (known === undefined) baselineMissed = true;
       } finally {
         inFlight = false;
         // The minute counts from when this check settled, whatever asked
@@ -146,6 +154,7 @@ export function useCanvasSourceCheck(
     const stopHearing = onCanvasSourcesChanged(() => {
       if (telling) return;
       known = undefined;
+      baselineMissed = false;
       void check(true);
     });
     const before = previous.current;

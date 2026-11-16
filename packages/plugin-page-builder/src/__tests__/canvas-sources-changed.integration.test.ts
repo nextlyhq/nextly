@@ -200,6 +200,22 @@ describe.each(getConfiguredTestDialects())(
       expect(await stampFor(owner, page)).not.toBe(before);
     });
 
+    it("reads the site's settings for a page that shows them, the same while they are", async () => {
+      const { t, owner } = await boot();
+      const id = await savePost(t, "Dated");
+      const ask = {
+        source: { kind: "collection", slug: POSTS, id },
+        singles: [],
+        lists: [],
+        site: true,
+      };
+      const first = await post(owner, ["canvas-sources", "changed"], ask);
+      expect(first.status).toBe(200);
+      const again = await post(owner, ["canvas-sources", "changed"], ask);
+      expect(again.body.stamp).toBe(first.body.stamp);
+      expect(first.body.stamp).toContain("site=");
+    });
+
     it("never moves for a source the person may not read", async () => {
       const { t } = await boot();
       const id = await savePost(t, "Private");

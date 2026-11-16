@@ -53,6 +53,11 @@ export interface CanvasSourcesChangedRequest {
    * fields changes only its own version.
    */
   readonly locale?: string;
+  /**
+   * The page reads the site's settings: a binding names one, or a date is
+   * shown in the site's time zone.
+   */
+  readonly site?: true;
 }
 
 /**
@@ -88,6 +93,9 @@ export function sourcesChangedAskOf(
     lists: [...request.lists].sort(),
     ...(follows === undefined ? {} : { follows }),
     ...(request.locale === undefined ? {} : { locale: request.locale }),
+    ...(request.demand.site || request.demand.formatsDates
+      ? { site: true as const }
+      : {}),
   };
 }
 
