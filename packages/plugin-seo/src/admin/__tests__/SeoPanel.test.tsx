@@ -230,29 +230,43 @@ describe("the SEO panel at rest", () => {
 });
 
 describe("a value the page's design gives", () => {
-  /** A title the design level answers, drawn by `drawnBy`. */
+  /** A description and a title the design level answers, drawn by `drawnBy`. */
   function drawn(drawnBy?: "design" | "template"): SeoTabContext {
     return {
       ...CONTEXT,
       levels: {
         ...LEVELS,
-        template: { title: "About us | Acme" },
+        template: {
+          title: "About us | Acme",
+          description: "What Acme makes, and for whom.",
+        },
         pattern: {},
       },
       ...(drawnBy === undefined ? {} : { drawnBy }),
     };
   }
+  const descriptionField = () => screen.getByLabelText("Description on Google");
 
   it("comes from this page's design where the page's own blocks draw it", () => {
     render(<Harness context={drawn("design")} />);
-    expect(titleField().parentElement).toHaveTextContent(
+    expect(descriptionField().parentElement).toHaveTextContent(
       "Empty uses this page's design"
     );
   });
 
   it("comes from this page's template where a template draws it", () => {
     render(<Harness context={drawn("template")} />);
-    expect(titleField().parentElement).toHaveTextContent(
+    expect(descriptionField().parentElement).toHaveTextContent(
+      "Empty uses this page's template"
+    );
+  });
+
+  it("is never the title: the title names its own source, not the design", () => {
+    render(<Harness context={drawn("template")} />);
+    const said = titleField().parentElement?.textContent ?? "";
+    expect(said).not.toMatch(/design|template/);
+    // CONTROL: the same panel names the template for the description.
+    expect(descriptionField().parentElement).toHaveTextContent(
       "Empty uses this page's template"
     );
   });
