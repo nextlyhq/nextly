@@ -296,7 +296,7 @@ const READ_RESPONSE_KEYS: ReadonlySet<string> = new Set([
  * A field's column name is no second name for it: field rules, validation and hooks look a field
  * up by its declared name, so a value under its column's name would pass them by.
  */
-export function undeclaredWriteKeys(
+function undeclaredWriteKeys(
   data: Record<string, unknown>,
   entity: WritableEntityKind,
   /** The entity's declared fields, as configured. */
