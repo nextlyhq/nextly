@@ -2470,6 +2470,121 @@ describe("inline padding and a contained container's inset", () => {
     ).not.toContain("--nx-sized-width");
   });
 
+  it("flags the children of a block that lays them out in a flex row", () => {
+    // A padding's `100%` is the flex container's width, not the item's, so a
+    // contained block laid out as a flex item would be inset from a box far
+    // wider than its own. The rule that makes its parent a flex container
+    // flags the parent's children; the site sheet then treats a contained one
+    // as a sized block: centred, not inset.
+    const ITEM = "--nx-sized-item";
+    for (const display of ["flex", "inline-flex"]) {
+      const out = css(doc([node("n1", { base: { base: { display } } })]));
+      expect(out).toMatch(
+        new RegExp(`\\.nx-pb-[a-z0-9]+ > \\* \\{ ${ITEM}: 1 \\}`)
+      );
+    }
+    // A grid item's percentages resolve against its own grid area, so its
+    // inset is already measured from its own width: no flag.
+    for (const display of ["grid", "inline-grid"]) {
+      const out = css(doc([node("n1", { base: { base: { display } } })]));
+      expect(out).toMatch(new RegExp(`> \\* \\{ ${ITEM}: 0 \\}`));
+    }
+    // Any other layout clears it, so an override back to block brings the
+    // inset back to the children it applies to.
+    const block = css(
+      doc([
+        node("n1", {
+          base: { base: { display: "flex" }, mobile: { display: "block" } },
+        }),
+      ])
+    );
+    expect(block).toMatch(new RegExp(`> \\* \\{ ${ITEM}: 1 \\}`));
+    const media = block.indexOf("@media");
+    expect(media).toBeGreaterThan(-1);
+    expect(block.slice(media)).toMatch(new RegExp(`> \\* \\{ ${ITEM}: 0 \\}`));
+    // A block-type default flags at a default's weight, like the rest.
+    const byDefault = css(doc([node("n1")]), {
+      ...CTX,
+      blockBases: { "core/box": { base: { base: { display: "flex" } } } },
+    } as unknown as StyleCompileContext);
+    expect(byDefault).toMatch(
+      new RegExp(`:where\\(\\.nx-bt-core--box > \\*\\) \\{ ${ITEM}: 1 \\}`)
+    );
+    // `initial`, `unset` and the reverts give no row either; only `inherit`
+    // takes a layout no rule here can know.
+    for (const keyword of ["initial", "unset", "revert", "revert-layer"]) {
+      expect(
+        css(doc([node("n1", { base: { base: { display: keyword } } })]))
+      ).toMatch(new RegExp(`> \\* \\{ ${ITEM}: 0 \\}`));
+    }
+    // `inherit` takes a layout no rule here can know, so it clears the flag:
+    // the inset is then never lost, at the most an item over-padded.
+    expect(
+      css(doc([node("n1", { base: { base: { display: "inherit" } } })]))
+    ).toMatch(new RegExp(`> \\* \\{ ${ITEM}: 0 \\}`));
+    // A block that sets no layout flags nothing.
+    expect(
+      css(doc([node("n1", { base: { base: { gap: "1rem" } } })]))
+    ).not.toContain(ITEM);
+  });
+
+  it("flags the children of a flex column, whose items fill its width", () => {
+    // In a column, a flex item stretches across the whole width the inset is
+    // measured from, so a contained one keeps its inset: the direction sets a
+    // flag of its own on the children, which the site sheet reads beside the
+    // item flag.
+    const COLUMN = "--nx-column-flow";
+    for (const flexDirection of ["column", "column-reverse"]) {
+      expect(
+        css(
+          doc([
+            node("n1", { base: { base: { display: "flex", flexDirection } } }),
+          ])
+        )
+      ).toMatch(new RegExp(`> \\* \\{[^}]*${COLUMN}: 1`));
+    }
+    // `inherit` takes a direction no rule here can know, so it is read as a
+    // column: the inset is then never lost. The other keywords resolve to
+    // the initial `row`.
+    expect(
+      css(
+        doc([
+          node("n1", {
+            base: { base: { display: "flex", flexDirection: "inherit" } },
+          }),
+        ])
+      )
+    ).toMatch(new RegExp(`> \\* \\{[^}]*${COLUMN}: 1`));
+    for (const flexDirection of ["row", "row-reverse", "initial", "unset"]) {
+      expect(
+        css(doc([node("n1", { base: { base: { flexDirection } } })]))
+      ).toMatch(new RegExp(`> \\* \\{[^}]*${COLUMN}: 0`));
+    }
+    expect(
+      css(doc([node("n1", { base: { base: { display: "flex" } } })]))
+    ).not.toContain(COLUMN);
+  });
+
+  it("flags a block taken out of the flow by its own position", () => {
+    // An absolutely or fixed positioned child of a row is not a flex
+    // item, so the item flag must not hold for it. Its own position sets a
+    // flag of its own, in the rule that sets the position; the site sheet
+    // reads the item flag only where this one is 0.
+    const FLOW = "--nx-out-of-flow";
+    const at = (type: string) =>
+      css(doc([node("n1", { base: { base: { position: { type } } } })]));
+    for (const type of ["absolute", "fixed"]) {
+      expect(at(type)).toContain(`${FLOW}: 1`);
+    }
+    for (const type of ["relative", "static", "sticky"]) {
+      expect(at(type)).toContain(`${FLOW}: 0`);
+    }
+    // A block that sets no position flags nothing.
+    expect(
+      css(doc([node("n1", { base: { base: { gap: "1rem" } } })]))
+    ).not.toContain(FLOW);
+  });
+
   it("records the value as it was set in the trace, not the wrapped one", () => {
     // The inspector names a value and where it came from. The inset is how
     // containment combines with it, not a value anyone set.
