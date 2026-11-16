@@ -382,9 +382,9 @@ function isObject(value: SettingsValue | undefined): value is SettingsObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-/** Whether `value` is an object holding no key. */
-function isEmptyObject(value: SettingsValue | undefined): boolean {
-  return isObject(value) && Object.keys(value).length === 0;
+/** Whether `value` is an `admin` object holding no option: the defaults, as no `admin` is. */
+function isEmptyAdmin(key: string, value: SettingsValue | undefined): boolean {
+  return key === "admin" && isObject(value) && Object.keys(value).length === 0;
 }
 
 /** Whether two recorded values are the same, key order aside (`canonicalJson`). */
@@ -442,19 +442,21 @@ function diffSettings(
       const where = joinPath(path, key);
       // An object set or cleared whole is named by what it holds, so a field
       // gaining its first admin option reads `admin.placeholder`, not `admin`.
-      // An empty one holds no setting, so beside an absent key it is no change:
-      // the Schema Builder writes `admin: {}` into its definition where the
-      // snapshot its save records has no `admin`, and naming that would report
-      // a change after every Builder create.
+      // An empty `admin` is the defaults, the same as none, so beside an absent
+      // one it is no change: the Schema Builder writes `admin: {}` into its
+      // definition where the snapshot its save records has no `admin`, and
+      // naming that would report a change after every Builder create. Any
+      // other key's empty object can mean something (`versions: {}` turns
+      // versioning on with its defaults), so it stays a change.
       if (!(key in after)) {
-        if (isEmptyObject(before[key])) return [];
-        return isObject(before[key])
+        if (isEmptyAdmin(key, before[key])) return [];
+        return isObject(before[key]) && Object.keys(before[key]).length > 0
           ? diffSettings(before[key], {}, where)
           : [`${where} (cleared)`];
       }
       if (!(key in before)) {
-        if (isEmptyObject(after[key])) return [];
-        return isObject(after[key])
+        if (isEmptyAdmin(key, after[key])) return [];
+        return isObject(after[key]) && Object.keys(after[key]).length > 0
           ? diffSettings({}, after[key], where)
           : [where];
       }

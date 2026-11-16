@@ -26,6 +26,7 @@ import { databaseBehindMigrations } from "../../../cli/errors/areas/migrations";
 import {
   parseSnapshotFile,
   SnapshotFileError,
+  type SnapshotFile,
 } from "../migrate-create/snapshot-io";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 
@@ -44,6 +45,40 @@ export interface MissingFromDatabase {
 export interface AppliedSnapshot {
   migration: string;
   snapshot: NextlySchemaSnapshot;
+  /**
+   * The tables in `snapshot` another owner declares (a plugin's, Nextly's),
+   * held for the columns the app contributed to them: never named missing
+   * whole, since such a table is its owner's to report.
+   */
+  foreign?: ReadonlySet<string>;
+}
+
+/**
+ * The part of a snapshot file the app's migrations made: its own tables whole,
+ * and of each table another owner declares, which the file holds whole because
+ * the app contributes to it, only the columns the app contributed. That
+ * table's other columns are its owner's, whose own history may drop or rename
+ * them while the app's copy stays as it was.
+ */
+export function appOwnedTables(
+  file: Pick<SnapshotFile, "snapshot" | "contributions">
+): { snapshot: NextlySchemaSnapshot; foreign: ReadonlySet<string> } {
+  const contributed = file.contributions ?? {};
+  const foreign = new Set(Object.keys(contributed));
+  return {
+    snapshot: {
+      ...file.snapshot,
+      tables: file.snapshot.tables.map(table => {
+        if (!foreign.has(table.name)) return table;
+        const own = new Set(contributed[table.name].columns);
+        return {
+          ...table,
+          columns: table.columns.filter(column => own.has(column.name)),
+        };
+      }),
+    },
+    foreign,
+  };
 }
 
 /** Each table's columns, lower-cased, by lower-cased table name. */
@@ -99,7 +134,9 @@ export function missingFromDatabase(
   return newest.snapshot.tables.flatMap(table => {
     const liveColumns = live.get(keyOf(table.name));
     if (liveColumns === undefined) {
-      return [{ table: table.name, createdBy: by(keyOf(table.name)) }];
+      return newest.foreign?.has(table.name) === true
+        ? []
+        : [{ table: table.name, createdBy: by(keyOf(table.name)) }];
     }
     return table.columns
       .filter(column => !liveColumns.has(column.name.toLowerCase()))
@@ -141,7 +178,7 @@ export async function appliedSnapshotsOf(
       );
       applied.push({
         migration: name.replace(/\.snapshot\.json$/, ""),
-        snapshot: file.snapshot,
+        ...appOwnedTables(file),
       });
     } catch (error) {
       if (!(error instanceof SnapshotFileError)) throw error;

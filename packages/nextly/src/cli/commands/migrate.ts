@@ -3279,11 +3279,11 @@ async function refuseDatabaseBehindLedger(
     await appliedSnapshotsOf(deps.migrationsDir, sql =>
       Promise.resolve(applied.has(sql.replace(/\.sql$/, "")))
     )
-  ).map(({ migration, snapshot }) => ({
-    migration,
+  ).map(entry => ({
+    ...entry,
     snapshot: {
-      ...snapshot,
-      tables: snapshot.tables.filter(table => !core.has(table.name)),
+      ...entry.snapshot,
+      tables: entry.snapshot.tables.filter(table => !core.has(table.name)),
     },
   }));
   const newest = snapshots.at(-1);

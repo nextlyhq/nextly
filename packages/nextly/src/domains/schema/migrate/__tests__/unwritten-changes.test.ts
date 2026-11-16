@@ -212,6 +212,24 @@ describe("compareWithNewestSnapshot", () => {
     expect(nothingUnwritten(compare(declaredEmpty, recordedWithout))).toBe(
       true
     );
+    // An empty object that means something is a change: `versions: {}` turns versioning on with
+    // its defaults, where an omitted `versions` leaves it off.
+    expect(
+      unwrittenChangesError(
+        compare(
+          recordedWithout,
+          entitiesOf(collection([TITLE], { versions: {} }))
+        )
+      )?.code
+    ).toBe("SETTINGS_CHANGE_WITHOUT_MIGRATION");
+    expect(
+      nothingUnwritten(
+        compare(
+          entitiesOf(collection([TITLE], { versions: {} })),
+          recordedWithout
+        )
+      )
+    ).toBe(false);
     // Holding a setting, it is a change.
     expect(
       unwrittenChangeLines(
