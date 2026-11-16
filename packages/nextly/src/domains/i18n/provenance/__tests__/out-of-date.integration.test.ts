@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, text } from "../../../../config";
+import { defineCollection, defineSingle, text } from "../../../../config";
 import { container } from "../../../../di/container";
 import {
   createTestNextly,
@@ -15,6 +15,7 @@ import {
   type TestNextly,
 } from "../../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
+import type { SingleEntryService } from "../../../../services/singles/single-entry-service";
 import type { LocaleTranslationMeta } from "../../companion-join";
 
 let t: TestNextly | undefined;
@@ -43,6 +44,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         localized: true,
         status: true,
         fields: [text({ name: "title", localized: true })],
+      }),
+    ],
+    singles: [
+      defineSingle({
+        slug: "notice",
+        localized: true,
+        status: true,
+        fields: [text({ name: "headline", localized: true })],
       }),
     ],
   });
@@ -222,6 +231,36 @@ describe.each(getConfiguredTestDialects())(
       expect(overview.es.translated).toBe(false);
       expect(overview.es.fields).toBeUndefined();
       expect(overview.en.fields?.title).toMatchObject({ origin: "original" });
+    });
+
+    it("shows a published read of a Single no provenance for a language whose translation is only a draft", async () => {
+      await boot(dialect);
+      const singles = container.get<SingleEntryService>("singleEntryService");
+      await singles.update(
+        "notice",
+        { headline: "Sale", status: "published", _overwrite: true },
+        { overrideAccess: true, locale: "en" }
+      );
+      await singles.update(
+        "notice",
+        { headline: "Rebajas", status: "draft", _overwrite: true },
+        { overrideAccess: true, locale: "es" }
+      );
+
+      const read = await singles.get("notice", {
+        overrideAccess: true,
+        status: "published",
+        translationStatus: true,
+      });
+      expect(read.success).toBe(true);
+      const overview = (read.data as Record<string, unknown>)
+        ._translations as Record<string, LocaleTranslationMeta>;
+      // The draft is hidden from this read, and so is what it records.
+      expect(overview.es.translated).toBe(false);
+      expect(overview.es.fields).toBeUndefined();
+      expect(overview.en.fields?.headline).toMatchObject({
+        origin: "original",
+      });
     });
   }
 );

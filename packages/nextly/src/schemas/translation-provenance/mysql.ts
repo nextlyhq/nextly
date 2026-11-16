@@ -22,6 +22,7 @@ import {
 
 import {
   TRANSLATION_PROVENANCE_FIELD_PATH_LENGTH,
+  TRANSLATION_PROVENANCE_PRINCIPAL_KIND_LENGTH,
   TRANSLATION_PROVENANCE_TABLE,
 } from "./table-name";
 import type {
@@ -68,7 +69,9 @@ export const nextlyTranslationProvenanceMysql = mysqlTable(
     actorKind: varchar("actor_kind", { length: 32 }),
     actorId: varchar("actor_id", { length: 191 }),
     // A plugin-defined person's kind: such a person is kept by kind alone, never by id.
-    actorPrincipalKind: varchar("actor_principal_kind", { length: 64 }),
+    actorPrincipalKind: varchar("actor_principal_kind", {
+      length: TRANSLATION_PROVENANCE_PRINCIPAL_KIND_LENGTH,
+    }),
     // The language the value was made from, and the fingerprint of that
     // language's value then. NULL for a value written in its own language.
     sourceLocale: varchar("source_locale", { length: 35 }),

@@ -7,6 +7,12 @@
 
 export const TRANSLATION_PROVENANCE_TABLE = "nextly_translation_provenance";
 
+/**
+ * The longest plugin-defined person's kind a row keeps (`actor_principal_kind`, a varchar on
+ * MySQL): the longest kind a plugin may name, which the principal registry holds every kind to.
+ */
+export const TRANSLATION_PROVENANCE_PRINCIPAL_KIND_LENGTH = 191;
+
 /** The longest field path a row keeps; a longer one is stored bounded, ending in a hash. */
 export const TRANSLATION_PROVENANCE_FIELD_PATH_LENGTH = 255;
 

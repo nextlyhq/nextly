@@ -12,6 +12,7 @@ import { getTableConfig as sqliteTableConfig } from "drizzle-orm/sqlite-core";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { loadDialectTables } from "../../../database/dialect-tables";
+import { PRINCIPAL_KIND_MAX_LENGTH } from "../../../plugins/principals/registry";
 import { CORE_TABLE_NAMES, getCoreSchema } from "../../index";
 import * as my from "../mysql";
 import * as pg from "../postgres";
@@ -125,4 +126,18 @@ describe(`${TABLE} is registered as a core table`, () => {
       expect(names).toContain(TABLE);
     }
   );
+});
+
+describe("the provenance table keeps who wrote a value", () => {
+  it("holds the longest plugin-defined person's kind a plugin may name, on MySQL", () => {
+    // MySQL keeps the kind in a varchar: a narrower one refuses a longer kind
+    // under strict mode, and the save that records it rolls back with it.
+    const column = mysqlTableConfig(
+      my.nextlyTranslationProvenanceMysql
+    ).columns.find(col => col.name === "actor_principal_kind") as
+      | { length?: number }
+      | undefined;
+    expect(column?.length).toBeGreaterThanOrEqual(PRINCIPAL_KIND_MAX_LENGTH);
+    expect(PRINCIPAL_KIND_MAX_LENGTH).toBe(191);
+  });
 });
