@@ -45,13 +45,13 @@ const runtime = vi.hoisted(() => ({
 // Whether the request in hand is in Next's draft mode, as the public route
 // reads it before asking its draft gate.
 const request = vi.hoisted(() => ({ draftMode: false }));
-vi.mock("next/headers", () => ({
-  draftMode: async () => ({ isEnabled: request.draftMode }),
-}));
 vi.mock("nextly/runtime", async importOriginal => {
   const actual = await importOriginal<typeof import("nextly/runtime")>();
   return {
     ...actual,
+    // What core answers for the request in hand: the draft-mode flag the
+    // public route reads before asking its draft gate.
+    isDraftModeRequest: async () => request.draftMode,
     createPublicReader: (
       ...[source, binding]: Parameters<typeof actual.createPublicReader>
     ) =>
