@@ -151,6 +151,31 @@ const CASES: Case[] = [
     value: text("red"),
     outcome: "kept",
   },
+  // Zero is a number: `exactNumber` spells it `0`, with no exponent.
+  {
+    name: "a text 0 to a number",
+    from: ["text"],
+    to: ["number"],
+    value: text("0"),
+    outcome: "changed",
+    readsAs: "0",
+  },
+  {
+    name: "a JSON 0 to a number",
+    from: ["json"],
+    to: ["number"],
+    value: json(0),
+    outcome: "kept",
+    readsAs: "0",
+  },
+  // A number field's validator refuses NaN, whatever its column holds.
+  {
+    name: "a text NaN to a float",
+    from: ["text"],
+    to: ["number", float],
+    value: text("NaN"),
+    outcome: "lost",
+  },
   // A whole-number field's validator refuses a non-finite number, whatever the column holds.
   {
     name: "a text Infinity to a whole number",

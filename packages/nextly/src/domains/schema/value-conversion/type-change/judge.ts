@@ -521,9 +521,11 @@ function numberInto(
     };
   }
   if (!number.finite) {
-    // A whole-number field's validator refuses a non-finite number, whatever its column holds.
-    if (format.kind === "integer")
+    // A number field's validator refuses NaN, and a whole-number field's any non-finite number,
+    // whatever the column holds.
+    if (number.value === "NaN" || format.kind === "integer") {
       return { outcome: "lost", reason: "non-finite" };
+    }
     return holdsNonFinite(format, dialect, number.value)
       ? {
           outcome: fits,

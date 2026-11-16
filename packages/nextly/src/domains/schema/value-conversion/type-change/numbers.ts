@@ -51,8 +51,15 @@ export function readNumber(text: string): ReadNumber | null {
     return { finite: false, value: "Infinity" };
   }
   if (lower === "-infinity") return { finite: false, value: "-Infinity" };
-  // `exactNumber` spells a number as its significant digits and an exponent: `-125e-2`.
+  // `exactNumber` spells a number as its significant digits and an exponent (`-125e-2`), and
+  // every zero as `0`.
   const canonical = exactNumber(text);
+  if (canonical === "0") {
+    return {
+      finite: true,
+      value: { negative: false, whole: "", fraction: "" },
+    };
+  }
   const parts =
     canonical === null ? null : /^(-)?(\d+)e(-?\d+)$/.exec(canonical);
   if (parts === null || canonical === null) return null;
