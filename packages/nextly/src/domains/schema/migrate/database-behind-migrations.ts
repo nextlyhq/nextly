@@ -49,19 +49,44 @@ export interface AppliedSnapshot {
 /** Each table's columns, lower-cased, by lower-cased table name. */
 type Columns = ReadonlyMap<string, ReadonlySet<string>>;
 
-function columnsOf(snapshot: NextlySchemaSnapshot): Map<string, Set<string>> {
-  return new Map(
-    snapshot.tables.map(table => [
-      table.name.toLowerCase(),
-      new Set(table.columns.map(column => column.name.toLowerCase())),
-    ])
-  );
+/** A table's key (`posts`) or a column's (`posts.title`), lower-cased. */
+const keyOf = (table: string, column?: string) =>
+  column === undefined
+    ? table.toLowerCase()
+    : `${table.toLowerCase()}.${column.toLowerCase()}`;
+
+/** Every table and column a snapshot records, by key. */
+function elementsOf(snapshot: NextlySchemaSnapshot): Set<string> {
+  const keys = new Set<string>();
+  for (const table of snapshot.tables) {
+    keys.add(keyOf(table.name));
+    for (const column of table.columns)
+      keys.add(keyOf(table.name, column.name));
+  }
+  return keys;
+}
+
+/**
+ * The applied migration that last created each table and column: the newest
+ * whose snapshot records it where the applied snapshot before it does not.
+ */
+function createdByOf(applied: readonly AppliedSnapshot[]): Map<string, string> {
+  const createdBy = new Map<string, string>();
+  let before = new Set<string>();
+  for (const { migration, snapshot } of applied) {
+    const now = elementsOf(snapshot);
+    for (const key of now) {
+      if (!before.has(key)) createdBy.set(key, migration);
+    }
+    before = now;
+  }
+  return createdBy;
 }
 
 /**
  * What the newest of `applied` records and `live` lacks, each with the
- * applied migration that last created it: the newest one whose snapshot holds
- * it where the applied snapshot before it does not. Pure.
+ * applied migration that last created it. A table missing whole is named
+ * once, not again for each of its columns. Pure.
  */
 export function missingFromDatabase(
   applied: readonly AppliedSnapshot[],
@@ -69,43 +94,21 @@ export function missingFromDatabase(
 ): MissingFromDatabase[] {
   const newest = applied.at(-1);
   if (newest === undefined) return [];
-  const createdBy = new Map<string, string>();
-  let before = new Map<string, Set<string>>();
-  for (const { migration, snapshot } of applied) {
-    const now = columnsOf(snapshot);
-    for (const [table, columns] of now) {
-      const had = before.get(table);
-      if (had === undefined) createdBy.set(table, migration);
-      for (const column of columns) {
-        if (had === undefined || !had.has(column)) {
-          createdBy.set(`${table}.${column}`, migration);
-        }
-      }
-    }
-    before = now;
-  }
-  const missing: MissingFromDatabase[] = [];
-  for (const table of newest.snapshot.tables) {
-    const name = table.name.toLowerCase();
-    const liveColumns = live.get(name);
+  const createdBy = createdByOf(applied);
+  const by = (key: string) => createdBy.get(key) ?? newest.migration;
+  return newest.snapshot.tables.flatMap(table => {
+    const liveColumns = live.get(keyOf(table.name));
     if (liveColumns === undefined) {
-      missing.push({
-        table: table.name,
-        createdBy: createdBy.get(name) ?? newest.migration,
-      });
-      continue;
+      return [{ table: table.name, createdBy: by(keyOf(table.name)) }];
     }
-    for (const column of table.columns) {
-      const key = column.name.toLowerCase();
-      if (liveColumns.has(key)) continue;
-      missing.push({
+    return table.columns
+      .filter(column => !liveColumns.has(column.name.toLowerCase()))
+      .map(column => ({
         table: table.name,
         column: column.name,
-        createdBy: createdBy.get(`${name}.${key}`) ?? newest.migration,
-      });
-    }
-  }
-  return missing;
+        createdBy: by(keyOf(table.name, column.name)),
+      }));
+  });
 }
 
 /**
@@ -149,9 +152,7 @@ export async function appliedSnapshotsOf(
 }
 
 /** One line per missing table or column, as the refusal names them. */
-export function missingLines(
-  missing: readonly MissingFromDatabase[]
-): string[] {
+function missingLines(missing: readonly MissingFromDatabase[]): string[] {
   return missing.map(m =>
     m.column === undefined
       ? `- table ${m.table} (created by ${m.createdBy})`
