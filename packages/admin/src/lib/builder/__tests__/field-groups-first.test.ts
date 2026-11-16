@@ -95,6 +95,27 @@ describe("fieldGroupsFirst", () => {
     expect(used.map(g => g.address)).toEqual(["banner", "hero", "cards"]);
   });
 
+  it("creates a group a used group names before the group that names it, and ends on a loop", () => {
+    const hero = {
+      ...group("hero", POSTS),
+      fields: [
+        field({ name: "badge", type: "component", component: "banner" }),
+      ],
+    };
+    const banner = {
+      ...group("banner"),
+      // Names back to the group naming it: each is visited once.
+      fields: [field({ name: "back", type: "component", component: "hero" })],
+    };
+    const fields = [
+      field({ name: "hero", type: "component", component: "hero" }),
+    ];
+
+    const { used } = fieldGroupsFirst([hero, banner], fields, POSTS);
+
+    expect(used.map(g => g.address)).toEqual(["banner", "hero"]);
+  });
+
   it("lets the host's own unused picker-made groups go, and keeps any other", () => {
     const held = [
       group("hero", POSTS),

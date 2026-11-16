@@ -189,9 +189,12 @@ export function BuilderFieldPicker({
   const [making, setMaking] = useState<
     ((made: FieldGroupOption | null) => void) | null
   >(null);
+  // Each "New field group" opens a fresh dialog, never the values a cancelled one left.
+  const [operation, setOperation] = useState(0);
   const newFieldGroup = useCallback(
     () =>
       new Promise<FieldGroupOption | null>(resolve => {
+        setOperation(count => count + 1);
         setMaking(() => resolve);
       }),
     []
@@ -275,6 +278,7 @@ export function BuilderFieldPicker({
       />
       {/* Over the picker, which waits on the chooser until it is made or closed. */}
       <NewEntityDialog
+        key={operation}
         open={making !== null}
         config={FIELD_GROUP_BUILDER_CONFIG}
         onCancel={() => finishMaking(null)}

@@ -30,7 +30,14 @@ import {
 } from "@nextlyhq/ui";
 import type { FieldSurface, FieldTypeDescription } from "nextly/field-catalog";
 import type React from "react";
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import * as Icons from "@admin/components/icons";
 import { Type } from "@admin/components/icons";
@@ -430,14 +437,22 @@ function FieldGroupStep({
   const [query, setQuery] = useState("");
   // While the host is making a group, a second click would ask it for a second one.
   const [making, setMaking] = useState(false);
+  // A group made after the chooser was left (Back, or another step) is not this chooser's to pick.
+  const present = useRef(true);
+  useEffect(() => {
+    present.current = true;
+    return () => {
+      present.current = false;
+    };
+  }, []);
   const makeNew = async () => {
     if (!onNew) return;
     setMaking(true);
     try {
       const made = await onNew();
-      if (made) onPick(made);
+      if (made && present.current) onPick(made);
     } finally {
-      setMaking(false);
+      if (present.current) setMaking(false);
     }
   };
   const q = query.trim().toLowerCase();

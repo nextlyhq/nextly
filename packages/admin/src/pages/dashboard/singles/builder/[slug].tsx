@@ -322,6 +322,8 @@ export default function SingleBuilderEditPage({
             pinFields();
             // Re-pin settings baseline so the Save button disables again.
             pinSettings(settings);
+            // Landed: the groups this editor's picker made that no field uses go.
+            groupsFirst.letGoUnused();
             // Mirror the settings change (notably Draft/Published) into the
             // committable ui-schema.json. Not awaited: the mutation callback
             // stays synchronous, and the mirror is best-effort anyway.
@@ -343,7 +345,7 @@ export default function SingleBuilderEditPage({
         }
       );
     },
-    [slug, settings, updateSingle, pinFields, pinSettings]
+    [slug, settings, updateSingle, pinFields, pinSettings, groupsFirst]
   );
 
   // i18n: preview and apply carry the same toggle, so the resolutions the user

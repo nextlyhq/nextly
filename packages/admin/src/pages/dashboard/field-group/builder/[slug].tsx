@@ -316,6 +316,8 @@ export default function FieldGroupBuilderEditPage({
             pinFields();
             // Re-pin settings baseline so the Save button disables again.
             pinSettings(settings);
+            // Landed: the groups this editor's picker made that no field uses go.
+            groupsFirst.letGoUnused();
           },
           onError: err => {
             const errorObj = err as { message?: string };
@@ -327,7 +329,7 @@ export default function FieldGroupBuilderEditPage({
         }
       );
     },
-    [slug, settings, updateFieldGroup, pinFields, pinSettings]
+    [slug, settings, updateFieldGroup, pinFields, pinSettings, groupsFirst]
   );
 
   // The first save of an unsaved field group is its create: reviewed from the

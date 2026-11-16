@@ -12,6 +12,7 @@ import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -33,6 +34,7 @@ import type { PluginMetadata } from "@admin/types/branding";
 
 import {
   FieldPicker,
+  type FieldGroupOption,
   type FieldPickerConfig,
   type FieldPickerProps,
 } from "../FieldPicker";
@@ -399,6 +401,33 @@ describe("FieldPicker", () => {
     expect(onAdd).not.toHaveBeenCalled();
   });
 
+  it("drops a group made after the chooser was left", async () => {
+    let finish: (made: FieldGroupOption | null) => void = () => {};
+    const onNew = vi.fn(
+      () =>
+        new Promise<FieldGroupOption | null>(resolve => {
+          finish = resolve;
+        })
+    );
+    const { user, onAdd } = renderPicker({
+      config: {
+        ...CONFIG,
+        fieldGroups: { type: "component", options: [], onNew },
+      },
+    });
+    await user.click(screen.getByRole("option", { name: /Field group/ }));
+    await user.click(screen.getByRole("button", { name: "New field group" }));
+    await user.click(screen.getByRole("button", { name: "Back" }));
+
+    await act(async () => {
+      finish({ slug: "hero", label: "Hero", text: "Hero" });
+    });
+
+    expect(search()).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Label" })).toBeNull();
+    expect(onAdd).not.toHaveBeenCalled();
+  });
+
   it("offers no new field group where the surface cannot make one", async () => {
     const { user } = renderPicker({
       config: {
@@ -545,6 +574,19 @@ describe("the Schema Builder's field picker", () => {
       })
     );
     expect(unsavedEntity("field-group", "hero")).toBeUndefined();
+  });
+
+  it("opens a fresh dialog for each new field group, never a cancelled one's values", async () => {
+    const { user } = renderBuilderPicker();
+    await user.click(screen.getByRole("option", { name: /Field group/ }));
+    await user.click(screen.getByRole("button", { name: "New field group" }));
+    let dialog = await screen.findByRole("dialog", { name: "New field group" });
+    await user.type(within(dialog).getByLabelText("Name"), "Draft");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    await user.click(screen.getByRole("button", { name: "New field group" }));
+    dialog = await screen.findByRole("dialog", { name: "New field group" });
+    expect(within(dialog).getByLabelText("Name")).toHaveValue("");
   });
 
   it("lists a field group another host's picker made once that host is left", async () => {

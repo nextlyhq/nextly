@@ -363,6 +363,8 @@ export default function CollectionBuilderEditPage({
             // Reset the settings dirty baseline so the Save button
             // disables again immediately after a successful save.
             pinSettings(settings);
+            // Landed: the groups this editor's picker made that no field uses go.
+            groupsFirst.letGoUnused();
             pinFields();
             // Mirror the settings change (notably Draft/Published) into the
             // committable ui-schema.json. Not awaited: the mutation callback
@@ -385,7 +387,7 @@ export default function CollectionBuilderEditPage({
         }
       );
     },
-    [slug, settings, updateCollection, pinFields, pinSettings]
+    [slug, settings, updateCollection, pinFields, pinSettings, groupsFirst]
   );
 
   // The first save of an unsaved collection is its create: reviewed from the

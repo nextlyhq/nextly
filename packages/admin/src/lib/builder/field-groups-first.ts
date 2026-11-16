@@ -61,10 +61,19 @@ export function fieldGroupsFirst(
 ): { used: UnsavedEntity[]; unused: UnsavedEntity[] } {
   const groups = held.filter(entity => entity.kind === "field-group");
   const named = fieldGroupsNamedBy(fields);
-  const used = named.flatMap(address => {
+  // Each used group's own fields are followed too, and a group it names comes before it, so
+  // every group exists before one that embeds it is created. Visited once each, so a loop ends.
+  const used: UnsavedEntity[] = [];
+  const visited = new Set<string>();
+  const visit = (address: string) => {
+    if (visited.has(address)) return;
+    visited.add(address);
     const group = groups.find(entity => entity.address === address);
-    return group ? [group] : [];
-  });
+    if (!group) return;
+    for (const inner of fieldGroupsNamedBy(group.fields)) visit(inner);
+    used.push(group);
+  };
+  for (const address of named) visit(address);
   const unused = groups.filter(
     entity =>
       entity.ownedBy?.kind === host.kind &&

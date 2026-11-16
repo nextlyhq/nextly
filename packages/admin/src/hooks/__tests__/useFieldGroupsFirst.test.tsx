@@ -153,6 +153,14 @@ describe("useFieldGroupsFirst", () => {
 
     unmount();
 
+    // Kept, with what it was made with, only no longer the host's.
+    expect(unsavedEntity("field-group", "hero")).toEqual(
+      expect.objectContaining({
+        address: "hero",
+        fields: [],
+        settings: expect.objectContaining({ singularName: "Hero" }),
+      })
+    );
     expect(unsavedEntity("field-group", "hero")?.ownedBy).toBeUndefined();
   });
 

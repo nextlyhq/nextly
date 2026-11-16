@@ -18,13 +18,26 @@ import { removeRuntimeCollection } from "./support/runtime-collection";
 // the other specs that create one.
 test.describe.configure({ lock: [LOCK.dashboard, LOCK.schema] });
 
+/**
+ * Whether the server holds what `path` names: a 404 is absent, a success is present, and any
+ * other answer fails the test rather than reading as absent.
+ */
+async function serverHolds(
+  api: APIRequestContext,
+  path: string
+): Promise<boolean> {
+  const answer = await api.get(path);
+  if (answer.status() === 404) return false;
+  expect(answer.ok(), `${path}: ${answer.status()}`).toBe(true);
+  return true;
+}
+
 /** Whether the server holds a collection under `slug`. */
 async function serverHas(
   api: APIRequestContext,
   slug: string
 ): Promise<boolean> {
-  const answer = await api.get(`/admin/api/collections/${slug}`);
-  return answer.ok();
+  return serverHolds(api, `/admin/api/collections/${slug}`);
 }
 
 /**
@@ -190,8 +203,7 @@ async function serverHasFieldGroup(
   api: APIRequestContext,
   slug: string
 ): Promise<boolean> {
-  const answer = await api.get(`/admin/api/field-groups/${slug}`);
-  return answer.ok();
+  return serverHolds(api, `/admin/api/field-groups/${slug}`);
 }
 
 /** Deletes a field group a test made, unless it never got that far. */
