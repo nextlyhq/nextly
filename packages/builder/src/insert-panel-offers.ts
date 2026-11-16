@@ -36,6 +36,7 @@ import {
 } from "./entry-content-rules";
 import { insertLockAt, type InsertLock } from "./insert-lock";
 import type { InsertPanelProps } from "./insert-panel-types";
+import { insertedAnnouncement } from "./insert-placement-words";
 import {
   blockLabel,
   blockSourceFor,
@@ -56,6 +57,11 @@ import {
   type InsertEntry,
   type PatternInsertEntry,
 } from "./inserter";
+import {
+  entryRoles,
+  type EntryRole,
+  type InsertionOptions,
+} from "./insertion-candidates";
 import { lockRefusalWording, type LockRefusalFacts } from "./lock-refusal";
 import { refusalAnnouncement } from "./move-refusal";
 import type { BuilderOp } from "./op-vocabulary";
@@ -71,8 +77,10 @@ export type EntryOffer =
       readonly entry: InsertEntry;
       readonly place: InsertionCandidate;
       /**
-       * Whether the place is past the one the placement line names, because
-       * that one refuses this entry: the tile then says where it goes.
+       * Whether the place is not the one the placement line names (a Box
+       * goes after a selected Section while the line says "inside"), or is
+       * past it because it refuses this entry: the tile then says where it
+       * goes.
        */
       readonly climbed: boolean;
       readonly refusal?: undefined;
@@ -120,8 +128,19 @@ export type InsertOffersInputs = Pick<
 export interface InsertOffers {
   /** Blocks, then saved patterns and components, in one list. */
   readonly catalog: readonly InsertEntry[];
-  /** The places a click may use, in the order they are tried. */
+  /** The places a content block's click may use, in the order they are tried. */
   readonly candidates: readonly InsertionCandidate[];
+  /**
+   * The place the panel's line names at rest: the first of
+   * {@link InsertOffers.candidates} a content block on offer takes, or the
+   * first of them when none does. Absent when there is no place at all.
+   */
+  readonly rest: InsertionCandidate | undefined;
+  /**
+   * The sentence the last insert is announced with ("Heading added inside
+   * Hero, at the end"), for a polite live region; empty until one is made.
+   */
+  readonly announcement: string;
   /** Each entry's offer, by entry id: its place, or why it has none. */
   readonly offers: ReadonlyMap<string, EntryOffer>;
   /** The definitions an insert builds a block's children from. */
@@ -206,26 +225,49 @@ export function useInsertOffers({
   // that block and then insert it without the children it declares.
   const blockSource = React.useMemo(() => blockSourceFor(palette), [palette]);
 
+  // What kind of block each entry adds, which orders the places it tries:
+  // read once per catalogue, from what its blocks declare.
+  const roles = React.useMemo(
+    () => entryRoles(catalog, definitions),
+    [catalog, definitions]
+  );
+
   // Recomputed from the CURRENT document and selection on every render rather
   // than remembered. A place is only valid against the document it was read
   // from, and an undo or a remote edit can move it without the selection
   // changing — a memo keyed on the selection alone would keep a position whose
   // index no longer names the same place.
-  const candidates = insertionCandidates(editor.document, editor.selectedId, {
+  const placeOptions: InsertionOptions = {
     slots: slotSource,
     ...(inside === undefined ? {} : { inside }),
-  });
+  };
+  const places: Readonly<Record<EntryRole, InsertionCandidate[]>> = {
+    content: insertionCandidates(editor.document, editor.selectedId, {
+      ...placeOptions,
+      role: "content",
+    }),
+    layout: insertionCandidates(editor.document, editor.selectedId, {
+      ...placeOptions,
+      role: "layout",
+    }),
+    band: insertionCandidates(editor.document, editor.selectedId, {
+      ...placeOptions,
+      role: "band",
+    }),
+  };
+  const candidates = places.content;
 
   // Remembered by what the verdicts depend on — the document, the places, the
   // catalog, the rule's sources and the locks — and not by the query, so a
   // keystroke asks no rule anything: judging a pattern walks its forest and a
   // component composes its definition, once per entry and place.
   const offerCache = React.useRef<OfferCache | undefined>(undefined);
-  const offers = !enabled
-    ? NO_OFFERS
+  const { offers, rest } = !enabled
+    ? { offers: NO_OFFERS, rest: candidates[0] }
     : cachedOffers(offerCache, {
         document: editor.document,
-        candidates,
+        places,
+        roles,
         catalog,
         source,
         components: componentDefinitions,
@@ -233,6 +275,15 @@ export function useInsertOffers({
         editor,
         entryFieldsKnown,
       });
+
+  // The sentence the last insert is announced with. A live region reads only
+  // a changed text, so a repeat of the same sentence (five Text blocks in a
+  // row) alternates a zero-width space to be read again.
+  const [announcement, setAnnouncement] = React.useState("");
+  const announce = (message: string) =>
+    setAnnouncement(previous =>
+      previous.replace(/\u200b$/, "") === message ? `${message}\u200b` : message
+    );
   /*
    * Add an entry where its offer says, or nothing when it was refused.
    *
@@ -244,14 +295,24 @@ export function useInsertOffers({
     if (offer?.place === undefined) return;
     const { entry } = offer;
     const at = offer.place.at;
-    if (entry.kind === "pattern") {
-      insertPattern(entry, at);
-      return;
-    }
-    if (entry.kind === "component") {
-      insertComponent(entry, at);
-      return;
-    }
+    // Named against the page as it is before the insert, where the place's
+    // blocks are the ones the line named.
+    const said = insertedAnnouncement(
+      entry.label,
+      editor.document,
+      offer.place
+    );
+    const inserted =
+      entry.kind === "pattern"
+        ? insertPattern(entry, at)
+        : entry.kind === "component"
+          ? insertComponent(entry, at)
+          : insertBlock(entry, at);
+    if (inserted) announce(said);
+  };
+
+  /** Place one block, and whether it was placed. */
+  const insertBlock = (entry: BlockInsertEntry, at: OpPosition): boolean => {
     // `nesting` rather than `source`. They differ exactly when the caller
     // supplied no rules: `source` has already defaulted to the REGISTRY, which
     // knows nothing about a supplied definition and so reports every one of its
@@ -267,11 +328,12 @@ export function useInsertOffers({
     // insert for free. It answers null when the op is refused, and a refusal
     // must not be reported as an insert — the panel offers only placements the
     // rule permits, so a null here means the document moved underneath it.
-    if (editor.apply({ kind: "insert", node, at }) === null) return;
+    if (editor.apply({ kind: "insert", node, at }) === null) return false;
     // Selecting what was just added is what makes a second insert land after
     // it, so repeated inserts build downward instead of stacking at one point.
     editor.select(node.id);
     onInsert?.(node);
+    return true;
   };
 
   /**
@@ -283,16 +345,20 @@ export function useInsertOffers({
    * The placement was judged when the tile was offered, by the definition's
    * roots, so a refusal here means the document moved underneath the panel.
    */
-  const insertComponent = (entry: ComponentInsertEntry, at: OpPosition) => {
+  const insertComponent = (
+    entry: ComponentInsertEntry,
+    at: OpPosition
+  ): boolean => {
     const node = nodeForComponentEntry(entry);
     // Whether the PAGE has room for it — the one refusal the tile could not
     // make, because room moves with every edit — is the editor's own apply's
     // to make: it asks the resolver with the node in place, under the caps it
     // enforces, and tells the host why when it refuses. A null here is that
     // refusal, or a document that moved under the panel.
-    if (editor.apply({ kind: "insert", node, at }) === null) return;
+    if (editor.apply({ kind: "insert", node, at }) === null) return false;
     editor.select(node.id);
     onInsert?.(node);
+    return true;
   };
 
   /**
@@ -308,7 +374,10 @@ export function useInsertOffers({
    * several inserts would come back one root at a time, which is not what the
    * author did.
    */
-  const insertPattern = (entry: PatternInsertEntry, at: OpPosition) => {
+  const insertPattern = (
+    entry: PatternInsertEntry,
+    at: OpPosition
+  ): boolean => {
     const plan = planInsertPattern(
       editor.document,
       { id: entry.patternId, document: entry.document },
@@ -323,25 +392,41 @@ export function useInsertOffers({
     // A refusal here means the document moved underneath the panel: the
     // catalogue offers only patterns the planner accepts, judged against the
     // same rules. Reported as no insert rather than as a failed one.
-    if (plan.pageOps === undefined) return;
-    if (editor.applyAll(plan.pageOps) === null) return;
+    if (plan.pageOps === undefined) return false;
+    if (editor.applyAll(plan.pageOps) === null) return false;
 
     // The FIRST root, so a second insert lands after the group rather than
     // inside it — the same rule the block path follows by selecting what it
     // just added.
     const first = plan.pageOps.find((op: BuilderOp) => op.kind === "insert");
-    if (first === undefined || first.kind !== "insert") return;
+    if (first === undefined || first.kind !== "insert") return true;
     editor.select(first.node.id);
     onInsert?.(first.node);
+    return true;
   };
 
-  return { catalog, candidates, offers, blockSource, insert };
+  return {
+    catalog,
+    candidates,
+    rest,
+    announcement,
+    offers,
+    blockSource,
+    insert,
+  };
+}
+
+/** Each entry's offer, and the place the line names at rest. */
+interface Judged {
+  readonly offers: ReadonlyMap<string, EntryOffer>;
+  readonly rest: InsertionCandidate | undefined;
 }
 
 /** What the offer was computed from, and the offer. */
 interface OfferCache {
   readonly document: unknown;
-  readonly candidates: string;
+  readonly places: string;
+  readonly roles: unknown;
   readonly catalog: unknown;
   readonly source: unknown;
   readonly components: unknown;
@@ -349,13 +434,16 @@ interface OfferCache {
   readonly nesting: unknown;
   readonly editor: unknown;
   readonly entryFieldsKnown: boolean;
-  readonly offers: ReadonlyMap<string, EntryOffer>;
+  readonly judged: Judged;
 }
 
 /** What each entry's offer is judged from. */
 interface OfferInputs {
   readonly document: BlockDocument;
-  readonly candidates: readonly InsertionCandidate[];
+  /** The places each kind of block tries, in order. */
+  readonly places: Readonly<Record<EntryRole, readonly InsertionCandidate[]>>;
+  /** What kind of block each entry adds, by entry id. */
+  readonly roles: ReadonlyMap<string, EntryRole>;
   readonly catalog: readonly InsertEntry[];
   readonly source: NestingSource;
   readonly components: ComponentLookup | undefined;
@@ -377,13 +465,14 @@ interface OfferInputs {
 function cachedOffers(
   cache: { current: OfferCache | undefined },
   inputs: OfferInputs
-): ReadonlyMap<string, EntryOffer> {
-  const candidates = JSON.stringify(inputs.candidates);
+): Judged {
+  const places = JSON.stringify(inputs.places);
   const held = cache.current;
   if (
     held !== undefined &&
     held.document === inputs.document &&
-    held.candidates === candidates &&
+    held.places === places &&
+    held.roles === inputs.roles &&
     held.catalog === inputs.catalog &&
     held.source === inputs.source &&
     held.components === inputs.components &&
@@ -392,12 +481,13 @@ function cachedOffers(
     held.editor === inputs.editor &&
     held.entryFieldsKnown === inputs.entryFieldsKnown
   ) {
-    return held.offers;
+    return held.judged;
   }
-  const offers = offersFor(inputs);
+  const judged = offersFor(inputs);
   cache.current = {
     document: inputs.document,
-    candidates,
+    places,
+    roles: inputs.roles,
     catalog: inputs.catalog,
     source: inputs.source,
     components: inputs.components,
@@ -405,65 +495,103 @@ function cachedOffers(
     nesting: inputs.expansion.nesting,
     editor: inputs.editor,
     entryFieldsKnown: inputs.entryFieldsKnown,
-    offers,
+    judged,
   };
-  return offers;
+  return judged;
+}
+
+/** One place's identity, the same for the equal places two kinds of block try. */
+function placeKey(candidate: InsertionCandidate): string {
+  return JSON.stringify([candidate.at, candidate.target]);
 }
 
 /**
  * Each entry's offer: the first place that takes it, by
- * {@link insertionFor} over the places a click may use, or — when none does —
- * the reason the FIRST place refused it, which is the one the placement line
- * names and so the one the author is asking about.
+ * {@link insertionFor} over the places its kind of block tries, or — when
+ * none does — the reason the FIRST of them refused it, which is the place
+ * the author is asking about. And the place the line names at rest: the
+ * first a content block on offer takes.
  */
-function offersFor(inputs: OfferInputs): ReadonlyMap<string, EntryOffer> {
-  // What a place reads for every entry, worked out once per place.
-  const places = new Map(
-    inputs.candidates.map(candidate => [
-      candidate,
-      placeContext(inputs, candidate),
-    ])
-  );
-  const offers = new Map<string, EntryOffer>();
+function offersFor(inputs: OfferInputs): Judged {
+  // What a place reads for every entry, worked out once per place, however
+  // many kinds of block try it.
+  const contexts = new Map<string, PlaceContext>();
+  const contextOf = (candidate: InsertionCandidate): PlaceContext => {
+    const key = placeKey(candidate);
+    const known = contexts.get(key);
+    if (known !== undefined) return known;
+    const context = placeContext(inputs, candidate);
+    contexts.set(key, context);
+    return context;
+  };
+  const taken = new Map<string, EntryOffer>();
   for (const entry of inputs.catalog) {
-    // A rule about the whole document refuses the entry wherever it goes: a
-    // template's one Entry content block, already placed.
-    const anywhere =
-      entry.kind === "block"
-        ? entryContentRefusal(
-            inputs.document,
-            entry.blockName,
-            inputs.entryFieldsKnown
-          )
-        : undefined;
-    if (anywhere !== undefined) {
-      offers.set(entry.id, { entry, refusal: anywhere });
-      continue;
-    }
-    const first: { refusal: string | undefined } = { refusal: undefined };
-    const taken = insertionFor(inputs.candidates, candidate => {
-      const context = places.get(candidate);
-      if (context === undefined) return undefined;
-      const refusal = refusalAt(inputs, entry, candidate, context);
-      if (candidate === inputs.candidates[0]) first.refusal = refusal;
-      return refusal === undefined ? candidate : undefined;
-    });
+    taken.set(entry.id, offerOf(inputs, entry, contextOf));
+  }
+  const rest = restPlace(inputs, taken);
+  const restKey = rest === undefined ? undefined : placeKey(rest);
+  const offers = new Map<string, EntryOffer>();
+  for (const [id, offer] of taken) {
     offers.set(
-      entry.id,
-      taken === undefined
-        ? {
-            entry,
-            refusal:
-              first.refusal ?? "This can't be added to the page from here.",
-          }
-        : {
-            entry,
-            place: taken.answer,
-            climbed: taken.answer !== inputs.candidates[0],
-          }
+      id,
+      offer.place === undefined
+        ? offer
+        : { ...offer, climbed: placeKey(offer.place) !== restKey }
     );
   }
-  return offers;
+  return { offers, rest };
+}
+
+/** One entry's place, or why it has none, before it is compared to the line. */
+function offerOf(
+  inputs: OfferInputs,
+  entry: InsertEntry,
+  contextOf: (candidate: InsertionCandidate) => PlaceContext
+): EntryOffer {
+  // A rule about the whole document refuses the entry wherever it goes: a
+  // template's one Entry content block, already placed.
+  const anywhere =
+    entry.kind === "block"
+      ? entryContentRefusal(
+          inputs.document,
+          entry.blockName,
+          inputs.entryFieldsKnown
+        )
+      : undefined;
+  if (anywhere !== undefined) return { entry, refusal: anywhere };
+  const candidates = inputs.places[inputs.roles.get(entry.id) ?? "content"];
+  const first: { refusal: string | undefined } = { refusal: undefined };
+  const taken = insertionFor(candidates, candidate => {
+    const refusal = refusalAt(inputs, entry, candidate, contextOf(candidate));
+    if (candidate === candidates[0]) first.refusal = refusal;
+    return refusal === undefined ? candidate : undefined;
+  });
+  return taken === undefined
+    ? {
+        entry,
+        refusal: first.refusal ?? "This can't be added to the page from here.",
+      }
+    : { entry, place: taken.answer, climbed: false };
+}
+
+/**
+ * The place the line names at rest: the first of a content block's places
+ * that a content block on offer takes. With Columns selected (which hold
+ * only Column blocks) that is after the Columns, where a Heading goes, not
+ * inside them; with a Section selected, inside it, at the end.
+ */
+function restPlace(
+  inputs: OfferInputs,
+  offers: ReadonlyMap<string, EntryOffer>
+): InsertionCandidate | undefined {
+  const content = inputs.places.content;
+  const takenKeys = new Set<string>();
+  for (const offer of offers.values()) {
+    if (offer.place === undefined) continue;
+    if ((inputs.roles.get(offer.entry.id) ?? "content") !== "content") continue;
+    takenKeys.add(placeKey(offer.place));
+  }
+  return content.find(place => takenKeys.has(placeKey(place))) ?? content[0];
 }
 
 /** What judging any entry at one place reads, asked once per place. */

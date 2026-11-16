@@ -89,9 +89,10 @@ import { useInsertOffers } from "./insert-panel-offers";
 import { SummonAnswerOnly } from "./insert-panel-summon";
 import {
   beginEntryDrag,
+  InsertAnnouncement,
   movesTheHighlight,
   PlacementLine,
-  tileAside,
+  tileWhere,
   TilePopover,
   TouchGestureHint,
 } from "./insert-panel-tiles";
@@ -120,6 +121,7 @@ export {
 } from "./insert-panel-offers";
 export {
   beginEntryDrag,
+  InsertAnnouncement,
   tileAside,
   placementWords,
 } from "./insert-panel-tiles";
@@ -215,16 +217,17 @@ export function InsertPanel({
   const root = React.useRef<HTMLDivElement | null>(null);
   // What can be added, where, and the act of adding it: shared with the
   // editor's search, so a row there and a tile here are one answer.
-  const { catalog, candidates, offers, blockSource, insert } = useInsertOffers({
-    editor,
-    definitions,
-    patterns,
-    components,
-    componentDefinitions,
-    nesting,
-    inside,
-    onInsert,
-  });
+  const { catalog, rest, announcement, offers, blockSource, insert } =
+    useInsertOffers({
+      editor,
+      definitions,
+      patterns,
+      components,
+      componentDefinitions,
+      nesting,
+      inside,
+      onInsert,
+    });
   // The field a dragged Entry content block draws, as a click places it,
   // and whether it can be known yet.
   const blocksFields = usePreviewedCollection()?.blocksFields;
@@ -299,7 +302,7 @@ export function InsertPanel({
   }, [catalog, idPrefix]);
 
   const header = <h2 className="nx-insert-panel__title">{EDITOR_WORDS.add}</h2>;
-  const firstPlace = candidates[0];
+  const firstPlace = rest;
   if (firstPlace === undefined) {
     // Only an `inside` can leave no place: the container it names is gone
     // from the page, or holds no region a block can be put in.
@@ -368,9 +371,8 @@ export function InsertPanel({
               const token = tokens.get(entry.id);
               const refusal = offer?.refusal;
               // What the author needs before what the block is: why it
-              // cannot go here, or where it goes when that is past the
-              // place the line above names.
-              const aside = tileAside(offer, editor.document);
+              // cannot go here, or where a click puts it.
+              const aside = tileWhere(offer, editor.document);
               // The aside's own id, beside the description's, so the tile
               // is described by the aside first, then what it is.
               const why = token === undefined ? undefined : `${token}-why`;
@@ -523,6 +525,7 @@ export function InsertPanel({
       }}
     >
       {header}
+      <InsertAnnouncement text={announcement} />
       <Tabs
         value={tab}
         onValueChange={value =>

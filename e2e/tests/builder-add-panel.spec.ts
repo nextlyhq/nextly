@@ -180,9 +180,13 @@ test.describe("the Add panel", () => {
         name: "Drop a block here, or click to add one, in Section",
       })
       .click();
-    await expect(placementLine(page)).toHaveText("Adding inside Section");
+    await expect(placementLine(page)).toHaveText(
+      "Adding inside Section, at the end"
+    );
     await tile(page, "Divider").click();
-    await expect(placementLine(page)).toHaveText("Adding after Divider");
+    await expect(placementLine(page)).toHaveText(
+      "Adding after Divider, inside Section"
+    );
     await tile(page, "Divider").click();
     await saveDraft(page);
 

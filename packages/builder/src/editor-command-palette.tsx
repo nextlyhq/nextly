@@ -31,6 +31,7 @@ import {
 } from "./command-palette";
 import type { EditorState } from "./editor-state";
 import {
+  InsertAnnouncement,
   placementWords,
   useInsertOffers,
   type InsertOffers,
@@ -178,34 +179,41 @@ export function EditorCommandPalette({
   ];
 
   return (
-    <CommandPalette
-      commands={found}
-      groups={[
-        // Already matched, by the Add panel's own rule.
-        { name: ADD_GROUP, limit: SEARCH_LIMIT, matched: true },
-        { name: PAGE_GROUP, limit: SEARCH_LIMIT },
-        ...(results === undefined ? [] : [{ ...results.group, matched: true }]),
-      ]}
-      onSearchChange={next => {
-        setQuery(next);
-        onSearchChange?.(next);
-      }}
-      placeholder="Search blocks, this page, pages and commands…"
-      emptyMessage={searched => (
-        <>
-          <p className="text-foreground">Nothing matches “{searched}”.</p>
-          <p className="mt-1">
-            Search finds blocks to add, blocks on this page, your pages and
-            commands.
-          </p>
-        </>
-      )}
-      open={isOpen}
-      onOpenChange={next => {
-        setShown(next);
-        onOpenChange?.(next);
-      }}
-    />
+    <>
+      {/* Outside the dialog, which closes as a row runs, so the sentence an
+          insert from search is announced with is still there to be read. */}
+      <InsertAnnouncement text={offers.announcement} />
+      <CommandPalette
+        commands={found}
+        groups={[
+          // Already matched, by the Add panel's own rule.
+          { name: ADD_GROUP, limit: SEARCH_LIMIT, matched: true },
+          { name: PAGE_GROUP, limit: SEARCH_LIMIT },
+          ...(results === undefined
+            ? []
+            : [{ ...results.group, matched: true }]),
+        ]}
+        onSearchChange={next => {
+          setQuery(next);
+          onSearchChange?.(next);
+        }}
+        placeholder="Search blocks, this page, pages and commands…"
+        emptyMessage={searched => (
+          <>
+            <p className="text-foreground">Nothing matches “{searched}”.</p>
+            <p className="mt-1">
+              Search finds blocks to add, blocks on this page, your pages and
+              commands.
+            </p>
+          </>
+        )}
+        open={isOpen}
+        onOpenChange={next => {
+          setShown(next);
+          onOpenChange?.(next);
+        }}
+      />
+    </>
   );
 }
 

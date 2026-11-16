@@ -256,11 +256,13 @@ describe("where a clicked block lands", () => {
     );
   });
 
-  it("keeps a Box in that same case on the layout rule: after the Column", () => {
+  it("keeps a Box in that same case on the layout rule, inside Pricing", () => {
+    // Columns hold only Column blocks, so the Box climbs one place out:
+    // after the Columns, still inside Pricing, never after Pricing.
     expect(lands(hero(), "col", "core/box", "layout")).toMatchObject({
-      kind: "after-selection",
-      afterId: "col",
-      at: { parentId: "cols", slot: "children", index: 1 },
+      kind: "after-ancestor",
+      afterId: "cols",
+      at: { parentId: "pricing", slot: "children", index: 1 },
     });
   });
 

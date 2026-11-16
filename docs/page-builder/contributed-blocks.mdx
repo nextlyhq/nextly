@@ -81,6 +81,16 @@ sees a block registered that way: nothing can name its module before the plugin 
 the component map cannot import it. In development, the first registration of each such
 block logs a warning naming it. Declare it instead.
 
+### Where a clicked block lands
+
+A block is placed from the Add panel by what it already declares, with no field of its
+own. A block in the `"layout"` category that has slots is a layout block: added with a
+container selected, it goes after the container. Any other block is a content block and
+goes inside a selected container that takes it, at the end. A block that holds blocks of
+its own kind, like a list of cards, belongs in its own category rather than `"layout"`,
+so content added with it selected goes inside it. See
+[Where a clicked block lands](/docs/page-builder/editor#where-a-clicked-block-lands).
+
 ## Prop types and their controls
 
 The inspector's Content tab draws one control per prop, from the prop's `type`:

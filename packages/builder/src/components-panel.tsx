@@ -41,6 +41,7 @@ import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
 import {
   beginEntryDrag,
+  InsertAnnouncement,
   LibraryNotices,
   placementWords,
   tileAside,
@@ -171,15 +172,16 @@ export function ComponentsPanel({
   mayCreate = false,
 }: ComponentsPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
-  const { catalog, candidates, offers, blockSource, insert } = useInsertOffers({
-    editor,
-    definitions: NO_BLOCKS,
-    components,
-    componentDefinitions,
-    nesting,
-    inside,
-    onInsert,
-  });
+  const { catalog, rest, announcement, offers, blockSource, insert } =
+    useInsertOffers({
+      editor,
+      definitions: NO_BLOCKS,
+      components,
+      componentDefinitions,
+      nesting,
+      inside,
+      onInsert,
+    });
   const unplaceable = React.useMemo(
     () => unplaceableComponentEntries(components, catalog),
     [components, catalog]
@@ -194,7 +196,7 @@ export function ComponentsPanel({
   const header = (
     <h2 className="nx-insert-panel__title">{EDITOR_WORDS.components}</h2>
   );
-  const firstPlace = candidates[0];
+  const firstPlace = rest;
   if (firstPlace === undefined) {
     // Only an `inside` can leave no place, as in Add.
     return (
@@ -226,6 +228,7 @@ export function ComponentsPanel({
   return (
     <div className="nx-components-panel" aria-busy={loading || undefined}>
       {header}
+      <InsertAnnouncement text={announcement} />
       <ComponentSearch
         query={query}
         onQuery={setQuery}

@@ -199,9 +199,14 @@ function tile(page: Page, label: string) {
   return page.getByRole("option", { name: label, exact: true });
 }
 
-/** The polite region an insert is announced in. */
-function insertAnnouncement(page: Page) {
-  return page.locator("[data-insert-announcement]").first();
+/**
+ * That the polite region of the surface just used announces `text`. Each
+ * surface has its own region, so the one holding the sentence is asked for.
+ */
+async function announced(page: Page, text: string): Promise<void> {
+  await expect(
+    page.locator("[data-insert-announcement]", { hasText: text })
+  ).toHaveCount(1);
 }
 
 test.describe("where a clicked block lands", () => {
@@ -219,9 +224,7 @@ test.describe("where a clicked block lands", () => {
       "Adding inside Hero, at the end"
     );
     await tile(page, "Heading").click();
-    await expect(insertAnnouncement(page)).toHaveText(
-      "Heading added inside Hero, at the end"
-    );
+    await announced(page, "Heading added inside Hero, at the end");
     // The new Heading is the selection, and the next click's anchor.
     await expect(placementLine(page)).toHaveText(
       "Adding after Heading, inside Hero"
@@ -286,9 +289,7 @@ test.describe("where a clicked block lands", () => {
     await openAdd(page);
 
     await tile(page, "Section").click();
-    await expect(insertAnnouncement(page)).toHaveText(
-      "Section added after Hero"
-    );
+    await announced(page, "Section added after Hero");
     await saveDraft(page);
 
     expect(await shape(page.request, id)).toEqual([
@@ -311,9 +312,7 @@ test.describe("where a clicked block lands", () => {
     await openAdd(page);
     await combobox.fill(title);
     await tile(page, title).click();
-    await expect(insertAnnouncement(page)).toHaveText(
-      `${title} added inside Hero, at the end`
-    );
+    await announced(page, `${title} added inside Hero, at the end`);
     await expect.poll(() => heroChildren(page)).toBe(2);
 
     // Enter on its Add tile.

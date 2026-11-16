@@ -32,7 +32,7 @@ import {
   type Measurable,
 } from "./insert-panel-summon";
 import type { InsertPanelProps } from "./insert-panel-types";
-import { placeParts, placementWords } from "./insert-placement-words";
+import { placementSentence, placementWords } from "./insert-placement-words";
 import {
   nodeForComponentEntry,
   nodeForEntry,
@@ -252,10 +252,10 @@ function howToAdd(entry: InsertEntry): string {
 
 /**
  * The line under the search that says where the next block goes: where the
- * highlighted tile goes, or at rest the FIRST place a click may use — the
- * one an author expects. Following the highlight names a place before the
- * click wherever a tile goes further than that first place: past a region
- * that refuses it, or inside the selected container as the last resort.
+ * highlighted tile goes, or at rest where a content block goes ("Adding
+ * inside Hero, at the end"), the place an author expects. Following the
+ * highlight names a place before the click wherever a tile goes elsewhere: a
+ * layout block after a selected Section, or past a region that refuses it.
  *
  * A polite live region at rest, because it changes with every selection and
  * an assertive one would interrupt a screen reader mid-sentence each time.
@@ -301,6 +301,26 @@ export function PlacementLine({
     >
       <CornerDownRight aria-hidden="true" size={14} />
       <span>{placementWords("Adding", document, place)}</span>
+    </p>
+  );
+}
+
+/**
+ * Where an insert is announced: "Heading added inside Hero, at the end".
+ *
+ * Polite, so it waits for whatever a screen reader is saying, and hidden from
+ * sight, since the block appearing selected on the canvas says it to the eye.
+ * No status role: the editor's keyboard region is the one status region an
+ * author's moves are read from, and this one speaks only after an insert.
+ */
+export function InsertAnnouncement({
+  text,
+}: {
+  text: string;
+}): React.JSX.Element {
+  return (
+    <p className="nx-sr-only" aria-live="polite" data-insert-announcement="">
+      {text}
     </p>
   );
 }
@@ -368,8 +388,9 @@ export function beginEntryDrag(
 }
 
 /**
- * What a tile says before what it is: why it cannot go here, or where it goes
- * when that is past the place the placement line names.
+ * What a row says before what it is, where it is drawn: why it cannot go
+ * here, or where it goes when that is past the place the placement line
+ * names.
  */
 export function tileAside(
   offer: EntryOffer | undefined,
@@ -381,14 +402,20 @@ export function tileAside(
     : undefined;
 }
 
-/** The same place as one plain sentence, for a tile's description. */
-function placementSentence(
-  lead: string,
-  document: BlockDocument,
-  candidate: InsertionCandidate
-): string {
-  const { where, name } = placeParts(document, candidate);
-  return name === undefined ? `${lead} ${where}.` : `${lead} ${where} ${name}.`;
+/**
+ * What an Add panel tile tells a screen reader before what it is: why it
+ * cannot go here, or where a click puts it ("Goes inside Hero, at the
+ * end."). Every tile says its place, not only those past the line's, so an
+ * author arrowing through the tiles hears where each one lands.
+ */
+export function tileWhere(
+  offer: EntryOffer | undefined,
+  document: BlockDocument
+): string | undefined {
+  if (offer?.refusal !== undefined) return offer.refusal;
+  return offer?.place === undefined
+    ? undefined
+    : placementSentence("Goes", document, offer.place);
 }
 
 /**
