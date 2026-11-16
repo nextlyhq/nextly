@@ -30,6 +30,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 }));
 
 const {
+  canvasListSample,
   drawnListsOf,
   listEntryCollectionOf,
   namedHostRetryDelay,
@@ -296,5 +297,95 @@ describe("a list the canvas reads as a visitor reads it", () => {
       );
     });
     userId.mockReturnValue("u1");
+  });
+});
+
+describe("a list's sample for the binding picker", () => {
+  /** The route answering every read with these rows. */
+  async function answering(rows: readonly Record<string, unknown>[]) {
+    const { writePluginRoute } = await import("@nextlyhq/plugin-sdk/admin");
+    vi.mocked(writePluginRoute).mockReset();
+    vi.mocked(writePluginRoute).mockImplementation(async () => ({
+      items: rows,
+      meta: {
+        total: rows.length,
+        page: 1,
+        limit: 10,
+        totalPages: 1,
+        hasNext: false,
+        hasPrev: false,
+      },
+    }));
+    return vi.mocked(writePluginRoute);
+  }
+
+  const NO_ENTRY = { entryCollection: undefined, entryId: undefined };
+
+  it("previews the first entry the list shows, its fields and one step in", async () => {
+    await answering([
+      {
+        id: "p1",
+        title: "Highway 9 realignment",
+        year: 2026,
+        author: { name: "Ada" },
+        cover: null,
+      },
+      { id: "p2", title: "Cedar Ridge subdivision" },
+    ]);
+    const sample = await canvasListSample(
+      { collection: "posts", limit: 3 },
+      "en",
+      "sample-reader",
+      NO_ENTRY
+    );
+    expect(sample).toMatchObject({
+      title: "Highway 9 realignment",
+      year: "2026",
+      "author.name": "Ada",
+    });
+    // A value with nothing to show is left out, never shown as "null".
+    expect(sample).not.toHaveProperty("cover");
+  });
+
+  it("reads through the canvas's own read of the list, so asking again reads nothing new", async () => {
+    const route = await answering([{ id: "p1", title: "Kept" }]);
+    const props = { collection: "posts", limit: 3, sort: "title" };
+    // The first ask reads; the same list asked again is answered from the
+    // read the canvas's provider keeps, as the canvas's own draw is.
+    await canvasListSample(props, "en", "kept-reader", NO_ENTRY);
+    const made = route.mock.calls.length;
+    expect(made).toBeGreaterThan(0);
+    expect(await canvasListSample(props, "en", "kept-reader", NO_ENTRY)).toEqual(
+      { id: "p1", title: "Kept" }
+    );
+    expect(route.mock.calls.length).toBe(made);
+  });
+
+  it("gives nothing for a list fed by a named query or naming no collection, reading nothing", async () => {
+    const route = await answering([{ id: "p1", title: "Never" }]);
+    expect(
+      await canvasListSample(
+        { namedQuery: { name: "featured" } },
+        "en",
+        "named-reader",
+        NO_ENTRY
+      )
+    ).toBeUndefined();
+    expect(
+      await canvasListSample({}, "en", "named-reader", NO_ENTRY)
+    ).toBeUndefined();
+    expect(route).not.toHaveBeenCalled();
+  });
+
+  it("gives nothing for a list with no entry", async () => {
+    await answering([]);
+    expect(
+      await canvasListSample(
+        { collection: "posts" },
+        "en",
+        "empty-reader",
+        NO_ENTRY
+      )
+    ).toBeUndefined();
   });
 });

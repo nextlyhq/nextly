@@ -100,7 +100,7 @@ import { OwnDesignsChip } from "../TemplateOwnDesigns";
 
 import { bindingSourcePath, type OpenAt } from "./builder-address";
 import { useCanvasEntryIdentity } from "./canvas-entry";
-import { listEntryCollectionOf } from "./canvas-page-context";
+import { canvasListSample, listEntryCollectionOf } from "./canvas-page-context";
 import { previewedCanvas } from "./canvas-preview-mode";
 import { useConditionedPage, type ConditionedPage } from "./conditioned-page";
 import {
@@ -618,6 +618,17 @@ function servicesFor(
       // The fields a binding can read, as this author reads them, kept a
       // short while: the picker opens on every bindable prop.
       listBindingFields: bindingFieldsReader(binding.entry, locale, userId),
+      // The values of a list's first entry, beside its item's fields in the
+      // picker: the canvas's own read of the list, as the canvas draws it
+      // for this author, related lists reading the canvas's entry.
+      readListSample: props =>
+        canvasListSample(props, locale, userId, {
+          entryCollection:
+            binding.canvas?.kind === "collection"
+              ? binding.canvas.slug
+              : undefined,
+          entryId: binding.canvas?.documentId,
+        }),
       // The picker's previews in the canvas's language and the site's zone.
       ...previewServices(passages, binding.canvas, userId, formatLocale),
       // An unbind's plan against the document the editor holds, by the same

@@ -49,6 +49,7 @@ import * as React from "react";
 
 import type {
   BindingFieldSource,
+  ListSample,
   UnbindAsk,
   UnbindPlanAnswer,
 } from "./binding-services";
@@ -263,6 +264,17 @@ export interface ContentServices {
    * reads it. Absent, a prop offers no binding.
    */
   readonly listBindingFields?: () => Promise<readonly BindingFieldSource[]>;
+  /**
+   * The start of each field's value in the first entry a list shows, read
+   * as the canvas reads that list, for the picker's samples beside a list
+   * item's fields. Takes the list's stored props. `undefined` for a list the
+   * canvas reads no entry of. Absent, the item's fields show no samples.
+   *
+   * @experimental Settles with the editor's binding controls.
+   */
+  readonly readListSample?: (
+    props: Readonly<Record<string, unknown>>
+  ) => Promise<ListSample | undefined>;
   /**
    * The page's language, as the canvas's render formats bound values in it,
    * so the picker previews a date or a number as the page shows it. Resolved

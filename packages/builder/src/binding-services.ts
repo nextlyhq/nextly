@@ -25,12 +25,15 @@ export interface BindingFieldChoice extends Omit<BindingFieldShape, "fields"> {
   /** Whether a visitor may read it; a binding to one shows its fallback. */
   readonly public: boolean;
   /**
-   * The start of its value, as the person editing reads it. Absent for a
-   * field visitors can't read, an empty one, one whose value is not text, a
-   * number or a yes-or-no, and one whose value is a draft's.
+   * The start of its value, as the person editing reads it, a draft's
+   * included (marked by `draft`). Absent for a field visitors can't read, an
+   * empty one, and one whose value is not text, a number or a yes-or-no.
    */
   readonly preview?: string;
-  /** Set when the value differs from what the published entry holds. */
+  /**
+   * Set when the value differs from what the published entry holds: the
+   * picker shows it beside the value, so the author knows it isn't live yet.
+   */
   readonly draft?: true;
   /**
    * The fields inside it: a group's own, or a relation's, one step in, as the
@@ -73,6 +76,17 @@ export interface BindingFieldSource {
    */
   readonly readFailed?: true;
 }
+
+/**
+ * The start of each field's value in the first entry a list shows, as the
+ * canvas reads it, by the field's path (`title`, `author.name`): the samples
+ * the picker shows beside a list item's fields. Cut short by the same rule
+ * as a {@link BindingFieldChoice}'s `preview`; a field with no such value is
+ * absent.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export type ListSample = Readonly<Record<string, string>>;
 
 /**
  * An unbind the inspector asks the host to plan, in the document it holds.
