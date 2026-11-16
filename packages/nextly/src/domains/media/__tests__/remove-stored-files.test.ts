@@ -76,6 +76,7 @@ describe("filesKeptByOthers, when the sizes column is gone by the time it is rea
   // without a database.
   const media = sqliteTable("media", {
     filename: text("filename"),
+    mimeType: text("mime_type"),
     url: text("url"),
     thumbnailUrl: text("thumbnail_url"),
   });
@@ -94,7 +95,13 @@ describe("filesKeptByOthers, when the sizes column is gone by the time it is rea
       read: async (_where: SQL, sizes: SQL | undefined) => {
         reads.push(sizes === undefined ? "without" : "with");
         if (sizes !== undefined) throw error;
-        return [{ filename: otherOriginal, url: `/uploads/${otherOriginal}` }];
+        return [
+          {
+            filename: otherOriginal,
+            mimeType: "image/png",
+            url: `/uploads/${otherOriginal}`,
+          },
+        ];
       },
     };
   }

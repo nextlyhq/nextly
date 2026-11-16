@@ -72,6 +72,7 @@ import {
   migrationChecksum,
   type MigrationContent,
 } from "../plugin/plugin-migration";
+import { postgresInlineUniqueName } from "../earlier-inline-uniques";
 import {
   adoptUniqueIndexesAlreadyThere,
   readRepeatedValues,
@@ -1321,6 +1322,234 @@ describe.each(LOCK_DIALECTS)(
         await migrate();
 
         expect(await personIsUnique()).toBe(true);
+      },
+      120_000
+    );
+
+    // -----------------------------------------------------------------------------------------
+    // The inline UNIQUE an earlier release gave a one-to-one
+    // -----------------------------------------------------------------------------------------
+
+    /**
+     * The name the earlier Builder's inline UNIQUE on `column` has: PostgreSQL's
+     * `<table>_<column>_key`, MySQL's index named after the column.
+     */
+    const inlineName = (column: string) =>
+      dialect === "mysql" ? column : `${PROFILES}_${column}_key`;
+
+    /** The profiles' index or constraint names, with whether each is unique. */
+    async function profileIndexes(): Promise<Map<string, { unique: boolean }>> {
+      return readIndexUniqueness(adapter.getDrizzle(), dialect, PROFILES);
+    }
+
+    /**
+     * Gives the profiles' `person` the inline UNIQUE an earlier release's Builder DDL wrote into a
+     * one-to-one's column: a constraint added this way gets the very name that one got.
+     */
+    async function earlierInlineUnique(): Promise<void> {
+      await run([`ALTER TABLE ${q(PROFILES)} ADD UNIQUE (${q("person")})`]);
+      expect((await profileIndexes()).get(inlineName("person"))).toEqual({
+        unique: true,
+      });
+    }
+
+    // SQLite keeps it: only a rebuild of the table removes an inline UNIQUE, and the rebuild cannot
+    // yet carry the foreign key an earlier-shaped relationship holds.
+    it.skipIf(dialect === "sqlite")(
+      "lets go of the inline UNIQUE an earlier release gave a one-to-one now many-to-one, so its column takes a repeat",
+      async () => {
+        await earlierInlineUnique();
+        await run([profile("p1", "ada")]);
+        expect(await refusedAsRepeat(profile("p2", "ada"))).toBe(true);
+
+        await migrate();
+
+        expect((await profileIndexes()).has(inlineName("person"))).toBe(false);
+        expect(await refusedAsRepeat(profile("p2", "ada"))).toBe(false);
+      },
+      120_000
+    );
+
+    it.skipIf(dialect === "sqlite")(
+      "keeps the inline UNIQUE while the field is still one-to-one",
+      async () => {
+        await earlierInlineUnique();
+        await recordOneToOnes("person");
+        await run([profile("p1", "ada")]);
+
+        await migrate();
+
+        expect((await profileIndexes()).get(inlineName("person"))).toEqual({
+          unique: true,
+        });
+        expect(await refusedAsRepeat(profile("p2", "ada"))).toBe(true);
+      },
+      120_000
+    );
+
+    // The Builder's own database: its edit leaves the row `pending`, and the run records it applied
+    // once its table is there, so the same run lets go of the inline UNIQUE.
+    it.skipIf(dialect === "sqlite")(
+      "lets go of the inline UNIQUE in the run that records a waiting definition as applied",
+      async () => {
+        await earlierInlineUnique();
+        await run([
+          `UPDATE ${q("dynamic_collections")} SET ${q("migration_status")} = 'pending' WHERE ${q("slug")} = 'profiles'`,
+        ]);
+        await run([profile("p1", "ada")]);
+
+        await migrate();
+
+        const [row] = await adapter.executeQuery<{ status: string }>(
+          `SELECT ${q("migration_status")} AS ${q("status")} FROM ${q("dynamic_collections")} WHERE ${q("slug")} = 'profiles'`
+        );
+        expect(row?.status).toBe("applied");
+        expect((await profileIndexes()).has(inlineName("person"))).toBe(false);
+        expect(await refusedAsRepeat(profile("p2", "ada"))).toBe(false);
+      },
+      120_000
+    );
+
+    it.skipIf(dialect === "sqlite")(
+      "keeps the inline UNIQUE of a table defined in code",
+      async () => {
+        await earlierInlineUnique();
+        await run([
+          `UPDATE ${q("dynamic_collections")} SET ${q("source")} = 'code' WHERE ${q("slug")} = 'profiles'`,
+        ]);
+
+        await migrate();
+
+        expect((await profileIndexes()).has(inlineName("person"))).toBe(true);
+      },
+      120_000
+    );
+
+    it.skipIf(dialect === "sqlite")(
+      "keeps every unique that is not the earlier inline one: another name, two columns, a column no relationship holds",
+      async () => {
+        const nearMisses =
+          dialect === "mysql"
+            ? [
+                `ALTER TABLE ${q(PROFILES)} ADD UNIQUE INDEX ${q("person_2")} (${q("person")})`,
+                `ALTER TABLE ${q(PROFILES)} ADD UNIQUE INDEX ${q("partner")} (${q("partner")}, ${q("person")})`,
+                `ALTER TABLE ${q(PROFILES)} ADD UNIQUE INDEX ${q("title")} (${q("title")})`,
+              ]
+            : [
+                `ALTER TABLE ${q(PROFILES)} ADD CONSTRAINT ${q(`${PROFILES}_person_key2`)} UNIQUE (${q("person")})`,
+                `ALTER TABLE ${q(PROFILES)} ADD CONSTRAINT ${q(`${PROFILES}_partner_key`)} UNIQUE (${q("partner")}, ${q("person")})`,
+                `ALTER TABLE ${q(PROFILES)} ADD CONSTRAINT ${q(`${PROFILES}_title_key`)} UNIQUE (${q("title")})`,
+              ];
+        await run(nearMisses);
+        const before = await profileIndexes();
+
+        await migrate();
+
+        expect(await profileIndexes()).toEqual(before);
+      },
+      120_000
+    );
+
+    it.runIf(dialect === "postgresql")(
+      "names an inline UNIQUE on a long table as PostgreSQL itself names it",
+      async () => {
+        const table = `dc_${"l".repeat(60)}`;
+        await run([
+          `CREATE TABLE ${q(table)} (${q("id")} text PRIMARY KEY, ${q("person")} text UNIQUE)`,
+        ]);
+        const [row] = await adapter.executeQuery<{ name: string }>(
+          `SELECT conname AS ${q("name")} FROM pg_constraint WHERE contype = 'u' AND conrelid = to_regclass('${table}')`
+        );
+
+        expect(row?.name).toBe(postgresInlineUniqueName(table, "person"));
+        expect(row?.name).not.toBe(`${table}_person_key`);
+      },
+      120_000
+    );
+
+    // MySQL refuses to drop the last index a foreign key can use, so with no other index on the
+    // column the inline one stays rather than failing the run.
+    it.runIf(dialect === "mysql")(
+      "keeps the inline UNIQUE where no other index serves the column's foreign key",
+      async () => {
+        await earlierInlineUnique();
+        await run([
+          `DROP INDEX ${q(`idx_${PROFILES}_person`)} ON ${q(PROFILES)}`,
+        ]);
+
+        await migrate();
+
+        expect((await profileIndexes()).has(inlineName("person"))).toBe(true);
+      },
+      120_000
+    );
+
+    // An index over the column's first characters only cannot serve the foreign key either.
+    it.runIf(dialect === "mysql")(
+      "keeps the inline UNIQUE where the column's other index holds only a prefix of it",
+      async () => {
+        await earlierInlineUnique();
+        await run([
+          `DROP INDEX ${q(`idx_${PROFILES}_person`)} ON ${q(PROFILES)}`,
+          `CREATE INDEX ${q("person_prefix")} ON ${q(PROFILES)} (${q("person")}(8))`,
+        ]);
+
+        await migrate();
+
+        expect((await profileIndexes()).has(inlineName("person"))).toBe(true);
+      },
+      120_000
+    );
+
+    // A FULLTEXT index leading with the column cannot serve the foreign key: InnoDB keys one only
+    // by a B-tree.
+    it.runIf(dialect === "mysql")(
+      "keeps the inline UNIQUE where the column's other index is a FULLTEXT one",
+      async () => {
+        await earlierInlineUnique();
+        await run([
+          `DROP INDEX ${q(`idx_${PROFILES}_person`)} ON ${q(PROFILES)}`,
+          `CREATE FULLTEXT INDEX ${q("person_words")} ON ${q(PROFILES)} (${q("person")})`,
+        ]);
+
+        await migrate();
+
+        expect((await profileIndexes()).has(inlineName("person"))).toBe(true);
+      },
+      120_000
+    );
+
+    // A table named with capitals, as a custom name can be: PostgreSQL resolves it only quoted,
+    // and an unquoted name would fold to one that holds no constraint.
+    it.runIf(dialect === "postgresql")(
+      "lets go of the inline UNIQUE on a table whose name holds capitals",
+      async () => {
+        const table = "Dc_Profiles";
+        await run([
+          `ALTER TABLE ${q(PROFILES)} RENAME TO ${q(table)}`,
+          `UPDATE ${q("dynamic_collections")} SET ${q("table_name")} = '${table}' WHERE ${q("slug")} = 'profiles'`,
+          `ALTER TABLE ${q(table)} ADD UNIQUE (${q("person")})`,
+        ]);
+        /** The table's unique constraints, read by its quoted name; null while it is not there. */
+        const uniques = async (): Promise<string[] | null> => {
+          const [present] = await adapter.executeQuery<{ found: boolean }>(
+            `SELECT to_regclass(quote_ident('${table}')) IS NOT NULL AS found`
+          );
+          if (present?.found !== true) return null;
+          const rows = await adapter.executeQuery<{ name: string }>(
+            `SELECT conname AS name FROM pg_constraint
+              WHERE contype = 'u' AND conrelid = to_regclass(quote_ident('${table}'))`
+          );
+          return rows.map(row => row.name);
+        };
+        expect(await uniques()).toContain(`${table}_person_key`);
+
+        await migrate();
+
+        // The table still there, without the inline UNIQUE.
+        const after = await uniques();
+        expect(after).not.toBeNull();
+        expect(after).not.toContain(`${table}_person_key`);
       },
       120_000
     );

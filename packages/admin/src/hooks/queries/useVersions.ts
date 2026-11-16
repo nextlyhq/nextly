@@ -104,6 +104,18 @@ export const versionKeys = {
     [...versionKeys.details(), ...scopeKey(scope), versionNo] as const,
   diffs: (): readonly ["versions", "diff"] =>
     [...versionKeys.all(), "diff"] as const,
+  // What every comparison of one document starts with, so a cached
+  // answer can be told to belong to that document by its key alone.
+  documentDiffs: (scope: VersionScope): readonly string[] =>
+    [...versionKeys.diffs(), ...scopeKey(scope)] as const,
+  // A comparison with a baseline the server resolves: named by the baseline
+  // and the version compared, or none for the server's own choice.
+  baselineDiff: (
+    scope: VersionScope,
+    baseline: string,
+    to: number | undefined
+  ): readonly unknown[] =>
+    [...versionKeys.documentDiffs(scope), baseline, to ?? "auto"] as const,
   // A diff is identified by the document (scope), the ordered version pair
   // (from, to), and whether unchanged fields are filtered out (modifiedOnly).
   // The result also depends on the live schema, which the query treats as
@@ -306,6 +318,72 @@ export function useVersionDiff({
     // prior diff on screen while the new one loads rather than flashing a
     // skeleton over a comparison the user is already reading.
     placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * A version compared with a baseline the server resolves (see
+ * `versionApi.diffFromBaseline`). Null asks for nothing.
+ *
+ * What is published and the current draft are resolved again whenever the
+ * reader returns, the network does, or the comparison mounts: a publish or a
+ * draft saved in another tab changes what they name, and the comparison and
+ * the restore it offers should follow.
+ *
+ * "The version you last looked at" is the exception, resolved once per visit
+ * and never refetched by focus, reconnection or a remount while the answer is
+ * cached. Showing the comparison marks its newer version seen, which moves
+ * that baseline onto the version itself: asked again, the server would answer
+ * that there is nothing to compare, replacing the comparison the reader is
+ * looking at. Freezing it costs no freshness the reader can see, because only
+ * the two version numbers and the baseline note are read from this answer;
+ * the fields are drawn by the pair's own comparison (`useVersionDiff`), which
+ * still revalidates against the live schema. Marking a version seen
+ * invalidates nothing, so it cannot refetch this either.
+ */
+export function useBaselineDiff({
+  scope,
+  baseline,
+  to,
+  enabled = true,
+}: {
+  scope: VersionScope;
+  baseline: string | null;
+  to?: number;
+  enabled?: boolean;
+}): UseQueryResult<VersionDiff, Error> {
+  // The start every baseline key of this document shares, so a previous
+  // answer can be told apart from another document's.
+  const documentKey = versionKeys.documentDiffs(scope);
+  // The one baseline its own showing moves (see above).
+  const resolvedOnce = baseline === "last-viewed";
+  return useQuery<VersionDiff, Error>({
+    queryKey:
+      baseline === null
+        ? ([...versionKeys.diffs(), "none"] as const)
+        : versionKeys.baselineDiff(scope, baseline, to),
+    queryFn: () => {
+      // Guarded by `enabled`; this is defence against a direct queryFn call.
+      if (baseline === null) throw new Error("A baseline is required");
+      return versionApi.diffFromBaseline(scope, baseline, to);
+    },
+    enabled: enabled && baseline !== null && isAddressable(scope),
+    // Frozen for the visit, or re-resolved on every return (see above). Focus
+    // refetch is opted into explicitly: the provider turns it off app-wide.
+    staleTime: resolvedOnce ? Infinity : 0,
+    refetchOnWindowFocus: !resolvedOnce,
+    refetchOnReconnect: !resolvedOnce,
+    // The previous comparison stays on screen while another baseline of the
+    // SAME document loads. Never another document's: the router can move from
+    // one document's comparison to another's without unmounting, and that
+    // pair, drawn under the new document's heading, would also be marked
+    // seen on the new document, moving its "last looked at" to a version
+    // never shown.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery !== undefined &&
+      documentKey.every((part, i) => previousQuery.queryKey[i] === part)
+        ? previous
+        : undefined,
   });
 }
 

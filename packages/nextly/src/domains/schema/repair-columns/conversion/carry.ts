@@ -11,6 +11,7 @@ import {
   parseColumnType,
   type TypeFamily,
 } from "../../value-conversion/column-type";
+import { OWNER_CAN_CONVERT_BY_HAND } from "../../value-conversion/describe";
 import { valueJudgeFor } from "../../value-conversion/judge-value";
 import type {
   CompareAs,
@@ -144,8 +145,8 @@ export const OWNER_CAN: Record<CannotCarry["property"], string> = {
   trigger:
     "drop the trigger, run the repair, then create it again for the new type",
   view: "drop the view or rule, run the repair, then create it again",
-  definition:
-    "convert the column by hand, in a manual migration (nextly migrate:create --blank)",
+  // The one sentence every path that judges a conversion gives for this (`value-conversion/describe`).
+  definition: OWNER_CAN_CONVERT_BY_HAND,
   "generated column":
     "drop the generated column, run the repair, then add it again computed for the new type",
   policy:

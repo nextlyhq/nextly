@@ -319,17 +319,17 @@ describe("the definitions a route reads for its page", () => {
   });
 
   it("derives metadata from the SAME components the page renders", async () => {
-    // The heading a visitor sees comes from a component. Without the
+    // The prose a visitor sees comes from a component. Without the
     // definitions, the metadata preparation replaces that instance with a
-    // placeholder and derives a title from a document the page does not show —
-    // for exactly the pages components exist to build.
-    const heading = {
+    // placeholder and derives a description from a document the page does not
+    // show — for exactly the pages components exist to build.
+    const prose = {
       id: "h",
-      type: "core/heading",
+      type: "core/text",
       version: 1,
-      props: { text: "Composed title", level: 1 },
+      props: { text: "Composed description" },
     };
-    const r = reader({ hero: definition([heading]) }, page(["hero"]));
+    const r = reader({ hero: definition([prose]) }, page(["hero"]));
     const route = createBlocksPage({
       collections: ["pages"],
       field: "content",
@@ -340,13 +340,13 @@ describe("the definitions a route reads for its page", () => {
       metadata: (
         _entry: unknown,
         _context: unknown,
-        derived: { title?: string }
-      ) => ({ title: derived.title ?? "NO TITLE" }),
+        derived: { description?: string }
+      ) => ({ description: derived.description ?? "NO DESCRIPTION" }),
     } as Parameters<typeof createBlocksPage>[0]);
 
     const meta = await route.generateMetadata({ params: { slug: ["about"] } });
 
-    expect(meta.title).toBe("Composed title");
+    expect(meta.description).toBe("Composed description");
   });
 
   it("bounds the read by the next scheduled release", async () => {
@@ -436,6 +436,14 @@ const headingNode = (text: string) => ({
   props: { text, level: 1 },
 });
 
+/** One line of prose: what describes a page, since a heading never titles it. */
+const proseNode = (text: string) => ({
+  id: "h",
+  type: "core/text",
+  version: 1,
+  props: { text },
+});
+
 describe("a component's pending edits in draft mode", () => {
   it("previews the WORKING DRAFT, not the last published definition", async () => {
     // The defect this row exists for: the editor iframe drew the last published
@@ -467,10 +475,10 @@ describe("a component's pending edits in draft mode", () => {
     // Asserted through the COMPOSED document rather than the definitions map,
     // because the map is the fetch's own output: a read that returned the draft
     // and a composition that dropped it would still satisfy the test above.
-    // `derived.title` is produced by composing the page with its definitions.
+    // `derived.description` is produced by composing the page with its definitions.
     const r = splitStoreReader(
-      { hero: definition([headingNode("PUBLISHED")]) },
-      { hero: definition([headingNode("PENDING EDIT")]) },
+      { hero: definition([proseNode("PUBLISHED")]) },
+      { hero: definition([proseNode("PENDING EDIT")]) },
       page(["hero"])
     );
     const route = createBlocksPage({
@@ -482,13 +490,13 @@ describe("a component's pending edits in draft mode", () => {
       metadata: (
         _entry: unknown,
         _context: unknown,
-        derived: { title?: string }
-      ) => ({ title: derived.title ?? "NO TITLE" }),
+        derived: { description?: string }
+      ) => ({ description: derived.description ?? "NO DESCRIPTION" }),
     } as Parameters<typeof createBlocksPage>[0]);
 
     const meta = await route.generateMetadata({ params: { slug: ["about"] } });
 
-    expect(meta.title).toBe("PENDING EDIT");
+    expect(meta.description).toBe("PENDING EDIT");
   });
 
   it("names the placement of a draft component read refused for want of reads, as a component", async () => {
@@ -687,8 +695,8 @@ describe("a Single blocks page and the components it embeds", () => {
     // came from the published batched read — the same stale preview, one level
     // down.
     const s = singleStore(
-      definition([headingNode("PUBLISHED")]),
-      definition([headingNode("PENDING EDIT")])
+      definition([proseNode("PUBLISHED")]),
+      definition([proseNode("PENDING EDIT")])
     );
     const route = createSinglePage({
       slug: "homepage",
@@ -699,14 +707,14 @@ describe("a Single blocks page and the components it embeds", () => {
       metadata: (
         _entry: unknown,
         _context: unknown,
-        derived: { title?: string }
-      ) => ({ title: derived.title ?? "NO TITLE" }),
+        derived: { description?: string }
+      ) => ({ description: derived.description ?? "NO DESCRIPTION" }),
     } as Parameters<typeof createSinglePage>[0]);
 
     const meta = await route.generateMetadata();
 
     expect(s.byId).toEqual([{ id: "hero", draft: true }]);
-    expect(meta.title).toBe("PENDING EDIT");
+    expect(meta.description).toBe("PENDING EDIT");
   });
 });
 

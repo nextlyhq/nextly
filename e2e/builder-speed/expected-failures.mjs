@@ -18,8 +18,6 @@ export const EXPECTED_FAILURES = {
     "about 330 ms against 100 ms: the outline moves in the same render as the sidebar",
   "select-size-ratio":
     "about 2.2x against 2x: a selection takes about 150 ms on the 4-block page and 330 ms on the 150-block page",
-  "select-requests":
-    "one request against none: each selection asks the server for the loop collections again",
   "quick-clicks-blocking":
     "about 1.2 s against 400 ms: four quick clicks are handled one after another, each a long task",
   "add-panel-insert":

@@ -6,9 +6,9 @@
  */
 
 import type { DataLossVerdict } from "../../../domains/schema/migrate/data-loss-consent";
-import { UNIQUE_INDEX_NAME_HELD_ADVICE } from "../../../domains/schema/migrate/one-to-one-uniques";
 import { PLAN_CHANGED_AFTER_CONSENT } from "../../../domains/schema/migrate/plan-changed-after-consent";
 import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-column-guard";
+import { UNIQUE_INDEX_NAME_HELD_ADVICE } from "../../../domains/schema/migrate/unique-index-name-advice";
 import { NextlyError } from "../../../errors/nextly-error";
 import { builderMigrationRemedy } from "../../utils/migration-discovery";
 import { CliError, type CliErrorParts } from "../cli-error";
@@ -1132,6 +1132,10 @@ export const MIGRATION_CODES = defineCodes({
     cause:
       "An entity's settings changed in the configuration, and no migration records the change.",
   },
+  DATABASE_BEHIND_MIGRATIONS: {
+    cause:
+      "The database lacks a table or column that the migrations it records as applied created.",
+  },
 });
 
 /** A refused data-loss verdict as the command's error, under the code for its reason. */
@@ -1236,5 +1240,21 @@ export function settingsChangeWithoutMigration(
     what: `${count} entit${count === 1 ? "y's" : "ies'"} settings changed with no migration.`,
     why: lines.join("\n"),
     next: CREATE_MIGRATION,
+  });
+}
+
+/**
+ * Tables and columns the applied migrations created that the database no longer holds, each as
+ * a line naming the migration that last created it.
+ */
+export function databaseBehindMigrations(
+  count: number,
+  lines: readonly string[]
+): CliError {
+  return new CliError("DATABASE_BEHIND_MIGRATIONS", {
+    what: `The database lacks ${count} table${count === 1 ? "" : "s"} or column${count === 1 ? "" : "s"} its applied migrations created, so it no longer matches its ledger. Nothing was changed.`,
+    why: lines.join("\n"),
+    next: "Restore what is missing (from a backup, or by running again the statements of the migration named), then run `nextly migrate` again. Nothing applies until the database holds what its ledger says it does.",
+    context: { lines },
   });
 }
