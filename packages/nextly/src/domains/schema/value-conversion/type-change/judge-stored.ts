@@ -1,0 +1,161 @@
+/**
+ * A field's type change judged over every value its column holds: each stored value read as the
+ * old field reads it (`decodeStored`), judged by the eight rules (`judgeValue`), and collected as
+ * the class the worst value gives, every reason with how many rows give it and the first of their
+ * keys, and the keys a lost value would clear. Rows are named by their key, never their value.
+ *
+ * @module domains/schema/value-conversion/type-change/judge-stored
+ */
+import type { SupportedDialect } from "../../services/field-column-descriptor";
+import { reasonClass } from "../judge-column";
+import type { KeyedBy } from "../read-values";
+import { readStoredValues } from "../read-values";
+import type {
+  ConversionJudgement,
+  ConversionReason,
+  ConversionReasonKind,
+  RowKey,
+  StoredValue,
+} from "../types";
+
+import { decodeStored } from "./decode-stored";
+import type { FieldTypeOnDialect } from "./field-type";
+import {
+  classOf,
+  judgeValue,
+  type OutcomeReason,
+  pairBlocked,
+  type ValueOutcome,
+} from "./judge";
+
+/** How many keys a reason names before it gives only the count. */
+const FIRST_KEYS = 20;
+
+/** A field's type change judged over its stored values. */
+export interface StoredTypeChangeJudgement {
+  judgement: ConversionJudgement;
+  /** Every row whose value the change would clear: the lost ones. */
+  cleared: RowKey[];
+  /** How many values each outcome holds, for a review that names the changed ones too. */
+  counts: Record<ValueOutcome, number>;
+  /**
+   * Each kept or changed value as the new type reads it, with its row: what a unique field's
+   * repeats are counted by, per language where the field is translated.
+   */
+  readings: { key: RowKey; readsAs: string }[];
+}
+
+/**
+ * The reason kind each outcome reason is reported as. Kept values give no reason; a value stored
+ * in its new form is counted as `new-form`, which is safe.
+ */
+const REPORTED_AS: Record<
+  Exclude<OutcomeReason, "same-value" | "empty">,
+  ConversionReasonKind
+> = {
+  "new-form": "new-form",
+  "too-long": "too-long",
+  rounded: "rounded",
+  "out-of-range": "out-of-range",
+  "no-time-or-offset": "no-time-or-offset",
+  "not-a-number": "not-a-number",
+  "not-a-date": "not-a-date",
+  "not-an-email": "not-an-email",
+  "not-an-option": "not-an-option",
+  "not-a-boolean": "not-a-boolean",
+  "non-finite": "non-finite",
+  "several-items": "several-items",
+  "item-not-held": "item-not-held",
+  object: "object",
+  "kind-never-held": "kind-never-held",
+  "pair-blocked": "pair-blocked",
+  "column-refuses": "column-refuses",
+};
+
+/**
+ * The judgement of values already in hand: each judged by the eight rules and collected. The
+ * database read is `judgeStoredTypeChange`'s; this is the collecting, on its own so it can be
+ * judged without a database.
+ */
+export async function collectTypeChange(
+  from: FieldTypeOnDialect,
+  to: FieldTypeOnDialect,
+  values: AsyncIterable<Pick<StoredValue, "key" | "text" | "exactReal">>
+): Promise<StoredTypeChangeJudgement> {
+  const counts: Record<ValueOutcome, number> = {
+    kept: 0,
+    changed: 0,
+    lost: 0,
+    blocked: 0,
+  };
+  const byReason = new Map<
+    ConversionReasonKind,
+    { count: number; first: RowKey[] }
+  >();
+  const cleared: RowKey[] = [];
+  const readings: { key: RowKey; readsAs: string }[] = [];
+  // A pair blocked whatever its values hold is one reason of the types, with no rows.
+  const pair = pairBlocked(from, to);
+  for await (const value of values) {
+    if (pair !== null) break;
+    const verdict = judgeValue(from, to, decodeStored(from, value));
+    counts[verdict.outcome] += 1;
+    if (verdict.readsAs !== undefined) {
+      readings.push({ key: value.key, readsAs: verdict.readsAs });
+    }
+    if (verdict.outcome === "lost") cleared.push(value.key);
+    if (verdict.reason === "same-value" || verdict.reason === "empty") continue;
+    const kind = REPORTED_AS[verdict.reason];
+    const seen = byReason.get(kind) ?? { count: 0, first: [] };
+    seen.count += 1;
+    if (seen.first.length < FIRST_KEYS) seen.first.push(value.key);
+    byReason.set(kind, seen);
+  }
+  const reasons: ConversionReason[] =
+    pair !== null
+      ? [{ kind: "pair-blocked", class: "blocked" }]
+      : [...byReason].map(([kind, rows]) => ({
+          kind,
+          class: reasonClass(kind),
+          rows: { first: rows.first, count: rows.count },
+        }));
+  return {
+    judgement: {
+      class:
+        pair !== null
+          ? "blocked"
+          : classOf(
+              (Object.keys(counts) as ValueOutcome[]).filter(o => counts[o] > 0)
+            ),
+      reasons,
+    },
+    cleared,
+    counts,
+    readings,
+  };
+}
+
+/**
+ * A field's type change judged over every value `column` of `table` holds, read a page at a time
+ * and keyed as the table keys its rows.
+ */
+export function judgeStoredTypeChange(args: {
+  db: unknown;
+  dialect: SupportedDialect;
+  table: string;
+  column: string;
+  keyedBy: KeyedBy;
+  from: FieldTypeOnDialect;
+  to: FieldTypeOnDialect;
+}): Promise<StoredTypeChangeJudgement> {
+  return collectTypeChange(
+    args.from,
+    args.to,
+    readStoredValues(args.db, args.dialect, {
+      table: args.table,
+      column: args.column,
+      keyedBy: args.keyedBy,
+      toJson: false,
+    })
+  );
+}
