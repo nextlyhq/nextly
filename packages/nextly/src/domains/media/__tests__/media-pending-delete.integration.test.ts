@@ -15,7 +15,8 @@
  *   the delete, and the finaliser then deletes the item;
  * - a batch is marked whole or not at all;
  * - both halves need the delete permission, checked before any mark is
- *   written.
+ *   written;
+ * - a delete's own timer stops with the instance that armed it.
  */
 
 // Set before the harness boots (env validation reads it once).
@@ -30,6 +31,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createMediaHandlers } from "../../../api/media-handlers";
 import { defineCollection, text, upload } from "../../../config";
 import { container } from "../../../di/container";
+import {
+  getNextlyLogger,
+  setNextlyLogger,
+} from "../../../observability/logger";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -1966,5 +1971,100 @@ describe.each(getConfiguredTestDialects())(
       });
       expect((undone.json.restored as string[]).length).toBe(150);
     }, 90_000);
+  }
+);
+
+// A delete's own timer is the fast path of the instance that armed it. When
+// that instance shuts down, the timer goes with it: run later, it would work
+// through a container that is empty, or another instance's, and its warnings
+// would land after the services, and a test file, had ended.
+describe.each(getConfiguredTestDialects())(
+  "a media delete's own timer once its instance shuts down (%s)",
+  (dialect: TestDialect) => {
+    it("finishes the delete while its instance runs, and runs nothing once it is destroyed", async () => {
+      const own = await createTestNextly(
+        dialect === "sqlite" ? {} : { dialect }
+      );
+      let destroyed = false;
+      const warned: object[] = [];
+      const logger = getNextlyLogger();
+      try {
+        const key = await keyWith(own, ["read-media", "delete-media"]);
+        const upload = async (): Promise<string> => {
+          const data = pdfDocument(randomUUID());
+          const uploaded = await own.nextly.media.upload({
+            file: {
+              data,
+              name: `timer-${randomUUID().slice(0, 6)}.pdf`,
+              mimetype: "application/pdf",
+              size: data.length,
+            },
+          });
+          return uploaded.id;
+        };
+        // The item's row and the records its delete keeps: its mark, then its
+        // files' removal.
+        const left = async (id: string): Promise<number> =>
+          (
+            await own.adapter.select<Doc>("media", {
+              where: { and: [{ column: "id", op: "=", value: id }] },
+            })
+          ).length +
+          (
+            await own.adapter.select<Doc>("nextly_meta", {
+              columns: ["key"],
+              where: {
+                and: [
+                  {
+                    column: "key",
+                    op: "IN",
+                    value: [pendingDeleteKey(id), removingKey(id)],
+                  },
+                ],
+              },
+            })
+          ).length;
+        const first = await upload();
+        const second = await upload();
+        setNextlyLogger({
+          error: () => undefined,
+          warn: payload => warned.push(payload),
+          info: () => undefined,
+          debug: () => undefined,
+        });
+        // The clock moves on its own, so the database keeps answering, and
+        // jumps past a window on request.
+        vi.useFakeTimers({
+          shouldAdvanceTime: true,
+          toFake: ["setTimeout", "clearTimeout", "Date"],
+        });
+
+        // POSITIVE CONTROL: past the window, the delete's own timer finishes
+        // it, so a jump past the window reaches that timer.
+        expect(
+          (await api(key, "POST", ["deletions"], { body: { ids: [first] } }))
+            .status
+        ).toBe(200);
+        await vi.advanceTimersByTimeAsync(PENDING_DELETE_WINDOW_MS + 1_000);
+        await expect.poll(() => left(first)).toBe(0);
+
+        // The same delete, then the instance shuts down inside its window.
+        expect(
+          (await api(key, "POST", ["deletions"], { body: { ids: [second] } }))
+            .status
+        ).toBe(200);
+        await own.destroy();
+        destroyed = true;
+        await vi.advanceTimersByTimeAsync(PENDING_DELETE_WINDOW_MS + 1_000);
+        // Long enough for a timer that ran to have failed and said so.
+        await new Promise(resolve => setTimeout(resolve, 200));
+
+        expect(warned, JSON.stringify(warned)).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+        setNextlyLogger(logger);
+        if (!destroyed) await own.destroy();
+      }
+    });
   }
 );

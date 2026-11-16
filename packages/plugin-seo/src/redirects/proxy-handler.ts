@@ -123,8 +123,8 @@ async function pageAddressOf(
   return { ...asked, path: asked.path.slice(0, -1) };
 }
 
-/** What an address that is gone for good answers: 410, and a line to read. */
-function goneResponse(): Response {
+/** What an address that is gone for good answers with no page of the site's: 410, and a line. */
+function plainGoneResponse(): Response {
   return new Response("This page is gone.", {
     status: 410,
     headers: { "content-type": "text/plain; charset=utf-8" },
@@ -132,13 +132,78 @@ function goneResponse(): Response {
 }
 
 /**
+ * The request header the Proxy's own read of the site's Gone page carries.
+ * A read carrying it that meets a Gone answer is answered with the plain
+ * page, so a Gone page that is itself Gone, under whatever spelling a
+ * pattern or a language's address gives it, never reads itself again.
+ */
+export const GONE_PAGE_HEADER = "x-nextly-seo-gone-page";
+
+/** How long the site's own Gone page may take to answer before the plain one is sent. */
+const GONE_PAGE_TIMEOUT_MS = 5_000;
+
+/** How the Proxy answers an address made Gone. */
+export interface GoneAnswerOptions {
+  /**
+   * The address of the site's own page for a Gone answer, such as `/gone`,
+   * already checked to be an address from the site's root.
+   */
+  gonePage?: string;
+  /** Reads the site's page; `fetch` unless a test gives another. */
+  fetchPage?: (url: URL, init: RequestInit) => Promise<Response>;
+}
+
+/**
+ * What an address that is gone for good answers: the site's own page where
+ * it names one, read from the site and sent with status 410, else a short
+ * plain page. The plain page also answers where the site's page can't be
+ * read or doesn't answer 200, and where the request is that page itself, or
+ * the Proxy's own read of it, which would otherwise read itself again.
+ */
+async function goneResponse(
+  request: Request,
+  url: URL,
+  options: GoneAnswerOptions
+): Promise<Response> {
+  const { gonePage } = options;
+  if (
+    gonePage === undefined ||
+    request.headers.get(GONE_PAGE_HEADER) !== null ||
+    url.pathname.replace(/(.)\/$/, "$1") === gonePage
+  ) {
+    return plainGoneResponse();
+  }
+  try {
+    const read = options.fetchPage ?? ((at, init) => fetch(at, init));
+    const page = await read(new URL(gonePage, url.origin), {
+      headers: { accept: "text/html", [GONE_PAGE_HEADER]: "1" },
+      redirect: "manual",
+      signal: AbortSignal.timeout(GONE_PAGE_TIMEOUT_MS),
+    });
+    if (page.status !== 200) return plainGoneResponse();
+    return new Response(await page.text(), {
+      status: 410,
+      headers: {
+        "content-type":
+          page.headers.get("content-type") ?? "text/html; charset=utf-8",
+      },
+    });
+  } catch {
+    // The page couldn't be read: the visitor still gets the Gone answer.
+    return plainGoneResponse();
+  }
+}
+
+/**
  * The handler the plugin contributes to the site's Proxy, answering from
  * `keys`: the plugin forgets them when a redirect saved here commits. Each
  * request a redirect answers is counted on it by `hits`, in the background.
+ * An address made Gone is answered as `gone` says.
  */
 export function redirectsProxyHandler(
   keys: HeldRedirectKeys = heldRedirectKeys(),
-  hits: RedirectHits = redirectHits()
+  hits: RedirectHits = redirectHits(),
+  gone: GoneAnswerOptions = {}
 ): PluginProxyHandler {
   const seen = proxySeenNotes();
   return {
@@ -158,7 +223,7 @@ export function redirectsProxyHandler(
         : undefined;
       if (redirect?.gone === true) {
         hits.note(ctx, redirect.id);
-        return { response: goneResponse() };
+        return { response: await goneResponse(request, url, gone) };
       }
       const location =
         redirect !== undefined

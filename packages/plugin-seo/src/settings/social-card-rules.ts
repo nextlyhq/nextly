@@ -3,7 +3,8 @@
  * production address the page's language is served from, so the card, the
  * title pattern and structured data all name the site the same way. The
  * plugin's options stay the answer for what the settings leave empty, and
- * the page's language is always the options' reading.
+ * the page's language and the site's X account are always the options'
+ * reading.
  *
  * @module settings/social-card-rules
  */
@@ -24,6 +25,7 @@ export function socialCardRulesOf(
     ...(origin === undefined ? {} : { origin }),
     ...(siteName === undefined ? {} : { siteName }),
     ...(base.language === undefined ? {} : { language: base.language }),
+    ...(base.xAccount === undefined ? {} : { xAccount: base.xAccount }),
   };
 }
 

@@ -50,7 +50,11 @@ import {
   toIndexSpec,
   toTableSpec,
 } from "./compile";
-import { type SeedEntityTable, SchemaDraftStore } from "./draft";
+import {
+  type ColumnOverride,
+  type SeedEntityTable,
+  SchemaDraftStore,
+} from "./draft";
 import { foreignKeyRelations, type TableRelationInput } from "./dsl";
 import { enumChecks } from "./enum-check";
 import { assertMysqlRowFits, foreignKeyColumnProblem } from "./naming";
@@ -226,6 +230,15 @@ export interface ExtensionSchema {
    * runtime Drizzle table, and must NOT be emitted as a table of their own.
    */
   entityColumns: Map<string, ExtensionColumn[]>;
+  /**
+   * Entity table name → the app's overrides of its field columns' storage.
+   *
+   * Carried beside the contributions for the same reason: they change a
+   * table this module does not own, in its desired spec and its runtime
+   * table alike, and are recorded as the app's elements, which is what the
+   * drop guard is given for the app's migrations.
+   */
+  columnOverrides: Map<string, ColumnOverride[]>;
   /** Compiled, for the diff engine. */
   specs: TableSpec[];
   /** Compiled, sqlName → Drizzle table. */
@@ -283,7 +296,8 @@ export interface ExtensionSchema {
 function fingerprintOf(
   specs: readonly TableSpec[],
   entityIndexes: ReadonlyMap<string, ExtensionIndex[]>,
-  entityColumns: ReadonlyMap<string, ExtensionColumn[]>
+  entityColumns: ReadonlyMap<string, ExtensionColumn[]>,
+  columnOverrides: ReadonlyMap<string, ColumnOverride[]>
 ): string {
   // Sorted so the hash describes the CONTENT rather than the order the tables
   // happened to be visited in; two runs that produce the same schema must
@@ -315,8 +329,13 @@ function fingerprintOf(
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([name, columns]) => [name, columns] as const);
 
+  // Overrides likewise: a changed override is a change dev push applies.
+  const overrides = [...columnOverrides.entries()].sort(([a], [b]) =>
+    a.localeCompare(b)
+  );
+
   return createHash("sha256")
-    .update(JSON.stringify({ tables, entities, entityCols }))
+    .update(JSON.stringify({ tables, entities, entityCols, overrides }))
     .digest("hex");
 }
 
@@ -1201,6 +1220,7 @@ export async function buildExtensionSchema(
   const coreTables = staticRelationTables(input.dialect);
 
   const { entityIndexes, entityColumns } = foreignTableContributions(store);
+  const columnOverrides = store.columnOverrides();
 
   const compiledSpecs = tables.map(table => toTableSpec(table, input.dialect));
   // Every declared key's, index's and check's resolved name, before any
@@ -1227,6 +1247,9 @@ export async function buildExtensionSchema(
   // Each table whole, its own columns and every one a hook added, so a row
   // only MySQL cannot hold is refused on every dialect alike.
   for (const table of tables) assertMysqlRowFits(table);
+  // And each entity's, whose row hooks may have widened: the app's overrides
+  // and the hidden columns added to it.
+  store.assertEntityRowsFit();
   const { compiled, owners } = compileDrizzleTables(tables, input.dialect);
   const protectedTables = protectedTableNames(input, store);
 
@@ -1356,6 +1379,7 @@ export async function buildExtensionSchema(
     tables,
     entityIndexes,
     entityColumns,
+    columnOverrides,
     specs,
     drizzle,
     owners,
@@ -1368,7 +1392,12 @@ export async function buildExtensionSchema(
     codeFirstTables: new Set(entityOwners.keys()),
     entityOwners,
     pluginPrefixes: input.pluginPrefixes,
-    fingerprint: fingerprintOf(specs, entityIndexes, entityColumns),
+    fingerprint: fingerprintOf(
+      specs,
+      entityIndexes,
+      entityColumns,
+      columnOverrides
+    ),
   };
 }
 

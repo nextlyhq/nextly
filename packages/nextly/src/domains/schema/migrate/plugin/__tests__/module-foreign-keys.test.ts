@@ -145,7 +145,6 @@ const contributing = (
   return { ...content, checksum: migrationChecksum(content) };
 };
 
-
 describe("assertModuleForeignKeysResolve", () => {
   it("refuses a first module's key to a table only its second creates, naming both modules and the key", () => {
     const message = messageOf([

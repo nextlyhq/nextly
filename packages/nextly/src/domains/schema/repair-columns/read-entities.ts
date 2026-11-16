@@ -45,6 +45,7 @@ import {
   resolveRepairEntities,
   type ConfiguredEntity,
   type RegistryEntity,
+  type RepairOverrides,
   type SnapshotEntity,
   type UserFieldSources,
 } from "./resolve-entities";
@@ -312,32 +313,78 @@ const SNAPSHOT_RECORD_KEYS: Record<RecordedKind, keyof EntitySettingsRecord> = {
 function snapshotEntityOf(
   kind: RecordedKind,
   slug: string,
-  entry: RecordedEntitySettings
+  entry: RecordedEntitySettings,
+  tables: ReadonlyMap<string, Readonly<Record<string, string>>>
 ): SnapshotEntity {
   // The declaration as the snapshot stored it; read only the keys the comparison needs.
   const settings: Record<string, unknown> = entry.settings;
   const dbName =
     typeof settings.dbName === "string" ? settings.dbName : undefined;
+  const table = tableFor[kind]({
+    slug,
+    ...(dbName !== undefined ? { dbName } : {}),
+  });
+  const columnTypes = tables.get(table);
   return {
     kind,
     slug,
     source: entry.source,
     fields: Array.isArray(settings.fields) ? settings.fields : [],
     localized: settings.localized === true,
-    table: tableFor[kind]({
-      slug,
-      ...(dbName !== undefined ? { dbName } : {}),
-    }),
+    table,
+    ...(columnTypes !== undefined ? { columnTypes } : {}),
   };
 }
 
 /** Every entity one snapshot's entity record holds. */
-function recordedEntities(record: EntitySettingsRecord): SnapshotEntity[] {
+function recordedEntities(
+  record: EntitySettingsRecord,
+  tables: ReadonlyMap<string, Readonly<Record<string, string>>>
+): SnapshotEntity[] {
   return (Object.keys(SNAPSHOT_RECORD_KEYS) as RecordedKind[]).flatMap(kind =>
     Object.entries(record[SNAPSHOT_RECORD_KEYS[kind]]).map(([slug, entry]) =>
-      snapshotEntityOf(kind, slug, entry)
+      snapshotEntityOf(kind, slug, entry, tables)
     )
   );
+}
+
+/** Each recorded column's type, by its name; one in a shape this version cannot read is left out. */
+function typesByColumn(columns: readonly unknown[]): Record<string, string> {
+  const types: Record<string, string> = {};
+  for (const column of columns) {
+    const { name, type } = (column ?? {}) as { name?: unknown; type?: unknown };
+    if (typeof name === "string" && typeof type === "string") {
+      types[name] = type;
+    }
+  }
+  return types;
+}
+
+/**
+ * Each table a snapshot records, with the type of each of its columns: what its migration applied,
+ * which the app's overrides are read from. A table or column in a shape this version cannot read
+ * is left out, so it reads as recording no override rather than stopping the run.
+ */
+function recordedColumnTypes(
+  file: object
+): Map<string, Readonly<Record<string, string>>> {
+  const out = new Map<string, Readonly<Record<string, string>>>();
+  // A snapshot file holds the schema under `snapshot`, beside its entity record.
+  const schema = (file as { snapshot?: unknown }).snapshot;
+  const tables =
+    typeof schema === "object" && schema !== null
+      ? (schema as { tables?: unknown }).tables
+      : undefined;
+  if (!Array.isArray(tables)) return out;
+  for (const table of tables as unknown[]) {
+    const { name, columns } = (table ?? {}) as {
+      name?: unknown;
+      columns?: unknown;
+    };
+    if (typeof name !== "string" || !Array.isArray(columns)) continue;
+    out.set(name, typesByColumn(columns as unknown[]));
+  }
+  return out;
 }
 
 /** The ledger filename of a snapshot's migration, as `loadSnapshots` asks the ledger about it. */
@@ -400,7 +447,7 @@ function assertAppliedSnapshotsRead(
  */
 function newestAppliedRecord(
   loaded: readonly LoadedSnapshot[]
-): EntitySettingsRecord | undefined {
+): { record: EntitySettingsRecord; snapshot: object } | undefined {
   // Lexicographic order is migration order, so the newest is the last one that qualifies.
   for (const { file, snapshot, applied } of [...loaded].reverse()) {
     if (!applied) continue;
@@ -414,7 +461,7 @@ function newestAppliedRecord(
     }
     if (!Object.hasOwn(parsed, "entities")) continue;
     const record = (parsed as { entities?: unknown }).entities;
-    if (isEntitySettingsRecord(record)) return record;
+    if (isEntitySettingsRecord(record)) return { record, snapshot: parsed };
     throw unreadableSnapshot(
       file,
       "records its entities in a shape that cannot be read"
@@ -450,8 +497,10 @@ async function snapshotEntities(
     }),
   ]);
   assertAppliedSnapshotsRead(listed, loaded, applied);
-  const record = newestAppliedRecord(loaded);
-  return record === undefined ? [] : recordedEntities(record);
+  const newest = newestAppliedRecord(loaded);
+  return newest === undefined
+    ? []
+    : recordedEntities(newest.record, recordedColumnTypes(newest.snapshot));
 }
 
 /**
@@ -520,6 +569,8 @@ export async function readRepairEntities(args: {
    * not be read (the run's later reads take the same, spent, tries).
    */
   waits?: TableWaits;
+  /** The app's column overrides, as the configuration declares them. */
+  overrides?: RepairOverrides;
 }): Promise<RepairEntity[]> {
   const { adapter, dialect, logger } = args;
   const codeFields = args.config.users?.fields ?? [];
@@ -543,6 +594,7 @@ export async function readRepairEntities(args: {
       registry: [],
       snapshots: [],
       userFields: { stored: null, configured: codeFields },
+      ...(args.overrides !== undefined ? { overrides: args.overrides } : {}),
     });
   }
   const [registry, snapshots, userFields] = read.value;
@@ -551,5 +603,6 @@ export async function readRepairEntities(args: {
     registry,
     snapshots,
     userFields,
+    ...(args.overrides !== undefined ? { overrides: args.overrides } : {}),
   });
 }

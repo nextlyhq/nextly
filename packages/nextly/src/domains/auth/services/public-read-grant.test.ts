@@ -405,6 +405,26 @@ describe("withdrawUndeclaredPluginGrants", () => {
     expect(warned).toEqual([]);
   });
 
+  it("is not done by a seeding that knows only some of the enabled plugins", async () => {
+    const { deps, held, meta, warned } = withdrawal();
+
+    await seedPublicReadGrants(deps, { takeBackUndeclared: false });
+
+    expect(held.has("p-tickets")).toBe(true);
+    expect(JSON.parse(meta.rows.get("public-role-granted")!)).toMatchObject({
+      declared: { "p-tickets": tickets },
+    });
+    expect(warned.filter(line => line.includes("Removed"))).toEqual([]);
+  });
+
+  it("is done by a seeding that knows every enabled plugin", async () => {
+    const { deps, held } = withdrawal();
+
+    await seedPublicReadGrants(deps);
+
+    expect(held.has("p-tickets")).toBe(false);
+  });
+
   it("reads a record written before plugin grants as naming none", async () => {
     const { deps, held, meta } = withdrawal();
     meta.rows.set(

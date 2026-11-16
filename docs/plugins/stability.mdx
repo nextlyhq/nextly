@@ -72,7 +72,8 @@ These ship today but carry no guarantee yet — use them, but expect change:
   transaction, statement by statement
 - `onReady`, run once per boot after every plugin has initialised and routes
   are registered, and `onInstall` / `onUninstall`, called by
-  `nextly plugins install` and `nextly plugins uninstall`, never at boot
+  `nextly plugins install` and `nextly plugins uninstall`, never at boot,
+  and `onMigrate`, called by `nextly migrate` once it leaves nothing pending
 - `contributes.transforms` — changing entities another plugin declared
 - `ctx.db.contributed(table, columns)` — reading and writing the hidden
   columns a plugin contributed to a table it does not own

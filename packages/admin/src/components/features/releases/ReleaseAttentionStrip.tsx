@@ -16,7 +16,7 @@
  *
  * @module components/features/releases/ReleaseAttentionStrip
  */
-import type { JSX } from "react";
+import { useState, type JSX } from "react";
 
 import { AlertTriangle } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
@@ -41,6 +41,20 @@ export interface ReleaseAttentionStripProps {
    * to the list, where the tab it leads to is drawn.
    */
   onShowAll?: () => void;
+}
+
+/**
+ * Whether the strip's read has first answered (or failed), so whether the
+ * strip is drawn is known. Kept once known: a later read only refreshes it.
+ * The page holds what stands under the strip until then, so a strip drawn
+ * once its read lands does not push the tabs and the list down.
+ */
+export function useAttentionStripKnown(): boolean {
+  const read = useReleasesNeedingAttention(STRIP_RELEASES);
+  const settled = read.data !== undefined || read.isError;
+  const [known, setKnown] = useState(settled);
+  if (settled && !known) setKnown(true);
+  return known || settled;
 }
 
 export function ReleaseAttentionStrip({

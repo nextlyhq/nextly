@@ -122,6 +122,11 @@ export interface LayerNode {
    */
   readonly conditional: boolean;
   /**
+   * The block is marked never to be quoted in search snippets, so its row
+   * says so in words a screen reader reads.
+   */
+  readonly notQuoted?: boolean;
+  /**
    * The block is hidden at one or more breakpoints.
    *
    * Also not "hidden", for a different reason: visibility is per breakpoint, so
@@ -410,6 +415,7 @@ export function layersOf(
         locked,
         ...(locked || heldBy === undefined ? {} : { lockedBy: heldBy }),
         conditional: hasConditions(node),
+        ...(node.nosnippet === true ? { notQuoted: true } : {}),
         breakpointHidden: hiddenAtSomeBreakpoint(node),
         ...(device === undefined ? {} : { hiddenHere }),
         // Kept on a row hidden itself as well: showing it here shows nothing

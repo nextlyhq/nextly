@@ -1,41 +1,58 @@
 /**
- * Unit tests for `dbTimestampToInstant` — the dialect-aware recovery of the
- * correct instant from a database timestamp `Date`.
+ * Unit tests for `dbTimestampToInstant` and `normalizeDbTimestamp`: a database
+ * timestamp `Date` already names the stored instant, on every dialect.
  *
- * The assertions are written to be timezone-independent: the naive-dialect
- * inputs are built with the local-parts `Date` constructor (the shape a
- * Postgres/MySQL driver produces for a `timestamp without time zone` /
- * `datetime` column), and the SQLite input is an epoch-correct `Date`. So they
- * pass on a UTC and a non-UTC runner alike, which is exactly the case a fixed
- * offset would hide.
+ * Each adapter decodes a timestamp column to the instant it stored (SQLite
+ * epoch seconds, a PostgreSQL wall clock Drizzle reads as UTC, a MySQL one the
+ * adapter's UTC session reads as UTC), so the helpers must keep it as it is.
+ * Reading its LOCAL calendar fields as UTC instead moves it by the server's
+ * offset, which is nothing on a UTC runner, so the cases run under a zone five
+ * hours ahead of UTC, where that broken reading fails.
  */
-import { describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { dbTimestampToInstant } from "../date-formatting";
+import { dbTimestampToInstant, normalizeDbTimestamp } from "../date-formatting";
+
+let previousTz: string | undefined;
+
+beforeEach(() => {
+  previousTz = process.env.TZ;
+  process.env.TZ = "Asia/Karachi";
+});
+
+afterEach(() => {
+  if (previousTz === undefined) delete process.env.TZ;
+  else process.env.TZ = previousTz;
+});
 
 describe("dbTimestampToInstant", () => {
-  it("returns a SQLite epoch Date unchanged (already the correct instant)", () => {
-    const epochCorrect = new Date("2026-07-18T12:00:00.000Z");
-    const result = dbTimestampToInstant(epochCorrect, "sqlite");
-    expect(result.toISOString()).toBe("2026-07-18T12:00:00.000Z");
-  });
-
-  it("reinterprets a naive Postgres Date's local fields as UTC", () => {
-    // What node-postgres builds for a stored naive "2026-07-18 12:00:00": a Date
-    // whose LOCAL calendar fields are those values (local-parts constructor).
-    const naiveLocal = new Date(2026, 6, 18, 12, 0, 0);
-    const result = dbTimestampToInstant(naiveLocal, "postgresql");
-    expect(result.toISOString()).toBe("2026-07-18T12:00:00.000Z");
-  });
-
-  it("reinterprets a naive MySQL Date's local fields as UTC", () => {
-    const naiveLocal = new Date(2026, 0, 2, 3, 4, 5, 6);
-    const result = dbTimestampToInstant(naiveLocal, "mysql");
-    expect(result.toISOString()).toBe("2026-01-02T03:04:05.006Z");
+  it("keeps the instant a decoded timestamp names", () => {
+    const stored = new Date("2026-07-18T12:00:00.000Z");
+    expect(dbTimestampToInstant(stored).toISOString()).toBe(
+      "2026-07-18T12:00:00.000Z"
+    );
   });
 
   it("passes null through and returns null for an invalid Date", () => {
-    expect(dbTimestampToInstant(null, "postgresql")).toBeNull();
-    expect(dbTimestampToInstant(new Date("nonsense"), "mysql")).toBeNull();
+    expect(dbTimestampToInstant(null)).toBeNull();
+    expect(dbTimestampToInstant(new Date("nonsense"))).toBeNull();
+  });
+});
+
+describe("normalizeDbTimestamp", () => {
+  it("spells a decoded timestamp as the instant it names", () => {
+    const stored = new Date("2026-01-02T03:04:05.006Z");
+    expect(normalizeDbTimestamp(stored)).toBe("2026-01-02T03:04:05.006Z");
+  });
+
+  it("reads a stored wall clock without a zone as UTC", () => {
+    expect(normalizeDbTimestamp("2026-01-02 03:04:05")).toBe(
+      "2026-01-02T03:04:05Z"
+    );
+  });
+
+  it("returns null for none or an invalid Date", () => {
+    expect(normalizeDbTimestamp(null)).toBeNull();
+    expect(normalizeDbTimestamp(new Date("nonsense"))).toBeNull();
   });
 });

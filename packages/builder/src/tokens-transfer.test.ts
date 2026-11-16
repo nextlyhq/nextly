@@ -1472,7 +1472,8 @@ describe("an import is planned before anything changes", () => {
       { name: "color.ink", kind: "color", values: { light: "#222222" } },
       // Added.
       { name: "color.brand", kind: "color", values: { light: "#1d2b6b" } },
-      // Skipped: a composite this site has no kind for.
+      // Added too: a custom value, which the format has no type for and the
+      // file carries in this system's extension.
       { name: "shadow.card", kind: "custom", values: { light: "x" } },
     ],
   }).text;
@@ -1483,7 +1484,7 @@ describe("an import is planned before anything changes", () => {
       MINE
     );
     if (!plan.ok) throw new Error(plan.error);
-    expect(plan.added.map(t => t.name)).toEqual(["color.brand"]);
+    expect(plan.added.map(t => t.name)).toEqual(["color.brand", "shadow.card"]);
     expect(plan.changed.map(t => t.name)).toEqual(["color.paper"]);
     expect(plan.unchanged.map(t => t.name)).toEqual(["space.4"]);
     expect(
@@ -1530,6 +1531,7 @@ describe("an import is planned before anything changes", () => {
       "color.paper",
       "space.4",
       "color.brand",
+      "shadow.card",
     ]);
     expect(
       result.tokens.tokens.find(t => t.name === "color.paper")?.values.dark

@@ -50,7 +50,6 @@ function makeDeps(
       ipAddress: null,
     }),
     deleteRefreshToken,
-    deleteAllRefreshTokensForUser: vi.fn().mockResolvedValue(undefined),
     withSessionRowTransaction: rows.withSessionRowTransaction,
     findUserById: vi.fn().mockResolvedValue({
       id: "u1",

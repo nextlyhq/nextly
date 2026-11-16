@@ -239,7 +239,9 @@ function SettingSelect({
 // ============================================================
 
 const SettingsGeneralPage: React.FC = () => {
-  const { data: settings, isLoading } = useGeneralSettings();
+  // Pending, not loading: the read waits for the session before it is asked,
+  // and the form is held until it has answered.
+  const { data: settings, isPending: isLoading } = useGeneralSettings();
   const { mutate: updateSettings, isPending } = useUpdateGeneralSettings();
   // A reader without `update-settings` sees the settings read-only: the server
   // refuses their save, so none is offered.

@@ -65,10 +65,10 @@ const SECRET = "admin-speed-check-secret-not-for-production-0123456789";
 const USER = { email: "dev@nextly.local", password: "DevPassword123!" };
 
 /**
- * How far a start's or a screen's statements may move from their pin. What
- * still moves between runs of one commit is reads on a timer (the stored
- * schema version, the permissions epoch, the cache tags, a session check)
- * landing inside a load or not, a few statements on any screen.
+ * How far a start's or a screen's statements may move from their pin. Every
+ * screen load pays the reads on a timer (`TIMED_READS`); what still moves
+ * between runs of one commit is the start's, and background work (a job
+ * poll, a webhook drain) landing inside a load or not.
  */
 const STATEMENT_SLACK = 0.05;
 /** The least a growth pin allows either way, as two starts differ by a few. */
@@ -97,6 +97,61 @@ const OPEN_WAIT_MS = 10_000;
 const SAMPLES = 5;
 /** How long the database must be quiet before a start counts as finished. */
 const START_QUIET_MS = 4000;
+
+/**
+ * The reads the server makes at most once per interval rather than once per
+ * request, each named by the source constant that sets its interval: the
+ * stored schema version, the general settings row, the expiry of each cache
+ * tag served, the session's standing and a collection's registry row. A load
+ * that starts within one of these intervals of the last read skips it, so
+ * whether a load paid it depended on how fast the machine ran the loads
+ * before it: they ran about two seconds apart, right at the two-second
+ * intervals. Read from the source, so a changed interval cannot leave the
+ * wait behind.
+ *
+ * Reads kept for thirty seconds or more (permissions, a companion table's
+ * readiness, pending release transitions) are not waited out: five loads span
+ * less than that, so such a read lands in one load at most, and the fewest
+ * any load took leaves it out.
+ */
+const TIMED_READS = [
+  [
+    "packages/nextly/src/domains/schema/stored-schema-seq.ts",
+    "SCHEMA_VERSION_READ_INTERVAL_MS",
+  ],
+  [
+    "packages/nextly/src/services/general-settings/general-settings-service.ts",
+    "GENERAL_SETTINGS_READ_INTERVAL_MS",
+  ],
+  ["packages/nextly/src/runtime/cache/tag-expiry-view.ts", "TAG_LOOKUP_TTL_MS"],
+  [
+    "packages/nextly/src/auth/session/session-standing.ts",
+    "SESSION_STANDING_TTL_MS",
+  ],
+  [
+    "packages/nextly/src/domains/dynamic-collections/services/collection-row-cache.ts",
+    "COLLECTION_ROW_LIFETIME_MS",
+  ],
+];
+/** How far past the longest interval a load starts, so timer jitter cannot put it just inside. */
+const TIMED_READ_MARGIN_MS = 250;
+
+/** A numeric `export const` of a source file; throws when it is not there. */
+function sourceConstant(file, name) {
+  const text = fs.readFileSync(path.join(ROOT, file), "utf8");
+  const match = text.match(new RegExp(`export const ${name} = ([0-9_]+);`));
+  if (!match) throw new Error(`${name} is no longer a number in ${file}`);
+  return Number(match[1].replaceAll("_", ""));
+}
+
+/**
+ * How long each counted load waits, after everything before it has fallen
+ * quiet, so it pays every timed read: the same reads on every load and every
+ * machine, rather than whichever intervals happened to have run out.
+ */
+const TIMED_READ_WAIT_MS =
+  Math.max(...TIMED_READS.map(([file, name]) => sourceConstant(file, name))) +
+  TIMED_READ_MARGIN_MS;
 
 const argv = process.argv.slice(2);
 const flag = name => argv.includes(`--${name}`);
@@ -413,6 +468,8 @@ async function sample(context, log, load, before) {
     await watcher.quiet();
     watcher.requests.length = 0;
   }
+  // Every timed read's interval has run out, so this load pays each of them.
+  await sleep(TIMED_READ_WAIT_MS);
   const from = Date.now();
   const kept = await load(page);
   const to = await watcher.quiet();
@@ -491,6 +548,7 @@ async function steady(context, log, load, { fresh, before } = {}) {
     kept: samples[0].kept,
     startupStartsMs: median(samples.map(x => x.startupStartsMs)),
     mostStatements: Math.max(...samples.map(x => x.statements)),
+    eachStatements: samples.map(x => x.statements),
     result: {
       requests: Object.values(kinds).reduce((a, b) => a + b, 0),
       rounds: Math.min(...samples.map(x => x.rounds)),
@@ -527,6 +585,7 @@ async function measureDialect(dialect, dir) {
     out.timings[name] = {
       startupStartsMs: measured.startupStartsMs,
       mostStatements: measured.mostStatements,
+      eachStatements: measured.eachStatements,
     };
     return measured.result;
   };

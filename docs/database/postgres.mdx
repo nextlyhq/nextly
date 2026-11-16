@@ -111,6 +111,8 @@ When the adapter connects, it inspects `DATABASE_URL` and applies provider-aware
 
 Override the detection with the `DB_PROVIDER` env var (`neon`, `supabase`, or `standard`). User-provided config (`pool`, `ssl`, `statementTimeout`) always wins over provider defaults.
 
+On Vercel, every provider takes the [Vercel pool](#on-vercel) (`poolMax: 3`, `poolMin: 0`, `idleTimeoutMs: 5000`) in place of its own pool size and idle timeout, and keeps its other defaults: SSL, the connection and statement timeouts, and the connect retries.
+
 ## SSL / TLS
 
 System health on the dashboard reads whether the connection is actually encrypted; see [Encrypted connections](/docs/database/encrypted-connections).
@@ -135,14 +137,14 @@ Pass `ssl: true` for a quick default, or an `SslConfig` object for full control:
 
 ## Connection pool
 
-The adapter uses `pg.Pool`. Resolution order: **user config > provider defaults > hardcoded defaults** (`min: 0`, `max: 5`, `idleTimeoutMs: 30000`, `connectionTimeoutMs: 15000`).
+The adapter uses `pg.Pool`. Resolution order, setting by setting: **user config (`pool`, or the `DB_POOL_*` env vars) > provider defaults**, with the [Vercel pool](#on-vercel) in place of the provider's pool size and idle timeout on Vercel.
 
-| Option | Hardcoded default | Description |
+| Option | Default | Description |
 |---|---|---|
 | `pool.min` | `0` | Minimum connections. Stays at 0 to avoid eager creation while a serverless DB (Neon) is waking. |
-| `pool.max` | `5` | Maximum connections. Conservative to stay under cloud limits. Next.js can spawn up to ~7 build workers; multiply your `pool.max` by that to sanity-check against your provider's connection cap. |
-| `pool.idleTimeoutMs` | `30000` | Close idle connections after 30 s. |
-| `pool.connectionTimeoutMs` | `15000` | Wait at most 15 s for a free connection from the pool. Past it the request fails as `DATABASE_BUSY` (503, `Retry-After: 5`). `0` waits without limit. Provider defaults come first: Neon's is `20000`. |
+| `pool.max` | `10` (`5` on Neon and Supabase, `3` on Vercel) | Maximum connections. Next.js can spawn up to ~7 build workers; multiply your `pool.max` by that to sanity-check against your provider's connection cap. |
+| `pool.idleTimeoutMs` | `30000` (`10000` on Neon, `5000` on Vercel) | Close a connection after it has been idle this long. |
+| `pool.connectionTimeoutMs` | `15000` (`20000` on Neon) | Wait at most this long for a free connection from the pool. Past it the request fails as `DATABASE_BUSY` (503, `Retry-After: 5`). `0` waits without limit. |
 | `pool.maxLifetimeMs` | (driver default) | Recycle connections older than this. |
 
 ```typescript
@@ -158,6 +160,14 @@ const adapter = createPostgresAdapter({
 ```
 
 TCP keepalive is always enabled with a 10-second initial delay, which prevents serverless databases from silently dropping idle connections between the pool smoke-test and the first real query.
+
+### On Vercel
+
+On Vercel (where `VERCEL` is set, in functions and builds alike) the pool defaults to `max: 3`, `min: 0` and `idleTimeoutMs: 5000`, whatever the provider. A Vercel function instance is suspended between requests and keeps the connections it holds open while suspended, so a larger pool with a longer idle timeout runs a small database out of connections across a few instances. Each setting you give, in `pool` or as a `DB_POOL_*` env var, replaces only its own default: `DB_POOL_MAX=10` restores the old pool size and keeps the short idle timeout.
+
+When [`@vercel/functions`](https://vercel.com/docs/functions/functions-api-reference/vercel-functions-package#attachdatabasepool) is installed in the app, the adapter also hands its pool to `attachDatabasePool`, which keeps an instance alive until its idle connections have closed. It is an optional peer dependency: without it the adapter logs one warning at connect and runs with the short idle timeout alone. See [Database connections on Vercel](/docs/guides/deployment#database-connections-on-vercel).
+
+A database that has no connection to give answers SQLSTATE `53300` (`too_many_connections`), and one that closed a connection idle past its `idle_session_timeout` answers `57P05`. Both are reported as connection errors (`kind: "connection"`); a connect refused with `53300` is not retried.
 
 ## PostgreSQL-specific options
 
@@ -241,6 +251,7 @@ docker compose down
 - **Use a managed provider with SSL on by default** (Neon, Supabase, AWS RDS, Cloud SQL, Railway). For self-hosted, set `ssl: { rejectUnauthorized: true, ca: process.env.CA_CERT }` explicitly.
 - **Cap `pool.max` against your provider's connection limit.** Neon free tier allows ~25-30 simultaneous connections; with 7 Next.js build workers, `pool.max: 5` already lands at 35.
 - **Use a connection pooler** for serverless / edge runtimes that fan out many short-lived workers: PgBouncer for self-hosted, Neon's pooler endpoint, Supabase's Supavisor pooler. Pick the transaction-mode pooler if you don't need session features (advisory locks, prepared statements, `LISTEN`/`NOTIFY`).
+- **On Vercel, install `@vercel/functions`** so the adapter attaches its pool (see [On Vercel](#on-vercel)).
 - **Set `applicationName`** so you can identify your app's connections in `pg_stat_activity`.
 - **Set `statementTimeout`** (e.g., 30 s) to prevent runaway queries from holding connections.
 - **Run migrations from CI** before each deploy, not from the deployed app. See [production migrations](/docs/guides/production-migrations).

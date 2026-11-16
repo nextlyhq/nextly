@@ -63,6 +63,14 @@ export interface DocumentLockSurface extends DocumentLockAffordances {
   /** The editor has been told of `change`. */
   readonly settleChange: () => void;
   /**
+   * Whether the first answer about who holds the document is still on its
+   * way: this editor's claim, or a reader's look at the holder. Until it
+   * arrives the editor cannot say whether a colleague is in the document, so
+   * it holds its outline a moment rather than draw the fields and then push
+   * them down under the banner that says so (`useHeldReveal`).
+   */
+  readonly settling: boolean;
+  /**
    * The editor's answer to someone else's change the strip says: given by the
    * editor that says it (`withHeldChange`), absent where nothing does.
    */
@@ -313,5 +321,12 @@ export function useDocumentLockSurface({
     reloads: gainLoad.reloads,
     change,
     settleChange,
+    // Idle before the claim's effect has run, as well as acquiring after.
+    settling:
+      enabled &&
+      Boolean(options.entryId) &&
+      (readOnlyForReader
+        ? holder === undefined
+        : state.status === "idle" || state.status === "acquiring"),
   };
 }

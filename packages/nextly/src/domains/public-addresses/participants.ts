@@ -153,10 +153,22 @@ export function onParticipantsChange(
  * switched back on.
  */
 function active(): ParticipantRunner[] {
+  return activeEntries().map(entry => entry.runner);
+}
+
+/** The participants to ask now, each with the plugin it belongs to. */
+function activeEntries(): { runner: ParticipantRunner; owner: HookOwner }[] {
   const suspended = new Set(getActiveHookRegistry().getSuspendedOwners());
-  return participants
-    .filter(entry => !suspended.has(entry.owner))
-    .map(entry => entry.runner);
+  return participants.filter(entry => !suspended.has(entry.owner));
+}
+
+/**
+ * The plugins whose participants are asked now, each once, in plain sorted
+ * order: what a start records (`participation`), so a later start can tell
+ * it ran with another set.
+ */
+export function participatingOwners(): string[] {
+  return [...new Set(activeEntries().map(entry => entry.owner))].sort();
 }
 
 function sameHolder(a: AddressHolder, b: AddressHolder): boolean {

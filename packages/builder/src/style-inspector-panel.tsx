@@ -55,6 +55,7 @@ import {
   type StyleTraceEntry,
   type StyleValue,
   previewContainerName,
+  tokenRef,
 } from "@nextlyhq/blocks-engine";
 import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import {
@@ -3095,7 +3096,9 @@ export function pickedReference(
   picked: string,
   times: number | undefined
 ): { $token: string; times?: number } {
-  return { $token: picked, ...(times === undefined ? {} : { times }) };
+  // Built by the engine's one constructor, which a reader of stored text
+  // derives the reference's spelling from.
+  return tokenRef(picked, times);
 }
 
 function HeldVariable({

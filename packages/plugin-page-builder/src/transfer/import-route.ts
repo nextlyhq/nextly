@@ -1168,12 +1168,14 @@ function recordOf(value: unknown): Record<string, unknown> {
 /** The import route declaration. */
 export function importRoute(setup: ImportRouteSetup = {}): {
   method: "POST";
+  checksAccess: true;
   path: string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 } {
   return {
     method: "POST",
     path: IMPORT_ROUTE_PATH,
+    checksAccess: true, // The handler judges each caller.
     // Signed in is all reaching the route asks: what a file needs depends on
     // what it holds, so the handler asks for the right to add the file's own
     // kind of item before it reads anything, and the preview names each
