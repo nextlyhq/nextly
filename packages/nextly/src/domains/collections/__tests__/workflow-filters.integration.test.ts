@@ -483,7 +483,8 @@ describe.each(getConfiguredTestDialects())(
         handler.bulkUpdateByQuery({
           collectionName: "posts",
           where: clientWhere({ _inRelease: true }),
-          data: { title: "Selected by release" },
+          // Refused for the filter, not for want of a version.
+          data: { title: "Selected by release", _overwrite: true },
           user: owner,
           authenticatedScope: writer,
         })
@@ -512,7 +513,7 @@ describe.each(getConfiguredTestDialects())(
       const updated = await handler.bulkUpdateByQuery({
         collectionName: "posts",
         where: clientWhere({ _inRelease: true }),
-        data: { title: "Selected by release" },
+        data: { title: "Selected by release", _overwrite: true },
         user: owner,
         authenticatedScope: {
           ...writer,
@@ -544,7 +545,8 @@ describe.each(getConfiguredTestDialects())(
           handler.bulkUpdateByQuery({
             collectionName: "posts",
             where: clientWhere({ [key]: true }),
-            data: { title: "Selected unseen" },
+            // Refused for the filter, not for want of a version.
+            data: { title: "Selected unseen", _overwrite: true },
             user: owner,
             authenticatedScope: writeOnly,
           }),
@@ -576,7 +578,7 @@ describe.each(getConfiguredTestDialects())(
       const updated = await handler.bulkUpdateByQuery({
         collectionName: "posts",
         where: clientWhere({ title: { equals: "Untouched" } }),
-        data: { title: "Untouched, renamed" },
+        data: { title: "Untouched, renamed", _overwrite: true },
         user: owner,
         authenticatedScope: writeOnly,
       });

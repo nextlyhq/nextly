@@ -1,30 +1,43 @@
 import type { JSX } from "react";
 
-import { DynamicCollectionNav } from "@admin/components/features/dashboard/DynamicCollectionNav";
 import { DynamicPluginNav } from "@admin/components/features/dashboard/DynamicPluginNav";
 import { DynamicPluginSectionItems } from "@admin/components/features/dashboard/DynamicPluginSectionItems";
-import { DynamicSingleNav } from "@admin/components/features/dashboard/DynamicSingleNav";
+import {
+  PluginMenuGroups,
+  PluginMenuItems,
+} from "@admin/components/features/dashboard/PluginMenuItems";
 import * as Icons from "@admin/components/icons";
-import { Layers, Puzzle, FileText, Database } from "@admin/components/icons";
+import { Layers, Puzzle, FileText } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { contentIcon } from "@admin/lib/content-icons";
+import { CHANGE_SETTINGS } from "@admin/lib/permissions/system-policy";
+import { cn } from "@admin/lib/utils";
 import type { ApiCollection } from "@admin/types/entities";
 
-import { visibleSettingsNav } from "./lib/settings-nav";
+import { ContentPanel } from "./ContentPanel";
+import { isContentSection } from "./lib/content-rail";
+import {
+  isSettingsNavItemActive,
+  visibleSettingsNav,
+} from "./lib/settings-nav";
 import { MediaSidebarContent } from "./MediaSidebarContent";
 import type { MainMenuCategory } from "./sidebar-types";
 import { SidebarSearch } from "./SidebarSearch";
+import { StandalonePanelItems } from "./StandalonePanelItems";
 
 import { SidebarMenu, SidebarMenuItem, SidebarMenuButton } from "./index";
 
 interface SubSidebarContentProps {
   selectedMain: MainMenuCategory;
   standaloneLabel: string;
-  // Search state
-  collectionSearch: string;
-  onCollectionSearchChange: (value: string) => void;
-  singleSearch: string;
-  onSingleSearchChange: (value: string) => void;
+  // Search state: one for both content kinds
+  contentSearch: string;
+  onContentSearchChange: (value: string) => void;
+  /** Whether the reader has collections to list. */
+  hasCollectionsSection: boolean;
+  /** Whether the reader has Singles to list. */
+  hasSinglesSection: boolean;
   pluginSearch: string;
   onPluginSearchChange: (value: string) => void;
   // Navigation — typed with optional href to satisfy child component contracts
@@ -36,15 +49,20 @@ interface SubSidebarContentProps {
   pluginCollectionsForSection: ApiCollection[];
   // Branding
   showBuilder: boolean;
+  /**
+   * Whether a section draws a panel this reader can open; the plugin menu
+   * items of one that does not are listed under Plugins.
+   */
+  hasPanel: (section: string) => boolean;
 }
 
 export function SubSidebarContent({
   selectedMain,
   standaloneLabel,
-  collectionSearch,
-  onCollectionSearchChange,
-  singleSearch,
-  onSingleSearchChange,
+  contentSearch,
+  onContentSearchChange,
+  hasCollectionsSection,
+  hasSinglesSection,
   pluginSearch,
   onPluginSearchChange,
   isActive,
@@ -52,51 +70,29 @@ export function SubSidebarContent({
   canAccessApiKeys,
   canAccessWebhooks,
   pluginCollectionsForSection,
+  hasPanel,
 }: SubSidebarContentProps): JSX.Element | null {
   if (selectedMain === "media") {
-    return <MediaSidebarContent />;
-  }
-
-  if (selectedMain === "collections") {
     return (
-      <div className="space-y-6 px-4 py-6">
-        <SidebarSearch
-          placeholder="Search collection types"
-          value={collectionSearch}
-          onChange={onCollectionSearchChange}
-        />
-        <div className="space-y-1">
-          <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
-            Collections
-          </p>
-          <SidebarMenu>
-            <DynamicCollectionNav
-              isActive={isActive}
-              search={collectionSearch}
-            />
-          </SidebarMenu>
+      <>
+        <MediaSidebarContent />
+        {/* The plugin menu items placed in Media, below its folders. */}
+        <div className="px-4 pb-6">
+          <PluginMenuItems isActive={isActive} section="media" asMenu />
         </div>
-      </div>
+      </>
     );
   }
 
-  if (selectedMain === "singles") {
+  if (isContentSection(selectedMain)) {
     return (
-      <div className="space-y-6 px-4 py-6">
-        <SidebarSearch
-          placeholder="Search singles"
-          value={singleSearch}
-          onChange={onSingleSearchChange}
-        />
-        <div className="space-y-1">
-          <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
-            Singles
-          </p>
-          <SidebarMenu>
-            <DynamicSingleNav isActive={isActive} search={singleSearch} />
-          </SidebarMenu>
-        </div>
-      </div>
+      <ContentPanel
+        search={contentSearch}
+        onSearchChange={onContentSearchChange}
+        hasCollections={hasCollectionsSection}
+        hasSingles={hasSinglesSection}
+        isActive={isActive}
+      />
     );
   }
 
@@ -127,7 +123,7 @@ export function SubSidebarContent({
                 the occasional trip. Not filtered by `pluginSearch` either —
                 that box searches installed plugins, and an entry that ignores
                 it while sitting among entries that obey it reads as a bug. */}
-            {hasPermission("manage-settings") && (
+            {CHANGE_SETTINGS.some(hasPermission) && (
               <SidebarMenuItem>
                 <SidebarMenuButton
                   asChild
@@ -142,6 +138,15 @@ export function SubSidebarContent({
             )}
           </SidebarMenu>
         </div>
+        {/* Each plugin's own pages (`contributes.admin.menu`), under its
+            name, apart from managing plugins above: a plugin with pages of
+            its own, such as a library, is reached here. */}
+        <PluginMenuGroups
+          isActive={isActive}
+          section="plugins"
+          search={pluginSearch}
+          hasPanel={hasPanel}
+        />
       </div>
     );
   }
@@ -149,10 +154,10 @@ export function SubSidebarContent({
   if (selectedMain.startsWith("standalone-")) {
     return (
       <div className="space-y-6 px-4 py-6">
-        <div className="space-y-1">
-          <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
-            {standaloneLabel}
-          </p>
+        {/* Named by the plugin, as the Content panel's nav is, but with no
+            heading of its own: the panel's title band above already says the
+            plugin's name, and a second one under it only repeats it. */}
+        <nav aria-label={standaloneLabel} className="space-y-1">
           <SidebarMenu>
             {pluginCollectionsForSection.map(collection => {
               const href = buildRoute(ROUTES.COLLECTION_ENTRIES, {
@@ -163,12 +168,12 @@ export function SubSidebarContent({
                 collection.labels?.plural ||
                 collection.label ||
                 collection.name;
-              const iconMap = Icons as unknown as Record<
-                string,
-                React.ElementType
-              >;
-              const iconName = collection.admin?.icon || "Database";
-              const IconComponent = iconMap[iconName] || Database;
+              // The icon every panel draws for a collection: the one it
+              // names, else the list.
+              const IconComponent = contentIcon(
+                "collection",
+                collection.admin?.icon
+              );
 
               return (
                 <SidebarMenuItem key={collection.id}>
@@ -178,7 +183,13 @@ export function SubSidebarContent({
                     className="justify-start px-3"
                   >
                     <Link href={href}>
-                      <IconComponent className="h-4 w-4" />
+                      <IconComponent
+                        aria-hidden="true"
+                        className={cn(
+                          "h-4 w-4",
+                          !isActiveItem && "text-muted-foreground"
+                        )}
+                      />
                       <span>{displayName}</span>
                     </Link>
                   </SidebarMenuButton>
@@ -186,7 +197,10 @@ export function SubSidebarContent({
               );
             })}
           </SidebarMenu>
-        </div>
+          {/* And the menu items the plugin places in its own section, under
+              the groups and with the numbers it declares, if any. */}
+          <StandalonePanelItems isActive={isActive} section={selectedMain} />
+        </nav>
       </div>
     );
   }
@@ -210,9 +224,7 @@ export function SubSidebarContent({
             <SidebarMenu>
               {group.items.map(item => {
                 const ItemIcon = item.icon;
-                const active =
-                  isActive(item.href, item.exact) &&
-                  !(item.excludedBy ?? []).some(href => isActive(href));
+                const active = isSettingsNavItemActive(item, isActive);
 
                 return (
                   <SidebarMenuItem key={item.id}>
@@ -239,6 +251,9 @@ export function SubSidebarContent({
           </div>
         ))}
         <DynamicPluginSectionItems placement="settings" isActive={isActive} />
+        {/* Plugin menu items placed in Settings (or in Users, which shows
+            here), in a list of their own. */}
+        <PluginMenuItems isActive={isActive} section="settings" asMenu />
       </div>
     );
   }
@@ -287,6 +302,8 @@ export function SubSidebarContent({
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
+            {/* The plugin menu items placed in the builders. */}
+            <PluginMenuItems isActive={isActive} section="builders" />
           </SidebarMenu>
         </div>
       </div>

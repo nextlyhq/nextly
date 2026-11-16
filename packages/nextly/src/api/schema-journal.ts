@@ -6,8 +6,10 @@
  *     recent applies in the `nextly_migration_journal` table, newest
  *     first, paginated by `started_at` cursor.
  *
- * Auth: super-admin only. Schema applies are admin-level operations;
- * their audit log is gated the same way.
+ * Auth: a super-admin, as their actor decides it. Schema applies are
+ * admin-level operations, and their audit log is gated the same way: a
+ * session is judged by the person's roles, and an API key by its own actor,
+ * so only a full-access key whose maker is an active super-admin reads it.
  *
  * Wire shape: `respondData` with body `{ rows, hasMore }`. Pagination is
  * cursor-style (caller passes `before=<ISO>` to "load more"); there is no
@@ -24,13 +26,19 @@
  * @module api/schema-journal
  */
 
-import { isErrorResponse, requireAuthentication } from "../auth/middleware";
+import { isSuperAdmin } from "../auth/access/actor";
+import { actorForKey, userIsSuperAdmin } from "../auth/access/resolve-actor";
+import { keyCallerHoldsSuperAdmin } from "../auth/authenticated-scope";
+import {
+  isErrorResponse,
+  requireAuthentication,
+  type AuthContext,
+} from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import { readJournal } from "../domains/schema/journal/read-journal";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
-import { isSuperAdmin } from "../services/lib/permissions";
 
 import { respondData } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
@@ -47,6 +55,26 @@ const MAX_LIMIT = 100;
 interface AdapterLike {
   dialect: "postgresql" | "mysql" | "sqlite";
   getDrizzle: () => unknown;
+}
+
+/**
+ * Whether the authenticated caller holds super-admin authority, asked of the
+ * one decision's actor: a session by the person's roles, a key by the key's
+ * own actor rather than its maker's.
+ */
+function holdsSuperAdmin(auth: AuthContext): Promise<boolean> {
+  if (auth.authMethod === "api-key") {
+    const key = actorForKey({
+      keyId: auth.apiKeyId ?? "",
+      userId: auth.userId,
+      grants: auth.grants ?? [],
+      roles: auth.roles,
+      // Bounded as the key's scope is: the raw flag would outlast the bound.
+      superAdmin: keyCallerHoldsSuperAdmin(auth),
+    });
+    return Promise.resolve(isSuperAdmin(key));
+  }
+  return userIsSuperAdmin(auth.userId);
 }
 
 async function getAdapter(): Promise<AdapterLike> {
@@ -68,14 +96,16 @@ async function getAdapter(): Promise<AdapterLike> {
  * Errors:
  *   - 400 NEXTLY_VALIDATION when `limit` or `before` is malformed.
  *   - 401 unauthorized when no session cookie is present.
- *   - 403 NEXTLY_FORBIDDEN when the caller is not a super-admin.
+ *   - 403 NEXTLY_FORBIDDEN when the caller holds no super-admin authority:
+ *     a session that is no super-admin's, or any key but a super-admin's
+ *     full-access one.
  *   - 500 NEXTLY_INTERNAL when the DB query fails.
  */
 export const getSchemaJournal = withErrorHandler(async (req: Request) => {
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
-  if (!(await isSuperAdmin(auth.userId))) {
+  if (!(await holdsSuperAdmin(auth))) {
     // Generic forbidden message; the operator detail goes to logs.
     throw NextlyError.forbidden({
       logContext: { reason: "schema-journal-super-admin-required" },

@@ -40,6 +40,7 @@ import {
 } from "@admin/hooks/queries/useReleases";
 import type { Release } from "@admin/types/releases";
 
+import { useReturnFocusOnClose } from "./dialog-opener";
 import { isDefiniteRefusal, releaseErrorMessage } from "./release-error";
 import {
   describeAfterLostAnswer,
@@ -110,6 +111,11 @@ export interface ReleaseRowActionDialogProps {
   action: ReleaseRowAction;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * Called once the action has been done, for a surface that has to move on
+   * from it: the release's own page leaves a release that was deleted.
+   */
+  onDone?: (action: ReleaseRowAction) => void;
 }
 
 export function ReleaseRowActionDialog({
@@ -117,7 +123,10 @@ export function ReleaseRowActionDialog({
   action,
   open,
   onOpenChange,
+  onDone,
 }: ReleaseRowActionDialogProps): JSX.Element {
+  // Focus goes back to what opened the dialog when it closes.
+  const returnFocus = useReturnFocusOnClose(open);
   // All three hooks, every render: which one runs is chosen by `action`, and a
   // hook called conditionally would change the order React reads them in.
   const publish = usePublishReleaseNow(release.id);
@@ -143,7 +152,10 @@ export function ReleaseRowActionDialog({
   const confirm = () => {
     setAfterLoss(null);
     const done = {
-      onSuccess: () => onOpenChange(false),
+      onSuccess: () => {
+        onOpenChange(false);
+        onDone?.(action);
+      },
       onError: (error: unknown) => void onFailed(error),
     };
     if (action === "publish") publish.mutate(undefined, done);
@@ -164,7 +176,7 @@ export function ReleaseRowActionDialog({
         onOpenChange(next);
       }}
     >
-      <AlertDialogContent>
+      <AlertDialogContent onCloseAutoFocus={returnFocus}>
         <AlertDialogHeader>
           <AlertDialogTitle>{words.title}</AlertDialogTitle>
           <AlertDialogDescription>{words.body}</AlertDialogDescription>

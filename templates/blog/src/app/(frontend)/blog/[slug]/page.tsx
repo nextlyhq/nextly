@@ -43,19 +43,18 @@ import {
   getSiteSettings,
 } from "@/lib/queries";
 import { absoluteUrl } from "@/lib/site-url";
+import { detailStaticParams, isBuildPlaceholder } from "@/lib/static-params";
 
 // Pre-render every published post at build time. Freshness afterward is
 // tag-based: the post query helpers tag their reads (src/lib/queries), so
 // publishing, editing, or deleting a post busts the tag and this page
 // regenerates on the next request — no time-based `revalidate`. A rename
 // busts the collection tag too, so the old slug's page 404s once it moves.
+// Slugs published after the last build render on their first request. Never
+// empty: see detailStaticParams.
 export async function generateStaticParams() {
-  const slugs = await getAllPostSlugs();
-  return slugs.map(slug => ({ slug }));
+  return detailStaticParams(await getAllPostSlugs());
 }
-
-// Slugs published after the last build render on first request.
-export const dynamicParams = true;
 
 export async function generateMetadata({
   params,
@@ -63,6 +62,8 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
+  // The build-time placeholder has no metadata of its own.
+  if (isBuildPlaceholder(slug)) return {};
   const post = await getPostBySlug(slug);
   if (!post) return { title: "Post Not Found" };
 
@@ -96,6 +97,8 @@ export default async function PostPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
+  // The placeholder stops here, before any database read.
+  if (isBuildPlaceholder(slug)) notFound();
   const [post, settings] = await Promise.all([
     getPostBySlug(slug),
     getSiteSettings(),

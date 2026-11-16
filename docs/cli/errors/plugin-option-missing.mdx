@@ -1,0 +1,24 @@
+---
+title: PLUGIN_OPTION_MISSING
+description: "A plugin asks for options at install, and `nextly plugins add` was given none for some of them with no one at the terminal to ask."
+---
+
+## Cause
+
+A plugin asks for options at install, and `nextly plugins add` was given none for some of them with no one at the terminal to ask.
+
+The plugin's declaration lists options its install needs, such as the site's production address, and some were not given with `--option`. In a terminal the command asks for each one; in a script, in CI or with `--non-interactive` there is no one to ask. The configuration was not changed.
+
+## Fix
+
+- Give each option on the command line: `nextly plugins add <package> --option <name>=<value>`.
+- Or run the command in a terminal and answer the questions.
+
+## Example
+
+```text
+✗ "@acme/seo" needs siteUrl to be installed.
+  Why:  siteUrl: The site's production address. The configuration was not changed.
+  Next: Run the command again with --option siteUrl=<value>, or in a terminal to be asked.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-option-missing  (PLUGIN_OPTION_MISSING)
+```

@@ -15,7 +15,46 @@
  * on purpose: it reports no adapter from DI and a container that has none, because it is testing
  * response envelopes rather than DDL.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
+
+// A Builder save's statements run through the busy-table runner, which waits for a table another
+// session holds; those tries are judged against real databases
+// (`busy-table-parity.integration.test.ts`). Here the save runs as one try that never waits,
+// sending each statement through the double's `executeQuery`, so these stay on the statements
+// the save hands over and the outcome it records.
+vi.mock(
+  "../../../domains/schema/busy-table/run-unit",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("../../../domains/schema/busy-table/run-unit")
+    >()),
+    runUnitInTries: (
+      await import(
+        "../../../domains/schema/busy-table/__tests__/helpers/run-unit-once"
+      )
+    ).runUnitOnce,
+  })
+);
+
+// Whether the created table holds every requested column is judged by the comparison a push makes,
+// tested on its own (`created-table-shape.test.ts`); this double runs no introspection, so the check
+// answers that nothing was left out and the test stays on the statements.
+vi.mock("../../../domains/schema/services/created-table-shape", () => ({
+  columnsTheCreateLeftOut: vi.fn(async () => []),
+  describeColumnsLeftOut: vi.fn(() => ""),
+}));
+
+// A registry write's transaction, and the schema version stored in it, are
+// the integration suite's subject (`schema-version-writers.integration.test.ts`):
+// here a registry write runs on the adapter itself, as it did before it had one.
+vi.mock("../../../domains/schema/schema-version", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../domains/schema/schema-version")
+  >()),
+  writeRegistryRows: (adapter: unknown, work: (tx: unknown) => unknown) =>
+    work(adapter),
+  writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
+}));
 
 vi.mock("../../helpers/di", () => ({
   getComponentRegistryFromDI: vi.fn(),
@@ -45,10 +84,15 @@ function makeAdapter(dialect: "postgresql" | "mysql" | "sqlite") {
     dialect,
     getCapabilities: () => ({ dialect }),
     // Answers the way a fresh create finds the database: the main table is there once its CREATE
-    // has run, and the companion is NOT — so the companion path CREATEs it rather than altering
-    // one that does not exist. A blanket `true` here made the companion look pre-existing, which
-    // is not a state a create ever starts from.
-    tableExists: vi.fn(async (name: string) => !name.includes("_locales")),
+    // has run and not before, so the leftover probe before the DDL finds clear ground; and the
+    // companion is NOT, so the companion path CREATEs it rather than altering one that does not
+    // exist. A blanket `true` made a table look pre-existing, which is not a state a create starts
+    // from.
+    tableExists: vi.fn(
+      async (name: string) =>
+        !name.includes("_locales") &&
+        executed.some(sql => sql.includes("CREATE TABLE") && sql.includes(name))
+    ),
     executeQuery: vi.fn(async (sql: string) => {
       executed.push(sql);
       return [];
@@ -88,17 +132,28 @@ import {
   getFieldGroupMetadataServiceFromDI,
 } from "../../helpers/di";
 import { dispatchComponents } from "../component-dispatcher";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 function wireRegistry() {
   const registry = {
     listComponents: vi.fn(),
     registerComponent: vi.fn(async (row: unknown) => row),
     getComponent: vi.fn(),
+    // A schema save reads the component as stored, past the registry row cache.
+    getComponentForWrite: vi.fn(),
     updateComponent: vi.fn(),
     deleteComponent: vi.fn(),
     // "No such slug" and "no field group owns that table", so a create reaches the DDL path.
     getComponentBySlug: vi.fn().mockResolvedValue(null),
     getAllComponents: vi.fn().mockResolvedValue([]),
+    // No field group stored, so a save's cycle check finds nothing to close a cycle with.
+    getAllFieldLists: vi.fn().mockResolvedValue([]),
     isLocked: vi.fn().mockResolvedValue(false),
   };
   vi.mocked(getComponentRegistryFromDI).mockReturnValue(
@@ -271,7 +326,7 @@ describe("a diverged field group and the routes that move its storage", () => {
       adapter as unknown as ReturnType<typeof getAdapterFromDI>
     );
     const registry = wireRegistry();
-    registry.getComponent.mockResolvedValue(diverged);
+    registry.getComponentForWrite.mockResolvedValue(diverged);
 
     await expect(
       dispatchComponents(
@@ -320,7 +375,7 @@ describe("a diverged field group and the routes that move its storage", () => {
     // anything. Asserting after the request would pass on a handler that read the status first and
     // took the lock afterwards.
     let ownerWhenStatusRead: string | null = null;
-    registry.getComponent.mockImplementation(() => {
+    registry.getComponentForWrite.mockImplementation(() => {
       ownerWhenStatusRead = adapter.migrationLock.ownerNow();
       return Promise.resolve(diverged);
     });
@@ -334,9 +389,9 @@ describe("a diverged field group and the routes that move its storage", () => {
     ).rejects.toMatchObject({ code: "CONFLICT" });
 
     // Positive control: the read the assertion is about actually happened. Without it a handler
-    // that never reached `getComponent` would leave the sample at its initial value and satisfy
+    // that never reached `getComponentForWrite` would leave the sample at its initial value and satisfy
     // nothing while appearing to.
-    expect(registry.getComponent).toHaveBeenCalledTimes(1);
+    expect(registry.getComponentForWrite).toHaveBeenCalledTimes(1);
     expect(ownerWhenStatusRead).toMatch(/^apply schema changes to field group/);
   });
 
@@ -375,7 +430,7 @@ describe("a diverged field group and the routes that move its storage", () => {
       // Nothing was issued and nothing was read: no lock DDL, and the component was never fetched.
       expect(executed).toEqual([]);
       expect(adapter.migrationLock.ownerNow()).toBeNull();
-      expect(registry.getComponent).not.toHaveBeenCalled();
+      expect(registry.getComponentForWrite).not.toHaveBeenCalled();
     }
   );
 

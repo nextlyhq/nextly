@@ -12,6 +12,8 @@
 import type { Provider } from "react";
 import { createContext, useContext } from "react";
 
+import type { PublishAllPreview } from "@admin/services/publishAllPreview";
+
 export interface EntryLocaleContextValue {
   /** The active content locale code (undefined = the app default). */
   locale?: string;
@@ -100,6 +102,13 @@ export interface EntryLocaleContextValue {
     publish: () => void;
     /** True while it is in flight. */
     pending: boolean;
+    /**
+     * What the publish would do to each language, read from the server's
+     * preview of it, which judges the request as the publish would.
+     */
+    preview: () => Promise<PublishAllPreview>;
+    /** The query key the preview is cached under, one per document. */
+    previewKey: readonly unknown[];
   };
 }
 

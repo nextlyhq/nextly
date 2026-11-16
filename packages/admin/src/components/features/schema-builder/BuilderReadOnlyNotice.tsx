@@ -1,4 +1,4 @@
-// Shown at the top of the builder when a collection/single/component is
+// Shown at the top of the builder when a collection, Single or field group is
 // code-first (locked). The builder itself already renders every control
 // disabled; this notice makes the read-only intent explicit and points to
 // the source file so devs know where to make changes.
@@ -6,13 +6,9 @@ import type { JSX } from "react";
 
 import { Lock } from "@admin/components/icons";
 
-import type { BuilderConfig } from "./builder-config";
-
-const KIND_LABEL: Record<BuilderConfig["kind"], string> = {
-  collection: "collection",
-  single: "single",
-  "field-group": "field group",
-};
+// The kind's noun comes from the one shared table, so this notice spells each
+// kind as every other builder message does.
+import { BUILDER_KIND_NOUN, type BuilderConfig } from "./builder-config";
 
 type Props = {
   kind: BuilderConfig["kind"];
@@ -24,7 +20,7 @@ export function BuilderReadOnlyNotice({
   kind,
   configPath,
 }: Props): JSX.Element {
-  const label = KIND_LABEL[kind];
+  const label = BUILDER_KIND_NOUN[kind];
 
   return (
     <div

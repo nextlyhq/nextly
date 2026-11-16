@@ -99,3 +99,57 @@ describe("a Single blocks page and its draft hook", () => {
     ).toThrow(/cannot serve drafts/i);
   });
 });
+
+describe("a Single blocks page holding a conditioned block", () => {
+  it("reads the Single once, since its conditions have no entry to read", async () => {
+    const calls: Record<string, unknown>[] = [];
+    const reader = {
+      findSingle: vi.fn(async (args: Record<string, unknown>) => {
+        calls.push(args);
+        return {
+          title: "Home",
+          content: {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "c",
+                type: "core/heading",
+                version: 1,
+                props: { text: "Members only", level: "h1" },
+                // Bound to another Single: never read, since the block can
+                // never show on a Single's page.
+                bindings: {
+                  text: {
+                    $bind: "tagline",
+                    source: "single",
+                    sourceKey: "home",
+                  },
+                },
+                visibility: {
+                  conditions: [[{ field: "title", op: "exists" }]],
+                },
+              },
+            ],
+          },
+        };
+      }),
+      find: vi.fn(async () => ({ docs: [], totalDocs: 0 })),
+      findByID: vi.fn(async () => null),
+    };
+    const route = createSinglePage({
+      slug: "homepage",
+      field: "content",
+      blocks: createBlockResolver(coreBlocks),
+      nextly: reader as never,
+      metadata: (_entry, _context, derived) => ({
+        title: derived.title ?? "Home",
+      }),
+    });
+    await route.generateMetadata();
+    // The route's own read: no public read of the Single for a condition that
+    // can never be judged against it, nor of the Single the block binds.
+    expect(calls).toHaveLength(1);
+    expect(calls.map(call => call.slug)).toEqual(["homepage"]);
+  });
+});

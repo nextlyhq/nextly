@@ -33,10 +33,14 @@ function startNextly(configImport: string): string {
   const { createRegister } = await import("nextly");
   const { default: config } = await import("${configImport}");
   // Next.js writes its Cache Components setting into this file as it builds
-  // it. Nextly, loaded from node_modules, cannot read that for itself, and
-  // warns when Cache Components is on, which it does not support yet.
+  // it. Nextly, loaded from node_modules, cannot read that for itself. With
+  // it off, Nextly warns at start; with it on, a cached read that finds no
+  // "use cache" read function says so. The same holds for the build's newest
+  // migration, which withNextly sets: a production start compares it with
+  // the database's schema version and warns when the database is behind.
   await createRegister(config, {
     cacheComponents: process.env.__NEXT_CACHE_COMPONENTS,
+    buildSchemaVersion: process.env.NEXTLY_BUILD_SCHEMA_VERSION,
   })();`;
 }
 
@@ -160,10 +164,7 @@ function pageExtensionsAdvice(
  * never rewritten; it is reported as skipped with what to add. So is the case
  * where the app sets \`pageExtensions\`: Next.js then reads the hook only under a
  * name with one of those extensions, which this does not guess. The config file
- * itself is never edited here. Next.js 14 runs the hook only with
- * `experimental.instrumentationHook`, which the Next config step gives in the
- * same `experimental` object as Nextly's packages (`patchNextConfig`), so two
- * steps never hand the developer two objects for one key.
+ * itself is never edited here.
  */
 export async function generateInstrumentation(
   cwd: string,

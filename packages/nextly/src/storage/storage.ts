@@ -44,9 +44,16 @@
  */
 
 import { LocalStorageAdapter } from "./adapters/local-adapter";
+import { assertClientUploadClaim } from "./client-upload-claim";
+import { keepsCopies } from "./keeps-copies";
+import {
+  recordStorageWriteFailure,
+  recordStorageWriteSuccess,
+} from "./last-write-failure";
 import type {
   BulkDeleteResult,
   ClientUploadData,
+  ClientUploadOptions,
   CollectionStorageConfig,
   IStorageAdapter,
   StoragePlugin,
@@ -94,6 +101,85 @@ export interface MediaStorageConfig {
     /** URL path prefix for serving files (default: /uploads) */
     publicPath?: string;
   };
+}
+
+/**
+ * The adapter's type ("local", "s3"), naming it in the last-failed-write
+ * record; "unknown" when the adapter cannot say, so recording a failure never
+ * throws in place of the write's own error.
+ */
+function adapterType(adapter: IStorageAdapter): string {
+  try {
+    const type = adapter.getType();
+    return typeof type === "string" && type !== "" ? type : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+/** A write that answered but did not fully succeed: the error to record. */
+type PartialFailure = { error: unknown } | undefined;
+
+/**
+ * Run one server-side write through `adapter` and record it for System
+ * health: a throw, or an answer `partialFailure` reads as failed, as the
+ * adapter's last failed write; full success as clearing it. The record is
+ * kept per process (`last-write-failure`), and the write's own answer or
+ * error reaches the caller as it always did.
+ */
+async function recordedWrite<T>(
+  adapter: IStorageAdapter,
+  write: () => Promise<T>,
+  partialFailure: (result: T) => PartialFailure = () => undefined
+): Promise<T> {
+  let result: T;
+  try {
+    result = await write();
+  } catch (error) {
+    recordStorageWriteFailure(adapterType(adapter), error);
+    throw error;
+  }
+  const failure = partialFailure(result);
+  if (failure === undefined) recordStorageWriteSuccess();
+  else recordStorageWriteFailure(adapterType(adapter), failure.error);
+  return result;
+}
+
+/** How many of the fallback's deletes run at once. */
+const FALLBACK_DELETES_AT_ONCE = 10;
+
+/**
+ * Delete each file through the adapter's single delete, for an adapter with
+ * no bulk delete of its own: every file is tried, and each that is refused is
+ * named with why, none stopping the rest. Also answers the first refusal
+ * itself, which a bulk result keeps only as text.
+ */
+async function deleteEach(
+  adapter: IStorageAdapter,
+  filePaths: readonly string[]
+): Promise<{ result: BulkDeleteResult; firstRejection: PartialFailure }> {
+  const result: BulkDeleteResult = { successful: [], failed: [] };
+  let firstRejection: PartialFailure;
+  for (let at = 0; at < filePaths.length; at += FALLBACK_DELETES_AT_ONCE) {
+    const batch = filePaths.slice(at, at + FALLBACK_DELETES_AT_ONCE);
+    const outcomes = await Promise.allSettled(
+      batch.map(path => adapter.delete(path))
+    );
+    for (const [index, outcome] of outcomes.entries()) {
+      const filePath = batch[index];
+      if (outcome.status === "fulfilled") {
+        result.successful.push(filePath);
+        continue;
+      }
+      const reason: unknown = outcome.reason;
+      firstRejection ??= { error: reason };
+      result.failed.push({
+        filePath,
+        error: reason instanceof Error ? reason.message : String(reason),
+      });
+    }
+  }
+  return { result, firstRejection };
 }
 
 // ============================================================
@@ -241,6 +327,15 @@ export class MediaStorage {
   }
 
   /**
+   * Whether the storage a collection's files go to can keep resized copies
+   * beside them. A delete removes copies only from a storage that can have
+   * them, so one that cannot is asked to remove nothing it never held.
+   */
+  keepsCopies(collection?: string): boolean {
+    return keepsCopies(this.getAdapterForCollection(collection));
+  }
+
+  /**
    * Get configuration for a specific collection.
    *
    * @param collection - The collection slug
@@ -287,7 +382,7 @@ export class MediaStorage {
       uploadOptions.folder = config.prefix + (options.folder || "");
     }
 
-    return adapter.upload(buffer, uploadOptions);
+    return recordedWrite(adapter, () => adapter.upload(buffer, uploadOptions));
   }
 
   /**
@@ -300,7 +395,8 @@ export class MediaStorage {
    */
   async delete(filePath: string, collection?: string): Promise<void> {
     const adapter = this.getAdapterForCollection(collection);
-    return adapter.delete(filePath);
+    // A delete is a write too, recorded as an upload is.
+    return recordedWrite(adapter, () => adapter.delete(filePath));
   }
 
   /**
@@ -313,39 +409,32 @@ export class MediaStorage {
     collection?: string
   ): Promise<BulkDeleteResult> {
     const adapter = this.getAdapterForCollection(collection);
+    // Asked to delete nothing, nothing was written: a past failure stands.
+    if (filePaths.length === 0) return { successful: [], failed: [] };
 
+    // Recorded as an upload is; a file the adapter answered as not deleted
+    // is a failed write, though the call itself returned.
     if (adapter.bulkDelete) {
-      return adapter.bulkDelete(filePaths);
-    }
-
-    // Fallback: sequential deletes in chunks of 10
-    const successful: string[] = [];
-    const failed: Array<{ filePath: string; error: string }> = [];
-    const chunkSize = 10;
-
-    for (let i = 0; i < filePaths.length; i += chunkSize) {
-      const chunk = filePaths.slice(i, i + chunkSize);
-      const results = await Promise.allSettled(
-        chunk.map(fp => adapter.delete(fp))
+      const bulkDelete = adapter.bulkDelete.bind(adapter);
+      return recordedWrite(
+        adapter,
+        () => bulkDelete(filePaths),
+        result => (result.failed.length > 0 ? { error: undefined } : undefined)
       );
-
-      results.forEach((result, idx) => {
-        const fp = chunk[idx];
-        if (result.status === "fulfilled") {
-          successful.push(fp);
-        } else {
-          failed.push({
-            filePath: fp,
-            error:
-              result.reason instanceof Error
-                ? result.reason.message
-                : String(result.reason),
-          });
-        }
-      });
     }
 
-    return { successful, failed };
+    // Fallback: the adapter's own deletes, ten at a time. The first
+    // rejection is kept so the record's reason is chosen from its code.
+    let firstRejection: PartialFailure;
+    return recordedWrite(
+      adapter,
+      async () => {
+        const run = await deleteEach(adapter, filePaths);
+        firstRejection = run.firstRejection;
+        return run.result;
+      },
+      () => firstRejection
+    );
   }
 
   /**
@@ -419,7 +508,10 @@ export class MediaStorage {
    * @param filename - Original filename
    * @param mimeType - File MIME type
    * @param collection - Collection slug
+   * @param options - The file's exact size, and the URL's lifetime
    * @returns Client upload data, or null if not supported
+   * @throws NextlyError(VALIDATION_ERROR) when the claim fails the upload
+   *   checks, is an SVG, or its extension does not name its type
    *
    * @example
    * ```typescript
@@ -427,7 +519,8 @@ export class MediaStorage {
    * const uploadData = await storage.getClientUploadUrl(
    *   'photo.jpg',
    *   'image/jpeg',
-   *   'media'
+   *   'media',
+   *   { size: file.size }
    * );
    *
    * // Client-side: upload directly to storage
@@ -441,16 +534,30 @@ export class MediaStorage {
   async getClientUploadUrl(
     filename: string,
     mimeType: string,
-    collection: string
+    collection: string,
+    options: ClientUploadOptions
   ): Promise<ClientUploadData | null> {
     if (!this.supportsClientUploads(collection)) {
       return null;
     }
+    // Judged before anything is signed, here rather than in a route, so every
+    // way of asking for a direct upload is held to it. The type signed is the
+    // judged one, in its canonical spelling.
+    const judged = assertClientUploadClaim({
+      filename,
+      mimeType,
+      size: options.size,
+    });
 
     // Find the plugin for this collection
     for (const plugin of this.plugins.values()) {
       if (collection in plugin.collections && plugin.getClientUploadUrl) {
-        return plugin.getClientUploadUrl(filename, mimeType, collection);
+        return plugin.getClientUploadUrl(
+          filename,
+          judged.mimeType,
+          collection,
+          options
+        );
       }
     }
 

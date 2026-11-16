@@ -67,6 +67,11 @@ export const nextlyVersionsMysql = mysqlTable(
     // resolves to milliseconds here, which is finer than SQLite but still a
     // resolution two rewrites can share; a counter cannot collide.
     revision: int("revision").default(0).notNull(),
+    // A recovery point's base, as the PostgreSQL schema says.
+    baseVersionNo: int("base_version_no"),
+    baseDraftRevision: int("base_draft_revision"),
+    // Each restored field's source version, as the PostgreSQL schema says.
+    fieldSources: json("field_sources").$type<Record<string, number>>(),
   },
   table => [
     // Durable version_no uniqueness per document. A FULL (non-partial) unique

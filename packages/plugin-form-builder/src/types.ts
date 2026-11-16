@@ -47,8 +47,11 @@ export interface EmailConfig {
  * the `form-builder.beforeEmail` D63 filter seam.
  */
 export interface FormEmailNotification {
-  /** Resolved recipient address. */
-  to: string;
+  /**
+   * Resolved recipient address, or the addresses of a team notification
+   * that has several. A notification with one recipient keeps a string.
+   */
+  to: string | string[];
   /** Email template slug to render. */
   templateSlug: string;
   /** Template variables (submitted data + form metadata). */
@@ -68,6 +71,12 @@ export interface FormEmailNotification {
   bcc?: string[];
   /** Source notification id; undefined for filter-injected emails. */
   notificationId?: string;
+  /**
+   * The files that go with this email, by media id: the notification's own
+   * choice of file fields. Absent on a filter-injected email, which takes the
+   * files of the fields marked to attach to notification emails.
+   */
+  attachments?: Array<{ mediaId: string }>;
 }
 
 /** @experimental Context passed to the `form-builder.beforeEmail` filter seam. */
@@ -97,10 +106,25 @@ export interface FormNotification {
    * the template/provider default.
    */
   senderEmail?: string;
+  /**
+   * Which preset the notification started from: one to the team, or a
+   * confirmation to the person who submitted. Absent on rules saved before
+   * presets, which read by their recipient.
+   */
+  kind?: "team" | "visitor";
   /** How the recipient address is determined */
   recipientType: "static" | "field";
-  /** Recipient: static email address or a {{fieldName}} reference */
+  /**
+   * Recipient: static email address or a {{fieldName}} reference. A team
+   * notification with several addresses keeps them in `recipients`; this
+   * then holds the first, for readers that know only one.
+   */
   to: string;
+  /**
+   * A team notification's addresses. Absent on rules saved before several
+   * were allowed, whose single `to` reads as a list of one.
+   */
+  recipients?: string[];
   /** CC email addresses */
   cc: string[];
   /** BCC email addresses */
@@ -117,6 +141,20 @@ export interface FormNotification {
    * multi-condition tree without a migration.
    */
   condition?: ConditionalLogicCondition;
+  /**
+   * Several send conditions: all must hold, or any one. Takes the place of
+   * `condition`, which reads as a list of one under `all` when this is absent.
+   */
+  conditions?: {
+    match: "all" | "any";
+    list: ConditionalLogicCondition[];
+  };
+  /**
+   * The names of the form's file fields whose files go with this email.
+   * Absent on rules saved before it, which attach exactly the file fields
+   * marked to attach to notification emails.
+   */
+  attachFields?: string[];
   /** Slug of the email template to use */
   templateSlug?: string;
 }
@@ -172,6 +210,12 @@ export interface SubmissionDocument {
   userAgent?: string;
   /** Which spam check flagged this, when one did. */
   spamReason?: string | null;
+  /**
+   * What it was asked, as the write seam stored it (`utils/asked-fields`):
+   * its fields' labels and option labels at the time. Absent on a
+   * submission stored before submissions kept it.
+   */
+  asked?: unknown;
   submittedAt: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -206,6 +250,7 @@ export interface FormFieldToggles {
   date: boolean | Partial<FieldBlockConfig>;
   time: boolean | Partial<FieldBlockConfig>;
   hidden: boolean | Partial<FieldBlockConfig>;
+  consent: boolean | Partial<FieldBlockConfig>;
 }
 
 /** What a host may override on a collection this plugin contributes. */
@@ -421,6 +466,22 @@ export interface FormBuilderPluginOptions {
   /**
    * Spam protection configuration.
    */
+  /**
+   * One response per person.
+   */
+  oneResponse?: {
+    /**
+     * How many earlier submissions a form may have for a change of its
+     * one-response setting to give them their keys inside the save itself,
+     * so the save answers with the form as it then stands. A form with more
+     * is brought up to date by the plugin's background sweep instead, and
+     * until it is, each new submission is compared with the earlier answers.
+     * Lower it to keep saves short on a slow database.
+     * @default 200
+     */
+    keysInSave?: number;
+  };
+
   spamProtection?: {
     /**
      * Enable honeypot field for spam detection.
@@ -429,14 +490,29 @@ export interface FormBuilderPluginOptions {
     honeypot?: boolean;
 
     /**
-     * Enable reCAPTCHA v3.
-     * @default false
+     * Google reCAPTCHA v3: a score for each visitor, in the background.
+     * `enabled` makes it the site default for forms whose bot check is "Site
+     * default". The token is verified on the server with `secretKey`; the
+     * visitor's form renders the widget with `siteKey`.
+     * @default { enabled: false }
      */
     recaptcha?: {
       enabled: boolean;
       siteKey?: string;
       secretKey?: string;
-      scoreThreshold?: number; // 0.0 - 1.0
+      /** Below this score (0.0 to 1.0) a visitor is a bot. @default 0.5 */
+      scoreThreshold?: number;
+    };
+
+    /**
+     * Cloudflare Turnstile: a check in the background that rarely shows a
+     * puzzle. `enabled` makes it the site default when reCAPTCHA's is not.
+     * @default { enabled: false }
+     */
+    turnstile?: {
+      enabled: boolean;
+      siteKey?: string;
+      secretKey?: string;
     };
 
     /**
@@ -578,7 +654,8 @@ export type FormField =
   | FileFormField
   | DateFormField
   | TimeFormField
-  | HiddenFormField;
+  | HiddenFormField
+  | ConsentFormField;
 
 /**
  * A form field of a built-in type OR a plugin-contributed type. Stored form
@@ -604,7 +681,8 @@ export type FormFieldType =
   | "file"
   | "date"
   | "time"
-  | "hidden";
+  | "hidden"
+  | "consent";
 
 /**
  * A form field's type on the wire: a built-in or a plugin-contributed type id
@@ -630,6 +708,7 @@ export const BUILT_IN_FORM_FIELD_TYPES: readonly FormFieldType[] = [
   "date",
   "time",
   "hidden",
+  "consent",
 ];
 
 const BUILT_IN_FORM_FIELD_TYPES_SET = new Set<string>(
@@ -838,6 +917,27 @@ export interface HiddenFormField extends Omit<BaseFormField, "type"> {
   defaultValue?: string;
 }
 
+/**
+ * A box the visitor ticks to agree to a text, such as a privacy policy. It is
+ * always required, and its answer keeps the text the visitor was shown, so a
+ * later change to the text does not change what an earlier visitor agreed to.
+ */
+export interface ConsentFormField extends Omit<BaseFormField, "type"> {
+  type: "consent";
+  /** What the visitor agrees to, shown beside the box and stored with it. */
+  agreementText: string;
+}
+
+/**
+ * A consent field's stored answer: whether the visitor agreed, and the text
+ * the form showed them. Made by the server from the form, never taken from
+ * the visitor, and never changed by an edit of the submission.
+ */
+export interface ConsentAnswer {
+  agreed: boolean;
+  text: string;
+}
+
 // ============================================================
 // Validation Types
 // ============================================================
@@ -930,6 +1030,12 @@ export interface ConditionalLogicCondition {
 // Form Settings Types
 // ============================================================
 
+/** How a form tells one person's response from another's. */
+export type OneResponseMode = "off" | "email" | "browser" | "ip";
+
+/** Which bot check a form asks for. */
+export type BotCheckMode = "default" | "off" | "recaptcha" | "turnstile";
+
 /**
  * Form settings and behavior.
  */
@@ -970,8 +1076,67 @@ export interface FormSettings {
     value: string; // Document ID
   };
 
-  /** Allow multiple submissions from same IP (default true) */
+  /**
+   * Allow multiple submissions from same IP (default true).
+   * @deprecated Read as `oneResponse` (true is `"off"`, false is `"ip"`);
+   * no longer written.
+   */
   allowMultipleSubmissions?: boolean;
+
+  /**
+   * One response per person, and how a person is told apart: `"off"` allows
+   * several; `"email"` by the answer to `oneResponseField`, `"browser"` by a
+   * token the browser keeps, `"ip"` by network address.
+   *
+   * @default "off"
+   */
+  oneResponse?: OneResponseMode;
+
+  /** The email field `oneResponse: "email"` reads, by name. */
+  oneResponseField?: string;
+
+  /**
+   * Which run of one-response checks the form is on: a whole number from 0,
+   * moved on when the mode changes so earlier responses count afresh.
+   *
+   * @default 0
+   */
+  oneResponseVersion?: number;
+
+  /**
+   * The one-response version whose earlier submissions all carry their keys.
+   * Behind `oneResponseVersion` while the plugin is still making them, after
+   * a change of mode or Email field; unset reads as up to date. Written by
+   * the plugin only.
+   */
+  oneResponseKeyedVersion?: number;
+
+  /**
+   * The bot check: `"default"` follows the plugin's option, `"off"` none, or
+   * a named provider.
+   *
+   * @default "default"
+   */
+  botCheck?: BotCheckMode;
+
+  /** When the form stops taking submissions, as an ISO date and time. */
+  closesAt?: string;
+
+  /** How many submissions the form takes before it closes; none for no limit. */
+  submissionLimit?: number;
+
+  /**
+   * Whether a submission keeps the visitor's IP address and browser.
+   *
+   * @default true
+   */
+  storeIpAndBrowser?: boolean;
+
+  /** How many days submissions are kept; none to keep them. */
+  keepDays?: number;
+
+  /** A note about the form, for people in the admin only. */
+  internalNote?: string;
 
   /**
    * Per-form honeypot override. Unset inherits the plugin's
@@ -982,6 +1147,8 @@ export interface FormSettings {
   /**
    * Per-form reCAPTCHA override. Unset inherits the plugin's
    * `spamProtection.recaptcha.enabled`; the form wins where set.
+   * @deprecated Read as `botCheck` (unset is `"default"`, true
+   * `"recaptcha"`, false `"off"`); no longer written.
    */
   captchaEnabled?: boolean;
 
@@ -1138,9 +1305,10 @@ export interface ResolvedFormBuilderConfig {
   /**
    * Whether each redirect target collection is localized, keyed by slug.
    *
-   * Resolved at `init` from the collection's own registered metadata rather
-   * than asked for in options, because the collection already declares it and
-   * a second declaration drifts.
+   * Resolved at `init` from the collection's own declaration rather than
+   * asked for in options, because the collection already declares it and a
+   * second declaration drifts: the configuration's for a collection code
+   * declares, the registry row's for one made in the Schema Builder.
    *
    * It decides whether a target's main-row `status` answers for the document:
    * a localized collection publishes on a locale companion, so the row reads
@@ -1159,6 +1327,9 @@ export interface ResolvedFormBuilderConfig {
     enabled: boolean;
   };
 
+  /** `FormBuilderPluginOptions["oneResponse"]`, every option filled. */
+  oneResponse: Required<NonNullable<FormBuilderPluginOptions["oneResponse"]>>;
+
   spamProtection: {
     honeypot: boolean;
     recaptcha?: {
@@ -1166,6 +1337,11 @@ export interface ResolvedFormBuilderConfig {
       siteKey?: string;
       secretKey?: string;
       scoreThreshold?: number;
+    };
+    turnstile?: {
+      enabled: boolean;
+      siteKey?: string;
+      secretKey?: string;
     };
     rateLimit?: {
       maxSubmissions: number;

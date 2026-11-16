@@ -16,9 +16,9 @@
  * v2 syntax notes:
  * - `fields`/`references` became `from`/`to`.
  * - A bare `r.many.X()` infers its join from the single reverse
- *   `r.one` on X. Three manys have NO reverse one (userPermissionCache,
- *   media←mediaFolders) or are ambiguous (self-joins), so they carry
- *   explicit `from`/`to` or a matching `alias`.
+ *   `r.one` on X. A many with NO reverse one (media←mediaFolders) or an
+ *   ambiguous one (self-joins) carries explicit `from`/`to` or a matching
+ *   `alias`.
  * - `relationName` became `alias` — the string pairs a one with the
  *   many that reverses it when several edges connect the same tables
  *   (role inheritance's parent/child, media folders' subfolder tree).
@@ -41,11 +41,6 @@ export const buildSqliteEdges = (r: RelationsBuilder<SqliteTables>) => ({
   users: {
     refreshTokens: r.many.refreshTokens(),
     userRoles: r.many.userRoles(),
-    // No reverse one() exists on userPermissionCache — explicit columns.
-    permissionCache: r.many.userPermissionCache({
-      from: r.users.id,
-      to: r.userPermissionCache.userId,
-    }),
     apiKeys: r.many.apiKeys(),
     activityLogs: r.many.activityLog(),
   },

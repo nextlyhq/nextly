@@ -1,0 +1,23 @@
+---
+title: POSTGRES_SCHEMA_INVALID
+description: "`db.postgres.schema` is not a name PostgreSQL can use for a schema."
+---
+
+## Cause
+
+`db.postgres.schema` is not a name PostgreSQL can use for a schema.
+
+The schema name reaches SQL through the connection's `search_path`, so a name PostgreSQL would need quoting for is refused when the configuration is read, rather than connecting and then finding nothing.
+
+## Fix
+
+- Rename the schema in `db.postgres.schema` to lower-case letters, digits and underscores, starting with a letter or underscore, at most 63 characters, and not beginning with `pg_`.
+
+## Example
+
+```text
+✗ db.postgres.schema is "Tenant-A", which is not a usable schema name.
+  Why:  The name reaches SQL through the connection's `search_path`, where an unusable one would connect and then find nothing.
+  Next: Use lower-case letters, digits and underscores, starting with a letter or underscore (max 63 characters), and not beginning with "pg_".
+  Docs: https://nextlyhq.com/docs/cli/errors/postgres-schema-invalid  (POSTGRES_SCHEMA_INVALID)
+```

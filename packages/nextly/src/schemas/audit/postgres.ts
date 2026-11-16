@@ -23,6 +23,13 @@ import {
   pgIndexes,
 } from "../_internal/core-indexes";
 
+import {
+  AUDIT_ACTOR_KIND_LENGTH,
+  AUDIT_ACTOR_PRINCIPAL_KIND_LENGTH,
+  AUDIT_KIND_LENGTH,
+  AUDIT_TARGET_PRINCIPAL_KIND_LENGTH,
+} from "./widths";
+
 // Append-only by application convention, with two exceptions the application
 // itself performs and an operator hardening this table has to allow for:
 //
@@ -49,7 +56,7 @@ import {
 export function auditLogColumns() {
   return {
     id: text("id").primaryKey(),
-    kind: varchar("kind", { length: 64 }).notNull(),
+    kind: varchar("kind", { length: AUDIT_KIND_LENGTH }).notNull(),
     actorUserId: text("actor_user_id"),
     targetUserId: text("target_user_id"),
     ipAddress: varchar("ip_address", { length: 45 }),
@@ -70,14 +77,18 @@ export function auditLogColumns() {
     // identified, as on a failed sign-in), or a plugin's kind of signed-in
     // person ("<plugin>:<name>"). NULL on rows written before the column
     // existed, which read as they always did.
-    actorKind: varchar("actor_kind", { length: 191 }),
+    actorKind: varchar("actor_kind", { length: AUDIT_ACTOR_KIND_LENGTH }),
     // A plugin-defined person, named apart from the staff columns above: a
     // person's id in `actor_user_id` would be read as a staff user's, and
     // one that is not a staff user's as an erased account. Once the person is
     // reported deleted, the id is replaced by a keyed digest of kind and id.
-    actorPrincipalKind: varchar("actor_principal_kind", { length: 191 }),
+    actorPrincipalKind: varchar("actor_principal_kind", {
+      length: AUDIT_ACTOR_PRINCIPAL_KIND_LENGTH,
+    }),
     actorPrincipalId: varchar("actor_principal_id", { length: 191 }),
-    targetPrincipalKind: varchar("target_principal_kind", { length: 191 }),
+    targetPrincipalKind: varchar("target_principal_kind", {
+      length: AUDIT_TARGET_PRINCIPAL_KIND_LENGTH,
+    }),
     targetPrincipalId: varchar("target_principal_id", { length: 191 }),
   };
 }

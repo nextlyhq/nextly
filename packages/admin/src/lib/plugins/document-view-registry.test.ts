@@ -9,20 +9,29 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { resolveRoute } from "@admin/lib/routing";
-import EditEntryPage from "@admin/pages/dashboard/entries/[slug]/[id]/index";
-import EntryVersionsPage from "@admin/pages/dashboard/entries/[slug]/[id]/versions";
-import SingleEditPage from "@admin/pages/dashboard/singles/[slug]/index";
-import SingleVersionsPage from "@admin/pages/dashboard/singles/[slug]/versions";
+import { routeConfig } from "@admin/pages/registry";
 
 import {
+  addressableFieldsWithin,
   clearDocumentViews,
   documentViewApplies,
   documentViewMissing,
+  editViewHasPages,
+  editViewPage,
   resolveViewField,
   matchDocumentView,
   registerDocumentViews,
   routedDocumentView,
 } from "./document-view-registry";
+
+// Pages load on demand through lazyRoute, so the resolver hands back the
+// route table's own wrapper for each page. Identity is asserted against
+// those entries rather than against the raw page modules.
+const EditEntryPage = routeConfig[ROUTES.COLLECTION_ENTRY_EDIT].component;
+const EntryVersionsPage =
+  routeConfig[ROUTES.COLLECTION_ENTRY_VERSIONS].component;
+const SingleEditPage = routeConfig[ROUTES.SINGLE_EDIT].component;
+const SingleVersionsPage = routeConfig[ROUTES.SINGLE_VERSIONS].component;
 
 afterEach(() => clearDocumentViews());
 
@@ -98,14 +107,48 @@ describe("a view scoped to a field type", () => {
     expect(matchDocumentView("collection", "pages", "other")).toBeUndefined();
   });
 
-  it("applies to a document with a TOP-LEVEL field of its type only", () => {
+  it("applies to a document with a field of its type at the top, inside groups or in a repeater's rows", () => {
     expect(
       documentViewApplies(blocksBuilder, [{ type: "text" }, { type: "blocks" }])
     ).toBe(true);
-    // Nested inside a group, the field is not counted.
+    // Inside a named group, at any depth, the field is addressed by its path.
     expect(
       documentViewApplies(blocksBuilder, [
-        { name: "extra", type: "group", fields: [{ type: "blocks" }] },
+        {
+          name: "extra",
+          type: "group",
+          fields: [
+            {
+              name: "inner",
+              type: "group",
+              fields: [{ name: "b", type: "blocks" }],
+            },
+          ],
+        },
+      ])
+    ).toBe(true);
+    // Inside a repeater's rows too: each row is addressed by its saved id.
+    expect(
+      documentViewApplies(blocksBuilder, [
+        {
+          name: "rows",
+          type: "repeater",
+          fields: [{ name: "b", type: "blocks" }],
+        },
+      ])
+    ).toBe(true);
+    // But not where the rows declare their own `id`: they get no saved id,
+    // so no row of them has an address.
+    expect(
+      documentViewApplies(blocksBuilder, [
+        {
+          name: "rows",
+          type: "repeater",
+          fields: [
+            { name: "id", type: "text" },
+            { name: "b", type: "blocks" },
+          ],
+        },
       ])
     ).toBe(false);
     expect(documentViewApplies(blocksBuilder, [{ type: "text" }])).toBe(false);
@@ -150,7 +193,7 @@ describe("a view scoped to a field type", () => {
     ).toBeUndefined();
   });
 
-  it("routes an entry address at its path to the entry page, gated as editing", () => {
+  it("routes an entry address at its path to the entry page, gated as the editor it draws is", () => {
     registerDocumentViews([blocksBuilder]);
     const resolved = resolveRoute(
       buildRoute(ROUTES.COLLECTION_ENTRY_VIEW, {
@@ -161,7 +204,7 @@ describe("a view scoped to a field type", () => {
       ""
     );
     expect(resolved.Component).toBe(EditEntryPage);
-    expect(resolved.requiredPermission).toBe("update-pages");
+    expect(resolved.requiredPermission).toBe("read-pages");
   });
 });
 
@@ -185,6 +228,7 @@ describe("which field a field-type view edits", () => {
       // The declaration itself, so the view reads the field's own options.
       declaration: { name: "layout", type: "blocks" },
       within: [],
+      bases: [""],
     });
   });
 
@@ -194,12 +238,14 @@ describe("which field a field-type view edits", () => {
       name: "hero",
       declaration: twoFields[1],
       within: [],
+      bases: [""],
     });
     expect(resolveViewField("blocks", twoFields, "body")).toEqual({
       kind: "field",
       name: "body",
       declaration: twoFields[2],
       within: [],
+      bases: [""],
     });
   });
 
@@ -207,8 +253,20 @@ describe("which field a field-type view edits", () => {
     expect(resolveViewField("blocks", twoFields, undefined)).toEqual({
       kind: "choose",
       candidates: [
-        { name: "hero", label: "Hero", declaration: twoFields[1], within: [] },
-        { name: "body", label: "Body", declaration: twoFields[2], within: [] },
+        {
+          name: "hero",
+          label: "Hero",
+          declaration: twoFields[1],
+          within: [],
+          bases: [""],
+        },
+        {
+          name: "body",
+          label: "Body",
+          declaration: twoFields[2],
+          within: [],
+          bases: [""],
+        },
       ],
     });
   });
@@ -270,9 +328,9 @@ describe("which field a field-type view edits", () => {
     expect(resolveViewField("blocks", twoFields, "nope").kind).toBe("choose");
   });
 
-  it("counts a field in an unnamed group as top-level, and one in a named group not", () => {
-    // An unnamed group is presentation only: its fields are addressed at the
-    // top level, so the view reaches them; a named group moves them down.
+  it("addresses a field in an unnamed group at the top level, and one in a named group by its path", () => {
+    // An unnamed group is presentation only and adds nothing to the path; a
+    // named group adds its name.
     const fields = [
       { type: "group", fields: [{ name: "aside", type: "blocks" }] },
       {
@@ -281,14 +339,57 @@ describe("which field a field-type view edits", () => {
         fields: [{ name: "inner", type: "blocks" }],
       },
     ];
-    expect(resolveViewField("blocks", fields, undefined)).toMatchObject({
+    expect(resolveViewField("blocks", fields, "aside")).toMatchObject({
       kind: "field",
       name: "aside",
     });
-    expect(documentViewApplies(blocksBuilder, fields)).toBe(true);
-    expect(documentViewApplies(blocksBuilder, [fields[1] as object])).toBe(
-      false
-    );
+    expect(resolveViewField("blocks", fields, "hero.inner")).toMatchObject({
+      kind: "field",
+      name: "hero.inner",
+      declaration: { name: "inner" },
+    });
+    // Two candidates and no address: the author is asked, offered both paths.
+    const asked = resolveViewField("blocks", fields, undefined);
+    expect(asked.kind).toBe("choose");
+    expect(
+      asked.kind === "choose" ? asked.candidates.map(c => c.name) : []
+    ).toEqual(["aside", "hero.inner"]);
+  });
+
+  it("names every group around a nested field, with the level each condition reads at", () => {
+    // A hidden or read-only group closes everything inside it, so the view
+    // needs the whole chain; each step's condition names a field beside that
+    // step, so it reads under that step's own base path.
+    const outer = { name: "hero", type: "group", fields: [] as object[] };
+    const unnamed = { type: "group", fields: [] as object[] };
+    const body = { name: "body", type: "blocks" };
+    unnamed.fields.push(body);
+    outer.fields.push(unnamed);
+    const resolved = resolveViewField("blocks", [outer], "hero.body");
+
+    expect(resolved).toMatchObject({ kind: "field", name: "hero.body" });
+    if (resolved.kind !== "field") return;
+    expect(resolved.within).toEqual([outer, unnamed]);
+    expect(resolved.bases).toEqual(["", "hero", "hero"]);
+  });
+
+  it("does not reach a field inside a repeater by a path naming no row", () => {
+    // A row is reached only by an address naming its saved id
+    // (`rows.<rowId>.g.b`); the declared path names no row, and with no rows
+    // in hand there is none to offer.
+    const fields = [
+      {
+        name: "rows",
+        type: "repeater",
+        fields: [
+          { name: "g", type: "group", fields: [{ name: "b", type: "blocks" }] },
+        ],
+      },
+    ];
+    expect(resolveViewField("blocks", fields, "rows.g.b")).toEqual({
+      kind: "choose",
+      candidates: [],
+    });
   });
 
   it("names no field for a view scoped to the document itself", () => {
@@ -299,7 +400,7 @@ describe("which field a field-type view edits", () => {
 });
 
 describe("resolveRoute for a document view", () => {
-  it("resolves an entry's registered view to the entry page, gated as editing", () => {
+  it("resolves an entry's registered view to the entry page, gated as the editor it draws is", () => {
     registerDocumentViews([builder]);
     const href = buildRoute(ROUTES.COLLECTION_ENTRY_VIEW, {
       slug: "pages",
@@ -315,13 +416,13 @@ describe("resolveRoute for a document view", () => {
       id: "e1",
       view: "builder",
     });
-    expect(resolved.requiredPermission).toBe("update-pages");
+    expect(resolved.requiredPermission).toBe("read-pages");
     expect(resolved.routeType).toBe("private");
     // A refused view names what it opens, as the entry page it draws does.
     expect(resolved.accessSubject).toBe("collection");
   });
 
-  it("resolves a Single's field-type view to the Single page, gated as editing", () => {
+  it("resolves a Single's field-type view to the Single page, gated as the editor it draws is", () => {
     // A Single is reached only by a field-type view: `views[slug]` declares
     // for a collection.
     registerDocumentViews([{ ...blocksBuilder, path: "builder" }]);
@@ -334,7 +435,7 @@ describe("resolveRoute for a document view", () => {
 
     expect(resolved.Component).toBe(SingleEditPage);
     expect(resolved.params).toEqual({ slug: "homepage", view: "builder" });
-    expect(resolved.requiredPermission).toBe("update-homepage");
+    expect(resolved.requiredPermission).toBe("read-homepage");
     expect(resolved.accessSubject).toBe("single");
   });
 
@@ -412,5 +513,63 @@ describe("resolveRoute for a document view", () => {
     );
     expect(single.Component).toBe(SingleEditPage);
     expect(single.params).toEqual({ slug: "homepage" });
+  });
+});
+
+describe("the fields a document addresses at its own level", () => {
+  it("stops at an unnamed group already open on its path, directly or through another", () => {
+    // Raw config can hold a cycle. Each group's fields are still found once,
+    // the group that reaches itself is not walked again, and named fields
+    // keep the unnamed groups they sit in.
+    const direct: Record<string, unknown> = { type: "group", fields: [] };
+    direct.fields = [{ name: "secret", type: "text" }, direct];
+    const outer: Record<string, unknown> = { type: "group", fields: [] };
+    const inner = {
+      type: "group",
+      fields: [outer, { name: "note", type: "text" }],
+    };
+    outer.fields = [{ name: "secret", type: "text" }, inner];
+
+    const names = (fields: object[]) =>
+      addressableFieldsWithin(fields).map(({ field, within }) => [
+        (field as { name?: string }).name,
+        within.length,
+      ]);
+    expect(names([direct])).toEqual([["secret", 1]]);
+    expect(names([outer])).toEqual([
+      ["secret", 1],
+      ["note", 2],
+    ]);
+  });
+});
+
+describe("the pages of a collection's own edit view", () => {
+  const EDITOR = "@acme/forms/admin#FormEditor";
+
+  it("names a view declared on the collection that draws the edit view", () => {
+    registerDocumentViews([
+      { slug: "forms", path: "settings", component: EDITOR },
+    ]);
+    expect(editViewPage("forms", "settings", EDITOR)).toBe("settings");
+    expect(editViewHasPages("forms", EDITOR)).toBe(true);
+  });
+
+  it("leaves a view that draws another component to the form", () => {
+    registerDocumentViews([
+      { slug: "forms", path: "settings", component: "@acme/other#View" },
+    ]);
+    expect(editViewPage("forms", "settings", EDITOR)).toBeUndefined();
+    expect(editViewHasPages("forms", EDITOR)).toBe(false);
+  });
+
+  it("never takes a field-type view drawing the same component as a page", () => {
+    // A field-type view is offered on any document with its field, and only
+    // its field decides whether it applies; drawn as the editor's page it
+    // would skip that check.
+    registerDocumentViews([
+      { fieldType: "blocks", path: "settings", component: EDITOR },
+    ]);
+    expect(editViewPage("forms", "settings", EDITOR)).toBeUndefined();
+    expect(editViewHasPages("forms", EDITOR)).toBe(false);
   });
 });

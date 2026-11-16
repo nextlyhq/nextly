@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ROUTES } from "@admin/constants/routes";
 import { resolveRoute } from "@admin/lib/routing";
+import { routeConfig } from "@admin/pages/registry";
 import type { AdminBranding } from "@admin/types/branding";
 
 let mockBranding: AdminBranding = { plugins: [] } as unknown as AdminBranding;
@@ -49,7 +50,11 @@ describe("plugin browse route", () => {
   it("resolves the directory path to the browse page", () => {
     const resolved = resolveRoute(ROUTES.PLUGIN_BROWSE, "");
 
-    expect(resolved.Component).toBe(PluginBrowsePage);
+    // The page loads on demand, so the resolver hands back the route table's
+    // wrapper; identity is against the table's entry, not the raw module.
+    expect(resolved.Component).toBe(
+      routeConfig[ROUTES.PLUGIN_BROWSE].component
+    );
     expect(resolved.params).toEqual({});
   });
 
@@ -59,7 +64,9 @@ describe("plugin browse route", () => {
     // detail route that stopped matching anything.
     const resolved = resolveRoute("/admin/plugins/nextlyhq-plugin-seo", "");
 
-    expect(resolved.Component).not.toBe(PluginBrowsePage);
+    expect(resolved.Component).not.toBe(
+      routeConfig[ROUTES.PLUGIN_BROWSE].component
+    );
     expect(resolved.params).toEqual({ slug: "nextlyhq-plugin-seo" });
   });
 
@@ -77,7 +84,9 @@ describe("plugin browse route", () => {
   it("reaches the detail page for a plugin whose slug is the old directory segment", () => {
     const resolved = resolveRoute("/admin/plugins/browse", "");
 
-    expect(resolved.Component).not.toBe(PluginBrowsePage);
+    expect(resolved.Component).not.toBe(
+      routeConfig[ROUTES.PLUGIN_BROWSE].component
+    );
     expect(resolved.params).toEqual({ slug: "browse" });
   });
 });

@@ -21,10 +21,9 @@ import {
 } from "react";
 
 import { DASHBOARD_LAYOUT_KEY } from "@admin/hooks/queries/useDashboardLayout";
-import { ONBOARDING_STEPS_KEY } from "@admin/hooks/queries/useOnboardingSteps";
 import { ADMIN_META_KEY } from "@admin/hooks/useSchemaUpdateInvalidation";
 
-import { fieldGroupKeys } from "../hooks/queries";
+import { invalidateContentCaches } from "../hooks/schema-change-invalidation";
 
 interface RestartContextValue {
   isRestarting: boolean;
@@ -98,12 +97,8 @@ export function RestartProvider({
       // user sees the outcome quickly. Only the overlay hide is delayed.
       if (success) {
         toast.success(message ?? "Schema changes applied successfully");
-        // Invalidate all collection + entry caches so UI refetches fresh data
-        void queryClient.invalidateQueries({ queryKey: ["collections"] });
-        void queryClient.invalidateQueries({ queryKey: ["entries"] });
-        void queryClient.invalidateQueries({ queryKey: ["singles"] });
-        void queryClient.invalidateQueries({ queryKey: ["single-documents"] });
-        void queryClient.invalidateQueries({ queryKey: fieldGroupKeys.all() });
+        // Invalidate the content caches so UI refetches fresh data
+        invalidateContentCaches(queryClient);
         // The workspace payload carries the widget declarations, including the
         // cards core derives per collection. Without it the picker offers a new
         // collection's card under its raw id and the grid cannot draw it.
@@ -112,12 +107,6 @@ export function RestartProvider({
         // which are offered. Both go stale for the same reason and neither is
         // reachable from the other's key.
         void queryClient.invalidateQueries({ queryKey: DASHBOARD_LAYOUT_KEY });
-        // And the onboarding steps, two of which are answered from the
-        // collection registry a schema apply has just moved. Invalidated here
-        // rather than only through the card's own listener, because that
-        // listener is unmounted whenever the card is not offered -- and the
-        // moment the answer changes is exactly when it is not.
-        void queryClient.invalidateQueries({ queryKey: ONBOARDING_STEPS_KEY });
       } else {
         toast.error(message ?? "Failed to apply schema changes");
       }

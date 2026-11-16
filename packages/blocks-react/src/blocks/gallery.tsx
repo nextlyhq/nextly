@@ -40,14 +40,10 @@
  * `minmax(180px, 1fr)` makes a single track wider than its parent and the
  * pictures overflow. `min(180px, 100%)` lets the last one fit.
  *
- * **The gap is the site's spacing token, and there is no aspect ratio.** This
- * block shipped with `{ $token: "space.4" }`, rendered its tiles touching, and
- * spent a while as a plain length because of it: the renderer withheld the
- * token tier from a consumer handing back a stored artifact, so the reference
- * arrived as a `var()` with nothing behind it — invalid at computed-value time,
- * and `gap` falls back to `normal`, zero for a grid. The declaration now reaches
- * that path and resolves to `1rem`, which is the value the literal stood in for,
- * so the gutter follows a site that redefines `space.4`. A default `aspect-ratio` was considered and refused: it
+ * **The gap is the site's `space.columns` token, and there is no aspect
+ * ratio.** The same gutter `core/columns` uses, so a gallery beside a row of
+ * columns lines up with it, and a site that redefines the token moves both.
+ * A default `aspect-ratio` was considered and refused: it
  * would crop every picture in the library to one shape, and the crop is
  * invisible in the editor's own preview because the same rule applies there.
  * Uniform tiles are a real want, so `aspectRatio` stays available on the image
@@ -60,8 +56,13 @@ import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 import type { PageContext } from "../context";
 
 import { MEDIA } from "./categories";
-import { CONTAINER_SUPPORTS, renderContainer } from "./container";
+import {
+  CONTAINER_SUPPORTS,
+  containerContentModel,
+  renderContainer,
+} from "./container";
 import type { ContainerProps } from "./container";
+import { htmlTagProp } from "./html-tags";
 
 /** This block's registered name, so its tests name it once. */
 export const GALLERY_BLOCK = "core/gallery";
@@ -90,7 +91,7 @@ export const GALLERY_BASE_STYLES = {
       // a grid. Measured on the path that used to fail — a stored artifact
       // handed back with no context — the property is now declared and resolves
       // to `1rem`, the value the literal stood in for.
-      gap: { $token: "space.4" },
+      gap: { $token: "space.columns" },
     },
   },
 } as const;
@@ -99,8 +100,12 @@ export const gallery: BlockDefinition<ContainerProps, PageContext> =
   defineBlock({
     name: GALLERY_BLOCK,
     version: 1,
-    description:
-      "A reflowing grid of pictures. Restricts its slot to core/image so every item carries alt text and an intrinsic size, and a stray block cannot be laid out as though it were a photograph.",
+    // What an author reads, in the Add panel and the block card: one plain
+    // line. What the block does, for whoever maintains it: A reflowing grid of
+    // pictures. Restricts its slot to core/image so every item carries alt text
+    // and an intrinsic size, and a stray block cannot be laid out as though it
+    // were a photograph.
+    description: "A grid of images.",
     // Palette metadata. The category is imported rather than spelled here so
     // nineteen blocks cannot drift into nineteen headings; keywords are what
     // let a search for a word the description never uses still find this.
@@ -111,8 +116,8 @@ export const gallery: BlockDefinition<ContainerProps, PageContext> =
       keywords: ["images", "photos", "grid", "carousel"],
     },
     props: {
-      as: { type: "select", options: ["div", "section", "article"] },
-      contained: { type: "checkbox" },
+      as: htmlTagProp(["div", "section", "article"]),
+      contained: { label: "Constrain content width", type: "checkbox" },
     },
     defaultProps: { as: "div", contained: false },
     example: { props: { as: "div" } },
@@ -140,5 +145,7 @@ export const gallery: BlockDefinition<ContainerProps, PageContext> =
     },
     baseStyles: GALLERY_BASE_STYLES,
     supports: CONTAINER_SUPPORTS,
+    // What it is as HTML follows the tag it renders.
+    contentModel: containerContentModel,
     render: renderContainer,
   });

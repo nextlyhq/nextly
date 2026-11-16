@@ -1,10 +1,23 @@
 /**
- * The secondary panel's layout classes, as one decision.
+ * The secondary panel's layout, as one decision.
  *
- * The panel is always mounted so that opening and closing it can animate, so
- * "closed" is a zero-width box rather than an absent element. That makes its
- * decoration a separate question from its presence, and the two disagree: a
- * border on a `w-0` box is still a 1px box.
+ * On the wide layout the panel sits in flow between the icon rail and the main
+ * column, and its track has width when the page's own section owns a panel, or
+ * a panel is open. A page with no panel (the dashboard, Releases, Translations)
+ * draws no empty column beside the rail.
+ *
+ * The section comes from the route, so it is known at the first paint, before
+ * the reader's permissions and content lists arrive: a collection's page holds
+ * its panel's track from its first frame and nothing shifts while the panel's
+ * links load. Moving between a page with a panel and one without moves the
+ * main column once, as part of the navigation the reader started, and each
+ * page is drawn at the geometry a direct load of it draws.
+ *
+ * A surface that releases the panel (chrome suppression's `subSidebar` layer,
+ * asked for by an immersive editor) takes the width back whatever the section.
+ *
+ * On the narrow layout the panel overlays inside the navigation drawer, so it
+ * has width only while it is open.
  */
 
 export interface SubSidebarClassInput {
@@ -19,24 +32,40 @@ export interface SubSidebarClassInput {
   isMobile: boolean | undefined;
   /** Whether the current rail selection owns a panel to show. */
   hasSubSidebar: boolean;
+  /**
+   * Whether the section the route is in owns a panel at all, whatever the
+   * reader turns out to be allowed to see in it. Decided from the route alone,
+   * so the track is held from the first paint.
+   */
+  sectionHasPanel: boolean;
+  /** Whether a mounted surface has asked for the panel to go. */
+  released: boolean;
+}
+
+/** Whether the panel's box has width: the held track on the wide layout, the open panel on the narrow one. */
+export function subSidebarHoldsWidth({
+  isMobile,
+  hasSubSidebar,
+  sectionHasPanel,
+  released,
+}: SubSidebarClassInput): boolean {
+  if (released) return false;
+  return isMobile ? hasSubSidebar : sectionHasPanel || hasSubSidebar;
 }
 
 /**
  * The divider the panel contributes, or none.
  *
- * A panel with no width has no edge to divide, so it draws nothing. Leaving the
- * border on unconditionally paints it flush against the icon rail's own border
- * — two 1px lines a pixel apart — and widens the collapsed panel from 0 to 1px,
- * shifting the content region right. The wide layout is where this shows,
- * because there the panel keeps its opacity when closed.
+ * It follows the box's width, not the selection: a box with no width has no
+ * edge to divide, and a border on it would still paint a 1px line flush against
+ * the icon rail's own and widen the box from 0 to 1px. The held track keeps its
+ * edge while empty, so it reads as the shell's own column rather than as part
+ * of the page beside it.
  *
  * The side follows the panel's position: overlaying from the left edge it
  * divides on its left, and in flow beside the rail it divides on its right.
  */
-export function subSidebarBorderClass({
-  isMobile,
-  hasSubSidebar,
-}: SubSidebarClassInput): string {
-  if (!hasSubSidebar) return "";
-  return isMobile ? "border-l border-border" : "border-r border-border";
+export function subSidebarBorderClass(input: SubSidebarClassInput): string {
+  if (!subSidebarHoldsWidth(input)) return "";
+  return input.isMobile ? "border-l border-border" : "border-r border-border";
 }

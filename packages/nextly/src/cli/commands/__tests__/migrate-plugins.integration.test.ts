@@ -34,6 +34,7 @@ import {
   afterEach,
 } from "vitest";
 
+import { formatLocalizationIntent } from "../../../domains/i18n/migration/migration-intent";
 import { buildExtensionSchema } from "../../../domains/schema/extension/build-extension-schema";
 import { col, defineTable } from "../../../domains/schema/extension/dsl";
 import { buildPluginMigration } from "../../../domains/schema/migrate-create/generate-plugin";
@@ -43,10 +44,12 @@ import {
 } from "../../../domains/schema/migrate/plugin/plugin-migration";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
+import type { DataLossConsent } from "../../../domains/schema/migrate/data-loss-consent";
 import { CORE_TABLE_NAMES } from "../../../schemas/index";
 import { createLogger } from "../../utils/logger";
 import {
   migrateCore,
+  migrationsStillPending,
   recordAppTableOwners,
   runPluginPhase,
   syncElementOwners,
@@ -56,8 +59,15 @@ const DIALECT = "sqlite" as const;
 
 /** Minimal adapter surface the phase touches, backed by the live database. */
 function adapterFor(sqlite: Database.Database) {
+  // Whether this double's transaction is open. The tests run one flow at a
+  // time, so the flag answers for the calling flow as the adapter does.
+  let open = false;
   return {
     dialect: DIALECT,
+    // The probe a migration asks before it opens its own transaction, so a
+    // migration started inside this double's transaction is refused as the
+    // SQLite adapter refuses it.
+    transactionOpenInFlow: () => open,
     getCapabilities: () => ({ dialect: DIALECT }),
     // A PRAGMA that reads a setting returns its rows, as the SQLite adapter's
     // does; everything else runs for its effect.
@@ -78,6 +88,7 @@ function adapterFor(sqlite: Database.Database) {
       }) => Promise<T>
     ): Promise<T> => {
       sqlite.exec("BEGIN IMMEDIATE");
+      open = true;
       try {
         const result = await work({
           execute: async statement => {
@@ -93,6 +104,8 @@ function adapterFor(sqlite: Database.Database) {
       } catch (error) {
         sqlite.exec("ROLLBACK");
         throw error;
+      } finally {
+        open = false;
       }
     },
     listTables: async () =>
@@ -874,6 +887,16 @@ describe("ownership within and after one migrate run (sqlite)", () => {
         migrationsDir: mkdtempSync(join(tmpdir(), "nx-app-own-")),
         logger: createLogger({ quiet: true }),
         lockMode: "fail-fast",
+        // `adapterFor` is a statement-level double the schema lock cannot hold; the lock is
+        // exercised against real databases in its own suites.
+        withLock: async (
+          _adapter: unknown,
+          _dialect: unknown,
+          fn: () => Promise<unknown>
+        ) => ({
+          ran: true as const,
+          value: await fn(),
+        }),
         pluginMigrationSets: [
           {
             pluginName: "dropper",
@@ -882,8 +905,22 @@ describe("ownership within and after one migrate run (sqlite)", () => {
           },
         ],
         pluginsWithMigrations: new Set(["dropper"]),
+        // Consent to delete data, so the run passes the consent gate and
+        // reaches the plugin phase: consent never lets one owner drop
+        // another's table, and the drop guard is what refuses it.
+        consent: {
+          given: { from: "flag", targets: "all" },
+          earlier: [],
+          ignored: [],
+        } satisfies DataLossConsent,
       } as never)
-    ).rejects.toMatchObject({ code: "DROP_OF_FOREIGN_TABLE" });
+    ).rejects.toMatchObject({
+      code: "DROP_OF_FOREIGN_TABLE",
+      // Refused as the app's table, not as one nobody owns: the guard refuses
+      // a plugin dropping an unowned table too, so only the owner it names
+      // shows the app's row was in place before the plugin phase.
+      logContext: { table: "app_ledger", belongsTo: "app" },
+    });
     expect(await adapter.listTables()).toContain("app_ledger");
   });
 
@@ -979,7 +1016,10 @@ describe("--step across plugin modules and app files (sqlite)", () => {
   let sqlite: Database.Database;
   let db: unknown;
 
-  beforeAll(async () => {
+  // A database per test: each test brings its own migrations folder, and a
+  // ledger recording a file from another test's folder is an applied file
+  // this build lacks, which `migrateCore` refuses before it runs anything.
+  beforeEach(async () => {
     sqlite = new Database(":memory:");
     db = drizzle({ client: sqlite });
     await reconcileCore({
@@ -989,7 +1029,7 @@ describe("--step across plugin modules and app files (sqlite)", () => {
     });
   });
 
-  afterAll(() => sqlite.close());
+  afterEach(() => sqlite.close());
 
   it("runs N migrations in all, plugin modules first, then app files", async () => {
     // The plugin phase runs first, so a run limited to one migration applies
@@ -1045,6 +1085,16 @@ describe("--step across plugin modules and app files (sqlite)", () => {
         migrationsDir,
         logger: createLogger({ quiet: true }),
         lockMode: "fail-fast",
+        // `adapterFor` is a statement-level double the schema lock cannot hold; the lock is
+        // exercised against real databases in its own suites.
+        withLock: async (
+          _adapter: unknown,
+          _dialect: unknown,
+          fn: () => Promise<unknown>
+        ) => ({
+          ran: true as const,
+          value: await fn(),
+        }),
         pluginMigrationSets: [
           {
             pluginName: "stepper",
@@ -1071,6 +1121,189 @@ describe("--step across plugin modules and app files (sqlite)", () => {
       const third = await run();
       expect([third.pluginModulesApplied, third.applied]).toEqual([0, 1]);
       expect(await adapter.listTables()).toContain("step_app");
+    } finally {
+      rmSync(migrationsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("counts a plugin module a step left as still pending, while no app file is", async () => {
+    // A run cut short among the plugin's modules leaves no app file pending, so a count of app
+    // files alone would let the work that follows the final schema run now.
+    const migrationsDir = mkdtempSync(join(tmpdir(), "nx-step-left-"));
+    const steps = defineTable("rows", { id: col.id() });
+    const more = defineTable("more", { id: col.id() });
+    const extensionSchema = await buildExtensionSchema({
+      dialect: DIALECT,
+      coreTableNames: CORE_TABLE_NAMES,
+      entities: [],
+      pluginPrefixes: new Map([["stepper", "stepper"]]),
+      plugins: [
+        { owner: { kind: "plugin", id: "stepper" }, tables: [steps, more] },
+      ],
+    });
+    const firstModule = buildPluginMigration({
+      pluginName: "stepper",
+      schemaVersion: 1,
+      name: "v1",
+      now: new Date(Date.UTC(2026, 8, 26, 10, 0, 0)),
+      tablesByDialect: await tablesByDialect("stepper", "stepper", [steps]),
+      existing: [],
+    })!.module;
+    const secondModule = buildPluginMigration({
+      pluginName: "stepper",
+      schemaVersion: 2,
+      name: "v2",
+      now: new Date(Date.UTC(2026, 8, 26, 10, 0, 1)),
+      tablesByDialect: await tablesByDialect("stepper", "stepper", [
+        steps,
+        more,
+      ]),
+      existing: [firstModule],
+    })!.module;
+    const sets = [
+      {
+        pluginName: "stepper",
+        pluginVersion: "1.0.0",
+        migrations: [firstModule, secondModule],
+      },
+    ];
+    const adapter = {
+      ...adapterFor(sqlite),
+      tableExists: async (name: string) =>
+        (await adapterFor(sqlite).listTables()).includes(name),
+    };
+    const logger = createLogger({ quiet: true });
+    const run = () =>
+      migrateCore({
+        extensionSchema,
+        dialect: DIALECT,
+        db,
+        adapter,
+        migrationsDir,
+        logger,
+        lockMode: "fail-fast",
+        withLock: async (
+          _adapter: unknown,
+          _dialect: unknown,
+          fn: () => Promise<unknown>
+        ) => ({
+          ran: true as const,
+          value: await fn(),
+        }),
+        pluginMigrationSets: sets,
+        pluginsWithMigrations: new Set(["stepper"]),
+        step: 1,
+      } as never);
+    const stillPending = () =>
+      migrationsStillPending({
+        adapter: adapter as never,
+        db,
+        dialect: DIALECT,
+        migrationsDir,
+        logger,
+        pluginMigrationSets: sets,
+      });
+
+    try {
+      expect(await stillPending()).toBe(2);
+      expect((await run()).pluginModulesApplied).toBe(1);
+      expect(await stillPending()).toBe(1);
+      expect((await run()).pluginModulesApplied).toBe(1);
+      expect(await stillPending()).toBe(0);
+    } finally {
+      rmSync(migrationsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("judges a file turning translation on only once the step reaches it", async () => {
+    // The app's main table with a column naming a collation, which a move into the translations
+    // table would lose, so the file turning translation on is refused when the run reaches it.
+    sqlite.exec(
+      'CREATE TABLE "dc_docs" ("id" text PRIMARY KEY, "heading" text, "note" text COLLATE NOCASE)'
+    );
+    const migrationsDir = mkdtempSync(join(tmpdir(), "nx-step-"));
+    writeFileSync(
+      join(migrationsDir, "20260101_000000_enable_localization_docs.sql"),
+      `${formatLocalizationIntent({
+        kind: "enable",
+        entity: "collection",
+        spec: {
+          dialect: DIALECT,
+          collection: "docs",
+          kind: "collection",
+          mainTable: "dc_docs",
+          companionTable: "dc_docs_locales",
+          defaultLocale: "en",
+          parentIdType: "TEXT",
+          columns: [{ name: "heading", kind: "longText" }],
+        },
+      })}\nSELECT 1;\n`
+    );
+    const steps = defineTable("rows", { id: col.id() });
+    const extensionSchema = await buildExtensionSchema({
+      dialect: DIALECT,
+      coreTableNames: CORE_TABLE_NAMES,
+      entities: [],
+      pluginPrefixes: new Map([["stepper", "stepper"]]),
+      plugins: [{ owner: { kind: "plugin", id: "stepper" }, tables: [steps] }],
+    });
+    const module = buildPluginMigration({
+      pluginName: "stepper",
+      schemaVersion: 1,
+      name: "v1",
+      now: new Date(Date.UTC(2026, 8, 26, 10, 0, 0)),
+      tablesByDialect: await tablesByDialect("stepper", "stepper", [steps]),
+      existing: [],
+    })!.module;
+    const adapter = {
+      ...adapterFor(sqlite),
+      tableExists: async (name: string) =>
+        (await adapterFor(sqlite).listTables()).includes(name),
+    };
+    const run = (step?: number) =>
+      migrateCore({
+        extensionSchema,
+        dialect: DIALECT,
+        db,
+        adapter,
+        migrationsDir,
+        logger: createLogger({ quiet: true }),
+        lockMode: "fail-fast",
+        withLock: async (
+          _adapter: unknown,
+          _dialect: unknown,
+          fn: () => Promise<unknown>
+        ) => ({
+          ran: true as const,
+          value: await fn(),
+        }),
+        pluginMigrationSets: [
+          {
+            pluginName: "stepper",
+            pluginVersion: "1.0.0",
+            migrations: [module],
+          },
+        ],
+        pluginsWithMigrations: new Set(["stepper"]),
+        ...(step === undefined ? {} : { step }),
+      } as never);
+
+    try {
+      // The module takes the one step: the app file is not this run's, so it is not judged.
+      const first = await run(1);
+      expect([first.pluginModulesApplied, first.applied]).toEqual([1, 0]);
+      expect(await adapter.listTables()).toContain("stepper__rows");
+
+      // The next run reaches it, and refuses it before it runs.
+      await expect(run()).rejects.toMatchObject({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION",
+            }),
+          ],
+        },
+      });
     } finally {
       rmSync(migrationsDir, { recursive: true, force: true });
     }
@@ -1119,6 +1352,16 @@ describe("--step across plugin modules and app files (sqlite)", () => {
         migrationsDir,
         logger: createLogger({ quiet: true }),
         lockMode: "fail-fast",
+        // `adapterFor` is a statement-level double the schema lock cannot hold; the lock is
+        // exercised against real databases in its own suites.
+        withLock: async (
+          _adapter: unknown,
+          _dialect: unknown,
+          fn: () => Promise<unknown>
+        ) => ({
+          ran: true as const,
+          value: await fn(),
+        }),
         pluginMigrationSets: [
           {
             pluginName: "adopter",

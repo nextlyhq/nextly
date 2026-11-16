@@ -11,7 +11,13 @@ import * as path from "node:path";
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
-import { LocalStorageAdapter } from "../adapters/local-adapter";
+import { consoleLogger } from "../../shared/types";
+import { isGeneratedStorageKey } from "../adapters/base-adapter";
+import {
+  LocalStorageAdapter,
+  markLocalUploadsRouteLoaded,
+  resetLocalAdapterState,
+} from "../adapters/local-adapter";
 
 describe("LocalStorageAdapter", () => {
   let adapter: LocalStorageAdapter;
@@ -59,9 +65,125 @@ describe("LocalStorageAdapter", () => {
     });
   });
 
+  /*
+   * `next start` serves only the files `public/` held when it started, so a
+   * production upload with no route serving the folder is a 404 until the
+   * next restart. The upload is where that can be said.
+   */
+  describe("an upload in production", () => {
+    let warn: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      resetLocalAdapterState();
+      warn = vi.spyOn(consoleLogger, "warn").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      warn.mockRestore();
+      resetLocalAdapterState();
+    });
+
+    const store = () =>
+      adapter.upload(Buffer.from("x"), {
+        filename: "a.png",
+        mimeType: "image/png",
+      });
+
+    it("warns once, naming the URL and the route to add, when no uploads route has loaded", async () => {
+      vi.stubEnv("NODE_ENV", "production");
+
+      const first = await store();
+      await store();
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      const message = String(warn.mock.calls[0][0]);
+      expect(message).toContain(first.url);
+      expect(message).toContain("app/uploads/[...path]/route.ts");
+    });
+
+    it("does not warn once the uploads route has loaded", async () => {
+      vi.stubEnv("NODE_ENV", "production");
+      markLocalUploadsRouteLoaded();
+
+      await store();
+
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it("does not warn outside production, where Next.js reads the folder on every request", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+
+      await store();
+
+      expect(warn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("uploadAt()", () => {
+    it("writes at exactly the key, leaving no partial file behind", async () => {
+      const key = "2026/11/0b6f-photo.jpg.w640.webp";
+      const result = await adapter.uploadAt(key, Buffer.from("copy"), {
+        mimeType: "image/webp",
+      });
+      expect(result).toEqual({ url: "/uploads/" + key, path: key });
+      expect(await adapter.read(key)).toEqual(Buffer.from("copy"));
+      const left = await fs.readdir(path.join(testDir, "2026/11"));
+      expect(left).toEqual(["0b6f-photo.jpg.w640.webp"]);
+    });
+
+    it("keeps a copy whose name is near the 255-byte limit", async () => {
+      // 246 bytes: fits as a name, but not with a second suffix on it.
+      const long = `2026/11/${"b".repeat(232)}.jpg.w640.webp`;
+      expect(path.basename(long).length).toBe(246);
+      await adapter.uploadAt(long, Buffer.from("copy"), {
+        mimeType: "image/webp",
+      });
+      expect(await adapter.read(long)).toEqual(Buffer.from("copy"));
+    });
+
+    it("refuses a key it would have to tidy, writing nothing anywhere", async () => {
+      for (const key of [
+        "../../outside.webp",
+        "/leading.webp",
+        "a/../b.webp",
+      ]) {
+        await expect(
+          adapter.uploadAt(key, Buffer.from("x"), { mimeType: "image/webp" })
+        ).rejects.toThrow();
+      }
+      await expect(
+        fs.access(path.join(testDir, "..", "..", "outside.webp"))
+      ).rejects.toThrow();
+      expect(await fs.readdir(testDir)).toEqual([]);
+    });
+  });
+
   describe("getType()", () => {
     it("should return 'local'", () => {
       expect(adapter.getType()).toBe("local");
+    });
+  });
+
+  // The cache policy trusts `isGeneratedStorageKey` to recognize what the
+  // writer produced; a key the writer stores that the recognizer rejects (or
+  // the reverse) is how the two layouts would drift apart.
+  describe("a generated key", () => {
+    it("is recognized for every key upload writes, with or without a folder", async () => {
+      for (const options of [
+        { filename: "photo.jpg", mimeType: "image/jpeg" },
+        { filename: "Résumé (final).PDF", mimeType: "application/pdf" },
+        { filename: "a.b.c.png", mimeType: "image/png", folder: "documents" },
+        { filename: "x.webp", mimeType: "image/webp", folder: "a/b" },
+      ]) {
+        const { path: key } = await adapter.upload(Buffer.from("x"), options);
+        expect(isGeneratedStorageKey(key), key).toBe(true);
+      }
+    });
+
+    it("is not recognized for a name placed in the folder by hand", () => {
+      expect(isGeneratedStorageKey("logo.png")).toBe(false);
+      expect(isGeneratedStorageKey("2026/10/logo.png")).toBe(false);
     });
   });
 
@@ -286,6 +408,44 @@ describe("LocalStorageAdapter", () => {
       // The file outside basePath should NOT have been deleted
       // (we can't verify this without creating a real file, but the adapter
       // should resolve the path and check it's within basePath)
+    });
+
+    /*
+     * A folder BESIDE the storage folder whose name starts with the storage
+     * folder's name: `uploads-private` next to `uploads`. A containment check
+     * comparing string prefixes counts it as inside. `....//` is what reaches
+     * it, because stripping `../` once leaves `../` behind.
+     */
+    describe("a sibling folder sharing the storage folder's name as a prefix", () => {
+      let root: string;
+      let sibling: string;
+      let prefixed: LocalStorageAdapter;
+      const escape = "....//uploads-private/secret.txt";
+
+      beforeEach(async () => {
+        root = path.join(testDir, "site");
+        sibling = path.join(root, "uploads-private", "secret.txt");
+        await fs.mkdir(path.join(root, "uploads"), { recursive: true });
+        await fs.mkdir(path.dirname(sibling), { recursive: true });
+        await fs.writeFile(sibling, "not for the public");
+        prefixed = new LocalStorageAdapter({
+          basePath: path.join(root, "uploads"),
+          baseUrl: "/uploads",
+        });
+      });
+
+      it("is not read", async () => {
+        await expect(prefixed.read(escape)).resolves.toBeNull();
+      });
+
+      it("is not deleted from", async () => {
+        await prefixed.delete(escape);
+        expect(await fileExists(sibling)).toBe(true);
+      });
+
+      it("is not reported as stored", async () => {
+        await expect(prefixed.exists(escape)).resolves.toBe(false);
+      });
     });
   });
 });

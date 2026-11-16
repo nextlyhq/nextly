@@ -12,11 +12,17 @@
 import {
   type EmailFailure,
   failureOf,
+  lostAnswerFailure,
   networkFailure,
   smtpFailure,
   unclassifiedFailure,
   withEmailFailure,
 } from "../../failure";
+import {
+  setupFromStatus,
+  withSetupCategory,
+  type EmailSetupCategory,
+} from "../../setup-category";
 import type { EmailProviderAdapter } from "../../types";
 
 import { loadNodemailer } from "./nodemailer-loader";
@@ -165,15 +171,47 @@ const SMTP_NETWORK_CODES = new Set([
  * otherwise as unclassified.
  */
 function smtpErrorFailure(error: unknown): EmailFailure {
-  const { responseCode, code } = (error ?? {}) as {
+  const { responseCode, code, command } = (error ?? {}) as {
     responseCode?: unknown;
     code?: unknown;
+    command?: unknown;
   };
   if (typeof responseCode === "number") return smtpFailure(responseCode);
   if (typeof code === "string" && SMTP_NETWORK_CODES.has(code)) {
-    return networkFailure();
+    // Lost during DATA, the message may already be with the server, which
+    // had yet to answer: unknown. Before it, nothing was sent.
+    return command === "DATA" ? lostAnswerFailure() : networkFailure();
   }
   return unclassifiedFailure();
+}
+
+/**
+ * What a person setting SMTP up should check, from a nodemailer error.
+ *
+ * Nodemailer names the command the server refused, which says more than the
+ * reply code: a refused AUTH is the credentials, a refused MAIL FROM the
+ * sender, a refused RCPT TO the recipient. A connection that failed could not
+ * be reached; anything else is read from the reply code.
+ */
+export function smtpSetupCategory(error: unknown): EmailSetupCategory {
+  const { responseCode, code, command } = (error ?? {}) as {
+    responseCode?: unknown;
+    code?: unknown;
+    command?: unknown;
+  };
+  if (code === "EAUTH") return "credentials";
+  if (typeof code === "string" && SMTP_NETWORK_CODES.has(code)) {
+    return "connect";
+  }
+  if (typeof command === "string") {
+    const verb = command.toUpperCase();
+    if (verb.startsWith("AUTH")) return "credentials";
+    if (verb.startsWith("MAIL FROM")) return "sender";
+    if (verb.startsWith("RCPT TO")) return "recipient";
+  }
+  return setupFromStatus(
+    typeof responseCode === "number" ? responseCode : undefined
+  );
 }
 
 /**
@@ -245,9 +283,12 @@ export function createSmtpProvider(
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "SMTP send failed";
-        throw withEmailFailure(
-          new Error(`SMTP provider error: ${message}`),
-          failureOf(error) ?? smtpErrorFailure(error)
+        throw withSetupCategory(
+          withEmailFailure(
+            new Error(`SMTP provider error: ${message}`),
+            failureOf(error) ?? smtpErrorFailure(error)
+          ),
+          smtpSetupCategory(error)
         );
       }
     },
@@ -268,7 +309,7 @@ export function createSmtpProvider(
  */
 export async function verifySmtpConnection(
   config: SmtpProviderConfig
-): Promise<{ ok: boolean; detail?: string }> {
+): Promise<{ ok: boolean; detail?: string; setup?: EmailSetupCategory }> {
   // Loading sits inside its own try, unlike the send path: this function
   // reports a verdict rather than throwing, and a missing library is a probe
   // failure the admin renders like any other. Letting it escape would surface
@@ -294,6 +335,7 @@ export async function verifySmtpConnection(
     return {
       ok: false,
       detail: error instanceof Error ? error.message : "Connection failed",
+      setup: smtpSetupCategory(error),
     };
   } finally {
     // Close the pool the probe opened; leaving it holds a socket for the

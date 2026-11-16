@@ -3,15 +3,19 @@
  * turns it on (`auth.allowRegistration`). While it is off, a registration is
  * refused before anything is created or sent.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { useLoadedPasswordHasher } from "../../../di/password-digester";
+import type { PasswordHasher } from "../../password/policy";
 
 import { sanitizeConfig } from "../../../shared/types/config";
 import { buildAuthRouterDeps } from "../deps-bridge";
 import { handleRegister } from "../register";
+import { routeAuthRequest } from "../router";
 
 const ORIGIN = "http://localhost:3000";
 
-function registration(): Request {
+function registration(password = "Pass1234!"): Request {
   return new Request(`${ORIGIN}/admin/api/auth/register`, {
     method: "POST",
     headers: {
@@ -21,7 +25,7 @@ function registration(): Request {
     },
     body: JSON.stringify({
       email: "stranger@example.com",
-      password: "Pass1234!",
+      password,
       name: "Stranger",
       csrfToken: "csrf-test-token",
     }),
@@ -95,5 +99,74 @@ describe("the registration choice in the app's configuration", () => {
       sanitizeConfig({ auth: { allowRegistration: true } } as never).auth
         .allowRegistration
     ).toBe(true);
+  });
+});
+
+describe("the registration choice, as the admin's signed-out screens learn it", () => {
+  const services = (config: unknown) => (name: string) =>
+    name === "config"
+      ? config
+      : name === "adapter"
+        ? { getDrizzle: () => ({}) }
+        : {};
+
+  /** What setup-status answers for an app configured with `config`. */
+  async function setupStatus(
+    config: unknown
+  ): Promise<Record<string, unknown>> {
+    const res = await routeAuthRequest(
+      new Request(`${ORIGIN}/admin/api/auth/setup-status`),
+      "setup-status",
+      {
+        ...buildAuthRouterDeps(services(config)),
+        // The install has its administrator; the lookup is not under test.
+        hasAdministrator: async () => true,
+      }
+    );
+    expect(res?.status).toBe(200);
+    return (await res?.json()) as Record<string, unknown>;
+  }
+
+  // The sign-in page offers "Sign up", and the register page its form, only
+  // where the register route would take the request: from the one flag the
+  // register handler is refused by, never a second reading of the config.
+  it("is served by setup-status as off when the app says nothing", async () => {
+    expect((await setupStatus({ auth: {} })).allowRegistration).toBe(false);
+  });
+
+  it("is served by setup-status as on once the app turns it on", async () => {
+    expect(
+      (await setupStatus({ auth: { allowRegistration: true } }))
+        .allowRegistration
+    ).toBe(true);
+  });
+});
+
+describe("a registration's password with the app's own hasher", () => {
+  /** An unbounded app hasher: it reads a password longer than bcrypt's 72 bytes whole. */
+  const unbounded: PasswordHasher = {
+    name: "unbounded",
+    reach: "unbounded",
+    hash: password => Promise.resolve(`own$${password}`),
+    verify: (password, stored) => Promise.resolve(stored === `own$${password}`),
+  };
+  /** 80 bytes: past bcrypt's 72. */
+  const LONG = `Str0ng-P@ss-${"x".repeat(68)}`;
+  afterEach(() => useLoadedPasswordHasher(undefined));
+
+  it("is judged by the hasher, which reads it whole", async () => {
+    useLoadedPasswordHasher(unbounded);
+    const on = deps(true);
+    const res = await handleRegister(registration(LONG), on);
+    expect(res.status).toBe(200);
+    expect(on.registerUser).toHaveBeenCalledTimes(1);
+  });
+
+  it("is judged by bcrypt's 72 bytes without one", async () => {
+    // The control: the same password is refused where bcrypt hashes it.
+    const on = deps(true);
+    const res = await handleRegister(registration(LONG), on);
+    expect(res.status).toBe(400);
+    expect(on.registerUser).not.toHaveBeenCalled();
   });
 });

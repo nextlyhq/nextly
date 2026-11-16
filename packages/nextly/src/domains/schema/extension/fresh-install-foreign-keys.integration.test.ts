@@ -1,14 +1,18 @@
 /**
- * A fresh install creates a plugin table's foreign keys to code-first tables,
+ * A fresh install creates an app table's foreign keys to code-first tables,
  * on every dialect.
  *
- * A code-first collection's, Single's or field group's table is created later
- * in the boot than a plugin's own tables. PostgreSQL and MySQL add a foreign
- * key with a statement of its own, which fails while its target is missing, so
- * these keys exist only if the apply that creates the code-first tables adds
- * them afterwards. SQLite declares a key inside CREATE TABLE and resolves its
- * target only when a row is written, so it reaches the same end by another
- * route — which is why every dialect is asked.
+ * A code-first collection's, Single's or field group's table is created by
+ * the same apply as the app's own tables (`db.schema.extend`). PostgreSQL and
+ * MySQL add a foreign key with a statement of its own, which fails while its
+ * target is missing, so these keys exist only if that apply adds them once
+ * the code-first tables stand. SQLite declares a key inside CREATE TABLE and
+ * resolves its target only when a row is written, so it reaches the same end
+ * by another route — which is why every dialect is asked.
+ *
+ * The keying table is the app's: a plugin's key to an entity table is refused
+ * at boot, since a plugin's migrations run before the app's, which create the
+ * entity tables. The app's run last and may key to them.
  *
  * Asked of each database's own catalog, not of the compiled schema, and
  * proved by a write the key must refuse: a table without the key accepts every
@@ -31,7 +35,6 @@ import {
 } from "../../../database/test-database-ddl";
 import { clearServices } from "../../../di/register";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
-import { definePlugin } from "../../../plugins/plugin-context";
 import {
   createTestNextly,
   type TestDialect,
@@ -39,6 +42,7 @@ import {
 } from "../../../plugins/test-nextly";
 import { _resetEnvCache } from "../../../shared/lib/env";
 
+import type { SchemaHook } from "./draft";
 import { col, defineTable } from "./dsl";
 
 const posts = defineCollection({
@@ -57,7 +61,7 @@ const part = defineFieldGroup({
 // Each key column is nullable, so one row can test one key while the others
 // stay empty.
 const refs = defineTable(
-  "refs",
+  "cf_refs",
   {
     id: col.id(),
     postId: col.shortText({ nullable: true }),
@@ -82,17 +86,22 @@ const refs = defineTable(
   }
 );
 
-const fixture = definePlugin({
-  name: "fresh-install-fk-fixture",
-  version: "0.0.0",
-  nextly: "*",
-  contributes: {
-    collections: [posts],
-    singles: [site],
-    fieldGroups: [part],
-    schema: { prefix: "cf", tables: [refs] },
+/** The app's schema hook that adds `refs`. */
+const addRefs: SchemaHook = ({ schema }) => {
+  schema.addTable(refs);
+};
+
+/** The app's configuration: the code-first entities and its own keying table. */
+const app = {
+  collections: [posts],
+  singles: [site],
+  fieldGroups: [part],
+  db: {
+    migrationsDir: "./migrations",
+    uiSchemaFile: "./ui-schema.json",
+    schema: { extend: [addRefs] },
   },
-});
+};
 
 /** `column->table.column` for each foreign key on `table`, read from the catalog. */
 async function foreignKeysOf(
@@ -144,10 +153,10 @@ describeEachDialect(
   "a fresh install's foreign keys to code-first tables",
   dialect => {
     it("exist in the database and refuse a dangling row", async () => {
-      current = await createTestNextly({ dialect, plugins: [fixture] });
+      current = await createTestNextly({ dialect, ...app });
       const adapter = current.adapter;
 
-      expect(await foreignKeysOf(adapter, dialect, "cf__refs")).toEqual([
+      expect(await foreignKeysOf(adapter, dialect, "cf_refs")).toEqual([
         "part_id->comp_cf_part.id",
         "post_id->dc_cf_posts.id",
         "site_id->single_cf_site.id",
@@ -161,17 +170,17 @@ describeEachDialect(
         data: { title: "First" },
       });
       await adapter.executeQuery(
-        `INSERT INTO cf__refs (id) VALUES ('018f2c2e-0000-7000-8000-00000000f001')`
+        `INSERT INTO cf_refs (id) VALUES ('018f2c2e-0000-7000-8000-00000000f001')`
       );
       await adapter.executeQuery(
-        `INSERT INTO cf__refs (id, post_id) VALUES ('018f2c2e-0000-7000-8000-00000000f002', '${String(post.item.id)}')`
+        `INSERT INTO cf_refs (id, post_id) VALUES ('018f2c2e-0000-7000-8000-00000000f002', '${String(post.item.id)}')`
       );
 
       const missing = "018f2c2e-0000-7000-8000-00000000dead";
       for (const [at, column] of ["post_id", "site_id", "part_id"].entries()) {
         await expect(
           adapter.executeQuery(
-            `INSERT INTO cf__refs (id, ${column}) VALUES ('018f2c2e-0000-7000-8000-00000000f10${String(at)}', '${missing}')`
+            `INSERT INTO cf_refs (id, ${column}) VALUES ('018f2c2e-0000-7000-8000-00000000f10${String(at)}', '${missing}')`
           )
         ).rejects.toThrow();
       }
@@ -247,17 +256,17 @@ for (const dialect of ["postgresql", "mysql"] as const) {
             url: databaseUrl.toString(),
           });
 
-          handle = await createTestNextly({ adapter, plugins: [fixture] });
+          handle = await createTestNextly({ adapter, ...app });
           const key = await foreignKeyNameOn(
             adapter,
             dialect,
-            "cf__refs",
+            "cf_refs",
             "post_id"
           );
           await adapter.executeQuery(
             dialect === "postgresql"
-              ? `ALTER TABLE cf__refs DROP CONSTRAINT ${key}`
-              : `ALTER TABLE cf__refs DROP FOREIGN KEY ${key}`
+              ? `ALTER TABLE cf_refs DROP CONSTRAINT ${key}`
+              : `ALTER TABLE cf_refs DROP FOREIGN KEY ${key}`
           );
 
           // The tables are all there, so this boot creates nothing; only
@@ -267,7 +276,7 @@ for (const dialect of ["postgresql", "mysql"] as const) {
           // connection before the database is dropped.
           const restart = await createTestNextly({
             adapter,
-            plugins: [fixture],
+            ...app,
           }).then(
             booted => {
               handle = booted;
@@ -279,7 +288,7 @@ for (const dialect of ["postgresql", "mysql"] as const) {
             code: "VALIDATION_ERROR",
             logContext: {
               missingForeignKeys: [
-                expect.stringContaining(`"${key}" on "cf__refs"`),
+                expect.stringContaining(`"${key}" on "cf_refs"`),
               ],
             },
           });
@@ -293,12 +302,12 @@ for (const dialect of ["postgresql", "mysql"] as const) {
             url: databaseUrl.toString(),
           });
           await reopened.executeQuery(
-            `INSERT INTO cf__refs (id) VALUES ('018f2c2e-0000-7000-8000-00000000f201')`
+            `INSERT INTO cf_refs (id) VALUES ('018f2c2e-0000-7000-8000-00000000f201')`
           );
           clearServices();
           handle = await createTestNextly({
             adapter: reopened,
-            plugins: [fixture],
+            ...app,
           });
         } finally {
           await handle?.destroy();

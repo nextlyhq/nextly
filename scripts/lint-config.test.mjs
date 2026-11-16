@@ -26,6 +26,11 @@ import { pathToFileURL } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import {
+  IMPORT_CYCLES,
+  NEXTLY_SOURCE,
+  NO_CYCLE,
+} from "../lint/import-cycles.mjs";
 import committed from "../oxlint.config.mjs";
 import { everyPass, oxlintCommand, TEMPLATES_PASS } from "./lint.mjs";
 
@@ -38,7 +43,7 @@ const readJson = path => JSON.parse(readFileSync(path, "utf8"));
 
 // Files that still throw a built-in error, each with how many throws it may
 // keep. The number may only go down: an added entry is a new bare throw.
-const EXPECTED_BARE_ERROR_FILES = 86;
+const EXPECTED_BARE_ERROR_FILES = 72;
 const BARE_ERROR_ALLOWLIST = readJson(
   join(nextly, "bare-error-allowlist.json")
 );
@@ -285,8 +290,15 @@ describe("the boot modules' exemption from the request-path imports guard", () =
   // form, and given the static-only rule with the same patterns instead.
   // Exempting them from both would let a static import in.
   it("hands every exempted file the static-only rule, over the same patterns", () => {
-    const restricted = overrideFor("no-restricted-imports");
+    // Two overrides turn \`no-restricted-imports\` on: the dialect-table one
+    // over all of nextly's product code, and the request path's, which
+    // repeats its patterns. The boot modules are the request path's exemption.
     const staticOnly = overrideFor("nextly/no-static-restricted-import");
+    const restricted = committed.overrides.find(
+      override =>
+        override.rules?.["no-restricted-imports"] !== undefined &&
+        staticOnly.files.every(file => override.excludeFiles?.includes(file))
+    );
     expect(staticOnly.files.sort()).toEqual(
       [...restricted.excludeFiles].sort()
     );
@@ -325,6 +337,92 @@ describe("the API-key scope guard's allowlist", () => {
   });
 });
 
+describe("the import-cycle guard's allowlist", () => {
+  const listed = IMPORT_CYCLES.flat().map(file => `${NEXTLY_SOURCE}/${file}`);
+
+  /**
+   * The cycles `import/no-cycle` reports, as groups of files: each report
+   * prints the path of one cycle through its file, and files joined by any
+   * printed path are one group. Read from oxlint's own reports so the cycles
+   * come from the graph the lint uses rather than a second one built here.
+   */
+  function cycleGroups(diagnostics) {
+    const at = new RegExp(`\\((${NEXTLY_SOURCE}/[^)]+)\\)`, "g");
+    const parent = new Map();
+    const find = file => {
+      if (!parent.has(file)) parent.set(file, file);
+      while (parent.get(file) !== file) file = parent.get(file);
+      return file;
+    };
+    for (const report of diagnostics) {
+      if (report.code !== "import(no-cycle)") continue;
+      const path = [...(report.note ?? "").matchAll(at)].map(match => match[1]);
+      // A report whose path cannot be read would join nothing and make every
+      // group look smaller, so a change in how oxlint prints it fails here.
+      expect(
+        path.length,
+        `no cycle path read from ${report.filename}`
+      ).toBeGreaterThan(0);
+      for (const file of path) parent.set(find(file), find(report.filename));
+    }
+    const groups = new Map();
+    for (const file of parent.keys()) {
+      groups.set(find(file), [...(groups.get(find(file)) ?? []), file]);
+    }
+    return [...groups.values()].map(group => group.sort()).sort();
+  }
+
+  it("is the setting the configuration lints nextly's source with", () => {
+    const override = overrideFor("import/no-cycle");
+    expect(override.rules["import/no-cycle"]).toEqual(NO_CYCLE);
+    expect(override.files).toEqual([`${NEXTLY_SOURCE}/**/*.{ts,tsx}`]);
+    expect([...override.excludeFiles].sort()).toEqual([...listed].sort());
+  });
+
+  it("is what suppresses the guard on the listed files", () => {
+    const off = lint(committed, listed);
+    expect(off.files).toBe(listed.length);
+    expect(countsPerFile(off.diagnostics, "import(no-cycle)")).toEqual({});
+  }, 120_000);
+
+  it("lists exactly the cycles nextly's source has", () => {
+    // With the exemptions removed, every file on a cycle is reported. The
+    // groups must equal the listed ones: a file that joined a cycle, two cycles
+    // that merged, and a file that left one all change them. A merge is the
+    // case the per-file exemption alone cannot see, since every merged file is
+    // already exempt; fallow's new-only circular-dependency check reports it
+    // too, as an introduced cycle. A new import between two files already in
+    // one group changes none of this and passes: the groups hold membership,
+    // not edges (lint/import-cycles.mjs says why).
+    const on = lint(withoutExemptions("import/no-cycle"), [NEXTLY_SOURCE]);
+    const found = cycleGroups(on.diagnostics);
+    const expected = IMPORT_CYCLES.map(group =>
+      group.map(file => `${NEXTLY_SOURCE}/${file}`).sort()
+    ).sort();
+    const foundFiles = new Set(found.flat());
+    const joined = found.flat().filter(file => !listed.includes(file));
+    const left = listed.filter(file => !foundFiles.has(file));
+    expect(
+      found,
+      [
+        "The import cycles in nextly's source differ from lint/import-cycles.mjs.",
+        left.length
+          ? `No longer on a cycle, so remove them from the list: ${left.join(", ")}.`
+          : "",
+        joined.length
+          ? `Newly on a cycle: ${joined.join(", ")}. Make the import that closed it ` +
+            "type-only, or load it with import() inside the function that needs it."
+          : "",
+        !left.length && !joined.length
+          ? "Two listed cycles merged, or one split: the groups changed with the same files."
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" ")
+    ).toEqual(expected);
+  }, 120_000);
+});
+
 // Each guard above is shown live at a path no allowlist names: a probe doing
 // what the guard forbids, written where the committed `files` reach, must be
 // reported there. The checks above remove exemptions from allowlisted files;
@@ -353,16 +451,60 @@ describe("each guard, at a path no allowlist names", () => {
       `${src}/api/lint-probe-migrate-import.ts`,
       'export { runMigrate } from "../cli/commands/migrate";\n',
     ],
+    "nextly(no-top-level-await)": [
+      `${src}/lint-probe-top-level-await.ts`,
+      "export const ready = await Promise.resolve(true);\n",
+    ],
+    "import(no-cycle)": [
+      `${src}/lint-probe-cycle-a.ts`,
+      'import { b } from "./lint-probe-cycle-b";\nexport const a = () => b;\n',
+    ],
+  };
+  // The other half of the cycle the no-cycle probe closes.
+  const cycleBack = {
+    [`${src}/lint-probe-cycle-b.ts`]:
+      'import { a } from "./lint-probe-cycle-a";\nexport const b = () => a;\n',
   };
 
   it("reports each forbidden construct in the file it was written to", () => {
-    const diagnostics = lintProbes(Object.fromEntries(Object.values(probes)));
+    const diagnostics = lintProbes({
+      ...Object.fromEntries(Object.values(probes)),
+      ...cycleBack,
+    });
     for (const [rule, [path]] of Object.entries(probes)) {
       expect(
         countsPerFile(diagnostics, rule)[path] ?? 0,
         `${rule} at ${path}`
       ).toBeGreaterThan(0);
     }
+  }, 120_000);
+});
+
+// A plugin imports the SDK's entry where the SDK re-exports a core one: in a
+// first-party plugin's source, and in the playground's fixture plugins, which
+// double as examples. (Test files are outside the repository's lint.) The SDK itself is the re-exporter, so the
+// same import there is its job and reported nowhere.
+describe("the plugin SDK's re-exported entries, from a plugin", () => {
+  const violation =
+    'import { col } from "nextly/schema-extension";\n' +
+    'import { eq } from "nextly/db-operators";\n' +
+    'import { createTestNextly } from "nextly/testing";\n' +
+    "export const probe = [col, eq, createTestNextly];\n";
+  const reached = [
+    "packages/plugin-seo/src/lint-probe-sdk-entry.ts",
+    "apps/playground/src/plugins/lint-probe-fixture/plugin.ts",
+  ];
+  const exempt = "packages/plugin-sdk/src/lint-probe-sdk-entry.ts";
+
+  it("reports each of the three in a plugin, and none in the SDK", () => {
+    const probes = Object.fromEntries(
+      [...reached, exempt].map(path => [path, violation])
+    );
+    const counts = countsPerFile(
+      lintProbes(probes),
+      "eslint(no-restricted-imports)"
+    );
+    expect(counts).toEqual(Object.fromEntries(reached.map(path => [path, 3])));
   }, 120_000);
 });
 

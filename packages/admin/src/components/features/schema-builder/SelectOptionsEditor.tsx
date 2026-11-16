@@ -19,7 +19,7 @@ import type { JSX } from "react";
 import {
   FieldOptionsEditor,
   type FieldOption,
-} from "@admin/components/field-ui";
+} from "@admin/components/field-ui/FieldOptionsEditor";
 import { FormLabelWithTooltip } from "@admin/components/ui/form-label-with-tooltip";
 
 import type { SelectOptionsEditorProps } from "./types";
@@ -57,11 +57,12 @@ export function SelectOptionsEditor({
           <div className="space-y-0.5">
             <FormLabelWithTooltip
               className="text-sm font-medium"
-              label="Allow Multiple"
+              label="Allow multiple"
               description="Users can select more than one option"
             />
           </div>
           <Switch
+            aria-label="Allow multiple"
             checked={hasMany || false}
             onCheckedChange={onHasManyChange}
           />
@@ -94,6 +95,7 @@ export function SelectOptionsEditor({
             description="Text shown in the picker before any option is selected"
           />
           <Input
+            aria-label="Placeholder"
             value={placeholder ?? ""}
             onChange={event => onPlaceholderChange(event.target.value)}
             placeholder="e.g., Choose a category..."

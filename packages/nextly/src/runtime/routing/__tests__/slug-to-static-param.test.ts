@@ -5,7 +5,12 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { slugToStaticParam } from "../slug-param";
+import {
+  listPageNumber,
+  listPageOf,
+  slugToPath,
+  slugToStaticParam,
+} from "../slug-param";
 // The two spellings the package publishes, imported so a move that quietly
 // dropped either is a failing test rather than a consumer's build error.
 import { slugToStaticParam as viaRoute } from "../content-route";
@@ -86,5 +91,45 @@ describe("slugToStaticParam", () => {
       slug: ["docs", "v1.2", "guide"],
     });
     expect(slugToStaticParam("...")).toEqual({ slug: ["..."] });
+  });
+});
+
+describe("a list's page segment", () => {
+  it("reads a page number written the one way", () => {
+    expect(listPageNumber("1")).toBe(1);
+    expect(listPageNumber("42")).toBe(42);
+    // Any number held exactly is a page, so a count past nine digits has
+    // an address for every page it names.
+    expect(listPageNumber("1234567890")).toBe(1234567890);
+    for (const other of [
+      "0",
+      "02",
+      "-1",
+      "+1",
+      "1.5",
+      "1e3",
+      " 2",
+      "",
+      "99999999999999999999",
+    ]) {
+      expect(listPageNumber(other)).toBeNull();
+    }
+  });
+
+  it("names the address a path is a later page of", () => {
+    expect(listPageOf("news/page/2")).toEqual({ base: "news", segment: "2" });
+    expect(listPageOf("a/b/page/x")).toEqual({ base: "a/b", segment: "x" });
+    expect(listPageOf("page/3")).toEqual({ base: "", segment: "3" });
+    expect(listPageOf("news")).toBeNull();
+    expect(listPageOf("news/pages/2")).toBeNull();
+    expect(listPageOf("page")).toBeNull();
+  });
+
+  it("spells a slug's path as the route serves it, or none", () => {
+    expect(slugToPath("")).toBe("/");
+    expect(slugToPath("about/team")).toBe("/about/team");
+    expect(slugToPath("faq?all")).toBe("/faq%3Fall");
+    expect(slugToPath("admin")).toBeNull();
+    expect(slugToPath("a//b")).toBeNull();
   });
 });

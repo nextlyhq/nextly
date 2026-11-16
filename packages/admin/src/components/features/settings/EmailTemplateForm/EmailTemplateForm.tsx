@@ -1,6 +1,6 @@
 "use client";
 
-import { type EditorView } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { JSX } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -12,26 +12,29 @@ import { useEmailProviders } from "@admin/hooks/queries/useEmailProviders";
 import { useEmailTemplates } from "@admin/hooks/queries/useEmailTemplates";
 import { generateSlug } from "@admin/lib/fields";
 import { navigateTo } from "@admin/lib/navigation";
-import { type EmailTemplateRecord } from "@admin/services/emailTemplateApi";
+import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
 import { BodyEditor } from "./BodyEditor";
 import { DataRail } from "./DataRail";
 import { DetailsPanel } from "./DetailsPanel";
 import { EnvelopeBar } from "./EnvelopeBar";
-import { InboxStrip } from "./InboxStrip";
+import { InboxStrip, shownInboxLine } from "./InboxStrip";
 import { OwnershipNotices } from "./OwnershipNotices";
 import { regionsForRefusal } from "./refusal-routing";
+import { suppliedNamesFor } from "./sample-data";
 import {
   DEFAULT_VALUES,
   EMAIL_TEMPLATE_FORM_ID,
   templateSchemaFor,
   templateToFormValues,
+  testDraftOf,
   type TemplateFormValues,
 } from "./schema";
 import { SendTestDialog } from "./SendTestDialog";
 import { PreviewPane } from "./TemplatePreview";
 import { useDerivedTemplateState } from "./useDerivedTemplateState";
 import { useOwnershipActs, type OwnershipActs } from "./useOwnershipActs";
+import { useTemplateVariables } from "./useTemplateVariables";
 import { useVariableInsertion } from "./useVariableInsertion";
 import { VariableChips } from "./VariablesRail";
 import { ownsContent } from "./workbench-model";
@@ -66,7 +69,7 @@ function ContentColumn({
   acts,
   isPending,
   isLayoutRow,
-  previewSubject,
+  inbox,
   editor,
 }: {
   form: FormOf;
@@ -76,7 +79,8 @@ function ContentColumn({
   acts: OwnershipActs;
   isPending: boolean;
   isLayoutRow: boolean;
-  previewSubject: string;
+  /** The inbox line as rendered from the draft, or null before the first render. */
+  inbox: { subject: string; preheader: string; from: string | null } | null;
   editor: Omit<
     React.ComponentProps<typeof BodyEditor>,
     "control" | "isPending" | "readOnly" | "liquid"
@@ -95,6 +99,7 @@ function ContentColumn({
         record={template}
         ownsContent={owns}
         keptOnOldEngine={keptOnOldEngine}
+        isDirty={form.formState.isDirty}
         undo={acts.undoNote}
         onOverride={() => acts.startAct("override")}
         onReview={() => acts.startAct("review")}
@@ -102,9 +107,7 @@ function ContentColumn({
       />
       {isLayoutRow ? null : (
         <InboxStrip
-          from={fromOverride}
-          subject={previewSubject || subject}
-          preheader={preheader}
+          {...shownInboxLine({ subject, preheader, from: fromOverride }, inbox)}
         />
       )}
       <div
@@ -126,6 +129,7 @@ function ContentColumn({
           isPending={isPending}
           readOnly={!owns}
           liquid={!keptOnOldEngine}
+          suppliedNames={suppliedNamesFor(isLayoutRow)}
           {...editor}
         />
       </div>
@@ -201,10 +205,11 @@ export function EmailTemplateForm({
     preheader,
     useLayout,
     isActive,
-    slug,
     name,
     variables,
     layoutId,
+    fromOverride,
+    replyTo,
   ] = form.watch([
     "htmlContent",
     "plainTextContent",
@@ -212,10 +217,11 @@ export function EmailTemplateForm({
     "preheader",
     "useLayout",
     "isActive",
-    "slug",
     "name",
     "variables",
     "layoutId",
+    "fromOverride",
+    "replyTo",
   ]);
 
   useEffect(() => {
@@ -254,7 +260,34 @@ export function EmailTemplateForm({
     useLayout,
     layoutId,
     kind: currentKind,
+    fromOverride,
+    templateId: template?.id,
   });
+
+  // What the template uses but doesn't declare, and what would show blank.
+  const variableCheck = useTemplateVariables({
+    sources: [subject, preheader, htmlContent, plainTextContent],
+    // From address and Reply-To are always rendered by the Liquid engine,
+    // even when the body is kept on the previous one.
+    liquidSources: [fromOverride, replyTo],
+    declared: variables ?? [],
+    data: derived.sampleData,
+    isLayoutRow,
+    liquid: !keptOnOldEngine,
+  });
+  const declareVariable = useCallback(
+    (variableName: string) => {
+      form.setValue(
+        "variables",
+        [
+          ...(form.getValues("variables") ?? []),
+          { name: variableName, description: "", required: false },
+        ],
+        { shouldDirty: true }
+      );
+    },
+    [form]
+  );
 
   // What the editors complete: the declared variables, and the test data's
   // shape for their properties.
@@ -331,7 +364,15 @@ export function EmailTemplateForm({
               acts={acts}
               isPending={isPending}
               isLayoutRow={isLayoutRow}
-              previewSubject={derived.previewSubject}
+              inbox={
+                derived.hasPreview
+                  ? {
+                      subject: derived.previewSubject,
+                      preheader: derived.previewPreheader,
+                      from: derived.previewFrom,
+                    }
+                  : null
+              }
               editor={{
                 editorTab,
                 onEditorTabChange: setEditorTab,
@@ -363,7 +404,8 @@ export function EmailTemplateForm({
                 onSampleChange={setSampleOverride}
                 onReset={() => setSampleOverride(null)}
                 sampleError={derived.sampleError}
-                unknownVariables={derived.unknownVariables}
+                check={variableCheck}
+                onDeclare={owns ? declareVariable : undefined}
               />
             )
           }
@@ -398,8 +440,8 @@ export function EmailTemplateForm({
             onOpenChange={setSendTestOpen}
             templateId={template?.id ?? ""}
             templateName={name}
-            slug={slug}
             sampleData={derived.sampleData}
+            draftOf={() => testDraftOf(form.getValues())}
           />
         )}
       </form>

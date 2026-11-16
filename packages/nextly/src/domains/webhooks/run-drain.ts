@@ -32,8 +32,11 @@ import {
   CONTENT_EVENTS_RETENTION_DRAIN_GATE_KEY,
   EMAIL_RETENTION_DRAIN_GATE_KEY,
   NOTICES_RETENTION_DRAIN_GATE_KEY,
+  CACHE_TAG_EXPIRIES_RETENTION_DRAIN_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY,
+  PLUGIN_EVENTS_RETENTION_DRAIN_GATE_KEY,
   PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY,
+  RECEIVED_WEBHOOKS_RETENTION_DRAIN_GATE_KEY,
   WEBHOOK_RETENTION_GATE_KEY,
 } from "../../domains/retention/gate";
 import {
@@ -47,9 +50,26 @@ import {
   pruneOneTimeSecrets,
 } from "../../plugins/security/one-time-secrets-prune";
 import {
+  pruneReceivedWebhooks,
+  RECEIVED_WEBHOOKS_SWEEP_INTERVAL_MS,
+} from "../../plugins/security/received-webhooks-prune";
+import {
+  PLUGIN_EVENTS_SWEEP_INTERVAL_MS,
+  prunePluginEvents,
+} from "../plugin-events/prune";
+import {
   PREVIEW_LINKS_SWEEP_INTERVAL_MS,
   prunePreviewLinks,
 } from "../../auth/preview/preview-link-records";
+import {
+  ledgerFor,
+  LEDGER_PRUNE_INTERVAL_MS,
+  LEDGER_RETENTION_MS,
+  type TagExpiryLedgerAdapter,
+} from "../../runtime/cache/tag-expiry-ledger";
+
+/** Batches of the ledger's prune one drain runs, so its turn stays short. */
+const DRAIN_LEDGER_PRUNE_BATCHES = 5;
 
 /** Hard cap on rounds so a persistently-retrying backlog can't loop unbounded. */
 const DEFAULT_MAX_ROUNDS = 100;
@@ -102,13 +122,32 @@ export interface RunDrainDeps {
      */
     oneTimeSecrets?: boolean;
     /**
+     * Sweep plugins' received-webhook claims past their retention, for the
+     * secrets sweep's reason: an install that stops receiving webhooks makes
+     * no write that offers the pass.
+     */
+    receivedWebhooks?: boolean;
+    /**
+     * Sweep plugins' durable events finished past their retention, for the
+     * secrets sweep's reason: an install whose plugins stop recording events
+     * makes no write that offers the pass.
+     */
+    pluginEvents?: boolean;
+    /**
      * Sweep recorded preview links long past their end, for the secrets
      * sweep's reason: an install that goes quiet makes no write that offers
      * the pass.
      */
     previewLinks?: boolean;
+    /**
+     * Prune the cache tag expiry ledger past the age the cache handlers serve
+     * entries for, for the secrets sweep's reason.
+     */
+    cacheTagExpiries?: boolean;
     // The content-events sweep deletes each batch in a transaction of its own.
-    prune: PruneDeps & { adapter: ContentEventsPruneDb };
+    prune: PruneDeps & {
+      adapter: ContentEventsPruneDb & TagExpiryLedgerAdapter;
+    };
     gate: RetentionGateStore;
   };
 }
@@ -138,8 +177,14 @@ export interface RunDrainResult {
     emailDeliveries: number;
     /** Plugins' one-purpose secrets removed on this call. */
     oneTimeSecrets: number;
+    /** Plugins' received-webhook claims removed on this call. */
+    receivedWebhooks: number;
+    /** Plugins' finished durable events removed on this call. */
+    pluginEvents: number;
     /** Recorded preview links long past their end removed on this call. */
     previewLinks: number;
+    /** Cache tag expiries past the ledger's age removed on this call. */
+    cacheTagExpiries: number;
     /** Notices past the activity log's window removed on this call. */
     notices: number;
     /**
@@ -157,6 +202,26 @@ export interface RunDrainResult {
  * `maxRounds` is reached. Deliveries scheduled for a future retry are intentionally
  * left for a later drain — this returns once nothing is immediately actionable.
  */
+/**
+ * One of the drain's fixed-time sweeps: whether it holds a turn, its gate key,
+ * what a failure is logged as, where its count goes, and the sweep itself.
+ */
+interface FixedSweep {
+  turn: boolean;
+  key: string;
+  failure: string;
+  count:
+    | "oneTimeSecrets"
+    | "receivedWebhooks"
+    | "pluginEvents"
+    | "previewLinks";
+  prune(
+    adapter: NonNullable<RunDrainDeps["retention"]>["prune"]["adapter"],
+    now: Date,
+    limits: { deadline?: number; clock: () => number }
+  ): Promise<{ removed: number; started: boolean }>;
+}
+
 /**
  * An equal share of whatever time is left, as an absolute moment.
  *
@@ -209,7 +274,10 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
       auth: 0,
       emailDeliveries: 0,
       oneTimeSecrets: 0,
+      receivedWebhooks: 0,
+      pluginEvents: 0,
       previewLinks: 0,
+      cacheTagExpiries: 0,
       notices: 0,
       contentEvents: 0,
     },
@@ -324,6 +392,34 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
           : false;
       if (secretsTurn) heldTurns.add(ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY);
 
+      // Received-webhook claims, claimed with the others for the reason the
+      // secrets sweep is.
+      const receivedTurn =
+        retention.receivedWebhooks === true && !deadlineSpent()
+          ? await claimRetentionPass(
+              retention.gate,
+              RECEIVED_WEBHOOKS_RETENTION_DRAIN_GATE_KEY,
+              RECEIVED_WEBHOOKS_SWEEP_INTERVAL_MS
+            )
+          : false;
+      if (receivedTurn) {
+        heldTurns.add(RECEIVED_WEBHOOKS_RETENTION_DRAIN_GATE_KEY);
+      }
+
+      // Plugins' finished durable events, claimed with the others for the
+      // reason the secrets sweep is.
+      const pluginEventsTurn =
+        retention.pluginEvents === true && !deadlineSpent()
+          ? await claimRetentionPass(
+              retention.gate,
+              PLUGIN_EVENTS_RETENTION_DRAIN_GATE_KEY,
+              PLUGIN_EVENTS_SWEEP_INTERVAL_MS
+            )
+          : false;
+      if (pluginEventsTurn) {
+        heldTurns.add(PLUGIN_EVENTS_RETENTION_DRAIN_GATE_KEY);
+      }
+
       // Recorded preview links, claimed with the others for the reason the
       // secrets sweep is.
       const previewLinksTurn =
@@ -336,6 +432,20 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
           : false;
       if (previewLinksTurn) {
         heldTurns.add(PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY);
+      }
+
+      // The cache tag expiry ledger, claimed with the others for the reason
+      // the secrets sweep is.
+      const cacheTagsTurn =
+        retention.cacheTagExpiries === true && !deadlineSpent()
+          ? await claimRetentionPass(
+              retention.gate,
+              CACHE_TAG_EXPIRIES_RETENTION_DRAIN_GATE_KEY,
+              LEDGER_PRUNE_INTERVAL_MS
+            )
+          : false;
+      if (cacheTagsTurn) {
+        heldTurns.add(CACHE_TAG_EXPIRIES_RETENTION_DRAIN_GATE_KEY);
       }
 
       // Notices keep the activity log's window, so they ride its policy, on a
@@ -389,7 +499,10 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
         (noticesTurn && !done.notices ? 1 : 0) +
         (contentEventsTurn ? 1 : 0) +
         (secretsTurn ? 1 : 0) +
-        (previewLinksTurn ? 1 : 0);
+        (receivedTurn ? 1 : 0) +
+        (pluginEventsTurn ? 1 : 0) +
+        (previewLinksTurn ? 1 : 0) +
+        (cacheTagsTurn ? 1 : 0);
 
       const webhookPolicy = retention.policy;
       if (webhookPolicy && !deadlineSpent()) {
@@ -588,64 +701,94 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
         );
       }
 
-      // Plugins' one-purpose secrets, last and with what remains. The sweep
-      // stops between batches at the deadline, and the turn is kept only if a
-      // batch was attempted, for the reason the delivery log's is.
-      if (secretsTurn && !deadlineSpent()) {
-        const swept = await pruneOneTimeSecrets(
-          retention.prune.adapter,
-          now(),
-          {
-            // Its share, not the whole remainder, while the preview-links
-            // sweep still follows: a backlog here would otherwise take every
-            // drain's last moments and leave that sweep none.
-            deadline: shareOfRemaining(
-              deadline,
-              now,
-              previewLinksTurn ? 2 : 1
-            )?.getTime(),
+      // The fixed-time sweeps, in this order, after the passes above and
+      // before the ledger prune, each on the same terms: one-purpose secrets,
+      // received-webhook claims, finished durable events and preview links.
+      // Each sweep stops between batches at its share of the deadline, not
+      // the whole remainder, so a backlog in one cannot take every drain's last
+      // moments from the sweeps and the ledger prune after it. A failure is
+      // quiet: a database not yet updated has no table, and an app-supplied
+      // logger that throws must not reject a drain whose deliveries already
+      // succeeded. A turn is kept only if a batch was attempted, for the
+      // reason the delivery log's is.
+      const fixedSweeps: FixedSweep[] = [
+        {
+          turn: secretsTurn,
+          key: ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY,
+          failure: "One-purpose secrets retention pass failed",
+          count: "oneTimeSecrets",
+          prune: pruneOneTimeSecrets,
+        },
+        {
+          turn: receivedTurn,
+          key: RECEIVED_WEBHOOKS_RETENTION_DRAIN_GATE_KEY,
+          failure: "Received webhooks retention pass failed",
+          count: "receivedWebhooks",
+          prune: pruneReceivedWebhooks,
+        },
+        {
+          turn: pluginEventsTurn,
+          key: PLUGIN_EVENTS_RETENTION_DRAIN_GATE_KEY,
+          failure: "Plugin events retention pass failed",
+          count: "pluginEvents",
+          prune: prunePluginEvents,
+        },
+        {
+          turn: previewLinksTurn,
+          key: PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY,
+          failure: "Preview links retention pass failed",
+          count: "previewLinks",
+          prune: prunePreviewLinks,
+        },
+      ];
+      for (const [index, sweep] of fixedSweeps.entries()) {
+        if (!sweep.turn || deadlineSpent()) continue;
+        // This sweep, the claimed sweeps after it, and the ledger prune.
+        const ways =
+          1 +
+          fixedSweeps.slice(index + 1).filter(later => later.turn).length +
+          (cacheTagsTurn ? 1 : 0);
+        const swept = await sweep
+          .prune(retention.prune.adapter, now(), {
+            deadline: shareOfRemaining(deadline, now, ways)?.getTime(),
             clock: () => now().getTime(),
-          }
-        ).catch((error: unknown) => {
-          // Quietly: an app-supplied logger that throws here would reject a
-          // drain whose deliveries already succeeded.
-          warnQuietly(
-            retention.prune.logger,
-            "One-purpose secrets retention pass failed",
-            { error: error instanceof Error ? error.message : "unknown error" }
-          );
-          return { removed: 0, started: true };
-        });
-        result.pruned.oneTimeSecrets = swept.removed;
-        if (swept.started) {
-          heldTurns.delete(ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY);
-        }
+          })
+          .catch((error: unknown) => {
+            warnQuietly(retention.prune.logger, sweep.failure, {
+              error: error instanceof Error ? error.message : "unknown error",
+            });
+            return { removed: 0, started: true };
+          });
+        result.pruned[sweep.count] = swept.removed;
+        if (swept.started) heldTurns.delete(sweep.key);
       }
 
-      // Recorded preview links, after the secrets and on the same terms: the
-      // sweep stops between batches at the deadline, and the turn is kept only
-      // if a batch was attempted.
-      if (previewLinksTurn && !deadlineSpent()) {
-        // Mirrors the secrets sweep above deliberately: the same deadline,
-        // the same quiet failure and the same rule for keeping the turn.
-        // fallow-ignore-next-line code-duplication
-        const swept = await prunePreviewLinks(retention.prune.adapter, now(), {
-          deadline: deadline?.getTime(),
-          clock: () => now().getTime(),
-        }).catch((error: unknown) => {
-          // Quietly, as the secrets sweep: a database not yet updated has no
-          // table, and a drain whose deliveries succeeded must not reject.
+      // The cache tag expiry ledger, last. Bounded twice: by batches, each one
+      // indexed delete of a bounded number of rows, so a large ledger costs a
+      // few short statements, never one long lock; and by the drain's
+      // deadline, checked between them. What is left waits for the next turn.
+      if (cacheTagsTurn && !deadlineSpent()) {
+        // The ledger is made inside the `try` too: whatever fails, building it
+        // or pruning, a drain whose deliveries succeeded must not reject.
+        try {
+          result.pruned.cacheTagExpiries = await ledgerFor(
+            retention.prune.adapter
+          ).prune(LEDGER_RETENTION_MS, {
+            maxBatches: DRAIN_LEDGER_PRUNE_BATCHES,
+            // Stopped between batches at the drain's budget, as the sweeps
+            // above are: a slow database must not carry the drain past it.
+            deadline: deadline?.getTime(),
+            clock: () => now().getTime(),
+          });
+        } catch (error) {
+          // Quietly, as the sweeps above.
           warnQuietly(
             retention.prune.logger,
-            "Preview links retention pass failed",
+            "Cache tag expiries retention pass failed",
             { error: error instanceof Error ? error.message : "unknown error" }
           );
-          return { removed: 0, started: true };
-        });
-        result.pruned.previewLinks = swept.removed;
-        if (swept.started) {
-          heldTurns.delete(PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY);
         }
+        heldTurns.delete(CACHE_TAG_EXPIRIES_RETENTION_DRAIN_GATE_KEY);
       }
     } finally {
       // Anything still held was claimed and never spent. Giving it back costs

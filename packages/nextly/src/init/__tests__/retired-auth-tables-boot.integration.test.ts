@@ -1,6 +1,7 @@
 /**
- * A boot on a database that still holds the retired `accounts` or `sessions`
- * table names the table in a startup warning, with its row count. A database
+ * A boot on a database that still holds a retired `accounts`, `sessions` or
+ * `user_permission_cache` table names the table in a startup warning, with its
+ * row count. A database
  * without them stays quiet about auth tables.
  *
  * Runs the real check — live introspection, the shape test and the count
@@ -8,8 +9,11 @@
  * branch, the only branch the warning runs on. `tableExists` answers from the
  * live catalogue, so the namesake check sees the same columns a boot would.
  * On every dialect with a database in this run.
+ *
+ * In a development start: a production start compares nothing of the core
+ * schema with the database, so it names no retired table.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   availableDialects,
@@ -18,7 +22,18 @@ import {
   withFreshDatabase,
 } from "../../__tests__/helpers/fresh-database";
 import { ensureFirstRunSetup } from "../first-run";
-import { createRetiredAuthTables } from "./retired-auth-tables-fixture";
+import {
+  createRetiredAuthTables,
+  createStoredPermissionAnswersTable,
+} from "./retired-auth-tables-fixture";
+
+// The core schema is compared in a development start only.
+beforeEach(() => {
+  vi.stubEnv("NODE_ENV", "development");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 const WARNING_OPENING = "still has auth tables";
 
@@ -39,6 +54,8 @@ async function boot(fresh: FreshDatabase) {
       executeQuery: async sql => fresh.exec(sql),
     },
     logger,
+    // The initialized path never reaches the lock.
+    holdSchemaLock: work => work(),
   });
   expect(result).toEqual({ ranSetup: false, reason: "already_initialized" });
   return logger;
@@ -75,6 +92,23 @@ describe.each(availableDialects())(
         expect(rest).toEqual([]);
         expect(warning).toContain("accounts: 0 rows");
         expect(warning).toContain("sessions: 1 row");
+      });
+    });
+
+    it("names the stored permission answers an upgraded database still has", async () => {
+      await fresh(async db => {
+        await createStoredPermissionAnswersTable(
+          { executeQuery: sql => db.exec(sql) },
+          dialect
+        );
+        // Empty: its rows need a user to point at, and the count is read the
+        // same way the case above reads the sign-in tables'.
+        const logger = await boot(db);
+
+        const [warning, ...rest] = authTableWarnings(logger);
+        expect(rest).toEqual([]);
+        expect(warning).toContain("user_permission_cache: 0 rows");
+        expect(warning).toContain("whether or not it holds rows");
       });
     });
 

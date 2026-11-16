@@ -4,14 +4,17 @@
  */
 import { expect, type Page } from "@playwright/test";
 
-import { STORAGE_STATE } from "../global-setup";
-
 import { gotoAdmin } from "./support/admin";
 import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
-import { test } from "./support/test";
+import { fileAccount, test } from "./support/test";
+import { LOCK } from "./support/locks";
 
 // One signed-in user for the whole file: signing in spends the auth budget.
-test.describe.configure({ mode: "serial" });
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({
+  mode: "serial",
+  lock: [LOCK.usersRoles, LOCK.email],
+});
 
 let limited: LimitedUser;
 let page: Page;
@@ -21,7 +24,7 @@ test.beforeAll(async ({ browser, playwright }, testInfo) => {
   if (baseURL === undefined) throw new Error("[e2e] No baseURL configured.");
   const admin = await playwright.request.newContext({
     baseURL,
-    storageState: STORAGE_STATE,
+    storageState: await fileAccount(baseURL, testInfo),
   });
   try {
     limited = await signInAsLimitedUser(browser, admin, baseURL, [
@@ -38,14 +41,18 @@ test.afterAll(async () => {
   await limited?.context.close();
 });
 
-test("the hub is in the reader's navigation", async () => {
+test("the hub is reached through Settings, which lands on it", async () => {
   await gotoAdmin(page, "");
   const rail = page.getByRole("navigation").first();
-  await expect(rail.locator('a[href="/admin/email"]')).toHaveCount(1);
+  // Email grants alone reveal the Settings entry, and it leads to the hub
+  // rather than to General Settings, which this reader may not open.
+  await expect(rail.locator('a[href="/admin/settings/email"]')).toHaveCount(1);
+  await expect(rail.locator('a[href="/admin/settings"]')).toHaveCount(0);
+  await expect(rail.locator('a[href="/admin/email"]')).toHaveCount(0);
 });
 
 test("Messages lists the emails with nothing to change them", async () => {
-  await gotoAdmin(page, "/email");
+  await gotoAdmin(page, "/settings/email");
   await expect(page.getByText("Welcome").first()).toBeVisible({
     timeout: 30_000,
   });
@@ -58,7 +65,7 @@ test("Messages lists the emails with nothing to change them", async () => {
 });
 
 test("Sending lists the providers with nothing to add", async () => {
-  await gotoAdmin(page, "/email/sending");
+  await gotoAdmin(page, "/settings/email/sending");
   await expect(page.getByRole("tab", { name: "Sending" })).toHaveAttribute(
     "aria-selected",
     "true"
@@ -66,9 +73,14 @@ test("Sending lists the providers with nothing to add", async () => {
   await expect(page.getByRole("link", { name: /Add Provider/ })).toHaveCount(0);
 });
 
-test("Settings no longer lists email", async () => {
-  await gotoAdmin(page, "");
-  const rail = page.getByRole("navigation").first();
-  // Email grants alone reveal no Settings destination.
-  await expect(rail.locator('a[href="/admin/settings"]')).toHaveCount(0);
+test("Settings lists Email and nothing this reader cannot open", async () => {
+  await gotoAdmin(page, "/settings/email");
+  await expect(
+    page.locator('a[href="/admin/settings/email"]').first()
+  ).toBeVisible({ timeout: 30_000 });
+  // General Settings, Users and the developer screens are not offered.
+  await expect(page.locator('a[href="/admin/users"]')).toHaveCount(0);
+  await expect(page.locator('a[href="/admin/settings/api-keys"]')).toHaveCount(
+    0
+  );
 });

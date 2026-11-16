@@ -296,5 +296,47 @@ describe.each(getConfiguredTestDialects())(
         expect(JSON.stringify(caught)).toMatch(/ctx\.db\.transaction/);
       }
     });
+
+    it("holds a joined transaction's effect until the outer transaction commits", async () => {
+      const ctx = await boot();
+      const adapter = current?.adapter as unknown as DrizzleAdapter;
+      const seen: string[] = [];
+      await adapter.transaction(async () => {
+        // Joins the outer transaction, so its effect waits for the outer
+        // commit rather than for this call's end.
+        await ctx.db.transaction(async tx => {
+          await writeThrough(tx, "link-effect-joined");
+          linkedTransaction(tx, "test.effect").afterCommit(() => {
+            seen.push("effect");
+          });
+        });
+        seen.push("outer work done");
+      });
+      seen.push("outer resolved");
+      expect(seen).toEqual(["outer work done", "effect", "outer resolved"]);
+    });
+
+    it("never runs a joined transaction's effect when the outer transaction rolls back", async () => {
+      const ctx = await boot();
+      const adapter = current?.adapter as unknown as DrizzleAdapter;
+      let ran = false;
+      const outcome = await adapter
+        .transaction(async () => {
+          await ctx.db.transaction(async tx => {
+            await writeThrough(tx, "link-effect-joined-undone");
+            linkedTransaction(tx, "test.effect").afterCommit(() => {
+              ran = true;
+            });
+          });
+          throw new Error("the outer work fails after the joined call");
+        })
+        .then(
+          () => "committed",
+          () => "rolled back"
+        );
+      expect(outcome).toBe("rolled back");
+      expect(ran).toBe(false);
+      expect(await stored("link-effect-joined-undone")).toBe(false);
+    });
   }
 );

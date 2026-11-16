@@ -1,0 +1,397 @@
+/**
+ * The Recent entries card at each width, drawn from the data its `load` answers: titles alone
+ * when small, when each was updated and its status when medium, a table when large; every row a
+ * link to its entry at every width, and, when the collection holds more than the card draws,
+ * "View all (N)" to the collection's list under the card's Filter and Sort. A collection with no
+ * title to name its rows by is "not available".
+ */
+import type { SizeTier } from "@nextlyhq/ui/format";
+import { MAX_CHOSEN_FIELDS } from "nextly/config";
+import type { RecentEntriesWidgetData } from "nextly/core-widget-data";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
+import { cleanup, render, screen, within } from "@admin/__tests__/utils";
+
+import { MAX_META_FIELDS } from "../widgets/frame/entity-row";
+import { CardTierContext } from "../widgets/frame/tier";
+
+import { RecentEntriesCard } from "./RecentEntriesCard";
+
+/** Posts as the workspace payload publishes them: a collection with a lifecycle. */
+const PUBLISHED = {
+  widgetSources: [
+    { collection: "posts", label: "Posts", lifecycle: true, fields: [] },
+  ],
+};
+/** The collections the workspace payload publishes to the reader, as a test sets them. */
+let mockBranding: { widgetSources?: unknown[] } = PUBLISHED;
+vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  useBranding: () => mockBranding,
+}));
+afterEach(() => {
+  mockBranding = PUBLISHED;
+});
+
+const FILTER = { headline: { contains: "news" } };
+
+/** Three hours before the test runs, which the card reads as "3h ago". */
+const UPDATED = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+
+/** The columns the card asked, title first, as the read described them. */
+const COLUMNS: RecentEntriesWidgetData["columns"] = [
+  { name: "headline", label: "Headline", type: "string" },
+  {
+    name: "status",
+    label: "Status",
+    type: "string",
+    choices: [{ value: "published", label: "Published" }],
+  },
+  { name: "updatedAt", label: "Updated", type: "date" },
+];
+
+/** The card's data: `count` entries, four unless said, and the read's own count when it gave one. */
+function answered(total?: number, count = 4): RecentEntriesWidgetData {
+  return {
+    title: "headline",
+    rows: Array.from({ length: count }, (_, i) => i + 1).map(n => ({
+      id: `e${n}`,
+      headline: `Story ${n}`,
+      status: "published",
+      updatedAt: UPDATED,
+    })),
+    columns: COLUMNS,
+    ...(total !== undefined && { total }),
+  };
+}
+
+const DATA = answered();
+
+/** The same data, from a read that counted 42 entries in all. */
+const COUNTED = answered(42);
+
+/** Data of these rows and columns, titled by the headline. */
+function listed(
+  rows: RecentEntriesWidgetData["rows"],
+  columns: RecentEntriesWidgetData["columns"]
+): RecentEntriesWidgetData {
+  return { title: "headline", rows, columns };
+}
+
+function drawAt(
+  tier: SizeTier,
+  data: RecentEntriesWidgetData = DATA,
+  /** The card's "Number of entries", where its reader set one. */
+  limit?: number
+) {
+  render(
+    <CardTierContext.Provider value={tier}>
+      {inFrame(
+        <RecentEntriesCard
+          widgetId="core/recent-entries"
+          placementId="p1"
+          settings={{
+            collection: "posts",
+            filter: FILTER,
+            sort: "-updatedAt",
+            ...(limit === undefined ? {} : { limit }),
+          }}
+          size={{ w: 6, h: 4, tier }}
+          data={data}
+          refreshing={false}
+          retry={() => undefined}
+        />
+      )}
+    </CardTierContext.Provider>
+  );
+}
+
+/** The rows the card draws, as list rows below large and table rows at it. */
+const drawnRows = () => [
+  ...screen.queryAllByTestId("entity-row"),
+  ...screen.queryAllByTestId("list-card-table-row"),
+];
+
+/** The footer's View all link: its shown count, if any, and its address read whole. */
+function viewAll() {
+  const link = screen.getByRole("link", { name: /^View all/ });
+  const url = new URL(link.getAttribute("href") ?? "", "http://admin.test");
+  return {
+    count: /^View all \(([^)]*)\)/.exec(link.textContent ?? "")?.[1] ?? null,
+    path: url.pathname,
+    where: JSON.parse(url.searchParams.get("where") ?? "null") as unknown,
+    sort: url.searchParams.get("sort"),
+  };
+}
+
+describe("the Recent entries card's Number of entries", () => {
+  it.each([10, 20])(
+    "draws %i entries of the one more its load read, and View all (N) to the whole list",
+    limit => {
+      // The load asked its number and one more; the read counted 42 in all.
+      for (const tier of ["small", "medium", "large"] as const) {
+        drawAt(tier, answered(42, limit + 1), limit);
+        expect(drawnRows(), tier).toHaveLength(limit);
+        expect(screen.queryByText(`Story ${limit + 1}`)).toBeNull();
+        expect(viewAll()).toEqual({
+          count: "42",
+          path: "/admin/collections/posts",
+          where: FILTER,
+          sort: "-updatedAt",
+        });
+        cleanup();
+      }
+    }
+  );
+
+  it("says at least the rows it read when the read counted none, from the one more", () => {
+    drawAt("medium", answered(undefined, 11), 10);
+    expect(drawnRows()).toHaveLength(10);
+    expect(viewAll().count).toBe("11+");
+  });
+
+  it("draws every entry when there are fewer than its number, with View all and no count", () => {
+    drawAt("medium", answered(4, 4), 10);
+    expect(drawnRows()).toHaveLength(4);
+    expect(viewAll()).toEqual({
+      count: null,
+      path: "/admin/collections/posts",
+      where: FILTER,
+      sort: "-updatedAt",
+    });
+  });
+
+  it("draws five until its reader sets a number", () => {
+    drawAt("large", answered(undefined, 6));
+    expect(drawnRows()).toHaveLength(5);
+    expect(viewAll().count).toBe("6+");
+  });
+});
+
+describe("the Recent entries card", () => {
+  it.each(["small", "medium", "large"] as const)(
+    "links every row to its entry when %s",
+    tier => {
+      drawAt(tier);
+      // The title is inside the link the row is, so the link is named by it.
+      const story = screen.getByText("Story 1").closest("a");
+      expect(story).toHaveAttribute("href", "/admin/collections/posts/e1");
+    }
+  );
+
+  it.each(["small", "medium", "large"] as const)(
+    "offers View all (N) when %s and the collection holds more, opening the list under the card's Filter and Sort",
+    tier => {
+      drawAt(tier, COUNTED);
+      const viewAll = screen.getByRole("link", { name: /^View all/ });
+      expect(viewAll).toHaveTextContent("View all (42)");
+      const url = new URL(
+        viewAll.getAttribute("href") ?? "",
+        "http://admin.test"
+      );
+      expect(url.pathname).toBe("/admin/collections/posts");
+      expect(JSON.parse(url.searchParams.get("where") ?? "null")).toEqual(
+        FILTER
+      );
+      expect(url.searchParams.get("sort")).toBe("-updatedAt");
+    }
+  );
+
+  it("counts View all as a floor from the extra row when the read gave no total", () => {
+    // Four entries asked as four: a card of three draws three, and the fourth says at least four.
+    drawAt("small", DATA, 3);
+    expect(screen.getByRole("link", { name: /^View all/ })).toHaveTextContent(
+      "View all (4+)"
+    );
+  });
+
+  it.each(["medium", "large"] as const)(
+    "offers View all with no count when %s and it draws every entry there is",
+    tier => {
+      // The way to the collection's list is always in the footer; the count only says more.
+      drawAt(tier);
+      expect(screen.getAllByRole("link", { name: /^Story/ })).toHaveLength(4);
+      const footer = screen.getByTestId("list-card-footer");
+      expect(footer).toHaveTextContent(/^View all/);
+      expect(footer.textContent).not.toMatch(/\(\d/);
+    }
+  );
+
+  it("lists every entry it was answered when small, as many as when medium", () => {
+    // 🔴 Counted by its width, a small card drew three of these four.
+    drawAt("small");
+    const list = screen.getByTestId("list-card-rows");
+    expect(within(list).getAllByTestId("entity-row")).toHaveLength(4);
+  });
+
+  it("keeps each row's status when small", () => {
+    // Below large a row's slots stack the same way at every width: a small row says what a
+    // medium one says.
+    drawAt("small");
+    const rows = screen.getAllByTestId("entity-row");
+    expect(rows).toHaveLength(4);
+    expect(
+      within(rows[0]).getByTestId("entity-row-trailing")
+    ).toHaveTextContent("Published");
+  });
+
+  it("adds when each row was updated, and its status, when medium", () => {
+    drawAt("medium");
+    const [first] = screen.getAllByTestId("entity-row");
+    expect(within(first).getByTestId("entity-row-meta")).toHaveTextContent(
+      "3h ago"
+    );
+    expect(within(first).getByTestId("entity-row-trailing")).toHaveTextContent(
+      "Published"
+    );
+  });
+
+  it("is a table headed by the server's own column labels when large", () => {
+    drawAt("large");
+    const headings = screen
+      .getAllByRole("columnheader")
+      .map(heading => heading.textContent);
+    // In the order the server answered the columns, as the card asked them.
+    expect(headings).toEqual(["Headline", "Status", "Updated"]);
+  });
+
+  it("leads each row with its title, never with a chip", () => {
+    // 🔴 Every row repeated one letter: the collection's initial, which the card's title names.
+    mockBranding = {
+      widgetSources: [
+        {
+          collection: "posts",
+          label: "Articles",
+          lifecycle: false,
+          fields: [],
+        },
+      ],
+    };
+    drawAt("medium");
+    const rows = screen.getAllByTestId("entity-row");
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(within(row).queryByTestId("entity-row-leading")).toBeNull();
+    }
+  });
+
+  it("draws its status as a quiet chip with a dot, in the tone of done for a published entry", () => {
+    drawAt(
+      "medium",
+      listed(
+        [
+          { id: "e1", headline: "Story 1", status: "published" },
+          { id: "e2", headline: "Story 2", status: "draft" },
+        ],
+        [
+          { name: "headline", label: "Headline", type: "string" },
+          {
+            name: "status",
+            label: "Status",
+            type: "string",
+            choices: [
+              { value: "published", label: "Published" },
+              { value: "draft", label: "Draft" },
+            ],
+          },
+        ]
+      )
+    );
+    // 🔴 One tone for both says nothing about which is live.
+    const chips = screen
+      .getAllByTestId("status-chip")
+      .map(chip => [chip.textContent, chip.dataset.tone]);
+    expect(chips).toEqual([
+      ["Published", "good"],
+      ["Draft", "neutral"],
+    ]);
+    // Each marked by a dot beside its word, never by colour alone.
+    for (const chip of screen.getAllByTestId("status-chip")) {
+      expect(chip.querySelector('[data-slot="badge-dot"]')).not.toBeNull();
+    }
+  });
+
+  it("shows the fields its reader chose, each on the meta line or at the row's end", () => {
+    // Chosen in the card's Fields: a topic, which has no choices, joins the meta line.
+    const chosen = listed(
+      [{ id: "e1", headline: "Story 1", topic: "Plans" }],
+      [
+        { name: "headline", label: "Headline", type: "string" },
+        { name: "topic", label: "Topic", type: "string" },
+      ]
+    );
+    drawAt("medium", chosen);
+    const [row] = screen.getAllByTestId("entity-row");
+    expect(within(row!).getByTestId("entity-row-meta")).toHaveTextContent(
+      "Plans"
+    );
+    expect(within(row!).queryByTestId("entity-row-trailing")).toBeNull();
+  });
+
+  it("keeps the order the reader chose in the table, a field of choices included", () => {
+    // 🔴 Sorted by role, the stage (a field of choices) moved behind the topic.
+    drawAt(
+      "large",
+      listed(
+        [{ id: "e1", headline: "Story 1", stage: "open", topic: "Plans" }],
+        [
+          { name: "headline", label: "Headline", type: "string" },
+          {
+            name: "stage",
+            label: "Stage",
+            type: "string",
+            choices: [{ value: "open", label: "Open" }],
+          },
+          { name: "topic", label: "Topic", type: "string" },
+        ]
+      )
+    );
+    expect(
+      screen.getAllByRole("columnheader").map(heading => heading.textContent)
+    ).toEqual(["Headline", "Stage", "Topic"]);
+  });
+
+  it("reads a field named status as any other on a collection without a lifecycle", () => {
+    // 🔴 Judged by the field's name, an author's own `status` choice field was
+    // drawn as the lifecycle's pill, "published" in the tone of done.
+    mockBranding = {
+      widgetSources: [
+        { collection: "posts", label: "Posts", lifecycle: false, fields: [] },
+      ],
+    };
+    drawAt(
+      "medium",
+      listed(
+        [{ id: "e1", headline: "Story 1", status: "published" }],
+        [
+          { name: "headline", label: "Headline", type: "string" },
+          {
+            name: "status",
+            label: "Status",
+            type: "string",
+            choices: [{ value: "published", label: "Published" }],
+          },
+        ]
+      )
+    );
+    const [row] = screen.getAllByTestId("entity-row");
+    expect(within(row!).getByText("Published")).toBeInTheDocument();
+    expect(within(row!).queryByTestId("status-chip")).toBeNull();
+  });
+
+  it("says it is not available for a collection that names no title", () => {
+    drawAt("medium", { title: null, rows: [], columns: [] });
+    expect(screen.getByTestId("card-unavailable")).toBeInTheDocument();
+  });
+
+  it("says it has no entries yet when the read found none", () => {
+    drawAt("medium", listed([], COLUMNS));
+    expect(screen.getByText("No entries yet")).toBeInTheDocument();
+  });
+
+  it("never lets a reader choose more fields than a row's meta line shows", () => {
+    // Every chosen field shows at every size only while the cap fits the meta line.
+    expect(MAX_CHOSEN_FIELDS).toBeLessThanOrEqual(MAX_META_FIELDS);
+  });
+});

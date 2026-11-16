@@ -14,10 +14,15 @@
  * unresolved, which its own untranslatable check is expected to catch before
  * this point rather than silently dropping the predicate.
  */
-import { caseInsensitiveContains } from "@nextlyhq/adapter-drizzle/text-match";
+import {
+  caseFolded,
+  caseInsensitiveContains,
+} from "@nextlyhq/adapter-drizzle/text-match";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { SQL } from "drizzle-orm";
 import {
   and,
+  bindIfParam,
   Column,
   eq,
   is,
@@ -36,6 +41,7 @@ import {
 } from "drizzle-orm";
 import { SQLiteTimestamp } from "drizzle-orm/sqlite-core";
 
+import { referenceListCondition } from "../../domains/collections/query/reference-list-membership";
 import type { LocalizedFieldRef } from "../../domains/i18n/companion-join";
 import { buildCompanionExists } from "../../domains/i18n/companion-join";
 import { NextlyError } from "../../errors/nextly-error";
@@ -53,10 +59,34 @@ export interface LocalizedQueryContext {
   companionTableName: string;
   /** Localized fields with both the camelCase name (matching) and snake_case column (SQL). */
   localizedFields: LocalizedFieldRef[];
+  /**
+   * The companion table's Drizzle columns, so a localized comparison's
+   * operand is read as its column compares it, as a main-table column's is.
+   */
+  companionTable?: unknown;
+  /**
+   * The companion's runtime Drizzle table, when the caller has it loaded.
+   * Alias for {@link companionTable}.
+   */
+  table?: unknown;
   /** The main table's `id` column (Drizzle) — the companion `_parent` correlation target. */
   mainIdColumn: unknown;
   /** The locale to filter on (the requested locale — chain head). */
   locale: string;
+  /**
+   * The read's languages in the order it falls back through them, the
+   * requested one first. A localized field is shown from the first of them
+   * that holds a value.
+   */
+  localeChain?: readonly string[];
+  /**
+   * Whether each localized condition must hold in every language of
+   * {@link localeChain} rather than in {@link locale} alone. Set for a read
+   * rule's filter: a field the read shows from a fallback language is then
+   * judged on that language's value too, so the read shows nothing the rule
+   * refuses. A caller's own filter keeps its meaning, the requested language.
+   */
+  inEveryFallbackLanguage?: boolean;
   /**
    * Per-locale status filter (i18n M6). Set (e.g. `"published"`) when the read resolves to a
    * single status and the collection has per-locale status, so localized where/search EXISTS
@@ -65,12 +95,16 @@ export interface LocalizedQueryContext {
   statusValues?: readonly string[];
 }
 
-/** Emits the companion-table EXISTS for a filter on a localized field. */
+/**
+ * Emits the companion-table EXISTS for a filter on a localized field, on `dialect`, which decides
+ * how the operators that ignore case fold it.
+ */
 export type LocalizedExistsBuilder = (
   localizedCtx: LocalizedQueryContext,
   column: string,
   op: string,
-  value: unknown
+  value: unknown,
+  dialect: SupportedDialect
 ) => SQL | undefined;
 
 /**
@@ -89,10 +123,45 @@ export function buildLocalizedWhereExists(
   ctx: LocalizedQueryContext,
   column: string,
   op: string,
-  value: unknown
+  value: unknown,
+  dialect: SupportedDialect
 ): SQL | undefined {
   const t = sql.identifier(ctx.companionTableName);
   const col = sql.identifier(column);
+  // The companion column, resolved on its own table: a date value is read as
+  // the instant it names and bound as this column compares — the same reading
+  // the main where builder applies. Bound raw, an ISO string beside an epoch
+  // column compares by type ordering on SQLite (numbers order before text, so
+  // nothing matches) and by each server's coercion on the others: one filter,
+  // three answers.
+  const table = ctx.companionTable ?? ctx.table;
+  const companionColumn =
+    table !== undefined && table !== null && typeof table === "object"
+      ? findColumn(table, column)
+      : undefined;
+  if (companionColumn && COMPARISONS.has(op)) {
+    // The refusal names the field as the caller wrote it, not the
+    // companion's physical column spelling.
+    const apiName =
+      ctx.localizedFields.find(f => f.column === column)?.name ?? column;
+    if (
+      typeof value === "string" ||
+      (Array.isArray(value) && typeof value[0] === "string")
+    ) {
+      value = comparisonOperand(companionColumn, apiName, value);
+    }
+    // Bind through the column, as the main builder's eq() does: a Date
+    // bound raw reaches the driver as the driver zone's wall clock, while
+    // the companion column stores the UTC wall clock its encoder writes.
+    // Lists bind element-wise, each element through the column.
+    if (Array.isArray(value)) {
+      value = value.map(v =>
+        v instanceof Date ? sql`${bindIfParam(v, companionColumn)}` : v
+      );
+    } else if (value instanceof Date) {
+      value = bindIfParam(value, companionColumn);
+    }
+  }
   let valueCondition: SQL | undefined;
   switch (op) {
     case "=":
@@ -117,12 +186,17 @@ export function buildLocalizedWhereExists(
       valueCondition = sql`${t}.${col} LIKE ${value}`;
       break;
     case "ILIKE":
-      // Lower-cased on both sides, as the adapter compiles ILIKE: only PostgreSQL has the
-      // keyword, and a bare LIKE follows the column's collation.
-      valueCondition = sql`lower(${t}.${col}) like lower(${value})`;
+      // Case-folded on both sides, as the adapter compiles ILIKE: only PostgreSQL has the
+      // keyword, a bare LIKE follows the column's collation, and SQLite's lower() folds ASCII
+      // letters only.
+      valueCondition = sql`${caseFolded(dialect, sql`${t}.${col}`)} like ${caseFolded(dialect, sql`${value}`)}`;
       break;
     case "ICONTAINS":
-      valueCondition = caseInsensitiveContains(sql`${t}.${col}`, String(value));
+      valueCondition = caseInsensitiveContains(
+        dialect,
+        sql`${t}.${col}`,
+        String(value)
+      );
       break;
     case "IS NULL": {
       // A localized field is absent for the locale when no companion row holds
@@ -180,6 +254,52 @@ export function buildLocalizedWhereExists(
 }
 
 /**
+ * The companion-table filter for a translated field keeping a list of ids (`holdsReferenceList`),
+ * judged by membership in each language's row, as the main table's list is.
+ *
+ * `in` and `equals` keep an entry whose row in the language holds one of the ids; `not_in` and
+ * `not_equals` keep one with no such row, so an entry with no translation in the language holds
+ * none, as a NULL list on the main table does. `exists` reads presence as for any translated field
+ * (`fallback`), and the text operators are refused by the membership rule.
+ */
+function localizedReferenceListExists(
+  name: string,
+  fallback: LocalizedExistsBuilder | undefined
+): LocalizedExistsBuilder {
+  return (ctx, column, op, value, dialect) => {
+    if (op === "IS NULL" || op === "IS NOT NULL") {
+      return fallback?.(ctx, column, op, value, dialect);
+    }
+    // An empty `not_in` excludes nothing; any other `not_in` takes a list, refused as on main.
+    if (op === "NOT IN" && (!Array.isArray(value) || value.length === 0)) {
+      return referenceListCondition({
+        dialect,
+        column: sql`1`,
+        name,
+        op,
+        value,
+      });
+    }
+    const negated = op === "!=" || op === "NOT IN";
+    const holds = referenceListCondition({
+      dialect,
+      column: sql`${sql.identifier(ctx.companionTableName)}.${sql.identifier(column)}`,
+      name,
+      op: op === "!=" ? "=" : op === "NOT IN" ? "IN" : op,
+      value,
+    });
+    const exists = buildCompanionExists({
+      companionTableName: ctx.companionTableName,
+      mainIdColumn: ctx.mainIdColumn,
+      locale: ctx.locale,
+      valueCondition: holds,
+      statusValues: ctx.statusValues,
+    });
+    return negated ? sql`not ${exists}` : exists;
+  };
+}
+
+/**
  * Refuse a filter key this builder cannot turn into a predicate.
  *
  * Thrown rather than skipped: a skipped member leaves its siblings to decide
@@ -200,6 +320,18 @@ function refuseKey(column: string, code: string, message: string): never {
  * predicate nobody wrote.
  */
 function resolveColumn(schema: object, column: string): Column {
+  return (
+    findColumn(schema, column) ??
+    refuseKey(
+      column,
+      "FILTER_UNKNOWN_FIELD",
+      `"${column}" is not a field this collection can be filtered on.`
+    )
+  );
+}
+
+/** The column a filter key names on this table, if it names one. */
+function findColumn(schema: object, column: string): Column | undefined {
   // The name as written first, then its snake_case form: a runtime table keys
   // its system timestamps `created_at`, while every response spells them
   // `createdAt`, and a filter written the way rows read must reach them.
@@ -209,11 +341,7 @@ function resolveColumn(schema: object, column: string): Column {
       : undefined;
     if (is(candidate, Column)) return candidate;
   }
-  return refuseKey(
-    column,
-    "FILTER_UNKNOWN_FIELD",
-    `"${column}" is not a field this collection can be filtered on.`
-  );
+  return undefined;
 }
 
 /** The operators that compare a column with a value of the column's own kind. */
@@ -285,12 +413,100 @@ function comparisonOperand(
   return Array.isArray(value) ? value.map(bound) : bound(value);
 }
 
+/** The plain comparisons, each one Drizzle operator over the column and its operand. */
+const COMPARE_WITH: Partial<
+  Record<string, (column: Column, operand: unknown) => SQL>
+> = {
+  "=": (column, operand) => eq(column, operand),
+  "!=": (column, operand) => ne(column, operand),
+  ">": (column, operand) => gt(column, operand),
+  ">=": (column, operand) => gte(column, operand),
+  "<": (column, operand) => lt(column, operand),
+  "<=": (column, operand) => lte(column, operand),
+};
+
+/**
+ * The condition `op` with `value` makes on a main-table column, `column` being the filter key a
+ * refusal names. Split from the builder so each operator's rule reads on its own.
+ */
+function columnCondition(
+  schemaColumn: Column,
+  column: string,
+  op: string,
+  value: unknown,
+  dialect: SupportedDialect
+): SQL {
+  // Read once, for every comparison, so a date column's operand is the same
+  // instant whichever operator compares it.
+  const operand = COMPARISONS.has(op)
+    ? comparisonOperand(schemaColumn, column, value)
+    : value;
+
+  const compare = COMPARE_WITH[op];
+  if (compare) return compare(schemaColumn, operand);
+
+  switch (op) {
+    case "LIKE":
+      // The pattern the operator map built, wildcards and escapes included.
+      return like(schemaColumn, String(value));
+    case "ILIKE":
+      // Case-folded on both sides, as the adapter compiles ILIKE: only PostgreSQL has the
+      // keyword, a bare LIKE follows the column's collation, and SQLite's lower() folds
+      // ASCII letters only.
+      return sql`${caseFolded(dialect, schemaColumn)} like ${caseFolded(dialect, sql`${value}`)}`;
+    case "ICONTAINS":
+      return caseInsensitiveContains(dialect, schemaColumn, String(value));
+    case "IN":
+      // The filter shape refuses an empty `in` and drops an empty
+      // `not_in` before this point; refused again here rather than skipped,
+      // because a skipped `in` matched every row.
+      if (Array.isArray(operand) && operand.length > 0) {
+        return inArray(schemaColumn, operand);
+      }
+      return refuseKey(
+        column,
+        "FILTER_EMPTY_IN",
+        `"in" on "${column}" needs a list with at least one value.`
+      );
+    case "NOT IN":
+      if (Array.isArray(operand) && operand.length > 0) {
+        return notInArray(schemaColumn, operand);
+      }
+      // An empty list excludes nothing. Rendered as true rather than left
+      // out, so it reaches here and its column is resolved first, and so an
+      // `or` holding it is true as written.
+      if (Array.isArray(value)) return sql`1 = 1`;
+      return refuseKey(
+        column,
+        "FILTER_INVALID_OPERAND",
+        `"not_in" on "${column}" needs a list.`
+      );
+    case "IS NULL":
+      return isNull(schemaColumn);
+    case "IS NOT NULL":
+      return isNotNull(schemaColumn);
+    default:
+      return refuseKey(
+        column,
+        "FILTER_UNKNOWN_OPERATOR",
+        `"${String(op)}" is not an operator this builder can apply to "${column}".`
+      );
+  }
+}
+
 export function buildDrizzleCondition(
   whereClause: ReturnType<typeof buildWhereClause>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
   schema: any,
+  // The dialect the condition runs on, which decides how the operators that ignore case fold it.
+  dialect: SupportedDialect,
   localizedCtx?: LocalizedQueryContext | null,
-  localizedExists?: LocalizedExistsBuilder
+  localizedExists?: LocalizedExistsBuilder,
+  /**
+   * The fields that keep a list of related entries' ids in their column
+   * (`holdsReferenceList`), filtered by membership rather than compared whole.
+   */
+  referenceLists?: ReadonlySet<string>
 ): ReturnType<typeof and> | undefined {
   if (!whereClause) {
     return undefined;
@@ -304,8 +520,10 @@ export function buildDrizzleCondition(
       return buildDrizzleCondition(
         condition,
         schema,
+        dialect,
         localizedCtx,
-        localizedExists
+        localizedExists,
+        referenceLists
       );
     }
 
@@ -333,12 +551,45 @@ export function buildDrizzleCondition(
       f => f.name === columnParts[0]
     );
     if (localizedCtx && localizedWhereField) {
-      const localizedCond = localizedExists?.(
-        localizedCtx,
-        localizedWhereField.column,
-        op,
-        value
+      // Read as the companion column compares it: a date is the instant it
+      // names, spelled as that column's dialect stores one, as on the main
+      // table. Bound as written, an ISO string beside SQLite's integer
+      // timestamp compares as text, which every number sorts below.
+      const companionTable = localizedCtx.companionTable ?? localizedCtx.table;
+      const companionColumn =
+        companionTable === undefined ||
+        companionTable === null ||
+        typeof companionTable !== "object"
+          ? undefined
+          : findColumn(companionTable, localizedWhereField.name);
+      const operand =
+        companionColumn && COMPARISONS.has(op)
+          ? comparisonOperand(companionColumn, column, value)
+          : value;
+      // In every language the read may show the field from, where asked;
+      // else in the requested one.
+      const languages =
+        localizedCtx.inEveryFallbackLanguage && localizedCtx.localeChain?.length
+          ? localizedCtx.localeChain
+          : [localizedCtx.locale];
+      // A translated list of ids matches by membership, in each language's row.
+      const existsIn = referenceLists?.has(columnParts[0])
+        ? localizedReferenceListExists(column, localizedExists)
+        : localizedExists;
+      const perLanguage = languages.map(locale =>
+        existsIn?.(
+          { ...localizedCtx, locale },
+          localizedWhereField.column,
+          op,
+          operand,
+          dialect
+        )
       );
+      const localizedCond = perLanguage.every(cond => cond !== undefined)
+        ? perLanguage.length === 1
+          ? perLanguage[0]
+          : and(...perLanguage)
+        : undefined;
       if (localizedCond) return localizedCond;
       // The field lives in the companion table, so the main table has no
       // column to fall back on: without a companion condition it cannot be
@@ -351,69 +602,17 @@ export function buildDrizzleCondition(
     }
 
     const schemaColumn = resolveColumn(schema, columnParts[0]);
-    // Read once, for every comparison, so a date column's operand is the same
-    // instant whichever operator compares it.
-    const operand = COMPARISONS.has(op)
-      ? comparisonOperand(schemaColumn, column, value)
-      : value;
-
-    switch (op) {
-      case "=":
-        return eq(schemaColumn, operand);
-      case "!=":
-        return ne(schemaColumn, operand);
-      case ">":
-        return gt(schemaColumn, operand);
-      case ">=":
-        return gte(schemaColumn, operand);
-      case "<":
-        return lt(schemaColumn, operand);
-      case "<=":
-        return lte(schemaColumn, operand);
-      case "LIKE":
-        return like(schemaColumn, value);
-      case "ILIKE":
-        // Lower-cased on both sides, as the adapter compiles ILIKE: only PostgreSQL has the
-        // keyword, and a bare LIKE follows the column's collation.
-        return sql`lower(${schemaColumn}) like lower(${value})`;
-      case "ICONTAINS":
-        return caseInsensitiveContains(schemaColumn, String(value));
-      case "IN":
-        // The filter shape refuses an empty `in` and drops an empty
-        // `not_in` before this point; refused again here rather than skipped,
-        // because a skipped `in` matched every row.
-        if (Array.isArray(operand) && operand.length > 0) {
-          return inArray(schemaColumn, operand);
-        }
-        return refuseKey(
-          column,
-          "FILTER_EMPTY_IN",
-          `"in" on "${column}" needs a list with at least one value.`
-        );
-      case "NOT IN":
-        if (Array.isArray(operand) && operand.length > 0) {
-          return notInArray(schemaColumn, operand);
-        }
-        // An empty list excludes nothing. Rendered as true rather than left
-        // out, so it reaches here and its column is resolved first, and so an
-        // `or` holding it is true as written.
-        if (Array.isArray(value)) return sql`1 = 1`;
-        return refuseKey(
-          column,
-          "FILTER_INVALID_OPERAND",
-          `"not_in" on "${column}" needs a list.`
-        );
-      case "IS NULL":
-        return isNull(schemaColumn);
-      case "IS NOT NULL":
-        return isNotNull(schemaColumn);
-      default:
-        return refuseKey(
-          column,
-          "FILTER_UNKNOWN_OPERATOR",
-          `"${String(op)}" is not an operator this builder can apply to "${column}".`
-        );
+    // A list of ids matches by membership, and refuses the text operators.
+    if (referenceLists?.has(columnParts[0])) {
+      return referenceListCondition({
+        dialect,
+        column: schemaColumn,
+        name: column,
+        op,
+        value,
+      });
     }
+    return columnCondition(schemaColumn, column, op, value, dialect);
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle SQL condition accumulator

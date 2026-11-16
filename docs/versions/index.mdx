@@ -62,6 +62,24 @@ or not at all — there is no window where a document is saved and its history i
 The stored snapshot has the same shape the read path returns, which is what makes a
 restored version equal to a normal read rather than an approximation of one.
 
+History also shows events that are not versions. Taking over a document someone else is
+editing in the admin is one: it appears between the versions as "Took over from Ana", or "Took
+over (previous editor unavailable)" when that editor has no name or no account any more. Opening, leaving and
+asking for edit access are not recorded. See
+[Editing with others](/docs/admin/editing-together#taking-over).
+
+A save that chose to [overwrite](/docs/api-reference/rest-api#choosing-to-overwrite) is
+another, recorded whether or not the document keeps versions. When the version it was made from
+was out of date, it names whose changes it replaced: "Overwrote changes by Ben", or "by a
+member", "by an API key", "by a scheduled release", "by an agent", "by the system", or "Overwrote
+changes (previous editor unavailable)" for someone who can no longer be named. Otherwise it reads
+"Saved as an overwrite", or "Saved as an overwrite (no version given)" when the save sent no
+version.
+
+These version numbers are the history's own. A document's `_rev`, which a save sends back to
+show which version it was made from, is a different value (see
+[Versions and conflicts](/docs/api-reference/rest-api#versions-and-conflicts)).
+
 ## Comparing two versions
 
 The diff compares two snapshots **against the current field definitions**, not against the
@@ -127,8 +145,12 @@ on a component's own fields, which are judged on each instance the version holds
 depth. An API key is judged on its own grants, not its owner's.
 
 - A version read lists what it held back in `withheld`, by field name, or by a dotted
-  path below the top level (`banner.secret`).
-- A comparison shows a held-back field as `hidden` in its place, with neither value.
+  path below the top level (`banner.secret`). A field in a row of a list (a repeater or a
+  repeatable component) is named by that row's index in the version (`items.1.secret`),
+  so a rule that reads its row can hide a field in one row and show it in the next. The
+  shape of `withheld` is experimental.
+- A comparison shows a held-back field as `hidden` in its place, with neither value, and
+  only in the row that held it back: the other rows' changes to that field still show.
 - A restore never writes back a field the restorer may not read; it is reported in
   `droppedFields`.
 
@@ -154,20 +176,89 @@ returns:
 
 ## Restoring
 
-Restore writes **through the same update path a human edit uses**. Validation runs, hooks
-run, component and relationship writes happen, events fire and the outbox is written —
-exactly as if a person had made the change.
+A restore puts a version's values back into the document's **working draft**. It never
+publishes, never unpublishes and never changes what readers see: the version's status is not
+restored, and the published document stays as it is until someone publishes the draft.
 
-Two consequences worth knowing:
+- **It writes the parts the version holds.** A version holds one language's translated values
+  and the shared fields, so restoring it writes that language's draft and the shared draft.
+  Every other language's draft is left as it is.
+- **You choose the fields.** Every field the version holds is restored by default; name some
+  with `fields` and only those are.
+- **It needs working drafts.** A collection or Single kept without drafts (`versions: { drafts:
+  false }`, or no `status`) keeps versions as history only. It has no draft to write, so a restore
+  is refused with `422 BUSINESS_RULE_VIOLATION` before anything changes. In the admin, put the
+  values back by editing them.
 
-1. **Restoring destroys nothing.** Because a restore is an ordinary update, the state you
-   are restoring over is itself captured as a version first. You can undo an undo.
-2. **A restore cannot resurrect a field the schema no longer has.** The payload is filtered
-   by the current schema, so restoring an old snapshot into a changed collection puts back
-   what still exists and reports the rest.
+Restore writes **through the same update path a human edit uses**. Validation runs, hooks run,
+component and relationship writes happen, and events fire, exactly as if a person had saved
+the draft.
+
+Three consequences worth knowing:
+
+1. **Restoring destroys nothing.** The draft you are restoring over is itself captured as a
+   version first (named "Before restore"), so a restore can be undone.
+2. **A restore cannot resurrect a field the schema no longer has.** The payload is filtered by
+   the current schema, so restoring an old snapshot into a changed collection puts back what
+   still exists and reports the rest in `droppedFields`.
+3. **A restore writes only what the restorer may read and change.** A field hidden from them
+   or closed to their writes is left out and reported in `droppedFields`.
 
 System columns — creation timestamps, the creating user — are never carried back by a
 restore, so history cannot be used to forge them.
+
+A restore is judged like any other save. Send the `_rev` you read (or `_overwrite: true`), and
+the restore is refused with `409 STALE_VERSION` if the document changed since; its answer carries
+the new `_rev` (see [Which writes are judged](/docs/api-reference/rest-api#which-writes-are-judged)).
+
+### Through REST
+
+```http
+POST /api/collections/posts/entries/{id}/versions/{versionNo}/restore
+Content-Type: application/json
+
+{ "_rev": "12", "fields": ["title", "body"] }
+```
+
+A Single restores at `POST /api/singles/{slug}/versions/{versionNo}/restore`, with the same body.
+
+### From server code
+
+`nextly.versions` reads and restores a document's history from server code: `list`, `get`,
+`compare`, `name`, `restore` and `markSeen`. Name an entry as `{ collection, id }` or a Single as
+`{ single }`.
+
+```ts
+await nextly.versions.restore({
+  collection: "posts",
+  id,
+  versionNo: 3,
+  fields: ["title"],
+  _overwrite: true,
+});
+```
+
+Like the rest of the Direct API, a call is trusted unless it says otherwise. Pass
+`overrideAccess: false` and a `user` to have it judged as REST judges that person: `read-<slug>`
+for the reads, `update-<slug>` for naming and restoring. Marking a version seen needs a `user`
+either way. The namespace is experimental while history is being finished.
+
+A plugin restores through `ctx.services.versions.restore(ref, versionNo, { fields, version },
+opts)`, trusted when it acts as itself and judged as a person when its options name one.
+
+### Where restored values came from
+
+Each restored value records the version it came from, so the history can say "Restored from".
+A restore records its own version for every field it writes. A save that follows a restore in
+the editor names its restored fields in `_restoredFrom`, a map of field name to version number:
+
+```json
+{ "_rev": "14", "title": "Launch notes", "_restoredFrom": { "title": 3 } }
+```
+
+A field is recorded only while the saved value is the one its version holds: a restored value
+edited again, or undone, before the save carries no source. `_restoredFrom` is never stored as a
+value of the document.
 
 ## Working drafts
 
@@ -178,8 +269,8 @@ else from seeing the current published version.
 Each save of a working draft is also kept in the history as a draft version, credited to the
 person who saved it, so earlier saves and who made them are not lost when the next save
 replaces the draft. A save that changes nothing adds no version, and autosaves never appear
-in the history. Restoring one of these versions puts its content back as the working draft;
-it does not publish it.
+in the history. Restoring any version puts its content back as the working draft;
+it does not publish it (see [Restoring](#restoring)).
 
 ## Retention
 
@@ -195,6 +286,8 @@ keeps:
   language (a document without languages, or a publish of every language at once);
 - every named version, including the "Before restore" version a restore records;
 - every version that records a restore, and the version it was restored from;
+- every version a saved field was restored from (see
+  [Where restored values came from](#where-restored-values-came-from));
 - every version a feature has pinned (see [Pinning a version](#pinning-a-version)).
 
 So a run of saves in one language never removes another language's published version, and
@@ -250,12 +343,45 @@ export async function clearReview(tx: TransactionContext, ref: VersionRef) {
 - `registerVersionPinHolder` refuses a name another feature registered. Registering the
   same name and label again, as a module reloaded in development does, returns the same
   handle.
-- `versionPins.list(db, ref)` reads every slot on a document, of every feature.
+- `legal.list(db, ref)` reads the slots this feature holds on a document, taking a
+  transaction or the adapter. The read names the holder, so another feature's slots never
+  leave the database. `versionPins.list(db, ref)` reads every slot on a document, of every
+  feature.
 - Deleting a document, a collection or a Single removes its pins, and a pin waiting on one
   being deleted is refused.
 
-A plugin's `ctx.db.transaction` hands it a handle to its own tables, not the
-`TransactionContext` above, so a plugin cannot pin through it.
+### From a plugin
+
+A plugin pins through `ctx.services.versions.pins`, on its own transaction: the handle
+`ctx.db.transaction` passes its callback, or the transaction
+`ctx.services.collections.withTransaction` hands its work. The pin commits or rolls back
+with the plugin's own writes.
+
+```ts
+import type { PluginContext, VersionRef } from "@nextlyhq/plugin-sdk";
+
+// Record the approval in the plugin's own table, and pin the version it names,
+// in one transaction.
+export async function approve(
+  ctx: PluginContext,
+  ref: VersionRef,
+  versionNo: number
+) {
+  const approvals = ctx.services.versions.pins.registerHolder({
+    name: "approvals",
+    label: "Approvals",
+  });
+  await ctx.db.transaction(async tx => {
+    await approvals.pin(ref, { slot: "approved", versionNo }, { tx });
+  });
+}
+```
+
+- A plugin's holder is named in its own namespace, so two plugins can each register
+  `approvals` and hold apart, and no plugin can register or reach a holder of core's.
+- `pin`, `release`, `releaseAll` and `list` all take `{ tx }`, and refuse anything but an
+  open transaction of the plugin's. `list` returns the holder's own slots.
+- A plugin's pins take the same document lock and refusals as the ones above.
 
 ## Renaming a collection or Single
 
@@ -308,6 +434,14 @@ and nothing changes. Moving one entity's records in beside another's would merge
 
 A new slug longer than 50 characters is refused too, on every database, with a validation error
 that names the limit: a permission's resource holds 50 characters.
+
+A collection on either side of a many-to-many relationship can't be renamed either. Its links live
+in a junction table spelled from both collections' slugs, which a rename doesn't change, so the
+relationship would read them as empty. The refusal names the fields; remove them, or keep the
+collection's name.
+
+A rename started while a migration or another schema change is running is refused at once, with
+nothing changed; try it again once that change ends.
 
 <Callout type="info">
   Changing the `slug` of a code-first collection or Single in your config is not

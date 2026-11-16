@@ -16,12 +16,19 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../collections/fields/types";
+import { isRemovedFromCode } from "../domains/dynamic-collections/services/removed-from-code";
 import {
   isFieldGroupRegistry,
   resolveFieldGroupRegistryName,
   type FieldGroupRegistryName,
 } from "../domains/field-groups/storage/resolve-storage-names";
+import { storesPerLanguage } from "../domains/i18n/per-language-storage";
+import { tableExistsAtStart } from "../domains/schema/pipeline/diff/start-catalog-scope";
 import { isCodeOwned } from "../domains/schema/pipeline/registered-collections";
+import { NextlyError } from "../errors/nextly-error";
+import { STORAGE_FORMAT } from "../schemas/storage-format";
+
+import type { StartRegistry } from "./start-reads";
 
 /**
  * Row shape returned by the `SELECT table_name, fields, slug, status FROM
@@ -88,6 +95,102 @@ export interface DynamicTableLoadResult {
   failures: DynamicTableLoadFailure[];
 }
 
+/** What a caller tells the loader about the configuration it runs under. */
+export interface DynamicTableLoadOptions {
+  /**
+   * The slugs the running configuration declares for this registry's kind.
+   *
+   * Given, a row removed from code (its source is the app's code and its slug
+   * is not declared) is registered only while every table it owns exists: its
+   * main table and, where it has translatable columns, its translation table. Registering a
+   * localized entity creates a missing translation table, so registering one
+   * whose tables a migration dropped would bring part of it back, empty. One
+   * whose tables are all there is registered as before, so its rows can still
+   * be read. Left out, every row registers, as for field groups.
+   */
+  declaredSlugs?: ReadonlySet<string>;
+  /**
+   * The registries a production start read once (`di/start-reads`). Given, the rows are taken
+   * from there, with the columns this read would have selected, rather than read again.
+   */
+  registry?: StartRegistry;
+}
+
+/**
+ * A registry's rows as a read of the columns `select` chooses would return them, taken from the
+ * start's one reading of it (`di/start-reads`). `select` is told which columns the table has and
+ * answers what the read would have selected, or undefined where that read would have failed for
+ * a missing column. Undefined when the catalog does not describe the table, so the caller reads
+ * it itself; a table that is not there fails as reading it failed.
+ */
+async function startRegistryRows(
+  registry: StartRegistry,
+  table: string,
+  select: (has: (column: string) => boolean) => string[] | undefined
+): Promise<DynamicTableRow[] | undefined> {
+  const read = await registry.read(table);
+  if (!read.exists) {
+    throw NextlyError.internal({
+      logContext: { reason: "registry-table-missing", table },
+    });
+  }
+  const columns = read.columns;
+  if (columns === undefined) return undefined;
+  const selected = select(column => columns.has(column));
+  if (selected === undefined) {
+    throw NextlyError.internal({
+      logContext: { reason: "registry-column-missing", table },
+    });
+  }
+  return (await read.rows()).map(
+    row =>
+      Object.fromEntries(
+        selected.map(column => [column, row[column]])
+      ) as DynamicTableRow
+  );
+}
+
+/**
+ * Whether every table a registry row owns exists: its main table, and its
+ * translation table when it owns one.
+ *
+ * Whether it owns one is asked of the same specification that creates it. A
+ * localized entity whose every field is shared has no translatable column, so
+ * nothing ever creates its translation table, and requiring one would leave
+ * its standing main table unregistered.
+ */
+async function ownedTablesExist(
+  adapter: DrizzleAdapter,
+  row: { slug: string; tableName: string },
+  fields: unknown[],
+  localized: boolean
+): Promise<boolean> {
+  if (!(await tableExistsAtStart(adapter, row.tableName))) return false;
+  // Imported here, on the one path that needs it: only a removed entity whose
+  // main table stands ever reaches this question.
+  const { deriveCompanionSpec } = await import(
+    "../domains/i18n/migration/derive-companion-spec"
+  );
+  const companion = deriveCompanionSpec({
+    slug: row.slug,
+    dbName: row.tableName,
+    fields: fields as Parameters<typeof deriveCompanionSpec>[0]["fields"],
+    dialect: adapter.getCapabilities().dialect,
+    // Read only to seed existing rows; deciding whether a table exists reads
+    // neither this nor the builder, which shape its columns.
+    defaultLocale: "en",
+    // It owns a companion where its translatable values are kept per language: translated, or
+    // any entity under `experimental.perLanguageStorage`.
+    collectionLocalized: storesPerLanguage({ localized }),
+    builtBy: "codeFirst",
+  });
+  if (companion === null) return true;
+  return await tableExistsAtStart(
+    adapter,
+    `${row.tableName}${STORAGE_FORMAT.companionSuffix}`
+  );
+}
+
 export async function loadDynamicTables(
   adapter: DrizzleAdapter,
   sourceTable:
@@ -105,7 +208,8 @@ export async function loadDynamicTables(
      * tables hold both kinds. `undefined` where the registry is too old to say.
      */
     builderOwned: boolean | undefined
-  ) => Promise<void>
+  ) => Promise<void>,
+  options: DynamicTableLoadOptions = {}
 ): Promise<DynamicTableLoadResult> {
   // Components have no `status` column (they're not Draft/Published) — selecting it
   // would fail. They DO carry `localized` (i18n). Collections/singles carry both.
@@ -140,6 +244,19 @@ export async function loadDynamicTables(
     );
 
   const readRows = async (): Promise<DynamicTableRow[]> => {
+    // The longest run of tiers the registry has, as the selects below settle on.
+    const shared = options.registry
+      ? await startRegistryRows(options.registry, sourceTable, has => {
+          if (!required.every(has)) return undefined;
+          const selected = [...required];
+          for (const tier of optionalTiers) {
+            if (!tier.every(has)) break;
+            selected.push(...tier);
+          }
+          return selected;
+        })
+      : undefined;
+    if (shared !== undefined) return shared;
     let lastError: unknown;
     for (const sql of candidateSelects) {
       try {
@@ -189,6 +306,20 @@ export async function loadDynamicTables(
         // 0/1 as numbers — same dance as the registry deserializer.
         const hasStatus = row.status === 1 || row.status === true;
         const localized = row.localized === 1 || row.localized === true;
+        // A removed entity whose tables are gone, wholly or in part, is left
+        // unregistered: see `DynamicTableLoadOptions.declaredSlugs`.
+        if (
+          options.declaredSlugs !== undefined &&
+          isRemovedFromCode(row, options.declaredSlugs) &&
+          !(await ownedTablesExist(
+            adapter,
+            { slug: row.slug, tableName: row.table_name },
+            fields,
+            localized
+          ))
+        ) {
+          continue;
+        }
         // `undefined` when the registry could not report ownership at all, which is different from
         // reporting "not the Builder": the caller treats the unknown case as the pipeline's, the
         // same reading every code-first table already gets.
@@ -284,12 +415,63 @@ export interface LoadedBuilderEntity {
   fields: FieldConfig[];
   /** Draft/Published flag (collections/singles; always false for components). */
   status: boolean;
+  /**
+   * Whether the entity is marked translatable. Read so a column added to it at boot lands where
+   * its values live (`storesPerLanguage`); false where the registry is too old to record it.
+   */
+  localized: boolean;
+  /**
+   * Who made the row: `ui` for the Schema Builder, `code`, or
+   * `plugin:<name>`. A plugin scope reaches only the Builder's rows, and a
+   * row an uninstalled plugin left behind still names that plugin.
+   */
+  source?: string;
 }
 
 export interface LoadedBuilderEntities {
   collections: LoadedBuilderEntity[];
   singles: LoadedBuilderEntity[];
   components: LoadedBuilderEntity[];
+}
+
+/**
+ * Every row of a registry table, with `localized` and `source` where the
+ * registry has them. Each is dropped only when the registry has no such
+ * column, so an older registry still yields its entities rather than none;
+ * any other failure is not a missing column and is thrown.
+ */
+async function readRegistryRows(
+  adapter: DrizzleAdapter,
+  table: string,
+  columns: string,
+  registry: StartRegistry | undefined
+): Promise<DynamicTableRow[]> {
+  // Each optional column kept where the registry has it, as the tries below settle on:
+  // `localized` and `source` are independent of each other.
+  const shared = registry
+    ? await startRegistryRows(registry, table, has => {
+        const required = columns.split(",").map(column => column.trim());
+        if (!required.every(has)) return undefined;
+        return [...required, ...["localized", "source"].filter(has)];
+      })
+    : undefined;
+  if (shared !== undefined) return shared;
+  const tries = [", localized, source", ", localized", ", source", ""];
+  for (const [at, extra] of tries.entries()) {
+    try {
+      return await adapter.executeQuery<DynamicTableRow>(
+        `SELECT ${columns}${extra} FROM ${table}`
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const missingColumn =
+        /localized|source|no such column|does not exist|unknown column/i.test(
+          msg
+        );
+      if (!missingColumn || at === tries.length - 1) throw err;
+    }
+  }
+  return [];
 }
 
 /**
@@ -301,17 +483,19 @@ export interface LoadedBuilderEntities {
  * {@link loadDynamicTables}.
  */
 export async function loadBuilderEntities(
-  adapter: DrizzleAdapter
+  adapter: DrizzleAdapter,
+  /** The registries a production start read once, when it is one (`di/start-reads`). */
+  registry?: StartRegistry
 ): Promise<LoadedBuilderEntities> {
   const read = async (
     table: "dynamic_collections" | "dynamic_singles" | FieldGroupRegistryName,
     hasStatusColumn: boolean
   ): Promise<LoadedBuilderEntity[]> => {
-    const selectSql = hasStatusColumn
-      ? `SELECT slug, table_name, fields, status FROM ${table}`
-      : `SELECT slug, table_name, fields FROM ${table}`;
+    const columns = hasStatusColumn
+      ? "slug, table_name, fields, status"
+      : "slug, table_name, fields";
     try {
-      const rows = await adapter.executeQuery<DynamicTableRow>(selectSql);
+      const rows = await readRegistryRows(adapter, table, columns, registry);
       const out: LoadedBuilderEntity[] = [];
       for (const row of rows) {
         try {
@@ -326,6 +510,8 @@ export async function loadBuilderEntities(
             fields,
             // Same dialect-boolean coercion as loadDynamicTables.
             status: row.status === 1 || row.status === true,
+            localized: row.localized === 1 || row.localized === true,
+            ...(typeof row.source === "string" ? { source: row.source } : {}),
           });
         } catch {
           // Skip a row whose fields JSON is malformed.

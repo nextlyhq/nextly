@@ -21,7 +21,7 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { get: getSpy },
 }));
 
-import { usePluginRoute } from "../usePluginRoute";
+import { readPluginRoute, usePluginRoute } from "../usePluginRoute";
 
 function wrapper() {
   const client = new QueryClient({
@@ -251,5 +251,36 @@ describe("usePluginRoute", () => {
 
     await waitFor(() => expect(result.current.error).not.toBeNull());
     expect(result.current.data).toBeUndefined();
+  });
+});
+
+describe("readPluginRoute", () => {
+  beforeEach(() => {
+    getSpy.mockReset();
+  });
+
+  it("reads the plugin's own route through the session-renewing client, with the signal", async () => {
+    getSpy.mockResolvedValue({ items: [] });
+    const controller = new AbortController();
+
+    const body = await readPluginRoute<{ items: unknown[] }>({
+      plugin: "@acme/plugin",
+      path: "/entries?collection=posts",
+      signal: controller.signal,
+    });
+
+    expect(body).toEqual({ items: [] });
+    expect(getSpy).toHaveBeenCalledWith(
+      "/plugins/@acme/plugin/entries?collection=posts",
+      { signal: controller.signal }
+    );
+  });
+
+  it("rejects with the client's parsed error rather than answering nothing", async () => {
+    getSpy.mockRejectedValue(new Error("You don't have permission."));
+
+    await expect(
+      readPluginRoute({ plugin: "@acme/plugin", path: "/entries" })
+    ).rejects.toThrow("You don't have permission.");
   });
 });

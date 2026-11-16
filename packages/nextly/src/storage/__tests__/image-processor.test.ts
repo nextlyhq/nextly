@@ -72,7 +72,8 @@ describe("ImageProcessor", () => {
   });
 
   describe("generateThumbnail", () => {
-    it("should generate 300x300 thumbnail by default", async () => {
+    // Its real output, wide, tall and small: thumbnail-fits.test.ts.
+    it("fits the image inside 480x480 by default", async () => {
       const mockProcessed = {
         data: Buffer.from("thumbnail data"),
         info: {
@@ -93,9 +94,9 @@ describe("ImageProcessor", () => {
       const buffer = Buffer.from("original image");
       const result = await processor.generateThumbnail(buffer);
 
-      expect(mockSharp.resize).toHaveBeenCalledWith(300, 300, {
-        fit: "cover",
-        position: "center",
+      expect(mockSharp.resize).toHaveBeenCalledWith(480, 480, {
+        fit: "inside",
+        withoutEnlargement: true,
       });
       expect(mockSharp.jpeg).toHaveBeenCalledWith({
         quality: 80,

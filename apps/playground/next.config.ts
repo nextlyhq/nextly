@@ -1,5 +1,9 @@
 import type { NextConfig } from "next";
 
+import { nextlyHtmlLimitedBots } from "nextly/next";
+
+import { playgroundCacheComponents } from "./cache-components";
+
 // Payload-style env-conditional source-mode (see packages/next/src/withPayload/withPayload.js
 // in the payloadcms/payload repo for the canonical reference).
 //
@@ -46,15 +50,45 @@ const NEXTLY_DYNAMIC_PACKAGES = [
   "@nextlyhq/adapter-sqlite",
 ];
 
+/**
+ * Cache Components with Partial Prefetching, on unless turned off (see
+ * `cache-components.ts`). Partial Prefetching is set only with it, since
+ * Next.js accepts it only with Cache Components on.
+ */
+const CACHE_COMPONENTS = playgroundCacheComponents();
+
 const nextConfig: NextConfig = {
-  // Nextly does not support Cache Components yet; see the installation guide.
-  cacheComponents: false,
+  // Search engines and AI crawlers read each page's whole head in the first
+  // HTML, as a Nextly site's config sets it.
+  htmlLimitedBots: nextlyHtmlLimitedBots,
+  ...(CACHE_COMPONENTS
+    ? { cacheComponents: true, partialPrefetching: true }
+    : { cacheComponents: false }),
+  // Nextly's cache handlers, as `create-nextly-app` installs them in every
+  // app. They judge a stored page or read by when its render began, so a
+  // write made while a render runs expires what that render stores, and the
+  // first request after a write's response reads the new version. Next.js's
+  // own store judges an entry by when it was stored, which would let a
+  // render begun before a write stand as fresh. Resolved from the built
+  // `dist`, in development too, as an installed `nextly` is.
+  cacheHandler: require.resolve("nextly/cache-handler"),
+  cacheMaxMemorySize: 0,
+  cacheHandlers: { default: require.resolve("nextly/cache-handlers") },
   // Two dev servers on this app cannot share a build directory, and separate
   // ports do not help: the collision is on disk, not on the network. The
   // browser suite runs its own server on its own port, so it points this
   // elsewhere and a contributor's `pnpm dev:app` keeps running untouched.
   // Unset everywhere else, which leaves Next.js's own default.
   distDir: process.env.NEXT_DIST_DIR || ".next",
+
+  // The browser suite's own server turns Next.js's development indicator off.
+  // In development the indicator's button is injected into every document the
+  // app serves, the canvas's frame included, so a keyboard walk through the
+  // editor meets a tab stop inside the canvas that no deployed site has.
+  // Unset everywhere else, which keeps the indicator for a contributor.
+  ...(process.env.NEXTLY_E2E_DEV_INDICATORS === "0"
+    ? { devIndicators: false as const }
+    : {}),
 
   // Type-checking responsibility lives in each workspace package's own
   // `pnpm check-types` (run by CI and during dev). The playground's prod
@@ -125,6 +159,12 @@ const nextConfig: NextConfig = {
     // default, stated here so it cannot change underneath: a TypeScript with no
     // library API (7.0) works only this way.
     useTypeScriptCli: true,
+    // The upgrade reminder ends a build with exit 1 when it finds an advisory
+    // and a coding agent's environment is set, whatever `CI` says. This app is
+    // built by tests and by agents working on the repository, never by a user
+    // who should be told to upgrade, so it is off here alone; a user's app
+    // keeps Next.js's default.
+    agentUpgrade: false,
     // Turbopack's garbage collector removes cache entries nothing reaches any
     // more, so `.next` stops growing across dev sessions and builds. Off by
     // default in 16.4.
@@ -145,12 +185,34 @@ const nextConfig: NextConfig = {
       // identity mismatch" that broke FormBuilder custom view registration.
       "@nextlyhq/ui": ["../../packages/ui/src/index.ts"],
       "@nextlyhq/admin": ["../../packages/admin/src/index.ts"],
+      // The SDK's admin entry re-exports this one. Aliased with the root, so
+      // a plugin page and the admin share one instance of every module.
+      "@nextlyhq/admin/kit": ["../../packages/admin/src/kit.ts"],
+      "@nextlyhq/admin/kit/core": ["../../packages/admin/src/kit/core.ts"],
+      "@nextlyhq/admin/kit/document": [
+        "../../packages/admin/src/kit/document.ts",
+      ],
+      "@nextlyhq/admin/kit/field-ui": [
+        "../../packages/admin/src/kit/field-ui.ts",
+      ],
+      "@nextlyhq/admin/kit/media": ["../../packages/admin/src/kit/media.ts"],
+      "@nextlyhq/admin/kit/plugin-parts": [
+        "../../packages/admin/src/kit/plugin-parts.ts",
+      ],
+      "@nextlyhq/admin/kit/table": ["../../packages/admin/src/kit/table.ts"],
+      "@nextlyhq/admin/kit/widgets": [
+        "../../packages/admin/src/kit/widgets.ts",
+      ],
       "@nextlyhq/admin/lib/component-registry": [
         "../../packages/admin/src/lib/plugins/component-registry.ts",
       ],
       "@nextlyhq/admin/lib/plugin-components": [
         "../../packages/admin/src/lib/plugins/plugin-components.ts",
       ],
+      // The test entry, which the widget check's page draws its board from,
+      // aliased with the rest: from `dist` it would be a second admin beside
+      // the source one, with its own registries and contexts.
+      "@nextlyhq/admin/testing": ["../../packages/admin/src/testing.tsx"],
       "@nextlyhq/plugin-form-builder": [
         "../../packages/plugin-form-builder/src/index.ts",
       ],
@@ -211,12 +273,32 @@ const nextConfig: NextConfig = {
       "@nextly/types/*": ["../../packages/nextly/src/types/*"],
       "@nextly/validation": ["../../packages/nextly/src/validation/index.ts"],
       "@nextly/validation/*": ["../../packages/nextly/src/validation/*"],
+      // The root layout imports `@/nextly/cached-read`, the app's "use cache"
+      // read function, which registers it, and how Nextly starts, for every
+      // route (`<SiteCode>` refuses to read under Cache Components without
+      // it). Next.js refuses to compile `"use cache"` with Cache Components
+      // off, so that leg points the import at a variant that registers only
+      // how Nextly starts. An exact key, so it takes precedence over
+      // tsconfig's `@/*` wildcard, which type-checking follows to the Cache
+      // Components file.
+      ...(CACHE_COMPONENTS
+        ? {}
+        : {
+            "@/nextly/cached-read":
+              "./src/nextly/cached-read.cache-components-off.ts",
+          }),
       // Stubs / native-deps resolution. pg + mysql2 stubs predate this commit
       // and remain load-bearing for Turbopack's optional-peer-dep handling
       // inside nextly.
       pg: "pg",
-      "mysql2/promise": "./src/stubs/mysql2-stub.js",
-      mysql2: "./src/stubs/mysql2-stub.js",
+      // The mysql2 stub stands in only on SQLite and PostgreSQL: on MySQL the
+      // adapter needs the real driver, which stays external.
+      ...(process.env.DB_DIALECT === "mysql"
+        ? {}
+        : {
+            "mysql2/promise": "./src/stubs/mysql2-stub.js",
+            mysql2: "./src/stubs/mysql2-stub.js",
+          }),
       // CSS files come from dist (the build-css.mjs pipeline applies
       // the .nextly-admin scoping post-process and runs a watch loop so
       // the dist file stays fresh during dev). With @nextlyhq/admin

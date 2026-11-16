@@ -54,8 +54,11 @@ export function retiredSessionsTable(dialect: SupportedDialect) {
   return retiredOwnedTable(RETIRED_SESSIONS_TABLE, dialect);
 }
 
-/** A retired table declared by its owning-user column alone. */
-function retiredOwnedTable(name: string, dialect: SupportedDialect) {
+/**
+ * A retired table declared by its owning-user column alone. Exported for the
+ * retired `user_permission_cache`, emptied by the same means.
+ */
+export function retiredOwnedTable(name: string, dialect: SupportedDialect) {
   if (dialect === "postgresql") {
     return pgTable(name, { userId: text(OWNER_COLUMN).notNull() });
   }

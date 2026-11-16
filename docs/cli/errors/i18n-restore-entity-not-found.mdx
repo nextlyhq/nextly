@@ -1,0 +1,24 @@
+---
+title: I18N_RESTORE_ENTITY_NOT_FOUND
+description: "`i18n:restore --collection` names no collection, single or field group in the configuration or `ui-schema.json`."
+---
+
+## Cause
+
+`i18n:restore --collection` names no collection, single or field group in the configuration or `ui-schema.json`.
+
+The restore resolves the slug to a table through `nextly.config.ts` and `ui-schema.json`, and found nothing with it, or nothing of the kind `--kind` names.
+
+## Fix
+
+- Check the slug: it is the entity's slug, as the archive records it.
+- If the entity was removed after its translations were archived, add it back and turn localization on for it, run `nextly migrate`, then restore.
+
+## Example
+
+```text
+✗ No collection, single, or field group named "heroes" was found.
+  Why:  Looked in your config and ui-schema.json.
+  Next: Pass `--collection` the slug of a collection, single or field group your config or `ui-schema.json` defines. An entity removed since its translations were archived has to be added back first.
+  Docs: https://nextlyhq.com/docs/cli/errors/i18n-restore-entity-not-found  (I18N_RESTORE_ENTITY_NOT_FOUND)
+```

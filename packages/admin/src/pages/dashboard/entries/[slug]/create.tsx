@@ -11,33 +11,43 @@
  * @since 1.0.0
  */
 
-import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
+import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
 import type React from "react";
-import { useMemo } from "react";
+import { useEffect, useState } from "react";
 
 import {
   EntryForm,
+  UnsavedChangesGuard,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
+import { DOCUMENT_COLUMN_INSET } from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
+import {
+  UnsavedWorkProvider,
+  useUnsavedWork,
+} from "@admin/components/features/entries/EntryForm/UnsavedWorkContext";
+import { isRemovedFromCode } from "@admin/components/features/entries/removed-from-code-notice";
+import { RemovedFromCodeNotice } from "@admin/components/features/entries/RemovedFromCodeNotice";
 import {
   CONTENT_MEASURE_LENGTH,
   CONTENT_PAGE_MEASURE,
 } from "@admin/components/layout/content-measure";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
+import { useCollectionFoldedPanel } from "@admin/components/layout/PanelFold";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
+import { EditorOutline } from "@admin/components/shared/loading-frame/outlines";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
-import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { navigateTo } from "@admin/lib/navigation";
 import {
   getComponent,
   type CustomEditViewProps,
 } from "@admin/lib/plugins/component-registry";
-import type { ApiCollection } from "@admin/types/entities";
+import { editViewHasPages } from "@admin/lib/plugins/document-view-registry";
+import { getCollectionFields } from "@admin/types/collection";
 
 // ============================================================================
 // Types
@@ -83,52 +93,17 @@ function CreateEntryBreadcrumbs({
  * Loading skeleton for the create entry page.
  */
 function CreateEntryPageSkeleton() {
+  // The editor's outline, the one the frame drew for this address while the
+  // session was checked: the bar's controls at once, then the fields and the
+  // side panel at the editor's own geometry.
   return (
-    <PageContainer width="full">
-      {/* Accessibility: Announce loading state to screen readers */}
-      <div className="sr-only" role="status" aria-live="polite">
-        Loading collection...
-      </div>
-
-      {/* Cancels the page's vertical inset only.
-          The horizontal half would pull this skeleton past the measured
-          column, and the editor that replaces it would then jump 64px
-          narrower. */}
-      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-4rem)] items-stretch lg:-my-8">
-        {/* Main Content */}
-        {/* `min-w-0` as the editor that replaces this carries it: without it
-            this pane will not shrink and pushes the rail past the column. */}
-        <div
-          className="flex-1 min-w-0 space-y-6 lg:p-8 pt-6 mx-auto w-full"
-          // The form that replaces this bounds its FIELD column, not the
-          // page, so a skeleton bounded at the page moves every field
-          // sideways the moment data arrives.
-          style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
-        >
-          {/* Breadcrumbs skeleton */}
-          <div className="mb-6">
-            <Skeleton className="h-5 w-64" />
-          </div>
-
-          {/* Header skeleton */}
-          <div className="mb-8">
-            <Skeleton className="w-48 mb-2" />
-            <Skeleton className="h-5 w-96" />
-          </div>
-
-          <div className="bg-card  border border-border rounded-lg p-6">
-            <div className="space-y-6">
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-32 w-full" />
-            </div>
-          </div>
-        </div>
-
-        {/* Sidebar */}
-      </div>
-    </PageContainer>
+    <EditorOutline
+      // A new entry's bar has only its verbs.
+      creating
+      sideWidth={320}
+      columnClassName={DOCUMENT_COLUMN_INSET}
+      columnStyle={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+    />
   );
 }
 
@@ -145,7 +120,18 @@ function CreateEntryPageSkeleton() {
  * @param props - Page props with route params
  * @returns Create entry page component
  */
-export default function CreateEntryPage({
+export default function CreateEntryPage(
+  props: CreateEntryPageProps
+): React.ReactElement {
+  // The panel folded, where the collection's plugin says its document
+  // screens start so, as the frame's outline of this address was drawn: for
+  // every state the page draws, so here, around them all.
+  useCollectionFoldedPanel(props.params?.slug);
+  return <CreateEntryScreen {...props} />;
+}
+
+/** The page's states: its outline, a failure, or the new entry's editor. */
+function CreateEntryScreen({
   params,
 }: CreateEntryPageProps): React.ReactElement {
   const slug = params?.slug;
@@ -153,13 +139,26 @@ export default function CreateEntryPage({
   // Fetch enriched collection schema (component fields are populated)
   const { data: collection, isLoading, error } = useCollectionSchema(slug);
 
-  // Auto-register plugin components when collection is loaded
-  // This ensures custom Edit view components are available before rendering
-  const collectionsForRegistration = useMemo(
-    () => (collection ? [collection as unknown as ApiCollection] : undefined),
-    [collection]
-  );
-  usePluginAutoRegistration(collectionsForRegistration);
+  /*
+   * What a custom edit view says it holds unsaved, as on the edit page: the
+   * view replaces the form, so this page guards leaving for it. Hooks, so
+   * above the returns below.
+   */
+  const customViewUnsaved = useUnsavedWork();
+  /*
+   * The document a custom editor with pages of its own just created. Its
+   * editor carries on at the new document's own address. Moved there on the
+   * render AFTER the guard is told to stand down: the view clears its unsaved
+   * work as it reports success, but the guard only hears that on its next
+   * render, and a move made in the same breath would be asked about.
+   */
+  const [createdId, setCreatedId] = useState<string>();
+  useEffect(() => {
+    if (createdId === undefined || slug === undefined) return;
+    navigateTo(
+      buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, { slug, id: createdId })
+    );
+  }, [createdId, slug]);
 
   /**
    * The page's measure, on every branch.
@@ -238,6 +237,29 @@ export default function CreateEntryPage({
   }
 
   const collectionLabel = collection.label || collection.name || slug;
+  // The trail's step leads to the collection's list, so it says what the
+  // list and the default editor's trail say: the plural ("Submissions"),
+  // not the one-entry label a collection may also answer as `label`.
+  const listLabel = collection.labels?.plural || collectionLabel;
+
+  // A collection removed from code refuses every create, so no form is
+  // offered: the notice says why and what to do, with the way back to its
+  // entries, which can still be read.
+  if (isRemovedFromCode(collection)) {
+    return (
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
+        <RemovedFromCodeNotice
+          entity={{ kind: "collection", label: collectionLabel, slug }}
+          state={collection.removedFromCodeState}
+        />
+        <div className="mt-6">
+          <Link href={buildRoute(ROUTES.COLLECTION_ENTRIES, { slug })}>
+            <Button variant="outline">← Back to {collectionLabel}</Button>
+          </Link>
+        </div>
+      </PageContainer>
+    );
+  }
 
   // Check for custom Edit view component from plugins
   // The same Edit view handles both create and edit modes
@@ -247,8 +269,17 @@ export default function CreateEntryPage({
     ? getComponent<CustomEditViewProps>(customEditViewPath)
     : undefined;
 
+  // A custom edit view with pages of its own is a whole editor, which carries
+  // on at the document it created; any other view returns to the list.
+  const customViewHasPages = editViewHasPages(slug, customEditViewPath);
+
   // Shared callbacks
-  const handleSuccess = () => {
+  const handleSuccess = (entry?: Record<string, unknown>) => {
+    const id = entry?.id;
+    if (customViewHasPages && typeof id === "string" && id !== "") {
+      setCreatedId(id);
+      return;
+    }
     // Navigate to entry list page after successful creation
     navigateTo(buildRoute(ROUTES.COLLECTION_ENTRIES, { slug }));
   };
@@ -272,10 +303,11 @@ export default function CreateEntryPage({
     return (
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
         <MeasuredPageFrame
+          contentCarriesMeasure={customViewHasPages}
           breadcrumbs={
             <CreateEntryBreadcrumbs
               collectionSlug={slug}
-              collectionLabel={collectionLabel}
+              collectionLabel={listLabel}
             />
           }
         >
@@ -287,7 +319,17 @@ export default function CreateEntryPage({
               auto-placed into a gutter. The registry imposes no root-element
               contract, so the page provides the box. */}
           <div>
-            <CustomEditView {...customViewProps} />
+            {/* The view reports its unsaved work here, and leaving asks first
+                while it holds any. */}
+            <UnsavedWorkProvider report={customViewUnsaved.report}>
+              <UnsavedChangesGuard
+                isDirty={customViewUnsaved.anyUnsaved}
+                disabled={createdId !== undefined}
+                fields={getCollectionFields(collection)}
+              >
+                <CustomEditView {...customViewProps} />
+              </UnsavedChangesGuard>
+            </UnsavedWorkProvider>
           </div>
         </MeasuredPageFrame>
       </QueryErrorBoundary>

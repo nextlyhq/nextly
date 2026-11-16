@@ -79,14 +79,22 @@ import { cn } from "../lib/utils";
 const Skeleton: React.ForwardRefExoticComponent<
   React.PropsWithoutRef<SkeletonProps> & React.RefAttributes<HTMLDivElement>
 > = React.forwardRef<HTMLDivElement, SkeletonProps>(
-  ({ className, ...props }, ref) => {
+  ({ className, still = false, ...props }, ref) => {
     return (
       <div
         ref={ref}
         data-slot="skeleton"
+        // Marked so a page (or a test) can tell a still outline from a pulsing
+        // placeholder without reading its classes.
+        data-still={still ? "" : undefined}
         aria-hidden="true"
         className={cn(
-          "bg-primary/5 animate-pulse rounded-md motion-reduce:animate-none",
+          // A still outline is drawn on `secondary`, the surface a page's
+          // controls sit on, so it reads as the shape of what will arrive
+          // rather than as a faint flicker, in both themes; it never pulses.
+          still
+            ? "bg-secondary rounded-md"
+            : "bg-primary/5 animate-pulse rounded-md motion-reduce:animate-none",
           className
         )}
         {...props}
@@ -98,6 +106,13 @@ const Skeleton: React.ForwardRefExoticComponent<
 Skeleton.displayName = "Skeleton";
 
 /** @experimental */
-export type SkeletonProps = React.ComponentProps<"div">;
+export type SkeletonProps = React.ComponentProps<"div"> & {
+  /**
+   * Draw a still outline: no pulse, on the `secondary` surface. For a page's
+   * outline shown while its data is on its way, where motion would read as
+   * the page itself moving.
+   */
+  still?: boolean;
+};
 
 export { Skeleton };

@@ -20,6 +20,7 @@
 import { apiKeyScopeFrom } from "../auth/authenticated-scope";
 import { actorFromAuthContext } from "../auth/request-actor";
 import { getService } from "../di";
+import { parseRichTextStyles } from "../dispatcher/helpers/validation";
 import type { SingleResult } from "../domains/singles/types";
 import { errorFromServiceEnvelope } from "../errors/from-service-envelope";
 import { NextlyError } from "../errors/nextly-error";
@@ -38,7 +39,7 @@ import { withErrorHandler } from "./with-error-handler";
 
 /**
  * Context object for dynamic route handlers.
- * Next.js 15+ requires params to be a Promise.
+ * Next.js passes route params as a Promise.
  */
 interface RouteContext {
   params: Promise<{ slug: string }>;
@@ -130,6 +131,8 @@ function parseRichTextFormat(value: string | null): RichTextOutputFormat {
  *   - "json" (default): Return Lexical JSON structure only
  *   - "html": Return HTML string only
  *   - "both": Return object with both { json, html } properties
+ * - richTextStyles: How rich text HTML is styled ("default" | "none"); "none"
+ *   gives classes only, for the site's own CSS
  *
  * Response:
  * - 200 OK: bare document object (canonical `respondDoc` shape).
@@ -153,6 +156,9 @@ export const GET = withErrorHandler(
     const richTextFormat = parseRichTextFormat(
       searchParams.get("richTextFormat")
     );
+    const richTextStyles = parseRichTextStyles(
+      searchParams.get("richTextStyles")
+    );
 
     const result = await service.get(slug, {
       depth,
@@ -174,7 +180,8 @@ export const GET = withErrorHandler(
         responseData = transformRichTextFields(
           result.data,
           single.fields,
-          richTextFormat
+          richTextFormat,
+          richTextStyles
         ) as typeof result.data;
       }
     }
@@ -212,14 +219,22 @@ export const PATCH = withErrorHandler(
     // response stays redacted to what they may read. Without forwarding the
     // user, the standalone route ran the update anonymously and diverged from
     // the dispatcher's updateSingleDocument.
-    const auth = await requireRouteCollectionAccess(request, "update", slug);
+    // The language the write names, read before authorizing: the rule is
+    // told it, as the dispatcher's updateSingleDocument tells it.
+    const { searchParams } = new URL(request.url);
+    const locale = searchParams.get("locale") || undefined;
+
+    // A Single is its one document, refused about it as the dispatcher's
+    // Single routes refuse: a caller who may not read it is told it is missing.
+    const auth = await requireRouteCollectionAccess(request, "update", slug, {
+      method: "updateSingleDocument",
+      params: locale === undefined ? {} : { locale },
+      namesOne: true,
+    });
 
     const service = await getSingleEntryService();
 
     const body = await readJsonBody<Record<string, unknown>>(request, { slug });
-
-    const { searchParams } = new URL(request.url);
-    const locale = searchParams.get("locale") || undefined;
 
     // Include resolved role slugs so field-level `access.read` (which redacts
     // the response under `routeAuthorized`) evaluates against the caller's

@@ -16,12 +16,13 @@
 
 import {
   clearBlocks,
+  getBlock,
   hasBlock,
   registerBlocks,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
-import { previewStateClass } from "@nextlyhq/blocks-engine";
-import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
+import { CHILD_GAP_CLASS, previewStateClass } from "@nextlyhq/blocks-engine";
+import { createBlockResolver, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { act, cleanup, render } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -91,6 +92,7 @@ function editorOf(selectedId: string | null, ids?: string[]): EditorState {
       ids: ids ?? (selectedId === null ? [] : [selectedId]),
       primary: selectedId,
     },
+    composed: () => undefined,
   } as unknown as EditorState;
 }
 
@@ -222,6 +224,17 @@ class FakeResizeObserver {
   }
 }
 
+/**
+ * The canvas watch's observer: the newest one watching a rendered block. Found
+ * by what it watches, not by being the last made, since the canvas makes
+ * others of its own (one watching its root's size).
+ */
+function watchObserver(): FakeResizeObserver | undefined {
+  return FakeResizeObserver.instances.findLast(observer =>
+    observer.observed.some(element => element.hasAttribute("data-nx-node"))
+  );
+}
+
 function withFakeResizeObserver() {
   FakeResizeObserver.instances = [];
   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
@@ -229,7 +242,7 @@ function withFakeResizeObserver() {
 
 /** Make the overlay measure again, the way a real resize would. */
 function remeasure(): void {
-  const observer = FakeResizeObserver.instances.at(-1);
+  const observer = watchObserver();
   act(() => {
     observer?.callback([], observer as unknown as ResizeObserver);
   });
@@ -455,6 +468,98 @@ describe("who may write from the canvas", () => {
       container.querySelectorAll(".nx-spacing-handles__handle").length
     ).toBeGreaterThan(0);
   });
+
+  /*
+   * A handle writes the block's spacing, which an area locked to its content
+   * fixes, so the inspector holds its Style tab read-only there and the canvas
+   * must not offer the same write. The bands still report.
+   */
+  function heldIn(
+    lock: "contentOnly" | undefined,
+    layers = false
+  ): EditorState {
+    registerBlocks(
+      [
+        {
+          name: "acme/holder",
+          version: 1,
+          description: "A holder.",
+          example: { props: {} },
+          slots: { body: { lock } },
+          // Draws its slot, so the block inside is on the canvas to measure.
+          render: ({
+            renderSlot,
+          }: {
+            renderSlot: (slot: string) => React.ReactNode;
+          }) => React.createElement("div", null, renderSlot("body")),
+        },
+      ] as never,
+      { source: "spacing-overlay-lock-test" }
+    );
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "h",
+          type: "acme/holder",
+          version: 1,
+          props: {},
+          slots: {
+            body: [
+              {
+                id: "a",
+                type: "acme/leaf",
+                version: 1,
+                props: {},
+                ...(layers ? { locked: true } : {}),
+              },
+            ],
+          },
+        },
+      ],
+    } as unknown as BlockDocument;
+    return {
+      document,
+      selectedId: "a",
+      selection: { ids: ["a"], primary: "a" },
+      composed: () => undefined,
+    } as unknown as EditorState;
+  }
+
+  it("draws no handles for a block inside an area locked to its content", () => {
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    register();
+    const { container } = mount(heldIn("contentOnly"));
+    expect(labels(container)).toEqual(["16"]);
+    expect(
+      container.querySelectorAll(".nx-spacing-handles__handle")
+    ).toHaveLength(0);
+  });
+
+  it("draws no handles for a block its own Layers lock holds", () => {
+    // Locked from Layers or the inspector's card: every control is read-only,
+    // so the canvas must not offer the spacing write either.
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    register();
+    const { container } = mount(heldIn(undefined, true));
+    expect(labels(container)).toEqual(["16"]);
+    expect(
+      container.querySelectorAll(".nx-spacing-handles__handle")
+    ).toHaveLength(0);
+  });
+
+  it("draws them for the same block where its slot is not locked", () => {
+    // The control: nested the same way, so the case above is not passing on a
+    // nested block the overlay never reached.
+    stubComputedStyle({ a: { marginTop: "16px" } });
+    register();
+    const { container } = mount(heldIn(undefined));
+    expect(labels(container)).toEqual(["16"]);
+    expect(
+      container.querySelectorAll(".nx-spacing-handles__handle").length
+    ).toBeGreaterThan(0);
+  });
 });
 
 describe("a gesture the measurement must not end", () => {
@@ -540,7 +645,7 @@ describe("what it stays subscribed to", () => {
     stubComputedStyle({ a: { marginTop: "16px" } });
     const { container } = mount(editorOf("a"));
 
-    const observer = FakeResizeObserver.instances.at(-1);
+    const observer = watchObserver();
     expect(observer?.observed).toContain(
       container.querySelector('[data-nx-node="a"]')
     );
@@ -556,7 +661,7 @@ describe("what it stays subscribed to", () => {
     stubComputedStyle({ a: { marginTop: "16px" } });
     const { container } = mount(editorOf("a"));
 
-    expect(FakeResizeObserver.instances.at(-1)?.observed).toContain(
+    expect(watchObserver()?.observed).toContain(
       container.querySelector(`.${CANVAS_ROOT_CLASS}`)
     );
   });
@@ -572,7 +677,7 @@ describe("what it stays subscribed to", () => {
     stubComputedStyle({ a: { marginTop: "16px" } });
     const first = editorOf("a");
     const { rerender } = mount(first);
-    const before = FakeResizeObserver.instances.at(-1);
+    const before = watchObserver();
 
     const edited = {
       ...DOCUMENT,
@@ -801,5 +906,401 @@ describe("the probe is asked again on every measurement", () => {
     await settled();
     await settled();
     expect(writes()).toBe(afterOnePass);
+  });
+});
+
+describe("the space a container puts between its children", () => {
+  /** A container declaring a child gap, holding two leaves. */
+  function registerStack() {
+    register();
+    if (hasBlock("acme/stack")) return;
+    registerBlocks(
+      [
+        {
+          name: "acme/stack",
+          version: 1,
+          description: "A stack.",
+          example: { props: {} },
+          editor: { label: "Stack" },
+          childGap: { $token: "space.stack" },
+          slots: { children: {} },
+          supports: { spacing: { margin: true, padding: true } },
+          render: ({
+            className,
+            renderSlot,
+          }: {
+            className: string;
+            renderSlot: (name: string) => React.ReactNode;
+          }) =>
+            React.createElement("div", { className }, renderSlot("children")),
+        },
+        {
+          // A leaf that wears the classes it is handed, as every core block
+          // does, so its own node class can be taken away and put back.
+          name: "acme/item",
+          version: 1,
+          description: "An item.",
+          example: { props: {} },
+          supports: { spacing: { margin: true, padding: true } },
+          render: ({ className }: { className: string }) =>
+            React.createElement("p", { className }, "item"),
+        },
+      ] as never,
+      { source: "spacing-overlay-test" }
+    );
+  }
+
+  const STACKED = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "s",
+        type: "acme/stack",
+        version: 1,
+        props: {},
+        slots: {
+          children: [
+            { id: "a", type: "acme/item", version: 1, props: {} },
+            { id: "b", type: "acme/item", version: 1, props: {} },
+          ],
+        },
+      },
+    ],
+  } as unknown as BlockDocument;
+
+  /** A compile context, so the canvas compiles and marks gap containers. */
+  const COMPILED = {
+    breakpoints: {
+      viewport: [{ id: "base", label: "Desktop" }],
+      container: [],
+    },
+  };
+
+  function stackedEditor(selectedId: string): EditorState {
+    return { ...editorOf(selectedId), document: STACKED } as EditorState;
+  }
+
+  /**
+   * Computed styles per node, modelling the cascade the overlay probes:
+   * whether the element wears its own node class (an author's value applies),
+   * whether the container's gap rule reaches it (its parent wears the gap
+   * marker the compiler keys that rule on), and whether the parent still wears
+   * its block-type class (the defaults, such as padding, that a percentage
+   * margin resolves against).
+   */
+  function stubByElement(
+    styles: (
+      id: string,
+      ownClass: boolean,
+      gapRuleMatches: boolean,
+      parentDefaults: boolean
+    ) => Partial<Record<string, string>> | undefined
+  ) {
+    vi.spyOn(window, "getComputedStyle").mockImplementation(((
+      element: Element,
+      pseudo?: string | null
+    ) => {
+      const id = element.getAttribute?.(NODE_ID_ATTRIBUTE);
+      const ownClass = Array.from(element.classList ?? []).some(
+        name =>
+          name.startsWith("nx-pb-") &&
+          name !== "nx-pb-contained" &&
+          name !== CHILD_GAP_CLASS
+      );
+      const parentClasses = Array.from(element.parentElement?.classList ?? []);
+      const gapRuleMatches = parentClasses.includes(CHILD_GAP_CLASS);
+      const parentDefaults = parentClasses.some(name =>
+        name.startsWith("nx-bt-")
+      );
+      const values =
+        id === null || id === undefined
+          ? undefined
+          : styles(id, ownClass, gapRuleMatches, parentDefaults);
+      return values === undefined
+        ? REAL_COMPUTED_STYLE(element, pseudo)
+        : styleOf(
+            Object.fromEntries(
+              Object.entries(values).filter(
+                (entry): entry is [string, string] => entry[1] !== undefined
+              )
+            )
+          );
+    }) as typeof window.getComputedStyle);
+  }
+
+  function mountStacked(selectedId: string) {
+    stubLayoutBoxes(true);
+    registerStack();
+    const editor = stackedEditor(selectedId);
+    return render(
+      <Canvas
+        document={editor.document}
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId={editor.selectedId}
+        selectedIds={editor.selection.ids}
+        render={{ styleContext: COMPILED }}
+        overlay={<SpacingOverlay editor={editor} />}
+      />
+    );
+  }
+
+  it("names the container a second child's top space comes from", () => {
+    stubByElement((id, _own, gap) =>
+      id === "s"
+        ? { display: "block" }
+        : id === "b"
+          ? { marginTop: gap ? "18px" : "0px" }
+          : undefined
+    );
+    const { container } = mountStacked("b");
+    expect(labels(container)).toEqual(["18 · Gap · from Stack"]);
+  });
+
+  it("calls an author's own margin on the child its own", () => {
+    // 40px while the node wears its own class, 18px (the gap) without it: the
+    // author's value is what is on screen, and it is theirs.
+    stubByElement((id, ownClass, gap) =>
+      id === "s"
+        ? { display: "block" }
+        : id === "b"
+          ? { marginTop: ownClass ? "40px" : gap ? "18px" : "0px" }
+          : undefined
+    );
+    const { container } = mountStacked("b");
+    expect(labels(container)).toEqual(["40"]);
+  });
+
+  it("calls an author's margin its own even when it equals the gap", () => {
+    // The author's class sets the same 18px the gap would: the gap rule loses
+    // to it, so taking the gap rule away changes nothing and the space is the
+    // block's own. Comparing values alone would call it the container's.
+    stubByElement((id, ownClass, gap) =>
+      id === "s"
+        ? { display: "block" }
+        : id === "b"
+          ? { marginTop: ownClass ? "18px" : gap ? "18px" : "0px" }
+          : undefined
+    );
+    const { container } = mountStacked("b");
+    expect(labels(container)).toEqual(["18"]);
+  });
+
+  it("never calls the first child's space a gap", () => {
+    stubByElement(id =>
+      id === "s"
+        ? { display: "block" }
+        : id === "a"
+          ? { marginTop: "18px" }
+          : undefined
+    );
+    const { container } = mountStacked("a");
+    expect(labels(container)).toEqual(["18"]);
+  });
+
+  it("names the container through the resolver the canvas renders with", () => {
+    // A container only the canvas's own resolver knows: nothing registers it
+    // in the process registry, so asking that registry finds no editor label
+    // and would name the owner after its type ("Private stack") instead of the
+    // label this resolver gives it.
+    stubLayoutBoxes(true);
+    registerStack();
+    const resolver = createBlockResolver([
+      {
+        name: "acme/private-stack",
+        version: 1,
+        description: "A stack only this canvas knows.",
+        example: { props: {} },
+        editor: { label: "Hero band" },
+        childGap: "1rem",
+        slots: { children: {} },
+        render: ({
+          className,
+          renderSlot,
+        }: {
+          className: string;
+          renderSlot: (name: string) => React.ReactNode;
+        }) => React.createElement("div", { className }, renderSlot("children")),
+      },
+      getBlock("acme/item"),
+    ] as never);
+    const document = {
+      ...STACKED,
+      nodes: [{ ...STACKED.nodes[0], type: "acme/private-stack" }],
+    } as unknown as BlockDocument;
+    stubByElement((id, _own, gap) =>
+      id === "s"
+        ? { display: "block" }
+        : id === "b"
+          ? { marginTop: gap ? "16px" : "0px" }
+          : undefined
+    );
+    const editor = { ...editorOf("b"), document } as EditorState;
+    const { container } = render(
+      <Canvas
+        document={document}
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId="b"
+        selectedIds={["b"]}
+        render={{ blocks: resolver, styleContext: COMPILED }}
+        overlay={<SpacingOverlay editor={editor} blocks={resolver} />}
+      />
+    );
+    expect(labels(container)).toEqual(["16 · Gap · from Hero band"]);
+  });
+
+  it("names a container whose gap only the compile context declares", () => {
+    // A container whose definition declares no `childGap`: the gap comes from
+    // the compile context alone, which marks the container and writes the gap
+    // all the same. Reading ownership from the definition would find nothing
+    // there and call the gap the child's own margin.
+    stubLayoutBoxes(true);
+    registerStack();
+    const resolver = createBlockResolver([
+      {
+        name: "acme/plain-stack",
+        version: 1,
+        description: "A stack declaring no gap of its own.",
+        example: { props: {} },
+        editor: { label: "Plain stack" },
+        slots: { children: {} },
+        render: ({
+          className,
+          renderSlot,
+        }: {
+          className: string;
+          renderSlot: (name: string) => React.ReactNode;
+        }) => React.createElement("div", { className }, renderSlot("children")),
+      },
+      getBlock("acme/item"),
+    ] as never);
+    const document = {
+      ...STACKED,
+      nodes: [{ ...STACKED.nodes[0], type: "acme/plain-stack" }],
+    } as unknown as BlockDocument;
+    stubByElement((id, _own, gap) =>
+      id === "s"
+        ? { display: "block" }
+        : id === "b"
+          ? { marginTop: gap ? "16px" : "0px" }
+          : undefined
+    );
+    const editor = { ...editorOf("b"), document } as EditorState;
+    const { container } = render(
+      <Canvas
+        document={document}
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId="b"
+        selectedIds={["b"]}
+        render={{
+          blocks: resolver,
+          styleContext: {
+            ...COMPILED,
+            childGaps: { "acme/plain-stack": "1rem" },
+          },
+        }}
+        overlay={<SpacingOverlay editor={editor} blocks={resolver} />}
+      />
+    );
+    // The marker is what the compiled gap rule is keyed on, so its presence
+    // shows the context's gap reached the canvas.
+    expect(
+      container.querySelector(`[${NODE_ID_ATTRIBUTE}="s"]`)?.classList
+    ).toContain(CHILD_GAP_CLASS);
+    expect(labels(container)).toEqual(["16 · Gap · from Plain stack"]);
+  });
+
+  it("calls an author's percentage margin its own, though the section's padding moves it", () => {
+    // 5% of a width the section's own padding decides: without the section's
+    // defaults it would compute differently, but the gap rule losing is what
+    // matters, and only the gap marker comes off to ask.
+    stubByElement((id, ownClass, gap, parentDefaults) =>
+      id === "s"
+        ? { display: "block" }
+        : id === "b"
+          ? {
+              marginTop: ownClass
+                ? parentDefaults
+                  ? "40px"
+                  : "38px"
+                : gap
+                  ? "18px"
+                  : "0px",
+            }
+          : undefined
+    );
+    const { container } = mountStacked("b");
+    expect(labels(container)).toEqual(["40"]);
+  });
+
+  it("names the loop as the owner of a gap inside one of its entries", () => {
+    // A container that repeats its slot inside wrappers of its own, as a
+    // configured collection loop draws its entries: the wrapper holds the gap
+    // rule and the marker, and is no node, so the loop around it is the owner.
+    // That the real loop puts the marker on its wrappers is asserted on its
+    // rendered markup in `blocks-react`'s `collection-loop-spacing.test.tsx`.
+    stubLayoutBoxes(true);
+    registerStack();
+    const resolver = createBlockResolver([
+      {
+        name: "acme/loop",
+        version: 1,
+        description: "A loop drawing its template once per entry.",
+        example: { props: {} },
+        editor: { label: "Collection loop" },
+        childGap: { $token: "space.stack" },
+        slots: { children: {} },
+        render: ({
+          className,
+          renderSlot,
+        }: {
+          className: string;
+          renderSlot: (name: string) => React.ReactNode;
+        }) =>
+          React.createElement(
+            "div",
+            { className },
+            ["e1", "e2"].map(key =>
+              React.createElement(
+                "div",
+                { key, className: `nx-bt-acme--loop ${CHILD_GAP_CLASS}` },
+                renderSlot("children")
+              )
+            )
+          ),
+      },
+      getBlock("acme/item"),
+    ] as never);
+    const document = {
+      ...STACKED,
+      nodes: [{ ...STACKED.nodes[0], id: "loop", type: "acme/loop" }],
+    } as unknown as BlockDocument;
+    stubByElement((id, _own, gap) =>
+      id === "b" ? { marginTop: gap ? "18px" : "0px" } : undefined
+    );
+    const editor = { ...editorOf("b"), document } as EditorState;
+    const { container } = render(
+      <Canvas
+        document={document}
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId="b"
+        selectedIds={["b"]}
+        render={{ blocks: resolver, styleContext: COMPILED }}
+        overlay={<SpacingOverlay editor={editor} blocks={resolver} />}
+      />
+    );
+    expect(labels(container)).toEqual(["18 · Gap · from Collection loop"]);
+  });
+
+  it("leaves a flex container's child margin alone, since flex spaces with gap", () => {
+    stubByElement(id =>
+      id === "s"
+        ? { display: "flex" }
+        : id === "b"
+          ? { marginTop: "18px" }
+          : undefined
+    );
+    const { container } = mountStacked("b");
+    expect(labels(container)).toEqual(["18"]);
   });
 });

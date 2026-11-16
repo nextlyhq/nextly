@@ -5,15 +5,20 @@
  * a table: order, visibility and grouping are decidable from the data, so they
  * can be checked without standing up the sidebar and its providers.
  */
+import { renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { EMAIL_HUB_PERMISSIONS } from "@admin/constants/email-hub";
 import { ROUTES } from "@admin/constants/routes";
+import { useSidebarNavigation } from "@admin/hooks/useSidebarNavigation";
 
 import {
   SETTINGS_NAV,
+  isSettingsNavItemActive,
   isSettingsNavItemVisible,
   visibleSettingsNav,
   type SettingsNavAccess,
+  type SettingsNavGate,
 } from "../lib/settings-nav";
 
 /** Sees everything, so a hidden entry is the table's doing and not the gate's. */
@@ -37,14 +42,47 @@ const only = (permission: string): SettingsNavAccess => ({
   canAccessWebhooks: false,
 });
 
+/** Sees exactly these permissions, and no capability. */
+const holding = (...permissions: string[]): SettingsNavAccess => ({
+  hasPermission: p => permissions.includes(p),
+  canAccessApiKeys: false,
+  canAccessWebhooks: false,
+});
+
 const allItems = SETTINGS_NAV.flatMap(g => g.items);
 
+/** Every permission a gate names, one at a time satisfying it. */
+const gatePermissions = (gate: SettingsNavGate): readonly string[] =>
+  gate.kind === "permission"
+    ? [gate.permission]
+    : gate.kind === "anyOf"
+      ? gate.permissions
+      : [];
+
+/** Each visible group as its label and the labels of its destinations. */
+const shape = (access: SettingsNavAccess) =>
+  visibleSettingsNav(access).map(g => [g.label, g.items.map(i => i.label)]);
+
 describe("settings nav table", () => {
-  it("configures the system before the people in it", () => {
-    expect(visibleSettingsNav(superuser).map(g => g.id)).toEqual([
-      "system",
-      "users",
+  it("orders the groups Site, People, Developers", () => {
+    expect(visibleSettingsNav(superuser).map(g => g.label)).toEqual([
+      "Site",
+      "People",
+      "Developers",
     ]);
+  });
+
+  it("files each destination under its group, in order", () => {
+    expect(shape(superuser)).toEqual([
+      ["Site", ["General", "Email"]],
+      ["People", ["Users", "Roles"]],
+      ["Developers", ["API Keys", "Webhooks", "Background Jobs"]],
+    ]);
+  });
+
+  it("has no user fields entry: that screen is reached from the Users page", () => {
+    expect(allItems.map(i => i.id)).not.toContain("user-fields");
+    expect(allItems.map(i => i.href)).not.toContain(ROUTES.USERS_FIELDS);
   });
 
   it("is a non-empty table with unique group and item ids", () => {
@@ -76,11 +114,51 @@ describe("visibility", () => {
   it("shows nothing to a reader with no permissions, except a plugin slot", () => {
     const groups = visibleSettingsNav(nobody);
 
-    // The users group survives with zero of its OWN items because it carries a
-    // plugin slot whose contents this table does not gate.
-    expect(groups.map(g => g.id)).toEqual(["users"]);
+    // The People group survives with zero of its OWN items because it carries
+    // the slot for plugins placed beside users, whose contents this table does
+    // not gate. It draws no heading without destinations of its own.
+    expect(groups.map(g => g.id)).toEqual(["people"]);
     expect(groups[0].items).toHaveLength(0);
     expect(groups[0].pluginPlacement).toBe("users");
+  });
+
+  it.each([
+    ["read-email-templates", [["Site", ["Email"]]]],
+    ["read-email-providers", [["Site", ["Email"]]]],
+    ["read-settings", [["Site", ["General"]]]],
+    ["read-users", [["People", ["Users"]]]],
+    ["read-roles", [["People", ["Roles"]]]],
+    ["manage-background-jobs", [["Developers", ["Background Jobs"]]]],
+  ])(
+    "shows a reader holding only %s the groups they can open something in",
+    (permission, expected) => {
+      // The People group's plugin slot is left aside here: it is kept for its
+      // plugin contents, and shows no heading or destination of its own.
+      const withDestinations = shape(holding(permission)).filter(
+        ([, items]) => items.length > 0
+      );
+      expect(withDestinations).toEqual(expected);
+    }
+  );
+
+  it("shows Email for any grant that shows one of its tabs, and not without one", () => {
+    expect(EMAIL_HUB_PERMISSIONS.length).toBeGreaterThan(0);
+    for (const permission of EMAIL_HUB_PERMISSIONS) {
+      const ids = visibleSettingsNav(holding(permission)).flatMap(g =>
+        g.items.map(i => i.id)
+      );
+      expect(ids, permission).toContain("email");
+    }
+    // A grant that changes templates without reading them shows no tab.
+    const ids = visibleSettingsNav(holding("create-email-templates")).flatMap(
+      g => g.items.map(i => i.id)
+    );
+    expect(ids).not.toContain("email");
+  });
+
+  it("drops the Developers group for a reader who can open none of it", () => {
+    const groups = visibleSettingsNav(holding("read-settings", "read-users"));
+    expect(groups.map(g => g.id)).toEqual(["site", "people"]);
   });
 
   it("never presents a group heading with no destinations under it", () => {
@@ -89,11 +167,7 @@ describe("visibility", () => {
     // new item under a new permission would appear with no heading above it.
     // Exercised against every permission the table mentions, one at a time.
     const permissions = [
-      ...new Set(
-        allItems
-          .filter(i => i.gate.kind === "permission")
-          .map(i => (i.gate as { permission: string }).permission)
-      ),
+      ...new Set(allItems.flatMap(i => gatePermissions(i.gate))),
     ];
     expect(permissions.length).toBeGreaterThan(0);
 
@@ -140,5 +214,38 @@ describe("visibility", () => {
     const before = SETTINGS_NAV.map(g => g.items.length);
     visibleSettingsNav(nobody);
     expect(SETTINGS_NAV.map(g => g.items.length)).toEqual(before);
+  });
+});
+
+describe("which destination is highlighted", () => {
+  /** The panel's own highlight rule, asked with the sidebar's real matcher. */
+  function activeAt(pathname: string): string[] {
+    const { result } = renderHook(() => useSidebarNavigation([], pathname));
+    return allItems
+      .filter(item => isSettingsNavItemActive(item, result.current.isActive))
+      .map(item => item.id);
+  }
+
+  /*
+   * The user fields screens have no entry of their own and are reached from
+   * the Users page, so Users is where the reader is, as the trail says.
+   */
+  it("highlights Users on the user fields screens", () => {
+    expect(activeAt(ROUTES.USERS_FIELDS)).toEqual(["users"]);
+    expect(activeAt(ROUTES.USERS_FIELDS_CREATE)).toEqual(["users"]);
+  });
+
+  it("highlights Users on its own list, and nothing else", () => {
+    expect(activeAt(ROUTES.USERS)).toEqual(["users"]);
+  });
+
+  /*
+   * General's address is a prefix of every Settings address, Email's
+   * included, so it matches exactly; Email's own pages keep Email highlighted.
+   */
+  it("highlights Email on its tabs and editors, and not General", () => {
+    expect(activeAt(ROUTES.EMAIL)).toEqual(["email"]);
+    expect(activeAt(ROUTES.EMAIL_SENDING_CREATE)).toEqual(["email"]);
+    expect(activeAt(ROUTES.SETTINGS)).toEqual(["general"]);
   });
 });

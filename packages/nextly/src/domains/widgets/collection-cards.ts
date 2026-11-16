@@ -1,0 +1,207 @@
+/**
+ * Cards set to a collection, and which of them one reader may be shown.
+ *
+ * A widget offered per collection (Count) is one widget every reader may see,
+ * and each CARD of it reads the collection its Collection setting names. A card
+ * set to a collection this reader may not read names that collection in its
+ * settings, so handing it over would tell the reader of a collection they may
+ * not know about; and its reads are refused anyway. Such a card is withheld,
+ * exactly as a card of a widget they may not see is: left out of what they are
+ * handed, and carried in place by their saves, so it returns the day they may
+ * read the collection. A save may not ADD one: the layout write refuses a
+ * submitted card set to a collection the reader may not read.
+ *
+ * 🔴 "May not read" covers a collection that does not exist as well. Telling
+ * the two apart -- withholding one, drawing the other as not available -- would
+ * let a reader learn whether a collection exists by saving a card set to a
+ * guessed name and reading the layout back. Both are withheld, and both are
+ * refused on a write, the same way.
+ *
+ * The collection a card reads is its EFFECTIVE Collection setting, read through
+ * `resolveWidgetSettings`: a card with no stored value reads the setting's
+ * declared default, and is judged by it. Only a value shaped like a slug names
+ * a collection (`namedCollection`, the rule the card's query reads it by), so
+ * a special default such as "*" names none and withholds nothing. The setting
+ * comes from the canonical summary (`collectionSetting`), merged from both
+ * channels as the admin merges them, so a widget a plugin contributes is
+ * judged like a registered one.
+ *
+ * @module domains/widgets/collection-cards
+ */
+
+import type { WidgetPlacement } from "./layout";
+import {
+  namedCollection,
+  resolveWidgetSettings,
+  type AnyWidgetSetting,
+} from "./settings";
+import { COUNT_USERS_SOURCE } from "./users-gate";
+
+/**
+ * Each widget's Collection setting, by widget id: a widget declares at most
+ * one (`settings.ts` refuses a second).
+ */
+export function collectionWidgets(
+  widgets: readonly {
+    id: string;
+    collectionSetting?: AnyWidgetSetting;
+  }[]
+): ReadonlyMap<string, AnyWidgetSetting> {
+  const found = new Map<string, AnyWidgetSetting>();
+  for (const widget of widgets) {
+    const setting = widget.collectionSetting;
+    if (setting === undefined) continue;
+    // A declared widget's Collection setting reaches its `load`, so it names
+    // the collection its card reads.
+    found.set(widget.id, setting);
+  }
+  return found;
+}
+
+/** Whether a Collection setting offers Users beside its collections. */
+function offersUsers(setting: AnyWidgetSetting): boolean {
+  return setting.type === "collection" && setting.users === true;
+}
+
+/**
+ * Whether a card is set to a collection this reader may not read (whether or
+ * not it exists), for a reader who may read `readable`; or, for a Collection
+ * setting that offers Users, set to Users for a reader who may not read users
+ * (`readsUsers`). Users set on any other Collection setting names no
+ * collection anyone may read, and is withheld from everyone.
+ */
+export function unreadableCollectionCard(
+  widgets: ReadonlyMap<string, AnyWidgetSetting>,
+  readable: ReadonlySet<string>,
+  readsUsers = false
+): (placement: WidgetPlacement) => boolean {
+  return placement => {
+    const setting = widgets.get(placement.widgetId);
+    if (setting === undefined) return false;
+    // Resolved alone: a Collection setting depends on no other setting, so
+    // its effective value is the same as over the widget's whole list.
+    const collection = resolveWidgetSettings([setting], placement.config)[
+      setting.name
+    ];
+    if (collection === COUNT_USERS_SOURCE && offersUsers(setting)) {
+      return !readsUsers;
+    }
+    const named = namedCollection(collection);
+    return named !== undefined && !readable.has(named);
+  };
+}
+
+/**
+ * The first card a write ADDS that reads a collection, for a reader who may read none, or
+ * `undefined`.
+ *
+ * Such a card has nothing to read: whatever it is set to, every read it asks is refused, so it
+ * could only ever be drawn as not available. The add panel offers none to this reader, and the
+ * layout write refuses one sent anyway. Only a card new to the reader's arrangement (`shownIds`)
+ * is judged: one they already held is carried as it is, whichever collections they may read now.
+ * A card set to Users on a setting that offers them, from a reader who may read users
+ * (`readsUsers`), reads the people rather than a collection, and is not one.
+ */
+export function addedCardWithoutCollection(
+  submitted: readonly WidgetPlacement[],
+  widgets: ReadonlyMap<string, AnyWidgetSetting>,
+  shownIds: ReadonlySet<string>,
+  readsAnyCollection: boolean,
+  readsUsers = false
+): WidgetPlacement | undefined {
+  if (readsAnyCollection) return undefined;
+  return submitted.find(placement => {
+    if (shownIds.has(placement.id) || placement.removed) return false;
+    const setting = widgets.get(placement.widgetId);
+    if (setting === undefined) return false;
+    return !(readsUsers && setToUsers(setting, placement));
+  });
+}
+
+/** Whether a card is set to Users on a Collection setting that offers them. */
+function setToUsers(
+  setting: AnyWidgetSetting,
+  placement: WidgetPlacement
+): boolean {
+  return (
+    offersUsers(setting) &&
+    resolveWidgetSettings([setting], placement.config)[setting.name] ===
+      COUNT_USERS_SOURCE
+  );
+}
+
+/**
+ * Each widget's Collection setting, whole, as scope-token inputs.
+ *
+ * Whole because every property of it can decide which collection a stored
+ * card resolves to -- its name says which stored key it reads, its default
+ * what an absent key reads -- so a plugin changing any of them can move a card
+ * between withheld and shown with no widget id, gate or readable collection
+ * changing, and a snapshot taken before must be refused. Hashing the whole
+ * declaration needs no list of the properties that matter to stay current.
+ *
+ * EVERY declared Collection setting, including one no query of its widget
+ * drives (a registration that replaced the query with one the setting does
+ * not reach). Such a setting decides no withholding, but the workspace payload
+ * and the settings sheet still show it, so a change to it must still refuse a
+ * snapshot taken before; filtered as `collectionWidgets` is, it changed nothing
+ * the token held.
+ */
+export function collectionSettingsToken(
+  widgets: readonly { id: string; collectionSetting?: AnyWidgetSetting }[]
+): string[] {
+  return widgets.flatMap(({ id, collectionSetting }) =>
+    collectionSetting === undefined
+      ? []
+      : [`${id}=${JSON.stringify(collectionSetting)}`]
+  );
+}
+
+/**
+ * A widget declaration as this reader is told it: its Collection setting's
+ * declared default withheld when that default names a collection the reader
+ * may not read. The same declaration when there is nothing to withhold.
+ *
+ * 🔴 The workspace payload ships declarations to every reader who may see the
+ * widget, and a default is a collection slug: shipped as declared, it tells a
+ * reader of a collection they may not read, whether or not they hold a card.
+ * Withholding the cards that rely on it (`unreadableCollectionCard`) does not
+ * reach the declaration.
+ *
+ * Only the default goes, not the declaration: the widget stays offered for
+ * the collections the reader may read, and a card added without choosing one
+ * is set to none, drawn as not available. The verdict is the layout's: the
+ * same slug rule (`namedCollection`) and the same readable collections.
+ *
+ * A Collection setting that offers Users is told without that offer to a
+ * reader who may not read users (`readsUsers`), so their settings drawer
+ * never lists Users, which a save would refuse.
+ */
+export function collectionDefaultForReader<
+  W extends { settings?: readonly AnyWidgetSetting[] },
+>(widget: W, readable: ReadonlySet<string>, readsUsers = false): W {
+  const settings = widget.settings;
+  if (settings === undefined) return widget;
+  let withheld = false;
+  const told = settings.map(setting => {
+    if (setting.type !== "collection") return setting;
+    const users = offersUsers(setting);
+    const keepUsers = users && readsUsers;
+    const named = namedCollection(setting.defaultValue);
+    const keepDefault =
+      named === undefined ||
+      (setting.defaultValue === COUNT_USERS_SOURCE && users
+        ? readsUsers
+        : readable.has(named));
+    if (keepDefault && (keepUsers || !users)) return setting;
+    withheld = true;
+    return Object.fromEntries(
+      Object.entries(setting).filter(
+        ([key]) =>
+          !(key === "defaultValue" && !keepDefault) &&
+          !(key === "users" && !keepUsers)
+      )
+    ) as AnyWidgetSetting;
+  });
+  return withheld ? { ...widget, settings: told } : widget;
+}

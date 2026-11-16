@@ -39,6 +39,7 @@ vi.mock("../../auth/middleware", async importActual => {
   };
 });
 
+import { userWhoMay } from "../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../config";
 import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../services/collections-handler";
@@ -72,6 +73,9 @@ async function boot(read: () => boolean): Promise<{
     ],
     localization: { locales: ["en", "de"], defaultLocale: "en" },
   });
+  // The signed-in caller, `u1`. A rule only narrows a permission, so `u1`
+  // holds `read-pages` and the rule decides what it reads.
+  await userWhoMay(current, "u1", "read", ["pages"]);
   await current.nextly.create({
     collection: "pages",
     data: { title: "A" },
@@ -215,6 +219,8 @@ describe("the languages the worklist's read decision is told", () => {
         defaultLocale: "en",
       },
     });
+    // `u1` holds `read-pages`, so the read rule is asked at all.
+    await userWhoMay(current, "u1", "read", ["pages"]);
     const { getTranslationWorklist } = await import("../translations");
 
     const res = await getTranslationWorklist(

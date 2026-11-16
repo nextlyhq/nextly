@@ -14,6 +14,8 @@ export type ValidationPublicData = {
     code: string;
     /** Complete sentence, ends with a period: "Must be a valid email address." */
     message: string;
+    /** The language the issue is in, where it is about one language's own value. */
+    locale?: string;
   }>;
 };
 
@@ -23,6 +25,17 @@ export type ValidationPublicData = {
  * Retry-After header (`retryAfterSeconds` in `errors/retry-after.ts`).
  */
 export type RateLimitPublicData = {
+  retryAfterSeconds?: number;
+};
+
+/**
+ * Which rule a `RULE_COULD_NOT_RUN` is about: the collection or Single whose
+ * rule it is, and the field, for a field's rule. The names of what the caller
+ * asked to read or write, and a retry hint.
+ */
+export type RuleCouldNotRunPublicData = {
+  subject: string;
+  field?: string;
   retryAfterSeconds?: number;
 };
 
@@ -46,8 +59,6 @@ export type SingleAbsentPublicData = {
  * words: `published` (the record of what went live), `committed` (scheduled
  * or stopped; cancel it first) or `was-scheduled` (cancelled after it was
  * scheduled, so it may have run and is kept).
- *
- * @experimental
  */
 export type ReleaseNotDeletablePublicData = {
   reason: "published" | "committed" | "was-scheduled";
@@ -97,11 +108,134 @@ export type SharedFieldsConflictPublicData = {
   hiddenCount?: number;
 };
 
+/**
+ * Which entity an `ENTITY_REMOVED_FROM_CODE` refusal is about: its kind and
+ * the slug the caller named. Enough for a client to mark the entity and say
+ * what to do, and nothing the caller did not already send.
+ */
+export type RemovedFromCodePublicData = {
+  kind: "collection" | "single";
+  slug: string;
+};
+
+/**
+ * Which entity an `ENTITY_NOT_MIGRATED` answer is about and what the database
+ * lacks for it: a field's column, the entity's table, or any registration in
+ * this running instance. The kind and slug are the caller's own; `field` and
+ * `table` appear only for trusted server code, since both come from the
+ * registry rather than the request. No SQL and no driver text.
+ */
+export type NotMigratedPublicData = {
+  kind: "collection" | "single";
+  slug: string;
+  reason: "column" | "table" | "unregistered";
+  field?: string;
+  table?: string;
+};
+
+/**
+ * Why a sample-content load, decline or record was not done, for the person
+ * who asked: refused because the site's answer moved on (`answered`, a load
+ * `in-progress`, one loaded but `unrecorded`, a failed one awaiting `confirm`,
+ * or `not-this-run` for a record of a run that is not the one waiting), or
+ * `failed`, with what failed and when that load started. A super-admin's own
+ * load reports what failed, so the card can say it.
+ */
+export type SampleContentPublicData = {
+  reason:
+    | "answered"
+    | "in-progress"
+    | "unrecorded"
+    | "confirm"
+    | "not-this-run"
+    | "failed";
+  failure?: string;
+  startedAt?: string;
+};
+
+/**
+ * Why a workflow step or an assignment was refused, for the caller to act on: the permission it
+ * needs (`approve-posts`, as stored), or for an assignment the permissions any one of which each
+ * refused part needed; that the person accountable for the part's stage may not approve it; the
+ * parts whose stage the step does not leave from, and the stage each is in; or the parts whose
+ * review state moved since the caller saw it; or the changed fields an approval would cover that
+ * a read rule hides from the reviewer, with who could approve instead. A part is a language, or
+ * null for the shared part.
+ *
+ * @experimental
+ */
+export type WorkflowRefusalPublicData =
+  | { reason: "no-permission"; permission: string }
+  | {
+      reason: "no-permission";
+      refused: Array<{ index: number; anyOf: string[] }>;
+    }
+  | { reason: "self-approval" }
+  | {
+      reason: "not-from-stage";
+      left: Array<{
+        part: string | null;
+        stage: string;
+        reason: "not-from-stage";
+      }>;
+    }
+  | { reason: "stale"; parts: Array<string | null> }
+  | {
+      reason: "field-hidden";
+      fields: string[];
+      approvers: Array<{ kind: "user"; id: string; name: string | null }>;
+    };
+
+/**
+ * What an update refused as made from an out-of-date version tells its caller:
+ * the document's current version always, and, to a caller who may read the
+ * document, who or what changed it last and when. `historyVersion` names the
+ * newest recorded version of the part the save writes, for comparing against,
+ * where the document keeps history and the caller may read it. Never a value
+ * of the document.
+ *
+ * @experimental
+ */
+export type StaleVersionPublicData = {
+  currentVersion: string;
+  changedBy?: {
+    kind: "person" | "apiKey" | "release" | "agent" | "principal" | "system";
+    /** The name shown for it now, or null where there is none. */
+    name: string | null;
+    /** A plugin-defined person's kind, such as `member`, for kind `principal`. */
+    principalKind?: string;
+  };
+  /** When, as an ISO 8601 string. */
+  changedAt?: string;
+  historyVersion?: { version: number; locale: string | null };
+};
+
+/**
+ * What an update refused for saying neither which version it was made from
+ * nor that it overwrites tells its caller: the keys that say either, so a
+ * client can be told how to send one. `revsKey` only where the update names
+ * its documents by id, so a version can be given for each.
+ *
+ * @experimental
+ */
+export type VersionRequiredPublicData = {
+  versionKey: string;
+  overwriteKey: string;
+  revsKey?: string;
+};
+
 export type PublicData =
   | ValidationPublicData
+  | StaleVersionPublicData
+  | VersionRequiredPublicData
+  | SampleContentPublicData
+  | RemovedFromCodePublicData
+  | NotMigratedPublicData
   | ReleaseNotDeletablePublicData
   | RateLimitPublicData
+  | RuleCouldNotRunPublicData
   | SingleAbsentPublicData
   | ReleaseProblemsPublicData
   | SharedFieldsConflictPublicData
+  | WorkflowRefusalPublicData
   | undefined;

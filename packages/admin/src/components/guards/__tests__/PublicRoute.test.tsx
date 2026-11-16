@@ -1,9 +1,8 @@
 /**
- * The guard gates every signed-out screen, so its boot cost IS the login
- * page's boot cost. The behavior under test: setup-status and the session
- * probe are independent requests, and the probe must not wait for
- * setup-status to answer — awaited serially they cost two full API
- * round-trips during which this guard renders nothing but a blank div.
+ * The guard gates every signed-out screen. Two behaviours are under test: the
+ * page is drawn at once, before setup-status or the session answer, because on
+ * a server that is starting those answers take a minute; and the session probe
+ * starts while setup-status is still in flight rather than after it.
  *
  * Deferred promises stand in for the two requests so "still in flight" is a
  * state the test can hold open while it asserts what has already started.
@@ -26,6 +25,11 @@ vi.mock("@admin/lib/auth/session", () => ({
 const mockNavigateTo = vi.fn();
 vi.mock("@admin/lib/navigation", () => ({
   navigateTo: (path: string) => mockNavigateTo(path),
+}));
+
+const mockReturnWithSession = vi.fn();
+vi.mock("@admin/lib/auth/return-address", () => ({
+  returnWithSession: () => mockReturnWithSession(),
 }));
 
 import { PublicRoute } from "../PublicRoute";
@@ -53,6 +57,7 @@ function renderGuard() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockReturnWithSession.mockReset();
 });
 
 describe("PublicRoute", () => {
@@ -109,8 +114,36 @@ describe("PublicRoute", () => {
       await Promise.resolve();
     });
 
+    // The page was drawn before the answer came; the answer moves the visitor.
     expect(mockNavigateTo).toHaveBeenCalledWith(ROUTES.DASHBOARD);
-    expect(screen.queryByText("public-content")).not.toBeInTheDocument();
+  });
+
+  it("returns an authenticated visitor to the address the sign-in page was given", async () => {
+    // A page the browser opened, refused for an expired session, sent it here
+    // to refresh it; the session is good again, so the browser goes back.
+    mockCheckSetupStatus.mockResolvedValue(true);
+    mockIsAuthenticated.mockResolvedValue(true);
+    mockReturnWithSession.mockReturnValue(true);
+
+    renderGuard();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockReturnWithSession).toHaveBeenCalledTimes(1);
+    expect(mockNavigateTo).not.toHaveBeenCalled();
+  });
+
+  it("asks for no return without a session", async () => {
+    mockCheckSetupStatus.mockResolvedValue(true);
+    mockIsAuthenticated.mockResolvedValue(false);
+
+    renderGuard();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockReturnWithSession).not.toHaveBeenCalled();
   });
 
   it("sends an unconfigured installation to setup", async () => {
@@ -123,7 +156,34 @@ describe("PublicRoute", () => {
     });
 
     expect(mockNavigateTo).toHaveBeenCalledWith(ROUTES.SETUP);
-    expect(screen.queryByText("public-content")).not.toBeInTheDocument();
+  });
+
+  it("draws the page before setup-status or the session has answered", () => {
+    // A starting server holds both answers for a minute. The login form must be
+    // there to read and fill meanwhile, not an empty page.
+    mockCheckSetupStatus.mockReturnValue(deferred<boolean>().promise);
+    mockIsAuthenticated.mockReturnValue(deferred<boolean>().promise);
+
+    renderGuard();
+
+    expect(screen.getByText("public-content")).toBeInTheDocument();
+    expect(mockNavigateTo).not.toHaveBeenCalled();
+  });
+
+  it("keeps the visitor on the page when the server cannot answer", async () => {
+    // A failed session check is not "signed in" and not "signed out": nothing
+    // moves the visitor on it.
+    mockCheckSetupStatus.mockResolvedValue(true);
+    mockIsAuthenticated.mockRejectedValue(new Error("503"));
+
+    renderGuard();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("public-content")).toBeInTheDocument();
+    expect(mockNavigateTo).not.toHaveBeenCalled();
   });
 
   it("renders the setup page itself when setup is incomplete", async () => {

@@ -50,8 +50,19 @@ import { siteBreakpoints, type SiteStyleData } from "../site-style";
  */
 export interface PageRenderInputs {
   styleContext: NonNullable<PageRendererProps["styleContext"]>;
+  /**
+   * The page context blocks read what they draw through, where the surface
+   * has one of its own: the editor's canvas resolves images through the
+   * admin. Absent, the renderer's stand-in.
+   */
+  context?: PageRendererProps["context"];
   hostPolicy?: PageRendererProps["hostPolicy"];
   limits?: PageRendererProps["limits"];
+  /**
+   * What the editor's canvas draws where a list's item hides a block, while
+   * conditions are applied. Never set for a published surface.
+   */
+  itemHiddenAs?: PageRendererProps["itemHiddenAs"];
   /**
    * The component definitions the page's instances resolve against.
    *

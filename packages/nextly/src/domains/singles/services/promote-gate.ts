@@ -29,12 +29,18 @@
 
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import {
+  readLanguagesFor,
+  withRuleLanguage,
+  type RuleLanguage,
+} from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import {
   declaredFieldNames,
+  keepDeniedAtStored,
   resolvePromotedDocument,
 } from "../../../shared/lib/denied-change";
 import {
@@ -48,10 +54,13 @@ import {
   type CallerGrants,
 } from "../../../shared/lib/field-level-registry";
 import { relationshipValidationView } from "../../../shared/lib/field-transform";
+import { issuesTheReaderMaySee } from "../../../shared/lib/unreadable-field-issues";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
 import { applyFieldGroupWriteAccessToDocument } from "../../field-groups/field-group-write-access";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { fieldGroupWriteAccessOf } from "../../field-groups/services/field-group-mutation-service";
+import { referencedFieldGroupFields } from "../../field-groups/storage/field-group-field-type";
+import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import {
   type ComponentFieldResolver,
@@ -61,6 +70,7 @@ import {
 } from "../../versions/tag-component-types";
 
 import { readCompanionValuesInTx } from "./apply-pending-change";
+import { checkSingleAccess } from "./single-query-service";
 
 /** One language's pending change, as the versions repository stores it. */
 export interface PromotableDraft {
@@ -68,6 +78,30 @@ export interface PromotableDraft {
   locale: string | null;
   /** The stored snapshot, in write shape. */
   snapshot: unknown;
+}
+
+/**
+ * Whether a caller may read the Single in every language, as its read gate
+ * answers a read in each and in all of them at once: a read rule can answer
+ * one language differently, and a promotion is judged language by language,
+ * so a refusal names a field of it only where every language's read could
+ * show it. Asked before the promotion's transaction opens, since the gate
+ * reads the caller's roles on the pool.
+ */
+export async function readsSingleInEveryLanguage(
+  params: Omit<Parameters<typeof checkSingleAccess>[0], "operation"> & {
+    /** The asking service's own localization; none for a site without. */
+    localization: SanitizedLocalizationConfig | undefined;
+  }
+): Promise<boolean> {
+  const { localization, ...gate } = params;
+  const ask = () => checkSingleAccess({ ...gate, operation: "read" });
+  if ((await ask()) !== null) return false;
+  for (const { code } of localization?.locales ?? []) {
+    const read = readLanguagesFor(localization, code);
+    if ((await withRuleLanguage(read, ask)) !== null) return false;
+  }
+  return true;
 }
 
 /**
@@ -88,6 +122,12 @@ export function promoteCallerFor(args: {
     authenticatedScope?: AuthenticatedScope;
   };
   grants?: () => Promise<CallerGrants>;
+  /** See {@link PromoteGateContext.readsEntry}. */
+  readsEntry?: boolean;
+  /** The service's own localization, for how a read of each language asks. */
+  localization?: SanitizedLocalizationConfig;
+  /** The Single's table, for the columns a read never shows. */
+  tableName?: string;
 }): Pick<
   PromoteGateContext,
   | "slug"
@@ -98,6 +138,10 @@ export function promoteCallerFor(args: {
   | "overrideAccess"
   | "authenticatedScope"
   | "grants"
+  | "readsEntry"
+  | "executor"
+  | "readLanguageOf"
+  | "tableName"
 > {
   return {
     slug: args.slug,
@@ -117,6 +161,10 @@ export function promoteCallerFor(args: {
     authenticatedScope: args.options.authenticatedScope,
     // Resolved on the pooled connection before the transaction opened.
     grants: args.grants,
+    readsEntry: args.readsEntry,
+    executor: args.tx.getDrizzle(),
+    readLanguageOf: locale => readLanguagesFor(args.localization, locale),
+    tableName: args.tableName,
   };
 }
 
@@ -218,6 +266,24 @@ export interface PromoteGateContext {
    * transaction is holding: the publish hangs rather than fails.
    */
   grants?: () => Promise<CallerGrants>;
+  /**
+   * Whether the caller may read the Single at all, answered by its read gate
+   * before the transaction opened. A refusal tells one who may not no field of
+   * it. Absent, the field rules alone decide.
+   */
+  readsEntry?: boolean;
+  /**
+   * The promoting transaction's connection: a lookup the gate still has to
+   * make reads on it, never on the pool the transaction is holding.
+   */
+  executor?: unknown;
+  /**
+   * How a read of one language asks, by the promoting service's own
+   * localization: a refusal is judged language by language as that read.
+   */
+  readLanguageOf?: (locale: string) => RuleLanguage;
+  /** The Single's table, for the columns a read never shows. */
+  tableName?: string;
   /**
    * The scope an API key arrived with, so a key is judged on ITS grants rather
    * than on the database roles of whoever owns it. There is no request-local
@@ -321,7 +387,13 @@ export async function promotionIssues(
 
   for (const { locale, values } of logical) {
     const live = ctx.toLogical(asRecord(await ctx.liveStoredFor(locale)));
-    const promoted = promotedDocument(live, shared, values, perLanguage, ctx);
+    const promoted = await promotedDocument(
+      live,
+      shared,
+      values,
+      perLanguage,
+      ctx
+    );
     // The document the write will persist, with every field this publisher may
     // not write held at its live value. Validated as THAT document rather than
     // as the one the promotion proposed, so the check and the row agree.
@@ -339,7 +411,7 @@ export async function promotionIssues(
       locale,
       ctx
     );
-    const issues = await schemaIssues(resolved, ctx);
+    const issues = await schemaIssues(resolved, ctx, locale);
     if (issues.length > 0) return issues;
   }
   return [];
@@ -381,19 +453,37 @@ function sharedValues(
  * caller's payload. Spreading the whole snapshot instead would put back the
  * shared values a later language overwrote and refuse a publish whose
  * committed document is perfectly valid.
+ *
+ * The caller's payload is laid over the pending change with every denied
+ * child of a container it sends at the pending change's value. The update's
+ * field gate kept those children at the LIVE row's values, the only stored
+ * document it had, and a container the caller sends replaces the pending
+ * change's whole: laid over as it is, a pending edit to a child the caller may
+ * not write would read as unchanged and be lost rather than refused.
  */
-function promotedDocument(
+async function promotedDocument(
   live: Record<string, unknown>,
   shared: Record<string, unknown>,
   values: Record<string, unknown>,
   perLanguage: ReadonlySet<string>,
   ctx: PromoteGateContext
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   const promoted: Record<string, unknown> = { ...live, ...shared };
   for (const [key, value] of Object.entries(values)) {
     if (perLanguage.has(key)) promoted[key] = value;
   }
-  Object.assign(promoted, ctx.callerData ?? {});
+  if (ctx.callerData) {
+    Object.assign(
+      promoted,
+      (
+        await keepDeniedAtStored({
+          update: ctx.callerData,
+          stored: promoted,
+          applyRules: promotionRules(ctx, live),
+        })
+      ).kept
+    );
+  }
   // Written with the status it publishes, whatever its snapshot was saved
   // under. Set before the field rules run as well as before validation, so a
   // rule reading the document's status judges the one that goes live.
@@ -443,35 +533,48 @@ async function resolveForLocale(
     // Refusing is what this path already did, and it is safe: with nothing
     // denied allowed to change, the snapshot's own copy of a denied field
     // already equals live, so writing it changes nothing.
-    // The Single's own rules, then every field group's on the instances the
-    // document holds, with the schemas this promotion already resolved: a
-    // pending change can carry a field-group edit, refused here like any other.
-    applyRules: async document => {
-      await applyFieldWriteAccess({
-        kind: "single",
-        slug: ctx.slug,
-        data: document,
-        operation: "update",
-        user: ctx.user,
-        authenticatedScope: ctx.authenticatedScope,
-        overrideAccess: ctx.overrideAccess,
-        grants: ctx.grants,
-        id: ctx.entryId,
-      });
-      await applyFieldGroupWriteAccessToDocument({
-        document,
-        fields: ctx.fields,
-        fieldGroupFields: { get: slug => ctx.componentFields?.(slug) },
-        access: { ...fieldGroupWriteAccessOf(ctx), grants: ctx.grants },
-        live,
-      });
-    },
-    // What this Single declares, so a field named like one of the store's own
-    // columns is judged as the content it is rather than skipped as metadata.
-    authoredFieldNames: declaredFieldNames(ctx.fields),
+    applyRules: promotionRules(ctx, live),
+    // What this Single declares, its field groups' schemas included, so a field
+    // named like one of the store's own columns is judged as the content it is
+    // rather than skipped as metadata.
+    authoredFieldNames: declaredFieldNames(ctx.fields, field =>
+      referencedFieldGroupFields(field, slug => ctx.componentFields?.(slug))
+    ),
     slug: ctx.slug,
     locale,
   });
+}
+
+/**
+ * The field rules a promotion is judged by, applied to the document given, in
+ * place: the Single's own rules, then every field group's on the instances
+ * the document holds, with the schemas this promotion already resolved. A
+ * pending change can carry a field-group edit, refused like any other.
+ */
+function promotionRules(
+  ctx: PromoteGateContext,
+  live: Record<string, unknown>
+): (document: Record<string, unknown>) => Promise<void> {
+  return async document => {
+    await applyFieldWriteAccess({
+      kind: "single",
+      slug: ctx.slug,
+      data: document,
+      operation: "update",
+      user: ctx.user,
+      authenticatedScope: ctx.authenticatedScope,
+      overrideAccess: ctx.overrideAccess,
+      grants: ctx.grants,
+      id: ctx.entryId,
+    });
+    await applyFieldGroupWriteAccessToDocument({
+      document,
+      fields: ctx.fields,
+      fieldGroupFields: { get: slug => ctx.componentFields?.(slug) },
+      access: { ...fieldGroupWriteAccessOf(ctx), grants: ctx.grants },
+      live,
+    });
+  };
 }
 
 /**
@@ -495,22 +598,66 @@ async function resolveForLocale(
  */
 async function schemaIssues(
   promoted: Record<string, unknown>,
-  ctx: PromoteGateContext
+  ctx: PromoteGateContext,
+  /** The language the promoted document is; `null` for an unlocalized one. */
+  locale: string | null
 ): Promise<ValidationIssue[]> {
-  return validateEntryData(
-    relationshipValidationView(promoted, ctx.fields),
+  const view = relationshipValidationView(promoted, ctx.fields);
+  const issues = await validateEntryData(
+    view,
     attachFieldValidators("single", ctx.slug, ctx.fields),
     {
       mode: "create",
       req: ctx.user ? { user: ctx.user } : {},
       localizedFieldNames: ctx.localizedFieldNames,
       enforceLocalizedRequired: ctx.enforceLocalizedRequired,
+      // The promoted document is the stored snapshot the write produces, so a
+      // whole-number field's stored fraction rides through it: the rule binds
+      // values a caller writes, and the write's own gate refused the caller's
+      // fraction before it could reach this snapshot.
+      assembledFromStorage: true,
       // A component inside a group or repeater is judged here: the component
       // write the promotion runs never reaches it.
       ...(ctx.componentFields === undefined
         ? {}
         : { componentFields: ctx.componentFields }),
-      ...(ctx.write === undefined ? {} : { write: ctx.write }),
+      // The write as this language is judged in: one promotion can judge
+      // several languages, so the language joins here rather than where the
+      // write was built.
+      ...(ctx.write === undefined
+        ? {}
+        : {
+            write: locale === null ? ctx.write : { ...ctx.write, locale },
+          }),
     }
   );
+  // The promoted document holds every stored field, those the publisher may
+  // not read included; their issues are told without naming them.
+  return issuesTheReaderMaySee(issues, {
+    kind: "single",
+    slug: ctx.slug,
+    document: view,
+    entryId: ctx.entryId,
+    executor: ctx.executor,
+    tableName: ctx.tableName,
+    readLanguage: locale === null ? undefined : ctx.readLanguageOf?.(locale),
+    ...(ctx.readsEntry === undefined
+      ? {}
+      : { rowReadable: () => Promise.resolve(ctx.readsEntry === true) }),
+    fields: ctx.fields,
+    ...(ctx.componentFields === undefined
+      ? {}
+      : {
+          fieldGroups: {
+            getComponentFields: componentSlug =>
+              Promise.resolve(ctx.componentFields?.(componentSlug) ?? null),
+          },
+        }),
+    reader: {
+      user: ctx.user,
+      overrideAccess: ctx.overrideAccess,
+      authenticatedScope: ctx.authenticatedScope,
+      grants: ctx.grants,
+    },
+  });
 }

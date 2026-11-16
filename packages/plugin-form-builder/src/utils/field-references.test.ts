@@ -5,6 +5,8 @@ import type { FormField, FormNotification } from "../types";
 import {
   buildFieldReferenceMap,
   findFieldReferences,
+  renameInFieldConditions,
+  renameInNotifications,
 } from "./field-references";
 
 function textField(name: string, label = name): FormField {
@@ -132,6 +134,29 @@ describe("findFieldReferences", () => {
     ]);
   });
 
+  it("finds a field named by one of several conditions, or attached by name", () => {
+    const notifications = [
+      notification({
+        name: "Access team",
+        conditions: {
+          match: "any",
+          list: [
+            { field: "join", comparison: "equals", value: "online" },
+            { field: "access", comparison: "isNotEmpty" },
+          ],
+        },
+      }),
+      notification({ name: "Hiring", attachFields: ["cv"] }),
+    ];
+
+    expect(findFieldReferences("access", [], notifications)).toEqual([
+      { kind: "notification", label: "Access team" },
+    ]);
+    expect(findFieldReferences("cv", [], notifications)).toEqual([
+      { kind: "notification", label: "Hiring" },
+    ]);
+  });
+
   it("ignores references held by disabled notifications", () => {
     const notifications = [
       notification({
@@ -190,5 +215,99 @@ describe("findFieldReferences", () => {
         [notification({ name: "Plain" })]
       )
     ).toEqual([]);
+  });
+});
+
+describe("moving references with a renamed field", () => {
+  const notification: FormNotification = {
+    id: "n1",
+    name: "Team",
+    enabled: false,
+    recipientType: "field",
+    to: "{{ email }}",
+    cc: ["{{email}}", "{{email_2}}"],
+    bcc: ["boss@example.com"],
+    replyTo: "{{email}}",
+    condition: { field: "email", comparison: "isNotEmpty" },
+  };
+
+  it("renames every address and the condition, and nothing else", () => {
+    const [next] = renameInNotifications([notification], "email", "work");
+    expect(next).toEqual({
+      ...notification,
+      to: "{{work}}",
+      cc: ["{{work}}", "{{email_2}}"],
+      bcc: ["boss@example.com"],
+      replyTo: "{{work}}",
+      condition: { field: "work", comparison: "isNotEmpty" },
+    });
+  });
+
+  it("renames the field in several conditions and in the files attached", () => {
+    const [next] = renameInNotifications(
+      [
+        {
+          ...notification,
+          conditions: {
+            match: "all",
+            list: [
+              { field: "email", comparison: "isNotEmpty" },
+              { field: "join", comparison: "equals", value: "online" },
+            ],
+          },
+          attachFields: ["email", "photo"],
+        },
+      ],
+      "email",
+      "work"
+    );
+    expect(next?.conditions).toEqual({
+      match: "all",
+      list: [
+        { field: "work", comparison: "isNotEmpty" },
+        { field: "join", comparison: "equals", value: "online" },
+      ],
+    });
+    expect(next?.attachFields).toEqual(["work", "photo"]);
+  });
+
+  it("renames conditions on the field in every other field, enabled or not", () => {
+    const fields = [
+      { type: "email", name: "email", label: "Email" },
+      {
+        type: "text",
+        name: "company",
+        label: "Company",
+        conditionalLogic: {
+          enabled: false,
+          action: "show",
+          operator: "AND",
+          conditions: [
+            { field: "email", comparison: "isNotEmpty" },
+            { field: "email_2", comparison: "isNotEmpty" },
+          ],
+        },
+      },
+    ] as FormField[];
+    const [, company] = renameInFieldConditions(fields, "email", "work");
+    expect(company?.conditionalLogic?.conditions).toEqual([
+      { field: "work", comparison: "isNotEmpty" },
+      { field: "email_2", comparison: "isNotEmpty" },
+    ]);
+  });
+
+  it("renames in a stored notification that predates the cc and bcc lists", () => {
+    const { cc: _cc, bcc: _bcc, ...older } = notification;
+    const [next] = renameInNotifications(
+      [older as FormNotification],
+      "email",
+      "work"
+    );
+    expect(next).toEqual({
+      ...older,
+      to: "{{work}}",
+      replyTo: "{{work}}",
+      condition: { field: "work", comparison: "isNotEmpty" },
+    });
   });
 });

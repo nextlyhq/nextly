@@ -94,6 +94,31 @@ describe("attaching the shared editor", () => {
     session.detach();
   });
 
+  it("reads a passage JSON carries unchanged, even one stored without every field", async () => {
+    // Stored as the core rich-text block's own example is: no direction, no
+    // indent, a text node with only its format. Lexical exports such a node
+    // with those fields `undefined`, which JSON drops — and a document op
+    // refuses a value JSON would not carry unchanged, so the author's edit
+    // was thrown away when they left the passage.
+    const editor = await loadInlineRichTextEditor();
+    const sparse = {
+      root: {
+        type: "root",
+        children: [
+          {
+            type: "paragraph",
+            children: [{ type: "text", text: "Hello", format: 0 }],
+          },
+        ],
+      },
+    };
+    const session = attached(editor, host(), sparse);
+
+    const read = session.read();
+    expect(read).toStrictEqual(JSON.parse(JSON.stringify(read)));
+    session.detach();
+  });
+
   it("reads back the passage it was given", async () => {
     // The round trip, which is what makes a commit meaningful: a session that
     // read nothing would write an empty passage over the author's words.

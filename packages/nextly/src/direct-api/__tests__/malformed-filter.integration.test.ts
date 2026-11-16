@@ -20,6 +20,10 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../plugins/test-nextly";
+import {
+  STORAGE_MODES,
+  type StorageMode,
+} from "../../plugins/__tests__/helpers/dialect-matrix";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -27,9 +31,13 @@ afterEach(async () => {
   current = undefined;
 });
 
-async function boot(dialect: TestDialect): Promise<TestNextly> {
+async function boot(
+  dialect: TestDialect,
+  storage: StorageMode
+): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    perLanguageStorage: storage.perLanguageStorage,
     collections: [
       defineCollection({
         slug: "people",
@@ -116,11 +124,20 @@ const MALFORMED: Array<[string, WhereFilter, string]> = [
   ],
 ];
 
-describe.each(getConfiguredTestDialects())(
-  "Direct API refuses a malformed filter (%s)",
-  dialect => {
+// Both storage layouts: where translatable values live must not change what this answers.
+describe.each(
+  STORAGE_MODES.flatMap(storage =>
+    getConfiguredTestDialects().map(dialect => ({
+      dialect,
+      storage,
+      mode: storage.name,
+    }))
+  )
+)(
+  "Direct API refuses a malformed filter ($dialect, $mode)",
+  ({ dialect, storage }) => {
     it("answers the well-formed filter with the one entry it names", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const all = await t.nextly.find({ collection: "notes" });
       expect(all.items).toHaveLength(3);
       const one = await t.nextly.find({
@@ -133,7 +150,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("refuses each malformed filter on find and on count", async () => {
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       for (const [name, where, code] of MALFORMED) {
         expect(
           await refusal(t.nextly.find({ collection: "notes", where })),
@@ -149,7 +166,7 @@ describe.each(getConfiguredTestDialects())(
     it("matches no entry for an empty or", async () => {
       // A computed `or: ids.map(...)` with no ids means "none of them". It
       // used to be dropped, which answered every entry.
-      const t = await boot(dialect);
+      const t = await boot(dialect, storage);
       const none = await t.nextly.find({
         collection: "notes",
         where: { or: [] },

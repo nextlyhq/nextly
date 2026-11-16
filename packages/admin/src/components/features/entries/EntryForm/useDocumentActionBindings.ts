@@ -15,17 +15,26 @@
  *
  * @module components/features/entries/EntryForm/useDocumentActionBindings
  */
-import { useRef, useState } from "react";
+import type { OverridableDocumentAction } from "nextly/config";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 
 import { useDocumentHistory } from "@admin/components/features/versions/document-history-context";
+import type { RestoreOutcome } from "@admin/hooks/useAutosaveRecovery";
 import { useCan } from "@admin/hooks/useCan";
 import { useLocalization } from "@admin/hooks/useLocalization";
 
-import { documentActions, type DocumentAction } from "./document-actions";
+import { documentActions, type EditorDocumentAction } from "./document-actions";
 import {
   acceptContributions,
   reasonFor,
   type ActionBinding,
+  type ActionRecovery,
   type ContributedAction,
 } from "./DocumentActionBar";
 import { effectiveEntryStatus } from "./entry-address";
@@ -48,6 +57,37 @@ type BuiltInActionId =
   | "discard-changes"
   | "unpublish"
   | "delete";
+
+/**
+ * How the editor applies a plugin's override of one built-in action.
+ *
+ * `open` is what choosing a replaced action runs; it resolves with what the
+ * replacement came to, so a caller that leaves the document once Delete is
+ * done does not leave one the author backed out of deleting.
+ */
+export type DocumentActionOverride =
+  | { kind: "hidden" }
+  /**
+   * Offered but not runnable: while the editor cannot yet tell whether a
+   * plugin hides or replaces the action, its built-in write must not run in
+   * the meantime. `reason` is told the action's own label, so what the row
+   * says names the row; `retry`, where given, is offered beside it.
+   */
+  | {
+      kind: "held";
+      reason: (label: string) => string;
+      retry?: ActionRecovery;
+    }
+  | {
+      kind: "replaced";
+      label?: string;
+      open: () => Promise<DocumentActionOutcome>;
+    };
+
+/** The overrides for one collection's document, by built-in action. */
+export type DocumentActionOverrides = Partial<
+  Record<OverridableDocumentAction, DocumentActionOverride>
+>;
 
 /** A handler whose work is stored, and which says how that went. */
 type StoringHandler = () => void | Promise<SubmitOutcome>;
@@ -116,6 +156,18 @@ export interface DocumentActionBindingsInput {
   /** Whether a colleague's claim withholds writing. */
   documentLocked?: boolean;
   /**
+   * Whether the user may change the document: create it, or update it. Without
+   * it the page offers nothing that writes its content, while publishing,
+   * unpublishing and deleting follow their own permissions.
+   */
+  canEdit?: boolean;
+  /**
+   * Whether the server refuses every write to the document whoever asks (its
+   * collection or Single was removed from code): only what reads is offered,
+   * and no contributed action is folded in.
+   */
+  writesRefused?: boolean;
+  /**
    * Document actions the PAGE owns, folded in with the built-in ones.
    *
    * Descriptions rather than rendered controls, so placement, ordering and
@@ -125,6 +177,21 @@ export interface DocumentActionBindingsInput {
    * distinguish from a feature that does not exist.
    */
   contributedActions?: readonly ContributedAction[];
+  /**
+   * What a plugin does with a built-in action on this collection's documents:
+   * hides it, or keeps its row and runs its own `open` in place of the
+   * built-in write. A replaced action is offered exactly where the built-in
+   * would be, with every reason it cannot run, so a permission, a colleague's
+   * lock or a past version on screen still holds it.
+   */
+  actionOverrides?: DocumentActionOverrides;
+  /**
+   * The form's current values, unsaved edits included, which a contributed
+   * action is told when it is chosen.
+   */
+  currentValues?: () => Record<string, unknown>;
+  /** Whether the form holds unsaved edits, told to a contributed action with its values. */
+  currentDirty?: () => boolean;
 
   /** Saves with no intent: the save of a collection with no status column. */
   onSubmit?: () => Promise<SubmitOutcome>;
@@ -157,6 +224,36 @@ export interface DocumentActionBindingsInput {
   onDuplicate?: () => void;
   /** Opens the API response view. */
   onViewApi?: () => void;
+  /**
+   * Changes from the author's last visit that were never saved, on offer in a
+   * view that shows the offer in its own save chip (the page builder).
+   *
+   * While one waits and the document is otherwise untouched, Save is offered
+   * rather than held for "nothing has changed", and it keeps those changes:
+   * it restores them, then saves. Absent everywhere else (the entry and
+   * Single pages make the offer in a banner), so Save there waits for an edit
+   * as it always has.
+   */
+  pendingRecovery?: PendingRecovery | null;
+}
+
+/**
+ * What came of keeping the changes on offer: the restore's own answer, or
+ * `edited` when the author changed the document while the point was being
+ * checked, so nothing was restored over that edit.
+ */
+export type KeepOutcome = RestoreOutcome | "edited";
+
+/** A recovery point on offer that Save can keep; see `pendingRecovery`. */
+export interface PendingRecovery {
+  /**
+   * Restores it into the document, answering what came of that. Asks
+   * `stillWanted` just before writing anything, and writes nothing (answering
+   * `edited`) when it says no.
+   */
+  restoreChecked: (stillWanted: () => boolean) => Promise<KeepOutcome>;
+  /** Stops offering it. */
+  dismiss: () => void;
 }
 
 /**
@@ -167,7 +264,18 @@ export interface DocumentActionBindingsInput {
  */
 export type DocumentActionOutcome =
   | { ok: true; item?: { id: string } }
-  | { ok: false; reason: SubmitRefusal | "cancelled"; message: string };
+  | {
+      ok: false;
+      reason: SubmitRefusal | "cancelled";
+      message: string;
+      /**
+       * Set where the store stopped before any write, readying the editor's
+       * work: no write failed, so nothing but this outcome says why.
+       */
+      beforeWrite?: true;
+      /** Set where the author has already been told, so nothing says it again. */
+      reported?: true;
+    };
 
 /** A confirmation an action asks before it runs. */
 export interface ActionConfirmation {
@@ -182,9 +290,9 @@ export interface ActionConfirmation {
 
 export interface DocumentActionBindings {
   /** Every action, in the order and placement the model gives it. */
-  actions: DocumentAction[];
+  actions: EditorDocumentAction[];
   /** The action that leads, when one does. */
-  primary: DocumentAction | undefined;
+  primary: EditorDocumentAction | undefined;
   /** What each action's control runs, and why it cannot at this instant. */
   bindings: Record<string, ActionBinding | undefined>;
   /**
@@ -218,11 +326,26 @@ export interface DocumentActionBindings {
    * has failed.
    */
   trackWrite: (label: string, write: Promise<unknown>) => void;
+  /** Whether a tracked write is still on its way. */
+  writesPending: boolean;
+  /**
+   * The Save the document's state calls for, run as its control runs it —
+   * every open edit committed and tracked write settled first — wherever that
+   * Save stores without publishing; absent where it would publish. For a
+   * refused publish's way out, which must never put anything live.
+   */
+  saveWithoutPublishing: (() => Promise<DocumentActionOutcome>) | undefined;
   /**
    * Whether the document's work is stored, as one value every surface reads,
    * so no two of them can say different things.
    */
   saveState: DocumentSaveState;
+  /**
+   * Whether Save keeps changes on offer from the last visit, rather than
+   * storing edits (see `pendingRecovery`): the save shortcut offers itself
+   * then, as the Save control does.
+   */
+  keepsOffer: boolean;
 }
 
 /**
@@ -256,8 +379,38 @@ export type DocumentSaveState =
       retry?: () => Promise<DocumentActionOutcome>;
     };
 
-/** Run before an action that stores the editor's work; given its id. */
-export type BeforeDocumentAction = (action: string) => void | Promise<void>;
+/**
+ * Run before an action that stores the editor's work; given its id, and how
+ * to wait for the writes the store depends on.
+ */
+export type BeforeDocumentAction = (
+  action: string,
+  store: StoreReadiness
+) => void | Promise<void>;
+
+/** What a before-action handler may ask of the store it runs before. */
+export interface StoreReadiness {
+  /**
+   * Waits for every write the document depends on but does not contain (see
+   * `useTrackedWrite`), and answers whether they all landed. A handler that
+   * acts on the server for the store, beyond committing work to the form,
+   * asks this first and acts only on `true`: on `false` the store is refused,
+   * and anything the handler did would stand without it.
+   */
+  writesSettled(): Promise<boolean>;
+  /**
+   * Gives the store a check to make once every handler has run and every
+   * tracked write has settled, immediately before it writes, with nothing
+   * awaited in between. A handler that judged the work (asked a question
+   * about it, say) checks there that the work is still what it judged: the
+   * handlers after it, and the writes the store waits for, give the author
+   * time to change it. A check answering `false` runs every handler again;
+   * work still changing after a few rounds is refused.
+   *
+   * @experimental
+   */
+  checkBeforeWrite(check: () => boolean): void;
+}
 
 const CANCELLED: DocumentActionOutcome = {
   ok: false,
@@ -381,7 +534,12 @@ export function useDocumentActionBindings({
   collectionSlug,
   locale,
   documentLocked = false,
+  canEdit = true,
+  writesRefused = false,
   contributedActions = [],
+  actionOverrides = {},
+  currentValues,
+  currentDirty,
   onSubmit,
   onSaveDraft,
   onPublish,
@@ -393,6 +551,7 @@ export function useDocumentActionBindings({
   onDelete,
   onDuplicate,
   onViewApi,
+  pendingRecovery,
 }: DocumentActionBindingsInput): DocumentActionBindings {
   const { defaultLocale } = useLocalization();
   // True while the document area is showing a past version rather than the
@@ -440,11 +599,13 @@ export function useDocumentActionBindings({
   const effectiveStatus = effectiveEntryStatus(entry, locale, defaultLocale);
   const isPublishedEditState =
     mode === "edit" && effectiveStatus === "published";
-  // A drafts-enabled published entry that has a pending working draft: the
-  // server flags the overlay read with `_isWorkingDraft`. This is Payload's
-  // "Changed" state — Publish promotes it and the status pill reflects it.
+  // A published entry that has a pending working draft: the server flags the
+  // overlay read with `_isWorkingDraft`, and overlays only a draft it holds.
+  // Read off the entry rather than the collection's `draftsEnabled`, since a
+  // collection that stopped holding drafts can still hold one saved before,
+  // which the editor must be able to see and discard (the server refuses to
+  // publish it, since it names no language).
   const hasWorkingDraft =
-    draftsEnabled &&
     (entry as { _isWorkingDraft?: boolean } | null | undefined)
       ?._isWorkingDraft === true;
   // The "Discard draft" revert is offered for a Changed document (a pending
@@ -466,42 +627,56 @@ export function useDocumentActionBindings({
    * which only the form knows, and about which handler a verb runs, which only
    * the host knows.
    */
-  const documentVerbs = documentActions({
+  const builtInVerbs = documentActions({
     mode,
     hasStatus,
     draftsEnabled: draftsEnabled === true,
     status: effectiveStatus === "published" ? "published" : "draft",
     hasWorkingDraft: hasWorkingDraft === true,
     readingHistory: isReadingHistory,
+    canEdit,
     canPublish: canPublishDocument,
     canUnpublish: canUnpublishDocument,
     canDelete: onDelete !== undefined,
     isDirty: isDirty === true,
     canDuplicate: onDuplicate !== undefined,
+    writesRefused,
   });
+  // A plugin's overrides, applied to what the model offers and to what each
+  // verb runs, so the row, its control and `run` agree about them.
+  const documentVerbs = withActionOverrides(builtInVerbs, actionOverrides);
 
-  const { reasons, refusalFor } = refusalReasons({
-    isSubmitting,
-    isInvalid,
+  const keep = useKeepOfferedChanges({
+    pendingRecovery,
     isDirty,
+    lastStore: gate.lastStore,
+    scope: storingScope(collectionSlug, entry, locale),
+  });
+  const moment = keep.moment(isSubmitting, isDirty);
+  const { reasons: momentReasons, refusalFor } = refusalReasons({
+    isSubmitting: moment.isSubmitting,
+    isInvalid,
+    isDirty: moment.isDirty,
     documentLocked,
     isPublishedEditState,
   });
+  const reasons = withHeldReasons(momentReasons, actionOverrides, builtInVerbs);
 
-  const performers = builtInPerformers({
+  // Saving means three different calls depending on where the work lands, a
+  // fact about this host rather than the document: a drafts-enabled published
+  // entry stores a working draft and leaves the live one alone, a
+  // drafts-disabled one re-asserts published, and anything else writes a
+  // draft. The model names ONE verb, `save`; its label says which.
+  const runSave = saveFor({
+    isPublishedEditState,
+    draftsEnabled,
+    onSaveDraft,
+    onSaveChanges,
+    onSaveWorkingDraft,
+  });
+  const builtIn = builtInPerformers({
     hasStatus,
-    // Saving means three different calls depending on where the work lands, a
-    // fact about this host rather than the document: a drafts-enabled
-    // published entry stores a working draft and leaves the live one alone, a
-    // drafts-disabled one re-asserts published, and anything else writes a
-    // draft. The model names ONE verb, `save`; its label says which.
-    runSave: saveFor({
-      isPublishedEditState,
-      draftsEnabled,
-      onSaveDraft,
-      onSaveChanges,
-      onSaveWorkingDraft,
-    }),
+    runSave,
     onSubmit,
     onPublish,
     storing,
@@ -515,12 +690,20 @@ export function useDocumentActionBindings({
     ),
     onDelete,
   });
+  const performers = overriddenPerformers(
+    keep.withKeepingSave(builtIn),
+    actionOverrides
+  );
 
-  const actionBindings = bindingsFor(performers, reasons, {
-    // A submit-typed control submits the form natively and never calls back;
-    // `run` calls the performer, which submits the same way.
-    submitForm: hasStatus ? undefined : formId,
-  });
+  const actionBindings = withHeldRecoveries(
+    bindingsFor(performers, reasons, {
+      // A submit-typed control submits the form natively and never calls
+      // back; `run` calls the performer, which submits the same way.
+      submitForm: hasStatus ? undefined : formId,
+    }),
+    actionOverrides,
+    builtInVerbs
+  );
 
   /*
    * One merge for both halves. Splitting them would let the bar draw a built-in
@@ -535,7 +718,16 @@ export function useDocumentActionBindings({
   const withContributions = acceptContributions(
     documentVerbs,
     actionBindings,
-    isReadingHistory ? [] : contributedActions
+    // A contribution acts on the document too (adding it to a release), which
+    // is not offered where every write to it is refused.
+    isReadingHistory || writesRefused
+      ? []
+      : heldUnderLock(
+          withoutHiddenIds(contributedActions, actionOverrides),
+          documentLocked
+        ),
+    currentValues,
+    currentDirty
   );
 
   const run = (id: string): Promise<DocumentActionOutcome> =>
@@ -545,11 +737,14 @@ export function useDocumentActionBindings({
       refusalFor,
     });
 
+  keep.track({ save: builtIn.save, run });
+
   const saveState = deriveSaveState({
-    isSubmitting,
+    isSubmitting: moment.isSubmitting,
     isDirty,
     gate,
     run,
+    keepRefusal: keep.refusal,
   });
 
   return {
@@ -566,9 +761,125 @@ export function useDocumentActionBindings({
     },
     registerBeforeAction: gate.registerBeforeAction,
     trackWrite: gate.trackWrite,
+    writesPending: gate.writesPending,
+    saveWithoutPublishing: storingWithoutPublishing(
+      hasStatus,
+      saveWithoutPublishing(runSave, onSaveChanges),
+      storing
+    ),
     saveState,
+    keepsOffer: keep.waiting,
     lastStoredAt: storedAt(gate.lastStore),
   };
+}
+
+/**
+ * The page's contributions, less any under the id of an action a plugin
+ * hides. A built-in wins an id collision, so such a contribution is dropped
+ * while the built-in stands; once hidden, the built-in no longer stands in
+ * the merge, and without this its id would pass to the contribution.
+ */
+function withoutHiddenIds(
+  contributed: readonly ContributedAction[],
+  overrides: DocumentActionOverrides
+): readonly ContributedAction[] {
+  return contributed.filter(
+    entry => overrideOf(overrides, entry.action.id)?.kind !== "hidden"
+  );
+}
+
+/**
+ * The model's actions with a plugin's overrides applied: a hidden action is
+ * not offered, and a replaced one keeps its place, its flags and every reason
+ * it cannot run, under the plugin's label where it gave one.
+ */
+function withActionOverrides(
+  actions: readonly EditorDocumentAction[],
+  overrides: DocumentActionOverrides
+): EditorDocumentAction[] {
+  return actions.flatMap(action => {
+    const override = overrideOf(overrides, action.id);
+    if (override === undefined || override.kind === "held") return [action];
+    if (override.kind === "hidden") return [];
+    return [
+      override.label === undefined
+        ? action
+        : { ...action, label: override.label },
+    ];
+  });
+}
+
+/** The override for an action id, when the id is one a plugin may override. */
+function overrideOf(
+  overrides: DocumentActionOverrides,
+  id: string
+): DocumentActionOverride | undefined {
+  return Object.hasOwn(overrides, id)
+    ? overrides[id as OverridableDocumentAction]
+    : undefined;
+}
+
+/**
+ * The moment's reasons, with a held action's own reason where nothing more
+ * decisive already holds it: a colleague's lock or a save in flight still
+ * speaks first.
+ */
+function withHeldReasons(
+  reasons: Partial<Record<BuiltInActionId, string | undefined>>,
+  overrides: DocumentActionOverrides,
+  actions: readonly EditorDocumentAction[]
+): Partial<Record<BuiltInActionId, string | undefined>> {
+  const result = { ...reasons };
+  for (const action of actions) {
+    const override = overrideOf(overrides, action.id);
+    if (override?.kind !== "held") continue;
+    const id = action.id as BuiltInActionId;
+    // Named by the row's own label, so the reason cannot name another verb.
+    result[id] = result[id] ?? override.reason(action.label);
+  }
+  return result;
+}
+
+/**
+ * Each held action's binding with its way out, where the hold offers one and
+ * is what holds it now: a lock or a save in flight is not one Retry ends.
+ */
+function withHeldRecoveries(
+  bindings: Record<string, ActionBinding | undefined>,
+  overrides: DocumentActionOverrides,
+  actions: readonly EditorDocumentAction[]
+): Record<string, ActionBinding | undefined> {
+  const result = { ...bindings };
+  for (const action of actions) {
+    const override = overrideOf(overrides, action.id);
+    const binding = result[action.id];
+    if (override?.kind !== "held" || override.retry === undefined) continue;
+    if (binding?.disabledReason !== override.reason(action.label)) continue;
+    result[action.id] = { ...binding, recovery: override.retry };
+  }
+  return result;
+}
+
+/**
+ * What each built-in action runs once a plugin's overrides apply. A hidden
+ * action runs nothing, so it is not offered and `run` refuses it as not
+ * offered; a replaced one runs the plugin's `open`, and only where the
+ * built-in would have run at all, so no permission is widened by it.
+ */
+function overriddenPerformers(
+  performers: Partial<
+    Record<BuiltInActionId, () => Promise<DocumentActionOutcome>>
+  >,
+  overrides: DocumentActionOverrides
+): Partial<Record<BuiltInActionId, () => Promise<DocumentActionOutcome>>> {
+  const result = { ...performers };
+  for (const id of Object.keys(result) as BuiltInActionId[]) {
+    const override = overrideOf(overrides, id);
+    if (override === undefined || override.kind === "held") continue;
+    if (override.kind === "hidden") delete result[id];
+    else result[id] = override.open;
+  }
+  return result;
 }
 
 /**
@@ -611,7 +922,7 @@ function runAction(
     refusalFor,
   }: {
     offered: {
-      actions: readonly DocumentAction[];
+      actions: readonly EditorDocumentAction[];
       bindings: Record<string, ActionBinding | undefined>;
     };
     builtIn: {
@@ -661,6 +972,30 @@ function saveFor(host: {
 }): StoringHandler | undefined {
   if (!host.isPublishedEditState) return host.onSaveDraft;
   return host.draftsEnabled ? host.onSaveWorkingDraft : host.onSaveChanges;
+}
+
+/**
+ * The Save the document's state calls for, unless that Save publishes: a
+ * drafts-disabled published document's Save re-asserts it live.
+ */
+function saveWithoutPublishing(
+  runSave: StoringHandler | undefined,
+  onSaveChanges: StoringHandler | undefined
+): StoringHandler | undefined {
+  return runSave === onSaveChanges ? undefined : runSave;
+}
+
+/**
+ * That Save as a storing action, where the document has a status to keep: a
+ * document without one has no Save that leaves it unpublished.
+ */
+function storingWithoutPublishing(
+  hasStatus: boolean,
+  save: StoringHandler | undefined,
+  storing: StoringGate["storing"]
+): (() => Promise<DocumentActionOutcome>) | undefined {
+  if (!hasStatus || save === undefined) return undefined;
+  return storing("save", () => stored(save));
 }
 
 /** `perform` when the action is offered here, otherwise nothing. */
@@ -807,9 +1142,7 @@ export function refusalReasons({
    * Reading verbs are deliberately left alone: discarding your own unsaved
    * changes, previewing and opening history are yours to do whoever holds the row.
    */
-  const lockedReason = documentLocked
-    ? "Someone else is editing this document"
-    : undefined;
+  const lockedReason = documentLocked ? LOCKED_REASON : undefined;
   const invalidReason = isInvalid
     ? "Fix the errors on this page first."
     : undefined;
@@ -839,19 +1172,63 @@ export function refusalReasons({
   };
 }
 
+/**
+ * Why a write is refused while the document is held elsewhere.
+ *
+ * Says where, not who: the holder may be a colleague, an API key, or this
+ * person in another tab, and the lock notice above the form names which.
+ */
+const LOCKED_REASON = "This document is being edited elsewhere";
+
+/**
+ * The page's contributions, with each way to publish held while a colleague
+ * holds the document, as Publish is: scheduling the document or adding it to
+ * a release publishes it later, which is a write the lock withholds. Other
+ * contributions (a reader's own pin) write nothing of the document's and stay
+ * usable. Held through the binding's transient reason, so a permission the
+ * page already refused with still speaks first.
+ */
+function heldUnderLock(
+  contributed: readonly ContributedAction[],
+  documentLocked: boolean
+): readonly ContributedAction[] {
+  if (!documentLocked) return contributed;
+  return contributed.map(entry =>
+    entry.action.placement === "publish-menu"
+      ? {
+          ...entry,
+          binding: {
+            ...entry.binding,
+            disabledReason: entry.binding.disabledReason ?? LOCKED_REASON,
+          },
+        }
+      : entry
+  );
+}
+
 /** The document's one save state, from the form and the storing gate. */
 function deriveSaveState({
   isSubmitting,
   isDirty,
   gate,
   run,
+  keepRefusal,
 }: {
   isSubmitting: boolean;
   isDirty: boolean;
   gate: StoringGate;
   run: (id: string) => Promise<DocumentActionOutcome>;
+  /** Why a Save could not keep the changes on offer; see `useKeepOfferedChanges`. */
+  keepRefusal: KeepRefusal | null;
 }): DocumentSaveState {
   if (isSubmitting || gate.inFlight) return { kind: "saving" };
+  if (keepRefusal !== null) {
+    return {
+      kind: "failed",
+      message: keepRefusal.message,
+      ...(keepRefusal.retry === undefined ? {} : { retry: keepRefusal.retry }),
+    };
+  }
   const { lastStore, trackedFailure } = gate;
   if (lastStore.kind === "failed") {
     return {
@@ -874,4 +1251,247 @@ function deriveSaveState({
     kind: "saved",
     at: lastStore.kind === "stored" ? lastStore.at : null,
   };
+}
+
+/** A built-in action's performer, as `builtInPerformers` returns each. */
+type Performer = () => Promise<DocumentActionOutcome>;
+
+/** The latest render's Save and `run`; see `useKeepOfferedChanges`. */
+interface KeepLatest {
+  save?: Performer | undefined;
+  run?: (id: string) => Promise<DocumentActionOutcome>;
+}
+
+/** Why a Save could not keep the changes on offer, and its Retry if any. */
+interface KeepRefusal {
+  message: string;
+  retry?: Performer;
+}
+
+/** What each refused restore says, in the save chip. */
+const KEEP_REFUSED: Record<Exclude<RestoreOutcome, "restored">, string> = {
+  changed:
+    "Your earlier changes weren't saved because this page changed after them.",
+  unchecked:
+    "Couldn't check your earlier changes, so nothing was saved. Try again.",
+};
+
+/**
+ * Save, while changes from the last visit are on offer and nothing else has
+ * changed: restore them, then save them.
+ *
+ * The restore asks first whether the point is still what was offered. Written
+ * since, or gone, nothing is saved, the offer closes and the chip says why;
+ * not checked (the read failed), nothing is saved, the offer stays and the
+ * chip offers Retry. Never a save of the document without them, which would
+ * report "Saved" over changes that are still only in the recovery point.
+ *
+ * Restored (the checked restore answers once the restore has reached the
+ * view), the save waits one more render, so the editor and the form hold the
+ * restored changes, then runs the latest render's Save directly: the render
+ * it was pressed in still holds the editor's state from before the restore,
+ * and its refusal reasons were decided when nothing had changed.
+ *
+ * Only while the document is otherwise untouched: an author who has edited
+ * since saves those edits, and is never put back to the recovery point by a
+ * Save. That holds while the point is checked too: an edit made meanwhile
+ * means nothing is restored, and Save stores that edit.
+ *
+ * A refusal says why the last Save stored nothing, so it lasts until that is
+ * no longer true: an edit, any store that lands, or another document or
+ * language. One offering Retry lasts only while its offer still waits.
+ */
+function useKeepOfferedChanges({
+  pendingRecovery,
+  isDirty,
+  lastStore,
+  scope,
+}: {
+  pendingRecovery: PendingRecovery | null | undefined;
+  isDirty: boolean;
+  lastStore: StoringGate["lastStore"];
+  /** The document and language stored, as `storingScope` names it. */
+  scope: string;
+}): {
+  /** Whether changes are on offer for Save to keep. */
+  waiting: boolean;
+  refusal: KeepRefusal | null;
+  /**
+   * The form's moment as the refusal reasons and the save state read it:
+   * submitting while a Save is keeping the changes (every write waits), and
+   * with something to save while changes are on offer, though none is in the
+   * form.
+   */
+  moment: (
+    isSubmitting: boolean,
+    isDirty: boolean
+  ) => { isSubmitting: boolean; isDirty: boolean };
+  /**
+   * Hands over this render's Save and `run`, for a Save that keeps the
+   * changes: it saves only once they have reached the document, by which
+   * time the render it was pressed in is gone.
+   */
+  track: (now: KeepLatest) => void;
+  /** The performers, with Save keeping the changes while they wait. */
+  withKeepingSave: (
+    performers: Partial<Record<BuiltInActionId, Performer>>
+  ) => Partial<Record<BuiltInActionId, Performer>>;
+} {
+  const offered = pendingRecovery ?? null;
+  const waiting = isDirty ? null : offered;
+  const [phase, setPhase] = useState<"idle" | "checking" | "landing">("idle");
+  const [refusal, setRefusal] = useState<KeepRefusal | null>(null);
+  const landed = useRef<(() => void) | null>(null);
+  const latest = useRef<KeepLatest>({});
+  // Set while a Save is keeping the changes, so a second call (a plugin's
+  // `run("save")` twice before a render) does not restore them twice.
+  const running = useRef(false);
+  // Whether the document has changed, as of the latest render: asked just
+  // before the restore writes anything.
+  const dirtyNow = useRef(isDirty);
+  // The document and language on screen now, so an answer that arrives after
+  // the author moved to another is not reported, or retried, there.
+  const scopeNow = useRef(scope);
+  useLayoutEffect(() => {
+    dirtyNow.current = isDirty;
+    scopeNow.current = scope;
+  });
+
+  // A render after the restore: everything it wrote has been rendered by now,
+  // since it was all asked for before this render was.
+  useEffect(() => {
+    if (phase !== "landing") return;
+    landed.current?.();
+    landed.current = null;
+  }, [phase]);
+
+  // An edit since makes the refusal old news: the chip reports the edit.
+  useEffect(() => {
+    if (isDirty) setRefusal(null);
+  }, [isDirty]);
+  // So does any store that lands, and another document or language.
+  useEffect(() => {
+    if (lastStore.kind === "stored") setRefusal(null);
+  }, [lastStore]);
+  useEffect(() => {
+    setRefusal(null);
+  }, [scope]);
+  // Retry tries the offer again, so it goes once nothing is on offer.
+  useEffect(() => {
+    if (offered === null) {
+      setRefusal(current => (current?.retry === undefined ? current : null));
+    }
+  }, [offered]);
+
+  // Rebuilt each render, as the performers it joins are.
+  const keepAndSave = async (): Promise<DocumentActionOutcome> => {
+    if (waiting === null) return unavailableSave();
+    if (running.current) {
+      return { ok: false, reason: "busy", message: "Saving…" };
+    }
+    running.current = true;
+    try {
+      return await keepThenSave(waiting);
+    } finally {
+      running.current = false;
+      setPhase("idle");
+    }
+  };
+
+  /*
+   * Nothing was restored. An edit made since (while the point was checked,
+   * or one the restore declined to write over) is what Save stores, as it
+   * would be had it come before the press; otherwise the chip says why
+   * nothing was saved. A point that changed is no longer offered either way.
+   */
+  const settleUnrestored = (
+    outcome: Exclude<KeepOutcome, "restored">,
+    offer: PendingRecovery
+  ): Promise<DocumentActionOutcome> => {
+    if (outcome === "changed") offer.dismiss();
+    if (outcome === "edited" || dirtyNow.current) {
+      return (latest.current.save ?? unavailableSave)();
+    }
+    const message = KEEP_REFUSED[outcome];
+    setRefusal(
+      outcome === "unchecked"
+        ? { message, retry: () => runLatest(latest, "save") }
+        : { message }
+    );
+    return Promise.resolve({
+      ok: false,
+      reason: "refused",
+      message,
+      reported: true,
+    });
+  };
+
+  const keepThenSave = async (
+    offer: PendingRecovery
+  ): Promise<DocumentActionOutcome> => {
+    setRefusal(null);
+    setPhase("checking");
+    const pressedIn = scopeNow.current;
+    const samePage = () => scopeNow.current === pressedIn;
+    // Written only to the page it was asked for, and over no newer edit.
+    const outcome = await offer
+      .restoreChecked(() => samePage() && !dirtyNow.current)
+      .catch((): KeepOutcome => "unchecked");
+    // Moved to another document or language meanwhile: whatever the answer,
+    // it is about the one left behind, so nothing is saved or said here.
+    if (!samePage()) return pageChanged();
+    if (outcome !== "restored") return settleUnrestored(outcome, offer);
+    await new Promise<void>(resolve => {
+      landed.current = resolve;
+      setPhase("landing");
+    });
+    // The page may have changed while the restore was drawn, too.
+    if (!samePage()) return pageChanged();
+    return (latest.current.save ?? unavailableSave)();
+  };
+
+  return {
+    waiting: waiting !== null,
+    refusal,
+    // Written as each render runs, as `run` itself is rebuilt with it: the
+    // value is read only after an await, never by the render that wrote it.
+    track: now => {
+      latest.current = now;
+    },
+    moment: (submitting, dirty) => ({
+      isSubmitting: submitting || phase !== "idle",
+      isDirty: dirty || waiting !== null,
+    }),
+    withKeepingSave: performers =>
+      waiting === null || performers.save === undefined
+        ? performers
+        : { ...performers, save: keepAndSave },
+  };
+}
+
+/** Runs an action through the latest render's `run`. */
+function runLatest(
+  latest: RefObject<KeepLatest>,
+  id: string
+): Promise<DocumentActionOutcome> {
+  return latest.current.run?.(id) ?? unavailableSave();
+}
+
+/** A keeping Save whose page changed before it could store anything. */
+function pageChanged(): Promise<DocumentActionOutcome> {
+  return Promise.resolve({
+    ok: false,
+    reason: "refused",
+    message: "Nothing was saved: the page on screen changed first.",
+    reported: true,
+  });
+}
+
+/** A Save that has nothing to run: refused, in words the author can act on. */
+function unavailableSave(): Promise<DocumentActionOutcome> {
+  return Promise.resolve({
+    ok: false,
+    reason: "refused",
+    message: "This page can't be saved here.",
+  });
 }

@@ -35,15 +35,23 @@
  */
 
 import { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import {
+  SERVERLESS_POOL_DEFAULTS,
+  isVercelFunction,
+  loadVercelPoolAttacher,
+} from "@nextlyhq/adapter-drizzle/serverless";
 // F17: connect-time DB version check shared across all adapters.
 import {
   createDatabaseError,
   isDatabaseError,
   type MySqlAdapterConfig,
+  type ConnectionInspection,
   type DatabaseCapabilities,
   type PoolStats,
   type TransactionContext,
   type TransactionOptions,
+  type SessionOptions,
+  type StatementSession,
   type SqlParam,
   type WhereClause,
   type WhereCondition,
@@ -61,7 +69,6 @@ import {
   type AdapterLogger,
   type PoolConfig,
   type SslConfig,
-  isApplicationError,
 } from "@nextlyhq/adapter-drizzle/types";
 import {
   acceptsForShare,
@@ -69,7 +76,12 @@ import {
 } from "@nextlyhq/adapter-drizzle/version-check";
 import { and, eq, getColumns } from "drizzle-orm";
 import type { AnyRelations, Column, SQL } from "drizzle-orm";
-import { getTableConfig, type MySqlTable } from "drizzle-orm/mysql-core";
+import {
+  getTableConfig,
+  mysqlTable,
+  timestamp,
+  type MySqlTable,
+} from "drizzle-orm/mysql-core";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import type {
   Pool as CallbackPool,
@@ -77,12 +89,24 @@ import type {
 } from "mysql2";
 import mysql from "mysql2/promise";
 import type {
+  ConnectionOptions,
   PoolOptions,
   RowDataPacket,
   ResultSetHeader,
 } from "mysql2/promise";
 
+import { sweepIdleConnections, type SweepablePool } from "./idle-sweep";
 import { boundPoolWait, type QueueingPool } from "./pool-wait";
+import { vercelPoolView } from "./vercel-pool";
+
+/**
+ * A date field's column as the schema generator declares it on MySQL:
+ * `timestamp`. Its encoder writes the UTC wall clock, which is what a `Date`
+ * bound to an undeclared key is spelled as, whatever zone mysql2 is given.
+ */
+const DATE_FIELD_COLUMN = mysqlTable("nextly_date_field", {
+  at: timestamp("at"),
+}).at;
 
 // mysql2 type definitions use mixin patterns that TypeScript struggles with.
 // We define explicit interfaces for the methods we need.
@@ -114,6 +138,14 @@ interface Pool extends Queryable {
     _freeConnections?: { length: number };
     _connectionQueue?: { length: number };
   };
+}
+
+/**
+ * A mysql2 connection of its own, outside the pool
+ */
+interface OwnConnection extends Queryable {
+  /** Closes the connection. */
+  destroy(): void;
 }
 
 /**
@@ -190,6 +222,41 @@ async function returnTransactionConnection(
   }
 }
 
+/**
+ * A newly opened pooled connection, as far as the time-zone pin needs one.
+ *
+ * The callback form of `query` is load-bearing twice: a pin that failed with
+ * nothing handling the error would end up an unhandled `error` event on the
+ * connection, and a failure swallowed without this `destroy` would leave an
+ * unpinned session in the pool to serve shifted values.
+ */
+interface PinnableConnection {
+  query(sql: string, callback: (error: Error | null) => void): void;
+  destroy(): void;
+}
+
+/**
+ * The part of mysql2's callback pool the time-zone pin uses. Declared here
+ * because mysql2's mixin typings drop the EventEmitter methods its pool has.
+ */
+interface PinnablePool {
+  on(
+    event: "connection",
+    listener: (connection: PinnableConnection) => void
+  ): unknown;
+}
+
+/**
+ * mysql2 accepts only `local`, `Z` and `±HH:MM` spellings for its driver
+ * zone, and the ones that resolve to UTC are exactly these. `local` resolves
+ * to the Node process's own zone, so it agrees with a UTC session only on a
+ * UTC host.
+ */
+function isUtcDriverZone(zone: string): boolean {
+  if (zone === "local") return new Date().getTimezoneOffset() === 0;
+  return zone === "Z" || zone === "+00:00" || zone === "-00:00";
+}
+
 // Re-export types for convenience
 export type {
   MySqlAdapterConfig,
@@ -222,16 +289,36 @@ export type {
 export const VERSION = "0.1.0";
 
 /**
- * Default pool configuration values.
+ * Default pool configuration values on a long-running server: the PostgreSQL
+ * adapter's for a standard server, so the same `pool` settings and
+ * `DB_POOL_*` variables mean the same pool on both. With `min` 0, every
+ * connection idle for 30 seconds is closed (`sweepIdleConnections`).
  */
 const DEFAULT_POOL_CONFIG = {
-  min: 2,
+  min: 0,
   max: 10,
   idleTimeoutMs: 30000,
   // How long a request waits for a connection, in the queue or opening one:
   // the same bound, and the same default, as the PostgreSQL adapter's.
   connectionTimeoutMs: 15000,
 };
+
+/**
+ * `@vercel/functions`' pool attaching, imported only on Vercel, at connect.
+ *
+ * An optional peer: an app outside Vercel never installs it, so the import is
+ * dynamic and its failure is a warning (`loadVercelPoolAttacher`), never a
+ * module that fails to load. The adapter is a server external package
+ * (`withNextly`'s `serverExternalPackages`), so Node resolves this at run time;
+ * the comments keep a bundler that bundles the adapter anyway from requiring
+ * the package at build time. The `db-connections` subpath loads the attaching
+ * alone, not the package's other helpers.
+ */
+function loadVercelDbConnections(): Promise<unknown> {
+  return import(
+    /* webpackIgnore: true */ /* turbopackIgnore: true */ "@vercel/functions/db-connections"
+  );
+}
 
 /**
  * MySQL error codes mapping to DatabaseErrorKind.
@@ -283,11 +370,21 @@ const MYSQL_ERROR_CODES: Record<number, DatabaseErrorKind> = {
   1054: "query", // ER_BAD_FIELD_ERROR
 };
 
+/** ER_LOCK_DEADLOCK: the transaction lost a race, and running it again may succeed. */
+const DEADLOCK = 1213;
+
 /**
- * Delay helper for retry logic.
+ * The MySQL error number an error carries: its own, or that of the driver
+ * error it wraps, as a classified or a Drizzle query error does.
  */
-function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+function errnoOf(error: unknown): number | undefined {
+  for (let at: unknown = error, hops = 0; hops < 4; hops++) {
+    if (typeof at !== "object" || at === null) return undefined;
+    const errno: unknown = Reflect.get(at, "errno");
+    if (typeof errno === "number") return errno;
+    at = Reflect.get(at, "cause");
+  }
+  return undefined;
 }
 
 /**
@@ -339,6 +436,12 @@ export class MySqlAdapter extends DrizzleAdapter {
    */
   private pool: Pool | null = null;
 
+  /** Stops closing the pool's idle connections; a no-op until a pool exists. */
+  private stopIdleSweep: () => void = () => {};
+
+  /** The `withSession` calls running, each on a connection of its own, for `disconnect` to wait for. */
+  private readonly sessions = new Set<Promise<unknown>>();
+
   /**
    * Connection state flag.
    */
@@ -349,6 +452,9 @@ export class MySqlAdapter extends DrizzleAdapter {
    * string at connect. Undefined until then, which callers treat as not known.
    */
   private sharedRowLock: boolean | undefined;
+  private functionalIndexes: boolean | undefined;
+  private enforcesCheckConstraints: boolean | undefined;
+  private serverVersion: string | undefined;
 
   /**
    * Creates a new MySQL adapter instance.
@@ -376,9 +482,51 @@ export class MySqlAdapter extends DrizzleAdapter {
       return;
     }
 
+    // On Vercel, what hands the pool built below to `attachDatabasePool`.
+    const attachPool = await loadVercelPoolAttacher({
+      load: loadVercelDbConnections,
+      dialect: "MySQL",
+      logger: this.config.logger,
+    });
+
     try {
+      // Warned once, here, rather than on every session configuration the
+      // standalone connections build: the configuration cannot change
+      // between calls.
+      this.warnOnDriverZoneDisagreement();
       const poolConfig = this.buildPoolConfig();
       const pool = mysql.createPool(poolConfig);
+      // mysql2's own idle closing is off (`buildPoolConfig`); this closes
+      // connections idle past the timeout and keeps `min` of them.
+      this.stopIdleSweep = sweepIdleConnections(
+        pool.pool as unknown as SweepablePool,
+        this.idleSweepOptions(poolConfig)
+      );
+      // Attached as soon as it exists, as Vercel's docs say, so the smoke
+      // test's own connection is one `@vercel/functions` waits on as well.
+      // Handed as the shape `attachDatabasePool` reads (`vercelPoolView`).
+      attachPool?.(
+        vercelPoolView(
+          pool.pool,
+          poolConfig.idleTimeout ?? DEFAULT_POOL_CONFIG.idleTimeoutMs
+        )
+      );
+      // Pin the session time zone the moment each pooled connection opens.
+      // Left unpinned, a session serves in whatever zone the server starts it
+      // in — `SYSTEM` on the containers, anything on a self-hosted server —
+      // and writes, window bounds and session-zone computations all follow
+      // it. mysql2 emits `connection` when a physical connection is
+      // established and BEFORE it reaches any caller, and each connection
+      // queues its commands in order, so this SET has always run by the time
+      // the first query handed the connection is sent; a replaced connection
+      // is pinned again by the same listener.
+      (pool.pool as unknown as PinnablePool).on("connection", connection => {
+        connection.query("SET SESSION time_zone = '+00:00'", error => {
+          // A session that could not be pinned must never be pooled: it
+          // would serve in whatever zone it answers in.
+          if (error) connection.destroy();
+        });
+      });
       // mysql2 queues a request for a connection without limit; it fails as
       // busy past the same bound a new connection gets to open.
       boundPoolWait(
@@ -397,7 +545,12 @@ export class MySqlAdapter extends DrizzleAdapter {
       const connection = await this.pool.getConnection();
       try {
         await connection.query("SELECT 1");
-        const { variant } = await checkDialectVersion(connection, "mysql", {
+        const {
+          variant,
+          functionalIndexes,
+          enforcesCheckConstraints,
+          serverVersion,
+        } = await checkDialectVersion(connection, "mysql", {
           // Why: route variant warnings through the adapter's logger so
           // users see a single, consistent log surface.
           onWarning: msg => this.config.logger?.warn?.(msg),
@@ -405,6 +558,14 @@ export class MySqlAdapter extends DrizzleAdapter {
         // MariaDB and TiDB connect through this adapter too, and reject
         // `FOR SHARE`; the capability tells callers which lock they can take.
         this.sharedRowLock = acceptsForShare(variant);
+        // Whether a unique index may key on an expression, which per-language uniqueness of a
+        // translated value does.
+        this.functionalIndexes = functionalIndexes;
+        // Whether a declared CHECK holds anything on this server, and the
+        // version string a refusal names: MySQL before 8.0.16 parses a CHECK
+        // and ignores it, and the variants are not spoken for.
+        this.enforcesCheckConstraints = enforcesCheckConstraints;
+        this.serverVersion = serverVersion;
         this.connected = true;
 
         if (this.config.logger?.info) {
@@ -418,6 +579,7 @@ export class MySqlAdapter extends DrizzleAdapter {
       }
     } catch (error) {
       // Clean up on failure
+      this.stopIdleSweep();
       if (this.pool) {
         await this.pool.end().catch(() => {});
         this.pool = null;
@@ -432,7 +594,8 @@ export class MySqlAdapter extends DrizzleAdapter {
    *
    * @remarks
    * This method is idempotent - calling it multiple times is safe.
-   * It waits for all connections to be released before shutting down.
+   * It waits for all connections to be released before shutting down,
+   * including each running `withSession`'s connection of its own.
    */
   async disconnect(): Promise<void> {
     // Detach the pool FIRST, then drop the memoized drizzle instances —
@@ -441,6 +604,9 @@ export class MySqlAdapter extends DrizzleAdapter {
     // the closing pool.
     const pool = this.pool;
     this.pool = null;
+    // The pool's end closes every connection; the sweep must not close one
+    // under it.
+    this.stopIdleSweep();
     this.drizzleBare = undefined;
     this.drizzleByRelations = new WeakMap();
     if (!pool) {
@@ -448,6 +614,8 @@ export class MySqlAdapter extends DrizzleAdapter {
     }
 
     try {
+      // With the pool detached no session starts; those running end first.
+      await Promise.allSettled([...this.sessions]);
       await pool.end();
 
       if (this.config.logger?.info) {
@@ -512,6 +680,66 @@ export class MySqlAdapter extends DrizzleAdapter {
   }
 
   /**
+   * The connection as a health check reads it, on one pooled connection: the
+   * server's version, timed for the round trip, then that session's
+   * `Ssl_cipher` status, which names the cipher when the session's connection
+   * is encrypted and is empty when it is not.
+   *
+   * @remarks
+   * The status and the connection's own socket are weighed by
+   * `encryptionOf`: behind a proxy the status can describe the proxy's own
+   * connection to the server, while this connection's socket is TLS. The
+   * socket is read as it is, never inferred from the `ssl` setting.
+   *
+   * Whether the database is on this machine is judged from the configured
+   * address, which never leaves this method. Any failure answers `"unknown"`.
+   */
+  override async inspectConnection(): Promise<ConnectionInspection> {
+    const local = this.isLocalHost(this.connectionHost());
+    let connection: PoolConnection | undefined;
+    try {
+      connection = await this.ensurePool().getConnection();
+      const started = performance.now();
+      const [versionRows] = await connection.query<RowDataPacket[]>(
+        "SELECT VERSION() AS version"
+      );
+      const roundTripMs = Math.max(0, Math.round(performance.now() - started));
+      const [statusRows] = await connection.query<RowDataPacket[]>(
+        "SHOW SESSION STATUS LIKE 'Ssl_cipher'"
+      );
+      const cipher: unknown = statusRows[0]?.Value;
+      const version: unknown = versionRows[0]?.version;
+      return {
+        encryption: this.encryptionOf({
+          session: typeof cipher === "string" ? cipher !== "" : undefined,
+          ownSocketTls: this.ownSocketIsTls(connection),
+        }),
+        local,
+        roundTripMs,
+        ...(typeof version === "string" && version !== ""
+          ? { serverVersion: version.split("-")[0] }
+          : {}),
+      };
+    } catch {
+      return { encryption: "unknown", local };
+    } finally {
+      connection?.release();
+    }
+  }
+
+  /**
+   * The host this adapter connects to, as mysql2 resolves it: the connection
+   * string's when one is set, else the `host` option, else `localhost`.
+   * `undefined` when the connection string cannot be read.
+   */
+  private connectionHost(): string | undefined {
+    const configured = this.config.url
+      ? this.hostOfUrl(this.config.url)
+      : (this.config.host ?? "");
+    return configured === "" ? "localhost" : configured;
+  }
+
+  /**
    * Execute a raw SQL query.
    *
    * @param sql - SQL query string with ? placeholders
@@ -560,103 +788,194 @@ export class MySqlAdapter extends DrizzleAdapter {
    *
    * Note: Savepoints are disabled in this adapter for safety due to
    * MySQL's quirks with nested transactions.
+   *
+   * A call made inside another transaction's work therefore joins it flat,
+   * on its connection: its statements are the outer's. Its failure cannot be
+   * undone alone, so it fails the whole transaction, even when the outer
+   * catches it: the outer's COMMIT is refused, it rolls back, and it rejects
+   * with the error that failed the joined call; any later joined call fails
+   * with that error at once. A joined call keeps the outer's options and is
+   * never retried itself. `retryWhen` is asked first, of every error that
+   * ends an attempt, application ones included.
    */
-  async transaction<T>(
+  transaction<T>(
     work: (tx: TransactionContext) => Promise<T>,
     options?: TransactionOptions
   ): Promise<T> {
-    // The calling flow's open transaction from BEGIN until COMMIT or ROLLBACK
-    // has run, for `transactionOpenInFlow`.
-    return this.runInFlowTransaction(() =>
-      this.runTransactionAttempts(work, options)
-    );
+    return this.openOrJoin(work, options, {
+      run: (_attempt, openedAt) => this.runAttempt(work, options, openedAt),
+      retryable: error => errnoOf(error) === DEADLOCK,
+      describe: error => {
+        const errno = errnoOf(error);
+        return {
+          label: errno === DEADLOCK ? "deadlock" : "a retryable error",
+          detail: { errno },
+        };
+      },
+      logger: this.config.logger,
+    });
   }
 
-  /** The attempts `transaction` makes, each on a connection of its own. */
-  private async runTransactionAttempts<T>(
-    work: (tx: TransactionContext) => Promise<T>,
-    options?: TransactionOptions
+  /**
+   * Runs `work` on a connection of its own, opened for it with the pool's
+   * connection settings, outside a transaction, each statement committing as
+   * it runs.
+   *
+   * @remarks
+   * Not a pooled connection: on a server whose sessions start with autocommit
+   * off, one can hold a transaction an earlier caller left open, and turning
+   * autocommit on would commit that caller's writes. A new connection holds
+   * nothing. It does not count against `pool.max`.
+   *
+   * Each statement commits as it runs, whatever the server's own autocommit
+   * default. With `strictSqlMode` the session runs in strict mode, as a
+   * transaction given the same option does, so a statement that would cut a
+   * value short fails and changes nothing. The connection is closed
+   * afterwards, whether `work` finished or threw, so whatever `work` set on
+   * its session (a temporary table, a session variable, a lock) ends with it.
+   */
+  override async withSession<T>(
+    work: (session: StatementSession) => Promise<T>,
+    options?: SessionOptions
   ): Promise<T> {
-    const pool = this.ensurePool();
-    const maxAttempts = (options?.retryCount ?? 0) + 1;
-    const retryDelayMs = options?.retryDelayMs ?? 100;
-
-    let lastError: unknown;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const connection = await this.connectFlowTransaction(() =>
-        pool.getConnection()
-      );
-      const startTime = Date.now();
-      // Set when the ROLLBACK failed (`returnTransactionConnection`).
-      let rollbackFailed = false;
-      // What `beginTransaction` changed on the session, to put back once the
-      // transaction has ended. Filled in as each change lands, so a setup
-      // that fails part way still puts back what it had already changed.
-      const restore: NonNullable<SessionRestore> = {};
-
-      try {
-        // Begin transaction with options
-        await this.beginTransaction(connection, options, restore);
-
-        // Create transaction context
-        const ctx = this.createTransactionContext(connection);
-
-        // Execute callback
-        const result = await work(ctx);
-
-        // Commit transaction
-        await connection.query("COMMIT");
-
-        // Log success
-        if (this.config.logger?.debug) {
-          const durationMs = Date.now() - startTime;
-          this.config.logger.debug("Transaction committed", {
-            attempt,
-            durationMs,
-          });
-        }
-
-        return result;
-      } catch (error) {
-        // Rollback transaction
-        await connection.query("ROLLBACK").catch(() => {
-          rollbackFailed = true;
-        });
-
-        lastError = error;
-
-        // Work inside a transaction may throw to roll the write back — a
-        // refused value, a denied permission — and that is the application's
-        // verdict, not the driver's failure. Rethrown before the retry check as
-        // well as before classification: a refusal re-run is the same refusal,
-        // and the caller must receive the code and payload it raised rather
-        // than a generic database error with the detail stripped out.
-        if (isApplicationError(error)) throw error;
-
-        // Check if error is retryable (deadlock only per approved approach)
-        const mysqlError = error as { errno?: number; code?: string };
-        const isRetryable = mysqlError.errno === 1213; // ER_LOCK_DEADLOCK
-
-        if (isRetryable && attempt < maxAttempts) {
-          if (this.config.logger?.warn) {
-            this.config.logger.warn(
-              `Transaction failed with deadlock, retrying (${attempt}/${maxAttempts})`,
-              { errno: mysqlError.errno, attempt }
-            );
-          }
-          await delay(retryDelayMs * attempt); // Exponential backoff
-          continue;
-        }
-
-        throw this.classifyError(error);
-      } finally {
-        await returnTransactionConnection(connection, rollbackFailed, restore);
-      }
+    // A precondition: before any connection is opened.
+    this.refuseSessionInTransaction();
+    // Connected first, as every other call requires.
+    this.ensurePool();
+    // Tracked before its connection opens: `disconnect` waits for it.
+    const running = this.runSession(work, options);
+    this.sessions.add(running);
+    try {
+      return await running;
+    } finally {
+      this.sessions.delete(running);
     }
+  }
 
-    // Should not reach here, but handle just in case
-    throw this.classifyError(lastError);
+  /** `withSession`'s work, on a connection it opens and closes. */
+  private async runSession<T>(
+    work: (session: StatementSession) => Promise<T>,
+    options?: SessionOptions
+  ): Promise<T> {
+    let connection: OwnConnection;
+    try {
+      // mysql2's connection already satisfies `OwnConnection`, so it is assigned as it comes.
+      connection = await mysql.createConnection(this.buildConnectionConfig());
+    } catch (error) {
+      throw this.classifyError(error);
+    }
+    try {
+      try {
+        // A server whose sessions start with autocommit off would otherwise
+        // hold every statement in a transaction nobody commits.
+        await connection.query("SET SESSION autocommit = 1");
+        // The connection opened outside the pool, so the pool's `connection`
+        // listener never pins it; its driver already parses in UTC, and a
+        // session still in the server's zone would shift every value a
+        // round-trip fails to cancel. The work below never runs unpinned.
+        await connection.query("SET SESSION time_zone = '+00:00'");
+        if (options?.strictSqlMode) {
+          // Nothing to put back: the connection is closed afterwards.
+          await this.enterStrictMode(connection, {});
+        }
+      } catch (error) {
+        throw this.classifyError(error);
+      }
+      return await work({
+        execute: async <R = unknown>(
+          statement: string,
+          params: SqlParam[] = []
+        ): Promise<R[]> => {
+          const startTime = Date.now();
+          try {
+            const [rows] = await connection.query<RowDataPacket[]>(
+              statement,
+              params as unknown[]
+            );
+            if (this.config.logger?.query) {
+              this.config.logger.query(
+                statement,
+                params,
+                Date.now() - startTime
+              );
+            }
+            return rows as R[];
+          } catch (error) {
+            throw this.classifyError(error, statement);
+          }
+        },
+      });
+    } finally {
+      connection.destroy();
+    }
+  }
+
+  /** One attempt at an outermost transaction, on a connection of its own. */
+  private async runAttempt<T>(
+    work: (tx: TransactionContext) => Promise<T>,
+    options: TransactionOptions | undefined,
+    openedAt: string | undefined
+  ) {
+    const pool = this.ensurePool();
+    // A checkout, taken from the pool like `executeQuery`'s queries are.
+    this.notePoolAccess();
+    const connection = await pool.getConnection();
+    // Set when the ROLLBACK failed (`returnTransactionConnection`).
+    let rollbackFailed = false;
+    // What `beginTransaction` changed on the session, to put back once the
+    // transaction has ended. Filled in as each change lands, so a setup that
+    // fails part way still puts back what it had already changed.
+    const restore: NonNullable<SessionRestore> = {};
+    const settled = await this.settleOutermost(
+      {
+        context: this.createTransactionContext(connection),
+        join: this.joinSteps(connection),
+        openedAt,
+        begin: () => this.beginTransaction(connection, options, restore),
+        commit: async () => {
+          await connection.query("COMMIT");
+        },
+        // A failure is recorded for the return and rethrown, so the base
+        // knows the ROLLBACK is unconfirmed.
+        rollback: async () => {
+          await connection.query("ROLLBACK").catch((rollbackError: unknown) => {
+            rollbackFailed = true;
+            throw rollbackError;
+          });
+        },
+      },
+      work,
+      options
+    );
+    // Returned before anything held runs, so an effect that opens a
+    // transaction takes one connection, not two.
+    await returnTransactionConnection(connection, rollbackFailed, restore);
+    return settled;
+  }
+
+  /**
+   * How a call made inside a transaction on `connection` joins it: flat, on
+   * the same connection, with nothing to send. Any failure inside it fails
+   * the whole transaction, since no savepoint can undo the part alone.
+   */
+  private joinSteps(connection: PoolConnection) {
+    const callbackConnection = (
+      connection as unknown as { connection: CallbackConnection }
+    ).connection;
+    return this.joinStepsOn(
+      () => this.createTransactionContext(connection),
+      relations =>
+        relations
+          ? drizzle({ client: callbackConnection, relations })
+          : drizzle({ client: callbackConnection }),
+      context => ({
+        context,
+        begin() {},
+        commit() {},
+        rollback() {},
+        dooms: () => true,
+      })
+    );
   }
 
   /**
@@ -685,6 +1004,9 @@ export class MySqlAdapter extends DrizzleAdapter {
       maxParamsPerQuery: 65535, // MySQL limit
       maxIdentifierLength: 64, // MySQL limit
       sharedRowLock: this.sharedRowLock, // Known once connected
+      functionalIndexes: this.functionalIndexes, // Known once connected
+      enforcesCheckConstraints: this.enforcesCheckConstraints, // Known once connected
+      serverVersion: this.serverVersion, // Known once connected
     };
   }
 
@@ -785,11 +1107,13 @@ export class MySqlAdapter extends DrizzleAdapter {
       (pool as unknown as { pool: CallbackPool }).pool,
       ["query", "execute", "getConnection"]
     );
-    return this.trackFlowTransactions(
-      this.pinDrizzleTransactions(onClient(callbackPool), async () => {
-        const connection = await this.connectFlowTransaction(() =>
-          pool.getConnection()
-        );
+    // Its transactions join the one the calling flow is inside, as the
+    // adapter's `transaction()` does, and open one of this adapter's
+    // otherwise (`joiningHandle`).
+    return this.joiningHandle(
+      onClient(callbackPool),
+      async () => {
+        const connection = await pool.getConnection();
         return {
           drizzle: onClient(
             (connection as unknown as { connection: CallbackConnection })
@@ -800,8 +1124,33 @@ export class MySqlAdapter extends DrizzleAdapter {
             if (dirty) connection.destroy();
             else connection.release();
           },
+          join: this.joinSteps(connection),
         };
-      })
+      },
+      relations
+    );
+  }
+
+  /**
+   * Warns when a caller's configured driver zone does not agree with the
+   * pinned UTC session.
+   *
+   * mysql2's driver-level `timezone` decides how it parses the date strings
+   * the pinned session answers with and how it binds raw Date parameters, so
+   * a non-UTC spelling there would shift values a round-trip fails to
+   * cancel. The configuration is aligned to the pin (`buildConnectionConfig`
+   * sets UTC unconditionally, for pooled and standalone connections alike),
+   * never rewritten silently: the caller configured a reading, and this is
+   * where that reading is named as lost. Runs from `connect`, once per pool
+   * build — the configuration cannot change between calls.
+   */
+  private warnOnDriverZoneDisagreement(): void {
+    // mysql2's own default is `local`, so an unset configuration is judged
+    // the same way: it agrees only on a UTC host.
+    const requestedZone = this.config.timezone ?? "local";
+    if (isUtcDriverZone(requestedZone)) return;
+    this.config.logger?.warn?.(
+      `Driver timezone "${requestedZone}" is not UTC; it is aligned to the pinned UTC session and no longer shifts reads or writes.`
     );
   }
 
@@ -809,50 +1158,76 @@ export class MySqlAdapter extends DrizzleAdapter {
    * Builds mysql2 Pool configuration from adapter config.
    */
   private buildPoolConfig(): PoolOptions {
-    const config: PoolOptions = {};
+    const config: PoolOptions = this.buildConnectionConfig();
 
-    // Connection string or explicit options
-    if (this.config.url) {
-      config.uri = this.config.url;
-    } else {
-      if (this.config.host) config.host = this.config.host;
-      if (this.config.port) config.port = this.config.port;
-      if (this.config.database) config.database = this.config.database;
-      if (this.config.user) config.user = this.config.user;
-      if (this.config.password) config.password = this.config.password;
-    }
-
-    // Pool settings - mysql2 uses different property names
-    config.connectionLimit = this.config.pool?.max ?? DEFAULT_POOL_CONFIG.max;
+    // Pool settings - mysql2 uses different property names.
+    const defaults = this.poolDefaults();
+    config.connectionLimit = this.config.pool?.max ?? defaults.max;
     config.idleTimeout =
-      this.config.pool?.idleTimeoutMs ?? DEFAULT_POOL_CONFIG.idleTimeoutMs;
-    config.connectTimeout =
-      this.config.pool?.connectionTimeoutMs ??
-      DEFAULT_POOL_CONFIG.connectionTimeoutMs;
+      this.config.pool?.idleTimeoutMs ?? defaults.idleTimeoutMs;
+    // mysql2 never closes an idle connection by itself with `maxIdle` equal
+    // to the limit: below it, it closes every connection idle past
+    // `idleTimeout` and keeps no minimum. The adapter closes them instead,
+    // past `idleTimeout` and down to `min` (`sweepIdleConnections`), and
+    // `idleTimeout` stays set so the pool's config reads as it behaves.
+    config.maxIdle = config.connectionLimit;
 
     // A request waits for a connection when the pool is full. The queue has
     // no length limit; each wait in it is bounded instead (`boundPoolWait`).
     config.waitForConnections = true;
     config.queueLimit = 0;
 
+    return config;
+  }
+
+  /**
+   * The pool defaults where this runs. Inside Vercel functions they are the
+   * serverless ones, a small pool whose idle connections close quickly, since
+   * a suspended instance keeps whatever it holds open; each setting the
+   * config gives still wins on its own.
+   */
+  private poolDefaults(): { min: number; max: number; idleTimeoutMs: number } {
+    return isVercelFunction() ? SERVERLESS_POOL_DEFAULTS : DEFAULT_POOL_CONFIG;
+  }
+
+  /** Which idle connections the pool built from `poolConfig` closes, and when. */
+  private idleSweepOptions(poolConfig: PoolOptions): {
+    min: number;
+    idleTimeoutMs: number;
+  } {
+    return {
+      min: this.config.pool?.min ?? this.poolDefaults().min,
+      idleTimeoutMs:
+        poolConfig.idleTimeout ?? DEFAULT_POOL_CONFIG.idleTimeoutMs,
+    };
+  }
+
+  /**
+   * Builds the settings every connection opens with, pooled or not, from
+   * adapter config.
+   */
+  private buildConnectionConfig(): ConnectionOptions {
+    const config: ConnectionOptions = this.buildAddressConfig();
+
+    config.connectTimeout =
+      this.config.pool?.connectionTimeoutMs ??
+      DEFAULT_POOL_CONFIG.connectionTimeoutMs;
+
     // SSL configuration
     if (this.config.ssl) {
-      if (typeof this.config.ssl === "boolean") {
-        config.ssl = this.config.ssl ? {} : undefined;
-      } else {
-        config.ssl = {
-          rejectUnauthorized: this.config.ssl.rejectUnauthorized,
-          ca: this.config.ssl.ca,
-          cert: this.config.ssl.cert,
-          key: this.config.ssl.key,
-        };
-      }
+      config.ssl = this.buildSslConfig(this.config.ssl);
     }
 
-    // MySQL-specific options
-    if (this.config.timezone) {
-      config.timezone = this.config.timezone;
-    }
+    // MySQL-specific options. Every connection this adapter opens serves a
+    // UTC session (see the pins in `connect` and `runSession`), so the
+    // driver zone is pinned with them: mysql2 parses the date strings a
+    // pinned session answers with and binds raw Date parameters, and a
+    // driver in one zone beside a session in another shifts values every
+    // time a round-trip fails to cancel. A configured zone that is not UTC
+    // is aligned rather than refused — the pin is the deliberate boundary —
+    // and `connect` warns the caller, once, that the shift they configured
+    // is gone.
+    config.timezone = "Z";
 
     if (this.config.charset) {
       config.charset = this.config.charset;
@@ -865,6 +1240,33 @@ export class MySqlAdapter extends DrizzleAdapter {
     config.dateStrings = false; // Return Date objects
 
     return config;
+  }
+
+  /** Where to connect: the connection string, or the explicit options. */
+  private buildAddressConfig(): ConnectionOptions {
+    if (this.config.url) return { uri: this.config.url };
+    const { host, port, database, user, password } = this.config;
+    const config: ConnectionOptions = { host, port, database, user, password };
+    // An option left unset is left out, for mysql2's own default.
+    for (const key of Object.keys(config) as (keyof ConnectionOptions)[]) {
+      if (!config[key]) delete config[key];
+    }
+    return config;
+  }
+
+  /** mysql2's `ssl` option for the adapter's `ssl` setting. */
+  private buildSslConfig(
+    ssl: NonNullable<MySqlAdapterConfig["ssl"]>
+  ): ConnectionOptions["ssl"] {
+    if (typeof ssl === "boolean") {
+      return ssl ? {} : undefined;
+    }
+    return {
+      rejectUnauthorized: ssl.rejectUnauthorized,
+      ca: ssl.ca,
+      cert: ssl.cert,
+      key: ssl.key,
+    };
   }
 
   /**
@@ -915,20 +1317,32 @@ export class MySqlAdapter extends DrizzleAdapter {
       changed.lockWaitTimeout = Number.isInteger(previous) ? previous : null;
     }
 
-    // Strict mode for this transaction: an INSERT, UPDATE or ALTER that would
-    // cut a string to its column's length, or clamp a number to its range,
-    // fails instead of applying with a warning. Added to the session's own
-    // mode, so every other flag it had still holds, and put back afterwards.
     if (options?.strictSqlMode) {
-      const [rows] = await connection.query<RowDataPacket[]>(
-        "SELECT @@SESSION.sql_mode AS mode"
-      );
-      const previous: unknown = rows[0]?.mode;
-      await connection.query(
-        "SET SESSION sql_mode = TRIM(BOTH ',' FROM CONCAT(@@SESSION.sql_mode, ',STRICT_ALL_TABLES'))"
-      );
-      changed.sqlMode = typeof previous === "string" ? previous : null;
+      await this.enterStrictMode(connection, changed);
     }
+  }
+
+  /**
+   * Strict mode for the rest of this connection's session: an INSERT, UPDATE
+   * or ALTER that would cut a string to its column's length, or clamp a
+   * number to its range, fails instead of applying with a warning. Added to
+   * the session's own mode, so every other flag it had still holds, and
+   * recorded in `changed` for `restoreSession` to put back.
+   */
+  private async enterStrictMode(
+    connection: Queryable,
+    changed: NonNullable<SessionRestore>
+  ): Promise<void> {
+    const [rows] = await connection.query<RowDataPacket[]>(
+      "SELECT @@SESSION.sql_mode AS mode"
+    );
+    const previous: unknown = rows[0]?.mode;
+    // Recorded before the SET: one the server applied but whose reply was
+    // lost still has its mode put back.
+    changed.sqlMode = typeof previous === "string" ? previous : null;
+    await connection.query(
+      "SET SESSION sql_mode = TRIM(BOTH ',' FROM CONCAT(@@SESSION.sql_mode, ',STRICT_ALL_TABLES'))"
+    );
   }
 
   /**
@@ -1214,6 +1628,13 @@ export class MySqlAdapter extends DrizzleAdapter {
     );
   }
 
+  /** A `Date` on an undeclared key is spelled as a date field's column spells it. */
+  protected override undeclaredDateColumn(): {
+    mapToDriverValue(value: unknown): unknown;
+  } {
+    return DATE_FIELD_COLUMN;
+  }
+
   /** A table-level `primaryKey({ columns })`, read through the MySQL table config. */
   protected override compositePrimaryKey(
     tableObj: Record<string, unknown>
@@ -1297,7 +1718,10 @@ export class MySqlAdapter extends DrizzleAdapter {
         data: Record<string, unknown>,
         options?: InsertOptions
       ): Promise<T> => {
-        const mapped = this.mapRowToRawSql(this.getTableObject(table), data);
+        // Refused before any statement, as the pooled insert is: a table this
+        // instance never registered may not match what its code would write.
+        const insertTableObj = this.resolvedTableObject(table);
+        const mapped = this.mapRowToRawSql(insertTableObj, data);
         const columns = Object.keys(mapped);
         const values = Object.values(mapped);
         const placeholders = this.buildPlaceholders(values.length, 0);
@@ -1314,7 +1738,6 @@ export class MySqlAdapter extends DrizzleAdapter {
 
         // MySQL has no RETURNING; select the inserted row back. Project only the
         // requested columns so a large JSON snapshot is not read unless asked.
-        const insertTableObj = this.getTableObject(table);
         // Each timestamp's wall clock, spelled out by the database. mysql2
         // turns one into a `Date` in the LOCAL zone before this code sees it,
         // and that conversion cannot be undone: a wall clock inside a
@@ -1366,7 +1789,8 @@ export class MySqlAdapter extends DrizzleAdapter {
         const retMany = options?.returning;
         const skipReread = Array.isArray(retMany) && retMany.length === 0;
 
-        const tableObj = this.getTableObject(table);
+        // Refused before any statement, as `insert` above is.
+        const tableObj = this.resolvedTableObject(table);
         const mappedRecords = data.map(r => this.mapRowToRawSql(tableObj, r));
         const columns = Object.keys(mappedRecords[0]);
         const allValues: unknown[] = [];
@@ -1417,8 +1841,10 @@ export class MySqlAdapter extends DrizzleAdapter {
       },
 
       // Adapter-built, as `insert` above is; `transactionUpdate` says why.
-      // A column the model does not declare binds natively, as every value
-      // on this path's insert does.
+      // A column the model does not declare binds natively, except a `Date`,
+      // spelled as a date field's column spells it (as this path's insert
+      // spells one), and a structured value, sent as JSON
+      // (`bindUnmodeledStructuredAsJson`).
       update: this.transactionUpdate(
         txDb,
         async statement => {

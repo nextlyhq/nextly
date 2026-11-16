@@ -39,6 +39,10 @@ import {
   forgetI18nTransition,
   readI18nTransitionState,
 } from "../../../domains/i18n/migration/transition-state";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../../domains/i18n/per-language-storage";
 import { MetaService } from "../../../domains/meta/services/meta-service";
 import { createLogger } from "../../utils/logger";
 import {
@@ -322,6 +326,86 @@ describe("db:sync creates localized companion tables in-process (integration)", 
       `SELECT "_parent", "title" FROM "dc_dbsync_seeded_locales" WHERE "_locale" = 'en'`
     );
     expect(rows).toEqual([{ _parent: "row1", title: "Written before" }]);
+  });
+
+  // A site that declares no languages turning `experimental.perLanguageStorage` on stores its
+  // values under one language from then on, so `db:sync` lays its content out per language under
+  // that language rather than refusing for want of one.
+  it("copies a site's content under its implicit language when it starts keeping every translatable field per language", async () => {
+    const config = defineConfig({
+      collections: [
+        defineCollection({
+          slug: "dbsync_implicit",
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    await runSync(config);
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_implicit" ("id", "slug", "title") VALUES ('row1', 'r1', 'Written before')`
+    );
+
+    setPerLanguageStorage(true);
+    try {
+      await runSync(config);
+
+      const rows = await adapter?.executeQuery<{
+        _parent: string;
+        title: string;
+      }>(
+        `SELECT "_parent", "title" FROM "dc_dbsync_implicit_locales" WHERE "_locale" = 'en'`
+      );
+      expect(rows).toEqual([{ _parent: "row1", title: "Written before" }]);
+    } finally {
+      _resetPerLanguageStorage();
+    }
+  });
+
+  // Only a column whose values move to the per-language table is dropped without consent. A field
+  // removed from the config in the same switch has nowhere its values go, so its drop still needs
+  // the consent nobody can give here, and nothing is changed.
+  it("still asks consent to drop a removed field's column when the site starts keeping every translatable field per language", async () => {
+    await runSync(
+      defineConfig({
+        collections: [
+          defineCollection({
+            slug: "dbsync_removed",
+            fields: [text({ name: "title" }), text({ name: "summary" })],
+          }),
+        ],
+      })
+    );
+    await adapter?.executeQuery(
+      `INSERT INTO "dc_dbsync_removed" ("id", "slug", "title", "summary") VALUES ('row1', 'r1', 'Kept', 'Removed')`
+    );
+
+    setPerLanguageStorage(true);
+    try {
+      const refused = await runSync(
+        defineConfig({
+          collections: [
+            defineCollection({
+              slug: "dbsync_removed",
+              fields: [text({ name: "title" })],
+            }),
+          ],
+        })
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      const message = String(refused);
+      expect(message).toMatch(/dc_dbsync_removed\.summary/);
+      // The column that moves is not among what it would delete.
+      expect(message).not.toMatch(/dc_dbsync_removed\.title/);
+      const main = await adapter?.executeQuery<{ summary: string }>(
+        `SELECT "summary" FROM "dc_dbsync_removed" WHERE "id" = 'row1'`
+      );
+      expect(main).toEqual([{ summary: "Removed" }]);
+    } finally {
+      _resetPerLanguageStorage();
+    }
   });
 
   it("leaves the main table's columns in place when it seeds", async () => {

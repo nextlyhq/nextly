@@ -23,20 +23,21 @@ import {
   isPlainObject,
   TRANSLATED_KEY,
 } from "../../domains/collections/query/filter-shape";
-import {
-  extractFieldGroupReferences,
-  isFieldGroupFieldType,
-} from "../../domains/field-groups/storage/field-group-field-type";
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
+import { appLocalization } from "../../domains/i18n/configured-locales";
 import {
   EVERY_LOCALE,
   EVERY_TRANSLATION,
 } from "../../domains/i18n/locale-selector";
+import { reachesLocalizedFieldGroupIn } from "../../domains/i18n/per-language-fields";
+import { contentDiffersByLanguage } from "../../domains/i18n/per-language-storage";
 import {
   resolveLocaleChain,
   resolveRequestedLocale,
 } from "../../domains/i18n/resolve-locale";
 import type { AccessRuleTarget } from "../../shared/types/access";
+
+import { ruleLanguageKeyOf } from "./rule-language-key";
 
 /** The languages an operation involves, and the one judged where it is one. */
 export interface RuleLanguage {
@@ -134,6 +135,22 @@ export function writeAsNamedLanguagesFor(
   return writeLanguagesFor(cfg, requested);
 }
 
+/**
+ * The languages a write by query involves: every configured language, since
+ * its filter may choose its rows by any language's translation state, with
+ * the default judged, the language it writes. A rule refusing that language
+ * refuses it; one refusing another does not.
+ */
+export function queryWriteLanguagesFor(
+  cfg: SanitizedLocalizationConfig | undefined
+): RuleLanguage {
+  if (!cfg) return NO_LANGUAGE;
+  return {
+    locale: oneLanguage(cfg, undefined).locale,
+    locales: everyLanguageOf(cfg).locales,
+  };
+}
+
 /** What a collection, Single or field group declares about its languages. */
 interface DeclaredContent {
   slug: string;
@@ -162,11 +179,19 @@ function registeredContent(): RegisteredContent | undefined {
 }
 
 /**
- * The site's languages, from the configuration the services were registered
- * with, or none before any are registered.
+ * The site's languages as they are now (`appLocalization`): the language
+ * registry's list once services are registered, so a site whose languages are
+ * stored in Settings rather than declared in its configuration tells its rules
+ * every one of them, and the configuration's block before then. None before
+ * anything is registered.
  */
 function registeredLocalization(): SanitizedLocalizationConfig | undefined {
-  return registeredContent()?.localization;
+  try {
+    return appLocalization();
+  } catch {
+    // The container is not initialized; the site has no languages yet.
+    return undefined;
+  }
 }
 
 /**
@@ -186,7 +211,9 @@ function storedByLanguage(target: AccessRuleTarget): boolean | undefined {
   }[target.kind];
   const declared = declaredIn?.find(entity => entity.slug === target.slug);
   if (declared === undefined) return undefined;
-  if (declared.localized === true) return true;
+  // Translated, or under `experimental.perLanguageStorage` with a translatable value to keep per
+  // language: one whose every field is shared is the same in every language.
+  if (contentDiffersByLanguage(declared)) return true;
   return (
     target.kind !== "component" &&
     hasLocalizedFieldGroup(declared, content?.fieldGroups ?? [])
@@ -194,24 +221,21 @@ function storedByLanguage(target: AccessRuleTarget): boolean | undefined {
 }
 
 /**
- * Whether `declared` has a field group that is localized, at its top level
- * only, as the read populates them. A localized one missed here is judged as
+ * Whether `declared` reaches a field group that is localized, at any depth,
+ * through the declared field groups. A localized one missed here is judged as
  * content the same in every language, which is told every language.
  */
 function hasLocalizedFieldGroup(
   declared: DeclaredContent,
   fieldGroups: readonly DeclaredContent[]
 ): boolean {
-  const localizedGroups = new Set(
-    fieldGroups.filter(group => group.localized === true).map(g => g.slug)
+  const bySlug = new Map(fieldGroups.map(group => [group.slug, group]));
+  return (
+    reachesLocalizedFieldGroupIn(
+      declared.fields ?? [],
+      slug => bySlug.get(slug) ?? null
+    ) === true
   );
-  return (declared.fields ?? []).some(field => {
-    if (!isFieldGroupFieldType(field.type)) return false;
-    const { single, many } = extractFieldGroupReferences(field);
-    return [single, ...(many ?? [])].some(
-      group => group !== undefined && localizedGroups.has(group)
-    );
-  });
 }
 
 /**
@@ -257,6 +281,11 @@ export function registeredWriteAsNamedLanguagesFor(
   return writeAsNamedLanguagesFor(registeredLocalization(), requested);
 }
 
+/** {@link queryWriteLanguagesFor}, on the site's registered configuration. */
+export function registeredQueryWriteLanguages(): RuleLanguage {
+  return queryWriteLanguagesFor(registeredLocalization());
+}
+
 /** Every language `cfg` configures, with none judged alone. */
 export function everyLanguageOf(
   cfg: SanitizedLocalizationConfig | undefined
@@ -280,9 +309,63 @@ export function withRuleLanguage<T>(
 }
 
 /**
+ * Asks `ask` once for each of `languages`, each time with its rules told that
+ * one language and every one of them, as an operation that takes several
+ * languages at once (publishing every language) is judged: a rule answering
+ * by language answers for each. Every language is asked, so a refusal names
+ * them all.
+ *
+ * The first refusal, with every language refused, or `undefined` where none
+ * refused. With no language named, `ask` is asked once, in the languages the
+ * operation already set.
+ */
+export async function askEachLanguage<R>(
+  languages: readonly string[],
+  ask: () => Promise<R | null | undefined>
+): Promise<{ refusal: R; refused: string[] } | undefined> {
+  if (languages.length === 0) {
+    const refusal = await ask();
+    return refusal == null ? undefined : { refusal, refused: [] };
+  }
+  let first: R | undefined;
+  const refused: string[] = [];
+  for (const locale of languages) {
+    const refusal = await withRuleLanguage(
+      { locale, locales: [...languages] },
+      ask
+    );
+    if (refusal != null) {
+      first ??= refusal;
+      refused.push(locale);
+    }
+  }
+  return first === undefined ? undefined : { refusal: first, refused };
+}
+
+/**
  * The languages the current operation involves: those it set, or every
  * configured language where it set none.
  */
 export function currentRuleLanguage(): RuleLanguage {
   return ruleLanguage.getStore() ?? everyLanguage();
+}
+
+/**
+ * The languages rules are told now, as one key: the language judged and every
+ * one involved. Two questions with the same key tell a rule the same language.
+ */
+export function ruleLanguageKey(): string {
+  return ruleLanguageKeyOf(currentRuleLanguage());
+}
+
+/**
+ * Asks `ask` about a read as a plain read is asked, in the default language
+ * and its fallbacks: whether the caller can see an entry at all. A gate that
+ * refused another action on one entry asks this to choose between telling the
+ * caller what it may not do and answering the entry as missing.
+ */
+export function askReadAsPlainRead<T>(ask: (action: "read") => T): T {
+  return withRuleLanguage(registeredReadLanguagesFor(undefined), () =>
+    ask("read")
+  );
 }

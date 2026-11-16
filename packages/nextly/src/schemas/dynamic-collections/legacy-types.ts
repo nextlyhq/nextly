@@ -45,6 +45,7 @@ export type DynamicFieldType =
   | "email"
   | "password"
   | "code"
+  | "icon"
   | "number"
   | "checkbox"
   | "date"

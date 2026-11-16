@@ -3,7 +3,7 @@
 import { describe, it, expect, vi } from "vitest";
 
 import type { Operation } from "../../diff/types";
-import { RealClassifier } from "../classifier";
+import { nonEmptyValuesOf, RealClassifier } from "../classifier";
 
 const noopWarnings: string[] = [];
 
@@ -114,6 +114,51 @@ describe("RealClassifier — NOT NULL detection (F5)", () => {
         "abort",
       ]);
     }
+  });
+
+  // One value for every row it fills repeats in a unique column, or collides with a value one
+  // already holds, so "fill with one value" is never offered for one; the rest stay.
+  it("offers no single fill value for a unique column, made or added required", async () => {
+    const c = new RealClassifier();
+    const result = await c.classify({
+      operations: [
+        {
+          type: "change_column_nullable",
+          tableName: "dc_users",
+          columnName: "handle",
+          fromNullable: true,
+          toNullable: false,
+        },
+        {
+          type: "add_column",
+          tableName: "dc_users",
+          column: { name: "code", type: "text", nullable: false },
+        },
+        {
+          type: "add_column",
+          tableName: "dc_users",
+          column: { name: "phone", type: "text", nullable: false },
+        },
+      ],
+      drizzleWarnings: noopWarnings,
+      hasDataLoss: false,
+      countNulls: vi.fn().mockResolvedValue(1),
+      countRows: vi.fn().mockResolvedValue(5),
+      isUnique: (table, column) =>
+        table === "dc_users" && (column === "handle" || column === "code"),
+      dialect: "postgresql",
+    });
+    const offered = Object.fromEntries(
+      result.events.map(e => [
+        e.columnName,
+        "applicableResolutions" in e ? e.applicableResolutions : [],
+      ])
+    );
+    expect(offered).toEqual({
+      handle: ["make_optional", "delete_nonconforming", "abort"],
+      code: ["make_optional", "abort"],
+      phone: ["provide_default", "make_optional", "abort"],
+    });
   });
 
   it("does NOT emit add_required_field_no_default when table is empty", async () => {
@@ -399,6 +444,51 @@ describe("RealClassifier — destructive_drop detection", () => {
       expect(event.tableRowCount).toBe(12);
       expect(event.applicableResolutions).toEqual(["confirm_drop", "abort"]);
     }
+  });
+
+  it("counts the dropped column's non-empty values, which its listing shows", async () => {
+    const countNulls = vi.fn().mockResolvedValue(4);
+    const result = await new RealClassifier().classify({
+      operations: [
+        {
+          type: "drop_column",
+          tableName: "dc_posts",
+          columnName: "excerpt",
+          columnType: "text",
+        },
+      ],
+      drizzleWarnings: noopWarnings,
+      hasDataLoss: false,
+      countNulls,
+      countRows: vi.fn().mockResolvedValue(12),
+      dialect: "postgresql",
+    });
+    expect(countNulls).toHaveBeenCalledWith("dc_posts", "excerpt");
+    expect(nonEmptyValuesOf(result.events[0])).toBe(8);
+  });
+
+  it("still emits the drop when its values cannot be counted, without a count", async () => {
+    const result = await new RealClassifier().classify({
+      operations: [
+        {
+          type: "drop_column",
+          tableName: "dc_posts",
+          columnName: "old-summary",
+          columnType: "text",
+        },
+      ],
+      drizzleWarnings: noopWarnings,
+      hasDataLoss: false,
+      countNulls: vi.fn().mockRejectedValue(new Error("unsafe identifier")),
+      countRows: vi.fn().mockResolvedValue(12),
+      dialect: "postgresql",
+    });
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]).toMatchObject({
+      kind: "destructive_drop",
+      columnName: "old-summary",
+    });
+    expect(nonEmptyValuesOf(result.events[0])).toBeUndefined();
   });
 
   it("emits one destructive_drop per drop_column op across mixed batches", async () => {

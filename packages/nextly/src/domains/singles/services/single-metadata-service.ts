@@ -46,7 +46,11 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { FieldConfig } from "@nextly/collections";
+
+import { assertTopLevelFieldsNamed } from "../../../api/fields-payload";
 import { NextlyError } from "../../../errors";
+import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
   DynamicSingleInsert,
@@ -54,19 +58,63 @@ import type {
   SingleMigrationStatus,
 } from "../../../schemas/dynamic-singles/types";
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
+import { assertAddressAllowed } from "../../../shared/address-rule";
+import { addressableFields } from "../../../shared/addressable-fields";
 import type { Logger } from "../../../shared/types";
+import { collectionTablesBySlug } from "../../dynamic-collections/services/collection-tables";
 import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
-import { appLocalization } from "../../i18n/configured-locales";
-import { archiveFieldsLeavingTranslation } from "../../i18n/migration/archive-preflight";
+import {
+  appLanguageOrder,
+  appLocalization,
+} from "../../i18n/configured-locales";
+import {
+  archiveFieldsLeavingTranslation,
+  fieldsLeavingTranslationUnder,
+  refuseTranslationMovesLosingDefinition,
+} from "../../i18n/migration/archive-preflight";
+import {
+  leavingFieldConstraints,
+  withoutLeavingConstraints,
+} from "../../i18n/migration/field-leaves-translation-rules";
+import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+  translationLayoutChange,
+  type TranslationLayoutChange,
+} from "../../i18n/per-language-storage";
+import { assertLanguageStatesAgreeWithEntry } from "../../i18n/runtime/language-states-agree";
+import type {
+  BuilderSaveSetup,
+  CollectionSaveDeps,
+} from "../../schema/builder-save/collection-save";
+import { entitySaveDeps } from "../../schema/builder-save/entity-save-deps";
+import { entityRelations } from "../../schema/builder-save/single-relations";
+import { singleEntity } from "../../schema/builder-save/stored-entity";
+import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
+import { writeRegistryRowsWith } from "../../schema/schema-version";
 import {
   applyMigrationStatements,
   applyMigrationWhole,
+  applyStatementsInTries,
+  type BusyTableWait,
 } from "../../schema/services/apply-migration-statements";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
+import { calculateSchemaHash } from "../../schema/services/schema-hash";
+import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
 import { singleTableFamiliesCollide } from "./resolve-single-table-name";
 import type { SingleRegistryService } from "./single-registry-service";
+
+/**
+ * The Builder save writer, loaded where a save runs: it brings the migration
+ * generator and runner, which a read, or a save with no writer set up, never
+ * needs.
+ */
+const loadEntitySave = () => import("../../schema/builder-save/entity-save");
+const loadCollectionSave = () =>
+  import("../../schema/builder-save/collection-save");
 
 /**
  * 🔴 The schema generators, the runtime-schema builder and the companion reconcile are loaded on
@@ -176,12 +224,51 @@ export interface UpdateSingleSchemaInput {
    * would turn the repair into a no-op.
    */
   statusRequested: boolean;
+  /**
+   * Where the Single's translatable values live and how each language publishes, before and after
+   * this save (`translationLayoutChange`), derived inside the exclusion. Absent in the caller's
+   * input. With it, `isLocalized`/`wasLocalized` above say where the values are stored.
+   */
+  layout?: TranslationLayoutChange;
 }
 
 /** The updated row, and the status the caller reports back to the user. */
 export interface UpdateSingleSchemaResult {
   record: DynamicSingleRecord;
   migrationStatus: SingleMigrationStatus;
+  /**
+   * The Required and Unique settings of fields leaving translation that the database refused, so
+   * the fields were recorded without them; empty when they were applied or none was asked for.
+   */
+  refusedSettings: { field: string; setting: "required" | "unique" }[];
+}
+
+/** One Required or Unique setting of a field leaving translation, and the SQL that undoes it. */
+interface LeavingSettingStep {
+  field: string;
+  setting: "required" | "unique";
+  forward: string;
+  inverse: string;
+  /**
+   * On SQLite, the nullability `forward` can't express: column → true for NOT NULL. Applied by
+   * rebuilding the table after `forward` runs.
+   */
+  sqliteNullability: ReadonlyMap<string, boolean>;
+}
+
+/**
+ * `fields` without the settings `refused` names, each field keeping any other: the list a Single's
+ * save records when the database refused those settings, as the table then holds the fields.
+ */
+function withoutRefusedSettings<F extends { name: string }>(
+  fields: readonly F[],
+  refused: readonly Pick<LeavingSettingStep, "field" | "setting">[]
+): F[] {
+  return fields.map(f =>
+    refused
+      .filter(r => r.field === f.name)
+      .reduce<F>((field, r) => ({ ...field, [r.setting]: false }), f)
+  );
 }
 
 /**
@@ -195,10 +282,22 @@ export interface UpdateSingleSchemaResult {
 interface UpdateDdlPlan {
   /** Statements to run. Empty for a save that changes only flags. */
   migrationSQL: string;
+  /**
+   * On SQLite, the nullability changes `migrationSQL` can't express (column → true for NOT NULL),
+   * applied by rebuilding the table once its statements have run, in the same transaction.
+   */
+  sqliteNullability?: ReadonlyMap<string, boolean>;
   /** The field list the table holds once this plan has run. */
   fields: FieldDefinition[];
   /** The field list the table holds now. The companion reconcile diffs against it. */
   previousFields: FieldDefinition[];
+  /**
+   * The Required and Unique settings of fields leaving translation, one step per setting, run
+   * after the companion reconcile has copied their default language's values in. `migrationSQL`
+   * creates their shared columns without the settings, since every entry would otherwise hold NULL
+   * or one placeholder before the copy. Empty when no such field leaves.
+   */
+  leavingSettings: LeavingSettingStep[];
   /**
    * Whether the statements describe the WHOLE table rather than a change to it.
    *
@@ -263,11 +362,15 @@ function mayIssueSchemaDdl(input: UpdateSingleSchemaInput): boolean {
 }
 
 function requestsSchemaWork(input: UpdateSingleSchemaInput): boolean {
-  const { fields, isLocalized, wasLocalized, statusRequested } = input;
+  const { fields, isLocalized, wasLocalized, statusRequested, layout } = input;
   if (fields !== undefined) return true;
   return (
     isLocalized !== wasLocalized ||
-    (statusRequested && (isLocalized || wasLocalized))
+    (statusRequested && (isLocalized || wasLocalized)) ||
+    // A translation toggle under the setting stores nothing elsewhere, but changes how each
+    // language publishes.
+    (layout !== undefined &&
+      layout.isPublishedPerLanguage !== layout.wasPublishedPerLanguage)
   );
 }
 
@@ -297,6 +400,23 @@ export class SingleMetadataService {
     private readonly adapter?: DrizzleAdapter
   ) {}
 
+  /** Where a Builder save writes its migration, when the app has one set up. */
+  private builderSave?: BuilderSaveSetup;
+
+  /**
+   * Have every save here write its migration and snapshot through the
+   * Builder save writer (`writeCollectionSave`), as a collection's does.
+   * Set by the service registration.
+   */
+  setBuilderSave(setup: BuilderSaveSetup): void {
+    this.builderSave = setup;
+  }
+
+  /** The writer's dependencies for a save here, when a writer is set up. */
+  private saveDeps(): CollectionSaveDeps | undefined {
+    return entitySaveDeps(this.builderSave, this.adapter, this.logger);
+  }
+
   /**
    * The dialect the DDL is generated for.
    *
@@ -315,6 +435,9 @@ export class SingleMetadataService {
    * table name. Rejecting after this point would leave a `pending` row behind.
    */
   async createSingle(input: CreateSingleInput): Promise<CreateSingleResult> {
+    // Only named fields at the top level, as a collection's API takes them: the request alone
+    // decides it, so it is refused before the lock (`assertTopLevelFieldsNamed`).
+    assertTopLevelFieldsNamed(input.fields ?? []);
     // 🔴 The exclusion wraps ALL THREE phases, not just the apply. A storage migration renaming
     // tables between the plan and the row write would leave this create describing storage that
     // moved underneath it, and the row is as much a part of the schema as the table is.
@@ -341,11 +464,30 @@ export class SingleMetadataService {
     // the process restarts, even though the registry insert afterwards correctly rejects the
     // duplicate. The insert is what makes the row safe; it is not what makes the process safe.
     await this.assertCreateStillPossible(input);
+    // A new Single holds no pair of sibling fields yet, so every pair it is created with is new.
+    assertNoNewSiblingClashes(
+      { kind: "single", slug: input.slug },
+      input.fields ?? [],
+      null
+    );
 
     // 1. PLAN, before anything is persisted or executed. The generator is a validator as well as a
     // renderer, so a request it refuses leaves nothing behind at all — no row, no table — and the
     // corrected retry is a fresh create rather than a collision with its own wreckage.
     const plan = await this.planCreate(input);
+    // A translated field marked unique needs an index this server may not be able to key. Refused
+    // here, before the main table: the companion is provisioned after it, and a failure there is
+    // recorded rather than raised. With no adapter, nothing is applied at all.
+    if (this.adapter) {
+      refuseUnindexableTranslatedUnique(this.adapter, {
+        entity: input.slug,
+        builtBy: "collection",
+        oldFields: [],
+        newFields: plan.fields,
+        wasLocalized: false,
+        isLocalized: plan.isLocalized,
+      });
+    }
 
     // 2. CLEAR THE GROUND. A table already standing where this create is about to build is never
     // adopted: empty, it is dropped so the apply renders every column from THIS request's fields;
@@ -353,8 +495,16 @@ export class SingleMetadataService {
     // been persisted and no statement has run.
     await this.resetOrphanStorage(input);
 
-    // 3. APPLY. Never throws; a failure is reported as a status so the row can still record it.
-    const migrationStatus = await this.applyCreateDdl(input, plan);
+    // 3. APPLY. Through the Builder save writer where one is set up: it writes the Single's
+    // migration and snapshot, as a collection's save does, and in development runs them, so the
+    // table is on record for every migration after it. Without one, the DDL runs here as before.
+    // The direct apply never throws (a failure is a status the row records); the writer refuses
+    // a save it could not write, leaving neither file nor table.
+    const deps = this.saveDeps();
+    const migrationStatus =
+      deps === undefined
+        ? await this.applyCreateDdl(input, plan)
+        : await this.writeCreate(deps, input, plan);
 
     // 4. RECORD, with the outcome already known.
     //
@@ -364,10 +514,22 @@ export class SingleMetadataService {
     // row owns the slug and refuses every retry, which is a worse state than the orphan it
     // prevents. That recovery half is the migration lock this relocation exists to unblock, and the
     // ordering changes with it rather than before it.
-    const record = await this.registry.registerSingle({
-      ...input,
-      migrationStatus,
-    });
+    // The row and the stored schema version in one transaction, so the
+    // version's count moves with the save it records (`writeRegistryRows`);
+    // the permissions are seeded once it has committed.
+    // A migration the writer ran writes the Single's row as `nextly migrate` does, so it stands
+    // already and takes the rest of the record.
+    const rowWritten =
+      deps?.applies === true &&
+      (await this.registry.getSingleForWrite(input.slug)) !== null;
+    const record = rowWritten
+      ? await writeRegistryRowsWith(this.adapter, () =>
+          this.registry.updateSingle(input.slug, { ...input, migrationStatus })
+        )
+      : await this.registry.registerSingle(
+          { ...input, migrationStatus },
+          { writeRow: write => writeRegistryRowsWith(this.adapter, write) }
+        );
 
     return { record, migrationStatus };
   }
@@ -405,55 +567,36 @@ export class SingleMetadataService {
   private async resetOrphanStorage(input: CreateSingleInput): Promise<void> {
     const adapter = this.adapter;
     if (!adapter) return;
-    if (!(await adapter.tableExists(input.tableName))) return;
-
-    const { readReferencingTables, tableHasRows } = await import(
-      "../../schema/pipeline/live-table-facts"
+    // The one rule every kind's create follows (`clearLeftoverStorage`): every table of the family
+    // probed first, a family holding rows refused naming each table and its row count, an empty one
+    // dropped. A Single's family also holds its field-group data, which `dropSingleStorage` takes
+    // with its main and translations tables.
+    const { clearLeftoverStorage } = await import(
+      "../../schema/services/leftover-storage"
     );
-    const db = adapter.getDrizzle();
-    const dialect = adapter.getCapabilities().dialect;
-
-    // The wreckage is a FAMILY plus its junctions, not one table. A relationship field's junction
-    // tables carry a foreign key to the main table, so a main table cannot simply be dropped while
-    // they stand: MySQL refuses the drop outright, and PostgreSQL's CASCADE strips the junction's
-    // constraint and leaves the junction itself to be adopted by the re-render — the same silent
-    // adoption this method exists to prevent. They are read from the live catalog because the
-    // abandoned attempt's field list is gone with its registry row. The `_locales` companion also
-    // references the main table and is excluded here: `dropSingleStorage` below owns its teardown.
-    const companion = `${input.tableName}_locales`;
-    const referencing = (
-      await readReferencingTables(db, dialect, input.tableName)
-    ).filter(name => name !== companion);
-
-    // Every table about to be dropped is probed BEFORE anything is dropped, so a refusal leaves
-    // the whole group exactly as it stood.
-    for (const name of [input.tableName, ...referencing]) {
-      if (await tableHasRows(db, dialect, name)) {
-        throw NextlyError.conflict({
-          reason: "state",
-          message: `Table "${name}" already exists and holds rows, but no Single describes it. Drop or rename that table, then retry the create.`,
-          logContext: {
-            reason: "single-create-table-occupied",
-            slug: input.slug,
-            tableName: input.tableName,
-            occupiedTable: name,
-          },
-        });
-      }
-    }
-
-    this.logger.info(
-      `[Singles] Dropping empty unregistered table "${input.tableName}" before creating "${input.slug}"`
+    const { junctionTablesOf } = await import(
+      "../../schema/services/field-column-descriptor"
     );
-    // Referencing tables first: they hold the foreign keys, and a parent cannot be dropped while a
-    // reference to it stands on MySQL.
-    for (const name of referencing) {
-      await adapter.dropTable(name, {
-        ifExists: true,
-        cascade: dialect === "postgresql",
-      });
-    }
-    await this.dropSingleStorage(input.slug, input.tableName, adapter);
+    const { countEntityComponentRows } = await import(
+      "../../field-groups/services/teardown-entity-field-group-data"
+    );
+    await clearLeftoverStorage({
+      adapter,
+      kind: "single",
+      slug: input.slug,
+      tableName: input.tableName,
+      // A Single's many-to-many fields keep their links in junction tables of its own, by the names
+      // this request's fields give them.
+      makesJunctionTables: true,
+      plannedJunctions: junctionTablesOf(input.tableName, input.fields ?? []),
+      // Its field-group rows live in the shared field-group tables, naming its table as their
+      // parent, and `dropSingleStorage` deletes them: they count as the leftover's content.
+      ownedElsewhere: () =>
+        countEntityComponentRows({ adapter, parentTable: input.tableName }),
+      logger: this.logger,
+      dropFamily: () =>
+        this.dropSingleStorage(input.slug, input.tableName, adapter),
+    });
   }
 
   /**
@@ -496,9 +639,12 @@ export class SingleMetadataService {
     // A record that has already gone is NOT an error here. Delete is idempotent by intent, and
     // refusing a second delete would turn a retry into a failure; the teardown below still runs
     // against the caller's table name so a half-finished delete can be completed.
-    const current = await this.registry.getSingleBySlug(slug);
+    // As stored, past the registry row cache: a cached row could still say unlocked.
+    const current = await this.registry.getSingleForWrite(slug);
     if (current?.locked === true) {
-      throw NextlyError.forbidden({
+      throw NextlyError.definedInCode({
+        thing: "Single",
+        change: "delete",
         logContext: {
           reason: "single became locked while awaiting the exclusion",
           slug,
@@ -507,22 +653,95 @@ export class SingleMetadataService {
     }
     const tableName = current?.tableName ?? callerTableName;
 
-    const adapter = this.adapter;
-    if (tableName && adapter) {
-      await this.dropSingleStorage(slug, tableName, adapter);
+    // Before anything is dropped, inside the same exclusion as the drops: a
+    // declared key into its tables or another owner's element on them refuses
+    // the delete by name, and so does either that cannot be read. Asked of a
+    // Single whose row is already gone too, since its tables may remain.
+    if (tableName) {
+      await this.registry.assertNothingDependsOn({
+        slug,
+        tableName,
+        fields: current?.fields ?? [],
+      });
     }
 
-    // A row a concurrent delete already took is the state this method exists to reach, so it
-    // completes rather than failing.
-    //
-    // The tolerance covers this one call and nothing above it. A teardown or a drop that fails has
-    // to surface even when its message mentions something missing, because answering "deleted" to
-    // it would leave the registry row present and the storage half removed — the exact state the
-    // ordering above is arranged to prevent.
-    try {
-      await this.registry.deleteSingle(slug, { force: true });
-    } catch (error) {
-      if (!NextlyError.isNotFound(error)) throw error;
+    const adapter = this.adapter;
+    const remove = async (): Promise<void> => {
+      if (tableName && adapter) {
+        // Its many-to-many junction tables first: each holds a key into the Single's table, and
+        // the delete is not done while any stands, so its migration is never recorded applied
+        // with them left.
+        await this.dropJunctionTables(
+          tableName,
+          current?.fields ?? [],
+          adapter
+        );
+        await this.dropSingleStorage(slug, tableName, adapter);
+      }
+
+      // A row a concurrent delete already took is the state this method exists to reach, so it
+      // completes rather than failing.
+      //
+      // The tolerance covers this one call and nothing above it. A teardown or a drop that fails
+      // has to surface even when its message mentions something missing, because answering
+      // "deleted" to it would leave the registry row present and the storage half removed — the
+      // exact state the ordering above is arranged to prevent.
+      try {
+        await this.registry.deleteSingle(slug, { force: true });
+      } catch (error) {
+        if (!NextlyError.isNotFound(error)) throw error;
+      }
+    };
+
+    // Where a Builder save writer is set up, the delete is written as the Single's migration,
+    // inside this same exclusion, with its junction tables and relationship keys, so no snapshot
+    // after it still records its tables. A Single whose row is already gone has nothing to write
+    // from, and finishes its delete alone.
+    const deps = current ? this.saveDeps() : undefined;
+    if (deps === undefined || !current) {
+      await remove();
+      return;
+    }
+    const { checkEntitySaveHistory, writeEntityDelete } =
+      await loadEntitySave();
+    await checkEntitySaveHistory(deps);
+    await writeEntityDelete(
+      deps,
+      {
+        kind: "single",
+        slug,
+        stored: singleEntity(current),
+        ...(await entityRelations(
+          deps.adapter,
+          this.logger,
+          current.tableName,
+          (current.fields ?? []) as unknown as FieldDefinition[],
+          []
+        )),
+      },
+      remove
+    );
+  }
+
+  /** Drop the junction tables of a Single's many-to-many fields, each where it stands. */
+  private async dropJunctionTables(
+    tableName: string,
+    fields: readonly unknown[],
+    adapter: DrizzleAdapter
+  ): Promise<void> {
+    // Loaded on demand, as this service loads the column descriptor elsewhere.
+    const { junctionTablesOf } = await import(
+      "../../schema/services/field-column-descriptor"
+    );
+    const junctions = junctionTablesOf(
+      tableName,
+      fields as Parameters<typeof junctionTablesOf>[1]
+    );
+    for (const junction of junctions) {
+      await adapter.dropTable(junction, {
+        ifExists: true,
+        cascade: adapter.getCapabilities().dialect === "postgresql",
+      });
     }
   }
 
@@ -583,6 +802,9 @@ export class SingleMetadataService {
   async updateSingleSchema(
     input: UpdateSingleSchemaInput
   ): Promise<UpdateSingleSchemaResult> {
+    // Only named fields at the top level, as a collection's API takes them: a field cannot be
+    // created in, or moved into, a group with no name there (`assertTopLevelFieldsNamed`).
+    if (input.fields !== undefined) assertTopLevelFieldsNamed(input.fields);
     return withSchemaChangeExcluded(
       {
         adapter: this.adapter,
@@ -631,6 +853,15 @@ export class SingleMetadataService {
       "../../../api/fields-payload"
     );
     assertValidPluginFieldOptions(args.fields ?? []);
+    // Judged against the fields as stored now, so only a pair of sibling fields this save creates
+    // is refused, and one the Single already holds keeps working.
+    if (args.fields !== undefined) {
+      assertNoNewSiblingClashes(
+        { kind: "single", slug: current.slug },
+        args.fields,
+        current.fields ?? []
+      );
+    }
 
     // The `was*` flags describe the state being transitioned FROM, so they follow the refreshed
     // record. The `is*`/`has*` flags describe what the request asked for — but only where it
@@ -642,43 +873,118 @@ export class SingleMetadataService {
     // the companion is created without `_status` while the row ends up saying it has one.
     const wasLocalized = current.localized === true;
     const wasStatus = current.status === true;
+    const hasStatus = args.statusRequested ? args.hasStatus : wasStatus;
+    // Where the values live and how each language publishes, before and after: under
+    // `experimental.perLanguageStorage` a translation toggle moves no value, and only gives each
+    // language a publish state of its own, or takes it away. Every step below reads storage.
+    const layout = translationLayoutChange({
+      wasLocalized,
+      isLocalized: args.localizedRequested ? args.isLocalized : wasLocalized,
+      wasStatus,
+      hasStatus,
+    });
     const input: UpdateSingleSchemaInput = {
       ...args,
       existing: current,
-      wasLocalized,
+      wasLocalized: layout.wasStored,
       wasStatus,
-      isLocalized: args.localizedRequested ? args.isLocalized : wasLocalized,
-      hasStatus: args.statusRequested ? args.hasStatus : wasStatus,
+      isLocalized: layout.isStored,
+      hasStatus,
+      layout,
     };
+
+    // A precondition, so before anything changes: turning translation off drops each language's
+    // own publish state, which loses nothing only where it is the entry's.
+    if (layout.languagesMustAgreeWithEntry && this.adapter) {
+      await assertLanguageStatesAgreeWithEntry(this.adapter, {
+        kind: "single",
+        slug: args.slug,
+        tableName: current.tableName,
+      });
+    }
 
     // Asked here, from the flags this exclusion just re-derived, because the caller's reading can
     // be stale: a concurrent save that turned translation on would make this edit a field leaving
     // translation that the caller never saw as one.
+    // A field renamed onto a column that is already there is refused here, before anything
+    // changes: the archive write of a field leaving translation, just below, is the first write a
+    // save makes.
+    await this.refuseRenameOntoTakenColumn(input);
+
+    // The history checks a Builder save makes, before that first write, where a writer is set up.
+    const deps = this.saveDeps();
+    if (deps !== undefined) {
+      const { checkEntitySaveHistory } = await loadEntitySave();
+      await checkEntitySaveHistory(deps);
+    }
+
     await this.assertFieldsMayLeaveTranslation(input);
 
     // 1. PLAN. May reject; nothing is persisted and no statement has run.
     const plan = await this.planUpdate(input);
 
-    // The status the response reports. A save with no schema work at all keeps whatever the last
-    // migration reached, because this request neither confirmed nor changed it.
+    // 2. APPLY, then 3. RECORD. The apply returns a status rather than throwing, except for a
+    // refusal (see below). Where a writer is set up, the update is written first as the Single's
+    // migration, and its row is written inside the step the writer runs (`writeUpdate`).
+    if (deps === undefined) {
+      return this.recordUpdate(
+        input,
+        plan ? await this.applyUpdateDdl(input, plan) : undefined
+      );
+    }
+    return this.writeUpdate(deps, input, plan);
+  }
+
+  /**
+   * Write the registry row an update's outcome describes, and answer it as the response reports
+   * it. A save with no schema work at all keeps whatever status the last migration reached.
+   *
+   * @param notYetApplied Leaving settings applied as a step of their own after this row is written
+   *   (`applyLeavingStep`): recorded without them until they have applied, and not reported refused.
+   */
+  private async recordUpdate(
+    input: UpdateSingleSchemaInput,
+    outcome:
+      | Awaited<ReturnType<SingleMetadataService["applyUpdateDdl"]>>
+      | undefined,
+    notYetApplied: readonly LeavingSettingStep[] = []
+  ): Promise<UpdateSingleSchemaResult> {
     let migrationStatus = input.existing.migrationStatus;
     const updateData = { ...input.updateData };
-
-    if (plan) {
-      // 2. APPLY. Returns a status rather than throwing, except for a refusal (see below).
-      const applied = await this.applyUpdateDdl(input, plan);
+    let refusedSettings: UpdateSingleSchemaResult["refusedSettings"] = [];
+    if (outcome) {
+      const { status: applied, refused } = outcome;
       if (applied !== undefined) {
         updateData.migrationStatus = applied;
         migrationStatus = applied;
       }
+      // Leaving settings the database refused: the fields are recorded as the table holds them,
+      // without the settings, and hashed as recorded, so the version moves on and the next save
+      // sees the settings as a change and applies them.
+      const without = [...refused, ...notYetApplied];
+      if (without.length > 0 && Array.isArray(updateData.fields)) {
+        const recorded = withoutRefusedSettings(
+          updateData.fields as FieldDefinition[],
+          without
+        );
+        updateData.fields = recorded;
+        updateData.schemaHash = calculateSchemaHash(
+          recorded as unknown as FieldConfig[]
+        );
+      }
+      refusedSettings = refused.map(({ field, setting }) => ({
+        field,
+        setting,
+      }));
     }
 
-    // 3. RECORD, with the outcome already known.
-    const record = await this.registry.updateSingle(input.slug, updateData, {
-      source: "ui",
-    });
+    // The row and the stored schema version in one transaction
+    // (`writeRegistryRows`).
+    const record = await writeRegistryRowsWith(this.adapter, () =>
+      this.registry.updateSingle(input.slug, updateData, { source: "ui" })
+    );
 
-    return { record, migrationStatus };
+    return { record, migrationStatus, refusedSettings };
   }
 
   /**
@@ -693,12 +999,234 @@ export class SingleMetadataService {
    * and the caller's field list unsaved.
    */
   /**
+   * An update written as the Single's migration through the Builder save writer, then applied
+   * (`applyUpdateDdl`): its fields, translation, status and settings as the definition file
+   * spells them, with its junction tables, relationship keys and renamed field, so the table any
+   * entry point changes stays on record for the migrations after it. A save that asks nothing of
+   * the schema writes its settings-only migration, as a collection's does.
+   *
+   * A failure before the apply, or in its main migration, is thrown as before, with nothing
+   * written. Past the main migration the apply reports rather than throws, and so does this: where
+   * the writer then refuses to record the files applied (the database does not stand as their
+   * snapshot says), the files are kept and the outcome is recorded as a failed migration, so the
+   * registry row is still written.
+   */
+  private async writeUpdate(
+    deps: CollectionSaveDeps,
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan | null
+  ): Promise<UpdateSingleSchemaResult> {
+    const { previousEntity, writeEntitySave } = await loadEntitySave();
+    const existing = input.existing;
+    const updateData = input.updateData;
+    const before = (existing.fields ?? []) as unknown as FieldDefinition[];
+    const after =
+      plan?.fields ??
+      (updateData.fields as FieldDefinition[] | undefined) ??
+      before;
+    const stored = singleEntity(existing);
+    const rename = await this.detectedFieldRename(before, after);
+    // The Required and Unique settings of fields leaving translation are applied after the
+    // companion's values are copied, and refused together where those values cannot take them. The
+    // first file is written without them, so it matches what the registry records either way; a
+    // second records them once they have applied.
+    const leaving = plan?.leavingSettings ?? [];
+    const planned =
+      leaving.length > 0 ? withoutRefusedSettings(after, leaving) : after;
+    const entityWith = (fields: FieldDefinition[]) =>
+      singleEntity({ ...existing, ...updateData, fields });
+    // Held in an object, as the step below sets it from inside the writer.
+    const ran: {
+      outcome?: Awaited<ReturnType<SingleMetadataService["applyUpdateDdl"]>>;
+      result?: UpdateSingleSchemaResult;
+      rowError?: unknown;
+    } = {};
+    // The apply and the row it records, as one step: the writer records the files applied only once
+    // the row is written. A row that fails once the table has changed keeps the files, recorded
+    // applied nowhere, and the failure is thrown.
+    const applyAndRecord = async (): Promise<"partly-applied" | undefined> => {
+      if (plan) {
+        ran.outcome = await this.applyUpdateDdl(
+          input,
+          plan,
+          leaving.length > 0
+        );
+      }
+      try {
+        ran.result = await this.recordUpdate(input, ran.outcome, leaving);
+      } catch (error) {
+        ran.rowError = error;
+        return "partly-applied";
+      }
+      // A companion that failed to follow leaves the main table changed: the files are kept and
+      // recorded applied nowhere, never taken as applied.
+      return ran.outcome?.status === "failed" ? "partly-applied" : undefined;
+    };
+    try {
+      await writeEntitySave(
+        deps,
+        {
+          kind: "single",
+          slug: input.slug,
+          previous: await previousEntity(deps, "single", input.slug, stored),
+          entity: entityWith(planned),
+          change: "update",
+          ...(rename ? { renamedFields: [rename] } : {}),
+          ...(await entityRelations(
+            deps.adapter,
+            this.logger,
+            existing.tableName,
+            before,
+            after
+          )),
+        },
+        applyAndRecord
+      );
+    } catch (error) {
+      if (ran.result === undefined) throw error;
+      this.logger.error(
+        `[Singles] The update of "${input.slug}" ran, but its migration could not be recorded applied: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return this.recordUpdate(
+        input,
+        { refused: [], ...ran.outcome, status: "failed" },
+        leaving
+      );
+    }
+    if ("rowError" in ran) throw ran.rowError;
+    if (plan && leaving.length > 0 && ran.outcome?.status !== "failed") {
+      const outcome = ran.outcome;
+      const refused = await this.applyLeavingStep(
+        deps,
+        input,
+        plan,
+        { previous: entityWith(planned), entity: entityWith(after) },
+        // Their row, with the settings, inside the step that records their file.
+        async () => {
+          ran.result = await this.recordUpdate(input, outcome);
+        }
+      );
+      if (refused.length > 0) {
+        return this.recordUpdate(input, { status: "failed", refused });
+      }
+    }
+    return ran.result as UpdateSingleSchemaResult;
+  }
+
+  /**
+   * The Required and Unique settings of fields leaving translation, applied once their values are
+   * on the shared columns, and written as a migration of their own only once they have applied:
+   * refused, they are taken off whole, and no file says the table holds them. Answers the steps
+   * refused, or none.
+   *
+   * In development the writer runs them and records their file; a refusal withdraws it. Elsewhere
+   * they run first and their file is written after, for the deploy's `nextly migrate` to find done.
+   */
+  private async applyLeavingStep(
+    deps: CollectionSaveDeps,
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan,
+    entities: { previous: UiSchemaEntity; entity: UiSchemaEntity },
+    /** Writes the row with the settings, once they have applied. */
+    recordApplied: () => Promise<void>
+  ): Promise<LeavingSettingStep[]> {
+    const { writeEntitySave } = await loadEntitySave();
+    const adapter = deps.adapter;
+    const tableName = input.existing.tableName;
+    const save = {
+      kind: "single" as const,
+      slug: input.slug,
+      previous: entities.previous,
+      entity: entities.entity,
+      change: "update" as const,
+    };
+    const applyThem = async (): Promise<LeavingSettingStep[]> => {
+      const refused = await this.applyLeavingSettings(adapter, tableName, plan);
+      // The fields as the table now holds them, settings and all where they applied.
+      await this.registerUpdatedRuntimeSchema(
+        input,
+        { ...plan, fields: withoutRefusedSettings(plan.fields, refused) },
+        adapter,
+        input.isLocalized
+      );
+      if (refused.length === 0) await recordApplied();
+      return refused;
+    };
+    if (!deps.applies) {
+      const refused = await applyThem();
+      if (refused.length === 0) {
+        await writeEntitySave(deps, save, () => Promise.resolve(undefined));
+      }
+      return refused;
+    }
+    // Held in an object, as the apply below sets it from inside the writer.
+    const ran: { refused: LeavingSettingStep[] } = { refused: [] };
+    try {
+      await writeEntitySave(deps, save, async () => {
+        ran.refused = await applyThem();
+        if (ran.refused.length > 0) {
+          // Nothing of them applied: their file is withdrawn.
+          throw NextlyError.validation({
+            errors: [
+              {
+                path: "fields",
+                code: "LEAVING_SETTINGS_REFUSED",
+                message:
+                  "The settings of fields leaving translation were refused.",
+              },
+            ],
+          });
+        }
+        return undefined;
+      });
+    } catch (error) {
+      if (ran.refused.length === 0) throw error;
+    }
+    return ran.refused;
+  }
+
+  /**
    * Read the Single again inside the exclusion, and re-check what the caller checked outside it.
    *
    * Both refusals are re-checked rather than trusted: a delete that lands while this request waited
    * leaves nothing to update, and a Single that became `locked` in the same window is code-first
    * now, so applying a UI edit to it would write a row the config is about to contradict.
    */
+  /**
+   * Refuse the field this save renames when the column it moves to is already there, naming the
+   * table and both columns, before anything changes.
+   *
+   * The renamed field is the one the main table's rule (`detectFieldRename`) finds on the whole
+   * field lists, as the plan finds it. Its values move from the table that holds it before the
+   * save to the one that holds it after: the companion for a translated field, the main table
+   * otherwise (`isFieldLocalized`), so a field leaving or joining translation as it is renamed is
+   * judged on both tables. The columns are the ones each spelling names (`renamedColumns`), which
+   * a companion column mirrors. A rename an earlier stopped save already made passes.
+   */
+  private async refuseRenameOntoTakenColumn(
+    input: UpdateSingleSchemaInput
+  ): Promise<void> {
+    const adapter = this.adapter;
+    if (!adapter || input.fields === undefined) return;
+    await refuseRenamedFieldOntoTakenColumn(
+      adapter,
+      {
+        previousFields: (input.existing.fields ??
+          []) as unknown as FieldDefinition[],
+        fields: input.fields,
+        mainTable: input.existing.tableName,
+        wasLocalized: input.wasLocalized,
+        isLocalized: input.isLocalized,
+        dialect: adapter.getCapabilities().dialect,
+        // A Single's table is built by the collection's generator.
+        builtBy: "collection",
+      },
+      { single: input.slug }
+    );
+  }
+
   /**
    * The first step of a field leaving translation (`archiveFieldsLeavingTranslation`), for a
    * save whose flags were derived inside the exclusion. Nothing is asked when the save sends no
@@ -709,9 +1237,12 @@ export class SingleMetadataService {
   private async assertFieldsMayLeaveTranslation(
     input: UpdateSingleSchemaInput
   ): Promise<void> {
+    if (!input.wasLocalized && !input.isLocalized) return;
+    // A save that sends no fields moves nothing unless it turns translation on or off, and with no
+    // adapter none of it runs: neither is asked anything.
     if (
-      input.fields === undefined ||
-      (!input.wasLocalized && !input.isLocalized)
+      input.fields === undefined &&
+      (input.wasLocalized === input.isLocalized || !this.adapter)
     ) {
       return;
     }
@@ -723,6 +1254,25 @@ export class SingleMetadataService {
         },
       });
     }
+    if (input.fields === undefined) {
+      // A save that sends no fields still moves every translated field's values as it turns
+      // translation on or off, through the companion transition after it, so their columns are
+      // asked here what the move would lose.
+      const fields = (input.existing.fields ??
+        []) as unknown as FieldDefinition[];
+      await refuseTranslationMovesLosingDefinition({
+        adapter: this.adapter,
+        // Singles are built by the collection schema service.
+        builtBy: "collection",
+        tableName: input.existing.tableName,
+        oldFields: fields,
+        newFields: fields,
+        wasLocalized: input.wasLocalized,
+        isLocalized: input.isLocalized,
+        surface: "builder",
+      });
+      return;
+    }
     // The site's default language as it is now, the same one the Single's companion reconcile reads.
     const defaultLocale = appLocalization()?.defaultLocale ?? "en";
     await archiveFieldsLeavingTranslation({
@@ -730,6 +1280,7 @@ export class SingleMetadataService {
       builtBy: "collection",
       tableName: input.existing.tableName,
       defaultLocale: defaultLocale,
+      languageOrder: appLanguageOrder(),
       adapter: this.adapter,
       entity: input.slug,
       kind: "single",
@@ -743,7 +1294,8 @@ export class SingleMetadataService {
   private async refreshForUpdate(
     input: UpdateSingleSchemaInput
   ): Promise<DynamicSingleRecord> {
-    const current = await this.registry.getSingleBySlug(input.slug);
+    // As stored, past the registry row cache: the update plans from this row.
+    const current = await this.registry.getSingleForWrite(input.slug);
 
     if (!current) {
       throw NextlyError.notFound({
@@ -754,7 +1306,9 @@ export class SingleMetadataService {
       });
     }
     if (current.locked) {
-      throw NextlyError.forbidden({
+      throw NextlyError.definedInCode({
+        thing: "Single",
+        change: "change",
         logContext: {
           reason: "single became locked while awaiting the exclusion",
           slug: input.slug,
@@ -811,6 +1365,7 @@ export class SingleMetadataService {
 
     if (fields === undefined) {
       return {
+        leavingSettings: [],
         migrationSQL: "",
         fields: previousFields,
         previousFields,
@@ -833,6 +1388,7 @@ export class SingleMetadataService {
     // records `pending`, which is what the migration runner looks for.
     if (!adapter) {
       return {
+        leavingSettings: [],
         migrationSQL: "",
         fields,
         previousFields,
@@ -849,10 +1405,13 @@ export class SingleMetadataService {
       return {
         // i18n: a fresh (re)create omits translatable columns when localized; they belong to the
         // companion.
+        leavingSettings: [],
         migrationSQL: schemaService.generateMigrationSQL(tableName, fields, {
           isSingle: true,
           hasStatus,
           localized: isLocalized,
+          // A relationship to a renamed collection keys the table it kept.
+          targetTables: await collectionTablesBySlug(adapter, fields),
         }),
         fields,
         previousFields,
@@ -913,6 +1472,24 @@ export class SingleMetadataService {
       schemaService
     );
 
+    // A junction carried to a name the database already holds would meet that table at apply,
+    // after earlier statements ran. Asked on the full lists, the ones the junctions are planned on.
+    await schemaService.refuseJunctionMovesOntoLiveTables(
+      tableName,
+      startingFields,
+      fields,
+      table => adapter.tableExists(table)
+    );
+
+    if (liveFacts.tableHasRows !== false) {
+      await refuseFillsTheirFieldsRefuse(
+        alterInput.oldFields,
+        alterInput.newFields,
+        this.fieldsLeavingTranslation(input, schemaService),
+        schemaService
+      );
+    }
+
     // Detected from the FULL field lists: a renamed LOCALIZED field-group
     // field sits in neither side of alterInput (the localized filter removes
     // both spellings), and its association migration must not be excluded
@@ -923,14 +1500,29 @@ export class SingleMetadataService {
       fields
     );
 
+    const deferred = this.withLeavingSettingsDeferred(
+      input,
+      alterInput.newFields,
+      schemaService
+    );
+
+    // What SQLite can't alter in place, which the apply rebuilds the table for.
+    const sqliteNullability = new Map<string, boolean>();
     return {
+      leavingSettings: deferred.leavingSettings,
       migrationSQL: schemaService.generateAlterTableMigration(
         tableName,
         alterInput.oldFields,
-        alterInput.newFields,
+        deferred.newFields,
         {
+          // A Single's field defaults are the application's, not its columns'.
+          isSingle: true,
           wasStatus,
           hasStatus,
+          // The junction tables are decided on the full lists, as a collection's save decides
+          // them: a translated many-to-many sits in neither list the main diff sees and still
+          // has one.
+          junctionFields: { old: startingFields, new: fields },
           tableHasRows: liveFacts.tableHasRows,
           foreignKeysByColumn: liveFacts.foreignKeysByColumn,
           indexNames: liveFacts.indexNames,
@@ -938,9 +1530,17 @@ export class SingleMetadataService {
           columnsContainingNull: liveFacts.columnsContainingNull,
           columnsAbsentFromTable: liveFacts.columnsAbsentFromTable,
           liveColumnTypes: liveFacts.liveColumnTypes,
+          // A key this save adds or changes references the table a renamed target kept.
+          targetTables: await collectionTablesBySlug(adapter, [
+            ...previousFields,
+            ...fields,
+          ]),
           ...groupMigration,
+          onSqliteNullability: (column, required) =>
+            sqliteNullability.set(column, required),
         }
       ),
+      sqliteNullability,
       fields,
       previousFields,
       describesWholeTable: false,
@@ -993,6 +1593,11 @@ export class SingleMetadataService {
       ),
       addedColumnBackfill: field => schemaService.addedColumnBackfill(field),
       presentColumns: new Set(liveColumnTypes.keys()),
+      // Counts the rows a field made required would break, naming the Single.
+      requiredColumns: {
+        db: adapter.getDrizzle(),
+        entity: { kind: "single", slug },
+      },
     });
     const companionTable = `${tableName}_locales`;
     const companionColumns =
@@ -1046,8 +1651,21 @@ export class SingleMetadataService {
         .filter(f => isFieldLocalized(f, change.wasLocalized))
         .map(f => f.name)
     );
+    // Not unique by either rule (`builderColumnIsUnique`): neither its mark nor a one-to-one's
+    // cardinality, so a translated relationship made one-to-one is not grouped by its column alone
+    // when its index is per language.
+    const notUnique = (f: FieldDefinition): FieldDefinition => {
+      const options = f.options as { relationType?: unknown } | undefined;
+      return f.type === "relationship" && options?.relationType === "oneToOne"
+        ? {
+            ...f,
+            unique: false,
+            options: { ...options, relationType: "manyToOne" },
+          }
+        : { ...f, unique: false };
+    };
     const lengthOnly = (f: FieldDefinition): FieldDefinition =>
-      isFieldLocalized(f, change.isLocalized) ? { ...f, unique: false } : f;
+      isFieldLocalized(f, change.isLocalized) ? notUnique(f) : f;
     return {
       main: {
         oldFields: change.previousFields.filter(
@@ -1063,7 +1681,7 @@ export class SingleMetadataService {
         ),
         newFields: change.fields
           .filter(f => translatedBefore.has(f.name))
-          .map(f => ({ ...f, unique: false })),
+          .map(notUnique),
       },
     };
   }
@@ -1125,6 +1743,106 @@ export class SingleMetadataService {
   }
 
   /**
+   * `newFields` with the Required and Unique settings of fields leaving translation taken off, and
+   * the steps that put them back. Their shared columns are created without the settings, since
+   * every entry would otherwise hold NULL or one placeholder until the companion reconcile copies
+   * the default language's values in; the settings follow the copy. Each step puts back one
+   * setting, from the state the step before it leaves, with the SQL that takes it off again, so a
+   * step that committed can be undone on its own. On SQLite, which can't alter a column, a Required
+   * setting is carried as the nullability the apply rebuilds the table for; a step with nothing to
+   * do is left out. The SQL is planned without the live table's facts, which describe the columns
+   * before the migration creates them.
+   */
+  /**
+   * The fields a localized Single that stays localized moves from translated to shared: their
+   * column is added open, given each entry's default-language value from the companion, and only
+   * then given its settings (`withLeavingSettingsDeferred`). Named after the change, by the main
+   * table's rename rule, so a field renamed and made shared leaves under its new name.
+   */
+  private fieldsLeavingTranslation(
+    input: UpdateSingleSchemaInput,
+    schemaService: Pick<DynamicCollectionSchemaService, "detectFieldRename">
+  ): ReadonlySet<string> {
+    const { wasLocalized, isLocalized } = input;
+    const previousFields = (input.existing.fields ??
+      []) as unknown as FieldDefinition[];
+    const rename = schemaService.detectFieldRename(
+      previousFields,
+      input.fields ?? []
+    );
+    return new Set(
+      wasLocalized && isLocalized
+        ? fieldsLeavingTranslationUnder(
+            previousFields,
+            input.fields ?? [],
+            rename ? { from: rename.from.name, to: rename.to.name } : null
+          )
+        : []
+    );
+  }
+
+  private withLeavingSettingsDeferred(
+    input: UpdateSingleSchemaInput,
+    newFields: FieldDefinition[],
+    schemaService: Pick<
+      DynamicCollectionSchemaService,
+      "generateAlterTableMigration" | "plannedColumnTypes" | "detectFieldRename"
+    >
+  ): { newFields: FieldDefinition[]; leavingSettings: LeavingSettingStep[] } {
+    const { hasStatus } = input;
+    const leaving = this.fieldsLeavingTranslation(input, schemaService);
+    const unconstrained = withoutLeavingConstraints(newFields, leaving);
+    const alter = (from: FieldDefinition[], to: FieldDefinition[]) => {
+      const sqliteNullability = new Map<string, boolean>();
+      const sql = schemaService.generateAlterTableMigration(
+        input.existing.tableName,
+        from,
+        to,
+        {
+          // A Single's field defaults are the application's, not its columns'.
+          isSingle: true,
+          wasStatus: hasStatus,
+          hasStatus,
+          // The type the diff BEFORE this one writes, not the live table's: MySQL restates a
+          // whole column definition on every MODIFY, and with none to restate it falls back to
+          // the legacy renderer, narrowing a float that diff had just created `double` down to
+          // `decimal(10,2)`.
+          liveColumnTypes: schemaService.plannedColumnTypes(from),
+          onSqliteNullability: (column, required) =>
+            sqliteNullability.set(column, required),
+        }
+      );
+      return { sql, sqliteNullability };
+    };
+    const leavingSettings: LeavingSettingStep[] = [];
+    let state = unconstrained;
+    newFields.forEach((field, i) => {
+      if (unconstrained[i] === field) return;
+      for (const setting of leavingFieldConstraints(field, undefined)) {
+        const next = state.map((f, j) =>
+          j !== i
+            ? f
+            : setting === "required"
+              ? { ...f, required: field.required }
+              : { ...f, unique: field.unique }
+        );
+        const forward = alter(state, next);
+        if (forward.sql.trim() !== "" || forward.sqliteNullability.size > 0) {
+          leavingSettings.push({
+            field: field.name,
+            setting,
+            forward: forward.sql,
+            inverse: alter(next, state).sql,
+            sqliteNullability: forward.sqliteNullability,
+          });
+        }
+        state = next;
+      }
+    });
+    return { newFields: unconstrained, leavingSettings };
+  }
+
+  /**
    * The options a field-group association rename contributes to the alter
    * generator: the rename pair itself and the registry-resolved physical
    * table per referenced slug.
@@ -1162,12 +1880,15 @@ export class SingleMetadataService {
     const registry = new FieldGroupRegistryService(adapter, this.logger);
     const resolved = new Map<string, string>();
     const slugs = new Set<string>();
-    for (const f of [...oldFields, ...newFields]) {
+    // The field groups at this level, those inside a group with no name among them, as the rename
+    // above pairs them (`fieldGroupRenamePairs`): a table left unresolved moves no rows.
+    for (const f of addressableFields([...oldFields, ...newFields])) {
       for (const slug of fieldGroupSlugList(f)) slugs.add(slug);
     }
     await Promise.all(
       [...slugs].map(async slug => {
-        const record = await registry.getComponentBySlug(slug);
+        // As stored, past the registry row cache: the DDL is planned against this table.
+        const record = await registry.findComponentForWrite(slug);
         if (record) resolved.set(slug, record.tableName);
       })
     );
@@ -1217,7 +1938,7 @@ export class SingleMetadataService {
     const { resolveLocalizedFieldNames } = await import(
       "../../i18n/classify-fields"
     );
-    const { columnsDeclaredBy } = await import(
+    const { columnsDeclaredBy, fieldsStoredOnRow } = await import(
       "../../schema/services/field-column-descriptor"
     );
 
@@ -1235,10 +1956,16 @@ export class SingleMetadataService {
       required: false,
     };
 
+    // The fields whose columns sit on the row (`fieldsStoredOnRow`): those inside a group with no
+    // name are columns of this table, and every check and statement planned from these lists
+    // reads them, so the group itself, which has no name to give a column, is read through here
+    // once. Which are translated is classified from the declared list, as the companion and the
+    // entry write classify it, so a field inside such a group stays on the row.
     const omitLocalized = (fields: FieldDefinition[]): FieldDefinition[] => {
-      if (!omitLocalizedColumns) return fields;
+      const stored = fieldsStoredOnRow(fields);
+      if (!omitLocalizedColumns) return stored;
       const localizedNames = new Set(resolveLocalizedFieldNames(fields, true));
-      return fields.filter(f => !localizedNames.has(f.name));
+      return stored.filter(f => !localizedNames.has(f.name));
     };
 
     const normalize = (fields: FieldDefinition[]): FieldDefinition[] => {
@@ -1341,8 +2068,9 @@ export class SingleMetadataService {
       newFields: plan.fields,
       wasLocalized: input.wasLocalized,
       isLocalized: input.isLocalized,
-      wasStatus: input.wasStatus,
-      status: input.hasStatus,
+      // The companion's own `_status`, before and after.
+      wasStatus: input.layout?.wasPublishedPerLanguage ?? input.wasStatus,
+      status: input.layout?.isPublishedPerLanguage ?? input.hasStatus,
     });
   }
 
@@ -1367,10 +2095,17 @@ export class SingleMetadataService {
     const rename = await this.companionRenameFirst(adapter, input, plan);
     if (!rename) return [];
     try {
-      for (const statement of rename.forward) {
-        await adapter.executeQuery(statement);
-      }
+      // Waits for a busy translations table in short tries, as `nextly migrate` waits.
+      await applyStatementsInTries(
+        this.busyTableWait(adapter),
+        rename.forward,
+        "the translations table's rename"
+      );
     } catch (error) {
+      // Tries that ran out say so themselves: the table, what holds it, and that nothing changed.
+      if (NextlyError.is(error) && error.code === "NEXTLY_TABLE_BUSY") {
+        throw error;
+      }
       throw new NextlyError({
         code: "NEXTLY_MIGRATION_APPLY_FAILED",
         publicMessage:
@@ -1443,6 +2178,14 @@ export class SingleMetadataService {
   }
 
   /**
+   * How this save's statements wait for a table another session is using: in short tries, as
+   * `nextly migrate` waits, each try after the first noted in the log.
+   */
+  private busyTableWait(adapter: DrizzleAdapter): BusyTableWait {
+    return { adapter, notify: line => this.logger.warn(line) };
+  }
+
+  /**
    * Applies the save's main migration. The collection save's runner, so the two apply a migration
    * the same way; MySQL passes over what an earlier refused save already applied, since this plan
    * is drawn from the registry rather than the live table.
@@ -1453,10 +2196,11 @@ export class SingleMetadataService {
   private async applyMainMigrationOrUndo(
     adapter: DrizzleAdapter,
     slug: string,
+    tableName: string,
     plan: UpdateDdlPlan,
     undoRename: readonly string[]
   ): Promise<void> {
-    if (!plan.migrationSQL) return;
+    if (!plan.migrationSQL && !plan.sqliteNullability?.size) return;
     try {
       await applyMigrationWhole({
         db: adapter.getDrizzle(),
@@ -1464,6 +2208,12 @@ export class SingleMetadataService {
         migrationSQL: plan.migrationSQL,
         entity: "single",
         tolerateApplied: true,
+        busyTable: this.busyTableWait(adapter),
+        sqliteNullability: plan.sqliteNullability && {
+          adapter,
+          tableName,
+          required: plan.sqliteNullability,
+        },
       });
     } catch (refusal) {
       await this.undoCompanionRename(adapter, slug, undoRename);
@@ -1529,8 +2279,17 @@ export class SingleMetadataService {
    */
   private async applyUpdateDdl(
     input: UpdateSingleSchemaInput,
-    plan: UpdateDdlPlan
-  ): Promise<SingleMigrationStatus | undefined> {
+    plan: UpdateDdlPlan,
+    /**
+     * Leave the Required and Unique settings of fields leaving translation to the caller, which
+     * applies them as a step of their own (`applyLeavingStep`): the fields are bound without them.
+     */
+    deferLeaving = false
+  ): Promise<{
+    status: SingleMigrationStatus | undefined;
+    /** The leaving settings refused, so the fields are recorded without them; else empty. */
+    refused: LeavingSettingStep[];
+  }> {
     const adapter = this.adapter;
     const tableName = input.existing.tableName;
 
@@ -1538,7 +2297,10 @@ export class SingleMetadataService {
       this.logger.warn(
         "[Singles] No adapter registered, migration not executed"
       );
-      return plan.ownsMigrationStatus ? "pending" : undefined;
+      return {
+        status: plan.ownsMigrationStatus ? "pending" : undefined,
+        refused: [],
+      };
     }
 
     // A field becoming translated takes its value to the default language's companion row first:
@@ -1558,7 +2320,13 @@ export class SingleMetadataService {
 
     // Before the try below, which records what it catches: a refusal here has changed nothing
     // the registry should describe, so it fails the save.
-    await this.applyMainMigrationOrUndo(adapter, input.slug, plan, undoRename);
+    await this.applyMainMigrationOrUndo(
+      adapter,
+      input.slug,
+      tableName,
+      plan,
+      undoRename
+    );
 
     try {
       // Observed, not assumed, and it covers the rebuild case as well as the alter: a plan that
@@ -1567,7 +2335,7 @@ export class SingleMetadataService {
         this.logger.error(
           `[Singles] Table "${tableName}" not found after migration update`
         );
-        return "failed";
+        return { status: "failed", refused: [] };
       }
 
       // 🔴 Past this point the MAIN table holds `plan.fields`. The companion may or may not follow,
@@ -1583,14 +2351,18 @@ export class SingleMetadataService {
       );
       try {
         await reconcileSingleCompanion({
+          busyTable: this.busyTableWait(adapter),
           slug: input.slug,
           tableName,
           oldFields: plan.previousFields,
           newFields: plan.fields,
           localized: input.isLocalized,
           wasLocalized: input.wasLocalized,
-          status: input.hasStatus,
-          wasStatus: input.wasStatus,
+          // The companion's own `_status`, before and after this save.
+          status: input.layout?.isPublishedPerLanguage ?? input.hasStatus,
+          wasStatus: input.layout?.wasPublishedPerLanguage ?? input.wasStatus,
+          statusFromEntryInEveryLanguage:
+            input.layout?.statusFromEntryInEveryLanguage,
           adapter,
           joinedBefore,
           // One rename rule for every column: the main table's decides a translated field's too.
@@ -1623,8 +2395,23 @@ export class SingleMetadataService {
               : String(companionError)
           }`
         );
-        return "failed";
+        return { status: "failed", refused: [] };
       }
+
+      // The Required and Unique settings of fields leaving translation, now that their shared
+      // columns hold the default language's values: all of them or none. Refused, the fields are
+      // recorded as the table then holds them, without the settings, and the runtime shape is
+      // bound from the same list, so the next save sees the settings as a change and applies them.
+      const refused = deferLeaving
+        ? []
+        : await this.applyLeavingSettings(adapter, tableName, plan);
+      const recorded = {
+        ...plan,
+        fields: withoutRefusedSettings(
+          plan.fields,
+          deferLeaving ? plan.leavingSettings : refused
+        ),
+      };
 
       // 🔴 Registered only once the companion has been reconciled, never before it.
       //
@@ -1640,10 +2427,12 @@ export class SingleMetadataService {
       // in the same way it was before the save, and the lazy rebuild can still correct it.
       await this.registerUpdatedRuntimeSchema(
         input,
-        plan,
+        recorded,
         adapter,
         input.isLocalized
       );
+
+      if (refused.length > 0) return { status: "failed", refused };
 
       // 🔴 Only a plan that describes the WHOLE table may clear a durable `failed`.
       //
@@ -1673,10 +2462,10 @@ export class SingleMetadataService {
           `[Singles] "${tableName}" is recorded as a failed migration and this save only ` +
             `describes a change to it, so its status is left as failed`
         );
-        return "failed";
+        return { status: "failed", refused: [] };
       }
 
-      return "applied";
+      return { status: "applied", refused: [] };
     } catch (error) {
       // 🔴 Everything inside this block is recorded, including a `NextlyError`, and the error TYPE
       // is deliberately not consulted.
@@ -1703,10 +2492,90 @@ export class SingleMetadataService {
       if (plan.migrationSQL) {
         this.logger.error(`[Singles] Migration SQL was: ${plan.migrationSQL}`);
       }
-      return "failed";
+      return { status: "failed", refused: [] };
     }
   }
 
+  /**
+   * Applies the plan's leaving settings, all of them or none, and returns those refused: every one
+   * of them, or none.
+   * The statements themselves refuse values that cannot take a setting, a value written since the
+   * save's first check included. PostgreSQL and SQLite run the steps in one transaction. MySQL
+   * commits each schema statement, so a step it refuses has itself and every step before it
+   * undone, newest first.
+   */
+  private async applyLeavingSettings(
+    adapter: DrizzleAdapter,
+    tableName: string,
+    plan: UpdateDdlPlan
+  ): Promise<LeavingSettingStep[]> {
+    const steps = plan.leavingSettings;
+    if (steps.length === 0) return [];
+    const dialect = adapter.getCapabilities().dialect;
+    const run = (
+      migrationSQL: string,
+      required: ReadonlyMap<string, boolean> = new Map()
+    ) =>
+      applyMigrationWhole({
+        db: adapter.getDrizzle(),
+        dialect,
+        migrationSQL,
+        entity: "single",
+        sqliteNullability: { adapter, tableName, required },
+        busyTable: this.busyTableWait(adapter),
+      });
+    try {
+      if (dialect !== "mysql") {
+        // On SQLite the Required settings are one rebuild after the steps' statements, all in one
+        // transaction.
+        await run(
+          steps.map(step => step.forward).join("\n--> statement-breakpoint\n"),
+          new Map(steps.flatMap(step => [...step.sqliteNullability]))
+        );
+        return [];
+      }
+      for (const [i, step] of steps.entries()) {
+        try {
+          await run(step.forward);
+        } catch (error) {
+          await this.undoLeavingSettings(adapter, steps.slice(0, i + 1));
+          throw error;
+        }
+      }
+      return [];
+    } catch (error) {
+      this.logger.error(
+        `[Singles] The Required and Unique settings of fields leaving translation on ` +
+          `"${tableName}" were refused, so the fields are recorded without them: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+      );
+      return steps;
+    }
+  }
+
+  /** Takes off again the leaving settings `steps` applied, newest first. Each is safe to repeat. */
+  private async undoLeavingSettings(
+    adapter: DrizzleAdapter,
+    steps: readonly LeavingSettingStep[]
+  ): Promise<void> {
+    for (const step of [...steps].reverse()) {
+      try {
+        await applyMigrationStatements(
+          adapter,
+          step.inverse,
+          this.busyTableWait(adapter)
+        );
+      } catch (error) {
+        this.logger.error(
+          `[Singles] Could not take the ${step.setting} setting of "${step.field}" off again ` +
+            `after its settings were refused: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+        );
+      }
+    }
+  }
   /**
    * Forget the main table's registered shape, so the next read rebuilds it from the database.
    *
@@ -1810,9 +2679,15 @@ export class SingleMetadataService {
       });
     }
 
+    // The address, judged inside the exclusion every Single create holds, whichever road reached
+    // it: by the one rule, then against the collections' and Singles' addresses, which a create
+    // that started while this one waited may have added.
+    assertAddressAllowed("single", input.slug);
     const adapter = this.adapter;
     if (adapter) {
-      await assertGlobalResourceSlugAvailable(adapter, input.slug);
+      await assertGlobalResourceSlugAvailable(adapter, input.slug, {
+        addressKind: "single",
+      });
     }
 
     // 🔴 Re-judged here, not only by the caller, because the thing that judges it can CHANGE while
@@ -1831,7 +2706,8 @@ export class SingleMetadataService {
   }
 
   private async planCreate(input: CreateSingleInput): Promise<CreateDdlPlan> {
-    const isLocalized = input.localized === true;
+    // Whether its translatable columns live in its companion (`storesPerLanguage`), for the DDL.
+    const isLocalized = storesPerLanguage(input);
     const hasStatus = input.status === true;
     const fields = input.fields as unknown as FieldDefinition[];
     const { DynamicCollectionSchemaService } = await import(
@@ -1849,7 +2725,16 @@ export class SingleMetadataService {
       // the companion `<table>_locales`, provisioned separately. `isSingle` skips the slug column
       // and adds `updated_at`; `hasStatus` adds the column the runtime schema expects when the user
       // opted into Draft/Published.
-      { isSingle: true, hasStatus, localized: isLocalized }
+      {
+        isSingle: true,
+        hasStatus,
+        localized: isLocalized,
+        // A relationship to a renamed collection keys the table it kept. With no adapter the
+        // statements are never run, and each target's table is spelled from its slug.
+        targetTables: this.adapter
+          ? await collectionTablesBySlug(this.adapter, fields)
+          : undefined,
+      }
     );
 
     return { migrationSQL, fields, isLocalized, hasStatus };
@@ -1862,11 +2747,43 @@ export class SingleMetadataService {
    * has a row describing what was attempted. That is the same choice the request handler made
    * before this service existed, and it is what makes the state repairable instead of lost.
    */
+  /**
+   * Write the create's migration and snapshot through the Builder save
+   * writer and, in development, run them; then bind the table and provision
+   * a translated Single's companion as the direct apply does. Outside
+   * development nothing runs, and the row records the Single as pending.
+   */
+  private async writeCreate(
+    deps: CollectionSaveDeps,
+    input: CreateSingleInput,
+    plan: CreateDdlPlan
+  ): Promise<SingleMigrationStatus> {
+    const { writeCollectionSave } = await loadCollectionSave();
+    await writeCollectionSave(deps, {
+      kind: "single",
+      slug: input.slug,
+      previous: null,
+      entity: singleEntity({ ...input, fields: plan.fields }),
+      change: "create",
+      // Its junction tables and relationship keys, which the writer does not
+      // derive itself, so the file makes what the Builder made.
+      ...(await entityRelations(
+        deps.adapter,
+        this.logger,
+        input.tableName,
+        [],
+        plan.fields
+      )),
+    });
+    if (!deps.applies) return "pending";
+    return this.finishCreate(input, plan, deps.adapter);
+  }
+
   private async applyCreateDdl(
     input: CreateSingleInput,
     plan: CreateDdlPlan
   ): Promise<SingleMigrationStatus> {
-    const { migrationSQL, fields, isLocalized, hasStatus } = plan;
+    const { migrationSQL } = plan;
     const adapter = this.adapter;
     if (!adapter) {
       this.logger.warn(
@@ -1878,7 +2795,11 @@ export class SingleMetadataService {
     try {
       // The shared runner, not a private copy: it owns both the splitting rule and the tolerance
       // that makes re-running over half-applied schema the repair case rather than a dead end.
-      await applyMigrationStatements(adapter, migrationSQL);
+      await applyMigrationStatements(
+        adapter,
+        migrationSQL,
+        this.busyTableWait(adapter)
+      );
     } catch (error) {
       this.logger.error(
         `[Singles] Migration execution failed for "${input.tableName}": ${
@@ -1888,10 +2809,54 @@ export class SingleMetadataService {
       return "failed";
     }
 
-    // Observed, not assumed. "Applied" has to mean the table is there.
-    if (!(await adapter.tableExists(input.tableName))) {
+    return this.finishCreate(input, plan, adapter);
+  }
+
+  /**
+   * What follows a create's statements, whoever ran them: the table
+   * observed, bound to the running server, and a translated Single's
+   * companion provisioned.
+   */
+  private async finishCreate(
+    input: CreateSingleInput,
+    plan: CreateDdlPlan,
+    adapter: DrizzleAdapter
+  ): Promise<SingleMigrationStatus> {
+    const { fields, isLocalized, hasStatus } = plan;
+    // Observed, not assumed. "Applied" has to mean the table is there, holding every requested
+    // column as the type asked for: the desired table a push compares the live one with, built as
+    // the creating SQL renders a Single's columns (`columnsTheCreateLeftOut`).
+    const { buildDesiredTableFromFields } = await import(
+      "../../schema/pipeline/diff/build-from-fields"
+    );
+    const { columnsTheCreateLeftOut, describeColumnsLeftOut } = await import(
+      "../../schema/services/created-table-shape"
+    );
+    const dialect = adapter.getCapabilities().dialect;
+    // A failing read is recorded rather than raised, as a failing statement is: the row still
+    // describes what was attempted, which is what makes the state repairable.
+    let leftOut: Awaited<ReturnType<typeof columnsTheCreateLeftOut>>;
+    try {
+      leftOut = await columnsTheCreateLeftOut(
+        adapter.getDrizzle(),
+        dialect,
+        buildDesiredTableFromFields(input.tableName, fields, dialect, {
+          builtBy: "collection",
+          hasStatus,
+          localized: isLocalized,
+        })
+      );
+    } catch (error) {
       this.logger.error(
-        `[Singles] Table "${input.tableName}" was not created after migration`
+        `[Singles] Could not read the columns of "${input.tableName}" after migration: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return "failed";
+    }
+    if (leftOut.length > 0) {
+      this.logger.error(
+        `[Singles] Table "${input.tableName}" was not created as requested: ${describeColumnsLeftOut(leftOut)}`
       );
       return "failed";
     }
@@ -1912,6 +2877,7 @@ export class SingleMetadataService {
         "./reconcile-single-companion"
       );
       await reconcileSingleCompanion({
+        busyTable: this.busyTableWait(adapter),
         slug: input.slug,
         tableName: input.tableName,
         oldFields: [],
@@ -1922,7 +2888,9 @@ export class SingleMetadataService {
         wasLocalized: false,
         // A single being created has no prior state at all.
         wasStatus: false,
-        status: hasStatus,
+        // A `_status` of each language only where each language publishes on its own: an
+        // untranslated Single kept per language under the setting publishes as a document.
+        status: publishesPerLanguage(input),
         adapter,
       });
     } catch (error) {
@@ -1978,4 +2946,59 @@ export class SingleMetadataService {
       );
     }
   }
+}
+
+/**
+ * Refuses the save, before any statement runs, when a field added to a Single that holds its row
+ * states a default its own rules refuse: a `defaultValue` of 0 under `min: 1`, a text longer than
+ * its `maxLength`. The row would be filled with that value (`singleRowFillValue`, the value the ADD
+ * writes), and every later write of the Single would then refuse what it holds. The value is
+ * judged by the entry validator every write answers to, so the two cannot disagree. A field
+ * leaving translation is not filled with its default but with each entry's default-language
+ * value from the companion (`fieldsLeavingTranslation`), so its default is not judged here.
+ *
+ * @throws NextlyError `VALIDATION_ERROR` naming each field and the rule its default breaks
+ */
+async function refuseFillsTheirFieldsRefuse(
+  oldFields: FieldDefinition[],
+  newFields: FieldDefinition[],
+  leavingTranslation: ReadonlySet<string>,
+  schemaService: Pick<
+    DynamicCollectionSchemaService,
+    "detectFieldRename" | "singleRowFillValue"
+  >
+): Promise<void> {
+  const before = new Set(oldFields.map(field => field.name));
+  // A renamed field keeps its column and its value; only a field new to the table is filled.
+  const renamedTo = schemaService.detectFieldRename(oldFields, newFields)?.to
+    .name;
+  const { validateEntryData } = await import(
+    "../../../shared/lib/entry-validation"
+  );
+  const errors: { path: string; code: string; message: string }[] = [];
+  for (const field of newFields) {
+    if (
+      before.has(field.name) ||
+      field.name === renamedTo ||
+      leavingTranslation.has(field.name)
+    ) {
+      continue;
+    }
+    const fill = schemaService.singleRowFillValue(field);
+    if (fill === undefined) continue;
+    const issues = await validateEntryData({ [field.name]: fill }, [field], {
+      mode: "create",
+    });
+    for (const issue of issues) {
+      errors.push({
+        path: `fields.${field.name}`,
+        code: "DEFAULT_FAILS_FIELD_RULES",
+        message:
+          `The default "${field.name}" states would fill the entry this Single already holds, ` +
+          `but the field's own rules refuse it. ${issue.message} Change the default or the rule, ` +
+          `then save again.`,
+      });
+    }
+  }
+  if (errors.length > 0) throw NextlyError.validation({ errors });
 }

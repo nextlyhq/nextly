@@ -1,4 +1,12 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The adapter double holds no stored schema version: registry writes run as
+// they are (`unversionedRegistryWrites`).
+vi.mock("../../schema/schema-version", async importOriginal =>
+  (
+    await import("../../../__tests__/helpers/unversioned-registry-writes")
+  ).unversionedRegistryWrites(await importOriginal())
+);
 
 // The sync asks the reconcile service to clear a diverged mark on a code-managed group. Mocked so
 // the ASK is observable: the repair itself is proved in its own suite, and running it here would
@@ -15,15 +23,40 @@ vi.mock("../services/field-group-reconcile-service", () => ({
   })),
 }));
 
+// The schema lock a delete holds from its check to its last drop. Run straight through here, with
+// what it was asked recorded: taking the lock is the exclusion suite's to prove.
+vi.mock("../../schema/services/schema-change-exclusion", () => ({
+  withSchemaChangeExcluded: vi.fn(
+    (_args: unknown, work: () => Promise<unknown>) => work()
+  ),
+}));
+
+// The database's catalog of keys pointing into a table, which a delete reads before it removes
+// anything. Answered as holding none here: the catalog read is the integration suites' to prove.
+vi.mock("../../schema/pipeline/live-table-facts", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../schema/pipeline/live-table-facts")
+  >()),
+  readReferencingTables: vi.fn(async () => []),
+}));
+
 // The service throws NextlyError, so `rejects.toThrow(...)` asserts against
 // that class for the instanceof check to line up with the thrown type.
 import { NextlyError } from "../../../errors";
 import { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
+import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 
 import {
   createSilentLogger,
   createMockAdapter,
 } from "./field-group-test-helpers";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 type RegistryTestCtx = {
   service: FieldGroupRegistryService;
@@ -288,22 +321,20 @@ describe("FieldGroupRegistryService", () => {
     });
 
     it("applies search filter across slug and label", async () => {
-      ctx.adapter.select.mockResolvedValue([]);
+      ctx.adapter.select.mockResolvedValue([
+        dbRow({ id: "1", slug: "seo", label: "Meta", created_at: 1 }),
+        dbRow({ id: "2", slug: "hero", label: "SEO card", created_at: 2 }),
+        dbRow({ id: "3", slug: "footer", label: "Footer", created_at: 3 }),
+      ]);
 
-      await ctx.service.listComponents({ search: "seo" });
+      const result = await ctx.service.listComponents({ search: "Seo" });
 
-      const opts = ctx.adapter.select.mock.calls[0][1] as Record<
-        string,
-        unknown
-      >;
-      const where = opts.where as Record<string, unknown>;
-      const andArr = where.and as Array<Record<string, unknown>>;
-      const orCond = andArr.find(c => "or" in c);
-      expect(orCond).toBeDefined();
-      const ors = orCond!.or as Array<Record<string, unknown>>;
-      const columns = ors.map(c => c.column);
-      expect(columns).toContain("slug");
-      expect(columns).toContain("label");
+      // Matched on the slug or the label, without regard to case.
+      expect(result.data.map(group => group.slug).sort()).toEqual([
+        "hero",
+        "seo",
+      ]);
+      expect(result.total).toBe(2);
     });
   });
 
@@ -467,18 +498,35 @@ describe("FieldGroupRegistryService", () => {
     });
   });
 
+  describe("a component defined in code", () => {
+    it("is refused a change from anywhere but its code, and told why", async () => {
+      ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 1 }));
+
+      await expect(
+        ctx.service.updateComponent("seo", { label: "X" }, { source: "ui" })
+      ).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        publicMessage:
+          "This component is defined in code, so it can't be changed here.",
+      });
+    });
+  });
+
   describe("deleteComponent", () => {
     it("throws FORBIDDEN when component is locked", async () => {
       ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 1 }));
 
-      await expect(ctx.service.deleteComponent("seo")).rejects.toThrow(
-        NextlyError
-      );
+      await expect(ctx.service.deleteComponent("seo")).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        // Why, in words: the component is defined in code.
+        publicMessage:
+          "This component is defined in code, so it can't be deleted here.",
+      });
     });
 
-    it("deletes unlocked component and drops its data table", async () => {
+    it("deletes unlocked component and drops its data table, under the schema lock", async () => {
       ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 0 }));
-      // select calls for findComponentReferences return empty
+      // Every registry read for what places it returns no rows.
       ctx.adapter.select.mockResolvedValue([]);
 
       await ctx.service.deleteComponent("seo");
@@ -491,11 +539,17 @@ describe("FieldGroupRegistryService", () => {
         "dynamic_components",
         expect.anything()
       );
+      expect(vi.mocked(withSchemaChangeExcluded)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          label: 'delete field group "seo"',
+          issuesDdl: true,
+        }),
+        expect.any(Function)
+      );
     });
 
-    it("throws CONFLICT when component is referenced by other entities", async () => {
+    it("refuses while another entity places it, naming the field, and drops nothing", async () => {
       ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 0 }));
-      // First select: dynamic_collections with referencing field
       ctx.adapter.select.mockImplementation(async (table: string) => {
         if (table === "dynamic_collections") {
           return [
@@ -510,9 +564,28 @@ describe("FieldGroupRegistryService", () => {
         return [];
       });
 
-      await expect(ctx.service.deleteComponent("seo")).rejects.toThrow(
-        NextlyError
-      );
+      await expect(ctx.service.deleteComponent("seo")).rejects.toMatchObject({
+        code: "CONFLICT",
+        publicMessage: `"seo" cannot be deleted while other schema depends on it. Fields that place it: pages.meta. Remove those fields, or have them place another field group, then delete "seo".`,
+      });
+      expect(ctx.adapter.executeQuery).not.toHaveBeenCalled();
+      expect(ctx.adapter.delete).not.toHaveBeenCalled();
+    });
+
+    it("refuses when a registry cannot be read, rather than taking it for no use, and drops nothing", async () => {
+      ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 0 }));
+      ctx.adapter.select.mockImplementation(async (table: string) => {
+        if (table === "dynamic_singles") {
+          throw new Error("permission denied for table dynamic_singles");
+        }
+        return [];
+      });
+
+      await expect(ctx.service.deleteComponent("seo")).rejects.toMatchObject({
+        code: "SERVICE_UNAVAILABLE",
+      });
+      expect(ctx.adapter.executeQuery).not.toHaveBeenCalled();
+      expect(ctx.adapter.delete).not.toHaveBeenCalled();
     });
   });
 
@@ -843,14 +916,65 @@ describe("FieldGroupRegistryService", () => {
       expect(refs).toEqual([]);
     });
 
-    it("handles table-missing errors gracefully (fresh install)", async () => {
+    it("takes a registry that does not exist yet for one with nothing in it (fresh install)", async () => {
       ctx.adapter.select.mockRejectedValue(
-        new Error("relation does not exist")
+        Object.assign(new Error('relation "dynamic_singles" does not exist'), {
+          code: "42P01",
+        })
       );
 
       const refs = await ctx.service.findComponentReferences("seo");
 
       expect(refs).toEqual([]);
+    });
+
+    it("throws when a registry cannot be read, rather than answering no references", async () => {
+      ctx.adapter.select.mockRejectedValue(
+        new Error("permission denied for table dynamic_collections")
+      );
+
+      await expect(ctx.service.findComponentReferences("seo")).rejects.toThrow(
+        "permission denied"
+      );
+    });
+
+    it("finds a placement inside a repeater and a group, by its path", async () => {
+      ctx.adapter.select.mockImplementation(async (table: string) => {
+        if (table === "dynamic_components") {
+          return [
+            {
+              slug: "card",
+              fields: JSON.stringify([
+                {
+                  name: "items",
+                  type: "repeater",
+                  fields: [
+                    {
+                      name: "meta",
+                      type: "group",
+                      fields: [
+                        { name: "seo", type: "fieldGroup", fieldGroup: "seo" },
+                      ],
+                    },
+                  ],
+                },
+              ]),
+            },
+          ];
+        }
+        return [];
+      });
+
+      const refs = await ctx.service.findComponentReferences("seo");
+
+      expect(refs).toEqual([
+        {
+          entityType: "component",
+          entitySlug: "card",
+          fieldName: "seo",
+          fieldPath: "items.meta.seo",
+        },
+      ]);
     });
   });
 

@@ -15,8 +15,9 @@ Integration tests in this repo must:
   `packages/nextly/src/database/__tests__/integration/helpers/test-db.ts`)
   so files stay independent. Fixed-name SYSTEM tables (for example
   `nextly_schema_events`) cannot be prefixed; suites that create them rely on
-  the sequential integration run (`fileParallelism: false`) for isolation,
-  which is why parallelism must never be re-enabled.
+  each worker having its own database and running its files in sequence
+  (`packages/nextly/src/__tests__/worker-database-guard.ts`), which is why
+  files must never run in parallel on a shared database.
 - Never target an existing database. Use the throwaway containers from
   `docker-compose.test.yml` (Postgres 15 on 5434, Postgres 17 on 5435, MySQL
   on 3307; these are the matrix-tested versions). The

@@ -12,6 +12,8 @@
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import { restoreDryRunChanges } from "../../../cli/commands/i18n-restore";
+import { dryRunLines } from "../../../cli/dry-run";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
@@ -127,7 +129,7 @@ describeEachDialect("the archive's entity kind", dialect => {
         overrideAccess: true,
         locale: "es",
       },
-      { heading: "Colección" }
+      { heading: "Colección", _overwrite: true }
     );
     expect(es.success, JSON.stringify(es)).toBe(true);
     return id;
@@ -253,6 +255,30 @@ describeEachDialect("the archive's entity kind", dialect => {
       entry: groupId,
       value: "Grupo",
     });
+  });
+
+  it("a dry run counts what a restore writes and claims, and writes nothing", async () => {
+    const collectionId = await seedCollection();
+    await seedFieldGroup();
+    await makeShared();
+    await makeCollectionTranslated();
+    const archivedBefore = await archived();
+
+    const plan = await restoreI18nArchive({
+      adapter: restoreAdapter(),
+      collection: "hero",
+      kind: "collection",
+      companionTableName: "dc_hero_locales",
+      purge: true,
+      dryRun: true,
+    });
+
+    expect(plan.rowsRead).toBe(1);
+    expect(plan.rowsRestored).toBe(1);
+    expect(plan.locales).toEqual(["es"]);
+    // Neither the companion nor the archive changed, the purge included.
+    expect(await spanishOf("dc_hero", collectionId)).toBeNull();
+    expect(await archived()).toEqual(archivedBefore);
   });
 
   it("removes only the deleted entity's archived values", async () => {
@@ -408,6 +434,113 @@ describeEachDialect("the archive's entity kind", dialect => {
       { slug: "hero", kind: "collection", value: "Antes" },
       { slug: "notice", kind: "single", value: "Aviso" },
       { slug: "banner", kind: "fieldGroup", value: "Bandera" },
+    ]);
+  });
+
+  it.each([
+    { archive: "without the kind column", migrated: false },
+    { archive: "whose rows are of unknown kind", migrated: true },
+  ])(
+    "a dry run over an older archive $archive counts what the restore then restores, and changes nothing",
+    async ({ migrated }) => {
+      const collectionId = await seedCollection();
+      // `hero` created between the two rows' archiving: one row is its, one predates it.
+      await createdLongAgo("dynamic_collections", "hero", BETWEEN);
+      await archiveWithoutTheKind();
+      // One row the labelling gives to `hero`, one archived before `hero` existed.
+      await legacyRow("hero", collectionId, "Antes");
+      await legacyRow("hero", "older-entry", "Antiguo", LONG_AGO);
+      if (migrated) await migrateCore();
+      const rowsBefore = await query(
+        `SELECT * FROM ${q("nextly_i18n_archive")} ORDER BY ${q("id")}`
+      );
+
+      const plan = await restoreI18nArchive({
+        adapter: restoreAdapter(),
+        collection: "hero",
+        kind: "collection",
+        companionTableName: "dc_hero_locales",
+        dryRun: true,
+      });
+
+      // Nothing changed, the archive's columns included.
+      expect(
+        await query(
+          `SELECT * FROM ${q("nextly_i18n_archive")} ORDER BY ${q("id")}`
+        )
+      ).toEqual(rowsBefore);
+      expect(await spanishOf("dc_hero", collectionId)).toBe("Colección");
+
+      const restored = await restoreHero();
+      expect(plan.rowsRead).toBe(restored.rowsRead);
+      expect(plan.rowsRestored).toBe(restored.rowsRestored);
+      expect(plan.locales).toEqual(restored.locales);
+      expect(plan.rowsUnattributed).toBe(restored.rowsUnattributed);
+      expect(restored.rowsRead).toBe(1);
+    }
+  );
+
+  /** The lines `i18n:restore --dry-run` prints for `hero`, from the restore's own dry run. */
+  async function dryRunLinesForHero(): Promise<string[]> {
+    const restoreArgs = {
+      collection: "hero",
+      kind: "collection" as const,
+      companionTableName: "dc_hero_locales",
+    };
+    const plan = await restoreI18nArchive({
+      adapter: restoreAdapter(),
+      ...restoreArgs,
+      dryRun: true,
+    });
+    return dryRunLines({ changes: restoreDryRunChanges(plan, restoreArgs) });
+  }
+
+  it("a dry run names the archive table a restore would create, and creates nothing", async () => {
+    await seedCollection();
+    await query(`DROP TABLE ${q("nextly_i18n_archive")}`);
+    const tablesBefore = (await current.adapter.listTables()).sort();
+
+    const lines = await dryRunLinesForHero();
+
+    expect(lines).toContain(
+      "Would create the archive table nextly_i18n_archive"
+    );
+    expect((await current.adapter.listTables()).sort()).toEqual(tablesBefore);
+
+    // The real restore creates it.
+    await restoreHero();
+    expect(await current.adapter.listTables()).toContain("nextly_i18n_archive");
+  });
+
+  it("a dry run over an archive older than the kind names the column it adds and the rows it labels", async () => {
+    const collectionId = await seedCollection();
+    // `hero` created between the two rows' archiving: one row is its, one predates it.
+    await createdLongAgo("dynamic_collections", "hero", BETWEEN);
+    await archiveWithoutTheKind();
+    await legacyRow("hero", collectionId, "Antes");
+    await legacyRow("hero", "older-entry", "Antiguo", LONG_AGO);
+    const rowsBefore = await query(
+      `SELECT * FROM ${q("nextly_i18n_archive")} ORDER BY ${q("id")}`
+    );
+
+    const lines = await dryRunLinesForHero();
+
+    expect(lines).toContain(
+      "Would add the entity_kind column to nextly_i18n_archive"
+    );
+    expect(lines).toContain("Would label 1 legacy rows as collection");
+    expect(lines).toContain("Would label 1 legacy rows as unresolved");
+    expect(
+      await query(
+        `SELECT * FROM ${q("nextly_i18n_archive")} ORDER BY ${q("id")}`
+      )
+    ).toEqual(rowsBefore);
+
+    // The real restore labels exactly those; the collection's row is then restored and kept.
+    await restoreHero();
+    expect(await archivedBySlug()).toEqual([
+      { slug: "hero", kind: "collection", value: "Antes" },
+      { slug: "hero", kind: "unresolved", value: "Antiguo" },
     ]);
   });
 

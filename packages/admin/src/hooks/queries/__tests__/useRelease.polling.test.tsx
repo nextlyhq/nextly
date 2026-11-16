@@ -29,7 +29,6 @@ vi.mock("@admin/services/releaseApi", () => ({
   createRelease: vi.fn(),
   scheduleRelease: vi.fn(),
   cancelRelease: vi.fn(),
-  addReleaseMember: vi.fn(),
   removeReleaseMember: vi.fn(),
 }));
 

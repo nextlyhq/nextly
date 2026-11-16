@@ -1,0 +1,24 @@
+---
+title: NEXTLY_CORE_UPGRADE_UNSUPPORTED
+description: "This version of Nextly cannot bring Nextly's own tables up to date from this database in one step, so it changed nothing."
+---
+
+## Cause
+
+This version of Nextly cannot bring Nextly's own tables up to date from this database in one step, so it changed nothing.
+
+Before the app's migrations, `nextly migrate` brings Nextly's own tables up to date with drizzle-kit's push. For some databases much older than this release, drizzle-kit cannot plan that push. Rather than fail part-way, or report success with columns missing, the command refuses before its first statement and names the tables.
+
+## Fix
+
+- Run `nextly migrate` with the release the message names first, for example `npx nextly@0.0.2-alpha.65 migrate`, against the same database.
+- Then run this version's `nextly migrate`.
+
+## Example
+
+```text
+✗ This version of Nextly cannot bring dynamic_collections, dynamic_singles up to date from this database in one step, so it changed nothing.
+  Why:  drizzle-kit cannot plan this upgrade of Nextly's own tables from the database as it stands.
+  Next: Run `npx nextly@0.0.2-alpha.65 migrate` first, then this version's `nextly migrate`.
+  Docs: https://nextlyhq.com/docs/cli/errors/nextly-core-upgrade-unsupported  (NEXTLY_CORE_UPGRADE_UNSUPPORTED)
+```

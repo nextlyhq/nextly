@@ -97,6 +97,8 @@ export interface BlockSupportKeys {
   container: never;
   /** Marker style on a list. */
   list: never;
+  /** The icon a block's disclosure children show, and which side it sits on. */
+  disclosure: never;
   /** Author-written CSS on this block. Gates a capability, not a style group. */
   customCss: never;
 }
@@ -198,17 +200,14 @@ export interface BlockRenderArgs<P>
    *
    * `ReactNode` rather than the `ReactNode | Promise<ReactNode>` that `render`
    * returns, and the asymmetry is deliberate: this value is one a block places
-   * into its own JSX, and that union is not a legal child under EITHER supported
-   * peer. React 18 admits no promise at all; React 19 admits only
+   * into its own JSX, and that union is not a legal child. React admits only
    * `Promise<AwaitedReactNode>`, a promise of a settled node, so a promise that
-   * may itself yield a promise is refused there too. Widening here would move
-   * the error onto every block that draws a slot.
+   * may itself yield a promise is refused. Widening here would move the error
+   * onto every block that draws a slot.
    *
-   * It still says what each peer can express, because React 19 counts
-   * `Promise<AwaitedReactNode>` as a `ReactNode`: a renderer on 19 may hand back
-   * a pending slot and the block places it unchanged. On 18 it may not, which
-   * costs nothing, since an async block cannot be drawn under React 18's types
-   * regardless — `<AsyncBlock />` is refused outright there.
+   * It still admits a pending slot, because React counts
+   * `Promise<AwaitedReactNode>` as a `ReactNode`: a renderer may hand one back
+   * and the block places it unchanged.
    */
   renderSlot(this: void, name: string, ctx?: BlockRenderContext): ReactNode;
 }
@@ -238,11 +237,10 @@ export interface BlockDefinition<P extends object = Record<string, unknown>>
   /**
    * Renders the block.
    *
-   * The promise is spelled out rather than left to `ReactNode`. React 19 added
-   * promises to that type and React 18 did not, and this package supports both,
-   * so an async block would compile against one peer and be rejected by the
-   * other. Naming it here makes the async contract mean the same thing across
-   * the range this package declares.
+   * The promise is spelled out rather than left to `ReactNode`, which admits
+   * only a promise of a settled node: an async block's `render` returns a
+   * promise of anything it could return synchronously, and spelling it out
+   * says so.
    */
   render(args: BlockRenderArgs<P>): BlockRenderResult;
 }
@@ -323,13 +321,22 @@ export type {
  * not satisfy `BlockDefinition["render"]`, so handing that helper to
  * `defineBlock` failed to compile.
  *
- * The promise is spelled out for the same reason `render` spells it out: React
- * 19 added promises to `ReactNode` and React 18 did not, and this package
- * supports both.
+ * The promise is spelled out for the same reason `render` spells it out.
  *
  * @experimental Carried by the same freeze as `defineBlock`.
  */
 export type BlockRenderResult = ReactNode | Promise<ReactNode>;
+
+/**
+ * What a block's own inspector (`editor.component`) is given: the selected
+ * node, its props, `commit(name, value)` through the editor's own write path,
+ * and whether the block is read-only. The editor refuses a commit while it is,
+ * and one to a non-content prop inside a `contentOnly` area, whatever the
+ * component does.
+ *
+ * @experimental The contract will grow with the editor's controls registry.
+ */
+export type { BlockInspectorProps } from "@nextlyhq/blocks-engine";
 
 /**
  * The rest of the definition's own vocabulary. Every one of these names a field
@@ -346,6 +353,10 @@ export type BlockRenderResult = ReactNode | Promise<ReactNode>;
  * one key is written as `BlockSupports["spacing"]`, which is checked, and a
  * whole object goes through `blockSupports()`.
  *
+ * `ContentKind` and `ContentModel` are what `contentModel(props)` answers
+ * with, so a block author declares what their block is as HTML content
+ * without importing the engine.
+ *
  * @experimental Carried by the same freeze as `defineBlock`.
  */
 export type {
@@ -358,7 +369,47 @@ export type {
   BlockSeoImage,
   BlockVariation,
   ComponentPath,
+  ContentKind,
+  ContentModel,
   NodeStyles,
   SlotLock,
   SlotSpec,
+} from "@nextlyhq/blocks-engine";
+
+/**
+ * Named queries: a collection list's custom source. A developer declares one
+ * with `defineNamedQuery`, its typed inputs made with `param`, every
+ * collection, Single and site setting it reads, and the shape of its rows.
+ * The site registers its own with `pageBuilder({ namedQueries })`; a plugin
+ * declares them under `contributes.declarations["@nextlyhq/plugin-page-builder"].namedQueries`.
+ *
+ * Re-exported from the engine, where the validator and the renderer read the
+ * same declaration. Its `run` function receives a reader that reads as an
+ * anonymous visitor, limited to what the query declares; the Direct API
+ * refuses any other read made while it runs.
+ *
+ * @experimental A collection list's custom source settles with the editor
+ * that offers it.
+ */
+export { defineNamedQuery, param } from "@nextlyhq/blocks-engine";
+/** @experimental Settles with `defineNamedQuery`. */
+export type {
+  BooleanParam,
+  ChoiceParam,
+  DayParam,
+  EntryParam,
+  NamedQueryChoice,
+  NamedQueryDeclaration,
+  NamedQueryDefinition,
+  NamedQueryParam,
+  NamedQueryParams,
+  NamedQueryParamValues,
+  NamedQueryReader,
+  NamedQueryResult,
+  NamedQueryRows,
+  NamedQueryRunArgs,
+  NamedReadFilter,
+  NamedReadQuery,
+  NumberParam,
+  TextParam,
 } from "@nextlyhq/blocks-engine";

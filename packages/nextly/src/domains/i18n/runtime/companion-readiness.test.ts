@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   cachedCompanionReadiness,
+  companionFoundMissing,
   companionNotReadyMessage,
   expireCompanionReadiness,
   forgetCompanionReadiness,
@@ -122,6 +123,112 @@ describe("companion readiness", () => {
     ).toBeUndefined();
     // And the second connection's miss did not disturb the first's verdict.
     expect(cachedCompanionReadiness(first, "dc_posts_locales")).toBe("ready");
+  });
+});
+
+describe("companionFoundMissing", () => {
+  /** A driver error with the code and message a dialect gives, as Drizzle wraps it. */
+  function driverError(message: string, code: string): Error {
+    return new Error("Failed query", {
+      cause: Object.assign(new Error(message), { code }),
+    });
+  }
+
+  /** A connection holding a fresh `ready` verdict for the posts companion. */
+  async function readyAdapter() {
+    const adapter = countingAdapter(["dc_posts_locales"]);
+    expect(await isCompanionReady(adapter, "dc_posts_locales")).toBe(true);
+    return adapter;
+  }
+
+  it.each([
+    [
+      "postgresql",
+      driverError('relation "dc_posts_locales" does not exist', "42P01"),
+    ],
+    [
+      "mysql",
+      driverError(
+        "Table 'nextly.dc_posts_locales' doesn't exist",
+        "ER_NO_SUCH_TABLE"
+      ),
+    ],
+    ["sqlite", driverError("no such table: dc_posts_locales", "SQLITE_ERROR")],
+  ] as const)(
+    "knows this companion missing on %s by its own code, and forgets its verdict",
+    async (dialect, error) => {
+      const adapter = await readyAdapter();
+      expect(
+        companionFoundMissing(adapter, dialect, "dc_posts_locales", error)
+      ).toBe(true);
+      expect(
+        cachedCompanionReadiness(adapter, "dc_posts_locales")
+      ).toBeUndefined();
+    }
+  );
+
+  it("leaves another missing table, and its verdict, alone", async () => {
+    // The main table gone is not the companion's to explain.
+    const adapter = await readyAdapter();
+    const error = driverError('relation "dc_posts" does not exist', "42P01");
+    expect(
+      companionFoundMissing(adapter, "postgresql", "dc_posts_locales", error)
+    ).toBe(false);
+    expect(cachedCompanionReadiness(adapter, "dc_posts_locales")).toBe("ready");
+  });
+
+  it("leaves a statement on the companion that finds another table missing alone", async () => {
+    // A trigger on the companion reading a table that is gone: the query's
+    // wrapper names the companion, and the error carrying the code names the
+    // other table, which is the one missing.
+    const adapter = await readyAdapter();
+    const error = new Error(
+      'Failed query: insert into "dc_posts_locales" ("_parent") values ($1)',
+      {
+        cause: Object.assign(new Error('relation "audit_log" does not exist'), {
+          code: "42P01",
+        }),
+      }
+    );
+    expect(
+      companionFoundMissing(adapter, "postgresql", "dc_posts_locales", error)
+    ).toBe(false);
+    expect(cachedCompanionReadiness(adapter, "dc_posts_locales")).toBe("ready");
+  });
+
+  it("leaves a missing table whose name only begins with the companion's alone", async () => {
+    const adapter = await readyAdapter();
+    const error = driverError(
+      'relation "dc_posts_locales_audit" does not exist',
+      "42P01"
+    );
+    expect(
+      companionFoundMissing(adapter, "postgresql", "dc_posts_locales", error)
+    ).toBe(false);
+    expect(cachedCompanionReadiness(adapter, "dc_posts_locales")).toBe("ready");
+  });
+
+  it("leaves any other failure on the companion alone", async () => {
+    // A missing column names the table too, and is no missing table.
+    const adapter = await readyAdapter();
+    const missingColumn = driverError(
+      'column "title" of relation "dc_posts_locales" does not exist',
+      "42703"
+    );
+    expect(
+      companionFoundMissing(
+        adapter,
+        "postgresql",
+        "dc_posts_locales",
+        missingColumn
+      )
+    ).toBe(false);
+    // The words alone, without the dialect's code, are not enough.
+    const uncoded = new Error('relation "dc_posts_locales" does not exist');
+    expect(
+      companionFoundMissing(adapter, "postgresql", "dc_posts_locales", uncoded)
+    ).toBe(false);
+    expect(cachedCompanionReadiness(adapter, "dc_posts_locales")).toBe("ready");
   });
 });
 

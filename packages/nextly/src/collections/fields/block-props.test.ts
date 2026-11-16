@@ -346,6 +346,25 @@ describe("blockPropsToFieldConfigs bounds", () => {
 });
 
 describe("validateBlockPropValues shape checks", () => {
+  it("accepts a fractional number prop, which stores as JSON", async () => {
+    // A block's props are JSON: no column decides what a number means, so a
+    // fraction is as declared as a whole. The whole-number floor binds typed
+    // integer columns alone and is not asked on this loose document.
+    const source: BlockPropsSource = {
+      props: {
+        opacity: { type: "number" },
+        ids: { type: "number", hasMany: true },
+      },
+    };
+    expect(
+      await validateBlockPropValues({ opacity: 0.5, ids: [1, 1.5] }, source)
+    ).toEqual([]);
+    // The shape rules still apply.
+    expect(
+      await validateBlockPropValues({ opacity: "half" }, source)
+    ).toHaveLength(1);
+  });
+
   it("rejects a rich text value that is not editor content", async () => {
     const source: BlockPropsSource = { props: { body: { type: "richText" } } };
     expect(await validateBlockPropValues({ body: 42 }, source)).toHaveLength(1);

@@ -94,15 +94,18 @@ const EXPECTED_BLOCKS = [
   "core/columns",
   "core/divider",
   "core/embed",
+  "core/entry-content",
   "core/form",
   "core/gallery",
   "core/heading",
+  "core/icon",
   "core/image",
   "core/list",
   "core/quote",
   "core/rich-text",
   "core/section",
   "core/spacer",
+  "core/table-of-contents",
   "core/text",
 ].sort();
 
@@ -228,9 +231,19 @@ function contexts(): PageContext[] {
     ...localized,
     queries: { take: () => true },
   };
+  // The editor's canvas drawing a template, where Entry content draws its
+  // note to the author rather than nothing: the one state its root is drawn
+  // in without an entry's blocks composed into it.
+  const templateCanvas = {
+    ...empty,
+    entryContentCanvas: {
+      noteFor: () => ({ tone: "muted", words: "The post’s Body shows here." }),
+    },
+  };
   return [
     empty,
     answering,
+    templateCanvas,
     noProvider,
     failing,
     rejecting,

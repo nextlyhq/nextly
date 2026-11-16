@@ -31,12 +31,32 @@ describe("pages carries no custom CSS surface", () => {
     expect(fieldNames()).not.toContain("customCss");
   });
 
-  it("declares no permission, now that no rule reads one", () => {
+  it("declares no custom CSS permission; each it declares is one a route reads", () => {
     // A permission nothing consults grants nothing when held and prevents
     // nothing when withheld, while still being offered to an administrator to
-    // assign.
+    // assign. So the declared list is exactly the permissions something reads:
+    // `manage-page-builder-site`, demanded by make-default,
+    // `lock-page-builder-shared-styles`, demanded by the shared-style lock, and
+    // `manage-template-routing`, asked by the template address field's rules
+    // and the template action (`templates/template-routing.test.ts`,
+    // `templates/template-actions-route.test.ts`).
     const declared = pageBuilder().contributes?.permissions ?? [];
-    expect(declared).toHaveLength(0);
+    expect(
+      declared.map(permission => `${permission.action}-${permission.resource}`)
+    ).toEqual([
+      "manage-page-builder-site",
+      "lock-page-builder-shared-styles",
+      "manage-template-routing",
+    ]);
+    const routes = pageBuilder().contributes?.routes ?? [];
+    const route = (suffix: string) =>
+      routes.find(candidate => candidate.path.endsWith(suffix));
+    expect(route("/make-default")?.requiredPermission).toBe(
+      "manage-page-builder-site"
+    );
+    expect(route("/shared-styles/lock")?.requiredPermission).toBe(
+      "lock-page-builder-shared-styles"
+    );
   });
 });
 
@@ -164,9 +184,43 @@ describe("where a page previews", () => {
     expect("breakpoints" in (preview as object)).toBe(false);
   });
 
-  it("escapes a slug that would otherwise change the path", () => {
+  it("keeps the segments of a page's path, and escapes a slug that would otherwise change it", () => {
     const url = pagesCollection({ previewPath: "/{slug}" }).admin?.preview?.url;
 
-    expect(url?.({ slug: "a/b" })).toBe("/a%2Fb");
+    // The slug is a path (`db.slugPaths`), so a page's own segments stay.
+    expect(url?.({ slug: "docs/install" })).toBe("/docs/install");
+    // Anything that would leave the template, or end the path, is encoded.
+    expect(url?.({ slug: "../admin" })).toBe("/..%2Fadmin");
+    expect(url?.({ slug: "a?b#c" })).toBe("/a%3Fb%23c");
+  });
+});
+
+describe("pages keeps its Layout choice to the one picker", () => {
+  it("hides the Layout reference and the switch from every form", () => {
+    // The Layout picker writes both together; a form drawing either raw would
+    // let an author set one without the other.
+    const fields = pagesCollection().fields as {
+      name?: string;
+      admin?: { hidden?: boolean };
+    }[];
+    for (const name of ["layout", "noHeaderFooter"]) {
+      expect(fields.find(field => field.name === name)?.admin?.hidden).toBe(
+        true
+      );
+    }
+  });
+});
+
+/**
+ * Pages are the site's own content, so a plugin extending every content type
+ * (an SEO plugin adding its fields) reaches them; the plugin's other
+ * collections, such as its layouts, are not marked and are left alone.
+ */
+describe("pages are marked as the site's content", () => {
+  it("marks pages, and only pages, among the collections the plugin adds", () => {
+    const marked = (pageBuilder().contributes?.collections ?? [])
+      .filter(collection => collection.siteContent === true)
+      .map(collection => collection.slug);
+    expect(marked).toEqual(["pages"]);
   });
 });

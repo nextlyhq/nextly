@@ -33,12 +33,19 @@
  * @module domains/schema/ui-schema/metadata-sql
  * @since v0.0.3-alpha (Plan D2b)
  */
-import { createHash } from "node:crypto";
-
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { resolveBuilderRevalidate } from "../../../revalidation/builder-revalidate";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
+// The registry services' own insert shapes: the row values below are typed by
+// them so the same values can be handed to a service as well as rendered here.
+import type {
+  DynamicCollectionInsert,
+  StoredHookConfig,
+} from "../../../schemas/dynamic-collections/types";
+import type { DynamicFieldGroupInsert } from "../../../schemas/dynamic-field-groups/types";
+import type { DynamicSingleInsert } from "../../../schemas/dynamic-singles/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import {
   toPluralLabel,
@@ -50,19 +57,9 @@ import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import { calculateSchemaHash } from "../services/schema-hash";
 import { quoteSqlLiteral } from "../utils/sql-literal";
 
-type Dialect = SupportedDialect;
+import { registryRowKeys, type RegistryRowKeys } from "./registry-row-keys";
 
-/** Deterministic UUID-shaped id from a slug (stable committed SQL). */
-function deterministicId(slug: string): string {
-  const hex = createHash("sha256").update(`ui:${slug}`).digest("hex");
-  return [
-    hex.slice(0, 8),
-    hex.slice(8, 12),
-    hex.slice(12, 16),
-    hex.slice(16, 20),
-    hex.slice(20, 32),
-  ].join("-");
-}
+type Dialect = SupportedDialect;
 
 /** SQL single-quoted string literal (standard single-quote doubling). */
 /**
@@ -90,51 +87,15 @@ function jsonLiteral(value: unknown, dialect: Dialect): string {
 }
 
 /**
- * The `versions` column value for a manifest entity.
+ * The literal for a resolved `versions`, `revalidate` or `webhooks` value.
  *
- * The column holds the resolved config every runtime reader tests, so the
- * manifest's boolean is normalized through the same mapping the Builder's write
- * paths use.
+ * Takes the value already resolved by the row-values functions below, where
+ * the manifest's boolean is normalized through the Builder's own mapping, so
+ * this only renders it: null (the column's "no override" state) is SQL NULL,
+ * anything else its JSON.
  */
-function versionsLiteral(
-  versions: boolean | undefined,
-  maxPerDoc: number | false | undefined,
-  dialect: Dialect
-): string {
-  const resolved = resolveBuilderVersions(versions, maxPerDoc);
-  return resolved === null ? "NULL" : jsonLiteral(resolved, dialect);
-}
-
-/**
- * The `revalidate` column value for a manifest entity.
- *
- * The column holds the resolved `{ tags?, disable? }` config the write path
- * reads, so the manifest's on/off boolean is normalized through the same
- * mapping the Builder's write paths use: on → NULL (standard revalidation),
- * off → the disable config.
- */
-function revalidateLiteral(
-  revalidate: boolean | undefined,
-  dialect: Dialect
-): string {
-  const resolved = resolveBuilderRevalidate(revalidate);
-  return resolved === null ? "NULL" : jsonLiteral(resolved, dialect);
-}
-
-/**
- * The `webhooks` column value for a manifest entity.
- *
- * The column holds the resolved `{ record }` policy boot reads back, so the
- * manifest's on/off boolean is normalized through the same mapping the
- * Builder's write paths use: on → NULL (record, the default), off → the
- * stored opt-out.
- */
-function webhooksLiteral(
-  webhooks: boolean | undefined,
-  dialect: Dialect
-): string {
-  const resolved = resolveBuilderWebhooks(webhooks);
-  return resolved === null ? "NULL" : jsonLiteral(resolved, dialect);
+function nullableJsonLiteral(value: object | null, dialect: Dialect): string {
+  return value === null ? "NULL" : jsonLiteral(value, dialect);
 }
 
 /** Boolean literal: integer on SQLite, keyword elsewhere. */
@@ -185,12 +146,15 @@ interface Column {
  * way for the same reason. The cost is that clearing a description cannot
  * propagate through a migration, which is much the smaller defect: being unable
  * to remove a value is recoverable, silently removing one is not.
+ *
+ * Reads the row value rather than the entity: the row-values functions already
+ * leave `description` out when the manifest carries none (or carries null), and
+ * the null test stays here because the insert types allow one.
  */
 function descriptionColumns(
-  entity: UiSchemaEntity,
+  description: string | null | undefined,
   dialect: Dialect
 ): Column[] {
-  const description = entity.description;
   if (description === undefined || description === null) return [];
   return [
     { name: "description", value: sqlStr(description, dialect), update: true },
@@ -205,12 +169,15 @@ function descriptionColumns(
  * Conditional for the same reason as {@link descriptionColumns}: no manifest
  * projection carries hooks today, so writing NULL when absent would disable the
  * validation and transformation a deployed collection was running.
+ *
+ * Reads the row value, which carries `hooks` only when the manifest did.
  */
-function hooksColumns(entity: UiSchemaEntity, dialect: Dialect): Column[] {
-  if (entity.hooks === undefined) return [];
-  return [
-    { name: "hooks", value: jsonLiteral(entity.hooks, dialect), update: true },
-  ];
+function hooksColumns(
+  hooks: StoredHookConfig[] | undefined,
+  dialect: Dialect
+): Column[] {
+  if (hooks === undefined) return [];
+  return [{ name: "hooks", value: jsonLiteral(hooks, dialect), update: true }];
 }
 
 /**
@@ -224,12 +191,16 @@ function hooksColumns(entity: UiSchemaEntity, dialect: Dialect): Column[] {
  *
  * One helper rather than the same block in each builder: all three kinds have
  * this column and all three must agree about when it is written.
+ *
+ * Reads the row value, which carries `admin` only when the manifest did. Typed
+ * as the widest of the three kinds' admin shapes because only its JSON is used.
  */
-function adminColumns(entity: UiSchemaEntity, dialect: Dialect): Column[] {
-  if (entity.admin === undefined) return [];
-  return [
-    { name: "admin", value: jsonLiteral(entity.admin, dialect), update: true },
-  ];
+function adminColumns(
+  admin: object | null | undefined,
+  dialect: Dialect
+): Column[] {
+  if (admin === undefined) return [];
+  return [{ name: "admin", value: jsonLiteral(admin, dialect), update: true }];
 }
 
 /** Assemble an INSERT … upsert for the given dialect. */
@@ -262,11 +233,22 @@ function buildUpsert(
   return `${insert} ON CONFLICT (${quoteIdent("slug", dialect)}) DO UPDATE SET ${sets}`;
 }
 
-function tableNameFor(
-  slug: string,
-  prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix
-): string {
-  return `${prefix}${slug.replace(/-/g, "_")}`;
+/**
+ * The `id` and `table_name` the row of `slug` is written with in one of the
+ * three registries, derived as `registryRowKeys` derives them for the reading
+ * that judges whose row an upsert writes.
+ */
+function keysOf(registryTable: string, slug: string): RegistryRowKeys {
+  const keys = registryRowKeys(registryTable, slug);
+  if (keys === undefined) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "no derived keys for this registry",
+        registryTable,
+      },
+    });
+  }
+  return keys;
 }
 
 function singular(entity: UiSchemaEntity): string {
@@ -279,36 +261,186 @@ function hashOf(entity: UiSchemaEntity): string {
   );
 }
 
+/**
+ * The entity's fields as the registry stores them: the manifest's field nodes
+ * 1:1, typed as the insert types' field config. The two declarations are
+ * separate types for one stored JSON shape, as `hashOf` above also treats them.
+ */
+function storedFields(
+  entity: UiSchemaEntity
+): DynamicCollectionInsert["fields"] {
+  return entity.fields as unknown as DynamicCollectionInsert["fields"];
+}
+
+/**
+ * The entity's description as a row value: present only when the manifest
+ * carries one, since an absent column must leave the stored value alone (see
+ * {@link descriptionColumns}). An explicit null counts as absent.
+ */
+function descriptionValue(entity: UiSchemaEntity): { description?: string } {
+  const description = entity.description;
+  if (description === undefined || description === null) return {};
+  return { description };
+}
+
+/**
+ * The `dynamic_collections` row the collection upsert writes, as typed values
+ * before any SQL rendering.
+ *
+ * Keyed and typed as `DynamicCollectionInsert`, so the same values can be given
+ * to the collection registry service. The columns written on every upsert are
+ * required here; `admin`, `hooks` and `description` are present only when the
+ * manifest carries them, because the upsert leaves an absent one untouched.
+ * `id` is the one column the insert type has no field for: the row id derived
+ * from the slug, so the committed SQL is byte-stable.
+ */
+export type CollectionRowValues = DynamicCollectionInsert &
+  Required<
+    Pick<
+      DynamicCollectionInsert,
+      | "status"
+      | "localized"
+      | "versions"
+      | "revalidate"
+      | "webhooks"
+      | "migrationStatus"
+    >
+  > & { id: string };
+
+/**
+ * The `dynamic_singles` row the single upsert writes, as typed values before
+ * any SQL rendering. Same rules as {@link CollectionRowValues}; singles have
+ * a single `label` and no `hooks` column.
+ */
+export type SingleRowValues = DynamicSingleInsert &
+  Required<
+    Pick<
+      DynamicSingleInsert,
+      | "status"
+      | "localized"
+      | "versions"
+      | "revalidate"
+      | "webhooks"
+      | "migrationStatus"
+    >
+  > & { id: string };
+
+/**
+ * The component registry row the component upsert writes, as typed values
+ * before any SQL rendering. Same rules as {@link CollectionRowValues};
+ * components have no status, versions, revalidate, webhooks or hooks columns.
+ */
+export type ComponentRowValues = DynamicFieldGroupInsert &
+  Required<Pick<DynamicFieldGroupInsert, "localized" | "migrationStatus">> & {
+    id: string;
+  };
+
+/**
+ * The values of the collection registry row for a manifest entity. Pure: the
+ * SQL builder renders exactly these, so a caller writing the row through the
+ * registry service writes what the committed migration writes.
+ *
+ * `versions`, `revalidate` and `webhooks` hold the resolved configs the runtime
+ * reads, normalized from the manifest's booleans through the same mappings the
+ * Builder's write paths use; null is each column's "no override" state.
+ */
+export function collectionRowValues(
+  entity: UiSchemaEntity
+): CollectionRowValues {
+  const keys = keysOf("dynamic_collections", entity.slug);
+  return {
+    id: keys.id,
+    slug: entity.slug,
+    labels: {
+      singular: singular(entity),
+      plural: entity.labels?.plural ?? toPluralLabel(entity.slug),
+    },
+    tableName: keys.table_name,
+    fields: storedFields(entity),
+    source: "ui",
+    schemaHash: hashOf(entity),
+    status: entity.status === true,
+    localized: entity.localized === true,
+    versions: resolveBuilderVersions(entity.versions, entity.versionsMaxPerDoc),
+    revalidate: resolveBuilderRevalidate(entity.revalidate),
+    webhooks: resolveBuilderWebhooks(entity.webhooks),
+    migrationStatus: "applied",
+    ...(entity.admin !== undefined ? { admin: entity.admin } : {}),
+    ...(entity.hooks !== undefined ? { hooks: entity.hooks } : {}),
+    ...descriptionValue(entity),
+  };
+}
+
+/** The values of the single registry row for a manifest entity. Pure. */
+export function singleRowValues(entity: UiSchemaEntity): SingleRowValues {
+  const keys = keysOf("dynamic_singles", entity.slug);
+  return {
+    id: keys.id,
+    slug: entity.slug,
+    label: singular(entity),
+    tableName: keys.table_name,
+    fields: storedFields(entity),
+    source: "ui",
+    schemaHash: hashOf(entity),
+    status: entity.status === true,
+    localized: entity.localized === true,
+    versions: resolveBuilderVersions(entity.versions, entity.versionsMaxPerDoc),
+    revalidate: resolveBuilderRevalidate(entity.revalidate),
+    webhooks: resolveBuilderWebhooks(entity.webhooks),
+    migrationStatus: "applied",
+    ...(entity.admin !== undefined ? { admin: entity.admin } : {}),
+    ...descriptionValue(entity),
+  };
+}
+
+/** The values of the component registry row for a manifest entity. Pure. */
+export function componentRowValues(entity: UiSchemaEntity): ComponentRowValues {
+  const keys = keysOf(STORAGE_FORMAT.registryTable, entity.slug);
+  return {
+    id: keys.id,
+    slug: entity.slug,
+    label: singular(entity),
+    tableName: keys.table_name,
+    fields: storedFields(entity),
+    source: "ui",
+    localized: entity.localized === true,
+    schemaHash: hashOf(entity),
+    migrationStatus: "applied",
+    ...(entity.admin !== undefined ? { admin: entity.admin } : {}),
+    ...descriptionValue(entity),
+  };
+}
+
+// The builders below render the row values above, column by column in the
+// order the committed SQL has always carried them, so the statement for any
+// entity is unchanged by computing the values separately.
 export function buildCollectionMetadataUpsert(
   entity: UiSchemaEntity,
   dialect: Dialect
 ): string {
-  const labels = {
-    singular: singular(entity),
-    plural: entity.labels?.plural ?? toPluralLabel(entity.slug),
-  };
+  const row = collectionRowValues(entity);
   const columns: Column[] = [
-    { name: "id", value: sqlStr(deterministicId(entity.slug), dialect) },
-    { name: "slug", value: sqlStr(entity.slug, dialect) },
-    { name: "labels", value: jsonLiteral(labels, dialect), update: true },
+    { name: "id", value: sqlStr(row.id, dialect) },
+    { name: "slug", value: sqlStr(row.slug, dialect) },
+    { name: "labels", value: jsonLiteral(row.labels, dialect), update: true },
     {
       name: "table_name",
-      value: sqlStr(tableNameFor(entity.slug, "dc_"), dialect),
+      value: sqlStr(row.tableName, dialect),
     },
     {
       name: "fields",
-      value: jsonLiteral(entity.fields, dialect),
+      value: jsonLiteral(row.fields, dialect),
       update: true,
     },
-    { name: "source", value: sqlStr("ui", dialect) },
+    { name: "source", value: sqlStr(row.source, dialect) },
     {
       name: "schema_hash",
-      value: sqlStr(hashOf(entity), dialect),
+      value: sqlStr(row.schemaHash, dialect),
       update: true,
     },
     {
       name: "status",
-      value: boolLiteral(entity.status === true, dialect),
+      value: boolLiteral(row.status, dialect),
       update: true,
     },
     {
@@ -316,7 +448,7 @@ export function buildCollectionMetadataUpsert(
       // companion runtime table; without it the registry row stays localized=false
       // and a Builder-localized collection never resolves its _locales fields.
       name: "localized",
-      value: boolLiteral(entity.localized === true, dialect),
+      value: boolLiteral(row.localized, dialect),
       update: true,
     },
     {
@@ -324,11 +456,7 @@ export function buildCollectionMetadataUpsert(
       // the column, and a column left out of the upsert is untouched by its
       // DO UPDATE SET.
       name: "versions",
-      value: versionsLiteral(
-        entity.versions,
-        entity.versionsMaxPerDoc,
-        dialect
-      ),
+      value: nullableJsonLiteral(row.versions, dialect),
       update: true,
     },
     {
@@ -336,7 +464,7 @@ export function buildCollectionMetadataUpsert(
       // the switch off must clear the column, and a column left out of the
       // upsert is untouched by its DO UPDATE SET.
       name: "revalidate",
-      value: revalidateLiteral(entity.revalidate, dialect),
+      value: nullableJsonLiteral(row.revalidate, dialect),
       update: true,
     },
     {
@@ -344,10 +472,10 @@ export function buildCollectionMetadataUpsert(
       // revalidate): turning it off has to occupy the column, and a column left
       // out of the upsert is untouched by its DO UPDATE SET.
       name: "webhooks",
-      value: webhooksLiteral(entity.webhooks, dialect),
+      value: nullableJsonLiteral(row.webhooks, dialect),
       update: true,
     },
-    { name: "migration_status", value: sqlStr("applied", dialect) },
+    { name: "migration_status", value: sqlStr(row.migrationStatus, dialect) },
   ];
   // 🔴 Emitted for every kind, because every registry table HAS this column —
   // checked per table rather than assumed. The shared manifest schema accepts
@@ -359,10 +487,10 @@ export function buildCollectionMetadataUpsert(
   // CONDITIONAL, on the same rule `description` follows: an absent block leaves
   // the stored value alone rather than clearing it, which is what lets a
   // manifest that says nothing about presentation not erase it.
-  columns.push(...adminColumns(entity, dialect));
-  columns.push(...hooksColumns(entity, dialect));
+  columns.push(...adminColumns(row.admin, dialect));
+  columns.push(...hooksColumns(row.hooks, dialect));
   columns.push(...timestampColumns(dialect));
-  columns.push(...descriptionColumns(entity, dialect));
+  columns.push(...descriptionColumns(row.description, dialect));
   return buildUpsert("dynamic_collections", columns, dialect);
 }
 
@@ -370,35 +498,36 @@ export function buildSingleMetadataUpsert(
   entity: UiSchemaEntity,
   dialect: Dialect
 ): string {
+  const row = singleRowValues(entity);
   const columns: Column[] = [
-    { name: "id", value: sqlStr(deterministicId(entity.slug), dialect) },
-    { name: "slug", value: sqlStr(entity.slug, dialect) },
-    { name: "label", value: sqlStr(singular(entity), dialect), update: true },
+    { name: "id", value: sqlStr(row.id, dialect) },
+    { name: "slug", value: sqlStr(row.slug, dialect) },
+    { name: "label", value: sqlStr(row.label, dialect), update: true },
     {
       name: "table_name",
-      value: sqlStr(tableNameFor(entity.slug, "single_"), dialect),
+      value: sqlStr(row.tableName, dialect),
     },
     {
       name: "fields",
-      value: jsonLiteral(entity.fields, dialect),
+      value: jsonLiteral(row.fields, dialect),
       update: true,
     },
-    { name: "source", value: sqlStr("ui", dialect) },
+    { name: "source", value: sqlStr(row.source, dialect) },
     {
       name: "schema_hash",
-      value: sqlStr(hashOf(entity), dialect),
+      value: sqlStr(row.schemaHash, dialect),
       update: true,
     },
     {
       name: "status",
-      value: boolLiteral(entity.status === true, dialect),
+      value: boolLiteral(row.status, dialect),
       update: true,
     },
     {
       // Mirror the collection upsert: persist the flag so the registry row and
       // boot-time companion registration reflect the single's config.
       name: "localized",
-      value: boolLiteral(entity.localized === true, dialect),
+      value: boolLiteral(row.localized, dialect),
       update: true,
     },
     {
@@ -406,17 +535,13 @@ export function buildSingleMetadataUpsert(
       // the column, and a column left out of the upsert is untouched by its
       // DO UPDATE SET.
       name: "versions",
-      value: versionsLiteral(
-        entity.versions,
-        entity.versionsMaxPerDoc,
-        dialect
-      ),
+      value: nullableJsonLiteral(row.versions, dialect),
       update: true,
     },
     {
       // Mirror the collection upsert: always written so flipping off clears it.
       name: "revalidate",
-      value: revalidateLiteral(entity.revalidate, dialect),
+      value: nullableJsonLiteral(row.revalidate, dialect),
       update: true,
     },
     {
@@ -424,14 +549,14 @@ export function buildSingleMetadataUpsert(
       // revalidate): turning it off has to occupy the column, and a column left
       // out of the upsert is untouched by its DO UPDATE SET.
       name: "webhooks",
-      value: webhooksLiteral(entity.webhooks, dialect),
+      value: nullableJsonLiteral(row.webhooks, dialect),
       update: true,
     },
-    { name: "migration_status", value: sqlStr("applied", dialect) },
+    { name: "migration_status", value: sqlStr(row.migrationStatus, dialect) },
   ];
   columns.push(...timestampColumns(dialect));
-  columns.push(...adminColumns(entity, dialect));
-  columns.push(...descriptionColumns(entity, dialect));
+  columns.push(...adminColumns(row.admin, dialect));
+  columns.push(...descriptionColumns(row.description, dialect));
   return buildUpsert("dynamic_singles", columns, dialect);
 }
 
@@ -439,40 +564,38 @@ export function buildComponentMetadataUpsert(
   entity: UiSchemaEntity,
   dialect: Dialect
 ): string {
+  const row = componentRowValues(entity);
   const columns: Column[] = [
-    { name: "id", value: sqlStr(deterministicId(entity.slug), dialect) },
-    { name: "slug", value: sqlStr(entity.slug, dialect) },
-    { name: "label", value: sqlStr(singular(entity), dialect), update: true },
+    { name: "id", value: sqlStr(row.id, dialect) },
+    { name: "slug", value: sqlStr(row.slug, dialect) },
+    { name: "label", value: sqlStr(row.label, dialect), update: true },
     {
       name: "table_name",
-      value: sqlStr(
-        tableNameFor(entity.slug, STORAGE_FORMAT.tablePrefix),
-        dialect
-      ),
+      value: sqlStr(row.tableName, dialect),
     },
     {
       name: "fields",
-      value: jsonLiteral(entity.fields, dialect),
+      value: jsonLiteral(row.fields, dialect),
       update: true,
     },
-    { name: "source", value: sqlStr("ui", dialect) },
+    { name: "source", value: sqlStr(row.source, dialect) },
     {
       // Persist the Builder localized flag so boot reads the component as localized and
       // resolves/writes its companion `comp_<slug>_locales` fields; without it the registry
       // row stays localized=false and embedded reads/writes target the omitted main columns.
       name: "localized",
-      value: boolLiteral(entity.localized === true, dialect),
+      value: boolLiteral(row.localized, dialect),
       update: true,
     },
     {
       name: "schema_hash",
-      value: sqlStr(hashOf(entity), dialect),
+      value: sqlStr(row.schemaHash, dialect),
       update: true,
     },
-    { name: "migration_status", value: sqlStr("applied", dialect) },
+    { name: "migration_status", value: sqlStr(row.migrationStatus, dialect) },
   ];
   columns.push(...timestampColumns(dialect));
-  columns.push(...adminColumns(entity, dialect));
-  columns.push(...descriptionColumns(entity, dialect));
+  columns.push(...adminColumns(row.admin, dialect));
+  columns.push(...descriptionColumns(row.description, dialect));
   return buildUpsert(STORAGE_FORMAT.registryTable, columns, dialect);
 }

@@ -79,7 +79,7 @@ describe("the Background Jobs settings entry", () => {
     // everyone.
     expect(item).toBeDefined();
     if (!item) return;
-    expect(isSettingsNavItemVisible(item, only("manage-settings"))).toBe(false);
+    expect(isSettingsNavItemVisible(item, only("read-settings"))).toBe(false);
   });
 });
 
@@ -97,16 +97,17 @@ describe("the RAIL above that entry, which the item's own gate cannot see", () =
    */
   it("reveals Settings to an operator whose ONLY grant is the jobs permission", () => {
     expect(
-      buildCapabilities(["manage-background-jobs"], false).canViewSettings
+      buildCapabilities(["manage-background-jobs"], false, undefined)
+        .canViewSettings
     ).toBe(true);
   });
 
   it("still hides it from someone holding an unrelated grant", () => {
     // The control: without it the case above passes against a capability that
     // is true for everyone, which is the other way to be wrong here.
-    expect(buildCapabilities(["read-media"], false).canViewSettings).toBe(
-      false
-    );
+    expect(
+      buildCapabilities(["read-media"], false, undefined).canViewSettings
+    ).toBe(false);
   });
 
   it("reveals Settings for EVERY destination the panel declares", () => {
@@ -117,32 +118,47 @@ describe("the RAIL above that entry, which the item's own gate cannot see", () =
      * property that failed when the list was maintained by hand and Background
      * Jobs was added to one side only.
      *
-     * User Management is excluded because those destinations answer to their
-     * own capabilities, which the rail consults separately.
+     * People is excluded because those destinations answer to their own
+     * capabilities, which the rail consults separately. A destination several
+     * grants reach (Email) must reveal it for EACH of them.
      */
-    const gated = SETTINGS_NAV.filter(group => group.id !== "users")
-      .flatMap(group => group.items)
-      .filter(item => item.gate.kind === "permission");
+    const gated = SETTINGS_NAV.filter(group => group.id !== "people").flatMap(
+      group => group.items
+    );
+    const checked: string[] = [];
     for (const item of gated) {
-      const permission =
-        item.gate.kind === "permission" ? item.gate.permission : "";
-      expect(
-        buildCapabilities([permission], false).canViewSettings,
-        `${item.id} (${permission})`
-      ).toBe(true);
+      const permissions =
+        item.gate.kind === "permission"
+          ? [item.gate.permission]
+          : item.gate.kind === "anyOf"
+            ? item.gate.permissions
+            : [];
+      for (const permission of permissions) {
+        checked.push(permission);
+        expect(
+          buildCapabilities([permission], false, undefined).canViewSettings,
+          `${item.id} (${permission})`
+        ).toBe(true);
+      }
     }
-    // The premise: this walked real destinations, not an empty list.
-    expect(gated.length).toBeGreaterThan(2);
+    // The premise: this walked real destinations, not an empty list. General
+    // and Background Jobs name a permission, and Email names several.
+    expect(checked.length).toBeGreaterThanOrEqual(4);
   });
 
   it("keeps revealing it for the grants it always revealed for", () => {
     // Adding to this list must not narrow it. One representative grant per
-    // group it already covered. (Email left the panel for its own rail entry,
-    // so its grants no longer reveal it.)
-    for (const grant of ["manage-settings", "read-api-keys"]) {
-      expect(buildCapabilities([grant], false).canViewSettings, grant).toBe(
-        true
-      );
+    // group it already covered, Email's among them now that it lives in the
+    // panel again.
+    for (const grant of [
+      "read-settings",
+      "read-api-keys",
+      "read-email-templates",
+    ]) {
+      expect(
+        buildCapabilities([grant], false, undefined).canViewSettings,
+        grant
+      ).toBe(true);
     }
   });
 });

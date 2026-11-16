@@ -24,7 +24,7 @@ import {
   FormLabel,
   FormMessage,
 } from "@admin/components/ui/form";
-import { type Media } from "@admin/types/media";
+import type { Media } from "@admin/types/media";
 
 import {
   USE_DEFAULT_LAYOUT,

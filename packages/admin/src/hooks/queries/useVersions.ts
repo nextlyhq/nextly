@@ -23,11 +23,9 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
-import { entryKeys } from "@admin/services/entryApi";
 import {
   versionApi,
   type DocumentEventListResponse,
-  type RestoreVersionResponse,
   type SetVersionLabelResponse,
   type VersionDetail,
   type VersionDiff,
@@ -35,7 +33,7 @@ import {
   type VersionScope,
 } from "@admin/services/versionApi";
 
-import { singleDocumentKeys, singleKeys } from "./useSingles";
+import { refreshRemovedFromCodeSchema } from "./removed-from-code-refusal";
 
 /** Page size for the history list. */
 const PAGE_SIZE = 25;
@@ -315,12 +313,6 @@ export function useVersionDiff({
 // Mutation Hooks
 // ============================================================
 
-export interface UseRestoreVersionOptions {
-  scope: VersionScope;
-  onSuccess?: (result: RestoreVersionResponse) => void;
-  onError?: (error: Error) => void;
-}
-
 /** Options for renaming a version. */
 export interface UseSetVersionLabelOptions {
   scope: VersionScope;
@@ -361,57 +353,13 @@ export function useSetVersionLabel({
     mutationFn: ({ versionNo, label }) =>
       versionApi.setLabel(scope, versionNo, label),
     onError: error => {
+      // A refusal because the entity was removed from code reads its schema
+      // again, so a screen opened before the removal turns read-only.
+      refreshRemovedFromCodeSchema(queryClient, error);
       onError?.(error);
     },
     onSuccess: result => {
       void queryClient.invalidateQueries({ queryKey: versionKeys.all() });
-      onSuccess?.(result);
-    },
-  });
-}
-
-/**
- * Put the document back to an earlier version.
- *
- * Restoring writes the live document and records a new version, so both the
- * document and its history are stale afterwards. The entry caches are
- * invalidated alongside the version caches, or the editor would keep showing
- * the pre-restore content it already had.
- */
-export function useRestoreVersion({
-  scope,
-  onSuccess,
-  onError,
-}: UseRestoreVersionOptions): UseMutationResult<
-  RestoreVersionResponse,
-  Error,
-  number,
-  unknown
-> {
-  const queryClient = useQueryClient();
-
-  return useMutation<RestoreVersionResponse, Error, number>({
-    mutationFn: versionNo => versionApi.restore(scope, versionNo),
-    // Mutations retry twice by default. A restore is not idempotent — each
-    // attempt is a fresh write that records another version and another outbox
-    // event — so a dropped response would otherwise multiply into several
-    // restores of the same version.
-    retry: false,
-    onError: error => {
-      onError?.(error);
-    },
-    onSuccess: result => {
-      void queryClient.invalidateQueries({ queryKey: versionKeys.all() });
-      void queryClient.invalidateQueries({ queryKey: entryKeys.all });
-      if (scope.kind === "single") {
-        // The editor reads the document through `singleDocumentKeys`, which is
-        // a different root from the metadata list — invalidating only the list
-        // would leave the form showing pre-restore content.
-        void queryClient.invalidateQueries({
-          queryKey: singleDocumentKeys.all(),
-        });
-        void queryClient.invalidateQueries({ queryKey: singleKeys.all() });
-      }
       onSuccess?.(result);
     },
   });

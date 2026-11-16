@@ -137,7 +137,7 @@ export const defaultLayoutTemplate: OwnerTemplate = {
         <table role="presentation" border="0" cellspacing="0" cellpadding="0" width="100%" style="max-width: 600px;">
           <tr>
             <td align="center" style="padding: 20px 0;">
-              <p class="email-muted" style="margin: 0; font-size: 12px; line-height: 18px; color: #71717a; font-family: {{brand.fontFamily}};">{{brand.html.footer}}</p>{{brand.html.links}}
+              <p class="email-muted" style="margin: 0; font-size: 12px; line-height: 18px; color: #52525b; font-family: {{brand.fontFamily}};">{{brand.html.footer}}</p>{{brand.html.links}}
             </td>
           </tr>
         </table>
@@ -151,13 +151,31 @@ export const defaultLayoutTemplate: OwnerTemplate = {
   variables: [
     {
       name: "content",
+      type: "text",
+      label: "Body",
       description: "Template body injected here",
       required: true,
+      example: "Your email content appears here.",
     },
-    { name: "year", description: "Current year", required: false },
-    { name: "appName", description: "Application name", required: false },
+    {
+      name: "year",
+      type: "number",
+      label: "Year",
+      description: "Current year",
+      required: false,
+      example: 2026,
+    },
+    {
+      name: "appName",
+      type: "text",
+      label: "App name",
+      description: "Application name",
+      required: false,
+      example: "Acme",
+    },
     {
       name: "brand",
+      label: "Brand settings",
       description:
         "Brand settings: colours, font, logo and footer (brand.html holds the markup they make)",
       required: false,

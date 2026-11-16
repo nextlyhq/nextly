@@ -2,13 +2,23 @@
 // three kinds (collection / single / component). Each builder page constructs
 // its own config and passes it down — shared components never branch on `kind`.
 
-import { isFieldGroupFieldType } from "nextly/field-group-type";
-
 import type { FieldTypeId } from "@admin/types/collection";
 
-import { FIELD_TYPES_CATALOG } from "./field-picker-modal/field-types-catalog";
-
 export type BuilderKind = "collection" | "single" | "field-group";
+
+/**
+ * How each kind is named in a sentence, e.g. "This Single has no custom fields
+ * yet." The kind is a slug, so it cannot be interpolated as it is ("This
+ * field-group ..."). "Single" keeps its capital as the product's name for that
+ * kind. Field groups are called components in code, and that word is never
+ * shown. Every builder message that names the kind reads it from here, so the
+ * three kinds are spelled the same way on every screen.
+ */
+export const BUILDER_KIND_NOUN: Record<BuilderKind, string> = {
+  collection: "collection",
+  single: "Single",
+  "field-group": "field group",
+};
 
 export type BasicsField =
   | "singularName"
@@ -50,28 +60,19 @@ export type BuilderConfig = {
     previewSchemaChange: boolean;
   };
   picker: {
-    /** Field types to omit from FieldPickerModal. Empty for all kinds today
+    /** Field types to omit from the field picker. Empty for all kinds today
      * per audit findings; reserved for future product decisions. */
     excludedTypes?: readonly FieldTypeId[];
   };
 };
 
-/** The picker's component types, read from its catalog rather than listed by hand. */
-const COMPONENT_TYPES: readonly FieldTypeId[] = FIELD_TYPES_CATALOG.map(
-  entry => entry.type
-).filter(type => isFieldGroupFieldType(type));
-
 /**
- * The types the picker leaves out where the new field goes. A component's own fields cannot hold a
- * component directly, since no write stores one there, so a component is offered in a component
- * only inside a group or repeater, whose value holds it.
+ * The types the picker leaves out: the kind's own exclusions, wherever the new field goes. A field
+ * group's own fields hold a field group directly as well as inside a group or repeater: its
+ * instances are rows of their own, under the instance holding them.
  */
 export function pickerExcludedTypes(
-  config: BuilderConfig,
-  parentFieldId: string | undefined
+  config: BuilderConfig
 ): readonly FieldTypeId[] {
-  const excluded = config.picker.excludedTypes ?? [];
-  return config.kind === "field-group" && parentFieldId === undefined
-    ? [...excluded, ...COMPONENT_TYPES]
-    : excluded;
+  return config.picker.excludedTypes ?? [];
 }

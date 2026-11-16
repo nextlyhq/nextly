@@ -18,6 +18,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import {
+  classOverrideOf,
   resolveSiteStyle,
   tokenOverrideOf,
   tokenSaveOutcome,
@@ -90,6 +91,18 @@ describe("only what differs from the site's own defaults is stored", () => {
     const override = tokenOverrideOf(DEFAULTS, { tokens: edited });
     expect(override.tokens.map(t => t.name)).toEqual(["color.ink"]);
     expect(override.tokens[0]?.unreadExtension).toEqual({ future: "keep-me" });
+  });
+
+  it("stores a default the author only gave a plain label", () => {
+    // A label is the one field an author changes on a code-supplied variable
+    // without touching its value. Compared away, the relabel is filtered out
+    // of the payload and the save reports success while storing nothing.
+    const relabelled = { ...ink, label: "Ink" };
+    const override = tokenOverrideOf(DEFAULTS, {
+      ...DEFAULTS,
+      tokens: [relabelled, brand],
+    });
+    expect(override.tokens).toEqual([relabelled]);
   });
 
   it("stores a token the config never supplied", () => {
@@ -367,5 +380,28 @@ describe("the engine's own defaults are editable without being stored wholesale"
     expect(
       resolved.tokens.find(t => t.name === "color.primary")?.values.light
     ).toBe(baseline.tokens.find(t => t.name === "color.primary")?.values.light);
+  });
+});
+
+describe("classOverrideOf", () => {
+  const configured = {
+    id: "c-card",
+    slug: "card",
+    orderIndex: 0,
+    styles: { base: { base: { color: "#111111" } } },
+  };
+
+  it("drops an untouched copy of a configured class", () => {
+    expect(classOverrideOf([configured], [configured])).toEqual([]);
+  });
+
+  it("keeps an override that only names the class, or only locks it", () => {
+    // The name and the lock are what an author changes on a shared style the
+    // site's code supplies; a comparison blind to them would drop the
+    // override and lose the change on save.
+    const named = { ...configured, label: "Card" };
+    const locked = { ...configured, locked: true as const };
+    expect(classOverrideOf([configured], [named])).toEqual([named]);
+    expect(classOverrideOf([configured], [locked])).toEqual([locked]);
   });
 });

@@ -11,6 +11,10 @@
  * dynamic-import race** (the P5 gap) — completing the string-path component
  * registry.
  *
+ * Declared contributions to admin places (`contributes.admin.contributions`)
+ * add each component they name: a block's, a tab's or a side panel section's,
+ * a drawn column's cell, and the component an action opens.
+ *
  * Menu items carry only a route (`to`), not a component, so they contribute no
  * paths. A widget contributes one only where it SHIPS a component: the
  * declarative archetypes name an archetype and a query, and the host draws them
@@ -21,33 +25,47 @@
  * @module plugins/codegen/component-import-map
  */
 
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, join, posix, relative, sep } from "node:path";
 
+import type { CollectionConfig } from "../../collections/config/define-collection";
+import {
+  isConfigRelative,
+  SITE_CONFIG,
+} from "../../domains/widgets/declaration/site-component";
 import type {
   ComponentPath,
   PluginAdminContributions,
 } from "../admin-contributions";
 import { pluginOwner } from "../dashboard-declarations";
 import { collectDeclarations } from "../declarations";
+import { headerSlotOf, validUserMenuItem } from "../header-item";
 import type { PluginDefinition } from "../plugin-context";
 
+import {
+  ADMIN_KIT_MODULE,
+  ADMIN_ROOT_EXPORTS,
+  ADMIN_ROOT_MODULE,
+} from "./admin-root-exports";
 import { isPageBuilderActive, PAGE_BUILDER_PLUGIN } from "./block-manifest";
 
 /** What a component in the map is for, as a fault about it names it. */
 export type ComponentMapUse =
   | "widget"
+  | "setting editor"
   | "page"
   | "settings"
   | "collection view"
   | "document view"
   | "slot"
+  | "contribution"
   | "field type"
-  | "block editor";
+  | "block editor"
+  | "block editor entry";
 
 /**
  * One component the generated map registers: its path, who declared it, and
- * what it is for. A widget's entry also names the widget, so a refusal can
- * say which card is affected.
+ * what it is for. A widget's entry also names the widget, so a warning, the
+ * CI check and the map itself can say which card is affected.
  */
 export interface ComponentMapEntry {
   readonly path: string;
@@ -56,6 +74,24 @@ export interface ComponentMapEntry {
   readonly use: ComponentMapUse;
   /** The widget's id, for a `widget` entry. */
   readonly widget?: string;
+  /**
+   * Set on a site widget's component written relative to the config file: the
+   * map imports it from its own folder, through where the config file is.
+   */
+  readonly fromConfig?: true;
+}
+
+/**
+ * A component as a warning or a check names it: whose it is, and the widget or the use it is
+ * for. One wording for the development check and `generate:types --check` alike.
+ */
+export function describeComponentUse(each: ComponentMapEntry): string {
+  if (each.use === "widget") {
+    return `${each.owner}, widget "${each.widget ?? "?"}": ${each.path}`;
+  }
+  return each.use === "setting editor"
+    ? `${each.owner}, a setting editor of widget "${each.widget ?? "?"}": ${each.path}`
+    : `${each.owner}, ${each.use}: ${each.path}`;
 }
 
 /** Filename of the generated admin component import map. */
@@ -70,25 +106,28 @@ const HEADER = [
 ].join("\n");
 
 /**
- * Header, schema-builder and form-toolbar slots. They render through the
- * same registry from surfaces the plugin does not own, so they need the
- * map's import as much as a page does.
+ * Header, schema-builder and form-toolbar slots, and the component a
+ * person's-menu item opens. They render through the same registry from
+ * surfaces the plugin does not own, so they need the map's import as much as
+ * a page does. The header's are read as admin-meta reads them: the slot only
+ * at the bar or the rail's foot, and the menu item's only when it is valid.
  */
-function collectAdminSlotPaths(admin: PluginAdminContributions): string[] {
-  // `header.slot` supersedes the deprecated top-level spelling; both are
-  // read exactly as admin-meta reads them.
-  const headerSlot = admin.header?.slot ?? admin.headerSlot;
+function collectAdminSlotPaths(plugin: PluginDefinition): string[] {
+  const admin = plugin.contributes?.admin;
+  const opened = validUserMenuItem(plugin)?.action;
   return [
-    headerSlot,
-    admin.schemaBuilderSlot,
-    admin.entryFormToolbarSlot,
+    headerSlotOf(admin),
+    opened && "open" in opened ? opened.open : undefined,
+    admin?.schemaBuilderSlot,
+    admin?.entryFormToolbarSlot,
   ].filter((path): path is ComponentPath => Boolean(path));
 }
 
 /**
  * Collect every admin `ComponentPath` a plugin contributes that the admin
  * can resolve by string: pages, settings, per-collection views, header and
- * schema-builder and form-toolbar slots, and field-type editor components.
+ * schema-builder and form-toolbar slots, declared contributions to admin
+ * places, and field-type editor components.
  * Behavioral UI (everything but field types) exists only for an ENABLED
  * plugin; field-type editors are collected regardless, because a disabled
  * plugin keeps its collections and their fields — admin-meta serializes
@@ -126,11 +165,18 @@ export function collectAdminComponentEntries(
   const fieldTypes = (plugin.contributes?.fieldTypes ?? []).map(fieldType =>
     entry(fieldType.component, owner, "field type")
   );
+  // A collection's own screens, by the same rule as its field editors: a
+  // disabled plugin keeps its collections, so the views they name still draw
+  // and still need their modules.
+  const ownViews = collectCollectionOwnViewPaths(
+    plugin.contributes?.collections
+  ).map(path => entry(path, owner, "collection view"));
 
-  if (plugin.enabled === false) return fieldTypes;
+  if (plugin.enabled === false) return [...fieldTypes, ...ownViews];
   return [
     ...fieldTypes,
-    ...collectAdminEntries(plugin.contributes?.admin, owner),
+    ...ownViews,
+    ...collectAdminEntries(plugin, owner),
     ...collectDeclaredWidgetEntries(plugin.contributes?.dashboard, owner),
   ];
 }
@@ -152,9 +198,10 @@ const entry = (
 
 /** Every component an enabled plugin's `contributes.admin` names. */
 function collectAdminEntries(
-  admin: PluginAdminContributions | undefined,
+  plugin: PluginDefinition,
   owner: string
 ): ComponentMapEntry[] {
+  const admin = plugin.contributes?.admin;
   if (!admin) return [];
   const tagged = (use: ComponentMapUse) => (path: string) =>
     entry(path, owner, use);
@@ -168,16 +215,43 @@ function collectAdminEntries(
     ...(admin.documentViews ?? []).map(view =>
       entry(view.component, owner, "document view")
     ),
-    ...collectWidgetEntries(admin.widgets, owner),
-    ...collectAdminSlotPaths(admin).map(tagged("slot")),
+    ...collectAdminSlotPaths(plugin).map(tagged("slot")),
+    ...collectContributionPaths(admin.contributions).map(
+      tagged("contribution")
+    ),
   ];
 }
 
 /**
+ * Every component the plugin's declared contributions to admin places name:
+ * a block's, a tab's and a side panel section's `component`, a column's when
+ * it draws its own cell rather than showing a field, and the component a row
+ * or bulk action opens. The admin resolves each by this string when it draws
+ * the place, so a plugin whose only admin UI is one of these needs its module
+ * in the map as much as one with a page; without it the place draws nothing.
+ *
+ * Read as plain JavaScript hands it over, as a widget's is, since generation
+ * runs before startup checks the declarations: an entry naming no component
+ * is skipped here and refused, by name, when the app starts.
+ */
+function collectContributionPaths(contributions: unknown): string[] {
+  if (!Array.isArray(contributions)) return [];
+  return contributions.flatMap((contribution: unknown): string[] => {
+    if (!isRecord(contribution)) return [];
+    const action = contribution.action;
+    const opened = isRecord(action) ? action.open : undefined;
+    return [contribution.component, opened].filter(
+      (path): path is string => typeof path === "string" && path.trim() !== ""
+    );
+  });
+}
+
+/**
  * The component each widget declared under `contributes.dashboard` draws
- * with, for the same reason as today's shape: the map is the only importer
- * the admin's registry can rely on. A widget drawn by one of core's displays
- * ships no component.
+ * with: being pre-bundled by this map is what puts a component in the
+ * registry the admin draws from, since the registry's runtime fallback cannot
+ * resolve a bare package specifier in a bundled browser. A widget drawn by
+ * one of core's views ships no component.
  *
  * Read as plain JavaScript hands it over, since generation runs before
  * startup checks anything: an entry that names no component is skipped here
@@ -191,23 +265,119 @@ function collectDeclaredWidgetEntries(
   const widgets: unknown = isRecord(dashboard) ? dashboard.widgets : undefined;
   if (!Array.isArray(widgets)) return [];
   return widgets.flatMap((widget: unknown): ComponentMapEntry[] => {
-    const display = isRecord(widget) ? widget.display : undefined;
-    const component = isRecord(display) ? display.component : undefined;
-    if (typeof component !== "string" || component.trim() === "") return [];
+    const view = isRecord(widget) ? widget.view : undefined;
+    const component = isRecord(view) ? view.component : undefined;
     const id = isRecord(widget) ? widget.id : undefined;
-    return [
-      {
-        path: component,
-        owner,
-        use: "widget",
-        ...(typeof id === "string" ? { widget: id } : {}),
-      },
-    ];
+    const named = typeof id === "string" ? { widget: id } : {};
+    const drawn: ComponentMapEntry[] =
+      typeof component === "string" && component.trim() !== ""
+        ? [{ path: component, owner, use: "widget", ...named }]
+        : [];
+    return [...drawn, ...settingEditorEntries(widget, owner, named)];
+  });
+}
+
+/**
+ * The components a widget's settings are edited with in the settings sheet,
+ * each from its setting's `editor`. Shipped as the widget's own component is,
+ * since the sheet loads it by its path the same way.
+ */
+function settingEditorEntries(
+  widget: unknown,
+  owner: string,
+  named: { widget?: string }
+): ComponentMapEntry[] {
+  const settings = isRecord(widget) ? widget.settings : undefined;
+  if (!isRecord(settings)) return [];
+  return Object.values(settings).flatMap((setting): ComponentMapEntry[] => {
+    const editor = isRecord(setting) ? setting.editor : undefined;
+    const component = isRecord(editor) ? editor.component : undefined;
+    return typeof component === "string" && component.trim() !== ""
+      ? [{ path: component, owner, use: "setting editor", ...named }]
+      : [];
   });
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * The site config's own widgets' components, named as the site config's, each
+ * written relative to the config file marked so the map imports it from there.
+ */
+function siteWidgetEntries(siteDashboard: unknown): ComponentMapEntry[] {
+  return collectDeclaredWidgetEntries(siteDashboard, SITE_CONFIG).map(each =>
+    isConfigRelative(parsePath(each.path).module)
+      ? { ...each, fromConfig: true }
+      : each
+  );
+}
+
+/**
+ * The views the site config's own collections name for their screens, named
+ * as the site config's and marked, as its widgets' are, when written relative
+ * to the config file. The same collector a plugin's collections go through.
+ */
+function siteCollectionViewEntries(
+  siteCollections: readonly CollectionConfig[] | undefined
+): ComponentMapEntry[] {
+  return collectCollectionOwnViewPaths(siteCollections).map(path => ({
+    ...entry(path, SITE_CONFIG, "collection view"),
+    ...(isConfigRelative(parsePath(path).module) ? { fromConfig: true } : {}),
+  }));
+}
+
+/**
+ * The module a map imports a config-relative component from: the path joined
+ * onto the config file's own folder, as the map's import of the config names
+ * it (`configImport`, from the map's folder). Unchanged with no config import.
+ */
+function importedFromConfig(module: string, configImport?: string): string {
+  if (configImport === undefined) return module;
+  const joined = posix.join(posix.dirname(configImport), module);
+  return joined.startsWith("../") ? joined : `./${joined}`;
+}
+
+/**
+ * The components a collection names for its own screens under
+ * `admin.components`: its edit and list views, and what is drawn before and
+ * after its list table and its edit form.
+ *
+ * The admin resolves each by this string through the component registry, and
+ * the map is the only importer of the module behind it once nothing loads a
+ * module by name at run time. Read defensively, since generation runs before
+ * startup validates a collection: a slot naming no component is skipped.
+ */
+function collectCollectionOwnViewPaths(
+  collections: readonly CollectionConfig[] | undefined
+): string[] {
+  return (collections ?? []).flatMap(collection => {
+    const components = collection.admin?.components;
+    return [
+      components?.views?.Edit?.Component,
+      components?.views?.List?.Component,
+      components?.BeforeListTable,
+      components?.AfterListTable,
+      components?.BeforeEdit,
+      components?.AfterEdit,
+    ].filter((path): path is string => typeof path === "string" && path !== "");
+  });
+}
+
+/**
+ * What a collection's document screen resolves by string beyond its views:
+ * the component a replaced document action opens, and each panel section's.
+ * A hidden action names none.
+ */
+function documentSurfacePaths(
+  view: NonNullable<PluginAdminContributions["views"]>[string]
+): string[] {
+  const replacements = Object.values(view.documentActions ?? {}).map(
+    override => (typeof override === "object" ? override.component : "")
+  );
+  const sections = (view.panelSections ?? []).map(section => section.component);
+  return [...replacements, ...sections].filter(Boolean);
+}
 
 /**
  * Every override and injection point a plugin declares per collection.
@@ -236,31 +406,9 @@ function collectCollectionViewPaths(
     for (const documentView of view.documentViews ?? []) {
       paths.push(documentView.component);
     }
+    paths.push(...documentSurfacePaths(view));
   }
   return paths;
-}
-
-/**
- * Every widget component a plugin declares.
- *
- * Being pre-bundled by this map is what puts a component in the registry
- * `PluginSlot` reads; the registry's runtime fallback cannot resolve a bare
- * package specifier in a bundled browser. So while widgets were excluded here,
- * a `custom` widget drew its card and then nothing inside it, unless the plugin
- * called `registerComponents` itself from its admin entry -- which the
- * documented contract never asked it to do.
- */
-function collectWidgetEntries(
-  widgets: PluginAdminContributions["widgets"],
-  owner: string
-): ComponentMapEntry[] {
-  // Optional now: a declarative widget names an archetype and a query and ships
-  // no component at all, so only the ones that HAVE a path contribute one.
-  return (widgets ?? []).flatMap((widget): ComponentMapEntry[] =>
-    widget.component
-      ? [{ path: widget.component, owner, use: "widget", widget: widget.id }]
-      : []
-  );
 }
 
 /**
@@ -283,10 +431,19 @@ function collectWidgetEntries(
 export function collectBlockEditorComponentPaths(
   plugins: readonly PluginDefinition[]
 ): string[] {
-  return collectBlockEditorEntries(plugins).map(each => each.path);
+  return collectBlockEditorEntries(plugins)
+    .filter(each => each.use === "block editor")
+    .map(each => each.path);
 }
 
-/** The block editors with who declared each, read as the paths above are. */
+/**
+ * The block editors with who declared each, read as the paths above are, and
+ * each declaration's `editorEntry`: the module exporting the declared block
+ * definitions themselves, which is how the editor in the browser receives
+ * them. The server registers a declaration at boot, in its own process, and
+ * nothing a server registers reaches the admin's bundle; only an import the
+ * bundler can see does.
+ */
 function collectBlockEditorEntries(
   plugins: readonly PluginDefinition[]
 ): ComponentMapEntry[] {
@@ -297,6 +454,16 @@ function collectBlockEditorEntries(
   // apps from one config.
   if (!isPageBuilderActive(plugins)) return paths;
   for (const declaration of collectDeclarations(plugins, PAGE_BUILDER_PLUGIN)) {
+    const editorEntry = declaredEditorEntry(declaration.value);
+    if (editorEntry !== undefined) {
+      paths.push(
+        entry(
+          editorEntry,
+          `plugin "${declaration.source}"`,
+          "block editor entry"
+        )
+      );
+    }
     for (const block of declaredBlocks(declaration.value)) {
       const component = blockEditorComponent(block);
       if (component !== undefined) {
@@ -316,6 +483,23 @@ function declaredBlocks(value: unknown): readonly unknown[] {
   }
   const blocks = (value as { blocks?: unknown }).blocks;
   return Array.isArray(blocks) ? blocks : [];
+}
+
+/**
+ * The `editorEntry` a page-builder declaration names, or `undefined`.
+ *
+ * Skipped rather than refused when malformed, as a block's editor component
+ * is: the page builder refuses a malformed entry at boot, naming the plugin,
+ * which is where a declaration's faults are reported.
+ */
+function declaredEditorEntry(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const editorEntry = (value as { editorEntry?: unknown }).editorEntry;
+  return typeof editorEntry === "string" && editorEntry.trim() !== ""
+    ? editorEntry
+    : undefined;
 }
 
 /** A block's editor component path, or `undefined` when it names none. */
@@ -338,6 +522,24 @@ interface ParsedPath {
   member: string;
 }
 
+/**
+ * The module a path's component is imported from: the module as written, save
+ * a name `@nextlyhq/admin`'s root no longer exports. The root holds only what
+ * an application mounts, and the rest of the admin's surface moved to
+ * `@nextlyhq/admin/kit`. A path declared before that move names the root, and
+ * the map reads `_pN.Name` from a namespace import, which for a name the root
+ * does not export is undefined with no error: the component would silently
+ * draw nothing after an upgrade. The registry key stays the path as declared,
+ * which is what the admin looks the component up by.
+ */
+function adminEntryOf(p: ParsedPath): string {
+  return p.module === ADMIN_ROOT_MODULE &&
+    p.member !== "default" &&
+    !ADMIN_ROOT_EXPORTS.includes(p.member)
+    ? ADMIN_KIT_MODULE
+    : p.module;
+}
+
 function parsePath(path: string): ParsedPath {
   const hash = path.indexOf("#");
   if (hash === -1) return { path, module: path, member: "default" };
@@ -349,20 +551,41 @@ function parsePath(path: string): ParsedPath {
  * contributions, declared widgets, then block editor components. A path two
  * contributions share appears once for each.
  *
- * The richer list, kept whole for the check: two widgets drawn with one
- * missing component are two cards that draw empty, and the refusal names and
- * counts both. The map's own entries are derived from it.
+ * The richer list, kept whole for the development check: two widgets drawn
+ * with one missing component are two cards that draw their error state, and
+ * its warning names both. The map's own entries are derived from it.
  */
 export function componentUses(
-  plugins: readonly PluginDefinition[]
+  plugins: readonly PluginDefinition[],
+  // The site config's `admin.dashboard`, whose own widgets draw through the
+  // map as a plugin's do.
+  siteDashboard?: unknown,
+  /** The site config's own collections, whose own views the map lists beside the plugins'. */
+  siteCollections?: readonly CollectionConfig[],
+  /**
+   * Contributed components whose module has no file behind it
+   * (`unbackedContributions`), left out: importing a module that is not there
+   * would stop the app compiling, where a contribution left out of the map
+   * only draws its place's fallback.
+   */
+  unbacked?: ReadonlySet<string>
 ): ComponentMapEntry[] {
-  return [
+  const uses = [
     ...plugins.flatMap(plugin => collectAdminComponentEntries(plugin)),
+    ...siteWidgetEntries(siteDashboard),
+    ...siteCollectionViewEntries(siteCollections),
     // Block editor components register through the same map, so the editor
     // bundle loads a contributed block's inspector without a hand-written
     // import -- the same guarantee admin contributions already have.
     ...collectBlockEditorEntries(plugins),
   ];
+  // Only a contribution is left out: every other use keeps its path, so a
+  // missing widget component still reaches the checks that name its card.
+  return unbacked === undefined || unbacked.size === 0
+    ? uses
+    : uses.filter(
+        each => !(each.use === "contribution" && unbacked.has(each.path))
+      );
 }
 
 /**
@@ -375,15 +598,25 @@ export function componentUses(
  * widget's.
  *
  * 🔴 A widget's use wins over any other. One path may serve a page and a
- * widget alike, and the check refuses only over a missing widget component:
- * kept as the page's, that path would only be warned about, and production
- * would serve the widget with an empty card.
+ * widget alike, and a missing widget component is the one that turns a card
+ * into its error state: kept as the page's, that path would be named as a
+ * page by the CI check, hiding which card it breaks.
  */
 export function componentImportMapEntries(
-  plugins: readonly PluginDefinition[]
+  plugins: readonly PluginDefinition[],
+  siteDashboard?: unknown,
+  /** The site config's own collections, whose own views the map lists beside the plugins'. */
+  siteCollections?: readonly CollectionConfig[],
+  /** Contributed components left out, as {@link componentUses} leaves them out. */
+  unbacked?: ReadonlySet<string>
 ): ComponentMapEntry[] {
   const byPath = new Map<string, ComponentMapEntry>();
-  for (const each of componentUses(plugins)) {
+  for (const each of componentUses(
+    plugins,
+    siteDashboard,
+    siteCollections,
+    unbacked
+  )) {
     const kept = byPath.get(each.path);
     if (
       kept === undefined ||
@@ -397,9 +630,18 @@ export function componentImportMapEntries(
 
 /** The paths of {@link componentImportMapEntries}, in its order. */
 export function componentImportMapPaths(
-  plugins: readonly PluginDefinition[]
+  plugins: readonly PluginDefinition[],
+  siteDashboard?: unknown,
+  /** The site config's own collections, whose own views the map lists beside the plugins'. */
+  siteCollections?: readonly CollectionConfig[],
+  unbacked?: ReadonlySet<string>
 ): string[] {
-  return componentImportMapEntries(plugins).map(each => each.path);
+  return componentImportMapEntries(
+    plugins,
+    siteDashboard,
+    siteCollections,
+    unbacked
+  ).map(each => each.path);
 }
 
 /**
@@ -408,6 +650,89 @@ export function componentImportMapPaths(
  */
 const pathListExport = (paths: readonly string[]): string =>
   `export const registeredComponentPaths = ${JSON.stringify(paths)} as const;`;
+
+/** A JSON string literal, read at one position (`y`): a `]` or `}` inside it is part of it. */
+const JSON_STRING = /"(?:[^"\\]|\\.)*"/y;
+
+/**
+ * The paths a generated list holds, read back from {@link pathListExport}'s line as written or
+ * as a formatter lays it out (one path a line, a trailing comma), or `undefined` for a list in
+ * any other shape.
+ *
+ * 🔴 Read string by string, never by matching up to the first `]`: a component path is any
+ * string, and a route folder such as `[slug]` puts one inside it.
+ */
+export function listedPathsOf(listCode: string): string[] | undefined {
+  const opening = "export const registeredComponentPaths = [";
+  const from = listCode.indexOf(opening);
+  if (from === -1) return undefined;
+  const paths: string[] = [];
+  let at = from + opening.length;
+  while (at < listCode.length) {
+    const char = listCode.charAt(at);
+    if (/[\s,]/.test(char)) {
+      at += 1;
+      continue;
+    }
+    if (char === "]") {
+      return listCode.startsWith("] as const;", at) ? paths : undefined;
+    }
+    JSON_STRING.lastIndex = at;
+    const literal = JSON_STRING.exec(listCode)?.[0];
+    if (literal === undefined) return undefined;
+    paths.push(JSON.parse(literal) as string);
+    at += literal.length;
+  }
+  return undefined;
+}
+
+/**
+ * The paths a generated map registers, read back from its `registered` object, one entry a line
+ * as {@link buildComponentImportMap} writes it (`"<path>": _p0.Member,` and any note after it),
+ * and from its `blockEditorEntries` where it has one: the page builder's editor modules, which
+ * the map holds to its list beside its components. `undefined` for a map without its
+ * `registered` object or its check against its list: one emptied or edited into another shape
+ * registers nothing, whatever its list says.
+ */
+export function mapRegisteredPathsOf(mapCode: string): string[] | undefined {
+  if (!mapCode.includes("export const componentMapAgreesWithList")) {
+    return undefined;
+  }
+  const registered = objectKeysOf(mapCode, "registered");
+  if (registered === undefined) return undefined;
+  if (!mapCode.includes(objectOpening("blockEditorEntries"))) return registered;
+  const editorEntries = objectKeysOf(mapCode, "blockEditorEntries");
+  return editorEntries === undefined
+    ? undefined
+    : [...registered, ...editorEntries];
+}
+
+/** The line a generated map opens its object `name` with. */
+const objectOpening = (name: string): string => `\nconst ${name} = {\n`;
+
+/**
+ * The keys of the map's object `name`, read one entry a line, or `undefined` where the object is
+ * missing or holds a line of another shape.
+ */
+function objectKeysOf(mapCode: string, name: string): string[] | undefined {
+  const opening = mapCode.indexOf(objectOpening(name));
+  if (opening === -1) return undefined;
+  const paths: string[] = [];
+  for (const line of mapCode
+    .slice(opening + 1)
+    .split("\n")
+    .slice(1)) {
+    if (line.startsWith("}")) return paths;
+    const entry = /^\s*("(?:[^"\\]|\\.)*")\s*:\s*_p\d+\.(.*)$/.exec(line);
+    if (entry === null) return undefined;
+    const path = JSON.parse(entry[1]) as string;
+    // The member the generator writes for that path, read back as written rather than as an
+    // ASCII identifier: an export named in any script (`#Résumé`) is one the generator emits.
+    if (!entry[2].startsWith(`${parsePath(path).member},`)) return undefined;
+    paths.push(path);
+  }
+  return undefined;
+}
 
 /**
  * How the map holds itself to its list.
@@ -449,6 +774,18 @@ const AGREEMENT_CHECK = [
 /** The line the map imports the site's config with, written and read as one: see `configImportOf`. */
 const SITE_CONFIG_IMPORT = "import type * as siteConfig from ";
 
+/** The line that holds the map's components to the config's widgets, written and read as one. */
+const SITE_CONFIG_CHECK =
+  "} satisfies DeclaredComponentMap<typeof siteConfig>;";
+
+/**
+ * Whether a generated map still holds its components to the config it imports: the import alone
+ * checks nothing, so a map that kept it but lost the `satisfies` line checks against no config.
+ */
+export function mapChecksAgainstConfig(mapCode: string): boolean {
+  return mapCode.split("\n").some(each => each === SITE_CONFIG_CHECK);
+}
+
 /**
  * The config import a generated map names, as `buildComponentImportMap` wrote it; undefined when it
  * names none or the line cannot be read. A rewrite keeps it, so the map goes on checking against
@@ -475,20 +812,75 @@ export function configImportOf(mapCode: string): string | undefined {
  * `import * as` per unique module; duplicate paths deduped. A map with nothing
  * to register imports no component and registers nothing, and still holds
  * itself to its (empty) list.
+ *
+ * An app that has not installed `@nextlyhq/admin` gets the same map with the
+ * admin left out: no import of it and no call, so the app still type-checks.
+ * It still lists and checks every path, and once the admin is installed the
+ * map written again registers them.
  */
 export function buildComponentImportMap(
   plugins: PluginDefinition[],
-  configImport?: string
+  configImport?: string,
+  siteDashboard?: unknown,
+  /** The site config's own collections, whose own views the map lists beside the plugins'. */
+  siteCollections?: readonly CollectionConfig[],
+  /** Contributed components with no file behind them, left out of the map. */
+  unbacked?: ReadonlySet<string>,
+  /**
+   * Whether the app has installed `@nextlyhq/admin`, read from its root by the writer. Installed
+   * unless told otherwise, so a caller that cannot tell keeps the import the map always had.
+   */
+  adminInstalled = true
 ): string {
-  const paths = componentImportMapPaths(plugins);
+  const entries = componentImportMapEntries(
+    plugins,
+    siteDashboard,
+    siteCollections,
+    unbacked
+  );
+  const blockEditor = blockEditorHandOff(plugins, entries);
+  // An editor entry exports block definitions, not a component, so it is
+  // handed to the page builder alone and never put in the component registry,
+  // whose type would refuse it in the site's build.
+  const registeredEntries = entries.filter(
+    each => each.use !== "block editor entry"
+  );
+  const paths = registeredEntries.map(each => each.path);
   const parsed = paths.map(parsePath);
-  const modules = Array.from(new Set(parsed.map(p => p.module))).sort();
+  const handedOff = [...blockEditor.entries, ...blockEditor.components].map(
+    parsePath
+  );
+  // Each path's module as the map imports it: a site's config-relative one
+  // from the map's folder, every other as written.
+  const fromConfig = new Set(
+    registeredEntries.filter(each => each.fromConfig).map(each => each.path)
+  );
+  const importOf = (p: ParsedPath) =>
+    fromConfig.has(p.path)
+      ? importedFromConfig(p.module, configImport)
+      : adminEntryOf(p);
+  const modules = Array.from(
+    new Set([...parsed, ...handedOff].map(importOf))
+  ).sort();
   const alias = new Map<string, string>();
   modules.forEach((m, i) => alias.set(m, `_p${i}`));
+  const reference = (p: ParsedPath) => `${alias.get(importOf(p))}.${p.member}`;
 
   const lines: string[] = [HEADER, ""];
-  if (paths.length > 0) {
-    lines.push('import { registerComponents } from "@nextlyhq/admin";');
+  // Imported whatever the map holds, wherever the admin is installed: an empty
+  // map is still the whole map, and its call is what tells the admin nothing
+  // more is on its way. Left out where the app has not installed the admin,
+  // since an import of a package the app cannot resolve stops its type check,
+  // and there is no admin to register into.
+  if (adminInstalled) {
+    lines.push('import { registerComponentMap } from "@nextlyhq/admin";');
+  } else {
+    lines.push(ADMIN_NOT_INSTALLED_NOTE);
+  }
+  if (blockEditor.used) {
+    lines.push(
+      `import { ${BLOCK_EDITOR_REGISTRAR} } from "${PAGE_BUILDER_ADMIN_MODULE}";`
+    );
   }
   for (const m of modules) {
     lines.push(`import * as ${alias.get(m)} from "${m}";`);
@@ -504,25 +896,121 @@ export function buildComponentImportMap(
   }
   lines.push("");
   lines.push("const registered = {");
-  for (const p of parsed) {
+  parsed.forEach((p, index) => {
     lines.push(
-      `  ${JSON.stringify(p.path)}: ${alias.get(p.module)}.${p.member},`
+      `  ${JSON.stringify(p.path)}: ${reference(p)},${widgetNote(registeredEntries[index])}`
     );
-  }
+  });
   // Each component registered under a typed widget's path must take that widget's props, or
   // the site's build fails here; every other path is left as it was.
+  lines.push(configImport === undefined ? "};" : SITE_CONFIG_CHECK);
+  lines.push("");
+  if (blockEditor.used) {
+    lines.push(
+      "/** The modules exporting each plugin's block definitions, for the page builder's editor. */"
+    );
+    lines.push("const blockEditorEntries = {");
+    for (const p of blockEditor.entries.map(parsePath)) {
+      lines.push(`  ${JSON.stringify(p.path)}: ${reference(p)},`);
+    }
+    lines.push("};");
+    lines.push("");
+  }
   lines.push(
-    configImport === undefined
-      ? "};"
-      : "} satisfies DeclaredComponentMap<typeof siteConfig>;"
+    blockEditor.used
+      ? AGREEMENT_CHECK.replace(
+          "type Registered = keyof typeof registered;",
+          "type Registered =\n  | keyof typeof registered\n  | keyof typeof blockEditorEntries;"
+        ).replace(
+          "JSON.stringify(Object.keys(registered).sort())",
+          "JSON.stringify(\n    [...Object.keys(registered), ...Object.keys(blockEditorEntries)].sort()\n  )"
+        )
+      : AGREEMENT_CHECK
   );
   lines.push("");
-  lines.push(AGREEMENT_CHECK);
-  lines.push("");
-  if (paths.length > 0) lines.push("registerComponents(registered);");
+  // Registered as the app's map rather than one plugin's components: once it
+  // has run, nothing more is on its way, so a component still missing draws
+  // its fallback rather than loading. Called on an empty map too: one whose
+  // every contribution was left out for want of its file still names them,
+  // and their places draw their fallback rather than loading forever.
+  if (adminInstalled) lines.push("registerComponentMap(registered);");
+  if (blockEditor.used) {
+    // The block inspectors are in `registered` too, which keeps them
+    // resolvable by path like any component; they are handed over here as
+    // well because the editor reaches no component registry of the admin's.
+    lines.push(`${BLOCK_EDITOR_REGISTRAR}({`);
+    lines.push("  entries: blockEditorEntries,");
+    lines.push("  components: {");
+    for (const p of blockEditor.components.map(parsePath)) {
+      lines.push(`    ${JSON.stringify(p.path)}: ${reference(p)},`);
+    }
+    lines.push("  },");
+    lines.push("});");
+  }
   lines.push("export const registeredComponentPaths = listed;");
   lines.push("");
   return lines.join("\n");
+}
+
+/**
+ * A widget's entry names its widget and owner on its own line, where the site's build reports a
+ * component whose props do not take that widget's (`DeclaredComponentMap`), so the error reads
+ * which card it is about. Nothing for any other entry.
+ */
+function widgetNote(entry: ComponentMapEntry | undefined): string {
+  // On one line whatever a plugin is called: a line break in its name would end the comment and
+  // leave the rest of the name as source.
+  const owner = entry?.owner.replace(/[\r\n\u2028\u2029]+/g, " ");
+  if (entry?.use === "widget") {
+    return ` // widget ${JSON.stringify(entry.widget ?? "?")} of ${owner}`;
+  }
+  return entry?.use === "setting editor"
+    ? ` // a setting editor of widget ${JSON.stringify(entry.widget ?? "?")} of ${owner}`
+    : "";
+}
+
+/** What a map written for an app without the admin says in place of its import. */
+const ADMIN_NOT_INSTALLED_NOTE = [
+  "// `@nextlyhq/admin` is not installed in this app, so this map imports nothing of it and",
+  "// registers nothing. Once it is installed, run `nextly generate:types` again.",
+].join("\n");
+
+/**
+ * The page builder's admin entry, and the function there the map hands block
+ * modules to. Stated here rather than imported, as the declaration key is, so
+ * core carries no dependency on the page builder; the page builder's
+ * `admin/registration.test.ts` holds its entry to both.
+ */
+const PAGE_BUILDER_ADMIN_MODULE = `${PAGE_BUILDER_PLUGIN}/admin`;
+const BLOCK_EDITOR_REGISTRAR = "registerBlockEditorModules";
+
+/**
+ * What the map hands the page builder: each declared editor entry and each
+ * declared block inspector, by path, and whether there is anything to hand
+ * over at all. Nothing when the page builder is inactive, since the uses are
+ * collected only while it is active. An inspector is handed over whichever
+ * use kept its path in the registry, so a component a page also uses still
+ * reaches the editor.
+ */
+function blockEditorHandOff(
+  plugins: readonly PluginDefinition[],
+  kept: readonly ComponentMapEntry[]
+): { entries: string[]; components: string[]; used: boolean } {
+  const editorEntries = kept
+    .filter(each => each.use === "block editor entry")
+    .map(each => each.path);
+  const components = [
+    ...new Set(
+      collectBlockEditorEntries(plugins)
+        .filter(each => each.use === "block editor")
+        .map(each => each.path)
+    ),
+  ].sort((a, b) => a.localeCompare(b));
+  return {
+    entries: editorEntries,
+    components,
+    used: editorEntries.length > 0 || components.length > 0,
+  };
 }
 
 /** Filename of the generated list of the paths the map registers. */
@@ -541,9 +1029,14 @@ const PATHS_HEADER = [
  * what the config declares.
  */
 export function buildComponentPathsModule(
-  plugins: readonly PluginDefinition[]
+  plugins: readonly PluginDefinition[],
+  siteDashboard?: unknown,
+  /** The site config's own collections, whose own views the map lists beside the plugins'. */
+  siteCollections?: readonly CollectionConfig[],
+  /** Left out of the list as the map leaves them out, so the two agree. */
+  unbacked?: ReadonlySet<string>
 ): string {
-  return `${PATHS_HEADER}\n\n${pathListExport(componentImportMapPaths(plugins))}\n`;
+  return `${PATHS_HEADER}\n\n${pathListExport(componentImportMapPaths(plugins, siteDashboard, siteCollections, unbacked))}\n`;
 }
 
 /**
@@ -559,17 +1052,36 @@ export function buildComponentPathsModule(
 export function buildImportMapArtifacts(
   plugins: PluginDefinition[],
   typesOutputPath: string,
-  configImport?: string
+  configImport?: string,
+  siteDashboard?: unknown,
+  /** The site config's own collections, whose own views the map lists beside the plugins'. */
+  siteCollections?: readonly CollectionConfig[],
+  /** Contributed components with no file behind them, left out of both files. */
+  unbacked?: ReadonlySet<string>,
+  /** Whether the app has installed `@nextlyhq/admin`: see {@link buildComponentImportMap}. */
+  adminInstalled = true
 ): { path: string; code: string }[] {
   const dir = dirname(typesOutputPath);
   return [
     {
       path: join(dir, COMPONENT_IMPORT_MAP_FILENAME),
-      code: buildComponentImportMap(plugins, configImport),
+      code: buildComponentImportMap(
+        plugins,
+        configImport,
+        siteDashboard,
+        siteCollections,
+        unbacked,
+        adminInstalled
+      ),
     },
     {
       path: join(dir, COMPONENT_PATHS_FILENAME),
-      code: buildComponentPathsModule(plugins),
+      code: buildComponentPathsModule(
+        plugins,
+        siteDashboard,
+        siteCollections,
+        unbacked
+      ),
     },
   ];
 }

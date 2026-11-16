@@ -8,9 +8,10 @@
  */
 
 import { render, screen, waitFor } from "@testing-library/react";
-import type { WidgetComponentProps } from "nextly/widget-result";
+import type { DeclaredComponentProps } from "nextly/widget-result";
 import { beforeAll, describe, expect, it } from "vitest";
 
+import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { NoteCard } from "./NoteCard";
 
 beforeAll(() => {
@@ -19,18 +20,24 @@ beforeAll(() => {
   Element.prototype.scrollIntoView = () => undefined;
 });
 
-function props(text: unknown): WidgetComponentProps {
+/** A declared card's props: the note's answered text, and its setting as stored. */
+function props(text: unknown, setting: unknown = text): DeclaredComponentProps {
   return {
     widgetId: "core/note",
     placementId: "note-1",
-    settings: { text },
-    slot: undefined,
-    isFetching: false,
+    settings: { text: setting },
+    size: { w: 4, h: 3, tier: "medium" },
+    data: { text },
+    refreshing: false,
+    retry: () => undefined,
   };
 }
 
-async function drawn(text: string): Promise<HTMLElement> {
-  render(<NoteCard {...props(text)} />);
+async function drawn(
+  text: string,
+  setting: unknown = text
+): Promise<HTMLElement> {
+  render(inFrame(<NoteCard {...props(text, setting)} />));
   // Lazy, as the text archetype's renderer is; given longer than the default
   // second for the same reason its own test gives.
   return waitFor(
@@ -70,11 +77,19 @@ describe("a note", () => {
     expect(link?.getAttribute("rel")).toBe("noopener noreferrer");
   });
 
-  it("says it is empty until it is written, and for a value that is not text", () => {
-    const { unmount } = render(<NoteCard {...props("   ")} />);
-    expect(screen.getByTestId("card-empty")).toHaveTextContent("An empty note");
-    unmount();
-    render(<NoteCard {...props(42)} />);
-    expect(screen.getByTestId("card-empty")).toBeInTheDocument();
+  it("draws its text as written, so a leading indent keeps its meaning", async () => {
+    // 🔴 Four leading spaces nest a list item one level in. Trimmed before it
+    // is drawn, the note's first item came out at the top level instead.
+    const root = await drawn("    - nested");
+    expect(root.querySelector("ul ul")).not.toBeNull();
+  });
+
+  it("draws the text its card was answered, which the frame judged not empty", async () => {
+    // 🔴 The answer, not the setting: the frame drew the empty state from the
+    // same answer (`isEmpty`), so drawing the setting could show text the
+    // card was judged empty without, or the other way round.
+    const root = await drawn("From the answer", "From the setting");
+    expect(root.textContent).toContain("From the answer");
+    expect(root.textContent).not.toContain("From the setting");
   });
 });

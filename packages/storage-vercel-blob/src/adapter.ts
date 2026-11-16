@@ -66,13 +66,43 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
   /**
    * Create a new Vercel Blob storage adapter.
    *
+   * The token is deliberately NOT checked here. This constructor runs while
+   * the host's config file is evaluated, so a throw would stop every command
+   * — including the schema-only ones that never touch storage. The check
+   * moves to the first storage operation ({@link ensureToken}), which refuses
+   * with the same message a missing token has always produced.
+   *
    * @param config - Vercel Blob storage configuration
-   * @throws Error if token is not provided
    */
   constructor(private config: VercelBlobStorageConfig) {
-    // Resolve token from config or environment
-    const token = config.token || process.env.BLOB_READ_WRITE_TOKEN || "";
+    // Resolve config with defaults. The token is stored unresolved when the
+    // config omits it and picked up from the environment at first use.
+    this.resolvedConfig = {
+      token: config.token || "",
+      addRandomSuffix: config.addRandomSuffix ?? true,
+      cacheControlMaxAge: config.cacheControlMaxAge ?? 31536000,
+      access: config.access ?? "public",
+      storeId: config.storeId,
+      allowOverwrite: config.allowOverwrite ?? false,
+      multipartThreshold: config.multipartThreshold ?? 5 * 1024 * 1024, // 5MB
+    };
+  }
 
+  /**
+   * Resolve the storage token, refusing at the first use that needs it.
+   *
+   * A token already resolved — from the config at construction, or from the
+   * environment on an earlier call — is returned as is. An unresolved one is
+   * read from the config and then the environment, and a refusal here is the
+   * same one the constructor used to throw: the operator is told which
+   * variable to set, at the moment the credential was actually needed.
+   *
+   * @throws Error if token is not provided
+   */
+  private ensureToken(): string {
+    if (this.resolvedConfig.token) return this.resolvedConfig.token;
+
+    const token = this.config.token || process.env.BLOB_READ_WRITE_TOKEN || "";
     if (!token) {
       throw new Error(
         "@nextly/storage-vercel-blob: token is required.\n\n" +
@@ -81,16 +111,8 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
       );
     }
 
-    // Resolve config with defaults
-    this.resolvedConfig = {
-      token,
-      addRandomSuffix: config.addRandomSuffix ?? true,
-      cacheControlMaxAge: config.cacheControlMaxAge ?? 31536000,
-      access: config.access ?? "public",
-      storeId: config.storeId,
-      allowOverwrite: config.allowOverwrite ?? false,
-      multipartThreshold: config.multipartThreshold ?? 5 * 1024 * 1024, // 5MB
-    };
+    this.resolvedConfig.token = token;
+    return token;
   }
 
   // ============================================================
@@ -152,7 +174,7 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
 
     const result = await put(pathname, buffer, {
       access: this.resolvedConfig.access,
-      token: this.resolvedConfig.token,
+      token: this.ensureToken(),
       contentType: options.contentType || options.mimeType,
       addRandomSuffix: this.resolvedConfig.addRandomSuffix,
       cacheControlMaxAge: this.resolvedConfig.cacheControlMaxAge,
@@ -178,13 +200,60 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
   }
 
   /**
+   * Write bytes at exactly the blob `filePath` names, beside one already in
+   * the store.
+   *
+   * A stored path here is the blob's full URL, so `filePath` is one too: a
+   * stored blob's URL with a suffix core derived from it, for a file made from
+   * that blob, such as a resized copy of an image. Written under that URL's
+   * pathname with no random suffix, so the blob's URL is the key it was asked
+   * for and the next read finds it; overwriting is allowed, since two requests
+   * may make the same copy at once and write the same bytes. A key that is not
+   * a Vercel Blob URL is refused before anything is written.
+   *
+   * @experimental
+   */
+  async uploadAt(
+    filePath: string,
+    buffer: Buffer,
+    options: { mimeType: string }
+  ): Promise<UploadResult> {
+    const located = URL.canParse(filePath) ? new URL(filePath) : undefined;
+    if (
+      located === undefined ||
+      located.protocol !== "https:" ||
+      !located.hostname.endsWith(".blob.vercel-storage.com")
+    ) {
+      throw NextlyError.internal({
+        logContext: {
+          adapter: "vercel-blob",
+          reason: "upload-at-key-not-a-blob-url",
+        },
+      });
+    }
+    const result = await put(
+      decodeURIComponent(located.pathname.replace(/^\/+/, "")),
+      buffer,
+      {
+        access: this.resolvedConfig.access,
+        token: this.ensureToken(),
+        contentType: options.mimeType,
+        addRandomSuffix: false,
+        allowOverwrite: true,
+        cacheControlMaxAge: this.resolvedConfig.cacheControlMaxAge,
+      }
+    );
+    return { url: result.url, path: result.url };
+  }
+
+  /**
    * Delete file from Vercel Blob.
    *
    * @param filePath - Full blob URL to delete
    */
   async delete(filePath: string): Promise<void> {
     await del(filePath, {
-      token: this.resolvedConfig.token,
+      token: this.ensureToken(),
     });
   }
 
@@ -205,7 +274,7 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
     for (let i = 0; i < filePaths.length; i += chunkSize) {
       const chunk = filePaths.slice(i, i + chunkSize);
       const results = await Promise.allSettled(
-        chunk.map(fp => del(fp, { token: this.resolvedConfig.token }))
+        chunk.map(fp => del(fp, { token: this.ensureToken() }))
       );
 
       results.forEach((result, idx) => {
@@ -236,9 +305,14 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
    * @returns true if file exists, false otherwise
    */
   async exists(filePath: string): Promise<boolean> {
+    // Resolved BEFORE the not-found catch, which answers "the blob is not
+    // there" for lookup failures: a missing credential is a configuration
+    // error, and the refusal must escape rather than be reported as that
+    // answer.
+    const token = this.ensureToken();
     try {
       await head(filePath, {
-        token: this.resolvedConfig.token,
+        token,
       });
       return true;
     } catch {
@@ -291,7 +365,7 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
     let target: string;
     try {
       const meta = await head(filePath, {
-        token: this.resolvedConfig.token,
+        token: this.ensureToken(),
         abortSignal: deadline,
       });
       target = meta.downloadUrl ?? meta.url;
@@ -377,7 +451,10 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
       type: "vercel-blob",
       name: "VercelBlobStorageAdapter",
       supportsSignedUrls: false, // Vercel Blob URLs are public by default
-      supportsClientUploads: true, // Via handleUpload API
+      // No: Vercel Blob has no pre-signed upload Nextly can bind to a checked
+      // type and size, so `clientUploads` is refused for it rather than signing
+      // nothing. Its large files go through the standard upload.
+      supportsClientUploads: false,
     };
   }
 
@@ -390,9 +467,13 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
    * @returns File metadata or null if file not found
    */
   async getMetadata(filePath: string): Promise<FileMetadata | null> {
+    // Resolved BEFORE the not-found catch, for the same reason as
+    // {@link exists}: `null` here means "no such blob", never "no
+    // credential".
+    const token = this.ensureToken();
     try {
       const result = await head(filePath, {
-        token: this.resolvedConfig.token,
+        token,
       });
 
       // Extract filename from pathname
@@ -469,7 +550,7 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
     cursor?: string;
   }> {
     const result = await list({
-      token: this.resolvedConfig.token,
+      token: this.ensureToken(),
       prefix,
       limit: options?.limit,
       cursor: options?.cursor,
@@ -568,7 +649,9 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
   // ============================================================
 
   /**
-   * Get the configured token (masked for logging).
+   * Get the configured token (masked for logging). Never resolves or
+   * refuses: an adapter whose credentials have not arrived yet masks to
+   * `****`, since this answers for logs, not for storage.
    */
   getTokenMasked(): string {
     const token = this.resolvedConfig.token;

@@ -35,7 +35,7 @@ const shop = {
       widgets: [
         {
           id: "acme/revenue",
-          display: { component: "@acme/shop/admin#Revenue" },
+          view: { component: "@acme/shop/admin#Revenue" },
         },
       ],
     },
@@ -209,4 +209,106 @@ describe("writing the component map", () => {
       await expect(stat(map)).rejects.toMatchObject({ code: "ENOENT" });
     }
   );
+});
+
+/*
+ * Whether the map imports and calls the admin is read from the app it is written for: an app
+ * that never installed `@nextlyhq/admin` cannot resolve it, and a static import of it stops the
+ * app's type check. Installed means findable from the app's root, as its own imports find it.
+ */
+describe("the map in an app with and without the admin", () => {
+  async function installAdmin(root: string): Promise<void> {
+    const dir = join(root, "node_modules/@nextlyhq/admin");
+    await mkdir(join(dir, "dist"), { recursive: true });
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify({
+        name: "@nextlyhq/admin",
+        version: "0.0.0",
+        type: "module",
+        exports: { ".": { default: "./dist/index.mjs" } },
+      })
+    );
+    await writeFile(join(dir, "dist/index.mjs"), "export {};\n");
+  }
+
+  it.each([
+    ["with a component", [shop]],
+    ["empty", []],
+  ])(
+    "leaves the admin out where the app has not installed it (%s)",
+    async (_, plugins) => {
+      const cwd = await app();
+      const [map] = (
+        await writeComponentMapFiles(
+          plugins,
+          "./src/types/generated/nextly-types.ts",
+          cwd
+        )
+      ).paths;
+      const code = await readFile(map, "utf-8");
+      expect(code).not.toContain('"@nextlyhq/admin"');
+      expect(code).not.toContain("registerComponentMap");
+      expect(code).toContain("export const registeredComponentPaths = listed;");
+    }
+  );
+
+  it.each([
+    ["with a component", [shop]],
+    ["empty", []],
+  ])(
+    "imports and registers once the admin is installed (%s)",
+    async (_, plugins) => {
+      const cwd = await app();
+      await installAdmin(cwd);
+      const [map] = (
+        await writeComponentMapFiles(
+          plugins,
+          "./src/types/generated/nextly-types.ts",
+          cwd
+        )
+      ).paths;
+      const code = await readFile(map, "utf-8");
+      expect(code).toContain(
+        'import { registerComponentMap } from "@nextlyhq/admin";'
+      );
+      expect(code).toContain("registerComponentMap(registered);");
+    }
+  );
+
+  // The same app, regenerated after the admin is installed, gets a map that registers: nothing
+  // written without it holds the next write back.
+  it("registers on the next write once the admin is added", async () => {
+    const cwd = await app();
+    const types = "./src/types/generated/nextly-types.ts";
+    const first = await writeComponentMapFiles([shop], types, cwd);
+    expect(await readFile(first.paths[0], "utf-8")).not.toContain(
+      "registerComponentMap"
+    );
+    await installAdmin(cwd);
+    const second = await writeComponentMapFiles([shop], types, cwd);
+    expect(second.changed).toContain(second.paths[0]);
+    expect(await readFile(second.paths[0], "utf-8")).toContain(
+      "registerComponentMap(registered);"
+    );
+  });
+
+  // An app in a folder of a workspace finds a package installed further up, as Node and the
+  // bundler do.
+  it("finds an admin installed in a folder above the app's root", async () => {
+    const root = await app();
+    await installAdmin(root);
+    const cwd = join(root, "apps/site");
+    await mkdir(cwd, { recursive: true });
+    const [map] = (
+      await writeComponentMapFiles(
+        [],
+        "./src/types/generated/nextly-types.ts",
+        cwd
+      )
+    ).paths;
+    expect(await readFile(map, "utf-8")).toContain(
+      "registerComponentMap(registered);"
+    );
+  });
 });

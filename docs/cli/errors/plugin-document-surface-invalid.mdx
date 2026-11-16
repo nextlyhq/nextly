@@ -1,0 +1,24 @@
+---
+title: PLUGIN_DOCUMENT_SURFACE_INVALID
+description: "A plugin overrides a document action it may not override, or declares a document action override or panel section with nothing to draw."
+---
+
+## Cause
+
+A plugin overrides a document action it may not override, or declares a document action override or panel section with nothing to draw.
+
+A plugin may hide or replace only the `delete` and `unpublish` actions of a collection's document screen. A replacement needs a component to open, and a label of text if it has one; a section added to the document panel needs a title and a component. The message names the override or section and what is wrong with it.
+
+## Fix
+
+- Correct the override or section the message names in the plugin's `contributes.admin.views`.
+- If the plugin is not yours, update it to a release that declares it correctly.
+
+## Example
+
+```text
+✗ Plugin "layouts" replaces the "delete" action on "pages" with no component to open.
+  Why:  A plugin may hide or replace only the delete and unpublish actions; a replacement needs a component to open and a label of text if it has one, and a panel section needs a title and a component.
+  Next: Correct the override or section the message names in the plugin's `contributes.admin.views`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-document-surface-invalid  (PLUGIN_DOCUMENT_SURFACE_INVALID)
+```

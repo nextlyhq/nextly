@@ -1,0 +1,24 @@
+---
+title: DATA_LOSS_DECLINED
+description: "The prompt listing what the command would delete was answered no, so it changed nothing."
+---
+
+## Cause
+
+The prompt listing what the command would delete was answered no, so it changed nothing.
+
+A command that deletes data (a table, a column, or the rows in them) lists what it would delete and asks before it deletes anything. The answer was no, so the command stopped there. A cancel (Ctrl+C) is not a no: it ends the run with exit 130 and never reaches this error.
+
+## Fix
+
+- Check that the data the prompt listed is not needed, then run the command again and answer yes.
+- To consent without being asked, as in a script, give `--accept-data-loss` (or set `NEXTLY_ACCEPT_DATA_LOSS`).
+
+## Example
+
+```text
+✗ Nothing was changed: the deletion was not confirmed.
+  Why:  The prompt that listed what would be deleted was not answered yes.
+  Next: Run the command again and confirm, or give --accept-data-loss (or NEXTLY_ACCEPT_DATA_LOSS) to consent without being asked.
+  Docs: https://nextlyhq.com/docs/cli/errors/data-loss-declined  (DATA_LOSS_DECLINED)
+```

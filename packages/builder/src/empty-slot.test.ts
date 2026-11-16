@@ -3,9 +3,10 @@
  * inserter and the canvas appender ask.
  */
 import { describe, expect, it } from "vitest";
-import type { BlockNode } from "@nextlyhq/blocks-engine";
+import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
 
 import { emptySlotOf } from "./empty-slot";
+import { insertionCandidates, slotsShowingEmpty } from "./inserter";
 
 const slots = {
   slotsOf: (type: string) =>
@@ -81,5 +82,59 @@ describe("emptySlotOf", () => {
     // The mirror of the case above. Without both, a rule that answered null
     // whenever ANY slot held a child would also pass the first one.
     expect(emptySlotOf(pair([], [leaf]), slots)).toBe("first");
+  });
+});
+
+describe("a list the canvas shows empty", () => {
+  const LIST_SLOTS = {
+    slotsOf: (type: string) =>
+      type === "core/collection-loop" ? ["children", "empty"] : undefined,
+  };
+  const heading: BlockNode = {
+    id: "h",
+    type: "core/heading",
+    version: 1,
+    props: {},
+  };
+  const list: BlockNode = {
+    id: "list",
+    type: "core/collection-loop",
+    version: 1,
+    props: {},
+    slots: { children: [heading], empty: [] },
+  };
+
+  it("names its empty state as the region to fill, while the canvas shows it", () => {
+    const shown = slotsShowingEmpty(LIST_SLOTS, new Set(["list"]));
+    expect(emptySlotOf(list, shown)).toBe("empty");
+    // Showing its entries, its first region holds the template: nothing to fill.
+    expect(
+      emptySlotOf(list, slotsShowingEmpty(LIST_SLOTS, new Set()))
+    ).toBeNull();
+  });
+
+  it("adds inside it to its empty state, the region the author sees", () => {
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [list],
+    } as BlockDocument;
+    const inside = insertionCandidates(document, "list", {
+      inside: "list",
+      slots: slotsShowingEmpty(LIST_SLOTS, new Set(["list"])),
+    });
+    expect(inside.map(candidate => candidate.at)).toEqual([
+      { parentId: "list", slot: "empty", index: 0 },
+    ]);
+    const filled = {
+      ...document,
+      nodes: [{ ...list, slots: { children: [heading], empty: [heading] } }],
+    } as BlockDocument;
+    expect(
+      insertionCandidates(filled, "list", {
+        inside: "list",
+        slots: slotsShowingEmpty(LIST_SLOTS, new Set(["list"])),
+      }).map(candidate => candidate.at)
+    ).toEqual([{ parentId: "list", slot: "empty", index: 1 }]);
   });
 });

@@ -1,4 +1,4 @@
 {
   "title": "Admin Panel",
-  "pages": ["index", "customization", "branding"]
+  "pages": ["index", "editing-together", "customization", "branding"]
 }

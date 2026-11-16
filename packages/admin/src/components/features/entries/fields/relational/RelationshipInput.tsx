@@ -33,12 +33,12 @@ import { cn } from "@admin/lib/utils";
 import type { EntryData } from "../../EntryForm/useEntryForm";
 import { RestrictedReference } from "../RestrictedReference";
 
-import { RelationshipCard, type RelatedItem } from "./RelationshipCard";
 import {
-  RelationshipCreateModal,
-  type CreatedEntry,
-} from "./RelationshipCreateModal";
-import { RelationshipQuickEdit } from "./RelationshipQuickEdit";
+  LazyRelationshipCreateModal,
+  LazyRelationshipQuickEdit,
+} from "./LazyRelationshipModals";
+import { RelationshipCard, type RelatedItem } from "./RelationshipCard";
+import type { CreatedEntry } from "./RelationshipCreateModal";
 import {
   RelationshipSearch,
   type SearchResultItem,
@@ -654,7 +654,7 @@ export function RelationshipInput<
 
       {/* Inline create modal */}
       {allowCreate && (
-        <RelationshipCreateModal
+        <LazyRelationshipCreateModal
           open={isCreateModalOpen}
           onOpenChange={setIsCreateModalOpen}
           relationTo={field.relationTo}
@@ -665,7 +665,7 @@ export function RelationshipInput<
 
       {/* Inline quick edit modal */}
       {allowEdit && editingItem && (
-        <RelationshipQuickEdit
+        <LazyRelationshipQuickEdit
           open={!!editingItem}
           onOpenChange={open => !open && setEditingItem(null)}
           collectionSlug={

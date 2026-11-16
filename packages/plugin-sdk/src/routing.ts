@@ -52,3 +52,12 @@
 // string function. Measured through package resolution, which is the only way
 // this is visible — a source-graph check reports the leaf either way.
 export { slugToStaticParam } from "nextly/route-path";
+/**
+ * The route's own reading of a paginated list's later pages: the segment
+ * they sit under (`LIST_PAGE_SEGMENT`) and which segments are page numbers
+ * (`listPageNumber`), so a plugin reserving or linking those addresses names
+ * exactly the ones the route serves.
+ *
+ * @experimental Settles with list pagination.
+ */
+export { LIST_PAGE_SEGMENT, listPageNumber } from "nextly/route-path";

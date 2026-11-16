@@ -15,6 +15,7 @@
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import {
+  type FieldGroupReach,
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
@@ -47,9 +48,11 @@ export function applyReadShape(
    * webhook payload carries it unless this boundary removes it — and the set
    * to remove is per table.
    */
-  tableName: string
+  tableName: string,
+  /** Where the password strip follows field groups held inline. */
+  reach: FieldGroupReach
 ): void {
-  stripPasswordFieldValues(row, fieldConfigs);
+  stripPasswordFieldValues(row, fieldConfigs, reach);
   stripServerOnlyColumns(row, tableName);
   for (const field of fieldConfigs) {
     if (!("name" in field) || !field.name) continue;

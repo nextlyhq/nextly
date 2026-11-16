@@ -23,7 +23,10 @@ import {
   type ManifestEntry,
 } from "../../domains/field-groups/migration/manifest";
 import { MIGRATION_MARKER_VERSION } from "../../domains/field-groups/migration/state";
+import { TTYRequiredError } from "../../domains/schema/pipeline/prompt-dispatcher/errors";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import { judgeAddress } from "../../shared/address-rule";
+import { ADDRESS_CASES } from "../../shared/__tests__/helpers/address-cases";
 
 /** The registry rename every run performs, spelled from the catalog so it stays a valid plan. */
 const IN_FLIGHT_PLAN: ManifestEntry[] = [
@@ -44,12 +47,14 @@ import {
 } from "../../domains/schema/extension/active-schema";
 import { col, defineTable } from "../../domains/schema/extension/dsl";
 import { compileAndPublishExtensionSchema } from "../../domains/schema/extension/publish";
+import { SchemaOwnersRepository } from "../../domains/schema/ownership/schema-owners-repository";
 import {
   collectionDbOptions,
   publishCollectionDbOptions,
 } from "../../domains/collections/services/collection-id";
 import {
   adminComponentPlugins,
+  adminSiteDashboard,
   setAdminComponentPlugins,
 } from "../../domains/widgets/declaration/component-map-store";
 import { setInitializedPlugins } from "../../plugins/initialized-plugins";
@@ -359,6 +364,73 @@ describe("reloadNextlyConfig", () => {
       })),
     };
   }
+
+  /**
+   * A configuration reload is a road that creates addresses, as a start is: a collection added to
+   * `nextly.config.ts` while `next dev` runs arrives here. It gives each new address the rule's
+   * verdict and reason (the same list every other road is given, `address-rule-roads.test.ts`),
+   * and a refused reload keeps the previous configuration and runs no DDL.
+   */
+  describe("the addresses a reload adds", () => {
+    it.each(ADDRESS_CASES)(
+      "gives a new collection '%s' the rule's verdict",
+      async address => {
+        loadConfigSpy.mockResolvedValue({
+          config: { collections: [{ slug: address, fields: [] }] },
+        });
+        introspectSpy.mockResolvedValue(buildSnapshot([]));
+        const resolver = buildResolver();
+        // The collection is new: no table of its own exists yet. Only the lock's does, which the
+        // reload's exclusion reads.
+        Object.assign(resolver("adapter") as object, {
+          tableExists: async (name: string) =>
+            name === "nextly_field_group_lock",
+        });
+        const { reloadNextlyConfig } = await import("../reload-config");
+        await reloadNextlyConfig({ resolver });
+
+        const refusal = judgeAddress("collection", address);
+        const logged = errorSpy.mock.calls.map(([line]) => String(line));
+        if (refusal === null) {
+          expect(logged.filter(line => line.includes("address"))).toEqual([]);
+          return;
+        }
+        expect(logged).toEqual([expect.stringContaining(refusal.message)]);
+        expect(pipelineApplySpy).not.toHaveBeenCalled();
+      }
+    );
+  });
+
+  it("keeps the previous config when the address check cannot read the database", async () => {
+    // `cascade` is refused for a new address, so the check asks whether its table exists, and that
+    // read fails after something was published mid-reload. The reload must give up the way every
+    // other refused reload does: the undo puts the previous options back.
+    publishCollectionDbOptions([
+      { slug: "posts", db: { allowIdOnCreate: true } },
+    ]);
+    loadConfigSpy.mockResolvedValue({
+      config: { collections: [{ slug: "cascade", fields: [] }] },
+    });
+    const resolver = buildResolver();
+    const adapter = resolver("adapter") as {
+      tableExists: (name: string) => Promise<boolean>;
+    };
+    const lockTableExists = adapter.tableExists.bind(adapter);
+    // Only the address check's own probe fails; the lock's reads answer as before.
+    adapter.tableExists = async (name: string) => {
+      if (name !== "dc_cascade") return lockTableExists(name);
+      publishCollectionDbOptions([{ slug: "posts", db: { idType: "uuidv7" } }]);
+      throw new Error("connection lost");
+    };
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    expect(collectionDbOptions("posts")).toEqual({ allowIdOnCreate: true });
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("connection lost")
+    );
+    expect(pipelineApplySpy).not.toHaveBeenCalled();
+  });
 
   it("re-reads the config from disk on every call (clears the loader cache first)", async () => {
     loadConfigSpy.mockResolvedValue({ config: { collections: [] } });
@@ -1832,7 +1904,7 @@ describe("reloadNextlyConfig", () => {
             widgets: [
               {
                 id: "acme/new",
-                display: { component: "@acme/widgets/admin#New" },
+                view: { component: "@acme/widgets/admin#New" },
               },
             ],
           },
@@ -1843,10 +1915,16 @@ describe("reloadNextlyConfig", () => {
         setAdminComponentPlugins([]);
       });
 
-      it("are republished when the reload lands", async () => {
+      it("are republished when the reload lands, with the site dashboard the loader carries", async () => {
         const plugins = [...withPluginTable.plugins, added];
+        // As the loader hands it over after every plugin's setup().
+        const dashboard = {
+          widgets: [
+            { id: "site/notes", view: { component: "./dashboard/notes" } },
+          ],
+        };
         loadConfigSpy.mockResolvedValue({
-          config: { ...withPluginTable, plugins },
+          config: { ...withPluginTable, plugins, admin: { dashboard } },
         });
         unchangedPosts();
 
@@ -1854,6 +1932,7 @@ describe("reloadNextlyConfig", () => {
         await reloadNextlyConfig({ resolver: buildResolver() });
 
         expect(adminComponentPlugins()).toEqual(plugins);
+        expect(adminSiteDashboard()).toEqual(dashboard);
       });
 
       it("are left as they were when the reload does not land", async () => {
@@ -1921,6 +2000,51 @@ describe("reloadNextlyConfig", () => {
       });
     });
 
+    describe("a plugin's recorded prefix", () => {
+      // The owner rows the plugin's install recorded, as the registry
+      // returns them: its table under the prefix it was created with.
+      const recordedUnder = (prefix: string) =>
+        vi.spyOn(SchemaOwnersRepository.prototype, "read").mockResolvedValue([
+          {
+            tableName: `${prefix}__notes`,
+            ownerKind: "plugin",
+            ownerId: "@acme/local",
+            migratedBy: "plugin:@acme/local",
+            ownerVersion: "1.0.0",
+            schemaVersion: 1,
+            state: "active",
+          },
+        ]);
+
+      it("refuses a reload that moves it, before the pipeline applies anything", async () => {
+        const read = recordedUnder("old");
+        loadConfigSpy.mockResolvedValue({ config: withPluginTable });
+        unchangedPosts();
+
+        const { reloadNextlyConfig } = await import("../reload-config");
+        await reloadNextlyConfig({ resolver: buildResolver() });
+
+        expect(read).toHaveBeenCalled();
+        expect(pipelineApplySpy).not.toHaveBeenCalled();
+        // The previous config stays, with the schema it compiled: none here.
+        expect(getActiveExtensionSchema("sqlite")).toBeFalsy();
+        read.mockRestore();
+      });
+
+      it("control: lets a reload keeping it through", async () => {
+        // `@acme/local` declares no prefix, so its name gives `acme_local`.
+        const read = recordedUnder("acme_local");
+        loadConfigSpy.mockResolvedValue({ config: withPluginTable });
+        unchangedPosts();
+
+        const { reloadNextlyConfig } = await import("../reload-config");
+        await reloadNextlyConfig({ resolver: buildResolver() });
+
+        expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+        read.mockRestore();
+      });
+    });
+
     it("is put back when the reload does not land", async () => {
       // The schema a previous reload published, distinct from what this one
       // compiles, so "put back" is observable as the same object returning.
@@ -1950,6 +2074,31 @@ describe("reloadNextlyConfig", () => {
       // A refused reload keeps the previous config, and with it the schema the
       // previous config compiled — not the one this reload compiled.
       expect(getActiveExtensionSchema("sqlite")).toBe(previous);
+    });
+
+    it("puts back the fields a scope held back when the reload does not land", async () => {
+      const { currentWithheldScopeFields, publishWithheldScopeFields } =
+        await import("../../domains/schema/pipeline/withheld-scope-fields");
+      // What the running configuration's fold held back: a type switched off.
+      const previous = new Map([
+        ["collection:pages", [{ name: "seo", type: "text" }]],
+      ]);
+      publishWithheldScopeFields(previous as never);
+      // The edited configuration switches it on again; its fold, run by the
+      // load, publishes that nothing is held back.
+      loadConfigSpy.mockImplementation(async () => {
+        publishWithheldScopeFields(new Map());
+        return { config: withPluginTable };
+      });
+      introspectSpy.mockRejectedValue(new Error("connection refused"));
+
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      // The previous configuration still runs, so its type stays off and its
+      // column stays kept.
+      expect(currentWithheldScopeFields()).toBe(previous);
+      publishWithheldScopeFields(new Map());
     });
   });
 
@@ -2178,7 +2327,9 @@ describe("reloadNextlyConfig", () => {
       renamesApplied: 0,
       error: {
         code: "CONFIRMATION_REQUIRED_NO_TTY",
-        message: "TTY required for schema confirmation",
+        // The message the terminal dispatcher's refusal carries.
+        message: new TTYRequiredError("Rename dc_posts.body to summary?")
+          .message,
       },
     });
 
@@ -2194,6 +2345,12 @@ describe("reloadNextlyConfig", () => {
     expect(consoleSpy).toHaveBeenCalled();
     const warningArg = consoleSpy.mock.calls[0]?.[0] as string;
     expect(warningArg).toContain("confirmation");
+    // The refusal's detail alone: its lead and its advice, written for a
+    // command run, are replaced by the dev server's own.
+    expect(warningArg).toContain("  Rename dc_posts.body to summary?\n");
+    expect(warningArg).not.toContain("nobody can be asked");
+    expect(warningArg).not.toContain("TTY required");
+    expect(warningArg).not.toContain("migration files via");
 
     consoleSpy.mockRestore();
   });
@@ -3647,11 +3804,12 @@ describe("reloadNextlyConfig", () => {
         "utf8"
       );
       const commits = source.match(/^\s*commitReload\(/gm) ?? [];
-      // Empty targets, the no-DDL branch, and after a successful apply. Two
+      // A start's reload with every entity unchanged since the last start,
+      // empty targets, the no-DDL branch, and after a successful apply. Two
       // branches deliberately publish nothing: the post-apply localization
       // failure returns before the runtime-schema refresh, and the no-DDL
       // deferred branch skips the metadata sync for every entity.
-      expect(commits).toHaveLength(3);
+      expect(commits).toHaveLength(4);
     });
 
     it("keeps a late app hook behind the config's, across a reload", async () => {

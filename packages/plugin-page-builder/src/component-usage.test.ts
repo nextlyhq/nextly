@@ -29,6 +29,47 @@ describe("what a stored document says about the components it embeds", () => {
     });
   });
 
+  it("names a component a placement's override installs", () => {
+    // A placement of `picker` that sets its exposure to `deep` installs `deep`
+    // inside `picker`, though nothing in this document stores it as a node's
+    // component. Recorded, so a change to `deep` judges this page.
+    const placed = {
+      ...instance("i1", "picker"),
+      props: { componentId: "picker", overrides: { card: "deep", on: true } },
+    };
+
+    expect(componentUsageOf(doc([placed]), DEFAULT_LIMITS)).toEqual({
+      ids: ["picker", "deep"],
+      complete: true,
+    });
+    // CONTROL: without the override, only what the node stores.
+    expect(
+      componentUsageOf(doc([instance("i1", "picker")]), DEFAULT_LIMITS)
+    ).toEqual({ ids: ["picker"], complete: true });
+  });
+
+  it("names a component a definition's variant installs", () => {
+    const definition = {
+      ...doc([instance("n1", "plain")]),
+      kind: "component",
+      exposed: [
+        {
+          id: "card",
+          label: "Card",
+          nodeId: "n1",
+          propPath: "componentId",
+          type: "select",
+        },
+      ],
+      variants: { deep: { label: "Deep", overrides: { card: "deep" } } },
+    };
+
+    expect(componentUsageOf(definition, DEFAULT_LIMITS)).toEqual({
+      ids: ["plain", "deep"],
+      complete: true,
+    });
+  });
+
   it("reads a document stored as JSON text", () => {
     // The column can hold either, and a reader that handled only the object
     // would answer "references nothing" for every site whose adapter stores

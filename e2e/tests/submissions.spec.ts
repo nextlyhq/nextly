@@ -7,70 +7,117 @@
  */
 import { expect } from "@playwright/test";
 
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 test.describe.configure({ mode: "serial" });
 
-const FORM_NAME = "E2E Submissions Form";
+// Named per run of this file, as is everything it seeds. A form's slug comes
+// from its name and is unique, so a second run on the same database (a retry
+// of the serial group, or `--repeat-each`) would otherwise be refused at the
+// first test. And the view lists every form's submissions until a form is
+// picked, so a row an earlier run left with the same text could be the one a
+// locator finds while the filtered list is still loading.
+let formName = "";
 let formId = "";
+let ada = "";
+let bot = "";
+let greeting = "";
 
 test("creates a published form and seeds submissions through the API", async ({
   page,
 }) => {
-  await gotoAdmin(page, "/collections/forms/create");
-  await page.getByRole("textbox", { name: "Form Name" }).fill(FORM_NAME);
-
-  for (const type of [/^Email/, /^Text Single-line/]) {
-    await page.getByRole("button", { name: "Add field" }).first().click();
-    const dialog = page.getByRole("dialog");
-    await dialog.getByRole("radio", { name: type }).click();
-    await dialog.getByRole("button", { name: "Add field" }).click();
-  }
-
-  await page.getByRole("combobox", { name: "Status" }).click();
-  await page.getByRole("option", { name: "Published" }).click();
-  await page.getByRole("button", { name: "Create", exact: true }).click();
-  await expect(page).toHaveURL(/\/collections\/forms$/, { timeout: 30_000 });
-
-  // Seed one clean and one spam-flagged submission via the entries API
-  // (the flag-on-submit path itself is covered by integration tests).
-  formId = await page.evaluate(async name => {
-    const forms = (await (
-      await fetch("/admin/api/collections/forms/entries?pageSize=50", {
-        credentials: "include",
-      })
-    ).json()) as { items: Array<{ id: string; name: string }> };
-    const form = forms.items.find(item => item.name === name);
-    if (!form) throw new Error("form not found");
-    for (const body of [
-      {
-        data: { email: "ada@example.com", text: "hello there" },
-        status: "new",
+  const run = Date.now().toString(36);
+  formName = `E2E Submissions Form ${run}`;
+  ada = `ada-${run}@example.com`;
+  bot = `bot-${run}@example.com`;
+  greeting = `hello there ${run}`;
+  // The form is made through the entries API: what this file tests is its
+  // submissions, and the form editor has browser specs of its own.
+  await gotoAdmin(page, "/collections/forms");
+  const created = await page.request.post(
+    "/admin/api/collections/forms/entries",
+    {
+      data: {
+        name: formName,
+        slug: `e2e-submissions-${run}`,
+        status: "published",
+        fields: [
+          { type: "email", name: "email", label: "Email" },
+          { type: "text", name: "text", label: "Text" },
+        ],
       },
-      {
-        data: { email: "bot@example.com", text: "buy things" },
-        status: "spam",
-        spamReason: "honeypot",
-      },
-    ]) {
-      const res = await fetch(
-        "/admin/api/collections/form-submissions/entries",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({
-            form: form.id,
-            submittedAt: new Date().toISOString(),
-            ...body,
-          }),
-        }
-      );
-      if (!res.ok) throw new Error(`seed failed: ${res.status}`);
     }
-    return form.id;
-  }, FORM_NAME);
+  );
+  expect(created.ok()).toBe(true);
+
+  // Seed one clean and one spam submission via the entries API. A create made
+  // over HTTP starts as `new` whatever status it names, and only the server's
+  // spam verdict files it as `spam`, so the spam row is sent the way a bot
+  // sends one: with the honeypot field (`website`, which this form does not
+  // declare) filled in. Each stored status is checked here, so a seed that no
+  // longer lands where the later tests look fails at the seed.
+  formId = await page.evaluate(
+    async seed => {
+      // Asked for by name rather than looked for on the first page of every
+      // form: other specs create forms on the same database, and a list read
+      // returns one page of them.
+      const query = new URLSearchParams({
+        where: JSON.stringify({ name: { equals: seed.name } }),
+      });
+      const forms = (await (
+        await fetch(`/admin/api/collections/forms/entries?${query}`, {
+          credentials: "include",
+        })
+      ).json()) as { items: Array<{ id: string; name: string }> };
+      const form = forms.items.find(item => item.name === seed.name);
+      if (!form) throw new Error("form not found");
+      for (const { data, expected } of [
+        {
+          data: { email: seed.ada, text: seed.greeting },
+          expected: { status: "new", spamReason: null },
+        },
+        {
+          data: {
+            email: seed.bot,
+            text: "buy things",
+            website: "http://spam.example",
+          },
+          expected: { status: "spam", spamReason: "honeypot" },
+        },
+      ]) {
+        const res = await fetch(
+          "/admin/api/collections/form-submissions/entries",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({
+              form: form.id,
+              submittedAt: new Date().toISOString(),
+              data,
+            }),
+          }
+        );
+        if (!res.ok) throw new Error(`seed failed: ${res.status}`);
+        const { item } = (await res.json()) as {
+          item: { status?: string; spamReason?: string | null };
+        };
+        const stored = {
+          status: item.status,
+          spamReason: item.spamReason ?? null,
+        };
+        if (JSON.stringify(stored) !== JSON.stringify(expected)) {
+          throw new Error(
+            `seeded ${data.email} as ${JSON.stringify(stored)}, ` +
+              `expected ${JSON.stringify(expected)}`
+          );
+        }
+      }
+      return form.id;
+    },
+    { name: formName, ada, bot, greeting }
+  );
   expect(formId).not.toBe("");
 });
 
@@ -86,69 +133,85 @@ test("shows per-field columns, edits in the drawer, and stamps the edit", async 
 
   // Select the form: columns become its field labels.
   await page.getByRole("combobox", { name: "Filter by form" }).click();
-  await page.getByRole("option", { name: FORM_NAME }).click();
+  await page.getByRole("option", { name: formName }).click();
   await expect(page.getByRole("columnheader", { name: "Email" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Text" })).toBeVisible();
   // The table renders desktop rows and responsive cards in the same DOM;
   // filter to the visible variant for the current viewport.
   await expect(
-    page.getByText("ada@example.com").filter({ visible: true }).first()
+    page.getByText(ada).filter({ visible: true }).first()
   ).toBeVisible();
 
   // The spam row stays out of the default view.
-  await expect(page.getByText("bot@example.com")).toHaveCount(0);
+  await expect(includingHidden(page).getByText(bot)).toHaveCount(0);
 
-  // Drawer: values, edit, save — the server stamps the edit.
-  await page
-    .getByText("ada@example.com")
-    .filter({ visible: true })
-    .first()
-    .click();
-  const sheet = page.getByRole("dialog");
-  await expect(sheet.getByText("hello there")).toBeVisible();
-  await sheet.getByRole("button", { name: "Edit" }).click();
-  await sheet
+  // A row opens the submission's own page, at its own address, carrying the
+  // list's filter.
+  await page.getByText(ada).filter({ visible: true }).first().click();
+  await expect(page).toHaveURL(
+    /\/admin\/collections\/form-submissions\/[^/?]+\?status=all&form=/
+  );
+  const answers = page.getByRole("region", { name: "Answers" });
+  await expect(answers.getByText(greeting)).toBeVisible();
+  // Opening a New one marks it Read, for a person who may update it.
+  await expect(
+    page
+      .getByRole("complementary", { name: "Submission details" })
+      .getByRole("button", { name: "Read", pressed: true })
+  ).toBeVisible({ timeout: 15_000 });
+
+  // Edit, save: the server stamps the edit, and Activity says so.
+  await answers.getByRole("button", { name: "Edit answers" }).click();
+  await answers
     .getByRole("textbox", { name: "Text" })
-    .fill("hello there (corrected)");
-  await sheet.getByRole("button", { name: "Save", exact: true }).click();
-
-  // The sheet stays open after saving (prev/next continuity); the refetched
-  // record flows back in with the server-side edit stamp.
-  await expect(sheet.getByText(/Edited .* — the values above/)).toBeVisible({
+    .fill(`${greeting} (corrected)`);
+  await answers.getByRole("button", { name: "Save answers" }).click();
+  await expect(answers.getByText(`${greeting} (corrected)`)).toBeVisible({
     timeout: 15_000,
   });
-  await page.keyboard.press("Escape");
   await expect(
-    page.getByText("hello there (corrected)").filter({ visible: true }).first()
+    page
+      .getByRole("region", { name: "Activity" })
+      .getByText("Answers edited in the admin")
   ).toBeVisible();
+
+  // Opened directly, by its address alone, it reads the same.
+  await page.reload();
+  await expect(
+    page
+      .getByRole("region", { name: "Answers" })
+      .getByText(`${greeting} (corrected)`)
+  ).toBeVisible({ timeout: 30_000 });
 });
 
 test("reviews spam in its tab and recovers it", async ({ page }) => {
   await gotoAdmin(page, "/collections/form-submissions");
   await page.getByRole("combobox", { name: "Filter by form" }).click();
-  await page.getByRole("option", { name: FORM_NAME }).click();
+  await page.getByRole("option", { name: formName }).click();
 
-  await page.getByRole("tab", { name: "Spam" }).click();
+  // The status filter: each status a pressed button, its count beside it.
+  const status = page.getByRole("group", { name: "Status" });
+  await status.getByRole("button", { name: /^Spam\b/ }).click();
   await expect(
-    page.getByText("bot@example.com").filter({ visible: true }).first()
+    page.getByText(bot).filter({ visible: true }).first()
   ).toBeVisible();
 
-  // Recover: the drawer's spam banner explains, status New brings it back.
-  await page
-    .getByText("bot@example.com")
-    .filter({ visible: true })
-    .first()
-    .click();
-  const sheet = page.getByRole("dialog");
-  await expect(sheet.getByText(/Flagged as spam/)).toBeVisible();
-  await sheet.getByLabel("Status").click();
-  await page.getByRole("option", { name: "New", exact: true }).click();
-  await sheet.getByRole("button", { name: "Save", exact: true }).click();
-  await page.keyboard.press("Escape");
-
-  await page.getByRole("tab", { name: "New", exact: true }).click();
+  // Recover from its page: Not spam brings it back as New.
+  await page.getByText(bot).filter({ visible: true }).first().click();
   await expect(
-    page.getByText("bot@example.com").filter({ visible: true }).first()
+    page.getByRole("region", { name: "Activity" }).getByText(/Flagged as spam/)
+  ).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("button", { name: "Not spam" }).click();
+  await expect(
+    page
+      .getByRole("complementary", { name: "Submission details" })
+      .getByRole("button", { name: "New", pressed: true })
+  ).toBeVisible({ timeout: 15_000 });
+  await page.goBack();
+
+  await status.getByRole("button", { name: /^New\b/ }).click();
+  await expect(
+    page.getByText(bot).filter({ visible: true }).first()
   ).toBeVisible({
     timeout: 15_000,
   });
@@ -164,7 +227,7 @@ test("exports CSV with columns from the form's fields", async ({ page }) => {
   expect(res.headers()["content-type"]).toContain("text/csv");
   const csv = await res.text();
   expect(csv).toContain("Email");
-  expect(csv).toContain("ada@example.com");
+  expect(csv).toContain(ada);
 
   // CSV without a form fails fast with a clear reason.
   const bad = await page.request.get(

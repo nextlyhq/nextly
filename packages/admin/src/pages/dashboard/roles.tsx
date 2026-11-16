@@ -1,4 +1,4 @@
-import { Button } from "@nextlyhq/ui";
+import { Button, PageHeader } from "@nextlyhq/ui";
 import type React from "react";
 
 import { Plus } from "@admin/components/icons";
@@ -9,6 +9,7 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import { READ_SETTINGS } from "@admin/lib/permissions/system-policy";
 
 import RoleTable from "./roles/components/RoleTable";
 
@@ -37,10 +38,10 @@ import RoleTable from "./roles/components/RoleTable";
  */
 const RolesPage: React.FC = () => {
   // Roles live under Settings (User Management) now. A roles-only user can't
-  // open the manage-settings-guarded General page, so the Settings crumb points
+  // open the read-settings-guarded General page, so the Settings crumb points
   // at the first reachable Settings subpage (Roles) — same logic as RoleBreadcrumbs.
   const { hasPermission } = useCurrentUserPermissions();
-  const settingsHref = hasPermission("manage-settings")
+  const settingsHref = hasPermission(READ_SETTINGS)
     ? ROUTES.SETTINGS
     : ROUTES.SECURITY_ROLES;
 
@@ -48,7 +49,7 @@ const RolesPage: React.FC = () => {
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer>
         {/* Breadcrumb navigation */}
-        <div className="mb-6">
+        <div className="mb-6 empty:hidden">
           <Breadcrumbs
             items={[
               { label: "Dashboard", href: ROUTES.DASHBOARD, isDashboard: true },
@@ -59,23 +60,22 @@ const RolesPage: React.FC = () => {
         </div>
 
         {/* Page header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight">Roles</h1>
-            {/* Muted foreground so this secondary subtitle meets contrast (a faint primary alpha did not). */}
-            <p className="text-sm font-normal text-muted-foreground mt-1">
-              Manage roles and permissions
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Link href={ROUTES.SECURITY_ROLES_CREATE}>
-              <Button size="md" className="flex items-center gap-1">
-                <Plus className="h-4 w-4" />
-                <span>Add Role</span>
-              </Button>
-            </Link>
-          </div>
-        </div>
+        <PageHeader
+          title="Roles"
+          description="Manage roles and permissions"
+          actions={
+            <>
+              <div className="flex items-center gap-2">
+                <Link href={ROUTES.SECURITY_ROLES_CREATE}>
+                  <Button size="md" className="flex items-center gap-1">
+                    <Plus className="h-4 w-4" />
+                    <span>Add Role</span>
+                  </Button>
+                </Link>
+              </div>
+            </>
+          }
+        />
 
         {/* Role table */}
         <RoleTable />

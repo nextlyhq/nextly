@@ -56,7 +56,7 @@ A scaffolded Nextly project ships this `build` script in `package.json`:
 }
 ```
 
-The `nextly migrate` step runs against the database referenced by `DATABASE_URL` during the Vercel build, so pending migrations are applied as part of every deploy. Migrations are forward-only -- to undo, write a new corrective migration. See [Production migrations](/docs/guides/production-migrations) for the deeper trade-offs (build-time vs. CI-step migrations) and recovery patterns.
+The `nextly migrate` step runs against the database referenced by `DATABASE_URL` during the Vercel build, so pending migrations are applied as part of every deploy. Keep it before the deploy serves: a production start writes no registry rows, permissions or role grants and creates or changes no table, so a new collection, field or permission reaches the database only through `nextly migrate` (see [What a production start writes](/docs/guides/production-migrations#what-a-production-start-writes) and [A production start changes no table](/docs/guides/production-migrations#a-production-start-changes-no-table)). A first deploy against an empty database needs it too: a production start there creates nothing and refuses with `NEXTLY_DATABASE_NOT_SET_UP`, naming `nextly migrate`. Migrations are forward-only -- to undo, write a new corrective migration. See [Production migrations](/docs/guides/production-migrations) for the deeper trade-offs (build-time vs. CI-step migrations) and recovery patterns.
 
 If you'd rather run migrations in a separate CI job before the Vercel deploy promotes (recommended once you have multiple developers / preview deploys), wire it into a GitHub Actions workflow as described in the migrations guide and remove `nextly migrate` from `build`.
 
@@ -78,17 +78,20 @@ The default zero-config local-disk adapter does **not** work on Vercel -- server
 
 - **S3 / R2 / DigitalOcean Spaces / etc.** -- install `@nextlyhq/storage-s3`, set `S3_BUCKET` + `S3_REGION` + `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (and `S3_ENDPOINT` + `S3_FORCE_PATH_STYLE` for non-AWS providers).
 
-Vercel's serverless functions also have a 4.5MB request-body limit. Enable client-side direct uploads on storage collections that need to accept larger files:
+Vercel's serverless functions also have a 4.5MB request-body limit. To accept larger files, store them on S3 (or an S3-compatible provider) and enable client-side direct uploads for that collection. Vercel Blob does not sign direct uploads.
 
 ```typescript
 // nextly.config.ts
 import { defineConfig } from "nextly/config";
-import { vercelBlobStorage } from "@nextlyhq/storage-vercel-blob";
+import { s3Storage } from "@nextlyhq/storage-s3";
 
 export default defineConfig({
   storage: [
-    vercelBlobStorage({
-      token: process.env.BLOB_READ_WRITE_TOKEN,
+    s3Storage({
+      bucket: process.env.S3_BUCKET!,
+      region: process.env.S3_REGION!,
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
       collections: {
         media: {
           clientUploads: true,
@@ -98,6 +101,8 @@ export default defineConfig({
   ],
 });
 ```
+
+The browser asks `POST /api/nextly/storage/upload-url` for a URL with the file's `filename`, `mimeType`, `collection` and exact `size`, then sends the file to that URL. The file is checked before the URL is signed (see [Media upload security](/docs/configuration/media-upload-security)).
 
 See [Media & Storage](/docs/guides/media-storage) for the full storage reference.
 
@@ -111,6 +116,30 @@ Use a managed PostgreSQL service that's reachable from Vercel's IP ranges:
 - [PlanetScale](https://planetscale.com) (MySQL)
 
 SQLite is **not** suitable for Vercel deployments -- the file would be wiped on every cold start. See [Database](/docs/database) for adapter-specific guidance.
+
+#### Database connections on Vercel
+
+A Vercel function instance serves many requests and is suspended between them, and a suspended instance keeps the database connections it holds open. A pool sized for a long-running server, ten connections kept for thirty seconds, can then use up a small database's connection limit across a handful of instances, and new connections fail with "too many connections".
+
+So on Vercel (where `VERCEL` is set, in functions and builds) the PostgreSQL and MySQL adapters default to a small pool: at most 3 connections, none kept open, and an idle connection closed after 5 seconds. Install `@vercel/functions` in the app as well:
+
+```bash
+pnpm add @vercel/functions
+```
+
+With it installed, the adapter hands its pool to [`attachDatabasePool`](https://vercel.com/docs/functions/functions-api-reference/vercel-functions-package#attachdatabasepool), which keeps an instance alive until its idle connections have closed, rather than suspending it with them open. Without it the adapter logs one warning when it connects and relies on the short idle timeout alone.
+
+To size the pool yourself, set `DB_POOL_MAX`, `DB_POOL_MIN` or `DB_POOL_IDLE_TIMEOUT`, or pass `pool` to the adapter. Each setting replaces only its own default, so `DB_POOL_MAX=10` gives a larger pool that still closes idle connections after 5 seconds. Setting all three (`DB_POOL_MAX=10`, `DB_POOL_MIN=0`, `DB_POOL_IDLE_TIMEOUT=30000`) returns to the defaults of a long-running server, on PostgreSQL and MySQL alike.
+
+To check the budget, multiply the pool's maximum by the function instances you expect at peak, and add the build: each Next.js build worker opens its own pool while it prerenders. Keep the total under your database's connection limit, with room for migrations and your own tools.
+
+Nextly does not ship a connection pooler. When the budget does not fit, because traffic runs many instances or the plan allows few connections, put the provider's pooler in front of the database and point `DATABASE_URL` at it:
+
+- **Neon**: the pooled connection string (its host ends in `-pooler`).
+- **Supabase**: the Supavisor pooler's connection string from the project's database settings.
+- **Self-hosted PostgreSQL**: PgBouncer.
+
+A transaction-mode pooler hands each transaction whichever server connection is free, so session state does not carry from one transaction to the next. If you set the adapter's `schema`, Nextly sends `search_path` as a connection startup option; check that your pooler passes it through. See [PostgreSQL connection pool](/docs/database/postgres#connection-pool) and [MySQL connection pool](/docs/database/mysql#connection-pool).
 
 ### 6. Client addresses
 
@@ -148,7 +177,9 @@ To rate-limit sign-in per client and record real client addresses, let Nextly re
 
 ### Migrations on deploy
 
-For self-hosted deploys, the same forward-only model applies. Run `nextly migrate` against the production database **before** the new app binary takes traffic. See [Production migrations](/docs/guides/production-migrations) for GitHub Actions, Railway, Render, Fly.io, and AWS examples.
+For self-hosted deploys, the same forward-only model applies. Run `nextly migrate` against the production database **before** the new app binary takes traffic. A production start does not bring the registry, the permissions, the role grants or the tables up to date itself: until `nextly migrate` runs, a declared field the database lacks answers `ENTITY_NOT_MIGRATED`, and against an empty database the start refuses, naming `nextly migrate`. A changed `dbName` needs a migration of its own (see [A changed `dbName`](/docs/guides/production-migrations#a-changed-dbname)), and a site whose tables its starts made before this release takes a baseline before upgrading (see [Upgrading a site whose starts made its tables](/docs/guides/production-migrations#upgrading-a-site-whose-starts-made-its-tables)).
+
+Do not move production back to a Nextly release from before the one where starts stopped writing this bookkeeping: such a release seeds the permissions and the preset role grants at every production start, from its own configuration, and nothing turns that off. See [Production migrations](/docs/guides/production-migrations) for GitHub Actions, Railway, Render, Fly.io, and AWS examples.
 
 ## When the database is busy
 
@@ -252,7 +283,7 @@ Before going live, verify:
 - [ ] Storage adapter is configured for non-ephemeral filesystems (no local disk on serverless).
 - [ ] An email provider is configured (Resend, SMTP, or SendLayer) -- without one, password-reset and verification tokens are returned in the API response as a development fallback.
 - [ ] The first administrator exists: created at `/admin/setup` with the setup token, or with `nextly users:create-admin`.
-- [ ] All pending migrations have been applied (`nextly migrate:status` reports zero pending and zero unfinished).
+- [ ] All pending migrations have been applied (`nextly migrate:status` reports zero pending and zero unfinished), by a `nextly migrate` that runs before each deploy serves: a production start writes no registry rows, permissions or role grants itself, and creates or changes no table.
 - [ ] The reverse proxy / load balancer terminates TLS and forwards real client headers.
 - [ ] `security.trustProxy` is `true` on Vercel or behind a proxy every request passes through, with `TRUSTED_PROXY_IPS` listing any hops in front of it (see [Client addresses and the auth rate limit](#client-addresses-and-the-auth-rate-limit)).
 - [ ] Database backups are configured (your hosting provider's snapshots, point-in-time recovery, etc.).

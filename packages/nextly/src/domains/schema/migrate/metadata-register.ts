@@ -22,21 +22,14 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { eq } from "drizzle-orm";
 
 import type { FieldConfig } from "@nextly/collections";
-import {
-  dynamicCollectionsMysql,
-  dynamicCollectionsSqlite,
-  dynamicCollectionsPg,
-} from "@nextly/schemas/dynamic-collections";
 import type { CollectionAdminConfig } from "@nextly/schemas/dynamic-collections/types";
-import { dynamicSinglesMysql } from "@nextly/schemas/dynamic-singles/mysql";
-import { dynamicSinglesPg } from "@nextly/schemas/dynamic-singles/postgres";
-import { dynamicSinglesSqlite } from "@nextly/schemas/dynamic-singles/sqlite";
 
 import type { SingleAdminOptions } from "../../../config";
+import { loadedDialect } from "../../../database/dialect-tables";
 import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
 import { simplePluralize } from "../../../shared/lib/pluralization";
 import { consoleLogger } from "../../../shared/types";
-import { clearCollectionRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { inRegistryStep, writeRegistryRows } from "../schema-version";
 
 import {
   loadSnapshots,
@@ -73,6 +66,16 @@ export type {
   SnapshotSingle,
   MigrationSnapshot,
 } from "./snapshot-source";
+
+/**
+ * Whether a collection or Single registered from a migration snapshot has
+ * Draft/Published. A snapshot that leaves `status` out registers it on, so its
+ * table must carry the status columns: a template's hand-written migration is
+ * checked against this same answer.
+ */
+export function registeredStatus(entity: { status?: boolean }): boolean {
+  return entity.status ?? true;
+}
 
 /**
  * Options for registering collections from migrations
@@ -209,28 +212,18 @@ function generateSchemaHash(fields: unknown[]): string {
  * Get the correct dynamic collections schema based on dialect
  */
 function getDynamicCollectionsSchema(dialect: SupportedDialect) {
-  switch (dialect) {
-    case "mysql":
-      return dynamicCollectionsMysql;
-    case "sqlite":
-      return dynamicCollectionsSqlite;
-    case "postgresql":
-      return dynamicCollectionsPg;
-  }
+  // The loaded dialect's own table, so only that dialect's file is imported;
+  // `createAdapter` loads it.
+  return loadedDialect(dialect).tables.dynamicCollections;
 }
 
 /**
  * Get the correct dynamic singles schema based on dialect
  */
 function getDynamicSinglesSchema(dialect: SupportedDialect) {
-  switch (dialect) {
-    case "mysql":
-      return dynamicSinglesMysql;
-    case "sqlite":
-      return dynamicSinglesSqlite;
-    case "postgresql":
-      return dynamicSinglesPg;
-  }
+  // The loaded dialect's own table, so only that dialect's file is imported;
+  // `createAdapter` loads it.
+  return loadedDialect(dialect).tables.dynamicSingles;
 }
 
 /**
@@ -242,13 +235,13 @@ function getDynamicSinglesSchema(dialect: SupportedDialect) {
  * @returns true if inserted, false if already exists
  */
 async function registerCollection(
-  adapter: DrizzleAdapter,
+  // The handle of the transaction the rows and the schema version are
+  // written in (`registerFromMigrations`).
+  db: DrizzleDatabase,
   dialect: SupportedDialect,
   collection: SnapshotCollection
 ): Promise<boolean> {
   const schema = getDynamicCollectionsSchema(dialect);
-  // getDrizzle returns untyped Drizzle instance; schema is passed to query ops
-  const db = adapter.getDrizzle<DrizzleDatabase>();
 
   // Check if collection already exists using Drizzle
   const existing = await db
@@ -274,7 +267,7 @@ async function registerCollection(
     description: collection.description ?? null,
     fields: (collection.fields ?? []) as FieldConfig[],
     timestamps: collection.timestamps !== false,
-    status: collection.status ?? true,
+    status: registeredStatus(collection),
     admin: (collection.admin ?? {}) as CollectionAdminConfig,
     source: "ui",
     locked: false,
@@ -295,13 +288,12 @@ async function registerCollection(
  * @returns true if inserted, false if already exists
  */
 async function registerSingle(
-  adapter: DrizzleAdapter,
+  // The transaction's handle, as for `registerCollection`.
+  db: DrizzleDatabase,
   dialect: SupportedDialect,
   single: SnapshotSingle
 ): Promise<boolean> {
   const schema = getDynamicSinglesSchema(dialect);
-  // getDrizzle returns untyped Drizzle instance; schema is passed to query ops
-  const db = adapter.getDrizzle<DrizzleDatabase>();
 
   // Check if single already exists using Drizzle
   const existing = await db
@@ -326,7 +318,7 @@ async function registerSingle(
     tableName: single.tableName,
     description: single.description ?? null,
     fields: (single.fields ?? []) as FieldConfig[],
-    status: single.status ?? true,
+    status: registeredStatus(single),
     admin: (single.admin ?? {}) as SingleAdminOptions,
     source: "ui",
     locked: false,
@@ -356,12 +348,17 @@ async function registerSingle(
  * saying so.
  */
 async function registerEach<T extends { slug: string }>(
+  adapter: DrizzleAdapter,
   entries: T[],
   kind: "collection" | "single",
   insert: (entry: T) => Promise<boolean>,
   logger: NonNullable<RegisterFromMigrationsOptions["logger"]>
-): Promise<number> {
+): Promise<{ registered: number; failed: string[] }> {
   let registered = 0;
+  // Each entity whose row could not be written, as `<kind> <slug>`: reported,
+  // so a caller can tell a registration that wrote every row from one that
+  // only wrote some.
+  const failed: string[] = [];
 
   for (const entry of entries) {
     // A snapshot can carry a name that has since become reserved (a system
@@ -377,18 +374,21 @@ async function registerEach<T extends { slug: string }>(
     }
 
     try {
-      if (await insert(entry)) registered += 1;
+      // One entity's failure rolls back its own insert alone, inside the
+      // transaction every entity is written in (`inRegistryStep`).
+      if (await inRegistryStep(adapter, () => insert(entry))) registered += 1;
       logger.debug?.(`[Migration Metadata] Registered ${kind}: ${entry.slug}`);
     } catch (err) {
       // Per entity: one row that cannot be written must not cost the rest
       // their registration.
+      failed.push(`${kind} ${entry.slug}`);
       logger.warn?.(
         `[Migration Metadata] Failed to register ${kind} ${entry.slug}: ${String(err)}`
       );
     }
   }
 
-  return registered;
+  return { registered, failed };
 }
 
 export async function registerFromMigrations(
@@ -396,6 +396,8 @@ export async function registerFromMigrations(
 ): Promise<{
   collectionsRegistered: number;
   singlesRegistered: number;
+  /** Entities whose row could not be written, as `<kind> <slug>`. */
+  rowsNotWritten: string[];
 }> {
   const { migrationsDir, adapter, dialect, logger = consoleLogger } = options;
 
@@ -411,7 +413,11 @@ export async function registerFromMigrations(
 
   if (snapshots.length === 0) {
     logger.debug?.("[Migration Metadata] No snapshot files found");
-    return { collectionsRegistered: 0, singlesRegistered: 0 };
+    return {
+      collectionsRegistered: 0,
+      singlesRegistered: 0,
+      rowsNotWritten: [],
+    };
   }
 
   logger.debug?.(
@@ -422,26 +428,40 @@ export async function registerFromMigrations(
   const collections = mergeCollections(snapshots, logger);
   const singles = mergeSingles(snapshots, logger);
 
-  // Step 3: Register each entity, by kind. The rows are written directly, so
-  // the cached collection rows are cleared once the writes have run, landed or
-  // not (`collection-row-cache`).
-  let collectionsRegistered: number;
-  try {
-    collectionsRegistered = await registerEach(
-      collections,
-      "collection",
-      entry => registerCollection(typedAdapter, dialect, entry),
-      logger
+  // Step 3: Register each entity, by kind, in one transaction with the
+  // stored schema version, whose count moves where any row was registered
+  // (`writeRegistryRows`, which also clears the cached registry rows once the
+  // writes have run, landed or not).
+  const { collectionsRegistered, singlesRegistered, rowsNotWritten } =
+    await writeRegistryRows(
+      typedAdapter,
+      async tx => {
+        const db = tx.getDrizzle<DrizzleDatabase>();
+        const collectionRows = await registerEach(
+          typedAdapter,
+          collections,
+          "collection",
+          entry => registerCollection(db, dialect, entry),
+          logger
+        );
+        const singleRows = await registerEach(
+          typedAdapter,
+          singles,
+          "single",
+          entry => registerSingle(db, dialect, entry),
+          logger
+        );
+        return {
+          collectionsRegistered: collectionRows.registered,
+          singlesRegistered: singleRows.registered,
+          rowsNotWritten: [...collectionRows.failed, ...singleRows.failed],
+        };
+      },
+      {
+        wrote: registered =>
+          registered.collectionsRegistered + registered.singlesRegistered > 0,
+      }
     );
-  } finally {
-    clearCollectionRowCache();
-  }
-  const singlesRegistered = await registerEach(
-    singles,
-    "single",
-    entry => registerSingle(typedAdapter, dialect, entry),
-    logger
-  );
 
   if (collectionsRegistered > 0 || singlesRegistered > 0) {
     logger.info?.(
@@ -449,5 +469,5 @@ export async function registerFromMigrations(
     );
   }
 
-  return { collectionsRegistered, singlesRegistered };
+  return { collectionsRegistered, singlesRegistered, rowsNotWritten };
 }

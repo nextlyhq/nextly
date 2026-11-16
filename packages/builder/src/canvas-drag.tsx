@@ -41,29 +41,47 @@
  * @module canvas-drag
  */
 
-import type {
-  BlockNode,
-  ComponentLookup,
-  NestingSource,
+import {
+  type BlockNode,
+  type ComponentLookup,
+  type NestingSource,
+  COMPONENT_INSTANCE_TYPE,
+  declaredSlotNames,
+  findNode,
+  type PlacedNode,
+  type PlacementSources,
 } from "@nextlyhq/blocks-engine";
-import { findNode } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
+import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { autoscrollStep } from "./autoscroll";
 import {
+  AUTOSCROLL_MAX_STEP_PX,
+  AUTOSCROLL_ZONE_PX,
+  autoscrollStep,
+} from "./autoscroll";
+import {
+  CANVAS_ROOT_CLASS,
   isOutermostForAddress,
   nodeAddressOf,
   nodeIdFromEvent,
 } from "./canvas";
 import {
+  inputDocuments,
+  useCanvasFrame,
+  type CanvasFrame,
+} from "./canvas-frame-context";
+import {
   collectRegions,
   movingSubtree,
+  placementSources,
   resolveDrop,
   type DropRefusal,
   type DropRegion,
+  type DropResolution,
   type DropTarget,
   type RectSource,
+  type RegionVerdicts,
 } from "./drop-targets";
 import type { EditorState } from "./editor-state";
 import type { Point, Rect } from "./geometry";
@@ -71,13 +89,21 @@ import {
   canvasContentPoint,
   canvasContentRect,
   canvasPointerPoints,
+  canvasScroller,
   containerEdges,
-  scrollableAncestor,
+  framePaintedScale,
+  hostPointInFrame,
+  overlaySpaceOf,
   type CanvasPointerPoints,
 } from "./geometry-dom";
 import { placementTypesOf, type SlotSource } from "./inserter";
+import {
+  layersLockFacts,
+  type LockDropRefusal,
+  type LockRefusalFacts,
+} from "./lock-refusal";
 import { lockBlockingMove } from "./locking";
-import type { OpPosition } from "./ops";
+import type { OpPosition } from "./op-vocabulary";
 import {
   nextTargetSwitchState,
   NO_TARGET,
@@ -183,7 +209,7 @@ export interface CanvasDragState {
    * Distinct from a null target: the author has aimed at something, and saying
    * nothing tells them the editor did not notice.
    */
-  readonly refusal: DropRefusal | null;
+  readonly refusal: DropRefusal | LockDropRefusal | null;
 }
 
 /** The handlers the canvas root must carry for a drag to work. */
@@ -304,6 +330,83 @@ function admitsPress(current: Gesture | null): boolean {
   return current === null || !current.active;
 }
 
+/** Where the pointer aims, with a target the locks refuse turned into a refusal. */
+type AimResolution =
+  | DropResolution
+  | { readonly kind: "refused"; readonly refusal: LockDropRefusal };
+
+/**
+ * A resolved target the editor's locks refuse, answered as a refusal that says
+ * so. Asked of the editor's own `lockRefusalFor`, the question its apply asks,
+ * so the indicator never offers a drop the release would then refuse.
+ */
+function withLockVerdict(
+  drag: Gesture,
+  editor: Pick<EditorState, "lockRefusalFor">,
+  resolution: DropResolution
+): AimResolution {
+  if (resolution.kind !== "target") return resolution;
+  const target = resolution.target;
+  let verdict = drag.lockVerdicts.get(target.id);
+  if (verdict === undefined) {
+    verdict = lockVerdictAt(drag.subject, target.at, editor) ?? null;
+    drag.lockVerdicts.set(target.id, verdict);
+  }
+  if (verdict === null) return resolution;
+  return {
+    kind: "refused",
+    refusal: {
+      regionId: target.regionId,
+      ...(target.at.parentId === undefined
+        ? {}
+        : { parentId: target.at.parentId }),
+      lock: verdict,
+    },
+  };
+}
+
+/**
+ * A thunk that builds its node on the first call and hands back that node
+ * after, so one gesture judges and inserts one node. Building twice would
+ * judge one subtree and insert another, with ids of its own.
+ */
+function builtOnce(make: () => BlockNode | null): () => BlockNode | null {
+  let built: { node: BlockNode | null } | undefined;
+  return () => (built ??= { node: make() }).node;
+}
+
+/** The lock break dropping the subject at `at` would add. */
+function lockVerdictAt(
+  subject: DragSubject,
+  at: OpPosition,
+  editor: Pick<EditorState, "lockRefusalFor">
+): LockRefusalFacts | undefined {
+  if (subject.kind === "move") {
+    return editor.lockRefusalFor([
+      { kind: "move", id: subject.nodeId, to: at },
+    ]);
+  }
+  // The node an insert would place, starting blocks and all: a block whose
+  // own slots are locked is judged as it would land, not as an empty shell.
+  const node = subject.makeNode();
+  return node === null
+    ? undefined
+    : editor.lockRefusalFor([{ kind: "insert", node, at }]);
+}
+
+/**
+ * A press on a block a Layers lock holds in place: whose pointer, where it
+ * began, the block, the lock's facts, and whether its reason is drawn.
+ */
+interface HeldPress {
+  readonly owner: number;
+  readonly originClient: { readonly x: number; readonly y: number };
+  readonly nodeId: string;
+  readonly blockName: string;
+  readonly lock: LockRefusalFacts;
+  shown: boolean;
+}
+
 /** What a drag needs to remember, none of which renders. */
 interface Gesture {
   readonly subject: DragSubject;
@@ -339,8 +442,20 @@ interface Gesture {
    * to 71%, the 4px that separates a click from a drag needs only 2.85px of
    * real movement, so ordinary click jitter starts committing moves — and the
    * target hysteresis loosens by the same factor at the same time.
+   *
+   * In the canvas document's client coordinates, like every later point of
+   * the gesture, and turned into the author's pixels by {@link handScale}.
    */
   readonly originClient: Point;
+  /**
+   * How many of the author's on-screen pixels one of the canvas document's
+   * client pixels is: `1` in the editor's own document, the frame's painted
+   * scale in a frame. The host paints a frame scaled, and nothing read inside
+   * the frame shows it, so a distance measured there is multiplied by this
+   * before any threshold about the hand is applied to it. Read once at the
+   * press: the scale does not change during a gesture.
+   */
+  readonly handScale: number;
   readonly regions: readonly DropRegion[];
   readonly rects: RectSource;
   readonly forbiddenParents: ReadonlySet<string>;
@@ -351,11 +466,32 @@ interface Gesture {
    * resolves against do not change mid-gesture.
    */
   readonly blockNames: readonly string[];
+  /**
+   * The blocks being placed, with everything inside them, which the one
+   * placement rule judges. Asked only when a region is judged, because an
+   * insert's answer is the node its palette builds, the very node the release
+   * inserts. Empty when the palette builds nothing; the name rules then judge
+   * `blockNames` as before.
+   */
+  readonly placing: () => readonly PlacedNode[];
+  /**
+   * The placement rule's answer for each region, asked once for the gesture's
+   * life, as the lock verdicts are: the document, the blocks and the regions
+   * do not change mid-drag, and every pointer move and autoscroll frame
+   * resolves the drop again.
+   */
+  readonly placementVerdicts: RegionVerdicts;
   /** False until the pointer has travelled far enough to mean a drag. */
   active: boolean;
   switchState: TargetSwitchState;
   /** Targets by id, so the committed id resolves back to something drawable. */
   targets: Map<string, DropTarget>;
+  /**
+   * Each target's lock verdict, asked once for the gesture's life: the document
+   * does not change mid-drag, and asking per pointer move would apply the edit
+   * speculatively on every frame.
+   */
+  lockVerdicts: Map<string, LockRefusalFacts | null>;
   /**
    * The canvas root, kept so a frame with no pointer event still has it.
    *
@@ -370,8 +506,8 @@ interface Gesture {
    * Resolved once at drag start rather than per frame: it is a walk up the tree
    * reading computed styles, and the answer cannot change mid-gesture.
    */
-  readonly scroller: HTMLElement | null;
-  /** The last pointer position, in CLIENT coordinates. */
+  readonly scroller: Element | null;
+  /** The last pointer position, in the canvas document's CLIENT coordinates. */
   clientX: number;
   clientY: number;
   /** The scheduled frame, or `null` when no loop is running. */
@@ -447,6 +583,64 @@ function snapshotRects(root: HTMLElement): RectSource {
 }
 
 /**
+ * Listen for one event type on every document given, in the capture phase.
+ *
+ * Returns the function that removes exactly the listeners added, so a caller
+ * holding it cannot remove from one document and leave the other listening.
+ */
+function listenOn<K extends keyof DocumentEventMap>(
+  documents: readonly Document[],
+  type: K,
+  listener: (event: DocumentEventMap[K]) => void
+): () => void {
+  for (const doc of documents) doc.addEventListener(type, listener, true);
+  return () => {
+    for (const doc of documents) doc.removeEventListener(type, listener, true);
+  };
+}
+
+/**
+ * The window the canvas root's frame loop runs in.
+ *
+ * The ROOT's, because a frame's animation callbacks are paced by that frame's
+ * own rendering, and a loop scheduled on another window's clock scrolls the
+ * frame out of step with what it paints. `null` for a root whose document has
+ * no window, where there is no frame to schedule on.
+ */
+function frameLoopOf(drag: Gesture): Window | null {
+  return drag.root.ownerDocument.defaultView;
+}
+
+/**
+ * How many of the author's on-screen pixels one canvas client pixel is.
+ *
+ * See {@link Gesture.handScale}.
+ */
+function handScaleOf(canvas: CanvasFrame): number {
+  return canvas.frame === null ? 1 : framePaintedScale(canvas.frame);
+}
+
+/**
+ * A point delivered to `doc`, in the canvas document's client coordinates.
+ *
+ * The canvas's own document, and every document while there is no frame,
+ * already reports in them. The editor's document reports in its own, which are
+ * carried into the frame's: every rectangle of the canvas is read inside the
+ * frame, so a point from the panels means nothing there until it is mapped.
+ */
+function canvasClientPoint(
+  canvas: CanvasFrame,
+  doc: Document,
+  clientX: number,
+  clientY: number
+): Point {
+  const point = { x: clientX, y: clientY };
+  return canvas.frame === null || doc === canvas.document
+    ? point
+    : hostPointInFrame(canvas.frame, point);
+}
+
+/**
  * Wire pointer events on the canvas root to the drop rules.
  *
  * Returns handlers to spread onto the root and the state to draw. The canvas
@@ -471,8 +665,20 @@ export function useCanvasDrag({
 
   // Read at event time rather than closed over, so a handler bound on one render
   // never patches a document that a later edit has already replaced.
+  /** A press on a block a Layers lock holds in place, if one is down. */
+  const heldPress = React.useRef<HeldPress | null>(null);
   const latest = React.useRef({ editor, slots, nesting, definitions });
   latest.current = { editor, slots, nesting, definitions };
+
+  /*
+   * The document the canvas is in, read at event time like the rest. Every
+   * listener a drag adds outside the canvas root goes on the documents this
+   * names, because a pointer or a key inside a frame is dispatched in the
+   * frame's document and never reaches the editor's.
+   */
+  const canvasFrame = useCanvasFrame();
+  const frameRef = React.useRef<CanvasFrame>(canvasFrame);
+  frameRef.current = canvasFrame;
 
   /**
    * Undo the document-level listening an insert-drag needs, or nothing.
@@ -485,6 +691,16 @@ export function useCanvasDrag({
   const stopTrackingDocument = React.useCallback(() => {
     detachDocument.current?.();
     detachDocument.current = null;
+  }, []);
+
+  /** The document listeners a held press's drawn reason ends on, if any. */
+  const detachHeld = React.useRef<(() => void) | null>(null);
+
+  /** Forget the held press, and stop listening for its release. */
+  const stopHolding = React.useCallback(() => {
+    detachHeld.current?.();
+    detachHeld.current = null;
+    heldPress.current = null;
   }, []);
 
   /**
@@ -502,15 +718,18 @@ export function useCanvasDrag({
    * editor and the DOM, and still scrolling a canvas whose editor has closed.
    */
   const teardown = React.useCallback(() => {
-    const running = gesture.current?.frame;
-    if (running !== null && running !== undefined) {
-      cancelAnimationFrame(running);
+    const drag = gesture.current;
+    if (drag !== null && drag.frame !== null) {
+      // Cancelled on the window that scheduled it: a handle is only meaningful
+      // to the clock that issued it.
+      frameLoopOf(drag)?.cancelAnimationFrame(drag.frame);
     }
     gesture.current = null;
     // A palette drag listens on the document, and every way one can end arrives
-    // here.
+    // here. So does a held press's drawn reason, which Escape abandons too.
     stopTrackingDocument();
-  }, [stopTrackingDocument]);
+    stopHolding();
+  }, [stopTrackingDocument, stopHolding]);
 
   const reset = React.useCallback(() => {
     teardown();
@@ -521,6 +740,43 @@ export function useCanvasDrag({
       refusal: null,
     });
   }, [teardown]);
+
+  /** The held press ends, and its reason with it, when its pointer lifts. */
+  const releaseHeld = React.useCallback(
+    (pointerId: number) => {
+      const press = heldPress.current;
+      if (press === null || press.owner !== pointerId) return;
+      stopHolding();
+      if (!press.shown) return;
+      setState({
+        draggingId: null,
+        draggingBlockName: null,
+        target: null,
+        refusal: null,
+      });
+    },
+    [stopHolding]
+  );
+
+  /**
+   * Follow a held press on the documents from the moment it is recorded, as a
+   * palette drag is followed: the hand may leave the canvas before or after
+   * the reason is drawn, and its release there must still end the press, or a
+   * later hover would draw the reason for a press long over. Escape ends it
+   * through `reset`.
+   */
+  const holdUntilReleased = React.useCallback(() => {
+    const lifted = (native: PointerEvent): void => {
+      releaseHeld(native.pointerId);
+    };
+    const documents = inputDocuments(frameRef.current);
+    const ups = listenOn(documents, "pointerup", lifted);
+    const cancels = listenOn(documents, "pointercancel", lifted);
+    detachHeld.current = () => {
+      ups();
+      cancels();
+    };
+  }, [releaseHeld]);
 
   const onPointerDown = React.useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
@@ -542,15 +798,29 @@ export function useCanvasDrag({
       const node = findNode(current.document.nodes, nodeId);
       if (node === undefined) return;
 
-      // A locked block is one the author has asked the editor not to move. The
-      // press is left alone rather than swallowed, so it still selects.
+      // A block a Layers lock holds in place: locked itself, holding a locked
+      // block, or inside one. The press is left alone rather than swallowed,
+      // so it still selects, and is remembered so that, if the hand goes on to
+      // drag, the reason is drawn over the block rather than nothing happening.
       //
-      // Asked through the shared rule rather than by reading the flag here: the
-      // keyboard moves and delete ask the same question, and delete's answer
-      // differs — it checks the whole subtree, because removing a container
-      // destroys what is inside it. Three inline reads of `node.locked` would
-      // agree until one of them gained that distinction.
-      if (lockBlockingMove(current.document, nodeId) !== undefined) return;
+      // Asked through the shared rule rather than by reading the flag here, so
+      // this answers as the keyboard moves, the toolbar and Layers do.
+      const held = lockBlockingMove(current.document, nodeId);
+      // A held press still down ends with this one: its reason and its
+      // listeners go, rather than being overwritten and left listening.
+      if (heldPress.current !== null) releaseHeld(heldPress.current.owner);
+      if (held !== undefined) {
+        heldPress.current = {
+          owner: event.pointerId,
+          originClient: { x: event.clientX, y: event.clientY },
+          nodeId,
+          blockName: node.type,
+          lock: layersLockFacts(held, nodeId, "move"),
+          shown: false,
+        };
+        holdUntilReleased();
+        return;
+      }
 
       const rects = snapshotRects(root);
       gesture.current = {
@@ -558,23 +828,32 @@ export function useCanvasDrag({
         owner: event.pointerId,
         origin: canvasContentPoint(event.clientX, event.clientY, root),
         originClient: { x: event.clientX, y: event.clientY },
-        regions: collectRegions(current.document, latest.current.slots, rects),
+        regions: collectRegions(
+          current.document,
+          latest.current.slots,
+          rects,
+          slotsOfNode(placementSources(latest.current))
+        ),
         rects,
         forbiddenParents: movingSubtree(current.document, nodeId),
         blockName: node.type,
         blockNames: placementTypesOf(node, latest.current.definitions),
+        placing: () => [node],
+        placementVerdicts: new Map(),
         active: false,
         switchState: NO_TARGET,
         targets: new Map(),
+        lockVerdicts: new Map(),
         root,
-        scroller: scrollableAncestor(root),
+        scroller: canvasScroller(root, frameRef.current.frame !== null),
+        handScale: handScaleOf(frameRef.current),
         clientX: event.clientX,
         clientY: event.clientY,
         frame: null,
       };
       // NOT captured here. See the activation branch in `onPointerMove`.
     },
-    []
+    [releaseHeld, holdUntilReleased]
   );
 
   /**
@@ -595,17 +874,27 @@ export function useCanvasDrag({
    */
   const aim = React.useCallback(
     (drag: Gesture, pointer: CanvasPointerPoints) => {
-      const resolution = resolveDrop(
-        {
-          blockNames: drag.blockNames,
-          forbiddenParents: drag.forbiddenParents,
-          regions: drag.regions,
-          rects: drag.rects,
-          nesting: latest.current.nesting,
-        },
-        // CONTENT coordinates: the rects were snapshotted in that space at drag
-        // start, and a scroll deliberately does not invalidate them.
-        pointer.content
+      const resolution = withLockVerdict(
+        drag,
+        latest.current.editor,
+        resolveDrop(
+          {
+            blockNames: drag.blockNames,
+            forbiddenParents: drag.forbiddenParents,
+            regions: drag.regions,
+            rects: drag.rects,
+            nesting: latest.current.nesting,
+            placement: {
+              nodes: latest.current.editor.document.nodes,
+              placing: drag.placing,
+              sources: placementSources(latest.current),
+              verdicts: drag.placementVerdicts,
+            },
+          },
+          // CONTENT coordinates: the rects were snapshotted in that space at drag
+          // start, and a scroll deliberately does not invalidate them.
+          pointer.content
+        )
       );
 
       if (resolution.kind === "none") {
@@ -701,7 +990,17 @@ export function useCanvasDrag({
     // contains the pointer — the case autoscroll exists for is exactly the case
     // that would stop working.
     const edges = containerEdges(scroller);
-    const step = autoscrollStep(drag.clientY, edges.top, edges.bottom);
+    // The band and the speed are the author's pixels, carried into the canvas
+    // document's by the hand scale: in a frame painted at a quarter size, the
+    // 64-pixel band is 256 of the frame's pixels and the step four times as
+    // many of them, so both look the same on screen at every zoom.
+    const step = autoscrollStep(
+      drag.clientY,
+      edges.top,
+      edges.bottom,
+      AUTOSCROLL_ZONE_PX / drag.handScale,
+      AUTOSCROLL_MAX_STEP_PX / drag.handScale
+    );
     if (step !== 0) {
       const before = scroller.scrollTop;
       scroller.scrollTop = before + step;
@@ -712,10 +1011,18 @@ export function useCanvasDrag({
         // Measured AFTER the assignment above, which is the one thing in this
         // module that moves the canvas: the root's rectangle has just travelled
         // and the pointer has to be placed against where it is now.
-        aim(drag, canvasPointerPoints(drag.clientX, drag.clientY, drag.root));
+        aim(
+          drag,
+          canvasPointerPoints(
+            drag.clientX,
+            drag.clientY,
+            drag.root,
+            drag.handScale
+          )
+        );
       }
     }
-    drag.frame = requestAnimationFrame(pump);
+    drag.frame = frameLoopOf(drag)?.requestAnimationFrame(pump) ?? null;
   }, [aim]);
 
   /**
@@ -729,6 +1036,35 @@ export function useCanvasDrag({
    * never reach the canvas at all. Both arrive here, and nothing below can tell
    * which did — which is the whole of what "one engine" buys.
    */
+  /**
+   * A press on a held block that has travelled far enough to mean a drag: the
+   * lock's reason, drawn over the block the way a refused drop is drawn over
+   * the container that refused it. Once per press.
+   */
+  const showHeld = React.useCallback(
+    (clientX: number, clientY: number, pointerId: number) => {
+      const press = heldPress.current;
+      if (press === null || press.owner !== pointerId || press.shown) return;
+      const travelled = Math.hypot(
+        clientX - press.originClient.x,
+        clientY - press.originClient.y
+      );
+      if (travelled < activationPx) return;
+      press.shown = true;
+      setState({
+        draggingId: null,
+        draggingBlockName: press.blockName,
+        target: null,
+        refusal: {
+          regionId: `held:${press.nodeId}`,
+          parentId: press.nodeId,
+          lock: press.lock,
+        },
+      });
+    },
+    [activationPx]
+  );
+
   const trackMove = React.useCallback(
     (
       clientX: number,
@@ -760,7 +1096,12 @@ export function useCanvasDrag({
        * that scrolls, resizes or writes a style invalidates the pair and has to
        * measure again.
        */
-      const pointer = canvasPointerPoints(clientX, clientY, drag.root);
+      const pointer = canvasPointerPoints(
+        clientX,
+        clientY,
+        drag.root,
+        drag.handScale
+      );
       // Recorded for the frame loop, which runs between moves and has no event
       // of its own to read a position from.
       drag.clientX = clientX;
@@ -770,10 +1111,11 @@ export function useCanvasDrag({
         // CLIENT pixels: the threshold separates a click from an intent to
         // move, which is a property of the hand rather than of the canvas's
         // scale. Measured in content pixels it shrinks with the canvas.
-        const travelled = Math.hypot(
-          clientX - drag.originClient.x,
-          clientY - drag.originClient.y
-        );
+        const travelled =
+          Math.hypot(
+            clientX - drag.originClient.x,
+            clientY - drag.originClient.y
+          ) * drag.handScale;
         if (travelled < activationPx) return;
         drag.active = true;
         /*
@@ -802,7 +1144,7 @@ export function useCanvasDrag({
         // released — and the row inserts on click.
         captureHost?.setPointerCapture(pointerId);
         // Started once, at activation. A press that stays a click never scrolls.
-        drag.frame = requestAnimationFrame(pump);
+        drag.frame = frameLoopOf(drag)?.requestAnimationFrame(pump) ?? null;
         // Selecting on activation rather than on press: a press that turns out
         // to be a click is handled by the canvas's own click handler, and
         // selecting here as well would run the same decision twice.
@@ -821,6 +1163,7 @@ export function useCanvasDrag({
 
   const onPointerMove = React.useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
+      showHeld(event.clientX, event.clientY, event.pointerId);
       trackMove(
         event.clientX,
         event.clientY,
@@ -828,7 +1171,7 @@ export function useCanvasDrag({
         event.currentTarget
       );
     },
-    [trackMove]
+    [showHeld, trackMove]
   );
 
   /**
@@ -857,7 +1200,8 @@ export function useCanvasDrag({
         return;
       }
 
-      // Built at the release, from the caller's own snapshot of the palette.
+      // From the caller's own snapshot of the palette, built once per gesture:
+      // the same node the locks were asked about while the pointer aimed.
       const node = subject.makeNode();
       if (node === null) return;
       // The position and the nesting verdict were both computed for the type
@@ -917,8 +1261,9 @@ export function useCanvasDrag({
    */
   const swallowNextClick = React.useCallback(() => {
     stopSwallowingClick();
+    let unlisten = (): void => {};
     const stop = (): void => {
-      document.removeEventListener("click", swallow, true);
+      unlisten();
       detachClickSwallow.current = null;
     };
     const swallow = (event: MouseEvent): void => {
@@ -926,7 +1271,7 @@ export function useCanvasDrag({
       event.stopPropagation();
       stop();
     };
-    document.addEventListener("click", swallow, true);
+    unlisten = listenOn(inputDocuments(frameRef.current), "click", swallow);
     setTimeout(stop, 0);
     detachClickSwallow.current = stop;
   }, [stopSwallowingClick]);
@@ -951,10 +1296,12 @@ export function useCanvasDrag({
   const swallowClickAfterRelease = React.useCallback(
     (pointerId: number) => {
       stopSwallowingClick();
+      const documents = inputDocuments(frameRef.current);
+      let unlistenClick = (): void => {};
+      let unlistenRelease = (): void => {};
       const stop = (): void => {
-        document.removeEventListener("click", swallow, true);
-        document.removeEventListener("pointerup", released, true);
-        document.removeEventListener("pointercancel", released, true);
+        unlistenClick();
+        unlistenRelease();
         detachClickSwallow.current = null;
       };
       const swallow = (event: MouseEvent): void => {
@@ -964,15 +1311,18 @@ export function useCanvasDrag({
       };
       const released = (event: PointerEvent): void => {
         if (event.pointerId !== pointerId) return;
-        document.removeEventListener("pointerup", released, true);
-        document.removeEventListener("pointercancel", released, true);
+        unlistenRelease();
         // The click belongs to the release's task. Given it, and no longer:
         // a suppressor left armed would eat an unrelated click later.
         setTimeout(stop, 0);
       };
-      document.addEventListener("click", swallow, true);
-      document.addEventListener("pointerup", released, true);
-      document.addEventListener("pointercancel", released, true);
+      unlistenClick = listenOn(documents, "click", swallow);
+      const ups = listenOn(documents, "pointerup", released);
+      const cancels = listenOn(documents, "pointercancel", released);
+      unlistenRelease = () => {
+        ups();
+        cancels();
+      };
       detachClickSwallow.current = stop;
     },
     [stopSwallowingClick]
@@ -1028,9 +1378,10 @@ export function useCanvasDrag({
 
   const onPointerUp = React.useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
+      releaseHeld(event.pointerId);
       endGesture(event.pointerId, event.currentTarget);
     },
-    [endGesture]
+    [endGesture, releaseHeld]
   );
 
   const beginInsertDrag = React.useCallback(
@@ -1049,17 +1400,34 @@ export function useCanvasDrag({
 
       const { editor: current, slots } = latest.current;
       const rects = snapshotRects(root);
+      // Built once for the gesture: the node the placement rule and the locks
+      // judge while the pointer aims is the node the release inserts.
+      const makeNode = builtOnce(entry.makeNode);
+      // The press, in the canvas's coordinates like every later point of the
+      // gesture: the row is in the editor's document, and the travel that
+      // activates the drag is measured from here.
+      const pressed = canvasClientPoint(
+        frameRef.current,
+        event.currentTarget.ownerDocument,
+        event.clientX,
+        event.clientY
+      );
       gesture.current = {
         owner: event.pointerId,
         subject: {
           kind: "insert",
           blockName: entry.blockName,
-          makeNode: entry.makeNode,
+          makeNode,
           onInserted: entry.onInserted,
         },
-        origin: canvasContentPoint(event.clientX, event.clientY, root),
-        originClient: { x: event.clientX, y: event.clientY },
-        regions: collectRegions(current.document, slots, rects),
+        origin: canvasContentPoint(pressed.x, pressed.y, root),
+        originClient: pressed,
+        regions: collectRegions(
+          current.document,
+          slots,
+          rects,
+          slotsOfNode(placementSources(latest.current))
+        ),
         rects,
         // EMPTY, and this is the other place the kinds differ. Forbidden
         // parents exist to stop a node being dropped inside itself; nothing is
@@ -1067,13 +1435,24 @@ export function useCanvasDrag({
         forbiddenParents: new Set<string>(),
         blockName: entry.blockName,
         blockNames: [entry.blockName],
+        // The node the palette builds, its variation's props and its seeded
+        // children included, rather than the type's defaults: that node is
+        // what lands. Asked for only once a region is judged, so a press that
+        // never becomes a drag builds nothing.
+        placing: () => {
+          const made = makeNode();
+          return made === null ? [] : [made];
+        },
+        placementVerdicts: new Map(),
         active: false,
         switchState: NO_TARGET,
         targets: new Map(),
+        lockVerdicts: new Map(),
         root,
-        scroller: scrollableAncestor(root),
-        clientX: event.clientX,
-        clientY: event.clientY,
+        scroller: canvasScroller(root, frameRef.current.frame !== null),
+        handScale: handScaleOf(frameRef.current),
+        clientX: pressed.x,
+        clientY: pressed.y,
         frame: null,
       };
 
@@ -1101,26 +1480,69 @@ export function useCanvasDrag({
        * two places, and the copy that mattered would be the one somebody forgot
        * when a third transport arrived.
        */
-      const move = (native: PointerEvent): void => {
-        trackMove(native.clientX, native.clientY, native.pointerId, null);
-      };
-      const up = (native: PointerEvent): void => {
-        endGesture(native.pointerId, null);
-      };
-      const cancel = (native: PointerEvent): void => {
-        cancelGesture(native.pointerId);
-      };
-      document.addEventListener("pointermove", move, true);
-      document.addEventListener("pointerup", up, true);
-      document.addEventListener("pointercancel", cancel, true);
+      /*
+       * On the editor's document AND the canvas's, which are two while the
+       * canvas is in a frame: a pointer over the panels is delivered to the
+       * editor's and one over the page to the frame's, so a drag from a row to
+       * the page is heard whole only by both. Each point is carried into the
+       * canvas's coordinates by the document that delivered it.
+       */
+      const canvas = frameRef.current;
+      const detachers = inputDocuments(canvas).map(doc => {
+        const move = (native: PointerEvent): void => {
+          const at = canvasClientPoint(
+            canvas,
+            doc,
+            native.clientX,
+            native.clientY
+          );
+          trackMove(at.x, at.y, native.pointerId, null);
+        };
+        const up = (native: PointerEvent): void => {
+          endGesture(native.pointerId, null);
+        };
+        const cancel = (native: PointerEvent): void => {
+          cancelGesture(native.pointerId);
+        };
+        const unlistenMove = listenOn([doc], "pointermove", move);
+        const unlistenUp = listenOn([doc], "pointerup", up);
+        const unlistenCancel = listenOn([doc], "pointercancel", cancel);
+        return () => {
+          unlistenMove();
+          unlistenUp();
+          unlistenCancel();
+        };
+      });
       detachDocument.current = () => {
-        document.removeEventListener("pointermove", move, true);
-        document.removeEventListener("pointerup", up, true);
-        document.removeEventListener("pointercancel", cancel, true);
+        for (const detach of detachers) detach();
       };
     },
     [canvasRoot, cancelGesture, endGesture, trackMove]
   );
+
+  /*
+   * A drag in flight when the canvas's document is replaced — the frame
+   * loading its content, or reloading — is abandoned. Its listeners are on
+   * the document that went, so the release in the new one would never be
+   * heard, and its root and frame loop belong to a page no longer on screen.
+   */
+  const gestureDocument = React.useRef(canvasFrame.document);
+  React.useEffect(() => {
+    if (gestureDocument.current === canvasFrame.document) return;
+    gestureDocument.current = canvasFrame.document;
+    const drag = gesture.current;
+    if (drag === null) return;
+    /*
+     * A palette drag the reload cancelled still ends in a release, and if the
+     * pointer has come back to the row it started on, that press and release
+     * are one click — which the row inserts on. Suppressed exactly as Escape
+     * suppresses it, so a drag that visibly ended adds nothing.
+     */
+    if (drag.active && drag.subject.kind === "insert") {
+      swallowClickAfterRelease(drag.owner);
+    }
+    reset();
+  }, [canvasFrame.document, reset, swallowClickAfterRelease]);
 
   // Every ordinary ending funnels through `reset`. This covers the one that
   // does not: a host unmounting mid-drag, which would otherwise leave a running
@@ -1174,11 +1596,10 @@ export function useCanvasDrag({
       }
       reset();
     };
-    document.addEventListener("keydown", abandon, true);
-    return () => {
-      document.removeEventListener("keydown", abandon, true);
-    };
-  }, [dragging, reset, swallowClickAfterRelease]);
+    // Every document a key can be pressed in: focus may be in a panel's
+    // search field or inside the canvas's frame.
+    return listenOn(inputDocuments(canvasFrame), "keydown", abandon);
+  }, [dragging, reset, swallowClickAfterRelease, canvasFrame]);
 
   return {
     ...state,
@@ -1189,7 +1610,10 @@ export function useCanvasDrag({
       onPointerUp,
       // Routed through the same ownership check every other ending uses, so a
       // second contact being withdrawn cannot end a drag it does not own.
-      onPointerCancel: event => cancelGesture(event.pointerId),
+      onPointerCancel: event => {
+        releaseHeld(event.pointerId);
+        cancelGesture(event.pointerId);
+      },
     },
   };
 }
@@ -1202,9 +1626,17 @@ export interface DropIndicatorProps {
 /**
  * The line showing where a dropped block will go.
  *
- * Positioned absolutely in the canvas's content coordinates, which is what the
- * rectangles were measured in — so it needs the canvas root to be a positioned
- * ancestor, and `builder-chrome.css` makes it one.
+ * The target is in the canvas root's content coordinates, which is what the
+ * rectangles were measured in. Where the line is drawn in those coordinates
+ * depends on where it is drawn: inside the root over a canvas sharing the
+ * editor's document, or in the layer over the canvas's frame, where they are
+ * scaled to the frame's zoom while the line keeps its own thickness. Asked of
+ * the line's own element, through `overlaySpaceOf`, the one mapping every
+ * piece of chrome uses.
+ *
+ * Written to the element's style before paint rather than rendered: the
+ * mapping needs the element in the document, and a render to apply it would
+ * draw the line at the unmapped position for a frame on every pointer move.
  *
  * `aria-hidden`, and deliberately: the equivalent keyboard move announces its
  * own outcome through the editor's one live region, and a second element
@@ -1214,30 +1646,53 @@ export interface DropIndicatorProps {
 export function DropIndicator({
   target,
 }: DropIndicatorProps): React.JSX.Element | null {
-  if (target === null) return null;
+  const line = React.useRef<HTMLDivElement | null>(null);
+  // A zoom, or the frame's page arriving, moves the line on screen while the
+  // target stays where it was.
+  const canvasFrame = useCanvasFrame();
+  useIsomorphicLayoutEffect(() => {
+    const element = line.current;
+    if (element === null || target === null) return;
+    // The line is drawn ACROSS the axis children are separated along: a
+    // region stacking its children downward gets a horizontal rule, a row
+    // gets a vertical one.
+    const span = target.to - target.from;
+    const rect: Rect =
+      target.axis === "y"
+        ? { x: target.from, y: target.line, width: span, height: 0 }
+        : { x: target.line, y: target.from, width: 0, height: span };
+    const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
+    const at = space === null ? rect : space.place(rect);
+    element.style.left = `${String(at.x)}px`;
+    element.style.top = `${String(at.y)}px`;
+    // The other dimension is the stylesheet's, so a line that changes axis
+    // does not keep the length it had along the old one.
+    element.style.width = target.axis === "y" ? `${String(at.width)}px` : "";
+    element.style.height = target.axis === "x" ? `${String(at.height)}px` : "";
+  }, [target, canvasFrame]);
 
-  // The line is drawn ACROSS the axis children are separated along: a region
-  // stacking its children downward gets a horizontal rule, a row gets a
-  // vertical one.
-  const style: React.CSSProperties =
-    target.axis === "y"
-      ? {
-          left: target.from,
-          top: target.line,
-          width: target.to - target.from,
-        }
-      : {
-          left: target.line,
-          top: target.from,
-          height: target.to - target.from,
-        };
+  if (target === null) return null;
 
   return (
     <div
+      ref={line}
       className="nx-drop-indicator"
       data-axis={target.axis}
-      style={style}
       aria-hidden="true"
     />
   );
+}
+
+/**
+ * The slots a component placement exposes, which its type alone cannot say.
+ * Every other block answers undefined, so its regions come from the caller's
+ * `slots` source, the one this hook documents as each type's child regions.
+ */
+function slotsOfNode(
+  sources: PlacementSources
+): (node: BlockNode) => readonly string[] | undefined {
+  return node =>
+    node.type === COMPONENT_INSTANCE_TYPE
+      ? declaredSlotNames(node, sources)
+      : undefined;
 }

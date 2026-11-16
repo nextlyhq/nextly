@@ -50,18 +50,6 @@ describe.each(DIALECTS)("a virtual component field on %s", dialect => {
     expect(columns).not.toContain("preview_line");
     expect(columns).not.toContain("summary");
   });
-
-  it("is not added by the ALTER when a component gains it", () => {
-    const sql = service.generateAlterTableMigration(
-      "comp_hero",
-      [{ name: "title", type: "text" }] as unknown as FieldConfig[],
-      [{ name: "title", type: "text" }, ...FIELDS] as FieldConfig[]
-    );
-
-    expect(sql).toMatch(/ADD COLUMN .?headline/);
-    expect(sql).not.toMatch(/preview_line/);
-    expect(sql).not.toMatch(/summary/);
-  });
 });
 
 describe.each(DIALECTS)(

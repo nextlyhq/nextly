@@ -15,6 +15,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
@@ -41,6 +42,9 @@ const FUTURE = new Date("2099-01-01T00:00:00Z");
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    // The assertions read as a visitor, judged by the Public role a real boot
+    // makes, which reads posts by their rule.
+    seedPublic: true,
     collections: [
       defineCollection({
         slug: SLUG,
@@ -67,7 +71,7 @@ async function draftInRelease(
 ): Promise<string> {
   const handler = t.getService("collectionsHandler") as CollectionsHandler;
   const created = await handler.createEntry(
-    { collectionName: SLUG },
+    { collectionName: SLUG, overrideAccess: true },
     { title: "pending", status: "draft" }
   );
   const id = (created.data as { id?: string } | undefined)?.id;
@@ -88,6 +92,14 @@ async function releaseHolding(
   action: "publish" | "unpublish",
   scheduledAt: Date | null
 ): Promise<void> {
+  // A live author: the read path projects a due member only when its author
+  // still exists and is active, matching the write path that runs AS them.
+  // Not the super admin, so the author's own access is what is judged. A code
+  // rule only narrows the permission, so the author holds update and the
+  // release's action on posts.
+  const author = await seedPlainAuthor(t);
+  await grantTo(t, author, "update", [SLUG]);
+  await grantTo(t, author, action, [SLUG]);
   const release = await t.nextly.releases.create({ title: "Go live" });
   await t.nextly.releases.addMember({
     releaseId: release.id,
@@ -96,10 +108,7 @@ async function releaseHolding(
     entryId,
     locale: null,
     action,
-    // A live author: the read path projects a due member only when its author
-    // still exists and is active, matching the write path that runs AS them.
-    // Not the super admin, so the author's own access is what is judged.
-    userId: await seedPlainAuthor(t),
+    userId: author,
   });
   expect(
     (await t.nextly.releases.readiness({ releaseId: release.id })).hard

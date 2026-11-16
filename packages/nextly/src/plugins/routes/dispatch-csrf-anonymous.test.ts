@@ -45,7 +45,7 @@ vi.mock("../../domains/audit/audit-log-writer", async importOriginal => ({
   buildAuditLogWriter: () => ({ write: auditWrite }),
 }));
 
-vi.mock("../../di/register", () => ({ getService: () => ({}) }));
+vi.mock("../../di/service-access", () => ({ getService: () => ({}) }));
 
 import { signAccessToken } from "../../auth/jwt/sign";
 import { requireAuthentication } from "../../auth/middleware";
@@ -310,7 +310,7 @@ describe("an Authorization header on an anonymous write to a csrf: true route", 
     } as never);
     const res = await runPluginRoute(
       write({ authorization: "Bearer nx_live_abc" }),
-      match({ csrf: true, public: false })
+      match({ csrf: true, public: false, siteWide: false })
     );
     expectAdmitted(res);
   });

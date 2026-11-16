@@ -4,7 +4,6 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import type { FieldGroupAdminOptions } from "../../../field-groups/config/types";
-import { MAX_FIELD_GROUP_NESTING_DEPTH } from "../../../field-groups/config/validate-field-group";
 // Throws NextlyError so public messages stay generic and never echo a slug,
 // while identifiers (slug, source, refs) travel in `logContext` and operators
 // keep full diagnostic context.
@@ -21,17 +20,19 @@ import type {
   BaseListResult,
 } from "../../../shared/base-registry-service";
 import type { Logger } from "../../../shared/types";
+import {
+  fieldSettingsChanged,
+  withUnsaidKept,
+  type RecordedWriteOptions,
+} from "../../collections/services/collection-registry-service";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
+import type { BuilderSaveSetup } from "../../schema/builder-save/collection-save";
 import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
-import {
-  omitDirectComponentFields,
-  storesItsChildren,
-  type DirectField,
-} from "../direct-component-fields";
 import {
   extractFieldGroupReferences,
   isFieldGroupFieldType,
@@ -85,6 +86,158 @@ export interface CodeFirstComponentConfig {
   localized?: boolean;
 }
 
+/**
+ * What {@link toCodeFirstComponentConfig} reads of a field group's config
+ * entry, typed as the minimal shape rather than `FieldGroupConfig` so a caller
+ * holding a recorded declaration (not a live config) can project it the same
+ * way.
+ */
+export interface CodeFirstComponentSource {
+  slug: string;
+  label?: { singular?: string };
+  fields: CodeFirstComponentConfig["fields"];
+  description?: string;
+  admin?: FieldGroupAdminOptions;
+  localized?: boolean;
+}
+
+/**
+ * The registry-sync payload for one code-first component.
+ *
+ * The one projection from a config entry to the sync payload, so the start's
+ * sync and `nextly migrate` derive a component's row from its declaration the
+ * same way and cannot rewrite each other's rows.
+ */
+export function toCodeFirstComponentConfig(
+  fieldGroup: CodeFirstComponentSource
+): CodeFirstComponentConfig {
+  return {
+    slug: fieldGroup.slug,
+    // The declared label, else the slug with `-` and `_` as spaces and every
+    // word capitalised.
+    label:
+      fieldGroup.label?.singular ??
+      fieldGroup.slug
+        .replace(/[-_]/g, " ")
+        .replace(/\b\w/g, c => c.toUpperCase()),
+    fields: fieldGroup.fields,
+    description: fieldGroup.description,
+    admin: fieldGroup.admin,
+    // Derived from the slug rather than read from the entry: the conventional
+    // file a code-first component is declared in.
+    configPath: `${STORAGE_FORMAT.configPathDir}/${fieldGroup.slug}.ts`,
+    // i18n: forward the localized flag from defineFieldGroup so the registry persists
+    // it and the companion is provisioned for embedded per-language values.
+    localized: fieldGroup.localized === true,
+  };
+}
+
+/**
+ * A component row's update: the insert's columns, with a description and admin
+ * options that may be cleared (`null`) as well as set or left out.
+ */
+type ComponentUpdate = Partial<
+  Omit<DynamicFieldGroupInsert, "description" | "admin">
+> & {
+  description?: string | null;
+  admin?: FieldGroupAdminOptions | null;
+};
+
+/**
+ * The columns a component's declaration gives a row it registers, before
+ * where the row came from (source, lock, config path), which each caller adds.
+ * One projection for the start's sync and `nextly migrate`'s writer.
+ */
+function declaredComponentRegistration(
+  config: CodeFirstComponentConfig,
+  schemaHash: string,
+  tableName: string
+): Omit<DynamicFieldGroupInsert, "source" | "locked" | "configPath"> {
+  return {
+    slug: config.slug,
+    label: config.label,
+    tableName,
+    description: config.description,
+    fields: config.fields,
+    admin: config.admin,
+    localized: config.localized === true,
+    schemaHash,
+  };
+}
+
+/**
+ * The columns a component's declaration rewrites on a schema change: its
+ * fields, its localization, its metadata, and its table pointer when that is
+ * repaired (`codeFirstTablePointer`). Where the row came from is the caller's
+ * to add, or to leave.
+ */
+function declaredComponentRow(
+  config: CodeFirstComponentConfig,
+  schemaHash: string,
+  repairedTableName: string | undefined
+): ComponentUpdate {
+  return {
+    ...declaredComponentMetadata(config),
+    fields: config.fields,
+    schemaHash,
+    localized: config.localized === true,
+    // Undefined unless repaired, which `updateComponent` reads as "leave".
+    tableName: repairedTableName,
+  };
+}
+
+/**
+ * The columns a metadata-only change rewrites: label, description and admin
+ * options. An absent description or admin block is written as `null`, so a
+ * declaration that dropped one clears it instead of leaving the old value.
+ */
+function declaredComponentMetadata(
+  config: CodeFirstComponentConfig
+): ComponentUpdate {
+  return {
+    label: config.label,
+    description: config.description ?? null,
+    admin: config.admin ?? null,
+  };
+}
+
+/**
+ * Where a stored table pointer stands against the one a Builder record's own
+ * row names: in agreement (or no row yet), or diverged, which no write
+ * resolves.
+ */
+function recordedTablePointer(
+  tableName: string,
+  existing: DynamicFieldGroupRecord | null
+): CodeFirstTablePointer {
+  return existing === null || existing.tableName === tableName
+    ? {
+        matches: true,
+        desiredTableName: tableName,
+        repairedTableName: undefined,
+      }
+    : {
+        matches: false,
+        desiredTableName: tableName,
+        storedTableName: existing.tableName,
+      };
+}
+
+/**
+ * Where a code-first component's table pointer stands against the table its
+ * slug derives (`codeFirstTablePointer`): in agreement, repairable (the stored
+ * name addresses no table while the derived one exists), or diverged, which
+ * neither the sync nor the recorded writer resolves.
+ */
+type CodeFirstTablePointer =
+  | {
+      matches: true;
+      desiredTableName: string;
+      /** Set when the stored pointer is to be corrected to the derived name. */
+      repairedTableName: string | undefined;
+    }
+  | { matches: false; desiredTableName: string; storedTableName: string };
+
 export interface SyncComponentResult {
   created: string[];
   updated: string[];
@@ -123,9 +276,24 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   DynamicFieldGroupRecord,
   FieldGroupMigrationStatus
 > {
+  // Every read of one looks its registry row up, so it comes from the registry row cache.
+  protected override readonly readsRowsFromCache = true;
+
   protected readonly registryTableName = STORAGE_FORMAT.registryTable;
   protected readonly resourceType = "Component";
   protected readonly tableNamePrefix = STORAGE_FORMAT.tablePrefix;
+
+  /**
+   * Where a Builder save writes a field group's delete as its migration
+   * (`writeEntityDelete`). Set by the service registration; absent, a delete
+   * drops the table alone, as before the writer.
+   */
+  private builderSave?: BuilderSaveSetup;
+
+  /** The Builder save writer's setup, set by the service registration. */
+  setBuilderSave(setup: BuilderSaveSetup): void {
+    this.builderSave = setup;
+  }
 
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
@@ -162,10 +330,60 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     return this.getRecordOrThrow(slug, executor);
   }
 
+  /**
+   * The component's registry row as stored, past the registry row cache: for a schema save, which
+   * decides from the stored row and re-reads it to learn whether its own write landed.
+   */
+  async getComponentForWrite(slug: string): Promise<DynamicFieldGroupRecord> {
+    return this.getRecordForWrite(slug);
+  }
+
+  /**
+   * The component's registry row as stored, or null if missing, past the registry row cache: for a
+   * schema save of something that uses the component, which plans its DDL from the component's
+   * stored table.
+   */
+  async findComponentForWrite(
+    slug: string
+  ): Promise<DynamicFieldGroupRecord | null> {
+    return this.findRecordForWrite(slug);
+  }
+
   async getAllComponents(
     options?: ListComponentsOptions
   ): Promise<DynamicFieldGroupRecord[]> {
     return this.getAllRecords(options);
+  }
+
+  /**
+   * Every stored field group with only its slug and fields read, as stored rather than cached:
+   * what a save's cycle check judges the saved definition against.
+   */
+  async getAllFieldLists(): Promise<DynamicFieldGroupRecord[]> {
+    return this.getAllRecordsWithColumns(["fields"], { forWrite: true });
+  }
+
+  /**
+   * Every stored field group's table: where a row placed under a field-group instance can be,
+   * whatever the definitions place now. Read on `executor` when a write's transaction supplies
+   * one, so the read waits on no second connection, and as stored rather than cached.
+   */
+  async getAllTableNames(executor?: unknown): Promise<string[]> {
+    try {
+      const rows = await this.adapter.select<Record<string, unknown>>(
+        await this.resolveRegistryTableName(),
+        { columns: ["slug", "table_name"] },
+        executor
+      );
+      return rows
+        .map(row => this.deserializeRecord(row).tableName)
+        .filter(
+          (name): name is string => typeof name === "string" && name !== ""
+        );
+    } catch (error) {
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
   }
 
   async listComponents(
@@ -208,11 +426,12 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   ): Promise<DynamicFieldGroupRecord> {
     this.logger.debug("Registering Component", { slug: data.slug });
 
-    const existing = await this.getComponentBySlug(data.slug);
+    const existing = await this.findRecordForWrite(data.slug);
     if (existing) {
-      // Generic public message; the conflicting slug stays out of the
-      // wire and lives in logContext for operator visibility.
+      // Names only the slug the caller asked for, which tells it nothing it did not send; what else
+      // the conflict involves stays in logContext for operator visibility.
       throw NextlyError.duplicate({
+        message: `The field group "${data.slug}" could not be created: its name is already taken.`,
         logContext: { reason: "component-slug-conflict", slug: data.slug },
       });
     }
@@ -246,11 +465,15 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     };
 
     try {
-      const result = await this.adapter.insert<DynamicFieldGroupRecord>(
-        await this.resolveRegistryTableName(),
-        record,
-        { returning: "*" }
+      const table = await this.resolveRegistryTableName();
+      // With the stored schema version's count (`writeRegistry`).
+      const result = await this.writeRegistry(() =>
+        this.adapter.insert<DynamicFieldGroupRecord>(table, record, {
+          returning: "*",
+        })
       );
+      // The cached registry row is now out of date.
+      clearRegistryRowCache();
 
       this.logger.info("Component registered", {
         slug: data.slug,
@@ -316,6 +539,10 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       record,
       { returning: "*" }
     );
+    // The stored schema version's count moves in the caller's transaction.
+    await this.countWriteOn(tx);
+    // The cached registry row is now out of date.
+    clearRegistryRowCache();
 
     return this.deserializeRecord(result);
   }
@@ -328,23 +555,14 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    */
   async updateComponent(
     slug: string,
-    data: Partial<DynamicFieldGroupInsert>,
+    data: ComponentUpdate,
     options?: UpdateComponentOptions
   ): Promise<DynamicFieldGroupRecord> {
     this.logger.debug("Updating Component", { slug });
 
-    const existing = await this.getComponent(slug);
+    const existing = await this.getRecordForWrite(slug);
 
-    if (existing.locked && options?.source !== "code") {
-      // Generic FORBIDDEN; slug and source go to logContext only.
-      throw NextlyError.forbidden({
-        logContext: {
-          reason: "component-locked",
-          slug,
-          source: options?.source ?? "UI",
-        },
-      });
-    }
+    refuseChangeOutsideCode(existing, slug, options?.source);
 
     const updateData = this.buildComponentUpdateColumns(data);
 
@@ -375,11 +593,11 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     }
 
     try {
-      const results = await this.adapter.update<DynamicFieldGroupRecord>(
+      // With the stored schema version's count (`updateRowBySlug`).
+      const results = await this.updateRowBySlug<DynamicFieldGroupRecord>(
         await this.resolveRegistryTableName(),
-        updateData,
-        this.whereEq("slug", slug),
-        { returning: "*" }
+        slug,
+        updateData
       );
 
       if (results.length === 0) {
@@ -410,7 +628,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * column mapping lives once here.
    */
   private buildComponentUpdateColumns(
-    data: Partial<DynamicFieldGroupInsert>
+    data: ComponentUpdate
   ): Record<string, unknown> {
     const updateData: Record<string, unknown> = {
       updated_at: this.formatDateForDb(),
@@ -509,57 +727,53 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       expectedSchemaVersion,
     });
 
-    const existing = await this.getComponent(slug);
+    const existing = await this.getRecordForWrite(slug);
 
-    if (existing.locked && options?.source !== "code") {
-      // Generic FORBIDDEN; slug and source go to logContext only.
-      throw NextlyError.forbidden({
-        logContext: {
-          reason: "component-locked",
-          slug,
-          source: options?.source ?? "UI",
-        },
-      });
-    }
+    refuseChangeOutsideCode(existing, slug, options?.source);
 
     const updateData = this.buildComponentUpdateColumns(data);
     const newSchemaVersion = expectedSchemaVersion + 1;
     updateData.schema_version = newSchemaVersion;
 
     try {
-      const matched = await this.adapter.updateCount(
-        await this.resolveRegistryTableName(),
-        updateData,
-        {
-          and: [
-            { column: "slug", op: "=", value: slug },
-            // 🔴 The Drizzle PROPERTY name, not the database column name. A WHERE clause is
-            // resolved against the table object's properties, while the SET payload above is
-            // mapped from snake_case by `mapDataToColumnNames` — so the two halves of this one
-            // statement legitimately spell the same column differently, and `schema_version` here
-            // raises "Column not found" rather than matching nothing.
-            {
-              column: "schemaVersion",
-              op: "=",
-              value: expectedSchemaVersion,
-            },
-            // 🔴 The lock state belongs IN the predicate, not only in the read above. Ownership can
-            // change without the version moving — a code sync claiming an existing UI group sets
-            // `locked` through the admin-only branch — so a caller that read the row unlocked still
-            // satisfies a version-only predicate and overwrites a definition that is now owned by a
-            // config file. Pinning it here makes the check and the write one statement, which is
-            // the whole reason this method exists rather than a read followed by an update.
-            //
-            // Only for a non-code caller: `source: "code"` IS the owner, and the read above already
-            // permits it, so requiring `locked = false` there would refuse every code sync.
-            // Safe as an equality because the column is NOT NULL with a default, so there is no
-            // third state for it to miss.
-            ...(options?.source !== "code"
-              ? [{ column: "locked", op: "=" as const, value: false }]
-              : []),
-          ],
-        }
+      const table = await this.resolveRegistryTableName();
+      // With the stored schema version's count (`writeRegistry`), moved only
+      // where the row matched.
+      const matched = await this.writeRegistry(
+        () =>
+          this.adapter.updateCount(table, updateData, {
+            and: [
+              { column: "slug", op: "=", value: slug },
+              // 🔴 The Drizzle PROPERTY name, not the database column name. A WHERE clause is
+              // resolved against the table object's properties, while the SET payload above is
+              // mapped from snake_case by `mapDataToColumnNames` — so the two halves of this one
+              // statement legitimately spell the same column differently, and `schema_version` here
+              // raises "Column not found" rather than matching nothing.
+              {
+                column: "schemaVersion",
+                op: "=",
+                value: expectedSchemaVersion,
+              },
+              // 🔴 The lock state belongs IN the predicate, not only in the read above. Ownership can
+              // change without the version moving — a code sync claiming an existing UI group sets
+              // `locked` through the admin-only branch — so a caller that read the row unlocked still
+              // satisfies a version-only predicate and overwrites a definition that is now owned by a
+              // config file. Pinning it here makes the check and the write one statement, which is
+              // the whole reason this method exists rather than a read followed by an update.
+              //
+              // Only for a non-code caller: `source: "code"` IS the owner, and the read above already
+              // permits it, so requiring `locked = false` there would refuse every code sync.
+              // Safe as an equality because the column is NOT NULL with a default, so there is no
+              // third state for it to miss.
+              ...(options?.source !== "code"
+                ? [{ column: "locked", op: "=" as const, value: false }]
+                : []),
+            ],
+          }),
+        count => count > 0
       );
+      // The cached registry row is now out of date.
+      clearRegistryRowCache();
 
       if (matched === 0) {
         this.logger.info("Component conditional update did not match", {
@@ -581,77 +795,122 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   }
 
   /**
-   * Delete a Component from the registry.
+   * Delete a Component: its nested instances, its translations, its table and
+   * its registry row.
+   *
+   * Every way a field group is deleted reaches this method (the Builder, the
+   * schema route and the Direct API), so the check that nothing depends on it
+   * lives here. It holds the schema lock from the check to the last drop: a
+   * Builder save that places the field group, or a migration that keys its
+   * table, cannot land between the two and be dropped with it.
    */
   async deleteComponent(slug: string): Promise<void> {
+    const { withSchemaChangeExcluded } = await import(
+      "../../schema/services/schema-change-exclusion"
+    );
+    return withSchemaChangeExcluded(
+      {
+        adapter: this.adapter,
+        logger: this.logger,
+        label: `delete field group "${slug}"`,
+        issuesDdl: true,
+      },
+      () => this.deleteComponentExcluded(slug)
+    );
+  }
+
+  private async deleteComponentExcluded(slug: string): Promise<void> {
     this.logger.debug("Deleting Component", { slug });
 
-    const existing = await this.getComponent(slug);
+    const existing = await this.getRecordForWrite(slug);
 
     if (existing.locked) {
-      // Generic FORBIDDEN — slug-specific reason stays operator-side.
-      throw NextlyError.forbidden({
+      // Defined in code, as the caller is told; the slug goes to the log.
+      throw NextlyError.definedInCode({
+        thing: "component",
+        change: "delete",
         logContext: { reason: "component-locked-for-delete", slug },
       });
     }
 
-    const references = await this.findComponentReferences(slug);
+    // Before anything is torn down: a field that places it, a declared key
+    // into its tables, or another owner's element on them refuses the delete
+    // by name, and so does any of those that cannot be read.
+    await this.assertNothingDependsOn(slug, existing.tableName);
 
-    if (references.length > 0) {
-      // The CONFLICT factory carries a stable generic public message.
-      // The structured `references` payload is operator-only — putting it on
-      // logContext keeps it out of the wire while preserving full debug info.
-      throw NextlyError.conflict({
-        reason: "state",
-        logContext: { reason: "component-has-references", slug, references },
-      });
-    }
+    // Where a Builder save writer is set up, the delete is written as the field group's migration,
+    // inside this same exclusion, so every entry point that deletes one (the Builder, the REST
+    // route, the Direct API) leaves no snapshot still recording its tables. Loaded on demand: the
+    // writer reaches much of the schema machinery, and this registry is imported early.
+    const { checkEntitySaveHistory, entitySaveDeps, writeEntityDelete } =
+      await import("../../schema/builder-save/entity-save");
+    const { fieldGroupEntity } = await import(
+      "../../schema/builder-save/stored-entity"
+    );
+    const deps = entitySaveDeps(this.builderSave, this.adapter, this.logger);
+    // The history checks a save makes, before anything is torn down.
+    await checkEntitySaveHistory(deps);
 
     try {
-      // Tear down the localization artifacts BEFORE the main table: the companion
-      // `_locales` table holds an FK to this table's `id`, so dropping the main table
-      // first would orphan it (Postgres CASCADE) or fail outright (MySQL). This also
-      // purges the component's rows from the shared `nextly_i18n_archive`.
-      // A component can host other components. Those nested instances point at THIS
-      // table via `_parent_table`, so dropping it below would strand them. Deletion is
-      // blocked while anything references this component, but nothing blocks the reverse
-      // direction, so the nested rows are this delete's responsibility.
-      await teardownEntityComponentData({
-        adapter: this.adapter,
-        parentTable: existing.tableName,
-      });
-
-      await teardownEntityI18n({
-        kind: "fieldGroup",
-        adapter: this.adapter,
-        slug,
-        tableName: existing.tableName,
-      });
-
-      // Drop the data table after its dependents, since both hold references into it.
-      // A failure here leaves the component present but its nested instances, companion
-      // table and archived translations already removed — the teardowns above are not
-      // reversible. A transaction would not close that window portably: MySQL commits
-      // implicitly on DDL, so the drop could not roll back there. Retrying the delete is
-      // safe (every step is existence-guarded) and is the intended recovery.
-      await this.dropComponentTable(existing.tableName);
-
-      // PG RETURNING-less DELETE always returns 0 rows, so no post-delete count check.
-      await this.adapter.delete(
-        await this.resolveRegistryTableName(),
-        this.whereEq("slug", slug)
+      await writeEntityDelete(
+        deps,
+        { kind: "fieldGroup", slug, stored: fieldGroupEntity(existing) },
+        () => this.removeComponent(slug, existing.tableName)
       );
 
       this.logger.info("Component deleted", { slug });
     } catch (error) {
       // Preserve mapped NextlyErrors thrown from the locked / has-references
-      // checks above; raw DB errors map via fromDatabaseError. Normalise raw
+      // checks above and the writer; raw DB errors map via fromDatabaseError. Normalise raw
       // driver errors via toDbError(dialect) first so the kind is preserved.
       if (NextlyError.is(error)) {
         throw error;
       }
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
+  }
+
+  /** The field group's data, translations, table and registry row, removed in that order. */
+  private async removeComponent(
+    slug: string,
+    tableName: string
+  ): Promise<void> {
+    // Tear down the localization artifacts BEFORE the main table: the companion
+    // `_locales` table holds an FK to this table's `id`, so dropping the main table
+    // first would orphan it (Postgres CASCADE) or fail outright (MySQL). This also
+    // purges the component's rows from the shared `nextly_i18n_archive`.
+    // A component can host other components. Those nested instances point at THIS
+    // table via `_parent_table`, so dropping it below would strand them. Deletion is
+    // blocked while anything references this component, but nothing blocks the reverse
+    // direction, so the nested rows are this delete's responsibility.
+    await teardownEntityComponentData({
+      adapter: this.adapter,
+      parentTable: tableName,
+    });
+
+    await teardownEntityI18n({
+      kind: "fieldGroup",
+      adapter: this.adapter,
+      slug,
+      tableName,
+    });
+
+    // Drop the data table after its dependents, since both hold references into it.
+    // A failure here leaves the component present but its nested instances, companion
+    // table and archived translations already removed — the teardowns above are not
+    // reversible. A transaction would not close that window portably: MySQL commits
+    // implicitly on DDL, so the drop could not roll back there. Retrying the delete is
+    // safe (every step is existence-guarded) and is the intended recovery.
+    await this.dropComponentTable(tableName);
+
+    // PG RETURNING-less DELETE always returns 0 rows, so no post-delete count check.
+    const table = await this.resolveRegistryTableName();
+    // With the stored schema version's count (`writeRegistry`).
+    await this.writeRegistry(() =>
+      this.adapter.delete(table, this.whereEq("slug", slug))
+    );
+    // The cached registry row is now out of date.
+    clearRegistryRowCache();
   }
 
   // Uses IF EXISTS so the operation is safe even if the table was never created.
@@ -688,75 +947,35 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
     for (const config of configs) {
       try {
-        const existing = await this.getComponentBySlug(config.slug);
+        const existing = await this.findRecordForWrite(config.slug);
         const schemaHash = calculateSchemaHash(config.fields);
-        // Canonical resolution: comp_ + normalized slug, matching what the
-        // runtime schema layer and migrate:create derive for the same
-        // component. Resolved before the
-        // existence check so a stored name that drifted from it is reconciled
-        // rather than left addressing a table the schema layer never created.
-        const desiredTableName = resolveComponentTableName(config.slug);
-        // A component's stored table name is never changed here. Repointing an
-        // existing component at different storage moves no data, and the paths
-        // that generate DDL do not all have the registry available — the
-        // offline migration generator has no database connection at all — so a
-        // divergence between the configured name and the stored one cannot be
-        // honoured consistently. Moving a registered component to different
-        // storage is a migration, not a config edit.
-        //
-        // Reported rather than passed over: registry-backed reads, filters and
-        // teardown all follow the stored name, so a mismatch means they address
-        // a table the schema layer is not maintaining. Recording it as a sync
-        // error surfaces it on every boot until a migration resolves it.
-        let repairedTableName: string | undefined;
-        // Any difference is treated the same way, casing included. Derived
-        // names are always lowercase, so a stored pointer differing only in
-        // case is a legacy or hand-edited row rather than a supported state,
-        // and whether two spellings are one table is server configuration that
-        // cannot be inferred from the catalog: a single listed spelling means
-        // the other does not exist, not that the server folded them.
-        if (existing !== null && existing.tableName !== desiredTableName) {
-          // One mismatch is repairable without moving anything: the stored name
-          // addresses no table while the configured one does. That is a row
-          // written before names resolved canonically — the data has always
-          // been in the configured table — so correcting the pointer converges
-          // the registry onto the config rather than leaving them divergent.
-          const [storedExists, desiredExists] = await Promise.all([
-            this.adapter.tableExists(existing.tableName),
-            this.adapter.tableExists(desiredTableName),
-          ]);
-
-          if (!storedExists && desiredExists) {
-            repairedTableName = desiredTableName;
-            this.logger.warn("Component registry table name repaired", {
-              slug: config.slug,
-              from: existing.tableName,
-              to: desiredTableName,
-            });
-          } else {
-            result.errors.push({
-              slug: config.slug,
-              error:
-                `Registry table '${existing.tableName}' does not match the derived ` +
-                `'${desiredTableName}'. Storage is not repointed automatically; run a ` +
-                `migration to move the data.`,
-            });
-            continue;
-          }
+        // The pointer decision `writeRecordedComponent` shares: a stored name
+        // that differs from the derived one is repaired or reported, never
+        // repointed at storage that holds data.
+        const pointer = await this.codeFirstTablePointer(config.slug, existing);
+        if (!pointer.matches) {
+          // Recording it as a sync error surfaces it on every boot until a
+          // migration resolves it.
+          result.errors.push({
+            slug: config.slug,
+            error:
+              `Registry table '${pointer.storedTableName}' does not match the derived ` +
+              `'${pointer.desiredTableName}'. Storage is not repointed automatically; run a ` +
+              `migration to move the data.`,
+          });
+          continue;
         }
+        const { desiredTableName, repairedTableName } = pointer;
         if (!existing) {
           await this.registerComponent({
-            slug: config.slug,
-            label: config.label,
-            tableName: desiredTableName,
-            description: config.description,
-            fields: config.fields,
-            admin: config.admin,
+            ...declaredComponentRegistration(
+              config,
+              schemaHash,
+              desiredTableName
+            ),
             source: "code",
             locked: true,
-            localized: config.localized === true,
             configPath: config.configPath,
-            schemaHash,
           });
           result.created.push(config.slug);
         } else {
@@ -809,7 +1028,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
           // divergence this sync exists to close.
           const settled =
             existing.migrationStatus === "diverged"
-              ? await this.getComponent(config.slug)
+              ? await this.getRecordForWrite(config.slug)
               : existing;
 
           await this.syncExistingCodeFirstComponent({
@@ -842,7 +1061,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * Write the config file's definition onto a component the registry already holds.
    *
    * Extracted so the divergence repair above reads as one step rather than being buried in the
-   * branch it guards; the decision of WHAT to write is unchanged.
+   * branch it guards; WHAT to write is `codeFirstSyncStep`'s decision, shared with
+   * `writeRecordedComponent`.
    */
   private async syncExistingCodeFirstComponent(args: {
     config: CodeFirstComponentConfig;
@@ -852,34 +1072,27 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     result: SyncComponentResult;
   }): Promise<void> {
     const { config, existing, schemaHash, repairedTableName, result } = args;
-    if (
-      repairedTableName !== undefined ||
-      !schemaHashesMatch(schemaHash, existing.schemaHash) ||
-      (config.localized === true) !== (existing.localized === true)
-    ) {
+    const step = this.codeFirstSyncStep(
+      config,
+      existing,
+      schemaHash,
+      repairedTableName
+    );
+    if (step === "update") {
       await this.updateComponent(
         config.slug,
         {
-          label: config.label,
-          description: config.description,
-          fields: config.fields,
-          admin: config.admin,
+          ...declaredComponentRow(config, schemaHash, repairedTableName),
           configPath: config.configPath,
-          schemaHash,
           locked: true,
-          localized: config.localized === true,
-          tableName: repairedTableName,
         },
         { source: "code" }
       );
       result.updated.push(config.slug);
-    } else if (this.adminConfigChanged(config.admin, existing.admin)) {
+    } else if (step === "metadata") {
       await this.updateComponent(
         config.slug,
-        {
-          admin: config.admin,
-          locked: true,
-        },
+        { ...declaredComponentMetadata(config), locked: true },
         { source: "code" }
       );
       result.updated.push(config.slug);
@@ -889,124 +1102,297 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   }
 
   /**
-   * Find all references to a Component across Collections, Singles, and other Components.
+   * What a code-first sync does with `config` on a component the registry
+   * already holds: write a schema change through (`update`: the table pointer is
+   * repaired, the fields changed by hash, or localization flipped), write only
+   * its label, description and admin options (`metadata`), as a collection's
+   * and a Single's are written, or leave it (`unchanged`).
+   *
+   * The one decision of it: `syncCodeFirstComponents` and
+   * `writeRecordedComponent` both act on it, so a start and `nextly migrate`
+   * agree on what matching means.
+   */
+  private codeFirstSyncStep(
+    config: CodeFirstComponentConfig,
+    existing: DynamicFieldGroupRecord,
+    schemaHash: string,
+    repairedTableName: string | undefined
+  ): "update" | "metadata" | "unchanged" {
+    if (
+      repairedTableName !== undefined ||
+      !schemaHashesMatch(schemaHash, existing.schemaHash) ||
+      // Field settings the hash omits (help text, placeholder, hidden): the
+      // stored field list carries them, so a change to one alone rewrites it.
+      fieldSettingsChanged(config.fields, existing.fields) ||
+      (config.localized === true) !== (existing.localized === true)
+    ) {
+      return "update";
+    }
+    // Label, description and admin options, as a collection's and a
+    // Single's are compared: a change to one alone is still written.
+    if (
+      config.label !== existing.label ||
+      (config.description ?? null) !== (existing.description ?? null) ||
+      this.adminConfigChanged(config.admin, existing.admin)
+    ) {
+      return "metadata";
+    }
+    return "unchanged";
+  }
+
+  /**
+   * Where a code-first component's stored table pointer stands against the
+   * table its slug derives.
+   *
+   * Canonical resolution: comp_ + normalized slug, matching what the runtime
+   * schema layer and migrate:create derive for the same component. Resolved
+   * before the existence check so a stored name that drifted from it is
+   * reconciled rather than left addressing a table the schema layer never
+   * created.
+   *
+   * A component's stored table name is never changed to address other
+   * storage. Repointing an existing component at different storage moves no
+   * data, and the paths that generate DDL do not all have the registry
+   * available — the offline migration generator has no database connection at
+   * all — so a divergence between the configured name and the stored one
+   * cannot be honoured consistently. Moving a registered component to
+   * different storage is a migration, not a config edit. Reported rather than
+   * passed over (`matches: false`): registry-backed reads, filters and teardown
+   * all follow the stored name, so a mismatch means they address a table the
+   * schema layer is not maintaining.
+   *
+   * Any difference is treated the same way, casing included. Derived names are
+   * always lowercase, so a stored pointer differing only in case is a legacy or
+   * hand-edited row rather than a supported state, and whether two spellings
+   * are one table is server configuration that cannot be inferred from the
+   * catalog: a single listed spelling means the other does not exist, not that
+   * the server folded them.
+   */
+  private async codeFirstTablePointer(
+    slug: string,
+    existing: DynamicFieldGroupRecord | null
+  ): Promise<CodeFirstTablePointer> {
+    const desiredTableName = resolveComponentTableName(slug);
+    if (existing === null || existing.tableName === desiredTableName) {
+      return { matches: true, desiredTableName, repairedTableName: undefined };
+    }
+    // One mismatch is repairable without moving anything: the stored name
+    // addresses no table while the configured one does. That is a row written
+    // before names resolved canonically — the data has always been in the
+    // configured table — so correcting the pointer converges the registry onto
+    // the config rather than leaving them divergent.
+    const [storedExists, desiredExists] = await Promise.all([
+      this.adapter.tableExists(existing.tableName),
+      this.adapter.tableExists(desiredTableName),
+    ]);
+    if (!storedExists && desiredExists) {
+      this.logger.warn("Component registry table name repaired", {
+        slug,
+        from: existing.tableName,
+        to: desiredTableName,
+      });
+      return {
+        matches: true,
+        desiredTableName,
+        repairedTableName: desiredTableName,
+      };
+    }
+    return {
+      matches: false,
+      desiredTableName,
+      storedTableName: existing.tableName,
+    };
+  }
+
+  /**
+   * Brings the registry row of a component the registry source records to that
+   * record, as `nextly migrate` does after its migrations apply, and writes
+   * nothing where the row already matches. The decision is the code-first
+   * sync's (`codeFirstTablePointer`, `codeFirstSyncStep`) and the columns are
+   * the ones it writes (`declaredComponentRow`, `declaredComponentMetadata`),
+   * so migrate and a start agree on what matching means.
+   *
+   * Unlike the sync it changes only what the declaration says: never where the
+   * row came from (its source, lock, config path or creator), and it runs no
+   * repair of a `diverged` mark, which is the sync's own step. `origin` is used
+   * only for a row it creates.
+   *
+   * @throws NextlyError(CONFLICT) when the stored table pointer differs from
+   *   the derived one in a way the sync reports rather than repairs; nothing is
+   *   written.
+   */
+  async writeRecordedComponent(
+    recorded: CodeFirstComponentConfig,
+    origin: { source: FieldGroupSource; locked: boolean },
+    options: RecordedWriteOptions<DynamicFieldGroupRecord> & {
+      /**
+       * The table a Builder record's own row names (`componentRowValues`),
+       * which a slug can spell differently from the code-first derivation:
+       * the row is held to that one, never to the derived name.
+       */
+      tableName?: string;
+    } = {}
+  ): Promise<"created" | "updated" | "unchanged"> {
+    const existing =
+      options.existing === undefined
+        ? await this.findRecordForWrite(recorded.slug)
+        : options.existing;
+    const config =
+      options.leavesUnsaid === true
+        ? withUnsaidKept(recorded, existing, options.cleared)
+        : recorded;
+    const schemaHash = calculateSchemaHash(config.fields);
+    const pointer =
+      options.tableName === undefined
+        ? await this.codeFirstTablePointer(config.slug, existing)
+        : recordedTablePointer(options.tableName, existing);
+    if (!pointer.matches) {
+      // The table names stay in the log: the public message says what to do.
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
+          "A component's registry row points at a table other than the one its slug derives. Storage is not repointed automatically; run a migration to move the data.",
+        logContext: {
+          slug: config.slug,
+          storedTableName: pointer.storedTableName,
+          derivedTableName: pointer.desiredTableName,
+        },
+      });
+    }
+    // Judged, not written (`RecordedWriteOptions.judgeOnly`).
+    if (!existing && options.judgeOnly === true) return "created";
+    if (!existing) {
+      await this.registerComponent({
+        ...declaredComponentRegistration(
+          config,
+          schemaHash,
+          pointer.desiredTableName
+        ),
+        // The config path a start gives the row it creates, from the same
+        // projection; a Builder record has none.
+        ...(config.configPath === undefined
+          ? {}
+          : { configPath: config.configPath }),
+        ...origin,
+      });
+      return "created";
+    }
+    const step = this.codeFirstSyncStep(
+      config,
+      existing,
+      schemaHash,
+      pointer.repairedTableName
+    );
+    if (step === "unchanged") return "unchanged";
+    if (options.judgeOnly === true) return "updated";
+    await this.updateComponent(
+      config.slug,
+      step === "update"
+        ? declaredComponentRow(config, schemaHash, pointer.repairedTableName)
+        : declaredComponentMetadata(config),
+      // The row's own source, so a row defined in code is written as the
+      // pipeline writes it, past its lock, and its source is left as it is.
+      { source: existing.source }
+    );
+    return "updated";
+  }
+
+  /**
+   * Refuse, before anything is removed, to delete the field group `slug` while
+   * something depends on it: a field of a collection, a Single or another
+   * field group that places it, a foreign key a plugin or the app declares
+   * into its tables, or another owner's element on them. Refused too when any
+   * of those cannot be read (`collection-dependents`, the one check every
+   * entity delete asks).
+   *
+   * @param slug the field group being deleted
+   * @param tableName its table, as its registry row records it
+   */
+  private async assertNothingDependsOn(
+    slug: string,
+    tableName: string
+  ): Promise<void> {
+    // Loaded when a delete asks, not with the registry: every caller of the
+    // registry would otherwise load the dependents readers it never uses.
+    const [
+      { assertNothingDependsOn, databaseDependentsSources },
+      { collectionOwnTables },
+      { getActiveExtensionSchema },
+    ] = await Promise.all([
+      import("../../collections/services/collection-dependents"),
+      import("../../schema/services/field-column-descriptor"),
+      import("../../schema/extension/active-schema"),
+    ]);
+    await assertNothingDependsOn(
+      [
+        {
+          kind: "fieldGroup",
+          slug,
+          // Its table and its translation table: a field group keeps a
+          // many-to-many as a list on its own row, so it has no junction table.
+          tables: collectionOwnTables(tableName, []),
+        },
+      ],
+      databaseDependentsSources(
+        this.adapter,
+        // The extension schema this process published at boot or on its last
+        // reload, read when the delete asks, so a failure to read it refuses.
+        () =>
+          Promise.resolve().then(() => getActiveExtensionSchema(this.dialect)),
+        { fieldGroupRegistryName: () => this.resolveRegistryTableName() }
+      )
+    );
+  }
+
+  /**
+   * Find every field of a Collection, Single or other Component that places
+   * the Component `componentSlug`, at any depth inside repeaters and groups.
+   *
+   * Reads the registries as the delete's check does, and fails as it does: a
+   * registry that does not exist yet has nothing in it, but any other failure
+   * to read one, or a stored field list that does not parse, is thrown rather
+   * than taken for no references.
+   *
+   * @deprecated A delete now refuses by itself, naming every field that
+   * places the field group along with the foreign keys and other owners'
+   * elements that depend on it; call `deleteComponent` and read its refusal.
+   * Kept because the registry is reachable through `getService`.
    */
   async findComponentReferences(
     componentSlug: string
   ): Promise<ComponentReference[]> {
-    this.logger.debug("Checking for component references", {
-      slug: componentSlug,
+    const { fieldsPlacing, readFieldOwners } = await import(
+      "../../collections/services/collection-dependents"
+    );
+    const owners = await readFieldOwners(this.adapter, {
+      fieldGroupRegistryName: () => this.resolveRegistryTableName(),
     });
-
-    const references: ComponentReference[] = [];
-
-    try {
-      const collections = await this.adapter.select<Record<string, unknown>>(
-        "dynamic_collections",
-        { columns: ["slug", "fields"] }
+    return owners
+      .filter(
+        owner =>
+          !(
+            owner.entityType === "fieldGroup" &&
+            owner.entitySlug === componentSlug
+          )
+      )
+      .flatMap(owner =>
+        fieldsPlacing(owner.fields, componentSlug).map(fieldPath => ({
+          entityType:
+            owner.entityType === "fieldGroup"
+              ? ("component" as const)
+              : owner.entityType,
+          entitySlug: owner.entitySlug,
+          fieldName: fieldPath.slice(fieldPath.lastIndexOf(".") + 1),
+          fieldPath,
+        }))
       );
-
-      for (const collection of collections) {
-        const slug = collection.slug as string;
-        const fields = this.parseJsonField(collection.fields);
-        if (fields) {
-          const found = this.scanFieldsForComponentRef(
-            fields,
-            componentSlug,
-            slug,
-            "collection"
-          );
-          references.push(...found);
-        }
-      }
-    } catch (error) {
-      // Table may not exist yet (fresh install) — not an error.
-      this.logger.debug("Could not scan dynamic_collections for references", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
-    try {
-      const singles = await this.adapter.select<Record<string, unknown>>(
-        "dynamic_singles",
-        { columns: ["slug", "fields"] }
-      );
-
-      for (const single of singles) {
-        const slug = single.slug as string;
-        const fields = this.parseJsonField(single.fields);
-        if (fields) {
-          const found = this.scanFieldsForComponentRef(
-            fields,
-            componentSlug,
-            slug,
-            "single"
-          );
-          references.push(...found);
-        }
-      }
-    } catch (error) {
-      this.logger.debug("Could not scan dynamic_singles for references", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
-    // Declared out here so the failure log can name it, ASSIGNED inside the
-    // try so a failed resolution is contained like any other read failure.
-    // This scan is best effort — it informs a reference check, and a catalog
-    // hiccup must not turn that into a hard failure — so the resolution has to
-    // sit inside the same boundary as the read it feeds. Its initial value is
-    // the name this release's DDL creates, which is what the message should say
-    // when resolution itself is what failed.
-    let registryTable: string = STORAGE_FORMAT.registryTable;
-    try {
-      registryTable = await this.resolveRegistryTableName();
-      const components = await this.adapter.select<Record<string, unknown>>(
-        registryTable,
-        { columns: ["slug", "fields"] }
-      );
-
-      for (const comp of components) {
-        const slug = comp.slug as string;
-        if (slug === componentSlug) {
-          continue;
-        }
-        const fields = this.parseJsonField(comp.fields);
-        if (fields) {
-          const found = this.scanFieldsForComponentRef(
-            fields,
-            componentSlug,
-            slug,
-            "component"
-          );
-          references.push(...found);
-        }
-      }
-    } catch (error) {
-      this.logger.debug(`Could not scan ${registryTable} for references`, {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
-    if (references.length > 0) {
-      this.logger.debug("Found component references", {
-        slug: componentSlug,
-        count: references.length,
-        references: references.map(
-          r => `${r.entityType}:${r.entitySlug}.${r.fieldPath}`
-        ),
-      });
-    }
-
-    return references;
   }
 
   /**
    * Enrich field configurations with inline component schemas.
    */
   async enrichFieldsWithComponentSchemas(
-    fields: Record<string, unknown>[],
-    currentDepth = 0
+    fields: Record<string, unknown>[]
   ): Promise<EnrichedFieldConfig[]> {
     const slugs = this.collectComponentSlugs(fields);
 
@@ -1016,7 +1402,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
     const componentMap = await this.fetchComponentsBySlugsBatch([...slugs]);
 
-    return this.enrichFieldsRecursive(fields, componentMap, currentDepth);
+    return this.enrichFieldsRecursive(fields, componentMap, new Set());
   }
 
   private collectComponentSlugs(
@@ -1061,23 +1447,21 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     }
 
     try {
-      const results = await this.adapter.select<DynamicFieldGroupRecord>(
-        await this.resolveRegistryTableName(),
-        {
-          where: {
-            and: [
-              {
-                column: "slug",
-                op: "IN",
-                value: slugs,
-              },
-            ],
-          },
-        }
+      // Derived from the registry's listing (`listStored`), which outside a
+      // transaction is read again only once the registry has changed: a form
+      // and a schema read draw the same field groups on every request.
+      const wanted = new Set(slugs);
+      const results = await this.listStored(rows =>
+        rows
+          .filter(row => wanted.has(String(row.slug)))
+          .map(row =>
+            this.deserializeRecord(
+              structuredClone(row) as Record<string, unknown>
+            )
+          )
       );
 
-      for (const result of results) {
-        const deserialized = this.deserializeRecord(result);
+      for (const deserialized of results) {
         componentMap.set(deserialized.slug, deserialized);
       }
     } catch (error) {
@@ -1095,9 +1479,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   private async enrichFieldsRecursive(
     fields: Record<string, unknown>[],
     componentMap: Map<string, DynamicFieldGroupRecord>,
-    currentDepth: number,
-    /** Inside a group or a repeater, whose value is stored as JSON; see `drawnComponentFields`. */
-    inContainer = false
+    /** The field groups being drawn on the way down to these fields; see `drawnComponentFields`. */
+    drawing: ReadonlySet<string>
   ): Promise<EnrichedFieldConfig[]> {
     const enrichedFields: EnrichedFieldConfig[] = [];
 
@@ -1114,8 +1497,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
             enrichedField.componentFields = await this.drawnComponentFields(
               component,
               componentMap,
-              currentDepth,
-              inContainer
+              drawing
             );
           }
         }
@@ -1131,8 +1513,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
                 fields: await this.drawnComponentFields(
                   component,
                   componentMap,
-                  currentDepth,
-                  inContainer
+                  drawing
                 ),
                 admin: component.admin,
               };
@@ -1152,10 +1533,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         enrichedField.fields = await this.enrichFieldsRecursive(
           nestedFields,
           componentMap,
-          currentDepth,
-          // A named group or a repeater stores its children in its own JSON value; a container
-          // with no name only arranges the form and keeps them where it sits.
-          inContainer || storesItsChildren(field)
+          drawing
         );
       }
 
@@ -1167,29 +1545,20 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
   /**
    * The fields a form draws for one component, with the components nested in it enriched in turn.
-   *
-   * Where it matters where the component sits: outside any group or repeater, its instance is a row
-   * of its own table, and a component field placed directly among its fields gets no column there
-   * and no table write, so nothing stores it and a form must not render, seed or send it. Held in a
-   * group or repeater, the component's whole value is stored in that container's JSON, a directly
-   * placed component included, so nothing is left out. The component write and the entry's
-   * validation make the same distinction.
+   * Every field is drawn wherever the component sits: a component placed directly among its fields
+   * is stored as a row of its own, and one held in a group or repeater in that container's value.
    */
   private async drawnComponentFields(
     component: DynamicFieldGroupRecord,
     componentMap: Map<string, DynamicFieldGroupRecord>,
-    currentDepth: number,
-    inContainer: boolean
+    drawing: ReadonlySet<string>
   ): Promise<Record<string, unknown>[]> {
-    const own = component.fields as unknown as Record<string, unknown>[];
-    if (!Array.isArray(own)) return own;
-    const fields = inContainer
-      ? own
-      : (omitDirectComponentFields(own as DirectField[]) as Record<
-          string,
-          unknown
-        >[]);
-    if (currentDepth >= MAX_FIELD_GROUP_NESTING_DEPTH) return fields;
+    const fields = component.fields as unknown as Record<string, unknown>[];
+    if (!Array.isArray(fields)) return fields;
+    // Field groups nest to any depth, so the form is drawn as deep as they reach. Only a field
+    // group already being drawn on the way down stops it: a definition placing one inside itself,
+    // saved before such a cycle was refused, would otherwise be drawn forever.
+    if (drawing.has(component.slug)) return fields;
     const nestedSlugs = this.collectComponentSlugs(fields);
     if (nestedSlugs.size === 0) return fields;
     const missing = [...nestedSlugs].filter(slug => !componentMap.has(slug));
@@ -1203,73 +1572,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     return this.enrichFieldsRecursive(
       fields,
       componentMap,
-      currentDepth + 1,
-      inContainer
+      new Set([...drawing, component.slug])
     );
-  }
-
-  private parseJsonField(value: unknown): Record<string, unknown>[] | null {
-    if (!value) {
-      return null;
-    }
-    try {
-      if (typeof value === "string") {
-        return JSON.parse(value);
-      }
-      if (Array.isArray(value)) {
-        return value;
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  }
-
-  private scanFieldsForComponentRef(
-    fields: Record<string, unknown>[],
-    targetSlug: string,
-    entitySlug: string,
-    entityType: ComponentReference["entityType"],
-    parentPath = ""
-  ): ComponentReference[] {
-    const references: ComponentReference[] = [];
-
-    for (const field of fields) {
-      const fieldName = field.name as string;
-      if (!fieldName) {
-        continue;
-      }
-
-      const fieldPath = parentPath ? `${parentPath}.${fieldName}` : fieldName;
-      const fieldType = field.type as string;
-
-      if (isFieldGroupFieldType(fieldType)) {
-        const { single, many } = extractFieldGroupReferences(field);
-        if (single === targetSlug) {
-          references.push({ entityType, entitySlug, fieldName, fieldPath });
-        }
-
-        if (many && many.includes(targetSlug)) {
-          references.push({ entityType, entitySlug, fieldName, fieldPath });
-        }
-      }
-
-      if (
-        (fieldType === "repeater" || fieldType === "group") &&
-        Array.isArray(field.fields)
-      ) {
-        const nested = this.scanFieldsForComponentRef(
-          field.fields as Record<string, unknown>[],
-          targetSlug,
-          entitySlug,
-          entityType,
-          fieldPath
-        );
-        references.push(...nested);
-      }
-    }
-
-    return references;
   }
 
   protected deserializeRecord(
@@ -1318,4 +1622,22 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       updatedAt: this.normalizeDbTimestamp(updatedAt) as unknown as Date,
     };
   }
+}
+
+/**
+ * Refuse a change to a component defined in code, made from anywhere but its
+ * code. The caller is told so, which is a fact about the component and not
+ * about their permissions; the slug and source go to the log.
+ */
+function refuseChangeOutsideCode(
+  existing: { locked?: boolean },
+  slug: string,
+  source: string | undefined
+): void {
+  if (!existing.locked || source === "code") return;
+  throw NextlyError.definedInCode({
+    thing: "component",
+    change: "change",
+    logContext: { reason: "component-locked", slug, source: source ?? "UI" },
+  });
 }

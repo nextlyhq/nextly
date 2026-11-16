@@ -15,7 +15,10 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 
-import type { ApiKeyService } from "../domains/auth/services/api-key-service";
+import type {
+  ApiKeyRefusalCause,
+  ApiKeyService,
+} from "../domains/auth/services/api-key-service";
 
 /** Whether a request's destination has an auth limit of its own. */
 export type RestLimitTarget = "core" | "auth";
@@ -30,6 +33,8 @@ export interface KnownApiKey {
   resolved: ResolvedApiKey;
   /** Whether the limit already spent the key's own budget for this request. */
   debited: boolean;
+  /** Why a key that does not resolve was refused, for the server's log. */
+  cause?: ApiKeyRefusalCause;
 }
 
 /** A plugin person's resolution, as the limit needs to see it. */

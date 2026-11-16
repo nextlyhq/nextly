@@ -1,0 +1,24 @@
+---
+title: UPGRADE_BACKUP_NOT_CONFIRMED
+description: "`nextly upgrade` would change the database, and no backup was confirmed, with no terminal attached to ask."
+---
+
+## Cause
+
+`nextly upgrade` would change the database, and no backup was confirmed, with no terminal attached to ask.
+
+`nextly upgrade` asks for a backup before its first step that changes anything. With no terminal attached, as in CI, it cannot ask, and `--confirm-backed-up` was not passed. Nothing was changed.
+
+## Fix
+
+- Back up the database.
+- Run `nextly upgrade --confirm-backed-up`.
+
+## Example
+
+```text
+✗ Refusing to upgrade without a confirmed backup.
+  Why:  No terminal is attached to ask whether the database is backed up, and `--confirm-backed-up` was not passed. Nothing was changed.
+  Next: Re-run with `--confirm-backed-up` (CI/non-TTY) after backing up your database.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-backup-not-confirmed  (UPGRADE_BACKUP_NOT_CONFIRMED)
+```

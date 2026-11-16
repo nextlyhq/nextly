@@ -53,9 +53,10 @@ export const PUBLIC_SERVE_MIME_TYPES: ReadonlySet<string> = new Set(
  * A year, and `immutable` alongside it.
  *
  * Sound for exactly the types above: a font is written once and never
- * regenerated, unlike an image, whose bytes a focal-point change rewrites in
- * place under the same id. If this set ever grows to cover a type that IS
- * rewritten, this header stops being true before the new type does.
+ * regenerated. An image is left out: its stored files have been rewritten in
+ * place under the same id before, and a header promising a year cannot be
+ * taken back. If this set ever grows to cover a type that IS rewritten, this
+ * header stops being true before the new type does.
  */
 const IMMUTABLE_FOR_A_YEAR = "public, max-age=31536000, immutable";
 

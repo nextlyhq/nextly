@@ -1,0 +1,24 @@
+---
+title: UPGRADE_CANCELLED
+description: "The backup prompt of `nextly upgrade` was answered no, so the upgrade did not run."
+---
+
+## Cause
+
+The backup prompt of `nextly upgrade` was answered no, so the upgrade did not run.
+
+`nextly upgrade` asks for a backup before its first step that changes anything. At the prompt the answer was no, so no step ran.
+
+## Fix
+
+- Back up the database.
+- Run `nextly upgrade` again and answer yes, or pass `--confirm-backed-up`.
+
+## Example
+
+```text
+✗ Upgrade cancelled by operator.
+  Why:  The upgrade asks for a backup before its first step that changes anything, and the answer was no. Nothing was changed.
+  Next: Back up the database, then run `nextly upgrade` again and answer yes.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-cancelled  (UPGRADE_CANCELLED)
+```

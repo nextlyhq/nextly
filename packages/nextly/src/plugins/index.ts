@@ -33,6 +33,9 @@ export {
   type PluginCapabilities,
   type PluginConfig,
   type PluginContext,
+  type PluginDurableEvents,
+  type PluginEmitOptions,
+  type PluginEvents,
   type PluginDatabase,
   type PluginDefinition,
   type PluginEmailService,
@@ -44,10 +47,24 @@ export {
   type PluginVersionsService,
   type PluginInsert,
   type PluginTransaction,
+  type PluginTransactionBounds,
   type PluginFilterRegistry,
   type PluginHookRegistry,
+  // `ctx.hooks.onInTransaction`'s handler and what it is handed.
+  type InTransactionContext,
+  type InTransactionHandler,
   type PluginSettingsApi,
 } from "./plugin-context";
+// `ctx.cache`, and the tag spelling its reads and expiries share.
+export type { PluginCacheApi } from "./plugin-cache";
+export { pluginCacheTag } from "../revalidation/compute-tags";
+export type {
+  PluginPinOptions,
+  PluginPinTransaction,
+  PluginVersionPin,
+  PluginVersionPinHolder,
+  PluginVersionPins,
+} from "./plugin-version-pins";
 export {
   PasswordTooLongError,
   type PasswordCheck,
@@ -59,7 +76,22 @@ export type {
   SecretData,
   TxOption,
 } from "./security/one-time-secrets";
+export type { KeyedDigests } from "./security/keyed-digest";
 export type { OpaqueSecrets } from "./security/opaque-secrets";
+export {
+  standardWebhooks,
+  type InboundWebhookDelivery,
+  type InboundWebhookReading,
+  type InboundWebhookScheme,
+  type ClaimDeliveryOptions,
+  type DeliveryClaim,
+  type DeliveryClaimResult,
+  type PluginReceivedWebhooks,
+  type VerifiedWebhook,
+  type VerifyWebhookOptions,
+  type WebhookRefusal,
+  type WebhookVerification,
+} from "./security/inbound-webhooks";
 
 // What each hook point carries, by name; a plugin augments the map.
 export type {
@@ -95,7 +127,10 @@ export type {
   PluginFieldCodegen,
   PluginFieldCodegenImport,
   FieldSurface,
+  PluginSchedule,
   ScheduledTask,
+  PluginWebhookEventType,
+  PluginTranslations,
   PermissionSlug,
 } from "./contributions";
 
@@ -106,24 +141,55 @@ export type {
   JsonValue,
   PluginAdminContributions,
   PluginAdminPage,
-  PluginAdminWidget,
-  PluginAdminCustomWidget,
-  PluginAdminDataWidget,
-  PluginAdminStatsWidget,
-  PluginAdminDeclarativeWidget,
-  PluginAdminQuerylessWidget,
-  DeclarativeWidgetArchetype,
+  PluginPageStartupRead,
   PluginCollectionView,
+  OverridableDocumentAction,
+  PluginDocumentActionOverride,
+  PluginDocumentActionOverrides,
   PluginDocumentView,
   PluginFieldTypeDocumentView,
+  PluginPanelSection,
+  PluginAdminPlaceDeclaration,
+  AdminBlockContribution,
+  AdminBulkActionContribution,
+  AdminColumnContribution,
+  AdminContribution,
+  AdminContributionAction,
+  AdminRowActionContribution,
+  AdminSidebarSectionContribution,
+  AdminTabContribution,
+  PluginListFilterDeclaration,
+  PluginListFilterOption,
   PluginMenuItem,
+  PluginMenuItemFields,
   PluginNavSection,
+  PluginAdminPanel,
+  PluginPanelGroup,
+  PluginItemCount,
+  PluginHeaderContributions,
+  PluginHeaderSlotContributions,
+  PluginHeaderUserMenuContributions,
+  PluginItemPlace,
+  PluginUserMenuAction,
+  PluginUserMenuItem,
+  PluginUserMenuLink,
 } from "./admin-contributions";
+export type { RowPredicate, RowPredicateValue } from "./row-predicate";
+export type { AdminContributionKind } from "./admin-places";
+
+// The places on admin pages plugins add to, and the ids every surface takes.
+export {
+  CORE_ADMIN_PLACES,
+  type AdminPlaceId,
+  type AdminPlaces,
+  type CoreAdminPlaceId,
+} from "./admin-places";
 
 // Plugin HTTP routes — `contributes.routes` surface.
 export type {
   PluginRoute,
   PluginRouteCaller,
+  PluginRouteCanOptions,
   PluginRouteIdentity,
   PluginRouteContext,
   PluginRouteHandler,
@@ -133,6 +199,9 @@ export type {
   Middleware,
   RouteMethod,
 } from "./routes/route-types";
+
+// Proxy handlers: `contributes.proxy`, asked by the app's Proxy.
+export type { PluginProxyHandler, ProxyAnswer } from "./proxy/proxy-types";
 
 // Plugin-defined kinds of signed-in person: `contributes.principals`, a
 // route's `principal`, `ctx.principals` and `nextly.principals`.

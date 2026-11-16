@@ -45,6 +45,7 @@
 
 import {
   findNode,
+  holdsEntryContent,
   locateNode,
   reidSubtree,
   type BlockDocument,
@@ -52,7 +53,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { layerLabel } from "./layers";
-import { positionOf, type OpPosition } from "./ops";
+import { positionOf, type OpPosition } from "./op-vocabulary";
 
 /** The suffix that keeps two copies of a named block apart. */
 export const COPY_SUFFIX = " copy";
@@ -86,7 +87,8 @@ function copyName(node: BlockNode): string | undefined {
  * What duplicating the selected block would do, or `null` when it cannot.
  *
  * `null` for no selection and for an id the document no longer holds — which an
- * undo produces routinely — and for a node whose parent has no named slot,
+ * undo produces routinely — for a block holding an Entry content block, which
+ * a template holds one of, and for a node whose parent has no named slot,
  * because that is a position the op vocabulary cannot express and therefore one
  * an insert could not be undone from.
  */
@@ -98,6 +100,9 @@ export function blockDuplication(
 
   const original = findNode(document.nodes, selectedId);
   if (original === undefined) return null;
+  // A template holds one Entry content block, so a copy of one, or of a
+  // block around one, is refused as the save would refuse it.
+  if (holdsEntryContent(original)) return null;
 
   const location = locateNode(document.nodes, selectedId);
   if (location === undefined) return null;

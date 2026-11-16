@@ -96,18 +96,24 @@ export const StatsCard: React.ForwardRefExoticComponent<
                 <div className="flex items-center justify-between pt-5  border-t border-border">
                   <div className="flex items-center gap-2">
                     {change !== undefined && (
+                      // A quiet chip, as every status is drawn: the card's surface, ordinary
+                      // text, and the arrow alone in the trend's text colour.
                       <div
-                        className={cn(
-                          "flex items-center gap-1 px-2 py-0.5 rounded-sm text-xs font-bold uppercase tracking-wider ring-1 transition-all duration-500",
-                          trend === "up"
-                            ? "bg-success-100 text-success-700 dark:bg-success-900 dark:text-success-100 ring-success-500/20 group-hover:bg-success-500/10"
-                            : "bg-destructive-100 text-destructive-700 dark:bg-destructive-900 dark:text-destructive-100 ring-destructive-500/20 group-hover:bg-destructive-500/10"
-                        )}
+                        data-trend={trend === "up" ? "up" : "down"}
+                        className="flex items-center gap-1 rounded-md border border-border bg-card px-2 py-0.5 text-xs font-medium tabular-nums text-foreground"
                       >
                         {trend === "up" ? (
-                          <TrendingUp className="h-3 w-3" />
+                          <TrendingUp
+                            aria-hidden="true"
+                            data-testid="trend-mark"
+                            className="h-3 w-3 text-success-text"
+                          />
                         ) : (
-                          <TrendingDown className="h-3 w-3" />
+                          <TrendingDown
+                            aria-hidden="true"
+                            data-testid="trend-mark"
+                            className="h-3 w-3 text-danger-text"
+                          />
                         )}
                         <span>
                           {change > 0 ? "+" : ""}

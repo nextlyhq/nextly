@@ -1,6 +1,6 @@
 // F11 PR 3: snapshot-io tests.
 
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +12,7 @@ import {
   loadLatestSnapshot,
   parseSnapshotFile,
   SnapshotFileError,
+  snapshotPathOf,
   verifyMigrationHash,
   writeSnapshot,
   type SnapshotFile,
@@ -26,6 +27,20 @@ describe("snapshot-io", () => {
 
   afterEach(async () => {
     // Cleanup is best-effort; vitest's tmpdir is auto-cleaned by the OS.
+  });
+
+  describe("snapshotPathOf", () => {
+    it("is where writeSnapshot writes a migration's snapshot", async () => {
+      // A dry run names the snapshot by this path without writing it, so the
+      // writer must put it nowhere else.
+      const written = await writeSnapshot(
+        metaDir,
+        "20260101000000_init",
+        EMPTY_SNAPSHOT,
+        "-- UP\n"
+      );
+      expect(written).toBe(snapshotPathOf(metaDir, "20260101000000_init"));
+    });
   });
 
   describe("loadLatestSnapshot", () => {
@@ -101,6 +116,62 @@ describe("snapshot-io", () => {
       expect(parsed.snapshot.tables[0].name).toBe("dc_posts");
     });
 
+    // Every declared permission, by owner, travels in the snapshot so it alone says what they were;
+    // a snapshot written without the record keeps no key, which a reader takes as saying nothing.
+    it("writes the permission record it is given, and none when given none", async () => {
+      const permissions = {
+        app: {},
+        plugins: {
+          "@nextlyhq/plugin-form-builder": {
+            "export-submissions": {
+              action: "export",
+              resource: "submissions",
+              name: "Export submissions",
+              description: null,
+              group: "Forms",
+              danger: false,
+            },
+          },
+        },
+        collections: {},
+        singles: {},
+      };
+      const withRecord = await writeSnapshot(
+        metaDir,
+        "20260429_154500_001_with",
+        { tables: [] },
+        "SELECT 1;",
+        {},
+        undefined,
+        permissions
+      );
+      expect(
+        parseSnapshotFile(await readFile(withRecord, "utf-8"), "x").permissions
+      ).toEqual(permissions);
+      const without = await writeSnapshot(
+        metaDir,
+        "20260429_154500_002_without",
+        { tables: [] },
+        "SELECT 1;"
+      );
+      expect(JSON.parse(await readFile(without, "utf-8"))).not.toHaveProperty(
+        "permissions"
+      );
+    });
+
+    it("says it records translated fields, with or without a translated table", async () => {
+      // Without the statement, a snapshot with no translated table reads the same as one
+      // written before snapshots recorded translated fields.
+      const path = await writeSnapshot(
+        metaDir,
+        "20260429_154500_001_create_posts",
+        { tables: [{ name: "dc_posts", columns: [] }] },
+        "SELECT 1;"
+      );
+      const parsed = parseSnapshotFile(await readFile(path, "utf-8"), "x");
+      expect(parsed.translatedFieldsRecorded).toBe(true);
+    });
+
     it("persists indexes when present and leaves them undefined when absent", async () => {
       const snapshot = {
         tables: [
@@ -118,7 +189,12 @@ describe("snapshot-io", () => {
           },
         ],
       };
-      await writeSnapshot(metaDir, "20260601_120000_001_idx", snapshot, "-- sql");
+      await writeSnapshot(
+        metaDir,
+        "20260601_120000_001_idx",
+        snapshot,
+        "-- sql"
+      );
       const loaded = await loadLatestSnapshot(metaDir);
       const tables = loaded!.data.snapshot.tables;
       const x = tables.find(t => t.name === "dc_x")!;
@@ -316,6 +392,34 @@ describe("snapshot-io", () => {
           "test.snapshot.json"
         )
       ).toThrow(/64-char hex SHA-256/);
+    });
+
+    it("throws on a record of translated fields that isn't `true`", () => {
+      expect(() =>
+        parseSnapshotFile(
+          JSON.stringify({
+            version: 1,
+            migrationHash: VALID_HASH,
+            snapshot: { tables: [] },
+            translatedFieldsRecorded: "yes",
+          }),
+          "test.snapshot.json"
+        )
+      ).toThrow(/translatedFieldsRecorded/);
+    });
+
+    it("throws on a permission record that is not one", () => {
+      expect(() =>
+        parseSnapshotFile(
+          JSON.stringify({
+            version: 1,
+            migrationHash: VALID_HASH,
+            snapshot: { tables: [] },
+            permissions: { app: [], plugins: {} },
+          }),
+          "test.snapshot.json"
+        )
+      ).toThrow(/permissions/);
     });
 
     it("throws on missing snapshot.tables", () => {

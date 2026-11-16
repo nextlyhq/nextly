@@ -32,6 +32,11 @@ updates:
     # PRs that CI would just block.
     ignore:
       - dependency-name: "drizzle-kit"
+      # The repository compiles with TypeScript 7 only, pinned exactly and held
+      # by an override in pnpm-workspace.yaml, so a TypeScript 5 or 6 release
+      # is never an update for it.
+      - dependency-name: "typescript"
+        versions: ["< 7"]
     reviewers:
       - mobeenabdullah
     labels:

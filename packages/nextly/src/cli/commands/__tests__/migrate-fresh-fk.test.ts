@@ -6,7 +6,7 @@
 // resolves FK dependencies), so the SET is best-effort: a permission failure
 // must be swallowed, not propagated.
 
-import { type SQL } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it, vi } from "vitest";
 

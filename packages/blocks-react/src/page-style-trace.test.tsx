@@ -167,3 +167,43 @@ describe("the tree an editor's cascade read is compiled from", () => {
     );
   });
 });
+
+describe("the token prefix an editor's cascade read was written under", () => {
+  /** A page whose one node reads a token, so its entry names the prefix. */
+  const tokened = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "n1",
+        type: "acme/text",
+        version: 1,
+        props: {},
+        styles: { base: { base: { rowGap: { $token: "space.4" } } } },
+      },
+    ],
+  } as unknown as BlockDocument;
+  const resolver = createBlockResolver([text]);
+
+  it("is the prefix the entries' token references use, a stated one included", () => {
+    for (const [stated, expected] of [
+      [undefined, "--site-"],
+      ["--brand-", "--brand-"],
+    ] as const) {
+      const cascade = pageStyleTrace({
+        document: tokened,
+        styleContext: {
+          breakpoints: BREAKPOINTS,
+          ...(stated === undefined ? {} : { tokenPrefix: stated }),
+        },
+        site: undefined,
+        blocks: resolver,
+      });
+      expect(cascade?.tokenPrefix).toBe(expected);
+      // The same one the entry was written with, not merely a plausible one.
+      expect(
+        cascade?.entries.find(entry => entry.property === "row-gap")?.value
+      ).toBe(`var(${expected}space-4)`);
+    }
+  });
+});

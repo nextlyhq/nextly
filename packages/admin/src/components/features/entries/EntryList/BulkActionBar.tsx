@@ -12,9 +12,9 @@ import { Button } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
 import { EyeOff, Send, Trash2, X } from "@admin/components/icons";
-import { useCan } from "@admin/hooks/useCan";
 
 import type { CollectionForColumns } from "./EntryTableColumns";
+import { useEntryBulkActions } from "./useEntryBulkActions";
 
 // ============================================================================
 // Types
@@ -51,6 +51,19 @@ export interface BulkActionBarProps {
   onClear: () => void;
   /** Singular/plural label used in the selected-count text */
   itemLabel?: string;
+  /**
+   * Plugins' declared bulk actions, in the order delivered, each already
+   * judged against the selection: drawn after the built-in actions, before
+   * the destructive one.
+   */
+  declaredActions?: readonly {
+    id: string;
+    label: string;
+    disabled: boolean;
+    /** Why it is held back, shown beside the bar's actions. */
+    note?: string;
+    onSelect: () => void;
+  }[];
 }
 
 // ============================================================================
@@ -86,21 +99,16 @@ export function BulkActionBar({
   isPublishing = false,
   onClear,
   itemLabel = "entry",
+  declaredActions = [],
 }: BulkActionBarProps): JSX.Element {
-  // Publishing is its own permission, distinct from editing, and gated per
-  // button rather than together: a user may hold one without the other. The
-  // slug is empty when there is no collection, which no permission matches, so
-  // the hook stays unconditional (a rule of hooks) and resolves to denied.
-  const canPublish = useCan(`publish-${collection?.slug ?? ""}`);
-  const canUnpublish = useCan(`unpublish-${collection?.slug ?? ""}`);
-
-  // Publish / Unpublish are only meaningful for collections with the built-in
-  // Draft / Published lifecycle (`status: true`), and only offered to a caller
-  // permitted to make the transition — matching the server, which refuses it
-  // otherwise. Each button is shown independently.
-  const showPublish = collection?.status === true && !!onPublish && canPublish;
-  const showUnpublish =
-    collection?.status === true && !!onUnpublish && canUnpublish;
+  // Each action is offered on its own permission, as the server answers it:
+  // a user may hold one without the others. Publish / Unpublish are only
+  // meaningful for collections with the built-in Draft / Published lifecycle,
+  // which the shared answer already folds in, and each button also needs the
+  // callback that performs it.
+  const offered = useEntryBulkActions(collection);
+  const showPublish = offered.publish && !!onPublish;
+  const showUnpublish = offered.unpublish && !!onUnpublish;
   const showPublishActions = showPublish || showUnpublish;
   // Pluralize the label. "entry" -> "entries", "category" -> "categories",
   // "collection" -> "collections", "user" -> "users". Already-plural labels
@@ -116,7 +124,9 @@ export function BulkActionBar({
     <div
       role="region"
       aria-label="Bulk actions"
-      className="flex items-center justify-between gap-3 rounded-md border border-border bg-primary/[0.07] px-4 py-2.5"
+      // Wrapping at every width: the actions, the plugins' among them, are
+      // more than a narrow bar holds on one line.
+      className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-primary/[0.07] px-4 py-2.5"
     >
       {/* Selection info */}
       <span className="text-sm font-medium text-foreground">
@@ -124,7 +134,7 @@ export function BulkActionBar({
       </span>
 
       {/* Actions */}
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button
           variant="ghost"
           size="sm"
@@ -170,16 +180,43 @@ export function BulkActionBar({
           </>
         )}
 
-        {/* Delete selected */}
-        <Button
-          variant="destructive"
-          size="sm"
-          onClick={onDelete}
-          className="gap-1.5"
-        >
-          <Trash2 className="h-4 w-4" />
-          Delete selected
-        </Button>
+        {/* Why a declared action is held back, said once per action. */}
+        {declaredActions.map(action =>
+          action.note ? (
+            <span
+              key={`${action.id}:note`}
+              className="text-xs text-muted-foreground"
+            >
+              {action.note}
+            </span>
+          ) : null
+        )}
+
+        {/* Plugins' declared bulk actions, run on the selected rows. */}
+        {declaredActions.map(action => (
+          <Button
+            key={action.id}
+            variant="outline"
+            size="sm"
+            onClick={action.onSelect}
+            disabled={action.disabled}
+          >
+            {action.label}
+          </Button>
+        ))}
+
+        {/* Delete selected, only for a caller who may delete here. */}
+        {offered.delete && (
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={onDelete}
+            className="gap-1.5"
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete selected
+          </Button>
+        )}
       </div>
     </div>
   );

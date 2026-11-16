@@ -5,7 +5,7 @@
   "hint": "Posts, authors, categories, clean design",
   "approaches": ["code-first", "visual"],
   "defaultApproach": "code-first",
-  "collections": ["posts", "categories", "tags"],
+  "collections": ["posts", "authors", "categories", "tags"],
   "singles": ["site-settings"],
   "hasDemoData": true,
   "hasFrontendPages": true,

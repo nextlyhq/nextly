@@ -63,7 +63,12 @@ async function publishBoth(entries: CollectionEntryService): Promise<string> {
       overrideAccess: true,
       locale: "es",
     },
-    { title: "es title", body: "es body", status: "published" }
+    {
+      title: "es title",
+      body: "es body",
+      status: "published",
+      _overwrite: true,
+    }
   );
   return id;
 }
@@ -127,7 +132,7 @@ describe("pending changes per language (integration)", () => {
         overrideAccess: true,
         locale: "es",
       },
-      { body: "es edited" }
+      { body: "es edited", _overwrite: true }
     );
 
     // The positive half: the pending change exists, keyed under Spanish.
@@ -147,7 +152,7 @@ describe("pending changes per language (integration)", () => {
         overrideAccess: true,
         locale: "es",
       },
-      { body: "es edited" }
+      { body: "es edited", _overwrite: true }
     );
     await entries.updateEntry(
       {
@@ -156,7 +161,7 @@ describe("pending changes per language (integration)", () => {
         overrideAccess: true,
         locale: "en",
       },
-      { body: "en edited" }
+      { body: "en edited", _overwrite: true }
     );
 
     expect(await pendingLocales(id)).toEqual(["en", "es"]);
@@ -176,7 +181,7 @@ describe("pending changes per language (integration)", () => {
         overrideAccess: true,
         locale: "es",
       },
-      { body: "es edited" }
+      { body: "es edited", _overwrite: true }
     );
     await entries.updateEntry(
       {
@@ -185,7 +190,7 @@ describe("pending changes per language (integration)", () => {
         overrideAccess: true,
         locale: "en",
       },
-      { body: "en edited" }
+      { body: "en edited", _overwrite: true }
     );
 
     const published = await entries.updateEntry(
@@ -195,7 +200,7 @@ describe("pending changes per language (integration)", () => {
         overrideAccess: true,
         locale: "es",
       },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
     // Assert the operation SUCCEEDED before asserting its effects: a soft
     // failure would otherwise read as "the promote did nothing".
@@ -223,7 +228,7 @@ describe("pending changes per language (integration)", () => {
 
     const res = await entries.updateEntry(
       { collectionName: COLLECTION, entryId: id, overrideAccess: true },
-      { body: "edited with no locale named" }
+      { body: "edited with no locale named", _overwrite: true }
     );
     expect(res.success).toBe(true);
 
@@ -246,7 +251,7 @@ describe("pending changes per language (integration)", () => {
         overrideAccess: true,
         locale: "es",
       },
-      { body: "es pending" }
+      { body: "es pending", _overwrite: true }
     );
 
     expect(await readDraftBody(entries, id, "es")).toBe("es pending");

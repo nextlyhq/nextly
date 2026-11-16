@@ -40,9 +40,11 @@ import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
 import type { MigrationOutcome } from "../../domains/field-groups/migration/run";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
-import { describeError } from "../../errors/index";
+import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
+import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
-import { validateDatabaseEnv, withAdapter } from "../utils/adapter";
+import { withAdapter } from "../utils/adapter";
+import { requireDatabaseEnv } from "../utils/command-prerequisites";
 
 export interface MigrateFieldGroupsCommandOptions {
   /** Perform the migration. Without it the command previews and writes nothing. */
@@ -65,18 +67,40 @@ export async function runMigrateFieldGroups(
 
   // Fail before touching the network if the database environment is unusable, matching every other
   // command that needs a connection.
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid) {
-    for (const error of dbValidation.errors) logger.error(error);
-    logger.newline();
-    logger.info(
-      "Set DATABASE_URL and optionally DB_DIALECT environment variables."
-    );
-    process.exit(1);
-  }
+  requireDatabaseEnv(logger);
+
+  // The site's per-language storage choice decides which field groups keep a translations table
+  // the rename has to carry with their own table: under `experimental.perLanguageStorage` an
+  // untranslated group keeps one too. A CLI process holds the choice only once it has read the
+  // site's config (`loadConfig` adopts it), so it is read before the migration plans anything. A
+  // site with no config file holds the default, which is off; a config that cannot be read stops
+  // the command rather than planning on a guess.
+  const { loadConfig } = await import("../utils/config-loader");
+  const configResult = await loadConfig({
+    configPath: options.config,
+    cwd: options.cwd,
+    debug: options.verbose,
+  });
+  // Reported beside the direction and mode rather than as a warning: a site without a config file
+  // is ordinary here, and the report's own warnings are about the plan.
+  logger.keyValue(
+    "Config",
+    configResult.configPath ?? "none found (defaults: per-language storage off)"
+  );
 
   const dryRun = options.apply !== true;
   const direction = options.down === true ? "down" : "up";
+
+  // A writing run's renames wait for a busy table within the bounds the environment gives
+  // (`NEXTLY_LOCK_TIMEOUT`, `NEXTLY_LOCK_TIMEOUT_TOTAL`), read before the database is reached so a
+  // bound outside its range refuses the run before anything is read or changed. Each try's notice
+  // is a warning, so `--quiet` keeps it back; the stop itself is an error and is always shown.
+  const busyTable = dryRun
+    ? undefined
+    : {
+        bounds: busyTableBounds({ env: process.env }),
+        notify: (line: string) => logger.warn(line),
+      };
 
   logger.keyValue("Direction", direction);
   logger.keyValue("Mode", dryRun ? "preview (nothing is written)" : "apply");
@@ -119,6 +143,7 @@ export async function runMigrateFieldGroups(
         // catalog or contended for the lock, and restating that decision would make this a second
         // place it could drift from.
         backupConfirmed: options.backupConfirmed === true,
+        ...(busyTable === undefined ? {} : { busyTable }),
       });
 
       reportOutcome(outcome, logger);
@@ -228,42 +253,27 @@ function reportLock(
   logger.info("No migration is currently running.");
 }
 
-export function registerMigrateFieldGroupsCommand(program: Command): void {
-  program
-    .command("migrate:field-groups")
-    .description(
-      "Preview or apply the rename of field-group storage to its current names"
-    )
-    .option(
-      "--apply",
-      "Perform the migration (without this, the command only previews)",
-      false
-    )
-    .option("--down", "Roll a completed migration back", false)
-    .option(
-      "--backup-confirmed",
-      "You confirm a restorable backup exists (required with --apply)",
-      false
-    )
-    .action(
-      async (cmdOptions: MigrateFieldGroupsCommandOptions, cmd: Command) => {
-        const globalOpts = cmd.optsWithGlobals();
-        const context = createContext(globalOpts);
-        try {
-          await runMigrateFieldGroups(
-            {
-              ...cmdOptions,
-              config: globalOpts.config,
-              verbose: globalOpts.verbose,
-              quiet: globalOpts.quiet,
-              cwd: globalOpts.cwd,
-            },
-            context
-          );
-        } catch (error) {
-          context.logger.error(describeError(error));
-          process.exit(1);
-        }
-      }
+/**
+ * The action of `nextly migrate:field-groups`, loaded when it runs.
+ */
+export async function migrateFieldGroupsAction(
+  cmdOptions: MigrateFieldGroupsCommandOptions,
+  cmd: Command
+): Promise<void> {
+  const globalOpts = cmd.optsWithGlobals();
+  const context = createContext(globalOpts);
+  try {
+    await runMigrateFieldGroups(
+      {
+        ...cmdOptions,
+        config: globalOpts.config,
+        verbose: globalOpts.verbose,
+        quiet: globalOpts.quiet,
+        cwd: globalOpts.cwd,
+      },
+      context
     );
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }

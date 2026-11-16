@@ -19,21 +19,14 @@ import { getService } from "../di";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
-import type {
-  MediaService,
-  ListMediaOptions,
-} from "../services/media/media-service";
+import type { MediaService } from "../services/media/media-service";
 import type { RequestContext } from "../services/shared";
 import { resolveClaimedMimeType } from "../services/upload-validation/mime";
 import { UploadMediaInputSchema, UpdateMediaInputSchema } from "../types/media";
 
+import { listMediaOptionsFrom, mediaListResponse } from "./media-list";
 import { readJsonBody } from "./read-json-body";
-import {
-  respondAction,
-  respondDoc,
-  respondList,
-  respondMutation,
-} from "./response-shapes";
+import { respondAction, respondDoc, respondMutation } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -78,37 +71,9 @@ export const GET = withErrorHandler(
     const { searchParams } = new URL(request.url);
     const context = createRequestContext();
 
-    const folderIdParam = searchParams.get("folderId");
-    const options: ListMediaOptions = {
-      page: searchParams.get("page") ? Number(searchParams.get("page")) : 1,
-      limit: searchParams.get("limit") ? Number(searchParams.get("limit")) : 24,
-      search: searchParams.get("search") || undefined,
-      type: (searchParams.get("type") as ListMediaOptions["type"]) || undefined,
-      folderId: folderIdParam === "root" ? "root" : folderIdParam || undefined,
-      sortBy:
-        (searchParams.get("sortBy") as ListMediaOptions["sortBy"]) ||
-        "uploadedAt",
-      sortOrder:
-        (searchParams.get("sortOrder") as ListMediaOptions["sortOrder"]) ||
-        "desc",
-    };
-
+    const options = listMediaOptionsFrom(searchParams);
     const result = await mediaService.listMedia(options, context);
-
-    const page = options.page ?? 1;
-    const limit = Math.max(1, options.limit ?? 24);
-    const total = result.pagination.total;
-    const totalPages = limit > 0 ? Math.ceil(total / limit) : 0;
-    return withTimezoneFormatting(
-      respondList(result.data, {
-        total,
-        page,
-        limit,
-        totalPages,
-        hasNext: page < totalPages,
-        hasPrev: page > 1,
-      })
-    );
+    return withTimezoneFormatting(mediaListResponse(result, options));
   }
 );
 

@@ -21,6 +21,11 @@ import { z } from "zod";
 
 import { actorFromAuthContext } from "../auth/request-actor";
 import { container } from "../di";
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+} from "../domains/auth/system-write-policy";
+import { templateVariablesSchema } from "../domains/email/template-variables";
 import { getCachedNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
 
@@ -83,8 +88,7 @@ async function getEmailTemplateService(): Promise<EmailTemplateService> {
 export const GET = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
     await requireRouteAnyPermission(request, [
-      { action: "read", resource: "email-templates" },
-      { action: "manage", resource: "email-templates" },
+      ...SYSTEM_READ_POLICY.emailTemplates.read.anyOf,
     ]);
 
     const { id } = await context.params;
@@ -119,8 +123,7 @@ export const GET = withErrorHandler(
 export const PATCH = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
     const auth = await requireRouteAnyPermission(request, [
-      { action: "update", resource: "email-templates" },
-      { action: "manage", resource: "email-templates" },
+      ...SYSTEM_WRITE_POLICY.emailTemplates.update.anyOf,
     ]);
 
     const { id } = await context.params;
@@ -135,7 +138,11 @@ export const PATCH = withErrorHandler(
       updateData.htmlContent = body.htmlContent;
     if (body.plainTextContent !== undefined)
       updateData.plainTextContent = body.plainTextContent;
-    if (body.variables !== undefined) updateData.variables = body.variables;
+    if (body.variables !== undefined) {
+      const parsed = templateVariablesSchema.safeParse(body.variables);
+      if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+      updateData.variables = parsed.data;
+    }
     if (body.useLayout !== undefined) updateData.useLayout = body.useLayout;
     if (body.isActive !== undefined) updateData.isActive = body.isActive;
     if (body.providerId !== undefined) updateData.providerId = body.providerId;
@@ -185,8 +192,7 @@ export const PATCH = withErrorHandler(
 export const DELETE = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
     const auth = await requireRouteAnyPermission(request, [
-      { action: "delete", resource: "email-templates" },
-      { action: "manage", resource: "email-templates" },
+      ...SYSTEM_WRITE_POLICY.emailTemplates.delete.anyOf,
     ]);
 
     const { id } = await context.params;

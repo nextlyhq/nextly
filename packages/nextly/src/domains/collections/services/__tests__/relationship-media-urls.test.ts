@@ -54,7 +54,7 @@ const silent = {
 } as never;
 
 describe("media reached through a relationship", () => {
-  it("carries its URLs as the storage wrote them", async () => {
+  it("carries its URLs as the storage wrote them, and no stored sizes", async () => {
     const service = new CollectionRelationshipService(
       adapterWithMedia(),
       silent,
@@ -72,8 +72,8 @@ describe("media reached through a relationship", () => {
     const hero = entry.hero as Record<string, unknown>;
     expect(hero.url).toBe("/uploads/2026/10/a1-hero.png");
     expect(hero.thumbnailUrl).toBe("/uploads/2026/10/b2-thumb_hero.png");
-    expect((hero.sizes as Record<string, { url: string }>).card.url).toBe(
-      "/uploads/2026/10/c3-hero-card.webp"
-    );
+    // The row still holds the sizes an earlier upload stored; image sizes are
+    // no longer offered, so the populated item leaves them out.
+    expect("sizes" in hero).toBe(false);
   });
 });

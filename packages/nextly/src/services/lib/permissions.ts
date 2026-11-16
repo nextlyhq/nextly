@@ -12,7 +12,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 // running in a browser) without breaking server-side build/test.
 // The verify-server-only.mjs CI script asserts the runtime throw.
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 // Phase 4 note: use relative paths instead of TS path aliases.
 // Vitest's vite-tsconfig-paths plugin sometimes fails to resolve
@@ -28,11 +28,19 @@ import type { GrantedPermission } from "../../auth/authenticated-scope";
 import { isDatabaseBusy } from "../../database/errors";
 import { getDialectTables } from "../../database/index";
 import { container } from "../../di/container";
-import { PermissionCacheService } from "../../domains/auth/services/permission-cache-service";
+import {
+  PUBLIC_ROLE_SLUG,
+  publicRoleMade,
+} from "../../domains/auth/services/public-role";
+import {
+  MAX_ROLE_HIERARCHY_DEPTH,
+  walkRoleGraph,
+} from "../../domains/auth/services/role-graph";
 import { NextlyError } from "../../errors/nextly-error";
+import { emptyRetiredPermissionAnswers } from "../../init/retired-permission-answers";
 import { getAuthLogger } from "../../lib/logger";
+import { coalesce } from "../../shared/lib/coalesce";
 import { consoleLogger } from "../../shared/types";
-import type { Logger } from "../shared";
 
 import {
   bumpEpoch,
@@ -44,7 +52,6 @@ import {
 } from "./rbac-epoch";
 import {
   cacheExpiry,
-  roleAssignmentInForce,
   soonestExpiry,
   userRoleAssignmentsInForce,
   type ResolvedRoles,
@@ -96,20 +103,7 @@ function getAdapter(): DrizzleAdapter {
   return container.get<DrizzleAdapter>("adapter");
 }
 
-function getLogger(): Logger {
-  return container.has("logger")
-    ? container.get<Logger>("logger")
-    : consoleLogger;
-}
-
 export type PermissionCheck = { action: string; resource: string };
-
-/**
- * The life the stored-answer service is built with. Nothing is served from
- * the stored answers any more; the service is only asked to empty them, which
- * this does not affect.
- */
-const STORED_ANSWER_TTL_SECONDS = 300;
 
 // The configured dialect's tables, looked up on each use. Kept for the whole
 // process, the first dialect's definitions answered for every later one, and
@@ -239,9 +233,6 @@ class PermissionChecker {
     );
     if (direct.size === 0) return { roleIds: direct, validUntil };
 
-    const all = new Set<string>(direct);
-    const queue: string[] = Array.from(direct);
-    const visited = new Set<string>(queue);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { roleInherits } = this.t as any;
 
@@ -252,33 +243,29 @@ class PermissionChecker {
     // symmetric — every role reachable from the user's own would count, and a
     // base role would collect everything the roles built on top of it hold.
     // Matches RoleInheritanceService.listDescendantRoles, which the rest of
-    // the RBAC services resolve through.
-    while (queue.length > 0) {
-      const batch = queue.splice(0, 50);
-
-      const childRows = await rbacQuery(executor)
-        .select({ childRoleId: roleInherits.childRoleId })
-        .from(roleInherits)
-        .where(inArray(roleInherits.parentRoleId, batch));
-
-      for (const r of childRows as Array<{ childRoleId: string }>) {
-        const childRoleId = String(r.childRoleId);
-        if (!visited.has(childRoleId)) {
-          visited.add(childRoleId);
-          all.add(childRoleId);
-          queue.push(childRoleId);
-        }
-      }
-
-      if (visited.size > 2000) {
-        getAuthLogger()?.log?.("warn", {
-          category: "auth",
-          op: "error",
-          userId,
-        });
-        break;
-      }
+    // the RBAC services resolve through. The user's own roles count toward
+    // the limit, and a walk cut short there is used as far as it reached.
+    const walk = await walkRoleGraph(
+      Array.from(direct),
+      async batch =>
+        (
+          (await rbacQuery(executor)
+            .select({ childRoleId: roleInherits.childRoleId })
+            .from(roleInherits)
+            .where(inArray(roleInherits.parentRoleId, [...batch]))) as Array<{
+            childRoleId: string;
+          }>
+        ).map(r => r.childRoleId),
+      { limit: MAX_ROLE_HIERARCHY_DEPTH }
+    );
+    if (!walk.complete) {
+      getAuthLogger()?.log?.("warn", {
+        category: "auth",
+        op: "error",
+        userId,
+      });
     }
+    const all = new Set<string>([...direct, ...walk.ids]);
     return { roleIds: all, validUntil };
   }
 
@@ -397,6 +384,58 @@ const ACTOR_CACHE_MAX_ENTRIES = 10_000;
 const actorCache = new Map<string, KeptActor>();
 
 /**
+ * The resolutions under way, by user and the role version each began under.
+ *
+ * The requests of one admin screen arrive together, and when the user's
+ * actor is not kept (the first screen after a start, or the minute after it
+ * was kept) each of them would resolve it: sixteen walks of the same roles,
+ * four statements each, where one answers them all. A request arriving while
+ * a resolution for its user is under way is handed that one instead
+ * (`coalesce`), on the same rules as keeping:
+ * - the role version is in the key, so a request that read a newer version
+ *   than a resolution began under never joins it, and a role change made in
+ *   this process applies at once to every request after it;
+ * - while a retirement runs, nothing is joined, as nothing is kept;
+ * - a failed resolution rejects every request that joined it, each failing
+ *   closed, and is never kept, so the next request resolves again.
+ * Authorization state for one user, keyed by that user: never an answer, and
+ * never shared across users.
+ */
+const actorLoads = new Map<string, Promise<ResolvedActor>>();
+
+/**
+ * Whether what this process kept under `key` may still be served: the role
+ * version it was read under stands and it has not expired. When it may, the
+ * request's memo of `key` is told when it expires, so a request that keeps
+ * serving its own copy never outlives this one: without that, a request
+ * running past the minute would go on serving what a change made through
+ * another instance, unseen by the role version, had replaced. Shared by
+ * every cache here, so each is bounded the same way.
+ */
+function keptStillServes(
+  key: string,
+  kept: { readonly epoch: string; readonly expiresAt: number }
+): boolean {
+  if (!stampIsCurrent(kept.epoch) || kept.expiresAt <= Date.now()) {
+    return false;
+  }
+  answersHoldUntil(key, kept.expiresAt);
+  return true;
+}
+
+/**
+ * When what was read under `key` just now stops being served: after the
+ * minute, or at `validUntil`, the soonest expiry of a role assignment it came
+ * from, whichever is first. The request's memo of `key` is told too, so
+ * nothing the request keeps outlives what this process would keep.
+ */
+function keptUntil(key: string, validUntil: number | undefined): number {
+  const expiresAt = cacheExpiry(Date.now(), ACTOR_CACHE_TTL_MS, validUntil);
+  answersHoldUntil(key, expiresAt);
+  return expiresAt;
+}
+
+/**
  * The user's actor, read now with nothing kept: one walk of their roles, then
  * those roles' slugs and grants. Throws on a failed read.
  */
@@ -427,6 +466,51 @@ async function loadActor(userId: string): Promise<ResolvedActor> {
 }
 
 /**
+ * How many times a request resolves the user again because the resolution it
+ * was handed outlived a role assignment it was built from, before it gives up
+ * and fails closed.
+ */
+const EXPIRED_RESOLUTION_RETRIES = 3;
+
+/**
+ * `actor`, when every role assignment it was built from is still in force,
+ * and otherwise the user resolved again, alone.
+ *
+ * An assignment's expiry moves no role version, so the version in the key
+ * does not keep a request from joining a resolution that read an assignment
+ * which has expired since: one whose later reads (inheritance, grants) ran
+ * past the moment it ended, or one a request joined after it ended. Served,
+ * that resolution would hand the request the ended role's grants, where a
+ * resolution of its own would have read the assignment as ended. So
+ * whichever request receives it, the one that began it included, checks the
+ * soonest expiry it carries (`validUntil`) against the time now, and resolves
+ * the user again on its own where it has passed: never joined, so never
+ * across an expiry. A fresh resolution leaves out every assignment ended when
+ * it read them; one that itself outlives another assignment is resolved
+ * again, a few times at most, then refused (the caller fails closed).
+ */
+async function stillInForce(
+  userId: string,
+  actor: ResolvedActor
+): Promise<ResolvedActor> {
+  let current = actor;
+  for (let retry = 0; ; retry += 1) {
+    if (current.validUntil === undefined || current.validUntil > Date.now()) {
+      return current;
+    }
+    if (retry === EXPIRED_RESOLUTION_RETRIES) {
+      throw NextlyError.internal({
+        logContext: {
+          reason:
+            "every resolution of the user's roles outlived a role assignment it read",
+        },
+      });
+    }
+    current = await loadActor(userId);
+  }
+}
+
+/**
  * The user's actor on the pool: the one this process kept, while the role
  * version it was resolved under stands and before it expires, and otherwise
  * read now and kept.
@@ -442,22 +526,21 @@ async function actorOnPool(userId: string): Promise<ResolvedActor> {
   const kept = actorCache.get(userId);
   if (kept) {
     actorCache.delete(userId);
-    if (stampIsCurrent(kept.epoch) && kept.expiresAt > Date.now()) {
+    if (keptStillServes(userId, kept)) {
       // Most recently asked last, so the oldest-asked goes first when full.
       actorCache.set(userId, kept);
-      answersHoldUntil(userId, kept.expiresAt);
       return kept.actor;
     }
   }
-  const actor = await loadActor(userId);
-  const expiresAt = cacheExpiry(
-    Date.now(),
-    ACTOR_CACHE_TTL_MS,
-    actor.validUntil
-  );
-  // Nothing the request keeps about this user outlives what this process
-  // would keep: these roles, and the kept actor's own life.
-  answersHoldUntil(userId, expiresAt);
+  // Joined only while the version this request read is still the one in
+  // force: checked here, after the kept actor, with no await before the join.
+  const shared = stampIsCurrent(resolvedUnder)
+    ? await coalesce(actorLoads, `${userId}\u0000${resolvedUnder}`, () =>
+        loadActor(userId)
+      )
+    : await loadActor(userId);
+  const actor = await stillInForce(userId, shared);
+  const expiresAt = keptUntil(userId, actor.validUntil);
   if (stampIsCurrent(resolvedUnder)) {
     if (actorCache.size >= ACTOR_CACHE_MAX_ENTRIES) {
       const oldest = actorCache.keys().next().value;
@@ -478,6 +561,136 @@ async function actorOnPool(userId: string): Promise<ResolvedActor> {
  */
 function actorThisRequest(userId: string): Promise<ResolvedActor> {
   return keptForRequest(userId, "actor", () => actorOnPool(userId));
+}
+
+/** The Public role's grants as this process keeps them, as an actor is kept. */
+interface KeptPublicGrants {
+  readonly grants: readonly GrantedPermission[];
+  /** The role version they were read under. */
+  readonly epoch: string;
+  readonly expiresAt: number;
+}
+
+let publicGrantsKept: KeptPublicGrants | undefined;
+
+/**
+ * The key the Public role's grants are kept under for a request, beside each
+ * user's. A role slug with a prefix no user id carries, so it names no user.
+ */
+const PUBLIC_GRANTS_KEY = `role:${PUBLIC_ROLE_SLUG}`;
+
+/** What reading the Public role's id needs of `nextly_meta`. */
+interface MetaReader {
+  get<T>(key: string, executor?: unknown): Promise<T | null>;
+}
+
+/**
+ * A database of the caller's own that the Public role is read on, as a
+ * signed-in user's grants are read on it (`hasPermission`'s `dialect`): the
+ * reader of that database's `nextly_meta`, and the dialect its role and
+ * permission tables are named by. Absent, the configured database is read,
+ * through the global container, which a setup holding its own database may
+ * not have filled, or may have filled for another instance.
+ */
+export interface PublicRoleDatabase {
+  readonly meta: MetaReader;
+  readonly dialect: string;
+}
+
+/**
+ * The Public role's id, once boot seeding has recorded making it, and `null`
+ * before: until then the slug may still be held by a site's own role, whose
+ * grants are not visitors'. Read on `own` where given, else the configured
+ * database. Throws on a failed read.
+ */
+async function publicRoleId(
+  executor?: unknown,
+  own?: PublicRoleDatabase
+): Promise<string | null> {
+  const meta = own?.meta ?? container.get<MetaReader>("metaService");
+  const made = await publicRoleMade({
+    get: <T>(key: string) => meta.get<T>(key, executor),
+  });
+  if (!made) return null;
+  const { roles } = own ? getDialectTables(own.dialect) : getTablesLazy();
+  const [row] = await rbacQuery(executor)
+    .select({ id: roles.id })
+    .from(roles)
+    .where(eq(roles.slug, PUBLIC_ROLE_SLUG))
+    .limit(1);
+  return row === undefined ? null : String(row.id);
+}
+
+/**
+ * The Public role's grants, read now with nothing kept: none while the role is
+ * not made. The role inherits no other (its writers refuse that), so its own
+ * grants are all it holds. Throws on a failed read.
+ */
+async function loadPublicGrants(
+  executor?: unknown,
+  own?: PublicRoleDatabase
+): Promise<GrantedPermission[]> {
+  const roleId = await publicRoleId(executor, own);
+  if (roleId === null) return [];
+  return grantsOf(PUBLIC_GRANTS_KEY, new Set([roleId]), executor, own?.dialect);
+}
+
+/**
+ * The Public role's grants on the pool: what this process kept, while the role
+ * version they were read under stands and before they expire, and otherwise
+ * read now and kept, exactly as a user's actor is (`actorOnPool`).
+ */
+async function publicGrantsOnPool(): Promise<readonly GrantedPermission[]> {
+  const resolvedUnder = await refreshEpoch();
+  const kept = publicGrantsKept;
+  if (kept && keptStillServes(PUBLIC_GRANTS_KEY, kept)) return kept.grants;
+  const grants = await loadPublicGrants();
+  // No role assignment is behind them, so only the minute bounds them.
+  const expiresAt = keptUntil(PUBLIC_GRANTS_KEY, undefined);
+  if (stampIsCurrent(resolvedUnder)) {
+    publicGrantsKept = { grants, epoch: resolvedUnder, expiresAt };
+  }
+  return grants;
+}
+
+/**
+ * The permissions the Public role grants, which are what a visitor holds, as
+ * their rows name them, sorted by slug. None until boot seeding has made the
+ * role.
+ *
+ * With `executor`, read on the caller's transaction and kept nowhere, as a
+ * user's lookups are inside one; with `own` too, on a database of the
+ * caller's own (`executor` its handle), by that database's `nextly_meta` and
+ * dialect. Otherwise read once per request on the pool, and kept per process
+ * behind the role version.
+ *
+ * A lookup that fails refuses rather than answering empty, as a user's do:
+ * an empty list would judge visitors by a role that holds nothing, which is
+ * not the role the site configured.
+ *
+ * @throws NextlyError when the Public role or its grants cannot be read.
+ */
+export async function listPublicGrants(
+  executor?: unknown,
+  own?: PublicRoleDatabase
+): Promise<GrantedPermission[]> {
+  try {
+    // A database of the caller's own is never answered from, or kept in,
+    // what is kept for the configured one.
+    if (executor !== undefined || own !== undefined) {
+      return await loadPublicGrants(executor, own);
+    }
+    // A list of its own for each caller: a rule handed it may change it.
+    return [
+      ...(await keptForRequest(
+        PUBLIC_GRANTS_KEY,
+        "grants",
+        publicGrantsOnPool
+      )),
+    ];
+  } catch (cause) {
+    throw unreadable(cause, { reason: "public-grants-unreadable" });
+  }
 }
 
 /**
@@ -657,10 +870,9 @@ export async function listEffectivePermissions(
  * the rows name them: each one's stored slug and the action and resource it
  * grants. Sorted by slug, each slug once.
  *
- * The rows rather than one spelling of them, because a rule is handed the
- * stored slug (`read-posts`) and, for one release, the earlier
- * `<resource>:<action>` spelling too, and a slug cannot be rebuilt from its
- * parts: `manage-api-keys` grants `update` on `api-keys`.
+ * The rows rather than the slugs alone, because a slug cannot be split back
+ * into the action and resource it grants: `manage-api-keys` grants `update`
+ * on `api-keys`. A rule is handed each one's stored slug (`read-posts`).
  *
  * Empty for a missing user id. A lookup that fails refuses rather than
  * answering empty: an empty list only denies a rule that asks for a
@@ -744,13 +956,16 @@ async function loadEffectiveGrants(
 async function grantsOf(
   userId: string,
   roleIds: ReadonlySet<string>,
-  executor?: unknown
+  executor?: unknown,
+  // The dialect `executor` reads, when it is a database of the caller's own;
+  // absent, the configured one.
+  dialect?: string
 ): Promise<GrantedPermission[]> {
   if (roleIds.size === 0) {
     return [];
   }
 
-  const t = getTablesLazy();
+  const t = dialect ? getDialectTables(dialect) : getTablesLazy();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { rolePermissions, permissions } = t as any;
 
@@ -838,12 +1053,12 @@ export function rbacRevision(): string {
  * The failing direction is a missed cache write, which costs one re-resolution.
  *
  * A retirement that is still running counts as not current, whatever the
- * numbers say. Clearing the shared tier is an awaited database write, and the
- * revision cannot be advanced once at the end to cover it: a check that starts
- * and finishes entirely inside that window reads a row the tombstone has not
- * reached yet, compares two numbers that have not moved since it captured one,
- * and promotes the retired answer into a tier that outlives the retirement.
- * Nothing is cacheable while the caches are being emptied.
+ * numbers say. A batch of permission writes holds one open for its whole
+ * length, and publishing the role version, after emptying the retired stored
+ * answers while they exist, is itself awaited: a check that starts and
+ * finishes inside either reads rows mid-change, compares two
+ * numbers that have not moved since it captured one, and would keep an answer
+ * the change is about to retire. Nothing is cacheable while a retirement runs.
  */
 export function resolvedUnderCurrentRevision(revision: string): boolean {
   // Nothing of its own left. Whether a retirement is running was the one thing
@@ -855,9 +1070,10 @@ export function resolvedUnderCurrentRevision(revision: string): boolean {
 }
 
 /**
- * Invalidate permission cache (both in-memory and database tiers).
+ * Retire what is kept about users' access: the actors this process keeps, and,
+ * by publishing the role version, what every other instance keeps.
  *
- * This function clears cached permissions when user roles or role permissions change.
+ * Called when user roles or role permissions change.
  *
  * @param hint - Invalidation hint with userId or roleId
  * @param hint.userId - Invalidate all permissions for this user
@@ -882,8 +1098,9 @@ export function resolvedUnderCurrentRevision(revision: string): boolean {
  * reached no cache at all — a role-based key kept a renamed slug and a
  * super-admin's key kept a deleted grant until their entries aged out.
  *
- * Clears the process-local tiers, tombstones the shared one, and advances the
- * revision so derived caches in this process retire with them.
+ * Forgets every actor this process keeps and publishes the role version, which
+ * retires what every instance keeps and the caches derived from it, an API
+ * key's copied grants among them.
  */
 /**
  * The batch the CURRENT operation is part of, or nothing if it is not in one.
@@ -899,13 +1116,13 @@ export function resolvedUnderCurrentRevision(revision: string): boolean {
 const permissionSweep = new AsyncLocalStorage<{ dirty: boolean }>();
 
 /**
- * Run a batch of permission-row writes under ONE table-wide invalidation.
+ * Run a batch of permission-row writes under ONE publish of the role version.
  *
- * The database tier is tombstoned by an unfiltered update of every cached row,
+ * Every publish sends every instance back to read its users' access again,
  * which is the right cost once and the wrong cost per row: a seeder calls
- * `ensurePermission` once per permission, so a single new collection rewrote
- * and locked the whole cache table six times over, each after the first
- * already having expired everything the next one would find.
+ * `ensurePermission` once per permission, so a single new collection would
+ * publish six times over, each after the first retiring access the previous
+ * one had already retired.
  *
  * Nested batches collapse into the outermost, and the flush happens on the way
  * out whether the batch succeeded or threw — a partial write still changed
@@ -922,14 +1139,20 @@ export async function inPermissionSweep<T>(run: () => Promise<T>): Promise<T> {
   // Open for the batch's whole length, not from its first write. A batch exists
   // to write permission rows, and the alternative is a window between the run
   // starting and its first write in which answers derived from rows the batch
-  // is about to change are still being filed as current.
-  return duringRetirement(async () => {
-    try {
-      return await permissionSweep.run(batch, run);
-    } finally {
-      if (batch.dirty) await flushPermissionCaches();
-    }
-  });
+  // is about to change are still being filed as current. The content expiry
+  // the batch owes is queued ahead of its first write and taken by the flush
+  // at its end; a batch that writes nothing queues nothing.
+  return aheadOfGrantsChange(
+    () =>
+      duringRetirement(async () => {
+        try {
+          return await permissionSweep.run(batch, run);
+        } finally {
+          if (batch.dirty) await flushPermissionCaches();
+        }
+      }),
+    { queue: false }
+  );
 }
 
 /**
@@ -940,6 +1163,8 @@ export async function inPermissionSweep<T>(run: () => Promise<T>): Promise<T> {
  */
 function clearInMemoryTiers(): void {
   actorCache.clear();
+  actorLoads.clear();
+  publicGrantsKept = undefined;
 }
 
 /**
@@ -965,17 +1190,10 @@ export async function invalidateAllPermissionCaches(): Promise<void> {
   const batch = permissionSweep.getStore();
   if (batch) {
     batch.dirty = true;
-    // Retired here, announced at the exit. The tiers this process holds cost
-    // nothing to empty, so an answer it is already holding does not outlive the
-    // row it came from; what the batch defers is the unfiltered rewrite of
-    // every STORED row, which is the cost it exists for.
-    //
-    // The epoch stays where it is until that rewrite has happened. Publishing
-    // per write would tell every other instance to drop its in-memory answer
-    // and read a stored row this batch has deliberately not tombstoned yet,
-    // filing it under the new epoch where the batch's own exit cannot reach it
-    // — and for as long as the batch runs, which for a seeder is not bounded by
-    // anything this module controls.
+    // Retired here, announced at the exit. The actors this process keeps cost
+    // nothing to forget, so none outlives the row it came from. The role
+    // version is published once rather than per write: a batch can make many
+    // writes, and every instance reads its actors again after each publish.
     clearInMemoryTiers();
     return;
   }
@@ -1008,62 +1226,70 @@ export async function writingPermissions<TTable, T>(
   permissions: TTable,
   run: (permissions: TTable) => Promise<T>
 ): Promise<T> {
-  try {
-    return await run(permissions);
-  } finally {
-    await invalidateAllPermissionCaches();
-  }
+  // The content expiry the write owes is queued before the write starts, so it
+  // is owed in the database before the write commits; the expiry the
+  // retirement below reaches (or a sweep's, at its end) takes it.
+  return aheadOfGrantsChange(async () => {
+    try {
+      return await run(permissions);
+    } finally {
+      await invalidateAllPermissionCaches();
+    }
+  });
 }
 
 /**
- * Empty the stored answers, then publish the role version that retires every
- * actor kept in every instance.
+ * {@link aheadOfGrantsChange}, loaded when a gate is entered rather than with
+ * this module, which most of the package imports, for the reason
+ * `expireContentReads` gives.
+ */
+async function aheadOfGrantsChange<T>(
+  write: () => Promise<T>,
+  options?: { queue?: boolean }
+): Promise<T> {
+  const { aheadOfGrantsChange: ahead } = await import(
+    "../../domains/flush-content-change"
+  );
+  return ahead(write, options);
+}
+
+/**
+ * Empty the retired stored answers, then publish the role version that retires
+ * every actor kept in every instance.
  *
  * Nothing here reads the stored answers, but an instance still running an
- * earlier release does, during a rolling upgrade, and the version is the only
- * signal it receives. So a retirement that failed publishes nothing: published,
- * the version would tell such an instance to drop its in-memory answer and read
- * a stored row the failed retirement left live, filing it under the new
- * version where nothing left to happen can reach it. Withheld, those rows are
- * served until their own expiry, as they would have been. This process still
- * retires what it kept: its actors were dropped before this ran, and
- * everything else it filed under the role version, an API key's copied grants
- * among them, stops being current here.
+ * earlier release does, while the table exists, and the version is the only
+ * signal it receives; see `init/retired-permission-answers`. So a retirement
+ * whose emptying failed publishes nothing: published, the version would tell
+ * such an instance to drop its in-memory answer and read a stored row the
+ * failure left live, filing it under the new version where nothing left to
+ * happen can reach it. Withheld, those rows are served until their own expiry,
+ * as they would have been. This process still retires what it kept: its actors
+ * were dropped before this ran, and everything else it filed under the role
+ * version, an API key's copied grants among them, stops being current here.
  *
  * The depth is held across both steps, so nothing this process resolves while
- * they run is kept as current; see {@link resolvedUnderCurrentRevision}.
+ * they run is kept as current; see {@link resolvedUnderCurrentRevision}. A
+ * version write that fails is owed rather than lost; see `bumpEpoch`.
  */
-async function retireSharedThenPublish(
-  // Whatever the retirement answers is discarded: how many rows a tombstone
-  // touched is not a signal anything here acts on, and a driver that reports it
-  // differently must not become a branch. Whether it THREW is the signal.
-  retireShared: () => Promise<unknown>,
-  logContext: Record<string, unknown> = {}
-): Promise<void> {
-  return duringRetirement(async () => {
-    // Where the stored answers were turned off, no instance on the release
-    // that reads them reads any, so there is nothing to empty and nothing to
+async function publishRetirement(): Promise<void> {
+  await duringRetirement(async () => {
+    // Where the stored answers were turned off, no instance on a release that
+    // reads them reads any, so there is nothing to empty and nothing to
     // withhold the version for.
     if (!storedAnswersReadElsewhere()) {
       await bumpEpoch();
       return;
     }
     try {
-      // A later release drops the table once nothing reads it, possibly while
-      // this one still serves. Gone, it holds nothing to empty, and failing on
-      // it would withhold the version from every other instance. Asked inside
-      // this `try`, so a probe that fails is handled as a failed emptying.
-      if (await getAdapter().tableExists(STORED_ANSWERS_TABLE)) {
-        await retireShared();
-      }
+      await emptyRetiredPermissionAnswers(getAdapter());
     } catch (error) {
       // Reported, not thrown: an invalidation failure must not break the
       // write that raised it. Unpublished, though, for the reason above.
       getAuthLogger()?.log?.("error", {
         category: "auth",
         op: "cache",
-        message: "DB cache invalidation failed",
-        ...logContext,
+        message: "Emptying the retired stored permission answers failed",
         error: String(error),
       });
       retireHereOnly();
@@ -1072,9 +1298,6 @@ async function retireSharedThenPublish(
     await bumpEpoch();
   });
 }
-
-/** The table the earlier release stored permission answers in. */
-const STORED_ANSWERS_TABLE = "user_permission_cache";
 
 /**
  * Whether an instance on the release that reads the stored answers may be
@@ -1090,14 +1313,26 @@ function storedAnswersReadElsewhere(): boolean {
   return setting !== "false" && setting !== "0";
 }
 
+/**
+ * Retire everything derived from permission rows, after one was written: the caches here, and
+ * the cached content reads (`expireContentAfterGrantsChange`), since a permission's rows decide
+ * what every role holding it, the Public role among them, may read.
+ */
 async function flushPermissionCaches(): Promise<void> {
   clearInMemoryTiers();
+  await publishRetirement();
+  await expireContentReads();
+}
 
-  await retireSharedThenPublish(() =>
-    new PermissionCacheService(getAdapter(), getLogger(), {
-      cacheTtlSeconds: STORED_ANSWER_TTL_SECONDS,
-    }).invalidateAll()
+/**
+ * The cached content reads expired after a change to grants. Loaded when it runs, so this module,
+ * which most of the package imports, does not import the content cache's.
+ */
+async function expireContentReads(): Promise<void> {
+  const { expireContentAfterGrantsChange } = await import(
+    "../../domains/flush-content-change"
   );
+  await expireContentAfterGrantsChange();
 }
 
 export async function invalidatePermissionCache(
@@ -1113,32 +1348,16 @@ export async function invalidatePermissionCache(
   // an actor is one walk of a user's roles. A role change is rare; guessing
   // at the subset is how a demotion survives.
   if (userId) actorCache.delete(userId);
-  if (roleId) actorCache.clear();
+  // The Public role's grants go too: the role changed may be Public.
+  if (roleId) {
+    actorCache.clear();
+    publicGrantsKept = undefined;
+  }
 
-  // Invalidate the database tier (Tier 2), and only then announce it. Same
-  // ordering as `flushPermissionCaches`, for the reason stated on
-  // `retireSharedThenPublish`: a scoped tombstone is still an awaited write, so
-  // announcing first still lets another instance promote the row it is about to
-  // remove into a place the removal cannot reach.
-  await retireSharedThenPublish(
-    async () => {
-      const cacheService = new PermissionCacheService(
-        getAdapter(),
-        getLogger(),
-        {
-          cacheTtlSeconds: STORED_ANSWER_TTL_SECONDS,
-        }
-      );
-
-      if (userId) {
-        await cacheService.invalidateByUser(userId);
-      }
-      if (roleId) {
-        await cacheService.invalidateByRole(roleId);
-      }
-    },
-    { userId, roleId }
-  );
+  await publishRetirement();
+  // What a role grants changed, so the cached content reads go too. A user's roles changing
+  // expires none: a read cached for a user is keyed by the roles it was read under.
+  if (roleId) await expireContentReads();
 }
 
 /**
@@ -1292,62 +1511,6 @@ async function decideSuperAdmin(
     .limit(1);
 
   return superAdmin.length > 0;
-}
-
-/**
- * Check if any user OTHER than the given userId has the super-admin role.
- *
- * Used for last-super-admin removal protection: prevents stripping the
- * super_admin role from a user if they are the only super-admin in the system.
- *
- * @param excludeUserId - The user ID to exclude from the check
- * @returns `true` if at least one other user has the super-admin role
- */
-export async function hasSuperAdminExcluding(
-  excludeUserId: string
-): Promise<boolean> {
-  if (!excludeUserId) return false;
-
-  try {
-    const t = getTablesLazy();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { roles, userRoles } = t as any;
-
-    // Find the super-admin role ID
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const superAdminRole = await (getDb() as any)
-      .select({ id: roles.id })
-      .from(roles)
-      .where(eq(roles.slug, "super-admin"))
-      .limit(1);
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if ((superAdminRole as any[]).length === 0) return false;
-
-    const superAdminRoleId = superAdminRole[0]!.id;
-
-    // Check if any other user holds the super-admin role. Held means in force
-    // now: an expired assignment grants nothing, so it cannot be the one that
-    // keeps the site administrable once this user's role is removed.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const otherSuperAdmins = await (getDb() as any)
-      .select({ userId: userRoles.userId })
-      .from(userRoles)
-      .where(
-        and(
-          eq(userRoles.roleId, superAdminRoleId),
-          ne(userRoles.userId, excludeUserId),
-          roleAssignmentInForce(userRoles, new Date())
-        )
-      )
-      .limit(1);
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (otherSuperAdmins as any[]).length > 0;
-  } catch {
-    // fail-open: don't block operations if check fails
-    return true;
-  }
 }
 
 /**

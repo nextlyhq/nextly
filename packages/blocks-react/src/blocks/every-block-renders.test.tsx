@@ -155,7 +155,11 @@ describe("every block in the library", () => {
     ).toEqual([]);
   });
 
-  it.each(BLOCKS.map(block => [block.name, block] as const))(
+  it.each(
+    BLOCKS.filter(block => !DRAWS_ONLY_COMPOSED.has(block.name)).map(
+      block => [block.name, block] as const
+    )
+  )(
     "%s renders its own element from its example props",
     async (name, block) => {
       const markup = await renderOf(block);
@@ -167,4 +171,40 @@ describe("every block in the library", () => {
       ).toContain(MARKER);
     }
   );
+
+  it("renders Entry content's own element once an entry's blocks are composed into it", async () => {
+    // The one block set aside above, held to the same marker once it has
+    // something to draw: the entry's blocks, composed into its slot as the
+    // host composes them.
+    const block = BLOCKS.find(each => DRAWS_ONLY_COMPOSED.has(each.name));
+    expect(block).toBeDefined();
+    if (block === undefined) return;
+    const props = { field: "body" };
+    const composed = {
+      ...args(block, props),
+      node: {
+        ...nodeFor(block, props),
+        slots: {
+          content: [{ id: "n-1:p", type: "core/text", version: 1, props: {} }],
+        },
+      },
+    };
+    const element = (await block.render(
+      composed as never
+    )) as ReactElement | null;
+    expect(element === null ? "" : renderToStaticMarkup(element)).toContain(
+      MARKER
+    );
+  });
 });
+
+/**
+ * The blocks that draw nothing for a visitor until the host gives them
+ * something to draw, by design: Entry content shows the entry's own blocks,
+ * and where there are none to show (no entry, an empty field, one the public
+ * may not read) it puts no element and no data on the page. Its own example
+ * has no entry, so it is held to the marker with composed content instead.
+ */
+const DRAWS_ONLY_COMPOSED: ReadonlySet<string> = new Set([
+  "core/entry-content",
+]);

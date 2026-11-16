@@ -2,11 +2,12 @@
  * The Data panel's sample JSON is a named code field that reports what the
  * author types, and says when it doesn't parse.
  */
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { EditorView } from "@uiw/react-codemirror";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { DataRail } from "../DataRail";
+import type { TemplateVariableCheck } from "../useTemplateVariables";
 
 beforeAll(
   () =>
@@ -14,7 +15,13 @@ beforeAll(
   60_000
 );
 
-function mount(sampleError: string | null = null) {
+const CLEAR: TemplateVariableCheck = { undeclared: [], missing: [] };
+
+function mount(
+  sampleError: string | null = null,
+  check: TemplateVariableCheck = CLEAR,
+  onDeclare?: (name: string) => void
+) {
   const onSampleChange = vi.fn();
   render(
     <DataRail
@@ -22,7 +29,8 @@ function mount(sampleError: string | null = null) {
       onSampleChange={onSampleChange}
       onReset={() => {}}
       sampleError={sampleError}
-      unknownVariables={[]}
+      check={check}
+      onDeclare={onDeclare}
     />
   );
   return onSampleChange;
@@ -67,5 +75,44 @@ describe("the Data panel", () => {
     );
     expect(field.getAttribute("aria-invalid")).toBe("false");
     expect(field.getAttribute("aria-describedby")).toBeNull();
+  });
+});
+
+describe("the Data panel's variable check", () => {
+  const check: TemplateVariableCheck = {
+    undeclared: [{ name: "order", paths: ["order.number", "order.lines"] }],
+    missing: ["order.number", "currency"],
+  };
+
+  it("lists a variable used but not declared, by every path it's read by, and declares it", () => {
+    const onDeclare = vi.fn();
+    mount(null, check, onDeclare);
+    const undeclared = screen.getByTestId("undeclared-variables");
+    expect(undeclared.textContent).toContain("{{order.number}}");
+    expect(undeclared.textContent).toContain("{{order.lines}}");
+    fireEvent.click(screen.getByRole("button", { name: "Declare order" }));
+    expect(onDeclare).toHaveBeenCalledWith("order");
+  });
+
+  it("offers no Declare where the declarations are locked", () => {
+    mount(null, check);
+    expect(screen.getByTestId("undeclared-variables")).toBeDefined();
+    expect(screen.queryByRole("button", { name: /^Declare/ })).toBeNull();
+  });
+
+  it("lists what shows blank: no test value and no fallback", () => {
+    mount(null, check);
+    const missing = screen.getByTestId("missing-values");
+    expect(missing.textContent).toContain("{{currency}}");
+    expect(missing.textContent).toContain("{{order.number}}");
+  });
+
+  it("says so when everything used is declared and has a value", () => {
+    mount();
+    expect(screen.queryByTestId("undeclared-variables")).toBeNull();
+    expect(screen.queryByTestId("missing-values")).toBeNull();
+    expect(
+      screen.getByText("Every variable used is declared and has a value.")
+    ).toBeDefined();
   });
 });

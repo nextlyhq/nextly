@@ -15,12 +15,37 @@
  * @module components/features/versions/document-history-context
  */
 
+import type { FieldConfig } from "nextly/config";
 import type { Context } from "react";
 import { createContext, useContext } from "react";
 
 import type { VersionMeta, VersionScope } from "@admin/services/versionApi";
 
+import type { EditorRestore } from "./editor-restore";
 import type { Predecessor } from "./version-pairing";
+
+/**
+ * The editor's side of a restore: where the chosen values go, and what the
+ * restore's field list needs to know of the form. Provided by the editor that
+ * holds the form; absent where no editor does.
+ */
+export interface EditorRestoreSurface {
+  restore: EditorRestore;
+  /** The content type's fields, as the form draws them. */
+  fields: FieldConfig[];
+  /** The form's values now. */
+  currentValues: () => Record<string, unknown>;
+  /** The fields with unsaved edits. */
+  dirtyFields: () => ReadonlySet<string>;
+  /** Whether the person may change a field in this editor. */
+  canEdit: (name: string) => boolean;
+  /** A translated document's translated fields; absent when not translated. */
+  translatable?: ReadonlySet<string>;
+  /** The language a translated document's restore writes, by name. */
+  language?: string;
+  /** That language's code: a version of another language is not restored here. */
+  locale?: string;
+}
 
 export interface ViewedVersion {
   versionNo: number;
@@ -33,6 +58,12 @@ export interface ViewedVersion {
   snapshot: unknown;
   /** The locale it was captured in, when the document is localized. */
   locale: string | null;
+  /**
+   * The fields the read held back, by their full paths, a list row named by
+   * its own index (`items.1.secret`). Empty while the read is in flight, and
+   * for a reader who may read all of it.
+   */
+  withheld: readonly string[];
   /** True while the snapshot is being read. */
   isLoading: boolean;
   /** Set when the read failed, so the document says so rather than blanking. */
@@ -93,6 +124,14 @@ export interface DocumentHistoryValue {
   /** Present only while the history panel is mounted to provide it. */
   restore: RestoreAffordance | null;
   setRestore: (restore: RestoreAffordance | null) => void;
+  /**
+   * The document's version, as the editor holds it in a language, for a
+   * write the history makes in that language (a restore): absent where no
+   * editor publishes it.
+   */
+  versionFor?: (locale: string | null) => Promise<string | undefined>;
+  /** The editor a restore puts values back into; see `EditorRestoreSurface`. */
+  editor?: EditorRestoreSurface;
 }
 
 /**

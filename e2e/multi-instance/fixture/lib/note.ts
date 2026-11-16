@@ -1,0 +1,81 @@
+/**
+ * The fixture's one read and one write, shared by its routes and its script.
+ *
+ * The read is cached as a site's public reads are, by `cachedFind` with the
+ * collection's tags and no lifetime, so only an expiry of `notes` makes it
+ * read the database again. The write is a Direct API update, which expires
+ * those tags wherever it runs.
+ */
+// Registers Nextly's cached reads under Cache Components (see the file).
+import "../nextly/cached-read";
+import { getNextly, type Nextly } from "nextly";
+import { cachedFind, nextlyTags } from "nextly/runtime";
+
+import config from "../nextly.config";
+
+/** The slug of the row both instances read. */
+export const NOTE_SLUG = "fixture";
+
+/** The note's value as this instance's cache holds it, or null with no row. */
+export function readNote(): Promise<string | null> {
+  return readNoteTagged(nextlyTags("notes"), "notes");
+}
+
+/**
+ * The note, cached under `tags` alone and its own `key`, so only an expiry of
+ * one of those tags makes it read the database again.
+ */
+export function readNoteTagged(
+  tags: string[],
+  key: string
+): Promise<string | null> {
+  return cachedFind(
+    async () => {
+      const nextly = await getNextly({ config });
+      const result = await nextly.find({
+        collection: "notes",
+        where: { slug: { equals: NOTE_SLUG } },
+        limit: 1,
+        depth: 0,
+      });
+      const value = result.items[0]?.value;
+      return typeof value === "string" ? value : null;
+    },
+    { tags, keyParts: [key, NOTE_SLUG] }
+  );
+}
+
+/** Sets the note's value through the Direct API, creating the row the first time. */
+export async function writeNote(nextly: Nextly, value: string): Promise<void> {
+  const found = await nextly.find({
+    collection: "notes",
+    where: { slug: { equals: NOTE_SLUG } },
+    limit: 1,
+    depth: 0,
+  });
+  if (found.items.length === 0) {
+    await nextly.create({
+      collection: "notes",
+      data: { title: "Fixture note", slug: NOTE_SLUG, value },
+    });
+    return;
+  }
+  await nextly.update({
+    collection: "notes",
+    where: { slug: { equals: NOTE_SLUG } },
+    // Last write wins here: the suite is about what each instance serves after
+    // a write, so nothing in it holds a version to send.
+    data: { value, _overwrite: true },
+  });
+}
+
+/**
+ * The answer to a write without the secret the driver starts each instance
+ * with, or `null` for one that carries it: a 404, so nothing else can write
+ * and nothing says the route exists.
+ */
+export function writeRefused(request: Request): Response | null {
+  const secret = process.env.FIXTURE_WRITE_SECRET;
+  if (secret && request.headers.get("x-fixture-secret") === secret) return null;
+  return new Response(null, { status: 404 });
+}

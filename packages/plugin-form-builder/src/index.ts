@@ -58,6 +58,14 @@ export {
 export const formBuilderPlugin: ReturnType<typeof formBuilder>["plugin"] =
   formBuilder().plugin;
 
+// The New form submissions widget's id, for a site's own `defaultLayout` to
+// name, and the data its card draws.
+export {
+  NEW_SUBMISSIONS_WIDGET_ID,
+  type NewSubmissionRow,
+  type NewSubmissionsData,
+} from "./dashboard/new-submissions";
+
 // ============================================================
 // Type Exports
 // ============================================================
@@ -90,6 +98,8 @@ export type {
   DateFormField,
   TimeFormField,
   HiddenFormField,
+  ConsentFormField,
+  ConsentAnswer,
 } from "./types";
 export { isKnownFormField, BUILT_IN_FORM_FIELD_TYPES } from "./types";
 
@@ -182,7 +192,7 @@ export { file } from "./config";
 export { date, time } from "./config";
 
 // Special field helpers
-export { hidden } from "./config";
+export { hidden, consent } from "./config";
 
 // ============================================================
 // Conditional Logic Utilities

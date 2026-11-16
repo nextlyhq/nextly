@@ -120,25 +120,24 @@ function abortAfter(options?: StorageReadOptions): {
 }
 
 export class S3StorageAdapter implements IStorageAdapter {
-  private client: S3Client;
+  private client: S3Client | null = null;
   private resolvedConfig: ResolvedS3Config;
   private isR2: boolean;
 
   /**
    * Create a new S3 storage adapter.
    *
+   * The bucket and region are deliberately NOT checked here, and the SDK
+   * client is deliberately not built. This constructor runs while the host's
+   * config file is evaluated, so a throw would stop every command —
+   * including the schema-only ones that never touch storage. Both the checks
+   * and the client construction move to the first storage operation
+   * ({@link ensureClient} and {@link ensureConfigured}), which refuse with
+   * the same messages a missing bucket or region has always produced.
+   *
    * @param config - S3 storage configuration
-   * @throws Error if bucket or region is not provided
    */
   constructor(private config: S3StorageConfig) {
-    // Validate required config
-    if (!config.bucket) {
-      throw new Error("@nextly/storage-s3: bucket is required");
-    }
-    if (!config.region) {
-      throw new Error("@nextly/storage-s3: region is required");
-    }
-
     // Detect if this is Cloudflare R2
     this.isR2 = config.endpoint?.includes("r2.cloudflarestorage.com") ?? false;
 
@@ -154,18 +153,52 @@ export class S3StorageAdapter implements IStorageAdapter {
       contentDisposition: config.contentDisposition,
       signedUrlExpiresIn: config.signedUrlExpiresIn ?? 3600,
     };
+  }
+
+  /**
+   * Validate that bucket and region are present.
+   *
+   * @throws Error if bucket is not provided
+   * @throws Error if region is not provided
+   */
+  private ensureConfigured(): void {
+    if (!this.config.bucket) {
+      throw new Error("@nextly/storage-s3: bucket is required");
+    }
+    if (!this.config.region) {
+      throw new Error("@nextly/storage-s3: region is required");
+    }
+  }
+
+  /**
+   * Validate the stored configuration and build the SDK client, at the
+   * first use that needs them.
+   *
+   * The refusals are the ones the constructor used to throw, in the same
+   * order, so an operator with a genuinely misconfigured deployment sees
+   * the message they have always seen — at the moment the value was
+   * actually needed rather than at config load. The client is built once
+   * and reused.
+   *
+   * @throws Error if bucket is not provided
+   * @throws Error if region is not provided
+   */
+  private ensureClient(): S3Client {
+    if (this.client) return this.client;
+
+    this.ensureConfigured();
 
     // Build credentials
     const credentials = this.buildCredentials();
 
-    // Initialize S3 client
     this.client = new S3Client({
-      region: config.region,
-      endpoint: config.endpoint,
+      region: this.config.region,
+      endpoint: this.config.endpoint,
       credentials,
       forcePathStyle: this.resolvedConfig.forcePathStyle,
-      ...config.config,
+      ...this.config.config,
     });
+    return this.client;
   }
 
   /**
@@ -209,6 +242,7 @@ export class S3StorageAdapter implements IStorageAdapter {
    * @returns Upload result with URL and storage path
    */
   async upload(buffer: Buffer, options: UploadOptions): Promise<UploadResult> {
+    const client = this.ensureClient();
     const key = this.generateKey(options.filename, options.folder);
 
     // Build upload parameters
@@ -243,7 +277,7 @@ export class S3StorageAdapter implements IStorageAdapter {
 
     // Use Upload for automatic multipart handling
     const upload = new Upload({
-      client: this.client,
+      client,
       params: uploadParams,
     });
 
@@ -256,17 +290,49 @@ export class S3StorageAdapter implements IStorageAdapter {
   }
 
   /**
+   * Write bytes at exactly `filePath`, beside a file already in the bucket.
+   *
+   * Core uses it to keep a file made from a stored one, such as a resized
+   * copy of an image, under a key derived from the original's. One request,
+   * since such a file is small, with the same cache setting and access as an
+   * upload, so it is served the way its original is.
+   *
+   * @experimental
+   */
+  async uploadAt(
+    filePath: string,
+    buffer: Buffer,
+    options: { mimeType: string }
+  ): Promise<UploadResult> {
+    const client = this.ensureClient();
+    const params: PutObjectCommandInput = {
+      Bucket: this.resolvedConfig.bucket,
+      Key: filePath,
+      Body: buffer,
+      ContentType: options.mimeType,
+      CacheControl: this.resolvedConfig.cacheControl,
+    };
+    // R2 ignores ACL settings, as for an upload.
+    if (!this.isR2) {
+      params.ACL = this.resolvedConfig.acl;
+    }
+    await client.send(new PutObjectCommand(params));
+    return { url: this.getPublicUrl(filePath), path: filePath };
+  }
+
+  /**
    * Delete file from S3.
    *
    * @param filePath - Storage path/key to delete
    */
   async delete(filePath: string): Promise<void> {
+    const client = this.ensureClient();
     const command = new DeleteObjectCommand({
       Bucket: this.resolvedConfig.bucket,
       Key: filePath,
     });
 
-    await this.client.send(command);
+    await client.send(command);
   }
 
   /**
@@ -279,6 +345,7 @@ export class S3StorageAdapter implements IStorageAdapter {
    * @returns Object with arrays of successful and failed deletions
    */
   async bulkDelete(filePaths: string[]): Promise<BulkDeleteResult> {
+    const client = this.ensureClient();
     const successful: string[] = [];
     const failed: Array<{ filePath: string; error: string }> = [];
     const maxBatchSize = 1000; // AWS limit
@@ -293,7 +360,7 @@ export class S3StorageAdapter implements IStorageAdapter {
         },
       });
 
-      const response = await this.client.send(command);
+      const response = await client.send(command);
 
       if (response.Errors && response.Errors.length > 0) {
         for (const err of response.Errors) {
@@ -328,13 +395,14 @@ export class S3StorageAdapter implements IStorageAdapter {
    * @returns true if file exists, false otherwise
    */
   async exists(filePath: string): Promise<boolean> {
+    const client = this.ensureClient();
     try {
       const command = new HeadObjectCommand({
         Bucket: this.resolvedConfig.bucket,
         Key: filePath,
       });
 
-      await this.client.send(command);
+      await client.send(command);
       return true;
     } catch (error: unknown) {
       // HeadObject returns 404 if object doesn't exist
@@ -364,9 +432,10 @@ export class S3StorageAdapter implements IStorageAdapter {
    * of up to 1,000 at a time.
    */
   async *list(): AsyncIterable<StoredFileEntry> {
+    const client = this.ensureClient();
     let token: string | undefined;
     do {
-      const page = await this.client.send(
+      const page = await client.send(
         new ListObjectsV2Command({
           Bucket: this.resolvedConfig.bucket,
           ContinuationToken: token,
@@ -382,6 +451,12 @@ export class S3StorageAdapter implements IStorageAdapter {
   }
 
   getPublicUrl(filePath: string): string {
+    // A URL is derived from the bucket and region, so a missing one is
+    // refused here exactly as an upload or read would refuse. A check-only
+    // helper is used so forming a URL does not needlessly build the full
+    // S3 client.
+    this.ensureConfigured();
+
     // Use custom CDN/public URL if configured
     if (this.resolvedConfig.publicUrl) {
       const baseUrl = this.resolvedConfig.publicUrl.replace(/\/$/, "");
@@ -442,13 +517,14 @@ export class S3StorageAdapter implements IStorageAdapter {
    * @returns File metadata or null if file not found
    */
   async getMetadata(filePath: string): Promise<FileMetadata | null> {
+    const client = this.ensureClient();
     try {
       const command = new HeadObjectCommand({
         Bucket: this.resolvedConfig.bucket,
         Key: filePath,
       });
 
-      const response = await this.client.send(command);
+      const response = await client.send(command);
       const filename = filePath.split("/").pop() || filePath;
 
       return {
@@ -497,6 +573,7 @@ export class S3StorageAdapter implements IStorageAdapter {
     filePath: string,
     options?: StorageReadOptions
   ): Promise<Buffer | null> {
+    const client = this.ensureClient();
     try {
       const command = new GetObjectCommand({
         Bucket: this.resolvedConfig.bucket,
@@ -516,7 +593,7 @@ export class S3StorageAdapter implements IStorageAdapter {
        * headers promptly and then stalls mid-transfer is exactly the case a
        * request-only timeout misses.
        */
-      const response = await this.client.send(command, abortAfter(options));
+      const response = await client.send(command, abortAfter(options));
       /*
        * An empty body is not a missing object, and the two must not collapse.
        * `GetObject` on a zero-byte key succeeds with no stream to transform,
@@ -564,12 +641,13 @@ export class S3StorageAdapter implements IStorageAdapter {
    * @returns Pre-signed URL for downloading the file
    */
   async getSignedUrl(filePath: string, expiresIn?: number): Promise<string> {
+    const client = this.ensureClient();
     const command = new GetObjectCommand({
       Bucket: this.resolvedConfig.bucket,
       Key: filePath,
     });
 
-    return getSignedUrl(this.client, command, {
+    return getSignedUrl(client, command, {
       expiresIn: expiresIn ?? this.resolvedConfig.signedUrlExpiresIn,
     });
   }
@@ -580,17 +658,27 @@ export class S3StorageAdapter implements IStorageAdapter {
    * Creates a pre-signed PutObject URL that allows direct uploads from
    * the browser to S3, bypassing server-side upload limits (e.g., Vercel's 4.5MB).
    *
+   * The signature covers the `Content-Type` and, given `options.contentLength`,
+   * the `Content-Length`: the bytes never pass Nextly's upload checks, so S3
+   * itself refuses a body of another type or length. The browser sets the
+   * length from the body; it is not a header the client sends.
+   *
    * @param key - Storage path/key for the upload
    * @param mimeType - MIME type of the file being uploaded
-   * @param expiresIn - URL validity duration in seconds (default: 3600)
+   * @param expiresIn - URL validity in seconds, at most the configured
+   *   `signedUrlExpiresIn` (its default)
+   * @param options - `contentLength`: the exact size the upload may have
    * @returns Client upload data with URL, method, and headers
    */
   async getPresignedUploadUrl(
     key: string,
     mimeType: string,
-    expiresIn?: number
+    expiresIn?: number,
+    options?: { contentLength?: number }
   ): Promise<ClientUploadData> {
-    const expiration = expiresIn ?? this.resolvedConfig.signedUrlExpiresIn;
+    const client = this.ensureClient();
+    const longest = this.resolvedConfig.signedUrlExpiresIn;
+    const expiration = Math.min(expiresIn ?? longest, longest);
 
     // Build PutObject command parameters
     const commandParams: PutObjectCommandInput = {
@@ -598,6 +686,9 @@ export class S3StorageAdapter implements IStorageAdapter {
       Key: key,
       ContentType: mimeType,
       CacheControl: this.resolvedConfig.cacheControl,
+      ...(options?.contentLength !== undefined
+        ? { ContentLength: options.contentLength }
+        : {}),
     };
 
     // Add ACL if not R2
@@ -607,8 +698,10 @@ export class S3StorageAdapter implements IStorageAdapter {
 
     const command = new PutObjectCommand(commandParams);
 
-    const uploadUrl = await getSignedUrl(this.client, command, {
+    const uploadUrl = await getSignedUrl(client, command, {
       expiresIn: expiration,
+      // Signed, so S3 refuses an upload whose type or length differs.
+      signableHeaders: new Set(["content-type", "content-length"]),
     });
 
     return {
@@ -761,9 +854,13 @@ export class S3StorageAdapter implements IStorageAdapter {
   /**
    * Get the S3 client instance.
    * Useful for advanced operations not covered by the adapter interface.
+   *
+   * Handing out the client is itself a use of the adapter, so a caller
+   * without the configuration a client needs is refused here like any
+   * other operation.
    */
   getClient(): S3Client {
-    return this.client;
+    return this.ensureClient();
   }
 
   /**

@@ -1,15 +1,16 @@
 import { useEffect, useRef } from "react";
 
 import { pluginSurfaceSection } from "@admin/lib/navigation/section-resolvers";
-import { autoRegisterPluginComponents } from "@admin/lib/plugins/component-registry";
 import {
   clearDocumentViews,
   registerDocumentViews,
 } from "@admin/lib/plugins/document-view-registry";
 import {
+  arePluginPagesKnown,
   registerPluginPages,
   clearPluginPages,
   pluginPagePath,
+  setPluginPagesKnown,
 } from "@admin/lib/plugins/plugin-route-registry";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import type { PluginMetadata } from "@admin/types/branding";
@@ -17,37 +18,6 @@ import type { PluginMetadata } from "@admin/types/branding";
 /** Order-independent signature of a set of registered plugin routes. */
 function routeSignature(routes: string[]): string {
   return JSON.stringify([...routes].sort());
-}
-
-/**
- * Every component path a plugin's admin-meta entry can resolve by string:
- * pages, settings, the header slot (both spellings), the schema-builder and
- * form-toolbar slots, document views, and custom field-type editors. All of
- * them render through the component registry, so their modules must be
- * imported even for a plugin that contributes no collections — the field-type,
- * slot and document-view kinds are delivered via branding rather than
- * collection admin.components, and nothing else would trigger their import.
- * The import-map codegen in `nextly` collects the same kinds; the parity test
- * there fails when the two disagree.
- */
-function pluginComponentPaths(plugin: PluginMetadata): string[] {
-  const headerSlot = plugin.header?.slot ?? plugin.headerSlot;
-  return [
-    ...(plugin.pages ?? []).map(page => page.component),
-    plugin.settings?.component,
-    headerSlot,
-    plugin.schemaBuilderSlot,
-    // The toolbar slot renders inside the entry form's provider, so it is
-    // resolved on the same pages the schema-builder slot is.
-    plugin.entryFormToolbarSlot,
-    // A document view is a whole screen resolved by string, and its plugin
-    // may contribute nothing else that would trigger the module's import.
-    ...(plugin.documentViews ?? []).map(view => view.component),
-    ...(plugin.fieldTypes ?? []).map(fieldType => fieldType.component),
-    // Falsy rather than only `undefined`, matching the codegen collector
-    // exactly: an empty component path names no module, and the two halves
-    // disagreeing about that is the drift this shared shape exists to stop.
-  ].filter((path): path is string => Boolean(path));
 }
 
 /**
@@ -102,15 +72,20 @@ function registerPluginDocumentViews(plugin: PluginMetadata): string[] {
 
 /**
  * Registers plugin-contributed admin pages into the client route registry
- * whenever the admin-meta plugin list changes, and triggers auto-registration
- * of their component modules (so `PluginSlot` can resolve them).
+ * whenever the admin-meta plugin list changes.
  *
- * Note: components are also self-registered by first-party plugin admin modules
- * on import; this additionally feeds page/settings paths for plugins that have
- * no collections to trigger their module import.
+ * Their components are not loaded here: the generated component map imports
+ * every module a plugin's admin names, so each is registered before a page
+ * asks for it.
  */
 export function usePluginPageRegistration(
-  plugins: PluginMetadata[] | undefined
+  plugins: PluginMetadata[] | undefined,
+  /**
+   * Whether admin-meta's answer is in. Not the same as `plugins` being
+   * present: an installation with no plugins answers without a list, and a
+   * cleared answer (signing out) takes the list away.
+   */
+  answered: boolean
 ): void {
   // Signature of the plugin routes registered by the last run, so the effect
   // can tell an actual route change from an unrelated admin-meta change. Seeded
@@ -122,7 +97,6 @@ export function usePluginPageRegistration(
     clearPluginPages();
     clearDocumentViews();
 
-    const componentPaths: string[] = [];
     const registeredRoutes: string[] = [];
     // `plugins` is undefined until admin-meta loads, and can come back without
     // pages if a plugin is disabled; both must still reach the change check
@@ -131,11 +105,6 @@ export function usePluginPageRegistration(
       const slug = pluginSlug(plugin.name);
       registeredRoutes.push(...registerPluginRoutes(plugin, slug));
       registeredRoutes.push(...registerPluginDocumentViews(plugin));
-      componentPaths.push(...pluginComponentPaths(plugin));
-    }
-
-    if (componentPaths.length > 0) {
-      void autoRegisterPluginComponents(componentPaths);
     }
 
     // Plugin routes register here, in an effect that runs after admin-meta
@@ -152,8 +121,20 @@ export function usePluginPageRegistration(
     const signature = routeSignature(registeredRoutes);
     const previousSignature = registeredRoutesRef.current;
     registeredRoutesRef.current = signature;
-    if (signature !== previousSignature && typeof window !== "undefined") {
+    // The registry is known while admin-meta's answer is in, whatever it
+    // listed: a plugin-prefixed address held while it was unknown is then
+    // either a page or genuinely not found. Becoming known re-resolves even when
+    // no route was added, or a held address would wait for a change that never
+    // comes. A cleared answer makes it unknown again, so the next deep link is
+    // held rather than called missing.
+    const wasKnown = arePluginPagesKnown();
+    setPluginPagesKnown(answered);
+    const becameKnown = !wasKnown && answered;
+    if (
+      (signature !== previousSignature || becameKnown) &&
+      typeof window !== "undefined"
+    ) {
       window.dispatchEvent(new Event("locationchange"));
     }
-  }, [plugins]);
+  }, [plugins, answered]);
 }

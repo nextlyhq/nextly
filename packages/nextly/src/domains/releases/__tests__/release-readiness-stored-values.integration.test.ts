@@ -18,6 +18,7 @@ process.env.NEXTLY_SECRET =
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import { seedBuilderCollection } from "../../../plugins/__tests__/seed-builder-entity";
 import {
@@ -127,6 +128,22 @@ async function created(
   return id;
 }
 
+/**
+ * A plain author, who holds read, update, publish and unpublish on
+ * `collection`. A code rule only narrows the permission, so the open rules
+ * admit the author only once they hold it.
+ */
+async function permittedAuthor(
+  t: TestNextly,
+  collection: "stories" | "guides"
+): Promise<string> {
+  const author = await seedPlainAuthor(t);
+  for (const action of ["read", "update", "publish", "unpublish"]) {
+    await grantTo(t, author, action, [collection]);
+  }
+  return author;
+}
+
 /** A release holding each document under its action, added by `author`. */
 async function releaseOf(
   t: TestNextly,
@@ -166,7 +183,7 @@ async function writeAsAuthor(
   return t.nextly.update({
     collection: collection as never,
     id,
-    data: { status } as never,
+    data: { status, _overwrite: true } as never,
     locale: "*",
     overrideAccess: false,
     user: { id: author, email: user.email, roles: [] },
@@ -179,7 +196,7 @@ describe.each(getConfiguredTestDialects())(
     it("keeps a protected relationship to a target taken down since as unchanged", async () => {
       const t = await boot(dialect);
       await seedStories(t);
-      const author = await seedPlainAuthor(t);
+      const author = await permittedAuthor(t, "stories");
       const topic = await created(t, "topics", {
         title: "Weather",
         name: "weather",
@@ -200,14 +217,14 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "stories" as never,
           id,
-          data: { title: "Edited" } as never,
+          data: { title: "Edited", _overwrite: true } as never,
         });
       }
       // The target leaves the published set, and its junction rows stay.
       await t.nextly.update({
         collection: "topics" as never,
         id: topic,
-        data: { status: "draft" } as never,
+        data: { status: "draft", _overwrite: true } as never,
       });
       const releaseId = await releaseOf(t, author, [
         { collection: "stories", id: going, action: "publish" },
@@ -228,7 +245,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("keeps a protected translation the pending change did not touch as unchanged", async () => {
       const t = await boot(dialect);
-      const author = await seedPlainAuthor(t);
+      const author = await permittedAuthor(t, "guides");
       const going = await created(t, "guides", {
         title: "Draft",
         guarded: "Kept",
@@ -244,7 +261,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "guides" as never,
           id,
-          data: { title: "Edited" } as never,
+          data: { title: "Edited", _overwrite: true } as never,
         });
       }
       const releaseId = await releaseOf(t, author, [

@@ -18,6 +18,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
+import {
   defineCollection,
   defineSingle,
   relationship,
@@ -68,6 +72,13 @@ async function boot(): Promise<{
       }),
     ],
   });
+  // Both readers below. A rule only narrows a permission, so each holds read
+  // and update on the Single and read on `pages`, and the rules alone decide:
+  // the pages rule admits `permitted` and refuses the editor.
+  for (const id of [EDITOR.id, "permitted"]) {
+    await userWhoMay(current, id, "read", [SLUG, "pages"]);
+    await grantTo(current, id, "update", [SLUG]);
+  }
 
   const handler = current.getService("collectionsHandler");
   const page = await handler.createEntry(
@@ -89,13 +100,18 @@ describe("single draft overlay — related-row collection access (integration)",
     // carries it.
     const published = await singles.update(
       SLUG,
-      { headline: "Live", featured: pageId, status: "published" },
+      {
+        headline: "Live",
+        featured: pageId,
+        status: "published",
+        _overwrite: true,
+      },
       { overrideAccess: true }
     );
     expect(published.success).toBe(true);
     const held = await singles.update(
       SLUG,
-      { headline: "Edited" },
+      { headline: "Edited", _overwrite: true },
       { overrideAccess: true }
     );
     expect(held.success).toBe(true);
@@ -134,12 +150,17 @@ describe("single draft overlay — related-row collection access (integration)",
     const { singles, pageId } = await boot();
     await singles.update(
       SLUG,
-      { headline: "Live", featured: pageId, status: "published" },
+      {
+        headline: "Live",
+        featured: pageId,
+        status: "published",
+        _overwrite: true,
+      },
       { overrideAccess: true }
     );
     await singles.update(
       SLUG,
-      { headline: "Edited" },
+      { headline: "Edited", _overwrite: true },
       { overrideAccess: true }
     );
 

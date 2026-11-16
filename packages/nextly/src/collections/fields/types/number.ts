@@ -79,7 +79,8 @@ export interface NumberFieldAdminOptions extends FieldAdminOptions {
  *
  * @example
  * ```typescript
- * // Price field: exact decimal storage (integer is the default and truncates)
+ * // Price field: exact decimal storage (integer is the default and refuses
+ * // a fractional value with a validation error naming the field)
  * const priceField: NumberFieldConfig = {
  *   name: 'price',
  *   type: 'number',
@@ -171,8 +172,9 @@ export interface NumberFieldConfig
   /**
    * Database storage type for the value.
    *
-   * - `"integer"` (default) - whole numbers only; a fractional value is not
-   *   preserved (the database rounds or truncates it). Use for counts,
+   * - `"integer"` (default) - whole numbers only; a fractional value is
+   *   refused with a validation error naming the field, before any write,
+   *   identically on every database. Use for counts,
    *   quantities, ratings, and IDs.
    * - `"decimal"` - a fixed-point `DECIMAL`/`NUMERIC` column for money and other
    *   fractional values, sized with `precision` and `scale` (default

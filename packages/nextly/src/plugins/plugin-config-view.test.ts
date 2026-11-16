@@ -16,6 +16,11 @@ import type { NextlyServiceConfig } from "../di/register";
 import { container } from "../di/container";
 import { resolveUploadPolicy } from "../services/upload-validation/upload-policy";
 
+import {
+  pluginConfigView,
+  setupConfigKeysOf,
+  withWithheldConfig,
+} from "./plugin-config-view";
 import { createPluginContext } from "./plugin-context";
 
 afterEach(() => {
@@ -60,6 +65,8 @@ function contextConfig(config: NextlyServiceConfig) {
     unregister: vi.fn(),
     registerBeforeOperation: vi.fn(),
     unregisterBeforeOperation: vi.fn(),
+    registerInTransaction: vi.fn(),
+    unregisterInTransaction: vi.fn(),
   };
   return createPluginContext(getService, registry, {
     name: "@evil/p",
@@ -146,5 +153,60 @@ describe("ctx.config", () => {
       appName: "Acme",
     });
     expect(view.email).not.toHaveProperty("providerConfig");
+  });
+});
+
+// The boot and the CLI both rebuild the config from a setup transformer's result through
+// `withWithheldConfig`, and both publish the per-language storage choice from what it returns.
+// The choice is not a key a transformer may rewrite, so a plugin cannot move the site's storage
+// layout, and the boot and the CLI read the same choice: the app's own.
+describe("a setup transformer's result", () => {
+  it("cannot change the per-language storage choice", () => {
+    const app = { perLanguageStorage: false, collections: [] };
+    const transformed = {
+      perLanguageStorage: true,
+      experimental: { perLanguageStorage: true },
+      collections: [],
+    };
+
+    const rebuilt = withWithheldConfig(app, transformed) as {
+      perLanguageStorage?: unknown;
+      experimental?: unknown;
+    };
+
+    expect(rebuilt.perLanguageStorage).toBe(false);
+    expect(rebuilt.experimental).toBeUndefined();
+  });
+});
+
+describe("the app's password hasher is withheld from plugins", () => {
+  const hasher = {
+    hash: (password: string) => Promise.resolve(`h:${password}`),
+    verify: () => Promise.resolve(false),
+    reach: "unbounded" as const,
+  };
+  const config = {
+    auth: { minPasswordLength: 8, passwordHasher: hasher },
+  } as unknown as NextlyServiceConfig;
+
+  it("is not in ctx.config's auth block, whose other settings are", () => {
+    const view = pluginConfigView(config) as { auth?: Record<string, unknown> };
+    expect(view.auth).toEqual({ minPasswordLength: 8 });
+  });
+
+  it("is not handed to a setup transformer, and one it returns is not taken", () => {
+    const handed = setupConfigKeysOf(config) as {
+      auth?: Record<string, unknown>;
+    };
+    expect(handed.auth).toEqual({ minPasswordLength: 8 });
+    const forged = {
+      ...hasher,
+      verify: () => Promise.resolve(true),
+    };
+    const rebuilt = withWithheldConfig(config, {
+      auth: { minPasswordLength: 12, passwordHasher: forged },
+    }) as { auth?: { minPasswordLength?: number; passwordHasher?: unknown } };
+    expect(rebuilt.auth?.minPasswordLength).toBe(12);
+    expect(rebuilt.auth?.passwordHasher).toBe(hasher);
   });
 });

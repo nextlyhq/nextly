@@ -1,7 +1,6 @@
 import { OG_CONTENT_TYPE, OG_SIZE, renderOg } from "@/lib/og";
 import { getSiteSettings, getTagBySlug } from "@/lib/queries";
 
-export const runtime = "nodejs";
 export const size = OG_SIZE;
 export const contentType = OG_CONTENT_TYPE;
 export const alt = "Tag cover image";

@@ -17,9 +17,6 @@ import {
   useSuppressAdminChrome,
 } from "./ChromeSuppression";
 
-import { CONTENT_PAGE_MEASURE } from "./content-measure";
-import { PageContainer } from "./page-container";
-
 import { MeasuredPageFrame } from "./MeasuredPageFrame";
 
 /** A view that asks for the whole panel on mount, as an immersive plugin does. */
@@ -42,26 +39,37 @@ function renderIn(children: React.ReactNode) {
 }
 
 describe("MeasuredPageFrame", () => {
-  it("frames a view that asked for nothing, and measures the page", () => {
+  it("frames a view that asked for nothing at full width, within the gutter and with no cap", () => {
     renderIn(<p>framed body</p>);
 
     const container = screen.getByTestId("page-container");
-    expect(container).toBeDefined();
     expect(screen.getByText("trail").parentElement?.className).toContain(
       "mb-6"
     );
-    // The measure is the page's. A view that set its own would sit inside this
-    // container's inset and add a second one to it.
+    // A plugin's custom edit view was drawn for a padded page, so it keeps the
+    // gutter, but no measure caps it: the full width is its own to lay out.
     expect(container.className).toContain("nx-page-shell");
     expect(container.className).not.toContain("contents");
-    expect(container.style.getPropertyValue("--nx-shell-measure")).toBe(
-      "var(--nx-measure-wide)"
+    expect(
+      container.dataset.width ?? container.getAttribute("data-width")
+    ).not.toBe("wide");
+    expect(container.style.getPropertyValue("--nx-shell-measure")).toBe("100%");
+  });
+
+  it("draws an editor that measures its own column as an Editor page, edge to edge", () => {
+    render(
+      <ChromeSuppressionProvider>
+        <MeasuredPageFrame contentCarriesMeasure>
+          <p>editor body</p>
+        </MeasuredPageFrame>
+      </ChromeSuppressionProvider>
     );
-    // The control for the line above: asserting only that SOME measure is set
-    // would pass on a frame that had silently kept the settings measure.
-    expect(container.style.getPropertyValue("--nx-shell-measure")).not.toBe(
-      "var(--nx-measure-form)"
-    );
+    const container = screen.getByTestId("page-container");
+    expect(container.getAttribute("data-page-type")).toBe("editor");
+    // No gutter and no vertical rhythm: its banners start under the bar and its
+    // panel meets the window's edge; the editor insets its own field column.
+    expect(container.className).not.toContain("nx-page-shell");
+    expect(container.className).not.toMatch(/(^|\s)py-/);
   });
 
   it("neutralises the frame and the trail for a view that took the window", () => {
@@ -169,36 +177,5 @@ describe("MeasuredPageFrame", () => {
 
     const trail = screen.getByTestId("page-container").firstElementChild;
     expect(trail?.className).toBe("");
-  });
-});
-
-describe("the content measure is declared once", () => {
-  it("renders whatever the shared constant says, not a literal of its own", () => {
-    // Both sides derive from `CONTENT_PAGE_MEASURE`, so this proves only that
-    // the FRAME reads it — a skeleton that drifted back to its own literal is
-    // invisible here, because no route state is rendered. That property is
-    // covered by `__tests__/content-measure-wiring.test.ts`, which reads the
-    // route sources; this one guards the frame's own half.
-    render(
-      <ChromeSuppressionProvider>
-        <MeasuredPageFrame>
-          <p>body</p>
-        </MeasuredPageFrame>
-      </ChromeSuppressionProvider>
-    );
-    const framed = screen.getByTestId("page-container");
-
-    cleanup();
-    render(
-      <PageContainer width={CONTENT_PAGE_MEASURE}>reference</PageContainer>
-    );
-    const reference = screen.getByTestId("page-container");
-
-    // The frame and a direct container must resolve to one measure, so a page
-    // whose states use both routes to the same width.
-    expect(framed.style.getPropertyValue("--nx-shell-measure")).toBe(
-      reference.style.getPropertyValue("--nx-shell-measure")
-    );
-    expect(reference.style.getPropertyValue("--nx-shell-measure")).not.toBe("");
   });
 });

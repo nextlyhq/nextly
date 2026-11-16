@@ -147,6 +147,17 @@ describe("authorizeTrigger — the human path", () => {
     originIsValid = false;
     const ok = await authorized(request("POST"), allow("session"));
     expect(ok).toBe(false);
+    // Told why: its own request's origin, not a permission it lacks.
+    await expect(
+      authorizeTrigger(request("POST"), {
+        requirePermission: allow("session"),
+        reason: "t",
+      })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      publicMessage:
+        "This request came from a site that isn't allowed to make it.",
+    });
   });
 
   it("admits an API key on a mismatched origin, which a cookie may not", async () => {

@@ -5,7 +5,7 @@
  * These types represent the public API surface for media operations.
  */
 
-import type { ImageSizeVariant } from "../../types/media";
+import type { MediaView } from "../../types/media";
 
 /**
  * Media file returned from operations
@@ -22,17 +22,10 @@ export interface MediaFile {
   url: string;
   thumbnailUrl?: string | null;
   /**
-   * Generated image variants, keyed by the configured size name.
-   *
-   * Optional and nullable because the column is: a non-image, or an image
-   * uploaded before any size was configured, carries none. Every variant URL is
-   * in the same form as `url`, as the storage wrote it: a path on the local
-   * storage's base (`/uploads/...`) by default, which any page of the app
-   * resolves, and an absolute URL on cloud storage. For an email, a feed or
-   * anything else outside the app, make it absolute with `toPublicMediaUrl`.
+   * Horizontal focal point, 0 is the left edge and 100 the right. With
+   * `focalY`, what a site's `object-position` or an image loader reads to keep
+   * the subject in frame: image sizes are no longer cut around it.
    */
-  sizes?: Record<string, ImageSizeVariant> | null;
-  /** Horizontal focal point, 0 is the left edge and 100 the right. */
   focalX?: number | null;
   /** Vertical focal point, 0 is the top edge and 100 the bottom. */
   focalY?: number | null;
@@ -72,6 +65,10 @@ export interface UpdateMediaInput {
   caption?: string | null;
   tags?: string[];
   folderId?: string | null;
+  /** Focus point, whole percent from the left edge (0 to 100). */
+  focalX?: number;
+  /** Focus point, whole percent from the top edge (0 to 100). */
+  focalY?: number;
 }
 
 /**
@@ -97,6 +94,8 @@ export interface ListMediaOptions {
   sortBy?: "uploadedAt" | "filename" | "size";
   /** Sort direction */
   sortOrder?: "asc" | "desc";
+  /** A view across every folder: images missing alt text, or unused items. */
+  view?: MediaView;
 }
 
 /**
@@ -142,8 +141,11 @@ export interface UpdateFolderInput {
 export interface FolderContents {
   folder: MediaFolder;
   subfolders: MediaFolder[];
+  /** One page of the folder's own items, as `meta` says. */
   files: MediaFile[];
   breadcrumbs: Array<{ id: string; name: string }>;
+  /** Which page `files` is, and how many items the folder holds in all. */
+  meta: { total: number; page: number; limit: number; totalPages: number };
 }
 
 /**

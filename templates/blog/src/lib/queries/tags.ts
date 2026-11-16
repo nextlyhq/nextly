@@ -10,6 +10,8 @@
 
 // Pass nextlyConfig (loaded via the -config path alias) so
 // getNextly() bootstraps with this project's collections list.
+// Registers Nextly's cached reads under Cache Components (see the file).
+import "@/nextly/cached-read";
 import { getNextly } from "nextly";
 import { cachedFind, nextlyTags } from "nextly/runtime";
 import nextlyConfig from "@nextly-config";
@@ -85,7 +87,9 @@ export async function getAllTagsWithCounts(): Promise<
               where: {
                 and: [
                   { status: { equals: "published" } },
-                  { tags: { contains: tagId } },
+                  // `in` matches a post whose hasMany `tags` holds this id;
+                  // `contains` is refused on a list of related entries.
+                  { tags: { in: [tagId] } },
                 ],
               },
               limit: 0,

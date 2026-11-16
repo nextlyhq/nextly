@@ -14,9 +14,9 @@
  * they leave. Rooting the scan at the editor's own container would read as
  * tighter and would mostly hide the same page from itself.
  *
- * ONE rule is disabled, named below with its reason. An ignore LIST is how a
- * guard stops meaning anything; a single named exclusion with a cause is a
- * boundary someone can argue with.
+ * No rule is disabled. The admin names the browser tab for every screen it
+ * renders, so `document-title` (WCAG 2.4.2) holds here like any other rule. An
+ * ignore list is how a guard stops meaning anything.
  *
  * ## Why the violations are ENUMERATED rather than counted
  *
@@ -32,6 +32,10 @@ import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { LOCK } from "./support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.homepage] });
 
 /**
  * The tags that define "AA", stated rather than left to axe's defaults.
@@ -41,21 +45,6 @@ import { gotoAdmin } from "./support/admin";
  * them would let a scan pass while breaking something older and more basic.
  */
 const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
-
-/**
- * `document-title` (WCAG 2.4.2), excluded because it is the HOST app's to fix
- * and this harness structurally cannot.
- *
- * Next emits `<title>` from a `metadata` export, which only a server component
- * may declare — and the playground's root layout is `"use client"`, because it
- * mounts the admin's providers. So the page under test has no title and no
- * amount of work in `packages/builder` would give it one. A real Nextly app
- * supplies its own.
- *
- * Named as one rule rather than filtered out of the results, so it appears in
- * the run's own record instead of only in this comment.
- */
-const HOST_OWNED_RULES = ["document-title"];
 
 /**
  * The readiness anchor — NOT a scan root.
@@ -82,10 +71,7 @@ interface Finding {
 
 /** What axe found, as something a failure message can name. */
 async function scanEditor(page: Page): Promise<Finding[]> {
-  const results = await new AxeBuilder({ page })
-    .withTags(AA_TAGS)
-    .disableRules(HOST_OWNED_RULES)
-    .analyze();
+  const results = await new AxeBuilder({ page }).withTags(AA_TAGS).analyze();
 
   /*
    * The POPULATION, before any verdict. A scan that ran against nothing reports
@@ -146,7 +132,10 @@ test.describe("the page builder meets WCAG 2.2 AA", () => {
     // The inserter is a different tree from the canvas — a list of options with
     // its own roles — and a scan of the closed editor never reaches it.
     await openEditor(page);
-    await page.getByRole("button", { name: "Insert" }).click();
+    await page
+      .getByRole("navigation", { name: "Editor panels" })
+      .getByRole("button", { name: "Add", exact: true })
+      .click();
     await expect(page.getByRole("option").first()).toBeVisible({
       timeout: 15_000,
     });
@@ -156,6 +145,34 @@ test.describe("the page builder meets WCAG 2.2 AA", () => {
     expect(
       findings,
       `axe reported ${findings.length} violation(s) with the inserter open:\n${JSON.stringify(findings, null, 2)}`
+    ).toEqual([]);
+  });
+
+  test("has no violations with the Add panel open in DARK mode", async ({
+    page,
+  }) => {
+    // The panel's greyed tiles, its placement line and the popover each set
+    // a colour of their own, so each theme is scanned with them on screen.
+    await page.addInitScript(
+      ([key, value]) => window.localStorage.setItem(key, value),
+      ["nextly-theme", "dark"] as const
+    );
+    await openEditor(page);
+    await page
+      .getByRole("navigation", { name: "Editor panels" })
+      .getByRole("button", { name: "Add", exact: true })
+      .click();
+    await expect(page.getByRole("option").first()).toBeVisible({
+      timeout: 15_000,
+    });
+    await page.getByRole("option").first().hover();
+    await expect(page.locator(".nx-insert-popover")).toBeVisible();
+
+    const findings = await scanEditor(page);
+
+    expect(
+      findings,
+      `axe reported ${findings.length} violation(s) with the inserter open in dark mode:\n${JSON.stringify(findings, null, 2)}`
     ).toEqual([]);
   });
 

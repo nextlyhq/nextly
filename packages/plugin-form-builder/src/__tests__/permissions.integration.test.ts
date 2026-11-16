@@ -31,6 +31,18 @@ describe("form-builder custom permissions", () => {
     );
   });
 
+  it("lets the Public role create submissions, under the slug they are installed with", () => {
+    expect(formBuilder().plugin.contributes?.publicGrants).toEqual([
+      { collection: "form-submissions", action: "create" },
+    ]);
+    const renamed = formBuilder({
+      formSubmissionOverrides: { slug: "entries" },
+    });
+    expect(renamed.plugin.contributes?.publicGrants).toEqual([
+      { collection: "entries", action: "create" },
+    ]);
+  });
+
   it("boots cleanly with the custom permission declared (passes boot validation)", async () => {
     current = await createTestNextly({ plugins: [formBuilder().plugin] });
     expect(current.nextly).toBeTruthy();

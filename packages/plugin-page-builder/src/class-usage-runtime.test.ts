@@ -5,8 +5,7 @@
  * Every assertion here is a way the index gets filed against the WRONG
  * document while every layer above reports success: a draft's classes recorded
  * as the published row's, a shared field's rows filed under a language, or a
- * maintenance write refused because it asked as a user who cannot see the
- * table.
+ * Single's document created by the read that asked about it.
  *
  * @module class-usage-runtime.test
  */
@@ -15,7 +14,8 @@ import { describe, expect, it } from "vitest";
 import type { ClassUsageSubject } from "./class-usage-reconcile";
 import {
   classUsageDocumentReader,
-  classUsageIndexStore,
+  hostFieldReader,
+  singleRebuildDocumentStore,
   type ClassUsageDirectApi,
 } from "./class-usage-runtime";
 
@@ -65,6 +65,14 @@ function recordingApi(overrides: Partial<ClassUsageDirectApi> = {}) {
     delete: async args => {
       calls.push({ op: "delete", ...args });
       return {};
+    },
+    findSingle: async args => {
+      calls.push({ op: "findSingle", ...args });
+      return {
+        id: "s1",
+        content: documentUsing("hero"),
+        ...(args.draft === true ? { _isWorkingDraft: true } : {}),
+      };
     },
     ...overrides,
   };
@@ -300,92 +308,113 @@ describe("resolving a subject to its document", () => {
   });
 });
 
-describe("writing the index", () => {
-  it("asks as the SYSTEM on every call, not as the acting user", async () => {
-    // The table's access rules deny everything, and they are the only thing
-    // keeping these rows private — `internal` sets `admin.hidden` and nothing
-    // more. A write that respected the acting user would fail for every user,
-    // so the index would simply never be maintained.
-    const { api, calls } = recordingApi();
-    const store = classUsageIndexStore(api);
+describe("resolving a Single's subject to its document", () => {
+  const single = (over: Partial<ClassUsageSubject> = {}) =>
+    subject({ scope: "single", entity: "home", entityKey: "", ...over });
 
-    await store.find({
-      collection: "idx",
-      where: {},
-      limit: 10,
-      page: 1,
-      sort: "id",
-    });
-    await store.create({ collection: "idx", data: { classId: "hero" } });
-    await store.delete({ collection: "idx", id: "r1" });
-
-    expect(calls.map(c => c.overrideAccess)).toEqual([true, true, true]);
-    expect(calls.map(c => c.op)).toEqual(["find", "create", "delete"]);
-  });
-
-  it("forwards the sort and the predicates rather than dropping them", async () => {
-    // These are OFFSET queries. Without the sort, successive pages have no
-    // guaranteed order and a row can be skipped or returned twice — a skipped
-    // row reads as a dropped reference and is deleted.
+  it("reads it by slug, as the system, WITHOUT creating it, and an unsaved one as its default", async () => {
+    // Any other read of a Single writes its default document when it has
+    // none, which would materialise every Single in the app as a side effect
+    // of indexing it. An unsaved Single is read as the default its first read
+    // will store, so what that default places is counted before it is stored.
     const { api, calls } = recordingApi();
 
-    await classUsageIndexStore(api).find({
-      collection: "idx",
-      where: { classId: { equals: "hero" } },
-      limit: 200,
-      page: 2,
-      sort: "id",
-    });
-
-    expect(calls[0]).toMatchObject({
-      sort: "id",
-      limit: 200,
-      page: 2,
-      where: { classId: { equals: "hero" } },
-    });
+    expect(await classUsageDocumentReader(api)(single())).toEqual(
+      documentUsing("hero")
+    );
+    expect(calls).toEqual([
+      {
+        op: "findSingle",
+        slug: "home",
+        createIfMissing: false,
+        whenAbsent: "default",
+        status: "all",
+        depth: 0,
+        overrideAccess: true,
+      },
+    ]);
   });
 
-  it("passes the Direct API envelope through unchanged", async () => {
-    // The reconciler asks for exactly what the Direct API answers. Translating
-    // between them restates one shape twice, and the statement this module
-    // carried was the collection SERVICE's inner payload — which it never
-    // sees, so every page came back empty and no stored row was ever found.
-    const { api } = recordingApi({
-      find: async () => ({
-        items: [{ id: "a" }, { id: "b" }],
-        meta: { hasNext: true },
+  it("opts into the working draft for its draft, and declines a live row answered to it", async () => {
+    const { api, calls } = recordingApi();
+    await classUsageDocumentReader(api)(single({ variant: "draft" }));
+    expect(calls[0]).toMatchObject({ op: "findSingle", draft: true });
+
+    const { api: live } = recordingApi({
+      findSingle: async () => ({ id: "s1", content: documentUsing("hero") }),
+    });
+    expect(
+      await classUsageDocumentReader(live)(single({ variant: "draft" }))
+    ).toBeUndefined();
+  });
+
+  it("asks for a real locale with FALLBACK OFF", async () => {
+    const { api, calls } = recordingApi();
+    await classUsageDocumentReader(api)(single({ locale: "fr" }));
+    expect(calls[0]).toMatchObject({ locale: "fr", fallbackLocale: false });
+  });
+
+  it("answers nothing for a Single nobody has saved", async () => {
+    const { api } = recordingApi({ findSingle: async () => null });
+    expect(await classUsageDocumentReader(api)(single())).toBeUndefined();
+  });
+
+  it("is walked by a rebuild as its one document, once", async () => {
+    const { api } = recordingApi();
+    const store = singleRebuildDocumentStore(api);
+    const at = {
+      collection: "home",
+      limit: 100,
+      sort: "id",
+      locale: "",
+      variant: "published",
+    } as const;
+
+    expect((await store.find({ ...at, page: 1 })).items).toHaveLength(1);
+    // A walk resuming after its cursor has already repaired it.
+    expect(
+      (await store.find({ ...at, page: 1, after: "s1" })).items
+    ).toHaveLength(0);
+    expect(
+      await store.exists({
+        collection: "home",
+        id: "",
+        locale: "",
+        variant: "published",
+      })
+    ).toBe(true);
+  });
+});
+
+describe("reading a host's field, as the variant count does", () => {
+  it("reads a Single by its slug, without creating it, and an entry by its id", async () => {
+    const { api, calls } = recordingApi();
+    const read = hostFieldReader(api);
+
+    expect(
+      await read(
+        { slug: "home", id: "", field: "content", single: true },
+        "published"
+      )
+    ).toEqual(documentUsing("hero"));
+    expect(calls).toEqual([
+      expect.objectContaining({
+        op: "findSingle",
+        slug: "home",
+        createIfMissing: false,
       }),
-    });
+    ]);
 
-    const page = await classUsageIndexStore(api).find({
-      collection: "idx",
-      where: {},
-      limit: 2,
-      page: 1,
-      sort: "id",
-    });
-
-    expect(page).toEqual({
-      items: [{ id: "a" }, { id: "b" }],
-      meta: { hasNext: true },
-    });
-  });
-
-  it("reports an empty table as an empty page, not as a failure", async () => {
-    // The state every site is in before its first save.
-    const { api } = recordingApi({
-      find: async () => ({ items: [], meta: { hasNext: false } }),
-    });
-
-    const page = await classUsageIndexStore(api).find({
-      collection: "idx",
-      where: {},
-      limit: 2,
-      page: 1,
-      sort: "id",
-    });
-
-    expect(page).toEqual({ items: [], meta: { hasNext: false } });
+    // CONTROL: a collection entry is read by its id.
+    calls.length = 0;
+    await read({ slug: "pages", id: "p1", field: "content" }, "published");
+    expect(calls).toEqual([
+      expect.objectContaining({
+        op: "findByID",
+        collection: "pages",
+        id: "p1",
+      }),
+    ]);
   });
 });
 

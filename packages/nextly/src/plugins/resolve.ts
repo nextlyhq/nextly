@@ -9,10 +9,18 @@ import {
   orderedMigrations,
 } from "../domains/schema/migrate/plugin/plugin-migration";
 import { assertSchemaVersionDeclarable } from "../domains/schema/ownership/schema-version-check";
+import {
+  collectPluginWebhookEventTypes,
+  publishWebhookEventTypes,
+} from "../domains/webhooks/event-type-registry";
 import type { NextlyError } from "../errors/nextly-error";
 import { isReservedEventName } from "../events/event-bus";
 
+import { contributedListFilters } from "./admin-filters";
+import { contributedAdminContributions } from "./admin-place-contributions";
+import { collectAdminPlaces } from "./admin-places-registry";
 import { validateCapabilities, validateRequires } from "./capabilities";
+import { assertDocumentSurfaces } from "./document-surfaces";
 import { collectHookPoints, publishHookPoints } from "./hook-points";
 import { assertLimitRules } from "./limits/limit-rules";
 import {
@@ -24,22 +32,26 @@ import {
   type PluginConsent,
   type PluginGrants,
   type PreSetupPlugin,
+  recordBootName,
   recordPreSetupPlugins,
 } from "./plugin-consent";
 import type { PluginDefinition } from "./plugin-context";
 import { isInPluginNamespace, pluginAdminSlug } from "./plugin-slug";
+import { collectPluginTranslations } from "./plugin-translations";
 import {
   collectPrincipalKinds,
   publishPrincipalKinds,
 } from "./principals/registry";
+import { assertNoRemovedWidgetKeys } from "./removed-widget-keys";
 import { resolutionError } from "./resolution-error";
 import { assertSettingsPermissionsGuardSettings } from "./settings-permission";
 import { topoSortPlugins } from "./topo-sort";
-import { assertAdminWidgets } from "./validate-admin-widgets";
 import { assertClientConfigs } from "./validate-client-config";
 import { assertDocumentViews } from "./validate-document-views";
 import { validatePluginMenus } from "./validate-menus";
+import { validatePluginNames } from "./validate-names";
 import { validatePluginSlugs } from "./validate-slugs";
+import { validatePluginStartupReads } from "./validate-startup-reads";
 import { validatePluginVersions } from "./validate-versions";
 
 export interface ResolvePluginsOptions {
@@ -132,16 +144,17 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // other fail-fast checks rather than surfacing when the admin first asks for
   // its metadata and losing the whole branding response with it.
   assertClientConfigs(plugins);
-  // Beside it, and for the same reason one level up: a contributed widget rides
-  // in the SAME `/api/admin-meta/workspace` payload, through the same single
-  // `JSON.stringify`. A bigint under `query.where` is type-legal there, so the
-  // throw lands on the workspace response for every admin rather than on the
-  // one card -- which is a worse failure than a bad `clientConfig`, not a
-  // lesser one.
-  assertAdminWidgets(plugins);
+  // Beside it: a plugin still adding widgets or widget sources through a key
+  // Nextly no longer reads is refused here, by name, rather than having its
+  // cards silently absent.
+  assertNoRemovedWidgetKeys(plugins);
   // And the document views: two screens on one address would leave the admin
   // drawing whichever it reached first, and a transformer can add either.
   assertDocumentViews(plugins);
+  // And the overrides of a document's actions and the sections added to its
+  // panel: an action two plugins override would be drawn one of their ways,
+  // silently.
+  assertDocumentSurfaces(plugins);
   // Two plugins sharing an admin slug share an address, and nothing downstream
   // can detect it: every lookup along that address returns a plugin, which is
   // what a correct lookup returns. Registration is where the ambiguity is still
@@ -152,6 +165,10 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // the item from everyone without the never-seeded permission, which is what
   // a role legitimately lacking access looks like.
   validatePluginMenus(plugins);
+  // And a page's startup reads: one the startup request cannot carry is left
+  // out of the prebuilt admin page, and the page is only slower, with nothing
+  // to say why.
+  validatePluginStartupReads(plugins);
   // A challenge under core's own password-change id would be offered in
   // place of that step, and two under one id leave the registry unable to say
   // which one a pending token names. The registry refuses both too, but only
@@ -163,37 +180,79 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // every emit — the per-plugin bus lets a plugin speak neither for core nor
   // for another plugin. Refused here, the mistake is named at boot.
   assertPluginEventNames(plugins);
+  // Webhook event types, checked and published as hook points are: a type
+  // outside the plugin's namespace, one of core's or one declared twice would
+  // otherwise be offered to subscribers as an event nothing may send. The
+  // published list is the one every subscription and the admin's form read.
+  publishWebhookEventTypes(collectPluginWebhookEventTypes(plugins));
+  // Translations, checked here and read again by the admin metadata: a key
+  // outside the plugin's namespace, or one another plugin declares, would
+  // otherwise show one plugin's text in another's screen, or none at all.
+  collectPluginTranslations(plugins);
   // A settings permission with no settings behind it guards nothing, and
   // reads as though the plugin's credentials were kept to a narrower role.
   // Whether the permission is the plugin's own is asked once the entities
   // are known: `assertSettingsPermissionsOwned`, at boot.
   assertSettingsPermissionsGuardSettings(plugins);
+  // Admin places, checked as hook points are: a place in another plugin's
+  // namespace or core's, or one declared twice, would otherwise surface as a
+  // contribution rendered in the wrong place or nowhere. Last, so two plugins
+  // sharing a slug are refused for the slug before their places collide on
+  // it. Checked only: nothing keeps the result, and a reader computes the
+  // places from the plugin list the app committed.
+  collectAdminPlaces(plugins);
+  // Entry-list filters, for the same reason: a malformed one would
+  // otherwise be offered in the toolbar and fail when chosen. Checked only;
+  // the admin meta is built from the same reduction.
+  contributedListFilters(plugins);
+  // Each place's contributions: checked whole and ordered, so one that cannot
+  // be ordered stops the app here rather than drawing in no order.
+  contributedAdminContributions(plugins);
 }
 
 /**
  * Refuse a plugin event declared under a prefix core reserves, or outside the
- * plugin's own namespace — the two names the per-plugin bus refuses to emit.
+ * plugin's own namespace — the two names the per-plugin bus refuses to emit —
+ * and one whose `durable` flag is not a boolean.
  */
 function assertPluginEventNames(plugins: PluginDefinition[]): void {
   for (const plugin of plugins) {
     if (plugin.enabled === false) continue;
     for (const event of plugin.contributes?.events ?? []) {
-      if (isReservedEventName(event.name)) {
-        throw resolutionError(
-          "plugin-event-name-reserved",
-          `Plugin "${plugin.name}" declares the event "${event.name}", whose prefix core reserves for its own events.`,
-          { plugin: plugin.name, event: event.name }
-        );
-      }
-      if (!isInPluginNamespace(plugin.name, event.name)) {
-        const prefix = `${pluginAdminSlug(plugin.name)}.`;
-        throw resolutionError(
-          "plugin-event-outside-namespace",
-          `Plugin "${plugin.name}" declares the event "${event.name}", which must start with "${prefix}".`,
-          { plugin: plugin.name, event: event.name, expectedPrefix: prefix }
-        );
-      }
+      assertPluginEvent(plugin.name, event);
     }
+  }
+}
+
+/** One declared event's checks, for `assertPluginEventNames`. */
+function assertPluginEvent(
+  pluginName: string,
+  event: { name: string; durable?: unknown }
+): void {
+  if (isReservedEventName(event.name)) {
+    throw resolutionError(
+      "plugin-event-name-reserved",
+      `Plugin "${pluginName}" declares the event "${event.name}", whose prefix core reserves for its own events.`,
+      { plugin: pluginName, event: event.name }
+    );
+  }
+  if (!isInPluginNamespace(pluginName, event.name)) {
+    const prefix = `${pluginAdminSlug(pluginName)}.`;
+    throw resolutionError(
+      "plugin-event-outside-namespace",
+      `Plugin "${pluginName}" declares the event "${event.name}", which must start with "${prefix}".`,
+      { plugin: pluginName, event: event.name, expectedPrefix: prefix }
+    );
+  }
+  // `true` or `false` only: anything else reads as durable to one check and
+  // not to another, and whether an event survives a restart is not a question
+  // two readers may answer differently.
+  if (event.durable !== undefined && typeof event.durable !== "boolean") {
+    throw resolutionError(
+      "plugin-event-durable-invalid",
+      `Plugin "${pluginName}" declares the event "${event.name}" with durable set to something other than true or false.`,
+      { plugin: pluginName, event: event.name }
+    );
   }
 }
 
@@ -249,6 +308,11 @@ export function resolvePlugins(
   plugins: PluginDefinition[],
   opts: ResolvePluginsOptions
 ): PluginDefinition[] {
+  // First, because a name is the key every later record of the plugin is
+  // stored under, and one that is the site's own permission owner (`app`)
+  // must never get as far as being stored. A `setup` transformer's list is
+  // resolved here again, so a plugin it adds or renames is refused the same.
+  validatePluginNames(plugins);
   validatePluginVersions(plugins, opts.coreVersion);
   assertPluginManifests(plugins);
   // After the manifests' shape is known good, so a capability is read from a
@@ -305,6 +369,17 @@ export function resolveTransformedPlugins<
     opts
   );
   assertConsentDeclaredBeforeSetup(opts.declared, plugins);
+  // The name is part of the verdict, so it is recorded with it: `init` runs
+  // as a method on the definition, and a plugin could rename itself onto a
+  // listed one there — including from a context built after `init`, such as
+  // the auth bridge's hook contexts. Recording the boot-time name (rather
+  // than freezing the property) means every later grant check answers for
+  // the plugin the boot resolved while an `init` assigning its own name —
+  // even idempotently — touches its own definition harmlessly, as any
+  // lifecycle method may. `bootNameOf` reads the record.
+  for (const plugin of plugins) {
+    recordBootName(plugin);
+  }
   // Decided here, once, from the copies every check above read: the grants
   // travel beside the config to whatever builds a plugin context, and a
   // manifest changed after this point grants nothing.

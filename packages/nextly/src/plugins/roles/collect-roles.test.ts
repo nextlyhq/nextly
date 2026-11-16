@@ -48,6 +48,27 @@ describe("collectRoles", () => {
     ).toThrow(/super-admin/);
   });
 
+  it("throws on the Public role's slug, from an app or a plugin", () => {
+    expect(() =>
+      collectRoles(
+        cfg([{ slug: "public", name: "X", permissionSlugs: [] }]),
+        []
+      )
+    ).toThrow(/public/);
+    expect(() =>
+      collectRoles(cfg(), [
+        plugin("@a/p", [{ slug: "public", name: "X", permissionSlugs: [] }]),
+      ])
+    ).toThrow(/public/);
+    // In any case, as a database comparing without case reads it.
+    expect(() =>
+      collectRoles(
+        cfg([{ slug: "Public", name: "X", permissionSlugs: [] }]),
+        []
+      )
+    ).toThrow(/Public/);
+  });
+
   it("returns [] when nothing declares roles", () => {
     expect(collectRoles(cfg(), [])).toEqual([]);
   });

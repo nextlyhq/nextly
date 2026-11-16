@@ -10,11 +10,15 @@
 import type { PaginationMeta } from "../../api/response-shapes";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { HookWarning } from "../../hooks/side-effect-warnings";
-import type { RichTextOutputFormat } from "../../lib/rich-text-html";
+import type {
+  RichTextOutputFormat,
+  RichTextStyles,
+} from "../../lib/rich-text-html";
 import type { Principal } from "../../plugins/principals/types";
 import type { TrustBound } from "../../services/collections/trust-grant";
 
 import type { FormsConfig } from "./forms";
+import type { LanguageOptionsFrom } from "./locales";
 
 // (`{ items, meta }`) so the in-process Direct API speaks the same envelope
 // as the wire API. The legacy `PaginatedResponse` (Payload's `{ docs,
@@ -30,7 +34,10 @@ export type {
   QueryOperator,
   FieldCondition,
 } from "../../services/collections/query-operators";
-export type { RichTextOutputFormat } from "../../lib/rich-text-html";
+export type {
+  RichTextOutputFormat,
+  RichTextStyles,
+} from "../../lib/rich-text-html";
 
 /**
  * Canonical Direct API list-response shape.
@@ -414,12 +421,14 @@ export interface RunAsPrincipal {
  * });
  * ```
  */
-export interface DirectAPIConfig {
+// The language options (`locale`, `fallbackLocale`) come from `LanguageOptionsFrom`, applied to
+// this site's generated types.
+export interface DirectAPIConfig extends LanguageOptionsFrom<GeneratedTypes> {
   /**
    * Bypass access control checks.
    *
    * When `true` (default for Direct API), all access control is skipped.
-   * Set to `false` to enforce collection, field, and row-level permissions.
+   * Set to `false` to enforce collection and field access rules.
    *
    * @default true
    */
@@ -513,8 +522,9 @@ export interface DirectAPIConfig {
   /**
    * User context for access control.
    *
-   * Required when `overrideAccess` is `false`. Provides the user identity
-   * and role for permission checks.
+   * Whose access is judged when `overrideAccess` is `false`: the identity
+   * and role permission checks read. Without one, the call is judged as a
+   * signed-out visitor.
    */
   user?: UserContext;
 
@@ -561,12 +571,18 @@ export interface DirectAPIConfig {
   request?: Request;
 
   /**
-   * Include hidden fields in the response.
+   * Include hidden fields (`admin.hidden: true`) in the response.
    *
-   * Hidden fields (defined with `hidden: true` in field config)
-   * are normally excluded from responses. Set to `true` to include them.
+   * `admin.hidden` is a UI flag, so every read returns such fields unless it
+   * passes `false`, trusted or judged as a caller alike; a field's read rule
+   * (`access.read`) is what keeps a value from a caller. With `false`, a
+   * `where` or `sort` naming a hidden field is refused, as is an aggregate's
+   * group key or date field, once the caller has passed the read gate. A
+   * related document populated at a `depth` loses its own collection's hidden
+   * fields too, and a user read its hidden custom user fields.
+   * Password fields are never returned, whatever this says.
    *
-   * @default false
+   * @default true
    */
   showHiddenFields?: boolean;
 
@@ -590,20 +606,6 @@ export interface DirectAPIConfig {
    * @default false
    */
   disableTransaction?: boolean;
-
-  /**
-   * Locale for localized content.
-   *
-   * When set, returns content in the specified locale.
-   */
-  locale?: string;
-
-  /**
-   * Fallback locale when requested locale data is missing.
-   *
-   * Set to `false` to disable fallback behavior.
-   */
-  fallbackLocale?: string | false;
 
   /**
    * Relationship population depth.
@@ -645,6 +647,30 @@ export interface DirectAPIConfig {
    * ```
    */
   richTextFormat?: RichTextOutputFormat;
+
+  /**
+   * How rich text HTML is styled, where `richTextFormat` returns HTML.
+   *
+   * - `"default"`: Nextly's own look as inline styles, so the HTML reads well
+   *   in a page whose CSS resets every element.
+   * - `"none"`: no style Nextly adds. Every element carries a class in the
+   *   `nextly-rich-text-` namespace and alignment is a class, so the site's
+   *   stylesheet decides the look. Styles an author chose in the editor (a
+   *   text colour, a button's colours) are kept.
+   *
+   * @default "default"
+   *
+   * @example
+   * ```typescript
+   * const posts = await nextly.find({
+   *   collection: 'posts',
+   *   richTextFormat: 'html',
+   *   richTextStyles: 'none',
+   * });
+   * // posts.items[0].content => '<p class="nextly-rich-text-paragraph">...</p>'
+   * ```
+   */
+  richTextStyles?: RichTextStyles;
 
   /**
    * Ignore document locks.

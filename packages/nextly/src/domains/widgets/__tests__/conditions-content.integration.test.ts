@@ -17,6 +17,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
@@ -92,6 +93,9 @@ async function boot(): Promise<TestNextly> {
     ],
   });
   current = t;
+  // A code rule only narrows the permission, so the admin holds read on both
+  // collections and the read rules decide which they may count.
+  await userWhoMay(t, admin.user.id, "read", [SECRETS, NOTES]);
   // The same call `POST /api/dashboard/query` makes before resolving anything:
   // publish the collection sources from the LIVE registry. Boot does not, and
   // the evaluator reads that registry to know which collections exist -- so

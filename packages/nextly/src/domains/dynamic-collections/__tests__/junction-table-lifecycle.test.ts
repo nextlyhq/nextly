@@ -626,6 +626,56 @@ describe.each(DIALECTS)("junction table lifecycle on %s", dialect => {
       expect(companion).toBeLessThan(main);
     });
 
+    it("drops collections deleted together in one file: every junction first, then each in the order given", () => {
+      // POSTS's junction holds a key to TAGS, which is dropped first here, so
+      // a file per collection, applied in name order, would meet TAGS's drop
+      // while the junction still stood.
+      const { migrationSQL, migrationFileName } =
+        service().generateDropTablesMigration([
+          { collectionName: "tags", tableName: "dc_tags", fields: [] },
+          {
+            collectionName: "posts",
+            tableName: "dc_posts",
+            fields: [manyToMany("tags")],
+          },
+        ]);
+      const statements = migrationSQL
+        .split("\n--> statement-breakpoint\n")
+        .map(statement => statement.replace(/^--.*\n/, ""));
+
+      expect(statements).toEqual([
+        `DROP TABLE IF EXISTS ${q(dialect, junction("tags"))};`,
+        `DROP TABLE IF EXISTS ${q(dialect, "dc_tags_locales")};`,
+        `DROP TABLE IF EXISTS ${q(dialect, "dc_tags")}${dialect === "sqlite" ? "" : " CASCADE"};`,
+        `DROP TABLE IF EXISTS ${q(dialect, "dc_posts_locales")};`,
+        `DROP TABLE IF EXISTS ${q(dialect, "dc_posts")}${dialect === "sqlite" ? "" : " CASCADE"};`,
+      ]);
+      expect(migrationFileName).toMatch(
+        /^\d+_drop_2_collections_[0-9a-f]{12}\.sql$/
+      );
+    });
+
+    it("names a junction table by its two tables and field, the same name a drop removes", () => {
+      expect(
+        service().generateJunctionTableName("dc_posts", "dc_tags", "tags")
+      ).toBe(junction("tags"));
+      // Sorted, so either side derives the same name.
+      expect(
+        service().generateJunctionTableName("dc_tags", "dc_posts", "tags")
+      ).toBe(junction("tags"));
+    });
+
+    it("names a drop file of many collections in a bounded name", () => {
+      const many = Array.from({ length: 40 }, (_, index) => ({
+        collectionName: `collection_with_a_long_name_${String(index)}`,
+        tableName: `dc_collection_with_a_long_name_${String(index)}`,
+      }));
+
+      const { migrationFileName } = service().generateDropTablesMigration(many);
+
+      expect(migrationFileName.length).toBeLessThan(64);
+    });
+
     it("drops nothing extra for a collection with no many-to-many field", () => {
       const { migrationSQL } = service().generateDropTableMigration(
         "posts",

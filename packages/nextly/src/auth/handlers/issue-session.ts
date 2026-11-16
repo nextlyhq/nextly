@@ -4,6 +4,7 @@ import {
   type AuditLogWriter,
 } from "../../domains/audit/audit-log-writer";
 import { auditReason } from "../../domains/audit/audit-reasons";
+import { wholeSecondExpiry } from "../../domains/auth/services/token-account-binding";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginContext } from "../../plugins/plugin-context";
 import type { AuthUser } from "../../types/auth";
@@ -78,7 +79,12 @@ export function newRefreshToken(
         trustProxy: deps.trustProxy,
         trustedProxyIps: deps.trustedProxyIps,
       }),
-      expiresAt: new Date(Date.now() + deps.refreshTokenTTL * 1000),
+      // The whole second the instant falls in: a column that keeps whole
+      // seconds rounds milliseconds rather than cutting them, which would
+      // store the session as living longer than issued.
+      expiresAt: wholeSecondExpiry(
+        new Date(Date.now() + deps.refreshTokenTTL * 1000)
+      ),
     },
   };
 }

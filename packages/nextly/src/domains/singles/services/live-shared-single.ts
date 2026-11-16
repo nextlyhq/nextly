@@ -17,12 +17,16 @@ import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
+import { addressableFields } from "../../../shared/addressable-fields";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
+import { storedAtThisLevel } from "../../../shared/lib/field-level-registry";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { isFieldLocalized } from "../../i18n/classify-fields";
+import { perLanguageFieldNames } from "../../i18n/per-language-fields";
 import {
+  asIdSet,
   sharedFieldNames,
   type SharedViews,
 } from "../../versions/shared-publish-base";
@@ -143,10 +147,14 @@ export async function sharedComparison(args: {
     }
     return answer;
   };
+  // The components placed directly in each, whose values are rows of their own.
+  const fieldsOf = (slug: string) =>
+    Promise.resolve(args.componentFields.get(slug) ?? null);
   const perLanguage = await perLanguageFieldNames(
     args.fields,
     args.translated,
-    isLocalized
+    isLocalized,
+    fieldsOf
   );
   const views = new Map<string, (value: unknown) => unknown>();
   const byHand = new Set<string>();
@@ -154,14 +162,17 @@ export async function sharedComparison(args: {
   for (const field of args.fields) {
     if (!field.name || args.translated.has(field.name)) continue;
     if (!perLanguage.has(field.name) || !isFieldGroupField(field)) continue;
-    const kept = await sharedSubFields(
-      field,
-      args.componentFields,
-      isLocalized
-    );
     // Compared even with no shared sub-fields: its instances are shared, and
     // a publish writes the change's set of them over everyone's.
-    views.set(field.name, componentView(kept, fieldGroupSlugList(field)[0]));
+    views.set(
+      field.name,
+      await componentView(fieldGroupSlugList(field), {
+        componentFields: args.componentFields,
+        isLocalized,
+        fieldsOf,
+        open: new Set(),
+      })
+    );
     byHand.add(field.name);
   }
   for (const name of args.unordered ?? []) views.set(name, asIdSet);
@@ -173,48 +184,59 @@ export async function sharedComparison(args: {
 }
 
 /**
- * Each component type's shared sub-fields: every field of a component kept
- * whole, and those a translated component marks shared. Empty when none.
+ * A component's fields whose values its instance holds: those at the top of its fields, and those
+ * in a group with no name, which only lays them out where it sits.
  */
-async function sharedSubFields(
-  field: FieldConfig,
-  componentFields: ReadonlyMap<string, FieldConfig[]>,
-  isLocalized: (slug: string) => Promise<boolean>
-): Promise<Map<string, Set<string>>> {
-  const kept = new Map<string, Set<string>>();
-  for (const slug of fieldGroupSlugList(field)) {
-    const translated = await isLocalized(slug);
-    const names = (componentFields.get(slug) ?? []).flatMap(sub => {
-      const name = sub.name;
-      if (!name) return [];
-      return translated && isFieldLocalized({ ...sub, name }, true)
-        ? []
-        : [name];
-    });
-    if (names.length > 0) kept.set(slug, new Set(names));
-  }
-  return kept;
+function storedOnInstance(fields: readonly FieldConfig[]): FieldConfig[] {
+  return addressableFields(fields, {
+    descendInto: storedAtThisLevel,
+  }) as FieldConfig[];
+}
+
+/** What projecting a component value to its shared parts reads. */
+interface SharedProjection {
+  componentFields: ReadonlyMap<string, FieldConfig[]>;
+  isLocalized: (slug: string) => Promise<boolean>;
+  fieldsOf: (slug: string) => Promise<readonly FieldConfig[] | null>;
+  /** The component types being projected on this path, so one that holds itself ends it. */
+  open: ReadonlySet<string>;
 }
 
 /**
- * A component value as its shared parts, instance by instance: each
- * instance's type, in order, and its shared sub-fields. Not its row id, which
- * a publish rewrites.
+ * A component value as its shared parts, instance by instance: each instance's type, in order, and
+ * its shared sub-fields. Not its row id, which a publish rewrites.
+ *
+ * A sub-field is shared when the component is kept whole, or when a translated component marks it
+ * shared. A component placed directly in it that holds values per language is a sub-field of the
+ * same kind as the field itself: compared through its own shared parts, the same way, rather than
+ * whole, since what it holds in one language is not another's to compare.
  */
-function componentView(
-  kept: ReadonlyMap<string, ReadonlySet<string>>,
-  onlySlug: string | undefined
-): (value: unknown) => unknown {
+async function componentView(
+  slugs: readonly string[],
+  projection: SharedProjection
+): Promise<(value: unknown) => unknown> {
+  const kept = new Map<
+    string,
+    Map<string, ((value: unknown) => unknown) | null>
+  >();
+  for (const slug of slugs) {
+    const shared = await sharedSubFields(slug, projection);
+    if (shared.size > 0) kept.set(slug, shared);
+  }
   const instance = (value: unknown): unknown => {
     if (!value || typeof value !== "object") return value ?? null;
     const row = value as Record<string, unknown>;
     // Whichever spelling the row stores its type under.
-    const type = readFieldGroupType(row) ?? onlySlug;
-    const names = type ? kept.get(type) : undefined;
+    const type = readFieldGroupType(row) ?? slugs[0];
+    const subs = type ? kept.get(type) : undefined;
     return {
       type: type ?? null,
       shared: Object.fromEntries(
-        Object.entries(row).filter(([key]) => names?.has(key) === true)
+        Object.entries(row).flatMap(([key, sub]) => {
+          if (subs?.has(key) !== true) return [];
+          const view = subs.get(key);
+          return [[key, view ? view(sub) : sub]];
+        })
       ),
     };
   };
@@ -222,33 +244,46 @@ function componentView(
     Array.isArray(value) ? value.map(instance) : instance(value);
 }
 
-/** A junction's ids, in one order. */
-function asIdSet(value: unknown): unknown {
-  if (!Array.isArray(value)) return value;
-  return value.map(id => String(id)).sort();
+/**
+ * One component type's shared sub-fields, each with the view it is compared through: none for one
+ * compared whole, and the shared-parts view of a component placed in it that holds values per
+ * language. Empty when none.
+ */
+async function sharedSubFields(
+  slug: string,
+  projection: SharedProjection
+): Promise<Map<string, ((value: unknown) => unknown) | null>> {
+  const shared = new Map<string, ((value: unknown) => unknown) | null>();
+  const translated = await projection.isLocalized(slug);
+  const open = new Set([...projection.open, slug]);
+  for (const sub of storedOnInstance(
+    projection.componentFields.get(slug) ?? []
+  )) {
+    const name = sub.name;
+    if (!name) continue;
+    if (translated && isFieldLocalized({ ...sub, name }, true)) continue;
+    const perLanguage =
+      isFieldGroupField(sub) &&
+      !fieldGroupSlugList(sub).some(inner => open.has(inner)) &&
+      (
+        await perLanguageFieldNames(
+          [sub],
+          new Set(),
+          projection.isLocalized,
+          projection.fieldsOf
+        )
+      ).has(name);
+    shared.set(
+      name,
+      perLanguage
+        ? await componentView(fieldGroupSlugList(sub), { ...projection, open })
+        : null
+    );
+  }
+  return shared;
 }
 
-/**
- * The fields judged per language when every language is published: the
- * translated fields, and each field whose component is translated. A dynamic
- * zone counts when any type it permits is translated. References are read
- * through `fieldGroupSlugList`, so a definition stored under the migrated
- * `fieldGroup` / `fieldGroups` keys counts as the field-group saver sees it.
- */
-export async function perLanguageFieldNames(
-  fieldConfigs: readonly FieldConfig[],
-  localizedFieldNames: ReadonlySet<string>,
-  isComponentLocalized: (slug: string) => Promise<boolean>
-): Promise<Set<string>> {
-  const names = new Set(localizedFieldNames);
-  for (const field of fieldConfigs) {
-    if (!isFieldGroupField(field)) continue;
-    for (const slug of fieldGroupSlugList(field)) {
-      if (await isComponentLocalized(slug)) {
-        names.add(field.name);
-        break;
-      }
-    }
-  }
-  return names;
-}
+// Which fields hold values per language is one question with one answer, and
+// the collection paths ask it as well, so it is kept beside the rest of the
+// language code. Re-exported here, where this reader first held it.
+export { perLanguageFieldNames };

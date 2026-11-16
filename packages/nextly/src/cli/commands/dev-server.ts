@@ -22,7 +22,11 @@ import {
   sqliteCoreStatementsFor,
 } from "../../database/sqlite-core-tables";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
-import { clearCollectionRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
+import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
+import {
+  declaredSlugsOf,
+  withoutRemovedFromCode,
+} from "../../domains/dynamic-collections/services/removed-from-code";
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import {
@@ -34,6 +38,12 @@ import {
 // The DI-bound `applyDesiredSchema` from pipeline/index.ts throws on
 // MySQL because it has no caller-supplied URL. Once F8 PR 2/3 collapses
 // the two paths, this can collapse back to a single import.
+import {
+  mainTableFields,
+  storesPerLanguage,
+} from "../../domains/i18n/per-language-storage";
+import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
+import { runStatementsInTries } from "../../domains/schema/busy-table/run-on-session";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -44,6 +54,11 @@ import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanu
 import { ClackTerminalPromptDispatcher } from "../../domains/schema/pipeline/prompt-dispatcher/clack-terminal";
 import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
 import { noopPreRenameExecutor } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
+import {
+  recordFieldsOnto,
+  registryRows,
+  type RegistryFieldsRow,
+} from "../../domains/schema/pipeline/recorded-fields";
 import {
   mergeRegisteredCollectionsSafely,
   mergeRegisteredSafely,
@@ -69,6 +84,7 @@ import {
 } from "../../domains/singles/services/reconcile-single-tables";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError, immediateMessage } from "../../errors/index";
+import { NextlyError } from "../../errors/nextly-error";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
@@ -82,6 +98,14 @@ import {
   SingleRegistryService,
   type SyncSingleResult,
 } from "../../services/singles/single-registry-service";
+import { exitWithError } from "../errors";
+import {
+  coreTablesNotCreated,
+  coreTablesNotReconciled,
+  databaseCatalogUnreadable,
+  schemaSyncInProduction,
+} from "../errors/areas/commands";
+import type { CliError } from "../errors/cli-error";
 import type { CommandContext } from "../program";
 import type { CLIDatabaseAdapter } from "../utils/adapter";
 import type { LoadConfigResult } from "../utils/config-loader";
@@ -184,16 +208,35 @@ async function ensureSystemTables(
  * case and stays silent. Branch on the IMMEDIATE message only: a wrapped
  * failure whose cause chain happens to mention "already exists" is a different
  * error and must not be swallowed.
+ *
+ * Each statement waits for a busy database in tries (`runStatementsInTries`),
+ * bounded by `NEXTLY_LOCK_TIMEOUT` / `NEXTLY_LOCK_TIMEOUT_TOTAL`, each try's
+ * notice through the logger. One that stays busy past its tries stops the
+ * setup with `NEXTLY_TABLE_BUSY`, naming the statements before it, which stay;
+ * every other failure is let go as before, and the next statement runs.
  */
-async function applyCoreStatements(
+export async function applyCoreStatements(
   drizzleAdapter: DrizzleAdapter,
   logger: CommandContext["logger"],
   statements: string[] = generateSqliteCoreTableStatements()
 ): Promise<void> {
-  for (const statement of statements) {
+  const bounds = busyTableBounds({ env: process.env });
+  const applied: string[] = [];
+  for (const [index, statement] of statements.entries()) {
     try {
-      await drizzleAdapter.executeQuery(statement);
+      // One statement a list, so a failure the setup lets go ends only that statement.
+      applied.push(
+        ...(await runStatementsInTries(drizzleAdapter, [statement], {
+          change: "the core tables' setup",
+          bounds,
+          notify: line => logger.warn(line),
+          appliedBefore: applied,
+          name: () =>
+            `statement ${String(index + 1)} of ${String(statements.length)}`,
+        }))
+      );
     } catch (error) {
+      if (NextlyError.isCode(error, "NEXTLY_TABLE_BUSY")) throw error;
       if (!immediateMessage(error).includes("already exists")) {
         logger.debug(
           `Table creation statement failed: ${describeError(error)}`
@@ -278,6 +321,9 @@ export async function ensureCoreTables(
           adapter: drizzleAdapter,
           logger,
           label: "core table reconcile",
+          // A command-line run: a held schema lock is waited for, about a minute, and then
+          // the run stops naming its holder.
+          whenHeld: "wait",
           mayCreateLock: mayChangeSchema,
           // Idempotent table creation, and the documented way to stop a sync
           // is Ctrl+C — a claim stuck behind a dead process is the worse
@@ -295,11 +341,7 @@ export async function ensureCoreTables(
       forgetFieldGroupStorageNames(drizzleAdapter);
 
       if (!repaired) {
-        logger.error(
-          "Core tables could not be reconciled. Run `nextly migrate` to " +
-            "repair the schema before syncing."
-        );
-        process.exit(1);
+        exitWithError(logger, coreTablesNotReconciled());
       }
       logger.debug("Core tables reconciled");
     } else {
@@ -315,12 +357,7 @@ export async function ensureCoreTables(
   // nothing to repair, and the catalog read that failed can be fixed and the
   // command re-run.
   if (registryTable === null) {
-    logger.error(
-      "Could not read the database catalog to determine which field-group " +
-        "registry this database uses, so core tables were not created. " +
-        "Re-run once the database is reachable."
-    );
-    process.exit(1);
+    exitWithError(logger, databaseCatalogUnreadable());
   }
 
   logger.newline();
@@ -333,12 +370,20 @@ export async function ensureCoreTables(
   // recreate the spelling it had just moved away from. The exclusion in
   // `db-sync.ts` is acquired only after this function returns, so it is too
   // late to help.
-  let pushFailed = false;
+  // Why the bootstrap failed, when it did: the catalog read inside the exclusion, or the push.
+  // Typed by assertion: it is set inside the exclusion's callback, which narrowing cannot see.
+  let pushFailure = undefined as
+    | { catalog: true }
+    | { push: unknown }
+    | undefined;
   await withMigrationExcluded(
     {
       adapter: drizzleAdapter,
       logger,
       label: "core table bootstrap",
+      // A command-line run: a held schema lock is waited for, about a minute, and then
+      // the run stops naming its holder.
+      whenHeld: "wait",
       mayCreateLock: options.autoSync !== false,
       releaseOnInterrupt: true,
     },
@@ -350,7 +395,7 @@ export async function ensureCoreTables(
       // costs one catalog query and is the only value the push may trust.
       const pushRegistry = await resolveRegistryTable(drizzleAdapter, logger);
       if (pushRegistry === null) {
-        pushFailed = true;
+        pushFailure = { catalog: true };
         return;
       }
       // F8 PR 2: use the freshPushSchema helper for the static-tables push.
@@ -405,7 +450,7 @@ export async function ensureCoreTables(
           // stays live until the 120-second lease expires — refusing the very
           // `nextly migrate` this message tells the operator to run. The exit
           // happens after the exclusion has unwound.
-          pushFailed = true;
+          pushFailure = { push: pushError };
         }
       }
     }
@@ -418,71 +463,64 @@ export async function ensureCoreTables(
   // window would leave the sync querying a table that has since been renamed.
   forgetFieldGroupStorageNames(drizzleAdapter);
 
-  if (pushFailed) {
-    logger.error(
-      "Core tables not found. Please run `nextly migrate` first to create the database schema."
+  if (pushFailure !== undefined) {
+    exitWithError(
+      logger,
+      "push" in pushFailure
+        ? coreTablesNotCreated(pushFailure.push)
+        : databaseCatalogUnreadable()
     );
-    process.exit(1);
   }
 }
 
-// ============================================================================
-// Collection Schema Auto-Sync (Push Mode)
-// ============================================================================
+/**
+ * What a sync does in production, where it never pushes schema: it refuses, naming them, when its
+ * registry step found collections created or updated, and otherwise goes on without a push
+ * (undefined). The one decision of it: the real sync acts on it, and its dry run names it.
+ */
+export function productionSyncRefusal(
+  sync: Pick<CollectionSyncResultWithValidation["sync"], "created" | "updated">
+): CliError | undefined {
+  const pendingCollections = [...sync.created, ...sync.updated];
+  return pendingCollections.length > 0
+    ? schemaSyncInProduction(pendingCollections)
+    : undefined;
+}
 
 /**
- * Perform auto-sync of schema changes to database
+ * The schema a sync pushes: every collection and Single the configuration declares, merged with
+ * what the Schema Builder registered (collections, Singles and components), leaving out what was
+ * removed from code. Also the schema registry holding each declared table's runtime schema, for
+ * the rest of the run to address them.
  *
- * This implements the "push mode" synchronization where schema changes
- * are applied directly to the database without creating migration files.
- *
- * Only runs in development mode (NODE_ENV !== 'production').
+ * The one builder of it: the real sync pushes this schema, and its dry run previews the push of
+ * this same schema. Reads the registry and changes nothing.
  */
-export async function performAutoSync(
+export async function desiredSchemaForSync(
   config: LoadConfigResult["config"],
-  adapter: CLIDatabaseAdapter,
-  syncResult: CollectionSyncResultWithValidation,
-  options: ResolvedDevOptions,
-  context: CommandContext
-): Promise<void> {
-  const { logger } = context;
-
-  // F8 PR 1: --force is no longer load-bearing. Pre-pipeline, --force
-  // routed through SchemaPushService.syncSchema and controlled drop+
-  // recreate behavior. The new pipeline owns destructive-op handling
-  // via the Classifier + PromptDispatcher: ambiguous renames trigger
-  // confirmations, real drops require explicit prompts. The flag is
-  // kept on the CLI surface for backward compatibility but emits a
-  // deprecation warning so users know it has no effect today.
-  if (options.force) {
-    logger.warn(
-      "[schema] --force has no effect with the new pipeline. " +
-        "Destructive ops are handled by interactive prompts; non-interactive " +
-        "runs use NEXTLY_ACCEPT_DATA_LOSS=1 instead."
-    );
-  }
-
-  // Production guard: never auto-apply schema in production. Users must
-  // explicitly run `nextly migrate:create` + `nextly migrate`.
-  if (process.env.NODE_ENV === "production") {
-    const pendingCollections = [
-      ...syncResult.sync.created,
-      ...syncResult.sync.updated,
-    ];
-
-    if (pendingCollections.length > 0) {
-      logger.newline();
-      logger.error("Cannot auto-sync schema in production mode.");
-      logger.info(
-        'Run `nextly migrate:create --name="<migration-name>"` to create migrations, then `nextly migrate` to apply.'
-      );
-      process.exit(1);
-    }
-    return;
-  }
-
-  const start = Date.now();
-  const drizzleAdapter = adapter as unknown as DrizzleAdapter;
+  drizzleAdapter: DrizzleAdapter,
+  logger: CommandContext["logger"],
+  {
+    registriesPresent = true,
+    recordedCollections = [],
+  }: {
+    /**
+     * False for a database whose core tables a sync has yet to create: its registries will hold
+     * nothing, so nothing registered is merged in.
+     */
+    registriesPresent?: boolean;
+    /**
+     * The collections' registry rows as they were before the collection sync replaced them: what
+     * each field was, which on SQLite is all that tells a relationship switched between one
+     * related entry and many. Absent, nothing is switched there, as before.
+     */
+    recordedCollections?: readonly RegistryFieldsRow[];
+  } = {}
+): Promise<{
+  desired: DesiredSchema;
+  desiredCollections: Record<string, DesiredCollection>;
+  schemaRegistry: SchemaRegistry;
+}> {
   const dialect = drizzleAdapter.getCapabilities().dialect;
 
   // Build a SchemaRegistry with static + dynamic tables. Even though the
@@ -605,25 +643,116 @@ export async function performAutoSync(
     registryLogger
   );
 
+  // A collection or Single removed from code is left out of the push
+  // altogether. Merged in, its stored fields became desired schema: a dropped
+  // table was created again, and a table that had drifted from its row was
+  // altered to match it. Left out, the push never names it, and the drop
+  // guard keeps drizzle-kit from dropping a table outside the desired schema.
+  const declaredCollections = declaredSlugsOf(config.collections);
+  const declaredSingles = declaredSlugsOf(config.singles);
   const desired: DesiredSchema = {
     collections: await mergeRegisteredCollectionsSafely(
       desiredCollections,
-      () => registry.getAllCollections(),
+      async () =>
+        registriesPresent
+          ? withoutRemovedFromCode(
+              await registry.getAllCollections(),
+              declaredCollections
+            )
+          : [],
       logger
     ),
     singles: await mergeRegisteredSafely(
       desiredSingles,
-      () => singleRegistry.getAllSingles(),
+      async () =>
+        registriesPresent
+          ? withoutRemovedFromCode(
+              await singleRegistry.getAllSingles(),
+              declaredSingles
+            )
+          : [],
       (row, base) => ({ ...base, status: row.status === true }),
       logger
     ),
     components: await mergeRegisteredSafely(
       {},
-      () => componentRegistry.getAllComponents(),
+      async () =>
+        registriesPresent ? componentRegistry.getAllComponents() : [],
       (_row, base) => base,
       logger
     ),
   };
+  // What each field was before this sync. The Singles' rows are read now: their sync runs after
+  // this apply.
+  recordFieldsOnto(desired.collections, recordedCollections);
+  recordFieldsOnto(
+    desired.singles,
+    await registryRows(() => singleRegistry.getAllSingles(), {
+      kind: "singles",
+      tableExists: name => drizzleAdapter.tableExists(name),
+    })
+  );
+
+  return { desired, desiredCollections, schemaRegistry };
+}
+
+// ============================================================================
+// Collection Schema Auto-Sync (Push Mode)
+// ============================================================================
+
+/**
+ * Perform auto-sync of schema changes to database
+ *
+ * This implements the "push mode" synchronization where schema changes
+ * are applied directly to the database without creating migration files.
+ *
+ * Only runs in development mode (NODE_ENV !== 'production').
+ */
+export async function performAutoSync(
+  config: LoadConfigResult["config"],
+  adapter: CLIDatabaseAdapter,
+  syncResult: CollectionSyncResultWithValidation,
+  options: ResolvedDevOptions,
+  context: CommandContext,
+  /**
+   * The collections' registry rows as they were before the collection sync replaced them, for
+   * the push to read what each field was (see `desiredSchemaForSync`).
+   */
+  recordedCollections: readonly RegistryFieldsRow[] = []
+): Promise<void> {
+  const { logger } = context;
+
+  // F8 PR 1: --force is no longer load-bearing. Pre-pipeline, --force
+  // routed through SchemaPushService.syncSchema and controlled drop+
+  // recreate behavior. The new pipeline owns destructive-op handling
+  // via the Classifier + PromptDispatcher: ambiguous renames trigger
+  // confirmations, real drops require explicit prompts. The flag is
+  // kept on the CLI surface for backward compatibility but emits a
+  // deprecation warning so users know it has no effect today.
+  if (options.force) {
+    logger.warn(
+      "[schema] --force has no effect with the new pipeline. " +
+        "Destructive ops are handled by interactive prompts; non-interactive " +
+        "runs use NEXTLY_ACCEPT_DATA_LOSS=1 instead."
+    );
+  }
+
+  // Production guard: never auto-apply schema in production. Users must
+  // explicitly run `nextly migrate:create` + `nextly migrate`.
+  if (process.env.NODE_ENV === "production") {
+    const refusal = productionSyncRefusal(syncResult.sync);
+    if (refusal !== undefined) exitWithError(logger, refusal);
+    return;
+  }
+
+  const start = Date.now();
+  const drizzleAdapter = adapter as unknown as DrizzleAdapter;
+  const dialect = drizzleAdapter.getCapabilities().dialect;
+
+  const { desired, desiredCollections, schemaRegistry } =
+    await desiredSchemaForSync(config, drizzleAdapter, logger, {
+      recordedCollections,
+    });
 
   // Per-call factory so MySQL `databaseName` flows into PushSchemaPipeline.
   // Mirrors the pattern in init/reload-config.ts. The DI-bound entry point
@@ -745,7 +874,7 @@ export async function performAutoSync(
           { and: [{ column: "slug", op: "=", value: collection.slug }] }
         );
         // Written past the registry services: the cached rows are cleared.
-        clearCollectionRowCache();
+        clearRegistryRowCache();
       }
     } catch {
       // Ignore errors updating migration status — non-critical metadata.
@@ -760,6 +889,25 @@ export async function performAutoSync(
 // ============================================================================
 // Singles Auto-Sync (Table Creation)
 // ============================================================================
+
+/**
+ * Run a generated migration's statements one at a time, each without its comment lines: the
+ * generator separates them with `--> statement-breakpoint`. One place for the Single and component
+ * syncs and the Single reconcile, which each ran their own copy.
+ */
+async function executeMigrationStatements(
+  adapter: DrizzleAdapter,
+  migrationSQL: string
+): Promise<void> {
+  for (const statement of migrationSQL.split("--> statement-breakpoint")) {
+    const clean = statement
+      .split("\n")
+      .filter(line => !line.trim().startsWith("--"))
+      .join("\n")
+      .trim();
+    if (clean) await adapter.executeQuery(clean);
+  }
+}
 
 /**
  * Register a newly-DDL'd Single table with the live schema resolver.
@@ -781,15 +929,21 @@ export async function performAutoSync(
  * log and continue. The next boot will rebuild the resolver from the
  * registry row that was just written, so the table becomes visible then.
  */
-function registerSingleTableInResolver(
+export function registerSingleTableInResolver(
   adapter: DrizzleAdapter,
   tableName: string,
   fields: FieldDefinition[],
-  logger: CommandContext["logger"]
+  logger: CommandContext["logger"],
+  // Whether its translatable values live in its per-language table, as the CREATE just laid it
+  // out: the registered table then names none of them, so the next query asks for no column the
+  // main table lacks.
+  localized: boolean
 ): void {
   try {
     const dialect = adapter.getCapabilities().dialect;
-    const { table } = generateRuntimeSchema(tableName, fields, dialect);
+    const { table } = generateRuntimeSchema(tableName, fields, dialect, {
+      localized,
+    });
     const resolver = (
       adapter as unknown as {
         tableResolver?: {
@@ -904,7 +1058,10 @@ export async function performSinglesAutoSync(
           drizzleAdapter,
           serviceLogger,
           tableName,
-          [...systemFields, ...singleConfig.fields] as unknown as FieldConfig[],
+          [
+            ...systemFields,
+            ...mainTableFields(singleConfig, singleConfig.fields),
+          ] as unknown as FieldConfig[],
           { timestamps: true, builtBy: "collection" }
         );
 
@@ -921,25 +1078,11 @@ export async function performSinglesAutoSync(
         const migrationSQL = schemaService.generateMigrationSQL(
           tableName,
           singleConfig.fields as unknown as FieldDefinition[],
-          { isSingle: true }
+          // Translatable columns stay off a main table whose values live in its companion.
+          { isSingle: true, localized: storesPerLanguage(singleConfig) }
         );
 
-        const statements = migrationSQL
-          .split("--> statement-breakpoint")
-          .map((s: string) => s.trim())
-          .filter((s: string) => s.length > 0);
-
-        for (const statement of statements) {
-          const cleanStatement = statement
-            .split("\n")
-            .filter((line: string) => !line.trim().startsWith("--"))
-            .join("\n")
-            .trim();
-
-          if (cleanStatement) {
-            await drizzleAdapter.executeQuery(cleanStatement);
-          }
-        }
+        await executeMigrationStatements(drizzleAdapter, migrationSQL);
 
         const tableActuallyExists = await drizzleAdapter.tableExists(tableName);
 
@@ -950,7 +1093,8 @@ export async function performSinglesAutoSync(
             drizzleAdapter,
             tableName,
             singleConfig.fields as unknown as FieldDefinition[],
-            logger
+            logger,
+            storesPerLanguage(singleConfig)
           );
           await singleRegistry.updateMigrationStatus(slug, "applied");
           synced.push(slug);
@@ -1033,14 +1177,23 @@ export async function performSinglesReconcile(
   const reconciledSlugs: string[] = [];
 
   await reconcileSingleTables({
-    ...singleTableSources(singleRegistry, () => drizzleAdapter.listTables()),
+    // A code-first Single the configuration no longer declares is left out,
+    // so `db:sync` does not build its dropped table again either.
+    ...singleTableSources(
+      singleRegistry,
+      () => drizzleAdapter.listTables(),
+      declaredSlugsOf(config.singles)
+    ),
     createTable: async single => {
       // Prefer code-first config (source of truth) but fall back to the
       // registry's stored fields for UI-created singles.
       const codeFirstConfig = config.singles?.find(s => s.slug === single.slug);
       let fields: FieldDefinition[];
+      // Whether its translatable columns stay off the main table, from the same source as its fields.
+      let localized: boolean;
       if (codeFirstConfig) {
         fields = codeFirstConfig.fields as unknown as FieldDefinition[];
+        localized = storesPerLanguage(codeFirstConfig);
       } else {
         const record = await singleRegistry.getSingleBySlug(single.slug);
         if (!record) {
@@ -1049,29 +1202,16 @@ export async function performSinglesReconcile(
           );
         }
         fields = record.fields as unknown as FieldDefinition[];
+        localized = storesPerLanguage(record);
       }
 
       const migrationSQL = schemaService.generateMigrationSQL(
         single.tableName,
         fields,
-        { isSingle: true }
+        { isSingle: true, localized }
       );
 
-      const statements = migrationSQL
-        .split("--> statement-breakpoint")
-        .map((s: string) => s.trim())
-        .filter((s: string) => s.length > 0);
-
-      for (const statement of statements) {
-        const cleanStatement = statement
-          .split("\n")
-          .filter((line: string) => !line.trim().startsWith("--"))
-          .join("\n")
-          .trim();
-        if (cleanStatement) {
-          await drizzleAdapter.executeQuery(cleanStatement);
-        }
-      }
+      await executeMigrationStatements(drizzleAdapter, migrationSQL);
 
       const tableExists = await drizzleAdapter.tableExists(single.tableName);
       if (tableExists) {
@@ -1082,7 +1222,8 @@ export async function performSinglesReconcile(
           drizzleAdapter,
           single.tableName,
           fields,
-          logger
+          logger,
+          localized
         );
         await singleRegistry.updateMigrationStatus(single.slug, "applied");
         reconciledSlugs.push(single.slug);
@@ -1174,7 +1315,7 @@ export async function performComponentsAutoSync(
           drizzleAdapter,
           serviceLogger,
           tableName,
-          componentConfig.fields,
+          mainTableFields(componentConfig, componentConfig.fields),
           { timestamps: true, builtBy: "fieldGroup" }
         );
 
@@ -1190,25 +1331,12 @@ export async function performComponentsAutoSync(
         // Table doesn't exist — create it
         const migrationSQL = schemaService.generateMigrationSQL(
           tableName,
-          componentConfig.fields
+          componentConfig.fields,
+          // Translatable columns stay off a main table whose values live in its companion.
+          { localized: storesPerLanguage(componentConfig) }
         );
 
-        const statements = migrationSQL
-          .split("--> statement-breakpoint")
-          .map((s: string) => s.trim())
-          .filter((s: string) => s.length > 0);
-
-        for (const statement of statements) {
-          const cleanStatement = statement
-            .split("\n")
-            .filter((line: string) => !line.trim().startsWith("--"))
-            .join("\n")
-            .trim();
-
-          if (cleanStatement) {
-            await drizzleAdapter.executeQuery(cleanStatement);
-          }
-        }
+        await executeMigrationStatements(drizzleAdapter, migrationSQL);
 
         const tableActuallyExists = await drizzleAdapter.tableExists(tableName);
 

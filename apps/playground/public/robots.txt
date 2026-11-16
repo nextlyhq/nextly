@@ -1,0 +1,4 @@
+# The dogfood page Lighthouse measures is this app's public home page, so
+# it answers for itself: a robots.txt that parses, and crawlers welcome.
+User-agent: *
+Allow: /

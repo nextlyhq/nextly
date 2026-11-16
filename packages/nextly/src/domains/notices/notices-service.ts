@@ -22,7 +22,6 @@
  * transaction, because a statement against a missing table would abort it.
  *
  * @module domains/notices/notices-service
- * @experimental Until the notices feature is complete.
  */
 import { createHash } from "node:crypto";
 
@@ -88,7 +87,7 @@ export interface NoticesLogger {
   warn(message: string, context?: Record<string, unknown>): void;
 }
 
-/** One notice to write. @experimental */
+/** One notice to write. */
 export interface RecordNoticeInput<TData> {
   /** The registered kind; its schema types and validates `data`. */
   kind: NoticeKind<TData>;
@@ -105,7 +104,7 @@ export interface RecordNoticeInput<TData> {
   data: TData;
 }
 
-/** What a write did. @experimental */
+/** What a write did. */
 export interface RecordNoticeResult {
   /** True only for the call that created the notice. */
   created: boolean;
@@ -113,7 +112,16 @@ export interface RecordNoticeResult {
   id: string | null;
 }
 
-/** One notice as its person sees it. @experimental */
+/**
+ * One notice as stored, as far as a writer's follow-up needs it: whom it is
+ * for, what it is about, and its snapshot.
+ */
+export type StoredNotice = Pick<
+  NoticeRow,
+  "id" | "userId" | "kind" | "subjectId" | "data"
+>;
+
+/** One notice as its person sees it. */
 export interface NoticeView {
   id: string;
   kind: string;
@@ -131,7 +139,7 @@ export interface NoticeView {
   readAt: Date | null;
 }
 
-/** A page of a person's notices. @experimental */
+/** A page of a person's notices. */
 export interface NoticePage {
   rows: NoticeView[];
   total: number;
@@ -177,6 +185,20 @@ export function noticeDedupeKey(input: {
     .map(encodeURIComponent)
     .join(":");
   return createHash("sha256").update(joined, "utf8").digest("hex");
+}
+
+/** A notice's identity under its kind: the key its write is deduplicated on. */
+function identityOf(
+  kind: Pick<NoticeKind<unknown>, "key" | "subjectType">,
+  notice: { userId: string; subjectId: string; occurrence: string }
+): string {
+  return noticeDedupeKey({
+    userId: notice.userId,
+    kind: kind.key,
+    subjectType: kind.subjectType,
+    subjectId: notice.subjectId,
+    occurrence: notice.occurrence,
+  });
 }
 
 export class NoticesService {
@@ -248,13 +270,7 @@ export class NoticesService {
       subjectType: input.kind.subjectType,
       subjectId: input.subjectId,
       occurrence: input.occurrence,
-      dedupeKey: noticeDedupeKey({
-        userId: input.userId,
-        kind: input.kind.key,
-        subjectType: input.kind.subjectType,
-        subjectId: input.subjectId,
-        occurrence: input.occurrence,
-      }),
+      dedupeKey: identityOf(input.kind, input),
       data,
       createdAt: new Date(),
       readAt: null,
@@ -276,6 +292,53 @@ export class NoticesService {
       return { created: false, id: null };
     }
     return { created: stored.id === row.id, id: stored.id ?? null };
+  }
+
+  /**
+   * Which of these notices are already recorded, in the order given: for a
+   * writer that would otherwise open a transaction for each one only to find
+   * it standing. Asked of the identity `record` writes, so it answers as a
+   * write would, in one read through that identity's unique index. None are,
+   * while the table does not exist yet.
+   */
+  async recorded<TData>(
+    kind: NoticeKind<TData>,
+    notices: readonly Pick<
+      RecordNoticeInput<TData>,
+      "userId" | "subjectId" | "occurrence"
+    >[]
+  ): Promise<boolean[]> {
+    if (notices.length === 0 || !(await this.tablePresent())) {
+      return notices.map(() => false);
+    }
+    const keys = notices.map(notice => identityOf(kind, notice));
+    const rows = await this.deps.db.select<{ dedupeKey: string }>(
+      NOTICES_TABLE,
+      {
+        columns: ["dedupeKey"],
+        where: {
+          and: [{ column: "dedupeKey", op: "IN", value: [...new Set(keys)] }],
+        },
+      }
+    );
+    const stored = new Set(rows.map(row => row.dedupeKey));
+    return keys.map(key => stored.has(key));
+  }
+
+  /**
+   * One notice by its id, as stored, or `null` when there is none: for the
+   * follow-up work of the feature that wrote it, such as the email that copies
+   * it. Not a person's read — `find` is — so neither the person nor the kind's
+   * `visible` narrows it.
+   */
+  async byId(id: string): Promise<StoredNotice | null> {
+    if (!(await this.tablePresent())) return null;
+    const [row] = await this.deps.db.select<StoredNotice>(NOTICES_TABLE, {
+      columns: ["id", "userId", "kind", "subjectId", "data"],
+      where: { and: [{ column: "id", op: "=", value: id }] },
+      limit: 1,
+    });
+    return row ?? null;
   }
 
   /** A page of this person's notices, newest first. */
@@ -300,7 +363,12 @@ export class NoticesService {
       }),
       this.deps.db.count(NOTICES_TABLE, { where }),
     ]);
-    return { rows: await this.viewsOf(rows), total, page, limit };
+    return {
+      rows: await this.viewsOf(rows, query.userId),
+      total,
+      page,
+      limit,
+    };
   }
 
   /** How many notices this person has, or how many are unread. */
@@ -378,11 +446,31 @@ export class NoticesService {
     return { and: conditions };
   }
 
-  /** Render a page: each kind's text, and its links resolved once per kind. */
-  private async viewsOf(rows: NoticeRow[]): Promise<NoticeView[]> {
+  /**
+   * Render a page for `userId`: each kind's text, and its links and readable notices resolved
+   * once per kind. A notice whose subject the person may not read is shown without its text or
+   * link, but still shown, so the count and the list agree.
+   */
+  private async viewsOf(
+    rows: NoticeRow[],
+    userId: string
+  ): Promise<NoticeView[]> {
     const links = new Map<string, ReadonlyMap<string, string> | null>();
+    const readable = new Map<string, ReadonlyMap<string, unknown>>();
     for (const kindKey of new Set(rows.map(row => row.kind))) {
       const kind = registeredNoticeKind(kindKey);
+      if (kind?.readable !== undefined) {
+        // A snapshot that no longer parses is shown as no longer showable whatever is decided.
+        const judged = rows
+          .filter(row => row.kind === kindKey)
+          .flatMap(row => {
+            const parsed = kind.data.safeParse(row.data);
+            return parsed.success
+              ? [{ id: row.id, subjectId: row.subjectId, data: parsed.data }]
+              : [];
+          });
+        readable.set(kindKey, await kind.readable(userId, judged));
+      }
       if (kind?.link === undefined) {
         links.set(kindKey, null);
         continue;
@@ -400,12 +488,37 @@ export class NoticesService {
       const known = links.get(row.kind) ?? null;
       const link = known?.get(row.subjectId) ?? null;
       const gone = known !== null && link === null;
-      const parsed = kind.data.safeParse(row.data);
+      // A subject the person may not read, or one that is gone, which no rule can be asked of
+      // any more: nothing of what the snapshot says, failing closed whoever reads it.
+      const judged = readable.get(row.kind);
+      if (judged !== undefined && (gone || !judged.has(row.id))) {
+        return [
+          {
+            id: row.id,
+            kind: row.kind,
+            title: UNSHOWN_NOTICE_TITLE,
+            ...(gone && kind.goneText !== undefined
+              ? { body: kind.goneText }
+              : {}),
+            subject: {
+              type: row.subjectType,
+              id: row.subjectId,
+              link: null,
+              gone,
+            },
+            createdAt: row.createdAt,
+            readAt: row.readAt,
+          },
+        ];
+      }
+      // The snapshot as the person may see it, where the kind decides that; as stored otherwise.
+      const shown = judged?.get(row.id);
+      const parsed = kind.data.safeParse(shown ?? row.data);
       const text = parsed.success
         ? kind.render(parsed.data, { subjectGone: gone })
         : // A snapshot written before its kind's schema changed. Shown
           // plainly rather than dropped, so the count and the list agree.
-          { title: "This notice can no longer be shown." };
+          { title: UNSHOWN_NOTICE_TITLE };
       return [
         {
           id: row.id,
@@ -445,6 +558,9 @@ export class NoticesService {
     return false;
   }
 }
+
+/** What a notice that cannot be shown to its person says in its place. */
+const UNSHOWN_NOTICE_TITLE = "This notice can no longer be shown.";
 
 /** The registered kinds a person may see now: each kind's `visible`, or all. */
 async function visibleKinds(userId: string): Promise<string[]> {

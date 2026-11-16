@@ -46,6 +46,12 @@ import { emailDeliveriesSqlite } from "../../../schemas/email-deliveries/sqlite"
 import { emailProvidersMysql } from "../../../schemas/email-providers/mysql";
 import { emailProvidersPg } from "../../../schemas/email-providers/postgres";
 import { emailProvidersSqlite } from "../../../schemas/email-providers/sqlite";
+import { emailQueueMysql } from "../../../schemas/email-queue/mysql";
+import { emailQueuePg } from "../../../schemas/email-queue/postgres";
+import { emailQueueSqlite } from "../../../schemas/email-queue/sqlite";
+import { emailQueueRecipientsMysql } from "../../../schemas/email-queue-recipients/mysql";
+import { emailQueueRecipientsPg } from "../../../schemas/email-queue-recipients/postgres";
+import { emailQueueRecipientsSqlite } from "../../../schemas/email-queue-recipients/sqlite";
 import { emailSendClaimsMysql } from "../../../schemas/email-send-claims/mysql";
 import { emailSendClaimsPg } from "../../../schemas/email-send-claims/postgres";
 import { emailSendClaimsSqlite } from "../../../schemas/email-send-claims/sqlite";
@@ -79,6 +85,9 @@ const SHARED_TABLES = [
   "email_deliveries",
   "email_providers",
   "email_send_claims",
+  // Erasing an address cancels the queued email to it, so it reads these.
+  "email_queue",
+  "email_queue_recipients",
 ];
 
 const DIALECTS: Array<{
@@ -91,13 +100,25 @@ const DIALECTS: Array<{
     dialect: "postgresql",
     url: process.env.TEST_POSTGRES_URL ?? null,
     make: url => createPostgresAdapter({ url }) as unknown as TestAdapter,
-    tables: { emailProvidersPg, emailDeliveriesPg, emailSendClaimsPg },
+    tables: {
+      emailProvidersPg,
+      emailDeliveriesPg,
+      emailSendClaimsPg,
+      emailQueuePg,
+      emailQueueRecipientsPg,
+    },
   },
   {
     dialect: "mysql",
     url: process.env.TEST_MYSQL_URL ?? null,
     make: url => createMySqlAdapter({ url }) as unknown as TestAdapter,
-    tables: { emailProvidersMysql, emailDeliveriesMysql, emailSendClaimsMysql },
+    tables: {
+      emailProvidersMysql,
+      emailDeliveriesMysql,
+      emailSendClaimsMysql,
+      emailQueueMysql,
+      emailQueueRecipientsMysql,
+    },
   },
   {
     dialect: "sqlite",
@@ -107,6 +128,8 @@ const DIALECTS: Array<{
       emailProvidersSqlite,
       emailDeliveriesSqlite,
       emailSendClaimsSqlite,
+      emailQueueSqlite,
+      emailQueueRecipientsSqlite,
     },
   },
 ];

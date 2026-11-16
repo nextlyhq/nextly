@@ -14,7 +14,46 @@
  * purpose: it replaces the schema service with a stub returning `""` and reports no adapter, because
  * it is testing response envelopes rather than DDL.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
+
+// A Builder save's statements run through the busy-table runner, which waits for a table another
+// session holds; those tries are judged against real databases
+// (`busy-table-parity.integration.test.ts`). Here the save runs as one try that never waits,
+// sending each statement through the double's `executeQuery`, so these stay on the statements
+// the save hands over and the outcome it records.
+vi.mock(
+  "../../../domains/schema/busy-table/run-unit",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("../../../domains/schema/busy-table/run-unit")
+    >()),
+    runUnitInTries: (
+      await import(
+        "../../../domains/schema/busy-table/__tests__/helpers/run-unit-once"
+      )
+    ).runUnitOnce,
+  })
+);
+
+// Whether the created table holds every requested column is judged by the comparison a push makes,
+// tested on its own (`created-table-shape.test.ts`); this double runs no introspection, so the check
+// answers that nothing was left out and the test stays on the statements.
+vi.mock("../../../domains/schema/services/created-table-shape", () => ({
+  columnsTheCreateLeftOut: vi.fn(async () => []),
+  describeColumnsLeftOut: vi.fn(() => ""),
+}));
+
+// A registry write's transaction, and the schema version stored in it, are
+// the integration suite's subject (`schema-version-writers.integration.test.ts`):
+// here a registry write runs on the adapter itself, as it did before it had one.
+vi.mock("../../../domains/schema/schema-version", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../domains/schema/schema-version")
+  >()),
+  writeRegistryRows: (adapter: unknown, work: (tx: unknown) => unknown) =>
+    work(adapter),
+  writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
+}));
 
 vi.mock("../../helpers/di", () => ({
   getSingleRegistryFromDI: vi.fn(),
@@ -59,11 +98,24 @@ function makeAdapter(dialect: "postgresql" | "mysql" | "sqlite") {
         !name.includes("_locales") &&
         executed.some(sql => sql.includes("CREATE TABLE") && sql.includes(name))
     ),
+    // Read before any DDL to find field-group rows a removed Single of this name left behind: a
+    // fresh database has no tables to scan.
+    listTables: vi.fn(async (): Promise<string[]> => []),
+    // The same read asks a MySQL server how it compares table names, through Drizzle's `sql`
+    // template; answered in the mysql2 `[rows, fields]` shape, as a case-sensitive server would.
+    getDrizzle: () => ({
+      execute: vi.fn(async () => [[{ lower_case_table_names: 0 }], []]),
+    }),
     // Read by the slug guard the create runs before any DDL, to find whether another resource
     // already owns this slug. `null` is "nobody does", which is the state a successful create
     // starts from. The return type names the owner case too, so the conflict test can replace this
     // without widening the double's shape from outside it.
     selectOne: vi.fn(async (): Promise<{ id: string } | null> => null),
+    // Read by the same guard to list the addresses already used, so a new one with the same
+    // snake_case form is refused. Empty is "none are", as for `selectOne`.
+    select: vi.fn(
+      async (_table: string): Promise<Array<{ id: string; slug: string }>> => []
+    ),
     executeQuery: vi.fn(async (sql: string) => {
       executed.push(sql);
       return [];
@@ -99,7 +151,16 @@ import {
   getSingleMetadataServiceFromDI,
   getSingleRegistryFromDI,
 } from "../../helpers/di";
+import { judgeAddress } from "../../../shared/address-rule";
+import { ADDRESS_CASES } from "../../../shared/__tests__/helpers/address-cases";
 import { dispatchSingles } from "../single-dispatcher";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 /** Silent: these tests read the statements, not the log. */
 const logger: Logger = {
@@ -290,6 +351,86 @@ describe("createSingle — what the request forwards into the DDL", () => {
     expect(executed, "a rejected create must leave no table behind").toEqual(
       []
     );
+  });
+
+  /**
+   * The Builder's Single create judges a new address by the one rule every road shares: the same
+   * verdict and reason as configuration and the other creates, and for a refusal, no statement.
+   */
+  it.each(ADDRESS_CASES)(
+    "gives the address '%s' the rule's verdict, before any DDL",
+    async address => {
+      const refusal = judgeAddress("single", address);
+      if (refusal === null) {
+        const sql = await ddlFor({ ...base, slug: address });
+        expect(sql).toContain(`"single_${address.replace(/-/g, "_")}"`);
+        return;
+      }
+      executed.length = 0;
+      adapter = makeAdapter("postgresql");
+      wireRegistry();
+      await expect(
+        dispatchSingles("createSingle", {}, { ...base, slug: address })
+      ).rejects.toMatchObject({
+        publicData: { errors: [{ path: "slug", message: refusal.message }] },
+      });
+      expect(executed).toEqual([]);
+    }
+  );
+
+  it("refuses an address with the same snake_case form as a collection's, before any DDL", async () => {
+    executed.length = 0;
+    adapter = makeAdapter("postgresql");
+    adapter.select = vi.fn(async (table: string) =>
+      table === "dynamic_collections"
+        ? [{ id: "col_1", slug: "team-updates" }]
+        : []
+    );
+    wireRegistry();
+
+    await expect(
+      dispatchSingles("createSingle", {}, { ...base, slug: "team_updates" })
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          {
+            code: "SLUG_SAME_SNAKE_CASE",
+            message: expect.stringMatching(
+              /^Single address 'team_updates'.*collection 'team-updates'/
+            ),
+          },
+        ],
+      },
+    });
+    expect(executed).toEqual([]);
+  });
+
+  it("names both addresses when a Single of the same snake_case form also owns the table", async () => {
+    // `team-updates` holds `single_team_updates`, so the table-family check would refuse
+    // `team_updates` too, with a message naming neither. The address check comes first.
+    executed.length = 0;
+    adapter = makeAdapter("postgresql");
+    adapter.select = vi.fn(async (table: string) =>
+      table === "dynamic_singles" ? [{ id: "s_1", slug: "team-updates" }] : []
+    );
+    const registry = wireRegistry();
+    registry.getAllSingles.mockResolvedValue([
+      { slug: "team-updates", tableName: "single_team_updates" },
+    ]);
+
+    await expect(
+      dispatchSingles("createSingle", {}, { ...base, slug: "team_updates" })
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          {
+            code: "SLUG_SAME_SNAKE_CASE",
+            message: expect.stringMatching(/single 'team-updates'/),
+          },
+        ],
+      },
+    });
+    expect(executed).toEqual([]);
   });
 
   /**

@@ -1,11 +1,3 @@
-export { getSession, hasRole, hasAnyRole, hasAllRoles } from "./get-session";
-export type {
-  SessionUser,
-  AuthContext,
-  RefreshTokenRecord,
-} from "./session-types";
-export {
-  generateRefreshToken,
-  hashRefreshToken,
-  generateRefreshTokenId,
-} from "./refresh";
+// The session reader the auth middleware imports. The session types and
+// refresh-token helpers are imported from their own modules.
+export { getSession } from "./get-session";

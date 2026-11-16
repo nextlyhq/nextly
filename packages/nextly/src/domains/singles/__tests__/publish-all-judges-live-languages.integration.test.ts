@@ -59,7 +59,7 @@ describe("publishing every language of a Single", () => {
     ] as const) {
       const live = await singles.update(
         SLUG,
-        { siteName, region: "us", status: "published" },
+        { siteName, region: "us", status: "published", _overwrite: true },
         { locale, overrideAccess: true }
       );
       expect(live.success, JSON.stringify(live)).toBe(true);
@@ -67,14 +67,17 @@ describe("publishing every language of a Single", () => {
     // Held as English's pending change, and valid for English.
     const held = await singles.update(
       SLUG,
-      { region: "eu" },
+      { region: "eu", _overwrite: true },
       { locale: "en", overrideAccess: true }
     );
     expect(held.success, JSON.stringify(held)).toBe(true);
 
     let refused: unknown;
     await singles
-      .publishAllLocales(SLUG, { overrideAccess: true })
+      .publishAllLocales(SLUG, {
+        overrideAccess: true,
+        data: { _overwrite: true },
+      })
       .catch(error => (refused = error));
 
     expect(

@@ -22,6 +22,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql, type SQL } from "drizzle-orm";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import {
   identifierCaseRules,
   indexCatalog,
@@ -72,32 +73,39 @@ function mysqlRows<T>(result: unknown): T[] {
  * same on a table of ten rows and a table of ten million, where `COUNT(*)` scans.
  */
 /**
- * Whether a probe returned at least one row.
+ * The rows a query returned.
  *
  * Each dialect hands its rows back differently — node-postgres wraps them in a
  * QueryResult, mysql2 may or may not nest them in a tuple, better-sqlite3
- * returns a plain array — and every caller that asks "is there such a row?"
- * had to spell all three. Two did, identically. Asked here once so a fourth
- * caller cannot get one of the three shapes subtly wrong.
+ * returns a plain array — and every caller reading rows had to spell all three.
+ * Asked here once so another caller cannot get one of the three shapes subtly
+ * wrong.
  */
+async function rowsOf<T>(
+  db: unknown,
+  dialect: SupportedDialect,
+  query: SQL
+): Promise<T[]> {
+  if (dialect === "postgresql") {
+    // node-postgres returns the QueryResult object, not a flat row array.
+    const result = (await (db as PgMysqlExecute).execute(query)) as {
+      rows: T[];
+    };
+    return result.rows;
+  }
+  if (dialect === "mysql") {
+    return mysqlRows<T>(await (db as PgMysqlExecute).execute(query));
+  }
+  return (await (db as SqliteAll).all(query)) as T[];
+}
+
+/** Whether a probe returned at least one row. */
 async function probeReturnsRow(
   db: unknown,
   dialect: SupportedDialect,
   probe: SQL
 ): Promise<boolean> {
-  if (dialect === "postgresql") {
-    // node-postgres returns the QueryResult object, not a flat row array.
-    const result = (await (db as PgMysqlExecute).execute(probe)) as {
-      rows: unknown[];
-    };
-    return result.rows.length > 0;
-  }
-  if (dialect === "mysql") {
-    return (
-      mysqlRows<unknown>(await (db as PgMysqlExecute).execute(probe)).length > 0
-    );
-  }
-  return (await (db as SqliteAll).all(probe)).length > 0;
+  return (await rowsOf<unknown>(db, dialect, probe)).length > 0;
 }
 
 export async function tableHasRows(
@@ -113,6 +121,48 @@ export async function tableHasRows(
 }
 
 /**
+ * The views (materialized ones included) that read the table, on PostgreSQL: objects a
+ * `DROP TABLE ... CASCADE` removes along with it without being asked about, since they hold no
+ * foreign key `readReferencingTables` would find. MySQL and SQLite leave a view standing over a
+ * dropped table rather than removing it, so they answer none.
+ */
+export async function readDependentViews(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<string[]> {
+  if (dialect !== "postgresql") return [];
+  const rows = await rowsOf<{ view_name: string }>(
+    db,
+    dialect,
+    sql`SELECT DISTINCT v.relname AS view_name
+        FROM pg_depend d
+        JOIN pg_rewrite r ON r.oid = d.objid
+        JOIN pg_class v ON v.oid = r.ev_class
+        WHERE d.refobjid = to_regclass(${tableName}) AND v.oid <> d.refobjid`
+  );
+  return rows.map(row => row.view_name);
+}
+
+/**
+ * How many rows the table holds: what a refusal to build over a standing table names, so whoever
+ * deals with it can tell a stray test row from real content. `COUNT(*)` reads the whole table, so
+ * it is asked only of a table already known to hold rows (`tableHasRows`).
+ */
+export async function countTableRows(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<number> {
+  const [row] = await rowsOf<{ n: unknown }>(
+    db,
+    dialect,
+    sql`SELECT COUNT(*) AS n FROM ${sql.identifier(tableName)}`
+  );
+  return Number(row?.n ?? 0);
+}
+
+/**
  * The names of the tables that hold a foreign key REFERENCING the given table.
  *
  * The reverse of {@link readForeignKeyColumns}, and read from the live catalog for the same
@@ -122,6 +172,41 @@ export async function tableHasRows(
  * while the reference stands, and PostgreSQL's CASCADE silently strips the referrer's constraint
  * instead, so the caller has to deal with the referrers first either way.
  */
+/**
+ * The functions the database defines outside its system catalogs, lower-cased:
+ * the ones a statement calling them may run code through that the statement
+ * does not show. PostgreSQL's from every schema but `pg_catalog` and
+ * `information_schema`, an installed extension's members (`uuid_generate_v4`,
+ * pgcrypto's) counting as system ones (`PG_USER_FUNCTIONS`); MySQL's stored
+ * functions in the current database; SQLite defines none in SQL.
+ */
+export async function readUserFunctions(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<Set<string>> {
+  const names = new Set<string>();
+  if (dialect === "postgresql") {
+    const result = (await (db as PgMysqlExecute).execute(
+      sql`SELECT DISTINCT p.proname AS name
+          FROM pg_proc p
+          WHERE p.oid IN (${PG_USER_FUNCTIONS})`
+    )) as { rows: { name: string }[] };
+    for (const row of result.rows) names.add(row.name.toLowerCase());
+    return names;
+  }
+  if (dialect === "mysql") {
+    const rows = mysqlRows<{ ROUTINE_NAME: string }>(
+      await (db as PgMysqlExecute).execute(
+        sql`SELECT ROUTINE_NAME
+            FROM information_schema.ROUTINES
+            WHERE ROUTINE_SCHEMA = DATABASE() AND ROUTINE_TYPE = 'FUNCTION'`
+      )
+    );
+    for (const row of rows) names.add(row.ROUTINE_NAME.toLowerCase());
+  }
+  return names;
+}
+
 /**
  * What the live table says about these columns: which hold a NULL today, and
  * which are not there at all.
@@ -260,6 +345,295 @@ export async function readReferencingTables(
 }
 
 /**
+ * A relation as the next catalog read finds it again. PostgreSQL's is its `regclass` text in
+ * `table` (schema-qualified, and quoted, exactly when its bare name would not resolve to it) and
+ * no `schema`; MySQL's is its name in `table` and its database in `schema`, the current database
+ * when unset.
+ */
+export interface RelationRef {
+  schema?: string;
+  table: string;
+}
+
+/** One foreign key referencing a table, as a removal of that table's rows reaches it. */
+export interface ReferencingKey {
+  /**
+   * The referencing table, named the way an unqualified statement reaches it: its bare name when
+   * that name resolves to it, else qualified by its schema (PostgreSQL) or database (MySQL).
+   */
+  child: string;
+  /** How the next read finds the referencing table itself, never a same-named one. */
+  ref: RelationRef;
+  onDelete: "cascade" | "set null" | "set default" | "none";
+  /** The referencing table's key columns, in key order. */
+  columns: string[];
+}
+
+/** PostgreSQL's `confdeltype` codes for the actions that touch the referencing rows. */
+const PG_DELETE_ACTIONS: Record<string, ReferencingKey["onDelete"]> = {
+  c: "cascade",
+  n: "set null",
+  d: "set default",
+};
+
+/** MySQL's `DELETE_RULE` spellings for the actions that touch the referencing rows. */
+const MYSQL_DELETE_ACTIONS: Record<string, ReferencingKey["onDelete"]> = {
+  CASCADE: "cascade",
+  "SET NULL": "set null",
+  "SET DEFAULT": "set default",
+};
+
+/**
+ * Throws when `ref` resolves to no PostgreSQL relation, so a read through `to_regclass` that
+ * would match nothing answers "unreadable" to its caller instead of "none".
+ */
+async function requirePgRelation(db: unknown, ref: string): Promise<void> {
+  const result = (await (db as PgMysqlExecute).execute(
+    sql`SELECT to_regclass(${ref}) IS NULL AS missing`
+  )) as { rows: { missing: boolean }[] };
+  if (result.rows[0]?.missing !== false) {
+    throw NextlyError.internal({
+      logContext: { reason: "relation not resolved", relation: ref },
+    });
+  }
+}
+
+/**
+ * Every foreign key referencing `parent`, with the referencing table it lives on, its ON DELETE
+ * action and its columns, read in one pass from the keys themselves.
+ *
+ * Read by relation identity rather than by name: a referencing table is found again through the
+ * ref this returns, so one in another schema (PostgreSQL) or database (MySQL) is never confused
+ * with a same-named table the search path or the current database makes visible. On PostgreSQL
+ * the keys come straight from `pg_constraint` by OID, the child named by `conrelid::regclass`;
+ * on MySQL from `KEY_COLUMN_USAGE` joined to `REFERENTIAL_CONSTRAINTS`, across every database.
+ * SQLite applies no cascade during a migration (its runner turns enforcement off) and is not read.
+ */
+export async function readReferencingKeys(
+  db: unknown,
+  dialect: "postgresql" | "mysql",
+  parent: RelationRef
+): Promise<ReferencingKey[]> {
+  const keys = new Map<string, ReferencingKey>();
+  if (dialect === "postgresql") {
+    await requirePgRelation(db, parent.table);
+    const result = (await (db as PgMysqlExecute).execute(
+      sql`SELECT c.oid::text AS key_id, c.conrelid::regclass::text AS child,
+                 c.confdeltype::text AS action, a.attname::text AS column_name
+          FROM pg_constraint c
+          CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+          JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+          WHERE c.contype = 'f' AND c.confrelid = to_regclass(${parent.table})
+          ORDER BY c.oid, k.ord`
+    )) as {
+      rows: {
+        key_id: string;
+        child: string;
+        action: string;
+        column_name: string;
+      }[];
+    };
+    for (const row of result.rows) {
+      const key = keys.get(row.key_id) ?? {
+        child: row.child,
+        ref: { table: row.child },
+        onDelete: PG_DELETE_ACTIONS[row.action] ?? "none",
+        columns: [],
+      };
+      key.columns.push(row.column_name);
+      keys.set(row.key_id, key);
+    }
+    return [...keys.values()];
+  }
+
+  const schema =
+    parent.schema === undefined ? sql`DATABASE()` : sql`${parent.schema}`;
+  const rows = mysqlRows<{
+    CONSTRAINT_SCHEMA: string;
+    CONSTRAINT_NAME: string;
+    TABLE_SCHEMA: string;
+    TABLE_NAME: string;
+    COLUMN_NAME: string;
+    DELETE_RULE: string;
+    CURRENT_DB: string | null;
+  }>(
+    await (db as PgMysqlExecute).execute(
+      sql`SELECT k.CONSTRAINT_SCHEMA, k.CONSTRAINT_NAME, k.TABLE_SCHEMA, k.TABLE_NAME,
+                 k.COLUMN_NAME, r.DELETE_RULE, DATABASE() AS CURRENT_DB
+          FROM information_schema.KEY_COLUMN_USAGE k
+          JOIN information_schema.REFERENTIAL_CONSTRAINTS r
+            ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA
+           AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
+           AND r.TABLE_NAME = k.TABLE_NAME
+          WHERE k.REFERENCED_TABLE_SCHEMA = ${schema}
+            AND k.REFERENCED_TABLE_NAME = ${parent.table}
+          ORDER BY k.CONSTRAINT_SCHEMA, k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION`
+    )
+  );
+  for (const row of rows) {
+    const id = `${row.CONSTRAINT_SCHEMA}\u0000${row.TABLE_NAME}\u0000${row.CONSTRAINT_NAME}`;
+    // A table in the current database goes by its bare name, any other by its database's too.
+    const child =
+      row.TABLE_SCHEMA === row.CURRENT_DB
+        ? row.TABLE_NAME
+        : `${row.TABLE_SCHEMA}.${row.TABLE_NAME}`;
+    const key = keys.get(id) ?? {
+      child,
+      ref: { schema: row.TABLE_SCHEMA, table: row.TABLE_NAME },
+      onDelete: MYSQL_DELETE_ACTIONS[row.DELETE_RULE] ?? "none",
+      columns: [],
+    };
+    key.columns.push(row.COLUMN_NAME);
+    keys.set(id, key);
+  }
+  return [...keys.values()];
+}
+
+/**
+ * The PostgreSQL functions outside the system catalogs, as `pg_proc` oids: every function but
+ * those in `pg_catalog` and `information_schema`, and an installed extension's members
+ * (`pg_depend` deptype 'e'), which are the database's own as much as a built-in is.
+ */
+const PG_USER_FUNCTIONS = sql`
+  SELECT p.oid FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+    AND n.nspname NOT LIKE 'pg\\_%'
+    AND NOT EXISTS (
+      SELECT 1 FROM pg_depend e
+      WHERE e.classid = 'pg_proc'::regclass AND e.objid = p.oid AND e.deptype = 'e'
+    )`;
+
+/** Code a table carries that a change reaching it runs (`readHiddenCode`). */
+export interface HiddenCode {
+  /**
+   * Run by a row removed, written or blanked: any trigger (whatever its event, enabled or not), a
+   * PostgreSQL rule, or a default, generated column, CHECK, policy or domain CHECK calling a
+   * function outside the system catalogs and installed extensions.
+   */
+  rows: boolean;
+  /** Run by PostgreSQL's conversion of a column, which re-checks every row: such a CHECK or domain CHECK. */
+  rewrite: boolean;
+}
+
+/**
+ * What code `table` carries that a change to it runs, which no statement shows and which may
+ * delete other data. PostgreSQL reads it through the table's ref (`RelationRef.table`), throwing
+ * when the ref does not resolve: the triggers, the rules, and the expressions depending on a user
+ * function (`PG_USER_FUNCTIONS`) or an operator one implements, through `pg_depend`. MySQL and
+ * SQLite read only triggers: neither lets a default or a CHECK call a stored function.
+ */
+export async function readHiddenCode(
+  db: unknown,
+  dialect: SupportedDialect,
+  table: string
+): Promise<HiddenCode> {
+  if (dialect === "postgresql") return readPgHiddenCode(db, table);
+  const lower = table.toLowerCase();
+  const probe =
+    dialect === "mysql"
+      ? sql`SELECT 1 FROM information_schema.TRIGGERS
+            WHERE EVENT_OBJECT_SCHEMA = DATABASE()
+              AND lower(EVENT_OBJECT_TABLE) = ${lower}
+            LIMIT 1`
+      : sql`SELECT 1 FROM sqlite_master
+            WHERE type = 'trigger' AND lower(tbl_name) = ${lower}`;
+  return { rows: await probeReturnsRow(db, dialect, probe), rewrite: false };
+}
+
+/** `readHiddenCode` on PostgreSQL. */
+async function readPgHiddenCode(
+  db: unknown,
+  table: string
+): Promise<HiddenCode> {
+  await requirePgRelation(db, table);
+  const result = (await (db as PgMysqlExecute).execute(
+    sql`WITH rel AS (SELECT to_regclass(${table}) AS id),
+      user_fn AS (${PG_USER_FUNCTIONS}),
+      user_ref AS (
+        SELECT 'pg_proc'::regclass AS classid, oid AS objid FROM user_fn
+        UNION ALL
+        SELECT 'pg_operator'::regclass, o.oid
+        FROM pg_operator o JOIN user_fn f ON f.oid = o.oprcode
+      ),
+      checks AS (
+        SELECT 'pg_constraint'::regclass AS classid, c.oid AS objid
+        FROM pg_constraint c JOIN rel ON c.conrelid = rel.id
+        WHERE c.contype = 'c'
+        UNION ALL
+        SELECT 'pg_constraint'::regclass, c.oid
+        FROM pg_constraint c
+        JOIN pg_attribute a ON a.atttypid = c.contypid
+        JOIN rel ON a.attrelid = rel.id
+        WHERE c.contype = 'c' AND a.attnum > 0 AND NOT a.attisdropped
+      ),
+      exprs AS (
+        SELECT classid, objid FROM checks
+        UNION ALL
+        SELECT 'pg_attrdef'::regclass, d.oid
+        FROM pg_attrdef d JOIN rel ON d.adrelid = rel.id
+        UNION ALL
+        SELECT 'pg_policy'::regclass, p.oid
+        FROM pg_policy p JOIN rel ON p.polrelid = rel.id
+      ),
+      calls AS (
+        SELECT x.classid, x.objid FROM pg_depend d
+        JOIN user_ref u ON u.classid = d.refclassid AND u.objid = d.refobjid
+        JOIN exprs x ON x.classid = d.classid AND x.objid = d.objid
+      )
+      SELECT
+        (EXISTS (SELECT 1 FROM pg_trigger t JOIN rel ON t.tgrelid = rel.id
+                 WHERE NOT t.tgisinternal)
+         OR EXISTS (SELECT 1 FROM pg_rewrite r JOIN rel ON r.ev_class = rel.id
+                    WHERE r.rulename <> '_RETURN')
+         OR EXISTS (SELECT 1 FROM calls)) AS on_rows,
+        EXISTS (SELECT 1 FROM calls c JOIN checks k
+                ON k.classid = c.classid AND k.objid = c.objid) AS on_rewrite`
+  )) as { rows: { on_rows: boolean; on_rewrite: boolean }[] };
+  const row = result.rows[0];
+  return { rows: row?.on_rows !== false, rewrite: row?.on_rewrite !== false };
+}
+
+/**
+ * Every table that inherits from PostgreSQL table `table` (its ref), directly or through another,
+ * partitions included: the tables a DELETE or TRUNCATE of it without ONLY also empties. Each comes
+ * as its `regclass` text, schema-qualified exactly when its bare name would not resolve to it, so
+ * it is both the name and the ref. Throws when `table` does not resolve.
+ */
+export async function readPgDescendants(
+  db: unknown,
+  table: string
+): Promise<string[]> {
+  await requirePgRelation(db, table);
+  const result = (await (db as PgMysqlExecute).execute(
+    sql`WITH RECURSIVE d(id) AS (
+          SELECT i.inhrelid FROM pg_inherits i WHERE i.inhparent = to_regclass(${table})
+          UNION
+          SELECT i.inhrelid FROM pg_inherits i JOIN d ON i.inhparent = d.id
+        )
+        SELECT d.id::regclass::text AS name FROM d ORDER BY 1`
+  )) as { rows: { name: string }[] };
+  return result.rows.map(row => row.name);
+}
+
+/**
+ * The enabled PostgreSQL event triggers (`pg_event_trigger`, any `evtenabled` but 'D'), by
+ * name: code the database runs on DDL commands, which no statement in a migration shows. Other
+ * dialects have none. Throws when the catalog cannot be read.
+ */
+export async function readDdlEventTriggers(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<string[]> {
+  if (dialect !== "postgresql") return [];
+  const result = (await (db as PgMysqlExecute).execute(
+    sql`SELECT evtname AS name FROM pg_event_trigger
+        WHERE evtenabled <> 'D' ORDER BY 1`
+  )) as { rows: { name: string }[] };
+  return result.rows.map(row => row.name);
+}
+
+/**
  * The names of the indexes the table currently carries.
  *
  * Whether a column is indexed is not derivable from its field: an index is created by the path
@@ -309,6 +683,32 @@ export async function readIndexNames(
   return names;
 }
 
+/** The names of the unique ones among `indexes` (`readIndexUniqueness`). */
+export function uniqueIndexNames(
+  indexes: ReadonlyMap<string, { unique: boolean }>
+): Set<string> {
+  return new Set(
+    [...indexes].filter(([, index]) => index.unique).map(([name]) => name)
+  );
+}
+
+/**
+ * Each index the table carries, by name, with whether it is unique (`readIndexes`). A name says
+ * nothing about what an index enforces, so a caller relying on one being unique asks this.
+ */
+export async function readIndexUniqueness(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<Map<string, { unique: boolean }>> {
+  return new Map(
+    (await readIndexes(db, dialect, tableName)).map(index => [
+      index.name,
+      { unique: index.unique },
+    ])
+  );
+}
+
 /**
  * The columns a UNIQUE index covers on its own, whatever the index is called.
  *
@@ -338,6 +738,71 @@ export async function readUniqueColumns(
       index.droppableByName ? index.name : null,
     ])
   );
+}
+
+/** An object of the database holding a name an index is about to take. */
+export interface NameHolder {
+  /** Its name as stored, which on SQLite may differ from the one asked for in letter case. */
+  name: string;
+  /** What it is: `index`, `table`, `view` and so on. */
+  type: string;
+  /** The table an index belongs to; null for any other object. */
+  table: string | null;
+}
+
+/**
+ * For each of `names`, an object outside `tableName`'s own indexes that already holds it, where
+ * the dialect's index names are shared beyond one table. SQLite keeps one name space for the whole
+ * database and compares names without regard to case, so an index under the name on another
+ * table, or under the name in other letter case, holds it. PostgreSQL gives an index the name
+ * space of every relation in its schema. MySQL names an index per table, so nothing elsewhere can
+ * hold one of its names, and the result is empty there. A `CREATE INDEX IF NOT EXISTS` under a held
+ * name does nothing, so a caller refuses rather than record an index nothing created.
+ */
+export async function readNameHoldersElsewhere(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string,
+  names: readonly string[]
+): Promise<Map<string, NameHolder>> {
+  const held = new Map<string, NameHolder>();
+  if (dialect === "mysql") return held;
+  for (const name of names) {
+    const rows =
+      dialect === "sqlite"
+        ? ((await (db as SqliteAll).all(
+            sql`SELECT name, type, CASE WHEN type = 'index' THEN tbl_name END AS tbl
+                FROM sqlite_master WHERE name = ${name} COLLATE NOCASE`
+          )) as { name: string; type: string; tbl: string | null }[])
+        : (
+            (await (db as PgMysqlExecute).execute(
+              sql`SELECT c.relname AS name,
+                    CASE c.relkind WHEN 'i' THEN 'index' WHEN 'r' THEN 'table' WHEN 'v' THEN 'view'
+                      WHEN 'S' THEN 'sequence' ELSE 'relation' END AS type,
+                    t.relname AS tbl
+                  FROM pg_class c
+                  JOIN pg_namespace ns ON ns.oid = c.relnamespace
+                  LEFT JOIN pg_index i ON i.indexrelid = c.oid
+                  LEFT JOIN pg_class t ON t.oid = i.indrelid
+                  WHERE ns.nspname = current_schema() AND c.relname = ${name}`
+            )) as {
+              rows: { name: string; type: string; tbl: string | null }[];
+            }
+          ).rows;
+    // The table's own index under exactly this name is the per-table check's to judge.
+    const holder = rows.find(
+      row =>
+        !(row.type === "index" && row.tbl === tableName && row.name === name)
+    );
+    if (holder) {
+      held.set(name, {
+        name: holder.name,
+        type: holder.type,
+        table: holder.tbl ?? null,
+      });
+    }
+  }
+  return held;
 }
 
 /**
@@ -370,6 +835,85 @@ interface LiveIndex {
   wholeColumns: boolean;
   /** False for the primary key, and SQLite's index for an inline `UNIQUE`, which only a rebuild removes. */
   droppableByName: boolean;
+}
+
+/** A PostgreSQL collation, with the schema that holds it. */
+/**
+ * MySQL: by lower-cased table name, the lower-cased columns whose character set is not their
+ * table's default. A `MODIFY` or `CHANGE` that names no character set gives the column the
+ * table's default, converting every stored value, so only a column absent here keeps its values
+ * through a type change that widens it. A table read with no such column maps to an empty set.
+ */
+export async function readMysqlOtherCharsets(
+  db: unknown,
+  tableNames: readonly string[]
+): Promise<Map<string, Set<string>>> {
+  const found = new Map<string, Set<string>>(
+    tableNames.map(name => [name.toLowerCase(), new Set<string>()])
+  );
+  if (tableNames.length === 0) return found;
+  const rows = mysqlRows<{ TABLE_NAME: string; COLUMN_NAME: string }>(
+    await (db as PgMysqlExecute).execute(
+      sql`SELECT c.TABLE_NAME, c.COLUMN_NAME
+          FROM information_schema.COLUMNS c
+          JOIN information_schema.TABLES t
+            ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
+          JOIN information_schema.COLLATIONS co
+            ON co.COLLATION_NAME = t.TABLE_COLLATION
+          WHERE c.TABLE_SCHEMA = DATABASE()
+            AND c.TABLE_NAME IN (${sql.join(
+              tableNames.map(name => sql`${name}`),
+              sql`, `
+            )})
+            AND c.CHARACTER_SET_NAME IS NOT NULL
+            AND c.CHARACTER_SET_NAME <> co.CHARACTER_SET_NAME`
+    )
+  );
+  for (const row of rows) {
+    found.get(row.TABLE_NAME.toLowerCase())?.add(row.COLUMN_NAME.toLowerCase());
+  }
+  return found;
+}
+
+export interface PgCollation {
+  schema: string;
+  name: string;
+}
+
+/**
+ * The columns of a PostgreSQL table that carry a collation other than their type's default, by
+ * name. `ALTER COLUMN ... TYPE` sets the new type's default collation unless the statement names
+ * one, so a statement that changes a column's type restates what this reads. Each collation comes
+ * with its schema: one outside the search path does not resolve by its name alone, and a
+ * same-named one elsewhere on it would be taken instead. Read through `to_regclass`, so the table
+ * resolves on the search path as every other read here does.
+ */
+export async function readPgColumnCollations(
+  db: unknown,
+  tableName: string
+): Promise<Map<string, PgCollation>> {
+  const result = (await (db as PgMysqlExecute).execute(
+    sql`SELECT a.attname AS column_name, n.nspname AS collation_schema,
+               co.collname AS collation_name
+        FROM pg_attribute a
+        JOIN pg_collation co ON co.oid = a.attcollation
+        JOIN pg_namespace n ON n.oid = co.collnamespace
+        JOIN pg_type t ON t.oid = a.atttypid
+        WHERE a.attrelid = to_regclass(${tableName}) AND a.attnum > 0
+          AND NOT a.attisdropped AND a.attcollation <> t.typcollation`
+  )) as {
+    rows: {
+      column_name: string;
+      collation_schema: string;
+      collation_name: string;
+    }[];
+  };
+  return new Map(
+    result.rows.map(row => [
+      row.column_name,
+      { schema: row.collation_schema, name: row.collation_name },
+    ])
+  );
 }
 
 /** Every index on `tableName`, read once from the catalog of the dialect. */
@@ -536,4 +1080,148 @@ export async function readForeignKeyColumns(
   )) as SqliteForeignKeyRow[];
   for (const row of rows) record(row.from, null);
   return out;
+}
+
+/** What a column carries beside its type and default, as its database reports it. */
+export interface ColumnExtras {
+  comment: string | null;
+  /** MySQL: the column's character set. Null elsewhere, where a column has none of its own. */
+  charset: string | null;
+  /**
+   * The column's collation where it is not what a column of its type takes unnamed: PostgreSQL's
+   * non-default collation (schema-qualified), MySQL's collation, and on SQLite `declared` when the
+   * table's statement names any collation, which SQLite keeps only in that text.
+   */
+  collation: string | null;
+}
+
+/** The character set and collation a column added to a table without naming them takes. */
+export interface ReceivingDefaults {
+  charset: string | null;
+  collation: string | null;
+}
+
+/**
+ * The comment, character set and collation of each of `columns` on `table`, by column. A column
+ * the table does not have, or a table that does not exist, has no entry.
+ */
+export async function readColumnExtras(
+  db: unknown,
+  dialect: SupportedDialect,
+  table: string,
+  columns: readonly string[]
+): Promise<Map<string, ColumnExtras>> {
+  const found = new Map<string, ColumnExtras>();
+  if (columns.length === 0) return found;
+  const names = sql.join(
+    columns.map(name => sql`${name}`),
+    sql`, `
+  );
+  if (dialect === "postgresql") {
+    const result = (await (db as PgMysqlExecute).execute(
+      sql`SELECT a.attname AS column_name,
+                 col_description(a.attrelid, a.attnum) AS comment,
+                 CASE WHEN a.attcollation <> t.typcollation
+                      THEN n.nspname || '.' || co.collname END AS collation
+          FROM pg_attribute a
+          JOIN pg_type t ON t.oid = a.atttypid
+          LEFT JOIN pg_collation co ON co.oid = a.attcollation
+          LEFT JOIN pg_namespace n ON n.oid = co.collnamespace
+          WHERE a.attrelid = to_regclass(${table}) AND a.attnum > 0
+            AND NOT a.attisdropped AND a.attname IN (${names})`
+    )) as {
+      rows: {
+        column_name: string;
+        comment: string | null;
+        collation: string | null;
+      }[];
+    };
+    for (const row of result.rows) {
+      found.set(row.column_name, {
+        comment: row.comment,
+        charset: null,
+        collation: row.collation,
+      });
+    }
+    return found;
+  }
+  if (dialect === "mysql") {
+    const rows = mysqlRows<{
+      COLUMN_NAME: string;
+      COLUMN_COMMENT: string | null;
+      CHARACTER_SET_NAME: string | null;
+      COLLATION_NAME: string | null;
+    }>(
+      await (db as PgMysqlExecute).execute(
+        sql`SELECT COLUMN_NAME, COLUMN_COMMENT, CHARACTER_SET_NAME, COLLATION_NAME
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${table}
+              AND COLUMN_NAME IN (${names})`
+      )
+    );
+    for (const row of rows) {
+      found.set(row.COLUMN_NAME, {
+        // MySQL reports a column with no comment as an empty one.
+        comment: row.COLUMN_COMMENT ? row.COLUMN_COMMENT : null,
+        charset: row.CHARACTER_SET_NAME,
+        collation: row.COLLATION_NAME,
+      });
+    }
+    return found;
+  }
+  // SQLite keeps a column's collation only in its table's statement, so any collation the
+  // statement names counts for every column judged: telling which column it belongs to would take
+  // a parser of that statement, and no table Nextly creates names one.
+  const rows = (await Promise.resolve(
+    (db as SqliteAll).all(
+      sql`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ${table}`
+    )
+  )) as { sql: string | null }[];
+  const statement = rows[0]?.sql;
+  if (statement === undefined) return found;
+  const live = (await Promise.resolve(
+    (db as SqliteAll).all(
+      sql`SELECT name FROM pragma_table_info(${table}) WHERE name IN (${names})`
+    )
+  )) as { name: string }[];
+  // Quoted text is left out first: a column named "collate", or a default literal holding the
+  // word, names no collation.
+  const unquoted = (statement ?? "").replace(
+    /'(?:[^']|'')*'|"(?:[^"]|"")*"|`(?:[^`]|``)*`|\[[^\]]*\]/g,
+    " "
+  );
+  const declared = /\bcollate\b/i.test(unquoted) ? "declared" : null;
+  for (const { name } of live) {
+    found.set(name, { comment: null, charset: null, collation: declared });
+  }
+  return found;
+}
+
+/**
+ * The character set and collation a column added to `table` without naming them takes: on MySQL
+ * the table's own defaults, or the database's where the table does not exist yet and will be
+ * created naming none. PostgreSQL gives such a column its type's collation and SQLite none, so
+ * both report none.
+ */
+export async function readReceivingDefaults(
+  db: unknown,
+  dialect: SupportedDialect,
+  table: string
+): Promise<ReceivingDefaults> {
+  if (dialect !== "mysql") return { charset: null, collation: null };
+  const [own] = mysqlRows<{ charset: string; collation: string }>(
+    await (db as PgMysqlExecute).execute(
+      sql`SELECT co.CHARACTER_SET_NAME AS charset, t.TABLE_COLLATION AS collation
+          FROM information_schema.TABLES t
+          JOIN information_schema.COLLATIONS co ON co.COLLATION_NAME = t.TABLE_COLLATION
+          WHERE t.TABLE_SCHEMA = DATABASE() AND t.TABLE_NAME = ${table}`
+    )
+  );
+  if (own !== undefined) return own;
+  const [database] = mysqlRows<{ charset: string; collation: string }>(
+    await (db as PgMysqlExecute).execute(
+      sql`SELECT @@character_set_database AS charset, @@collation_database AS collation`
+    )
+  );
+  return database ?? { charset: null, collation: null };
 }

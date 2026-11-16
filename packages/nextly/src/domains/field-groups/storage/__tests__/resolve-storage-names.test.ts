@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
-import { introspectLiveSnapshot } from "../../../schema/pipeline/diff/introspect-live";
+import { introspectLiveColumns } from "../../../schema/pipeline/diff/introspect-live";
 import type { ColumnSpec } from "../../../schema/pipeline/diff/types";
 import { identifierCaseRules } from "../../../schema/utils/resolve-catalog-name";
 import { MIGRATION_TARGET } from "../../migration/manifest";
@@ -19,9 +19,10 @@ import {
   type StorageNameAdapter,
 } from "../resolve-storage-names";
 
-// The live-snapshot read is the only I/O `resolveTypeColumns` does that these
+// The live-column read is the only I/O `resolveTypeColumns` does that these
 // cases need to control; everything else in the module answers from the dialect.
 vi.mock("../../../schema/pipeline/diff/introspect-live", () => ({
+  introspectLiveColumns: vi.fn(),
   introspectLiveSnapshot: vi.fn(),
 }));
 
@@ -293,7 +294,7 @@ describe("resolveKnownTypeColumns", () => {
 
   /**
    * SQLite so `readIdentifierCaseRules` answers from the dialect alone. The
-   * snapshot is served from `catalog`, and any table listed in `poison` throws
+   * columns are served from `catalog`, and any table listed in `poison` throws
    * the way a driver does when it cannot describe one — which fails the whole
    * batch, since one query covers every table.
    */
@@ -301,7 +302,7 @@ describe("resolveKnownTypeColumns", () => {
     catalog: Record<string, string[]>,
     poison: string[] = []
   ): CatalogReadAdapter {
-    vi.mocked(introspectLiveSnapshot).mockImplementation(
+    vi.mocked(introspectLiveColumns).mockImplementation(
       (_db: unknown, _dialect: SupportedDialect, tables?: string[]) => {
         const asked = tables ?? [];
         if (asked.some(table => poison.includes(table))) {

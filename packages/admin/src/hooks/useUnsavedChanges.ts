@@ -18,8 +18,10 @@
 
 import { useEffect, useCallback, useState, useRef } from "react";
 
+import { DOCUMENT_TAB_PARAM } from "@admin/components/features/entries/EntryForm/document-tab-address";
 import { HISTORY_ADDRESS_PARAMS } from "@admin/components/features/versions/history-address";
 import {
+  DOCUMENT_VIEW_ADDRESS_PARAMS,
   drawnDocumentView,
   type DocumentKind,
 } from "@admin/lib/plugins/document-view-registry";
@@ -124,8 +126,15 @@ function documentOf(
   );
   if (entry !== null) {
     const [, slug, id, view] = entry;
-    if (id === "create" || !isViewOf("collection", slug, view, fields))
-      return undefined;
+    // A new entry is the create page itself, with no id to hang a view on:
+    // its own address, with or without a part of it named in the query, is
+    // that one unsaved entry, and no view address is.
+    if (id === "create") {
+      return view === undefined
+        ? JSON.stringify(["collection", slug, "create"])
+        : undefined;
+    }
+    if (!isViewOf("collection", slug, view, fields)) return undefined;
     return JSON.stringify(["collection", slug, id]);
   }
   const single = /^\/admin\/singles\/([^/]+)(?:\/([^/]+))?$/.exec(pathname);
@@ -136,28 +145,59 @@ function documentOf(
 }
 
 /**
- * The query without the keys that move within the document: `field`, which
- * picks a view's field, and the history panel's own keys, which open history
- * beside the document and choose a version in it.
+ * The query without the keys that move within the document: a view's own
+ * keys, which pick its field and the part of it it opens at, the history
+ * panel's, which open history beside the document and choose a version in it,
+ * and the editor's open tab.
  */
 function queryBesidesField(search: string): string {
   const params = new URLSearchParams(search);
-  params.delete("field");
+  for (const key of DOCUMENT_VIEW_ADDRESS_PARAMS) params.delete(key);
   for (const key of HISTORY_ADDRESS_PARAMS) params.delete(key);
+  params.delete(DOCUMENT_TAB_PARAM);
   return params.toString();
 }
 
 /**
- * Whether a move is between one document's edit address and its own views, or
- * opens or moves through its history beside it. The same page answers all of
- * them and keeps the same form mounted, so nothing unsaved is left behind. Any other query change — a language among
- * them — still counts, and so does another document's view.
+ * A document editor's own address, a new entry's included: the pages whose
+ * `?tab=` names the editor's open tab rather than anything else.
+ */
+const EDITOR_ADDRESS =
+  /^\/admin\/(?:collections\/[^/]+\/[^/]+|singles\/[^/]+)$/;
+
+/**
+ * Whether a move only opens another tab of the editor on screen: the same
+ * editor address but for the open tab. That keeps the same form mounted on
+ * every editor, a new entry's among them, which has no document to stay on
+ * yet.
+ */
+function opensAnotherTab(
+  from: { pathname: string; search: string },
+  to: { pathname: string; search: string }
+): boolean {
+  if (from.pathname !== to.pathname || !EDITOR_ADDRESS.test(from.pathname)) {
+    return false;
+  }
+  const was = new URLSearchParams(from.search);
+  const next = new URLSearchParams(to.search);
+  was.delete(DOCUMENT_TAB_PARAM);
+  next.delete(DOCUMENT_TAB_PARAM);
+  return was.toString() === next.toString();
+}
+
+/**
+ * Whether a move is between one document's edit address and its own views,
+ * opens or moves through its history beside it, or opens another of its
+ * editor's tabs. The same page answers all of them and keeps the same form
+ * mounted, so nothing unsaved is left behind. Any other query change — a
+ * language among them — still counts, and so does another document's view.
  */
 function staysOnDocument(
   from: { pathname: string; search: string },
   to: { pathname: string; search: string },
   fields: readonly object[] | undefined
 ): boolean {
+  if (opensAnotherTab(from, to)) return true;
   // The guard's fields are the current document's, which is the one the
   // move would have to stay on.
   const here = documentOf(from.pathname, fields);
@@ -371,6 +411,11 @@ function holder(track: {
 
 /** What a history-write interceptor reads, from the hook. */
 interface WriteTrack {
+  /**
+   * Whether the guard that put this interceptor up is still on. Set false as it comes down: an
+   * interceptor another guard has since wrapped stays in the chain, and passes every write on.
+   */
+  live: { current: boolean };
   isDirty: boolean;
   isNavigating: { current: boolean };
   fields: { current: readonly object[] | undefined };
@@ -390,12 +435,17 @@ function writeInterceptor(
   kind: "pushState" | "replaceState",
   track: WriteTrack
 ): History["pushState"] {
-  return function (
+  const intercept = function (
     this: History,
     data: unknown,
     unused: string,
     url?: string | URL | null
   ): void {
+    // A guard that has come down holds nothing: passed on as written.
+    if (!track.live.current) {
+      write.apply(this, [data, unused, url]);
+      return;
+    }
     // Let through: nothing unsaved, a write the guard is making itself, or
     // one that stays put (a hash, or a rewrite of the same address).
     if (
@@ -410,6 +460,38 @@ function writeInterceptor(
     // Held, and asked about; never written.
     track.hold({ type: kind, args: [data, unused, url] });
   };
+  interceptors.set(intercept, { live: track.live, original: write });
+  return intercept;
+}
+
+/**
+ * Every interceptor a guard has put up, with whether its guard is still on and the write it
+ * wraps. Guards and the router do not come and go as a stack: under Activity a page's guard is
+ * put up before the router that wraps it, and two guards on one page change in whatever order
+ * the page does. So a guard coming down cannot count on its interceptor being the outermost,
+ * nor on what it wrapped still being on; it unwinds instead (`unwindGuardsGone`).
+ */
+const interceptors = new WeakMap<
+  object,
+  { live: { current: boolean }; original: History["pushState"] }
+>();
+
+/**
+ * Take every interceptor whose guard has come down off the top of `history[kind]`, down to the
+ * first that is still on, the router's own patch, or the browser's method. Read and written
+ * through `Reflect`, as the property it is, since the method is only ever compared and put
+ * back here, never called.
+ */
+function unwindGuardsGone(kind: "pushState" | "replaceState"): void {
+  const top: unknown = Reflect.get(window.history, kind);
+  if (typeof top !== "function") return;
+  let current: object = top;
+  let found = interceptors.get(current);
+  while (found !== undefined && !found.live.current) {
+    current = found.original;
+    found = interceptors.get(current);
+  }
+  if (current !== top) Reflect.set(window.history, kind, current);
 }
 
 /**
@@ -485,6 +567,76 @@ function popStateHandler(track: PopStateTrack): (event: PopStateEvent) => void {
 }
 
 /**
+ * The Navigation API, where the browser has one: what reports a Back or
+ * Forward before it moves, and lets the page cancel it.
+ */
+interface NavigationTarget extends EventTarget {
+  currentEntry?: { index: number } | null;
+}
+
+/** A `navigate` event, as much of it as the guard reads. */
+interface NavigateEvent extends Event {
+  navigationType: string;
+  destination: { url: string; index: number };
+}
+
+/**
+ * The Navigation API where it can report events: a `navigation` without them,
+ * as a partial stand-in has, is as good as none, and Back is held on
+ * `popstate` alone.
+ */
+function navigationApi(): NavigationTarget | undefined {
+  const navigation = (window as { navigation?: Partial<NavigationTarget> })
+    .navigation;
+  return typeof navigation?.addEventListener === "function" &&
+    typeof navigation.removeEventListener === "function"
+    ? (navigation as NavigationTarget)
+    : undefined;
+}
+
+/**
+ * The guard's `navigate` handler: a Back or Forward that would leave unsaved
+ * changes is cancelled before it moves, and asked about.
+ *
+ * 🔴 This is what holds Back wherever the admin's code arrives after the
+ * host's router. `popstate` reaches `window`'s listeners in the order they
+ * were added, and a page rendered with Cache Components streams the admin in
+ * after Next's App Router has added its listener, so the router hears a Back
+ * first, draws the page it goes to and hides this one, guard and all. A
+ * cancelled traversal moves nothing and fires no `popstate`, so no router
+ * hears it whatever order the listeners are in.
+ *
+ * Only a traversal the browser lets the page cancel is held here. A browser
+ * lets a page cancel Back only after the reader has used the page since the
+ * last time it did, so that a page can never trap Back; one it does not let
+ * cancel moves, and the `popstate` handler asks about it as before.
+ */
+function navigateHandler(track: PopStateTrack): (event: Event) => void {
+  return event => {
+    const navigate = event as NavigateEvent;
+    if (navigate.navigationType !== "traverse" || !navigate.cancelable) return;
+    if (
+      !track.isDirty ||
+      track.isNavigating.current ||
+      // The guard's own traversal: a confirmed leave going ahead.
+      track.traversal.current !== "none" ||
+      !movesElsewhere(navigate.destination.url, track.fields.current)
+    ) {
+      return;
+    }
+    navigate.preventDefault();
+    const now = historyIndex();
+    const steps =
+      now === undefined || navigate.destination.index < 0
+        ? undefined
+        : navigate.destination.index - now;
+    track.hold(
+      steps === undefined ? { type: "popstate" } : { type: "popstate", steps }
+    );
+  };
+}
+
+/**
  * The guards' one `popstate` listener, registered when this module loads, and
  * the handlers of the guards mounted now, in the order they mounted.
  *
@@ -495,9 +647,10 @@ function popStateHandler(track: PopStateTrack): (event: PopStateEvent) => void {
  * listener when the app mounts. During `popstate` React renders
  * synchronously, so the router drew the page Back was going to and unmounted
  * this one, taking the guard's listener with it, before the guard was asked:
- * a Back with unsaved changes left without a word. The admin's module has to
- * load before any page can draw it, so a listener added here is ahead of every
- * router by construction.
+ * a Back with unsaved changes left without a word. A listener added here is
+ * ahead of every router that is added when the admin draws. It is not ahead of
+ * one added before the admin's code arrives, as Next's App Router is on a page
+ * rendered with Cache Components; `navigateHandler` holds Back there.
  *
  * Kept on `globalThis` so a module evaluated again (a hot reload) reuses the
  * one listener and its list rather than adding a second.
@@ -683,7 +836,10 @@ export function useUnsavedChanges({
       },
     });
 
+    // This effect's interceptors are on until its cleanup.
+    const live = { current: true };
     const writes = {
+      live,
       isDirty,
       isNavigating,
       fields: fieldsRef,
@@ -701,15 +857,23 @@ export function useUnsavedChanges({
       writes
     );
 
-    // Back and Forward: held and undone, `popStateHandler` says how.
-    const handlePopState = popStateHandler({
+    // A confirmed leave whose `popstate` this guard never heard, because a
+    // router heard it first and hid the page (`navigateHandler`), is long
+    // over by the time the page is shown again.
+    if (traversal.current === "releasing") traversal.current = "none";
+
+    // Back and Forward: cancelled before they move where the browser allows
+    // it (`navigateHandler`), held and undone after (`popStateHandler`).
+    const traversals = {
       isDirty,
       isNavigating,
       traversal,
       lastLocation,
       fields: fieldsRef,
       hold,
-    });
+    };
+    const handlePopState = popStateHandler(traversals);
+    const handleNavigate = navigateHandler(traversals);
 
     // Handle browser close/refresh
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -729,19 +893,24 @@ export function useUnsavedChanges({
     // load; see `popStateGuards` for why a listener added here is too late.
     const guards = popStateGuards();
     guards.push(handlePopState);
+    // Absent where the browser has no Navigation API; `popstate` alone then.
+    const navigation = navigationApi();
+    navigation?.addEventListener("navigate", handleNavigate);
     window.addEventListener("beforeunload", handleBeforeUnload);
 
     // Cleanup
     return () => {
-      // Restore original methods
-      if (originalPushState.current) {
-        window.history.pushState = originalPushState.current;
-      }
-      if (originalReplaceState.current) {
-        window.history.replaceState = originalReplaceState.current;
-      }
+      // Not the original put back as it was found: by now another guard, or the router, may
+      // wrap this interceptor, and putting back what it wrapped would take that one down too,
+      // or bring back a guard that has gone. This one is marked gone instead, which makes it
+      // pass every write on wherever it sits, and the outermost write loses every gone
+      // interceptor at its top, this one with it when it is there (`unwindGuardsGone`).
+      live.current = false;
+      unwindGuardsGone("pushState");
+      unwindGuardsGone("replaceState");
       const at = guards.indexOf(handlePopState);
       if (at !== -1) guards.splice(at, 1);
+      navigation?.removeEventListener("navigate", handleNavigate);
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, [isDirty, disabled]);

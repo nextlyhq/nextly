@@ -5,11 +5,16 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { resolveLocalizedFieldNames } from "../domains/i18n/classify-fields";
 import type { LocalizedFieldRef } from "../domains/i18n/companion-join";
+import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../domains/i18n/per-language-storage";
 import type { CompanionSchema } from "../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../domains/i18n/runtime/companion-registration";
 import { applyMigrationWhole } from "../domains/schema/services/apply-migration-statements";
 import { toSnakeCase } from "../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
+import { NextlyError } from "../errors/nextly-error";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import { consoleLogger } from "../shared/types";
 import type { DatabaseInstance } from "../types/database-operations";
@@ -71,6 +76,10 @@ export class CollectionFileManager {
   private db: DatabaseInstance;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private schemaRegistry: Map<string, any> = new Map();
+  // The keys a caller registered a schema of its own under
+  // (`registerSchema(s)`), which `forgetBuiltSchemas` keeps: there may be no
+  // registry row to build them again from.
+  private callerSchemas = new Set<string>();
   private adapter?: DrizzleAdapter;
   private metadataFetcher?: CollectionMetadataFetcher;
 
@@ -96,7 +105,9 @@ export class CollectionFileManager {
   }
 
   registerSchema(collectionName: string, schema: unknown): void {
-    this.schemaRegistry.set(`dc_${collectionName.replace(/-/g, "_")}`, schema);
+    const key = `dc_${collectionName.replace(/-/g, "_")}`;
+    this.schemaRegistry.set(key, schema);
+    this.callerSchemas.add(key);
   }
 
   registerSchemas(schemas: Record<string, unknown>): void {
@@ -105,6 +116,7 @@ export class CollectionFileManager {
     });
     Object.entries(schemas).forEach(([key, schema]) => {
       this.schemaRegistry.set(key, schema);
+      this.callerSchemas.add(key);
       consoleLogger.info("[FileManager] Registered schema", { key });
     });
     consoleLogger.info("[FileManager] Registry now has", {
@@ -125,6 +137,21 @@ export class CollectionFileManager {
   // (built from the apply payload's `fields` list).
   refreshSchema(tableName: string, freshTable: unknown): void {
     this.schemaRegistry.set(tableName, freshTable);
+    // Built from the registry's fields now, so a later reload may build it again.
+    this.callerSchemas.delete(tableName);
+  }
+
+  /**
+   * Drop every table this cache built from registry rows (or was handed by a
+   * save), so each is built again from the rows as they now are on its next
+   * read. Called when the registry changed somewhere this process did not see:
+   * another server copy's save, a migration, the CLI. Schemas a caller
+   * registered itself are kept, since no registry row may describe them.
+   */
+  forgetBuiltSchemas(): void {
+    for (const key of [...this.schemaRegistry.keys()]) {
+      if (!this.callerSchemas.has(key)) this.schemaRegistry.delete(key);
+    }
   }
 
   /**
@@ -152,13 +179,40 @@ export class CollectionFileManager {
     await fs.writeFile(migrationPath, migrationSQL);
   }
 
+  /**
+   * Write a delete's drop migration, refusing a name already taken: two
+   * deletes of the same collections in the same millisecond name the same
+   * file, and the second overwriting it would let its withdrawal, should it
+   * fail, remove the file the first delete still needs.
+   */
   async saveDropMigration(
     migrationSQL: string,
     migrationFileName: string
   ): Promise<void> {
     await fs.mkdir(this.migrationsDir, { recursive: true });
     const migrationPath = path.join(this.migrationsDir, migrationFileName);
-    await fs.writeFile(migrationPath, migrationSQL);
+    try {
+      await fs.writeFile(migrationPath, migrationSQL, { flag: "wx" });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      throw NextlyError.conflict({
+        reason: "state",
+        message: `The drop migration ${migrationFileName} already exists: another delete of the same collections wrote it. Nothing was removed; try the delete again.`,
+        cause: error as Error,
+        logContext: { migrationFileName },
+      });
+    }
+  }
+
+  /**
+   * Remove a drop migration `saveDropMigration` wrote, for a delete that then
+   * failed: left behind, the next `nextly migrate` would drop the tables of
+   * collections that are still registered. Gone already is the same as removed.
+   */
+  async removeDropMigration(migrationFileName: string): Promise<void> {
+    await fs.rm(path.join(this.migrationsDir, migrationFileName), {
+      force: true,
+    });
   }
 
   /**
@@ -238,7 +292,7 @@ export class CollectionFileManager {
             // `select().from(schema)` would reference columns that no longer exist.
             {
               status: metadata.status === true,
-              localized: metadata.localized === true,
+              localized: storesPerLanguage(metadata),
             }
           );
 
@@ -294,7 +348,8 @@ export class CollectionFileManager {
   ): Promise<CompanionSchema | null> {
     if (!this.adapter || !this.metadataFetcher) return null;
     const metadata = await this.metadataFetcher(collectionName, executor);
-    if (!metadata || metadata.localized !== true) return null;
+    // Only a collection whose translatable values live in a companion has one to load.
+    if (!metadata || !storesPerLanguage(metadata)) return null;
 
     const tableName =
       metadata.tableName || `dc_${collectionName.replace(/-/g, "_")}`;
@@ -308,7 +363,8 @@ export class CollectionFileManager {
       true
     ).map(name => ({ name, column: toSnakeCase(name) }));
     if (localizedFields.length === 0) return null;
-    const hasStatus = metadata.status === true; // i18n M6: per-locale `_status` column
+    // A per-language `_status` only where the collection publishes each language on its own.
+    const hasStatus = publishesPerLanguage(metadata);
     // `_updated_at`: unconditional, unlike `_status` -- every companion's declared shape carries
     // `_updated_at`, so there is no metadata flag to read it from. Stated at each
     // construction rather than defaulted in the type, so adding a further structural column

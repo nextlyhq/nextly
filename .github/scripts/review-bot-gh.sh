@@ -83,6 +83,18 @@ posted_ids() {
 # `--no-textconv` keep a configured diff driver from running anything.
 GIT_READ=(git --no-pager)
 
+# The base branch under review, as the review workflow records it in
+# `refs/review/base` before the agent starts (`dev` for an ordinary pull
+# request, `main` for a promotion or a release). Where nothing recorded it,
+# `main`, as before there were two.
+base_rev() {
+  if git rev-parse --verify --quiet refs/review/base >/dev/null; then
+    echo refs/review/base
+  else
+    echo origin/main
+  fi
+}
+
 command="${1:-}"
 shift || true
 
@@ -183,10 +195,11 @@ case "$command" in
     exec gh api "repos/$REPO/pulls/$1" --jq '.head.sha'
     ;;
   base-file)
-    # One file as `main` has it: `git show origin/main:<path>`, from the local
-    # clone, which the workflow fetches whole.
+    # One file as the base branch under review has it:
+    # `git show <base>:<path>`, from the local clone, which the workflow
+    # fetches whole.
     require_path "${1:-}"
-    exec "${GIT_READ[@]}" show --no-ext-diff --no-textconv "origin/main:$1"
+    exec "${GIT_READ[@]}" show --no-ext-diff --no-textconv "$(base_rev):$1"
     ;;
   delta)
     # What changed since an earlier reviewed commit: `git diff <sha>..HEAD`.
@@ -195,13 +208,14 @@ case "$command" in
     ;;
   line-history)
     # How lines came to be: `git log -L <start>,<end>:<path>`, on HEAD unless
-    # `main` is asked for.
+    # the base branch is asked for (`base`, or `main`, its name from before
+    # pull requests could target `dev`).
     [[ "${1:-}" =~ ^[0-9]+,[0-9]+$ ]] || die "expected <start>,<end>, got '${1:-}'"
     require_path "${2:-}"
     case "${3:-HEAD}" in
       HEAD) rev=HEAD ;;
-      main) rev=origin/main ;;
-      *) die "expected HEAD or main, got '${3:-}'" ;;
+      base | main) rev=$(base_rev) ;;
+      *) die "expected HEAD or base, got '${3:-}'" ;;
     esac
     exec "${GIT_READ[@]}" log --no-ext-diff --no-textconv -L "$1:$2" "$rev"
     ;;

@@ -1,0 +1,23 @@
+---
+title: PLUGIN_ENTRY_EXPORTS_SEVERAL
+description: "The file given to `--plugin` exports more than one plugin, so it is not clear which to generate for."
+---
+
+## Cause
+
+The file given to `--plugin` exports more than one plugin, so it is not clear which to generate for.
+
+`nextly migrate:create --plugin <entry>` generates the migrations of one plugin at a time, read from the file it is given. A file that exports several plugin definitions leaves it unclear which one is meant.
+
+## Fix
+
+Point `--plugin` at a file that exports one plugin, or make the one you mean its default export.
+
+## Example
+
+```text
+✗ The plugin entry src/plugin.ts exports more than one plugin (seo, sitemap).
+  Why:  `nextly migrate:create --plugin` generates the migrations of one plugin at a time.
+  Next: Point --plugin at a file that exports one, or export it as the default.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-entry-exports-several  (PLUGIN_ENTRY_EXPORTS_SEVERAL)
+```

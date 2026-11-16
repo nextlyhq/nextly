@@ -25,7 +25,7 @@ vi.mock("../../../lib/env", () => ({
   env: { NEXTLY_ALLOWED_ORIGINS_PARSED: [] },
 }));
 
-vi.mock("../../../di/register", () => ({ getService: () => ({}) }));
+vi.mock("../../../di/service-access", () => ({ getService: () => ({}) }));
 vi.mock("../../../utils/proxy-trust", () => ({
   readProxyTrustSettings: () => ({ trustProxy: false, trustedProxyIps: [] }),
 }));
@@ -57,7 +57,13 @@ const csrfRoute = (
   handler: (req: Request) => Promise<Response> | Response
 ): RouteMatch => ({
   pluginName: "@a/x",
-  route: { method: "POST", path: "/r", csrf: true, handler } as PluginRoute,
+  route: {
+    siteWide: false,
+    method: "POST",
+    path: "/r",
+    csrf: true,
+    handler,
+  } as PluginRoute,
   baseCtx,
   params: {},
 });

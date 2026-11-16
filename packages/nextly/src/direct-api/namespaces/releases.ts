@@ -42,10 +42,13 @@ import type {
   ReleaseCalendarQuery,
   ReleaseCountQuery,
   ReleaseDetailsChange,
+  ReleaseMemberRemoval,
   ReleaseMembersView,
   ReleaseReadinessEntry,
   ReleaseReadinessView,
   ReleasesService,
+  ReleaseWithAddedMembers,
+  ScheduleDocumentInput,
 } from "../../domains/releases/services/releases-service";
 import { NextlyError } from "../../errors/nextly-error";
 import type {
@@ -108,7 +111,7 @@ export interface ReleasesNamespace {
   /**
    * Make a release. `kind` is `release` (the default), or `single` for a
    * document scheduled on its own, which holds exactly one document; it is
-   * fixed once the release exists. `kind` is `@experimental`.
+   * fixed once the release exists.
    */
   create(
     args: {
@@ -135,20 +138,21 @@ export interface ReleasesNamespace {
    * member's action, because a release can publish one document while taking
    * another down. Declared in the return type rather than left to the
    * runtime: a caller that cannot see `memberAction` cannot tell which way a
-   * release moves the document it just asked about.
-   *
-   * `tab`, `kind`, `search`, `day` and `page` are `@experimental`.
+   * release moves the document it just asked about. Each row also carries
+   * `memberId`, the membership `removeMember` takes the document out with.
    */
   find(
     args?: FindReleasesQuery & ReleaseCallerArgs
-  ): Promise<ListResult<ReleaseRow & { memberAction?: ReleaseMemberAction }>>;
+  ): Promise<
+    ListResult<
+      ReleaseRow & { memberAction?: ReleaseMemberAction; memberId?: string }
+    >
+  >;
   /**
    * How many releases a listing holds, without reading them: the same tab,
    * state, window and search `find` takes, and the same answer as its
    * `meta.total`. What a page outside Releases asks, such as "how many need
    * attention?".
-   *
-   * @experimental
    */
   count(args?: ReleaseCountQuery & ReleaseCallerArgs): Promise<number>;
   /**
@@ -160,8 +164,6 @@ export interface ReleasesNamespace {
    * first three in time order; the rest of a day is `find({ day })`. Refused
    * for an unknown zone, a date that does not exist, a `to` before `from`, or
    * a window longer than 42 days.
-   *
-   * @experimental
    */
   calendar(
     args: ReleaseCalendarQuery & ReleaseCallerArgs
@@ -193,8 +195,6 @@ export interface ReleasesNamespace {
    * {@link blockingReasons} with the blocked documents the caller may not
    * read counted by collection in `hidden`, so a release blocked only by
    * documents they cannot see still reads as blocked.
-   *
-   * @experimental
    */
   blockersOf(
     args: { releaseId: string } & ReleaseCallerArgs
@@ -208,8 +208,6 @@ export interface ReleasesNamespace {
    * counted by collection in `hidden`, so the release is ready only when
    * `hard` is empty and no `hidden` entry has a hard problem. An unknown
    * release is refused as not found.
-   *
-   * @experimental
    */
   readiness(
     args: { releaseId: string } & ReleaseCallerArgs
@@ -220,8 +218,6 @@ export interface ReleasesNamespace {
    * holding more documents than a release may now hold comes back
    * `checked: false`, for the single read to check in full. More than fifty
    * ids are refused.
-   *
-   * @experimental
    */
   readinessOf(
     args: { releaseIds: readonly string[] } & ReleaseCallerArgs
@@ -230,8 +226,6 @@ export interface ReleasesNamespace {
    * How many documents each of these releases holds, and how many it puts
    * live and takes down, keyed by release id. Every id asked about is
    * answered, with zeros for a release holding none.
-   *
-   * @experimental
    */
   memberCounts(
     args: { releaseIds: readonly string[] } & ReleaseCallerArgs
@@ -256,14 +250,53 @@ export interface ReleasesNamespace {
    * documents it links to that will not be live at the release's moment, so
    * they can be offered too. Only documents the caller may read are named; the
    * rest are counted in `hiddenCount`.
-   *
-   * @experimental The `unpublishedLinks` field.
    */
   addMember(
     args: { releaseId: string } & AddMemberInput & ReleaseCallerArgs
   ): Promise<AddedReleaseMember>;
   /**
+   * Put several documents into a release in one step, each with its action
+   * (`publish` to go live, `unpublish` to come down): all of them, or none.
+   *
+   * Each document is checked as {@link addMember} checks one, and the first
+   * refusal refuses the step with nothing written: a document the caller may
+   * not act on or read, one in a collection with no lifecycle, a document
+   * named twice, more than the release has room for (the refusal says how
+   * many fit), or, for a scheduled release, a document with a hard problem,
+   * named in `data.problems`. Use it for the linked documents an add
+   * offered, too. Answers the release as the step left it and the new
+   * members in the order given, each with its `unpublishedLinks`.
+   */
+  addMembers(
+    args: {
+      releaseId: string;
+      members: readonly AddMemberInput[];
+    } & ReleaseCallerArgs
+  ): Promise<ReleaseWithAddedMembers>;
+  /**
+   * Schedule a document in one step, with the linked documents accepted
+   * with it (`linked`, each going live). `into` says how it goes out:
+   *
+   * - `"own"`: on its own at `at` in `timezone`, in a single-document
+   *   release named `title`; with linked documents, an ordinary release
+   *   holding all of them. Needs `publish` authority on releases as well.
+   * - `"existing"`: with the ordinary draft or scheduled release `releaseId`.
+   * - `"new"`: in a new draft release named `title`.
+   *
+   * All of it lands or none of it does: a refusal, or a failure of any
+   * write, leaves no release, no document and no schedule behind.
+   */
+  scheduleDocument(
+    args: ScheduleDocumentInput & ReleaseCallerArgs
+  ): Promise<ReleaseWithAddedMembers>;
+  /**
    * Take a document back out of a release.
+   *
+   * Out of a single-document release that has not run (draft, scheduled or
+   * stopped), it cancels that release instead, under the cancel authority
+   * (`publish`), and the release is kept as cancelled. The answer says which
+   * happened: `releaseCancelled` is
+   * true when the release was cancelled instead of the document removed.
    *
    * `releaseId` is optional but SHOULD be supplied by any caller that knows it —
    * a transport addressing `/releases/A/members/B` knows which release it meant,
@@ -272,7 +305,7 @@ export interface ReleasesNamespace {
    */
   removeMember(
     args: { memberId: string; releaseId?: string } & ReleaseCallerArgs
-  ): Promise<void>;
+  ): Promise<ReleaseMemberRemoval>;
   /**
    * The release's documents the caller may read, in the order they were
    * added. A caller acting for a user is given only the documents that user
@@ -285,8 +318,6 @@ export interface ReleasesNamespace {
    * The release's documents as the caller sees them: those they may read in
    * `items`, and the rest counted by collection in `hidden`, with no title,
    * id or field.
-   *
-   * @experimental
    */
   membersOf(
     args: { releaseId: string } & ReleaseCallerArgs
@@ -300,8 +331,6 @@ export interface ReleasesNamespace {
    * action is checked as the document's author, who the release still acts as;
    * a switch that would leave a hard problem is refused as a `CONFLICT` naming
    * the problems in `data.problems`, and the release is left as it was.
-   *
-   * @experimental
    */
   changeMemberAction(
     args: {
@@ -328,16 +357,12 @@ export interface ReleasesNamespace {
    * then stands: `published`, or still `scheduled` if some of it is left for
    * the runner to finish. Refused for a stopped release (fix it and schedule it
    * again) and for a published or cancelled one, which never runs again.
-   *
-   * @experimental
    */
   publishNow(args: { id: string } & ReleaseCallerArgs): Promise<ReleaseRow>;
   /**
    * Rename a release, change its description (`null` clears it), or both,
    * and answer the release as it now reads. Needs `update-content-releases`
    * on a checked call, and works in any state.
-   *
-   * @experimental
    */
   update(
     args: { id: string } & ReleaseDetailsChange & ReleaseCallerArgs
@@ -350,8 +375,6 @@ export interface ReleasesNamespace {
    * stopped (`committed`), published (`published`), or cancelled after being
    * scheduled (`was-scheduled`). A release that is not there is NOT_FOUND.
    * Answers the release as it was when deleted.
-   *
-   * @experimental
    */
   delete(args: { id: string } & ReleaseCallerArgs): Promise<ReleaseRow>;
 }
@@ -543,6 +566,28 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
       void userRoles;
       void apiKeyId;
       return service().addMember(releaseId, member, actorOf(ctx, args));
+    },
+
+    addMembers: args =>
+      // The members named, not a spread: the caller keys are not members.
+      service().addMembers(args.releaseId, args.members, actorOf(ctx, args)),
+
+    scheduleDocument: args => {
+      const {
+        userId,
+        overrideAccess,
+        authenticatedScope,
+        userRoles,
+        apiKeyId,
+        ...input
+      } = args;
+      void userId;
+      void overrideAccess;
+      void authenticatedScope;
+      void userRoles;
+      void apiKeyId;
+      // Stripped for the reason `find` gives: caller keys are not input.
+      return service().scheduleDocument(input, actorOf(ctx, args));
     },
 
     removeMember: args =>

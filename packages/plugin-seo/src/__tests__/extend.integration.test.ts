@@ -4,11 +4,14 @@
  * a created entry round-trips the nested `seo` fields, and the same collection
  * booted WITHOUT the plugin has no `seo` (so the plugin is what adds them).
  */
+import { typesExtendedBy } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, text } from "nextly";
+import { defineCollection, defineSingle, group, text } from "nextly";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { seoPlugin } from "../plugin";
@@ -65,6 +68,91 @@ describe("seoPlugin extend (integration)", () => {
     expect(persisted?.noindex).toBe(true);
   });
 
+  it("saves a title and description longer than Google shows", async () => {
+    current = await createTestNextly({
+      collections: [pages()],
+      plugins: [seoPlugin({ collections: ["pages"] })],
+    });
+    // rext.ai's longest live title (83 characters) and a 190-character
+    // description: search engines cut them by width, they never refuse them.
+    const title =
+      "Best AI SEO tools for small businesses: from keywords to published content | Rext AI";
+    const description = `${"A description longer than Google shows. ".repeat(4)}It runs on.`;
+    expect(title.length).toBeGreaterThan(60);
+    expect(description.length).toBeGreaterThan(160);
+
+    const created = await current.nextly.create({
+      collection: "pages",
+      data: {
+        slug: "long",
+        title: "Long",
+        seo: { metaTitle: title, metaDescription: description },
+      },
+    });
+
+    const seo = (created.item as { seo?: Record<string, unknown> }).seo;
+    expect(seo?.metaTitle).toBe(title);
+    expect(seo?.metaDescription).toBe(description);
+  });
+
+  it("refuses a title or description wider than Google shows where the site asks for hard limits", async () => {
+    current = await createTestNextly({
+      collections: [pages()],
+      plugins: [seoPlugin({ collections: ["pages"], hardLengthLimits: true })],
+    });
+
+    // 40 wide capitals are short of 60 characters and 755 px wide, past
+    // the 600 px Google shows of a title.
+    await expect(
+      current.nextly.create({
+        collection: "pages",
+        data: {
+          slug: "wide-title",
+          title: "Wide",
+          seo: { metaTitle: "W".repeat(40) },
+        },
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    // 70 of them are 925 px as a description, past its 920 px.
+    await expect(
+      current.nextly.create({
+        collection: "pages",
+        data: {
+          slug: "wide-description",
+          title: "Wide",
+          seo: { metaDescription: "W".repeat(70) },
+        },
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
+  it("saves a title and description of narrow letters past the old character limits under hard limits", async () => {
+    current = await createTestNextly({
+      collections: [pages()],
+      plugins: [seoPlugin({ collections: ["pages"], hardLengthLimits: true })],
+    });
+    // 65 characters drawing 369 px, and 175 drawing 612 px: both fit what
+    // Google shows, so the width limit lets them through where a limit of
+    // 60 and 160 characters refused them. Trimmed, as a save stores it.
+    const title =
+      "Little tips: fill it in, lift it, tilt it, till it is still. jilt";
+    const description = "lilt it ".repeat(22).trim();
+    expect(title.length).toBeGreaterThan(60);
+    expect(description.length).toBeGreaterThan(160);
+
+    const created = await current.nextly.create({
+      collection: "pages",
+      data: {
+        slug: "narrow",
+        title: "Narrow",
+        seo: { metaTitle: title, metaDescription: description },
+      },
+    });
+    const seo = (created.item as { seo?: Record<string, unknown> }).seo;
+    expect(seo?.metaTitle).toBe(title);
+    expect(seo?.metaDescription).toBe(description);
+  });
+
   it("does not add seo when the plugin is absent (proves the plugin adds it)", async () => {
     current = await createTestNextly({ collections: [pages()] });
 
@@ -87,3 +175,86 @@ describe("seoPlugin extend (integration)", () => {
     });
   });
 });
+
+/**
+ * Where the site names no types, the group reaches every collection and
+ * Single it defines, and nothing else: not a type it leaves out, not one
+ * with a field of its own named `seo`, not users or a plugin's own records.
+ */
+describe.each(getConfiguredTestDialects())(
+  "seoPlugin on every content type (%s)",
+  (dialect: TestDialect) => {
+    it("adds the group to the site's types, and to no other", async () => {
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          pages(),
+          defineCollection({
+            slug: "logs",
+            fields: [text({ name: "slug" }), text({ name: "message" })],
+          }),
+          defineCollection({
+            slug: "landing",
+            fields: [
+              text({ name: "slug" }),
+              // The site's own field by the plugin's name, which it keeps.
+              group({ name: "seo", fields: [text({ name: "headline" })] }),
+            ],
+          }),
+        ],
+        singles: [
+          defineSingle({ slug: "home", fields: [text({ name: "headline" })] }),
+        ],
+        plugins: [seoPlugin({ exclude: ["logs"] })],
+      });
+
+      // The start's record of where the group went, which every part of the
+      // plugin reads.
+      expect(
+        typesExtendedBy("@nextlyhq/plugin-seo", "seo")
+          .map(type => `${type.kind}:${type.slug}`)
+          .sort()
+      ).toEqual(["collection:pages", "single:home"]);
+
+      // A collection and a Single round-trip SEO values.
+      const created = await current.nextly.create({
+        collection: "pages",
+        data: { slug: "a", title: "A", seo: { metaTitle: "On pages" } },
+      });
+      const page = (await current.nextly.findByID({
+        collection: "pages",
+        id: (created.item as { id: string }).id,
+      })) as { seo?: { metaTitle?: string } } | null;
+      expect(page?.seo?.metaTitle).toBe("On pages");
+      const home = await current.nextly.updateSingle({
+        slug: "home",
+        data: {
+          _overwrite: true,
+          headline: "Hi",
+          seo: { metaTitle: "On home" },
+        },
+        overrideAccess: true,
+      });
+      expect(
+        (home.item as { seo?: { metaTitle?: string } }).seo?.metaTitle
+      ).toBe("On home");
+
+      // The type left out has no group: the same write is refused.
+      await expect(
+        current.nextly.create({
+          collection: "logs",
+          data: { slug: "l", message: "m", seo: { metaTitle: "x" } },
+        })
+      ).rejects.toBeDefined();
+
+      // The type with its own `seo` keeps its own field's shape.
+      const own = await current.nextly.create({
+        collection: "landing",
+        data: { slug: "l", seo: { headline: "Its own" } },
+      });
+      expect((own.item as { seo?: { headline?: string } }).seo?.headline).toBe(
+        "Its own"
+      );
+    });
+  }
+);

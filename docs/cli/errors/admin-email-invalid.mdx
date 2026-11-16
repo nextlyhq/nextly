@@ -1,0 +1,23 @@
+---
+title: ADMIN_EMAIL_INVALID
+description: "`nextly users:create-admin` was given no email, or one that is not an email address."
+---
+
+## Cause
+
+`nextly users:create-admin` was given no email, or one that is not an email address.
+
+`nextly users:create-admin` needs the first administrator's email, from `--email` or, in a terminal, a prompt. None was given, or the value is not an email address.
+
+## Fix
+
+- Pass the email: `nextly users:create-admin --email ada@example.com --name Ada`.
+
+## Example
+
+```text
+✗ No valid email was given for the administrator.
+  Why:  `ada@` is not an email address.
+  Next: Give a valid email with `--email`.
+  Docs: https://nextlyhq.com/docs/cli/errors/admin-email-invalid  (ADMIN_EMAIL_INVALID)
+```

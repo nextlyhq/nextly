@@ -9,7 +9,7 @@
  * The exclusion primitive itself is covered where it lives; what can be forgotten, and what these
  * exist for, is a service method that never asks for it.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
 
 /** Everything the service did, in order: the lock, then whatever ran inside it. */
 const trace: string[] = [];
@@ -28,7 +28,32 @@ const companionCalls: Record<string, unknown>[] = [];
 /** Set to make the plugin-option validator refuse, standing in for a registry swapped underneath. */
 const pluginOptionRefusal: { error: unknown } = { error: undefined };
 
-vi.mock("../../../../api/fields-payload", () => ({
+// A Builder save's statements run through the busy-table runner, which waits for a table another
+// session holds; those tries are judged against real databases
+// (`busy-table-parity.integration.test.ts`). Here the save runs as one try that never waits,
+// sending each statement through the double's `executeQuery`, so these stay on the statements
+// the save hands over and the outcome it records.
+vi.mock("../../busy-table/run-unit", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../busy-table/run-unit")>()),
+  runUnitInTries: (
+    await import("../../busy-table/__tests__/helpers/run-unit-once")
+  ).runUnitOnce,
+}));
+
+// A registry write's transaction, and the schema version stored in it, are
+// the integration suite's subject (`schema-version-writers.integration.test.ts`):
+// here a registry write runs on the adapter itself, as it did before it had one.
+vi.mock("../../schema-version", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../schema-version")>()),
+  writeRegistryRows: (adapter: unknown, work: (tx: unknown) => unknown) =>
+    work(adapter),
+  writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
+}));
+
+// The plugin judge is made to refuse on demand; every other rule of the payload is the real one,
+// the top-level name rule the Single service asks before its exclusion among them.
+vi.mock("../../../../api/fields-payload", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../../../api/fields-payload")>()),
   assertValidPluginFieldOptions: vi.fn(() => {
     if (pluginOptionRefusal.error !== undefined)
       throw pluginOptionRefusal.error;
@@ -69,6 +94,13 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import type { Logger } from "../../../../shared/types";
 import { SingleMetadataService } from "../../../singles/services/single-metadata-service";
 import type { SingleRegistryService } from "../../../singles/services/single-registry-service";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 const logger: Logger = {
   debug: vi.fn(),
@@ -97,6 +129,9 @@ function makeAdapter(options: { mainTableExists?: boolean } = {}) {
       name.includes("_locales") ? false : created
     ),
     selectOne: vi.fn(async (): Promise<{ id: string } | null> => null),
+    // The slug guard also lists the addresses already used, to refuse one with the same
+    // snake_case form; none are.
+    select: vi.fn(async (): Promise<Array<{ id: string; slug: string }>> => []),
     // The delete path sweeps embedded field-group data and the i18n companion before dropping the
     // table, and both ask the adapter what exists. An empty database is the simplest state that
     // reaches the drop, which is the statement these tests order against.
@@ -163,7 +198,7 @@ function makeService(adapter: ReturnType<typeof makeAdapter>) {
     getAllSingles: vi.fn(
       async (): Promise<{ slug: string; tableName: string }[]> => []
     ),
-    getSingleBySlug: vi.fn(
+    getSingleForWrite: vi.fn(
       async (slug: string): Promise<SingleRowDouble> => ({
         slug,
         tableName: "single_page",
@@ -184,6 +219,8 @@ function makeService(adapter: ReturnType<typeof makeAdapter>) {
     deleteSingle: vi.fn(async () => {
       trace.push("registry:write");
     }),
+    // A delete asks what depends on the Single before it removes anything; nothing does here.
+    assertNothingDependsOn: vi.fn(async () => undefined),
   };
   const service = new SingleMetadataService(
     registry as unknown as SingleRegistryService,
@@ -364,7 +401,7 @@ describe("a Schema Builder change and the storage migration exclude each other",
     // contradict the row.
     const adapter = makeAdapter({ mainTableExists: true });
     const { service, registry } = makeService(adapter);
-    registry.getSingleBySlug.mockResolvedValue({
+    registry.getSingleForWrite.mockResolvedValue({
       slug: "page",
       tableName: "single_page",
       fields: [],
@@ -406,7 +443,7 @@ describe("a Schema Builder change and the storage migration exclude each other",
     // are consumed, so that is where they are read.
     const adapter = makeAdapter({ mainTableExists: true });
     const { service, registry } = makeService(adapter);
-    registry.getSingleBySlug.mockResolvedValue({
+    registry.getSingleForWrite.mockResolvedValue({
       slug: "page",
       tableName: "single_page",
       fields: [],
@@ -555,7 +592,7 @@ describe("a Schema Builder change and the storage migration exclude each other",
     // between the caller's check and this claim would otherwise drop a table the config owns.
     const adapter = makeAdapter();
     const { service, registry } = makeService(adapter);
-    registry.getSingleBySlug.mockResolvedValue({
+    registry.getSingleForWrite.mockResolvedValue({
       slug: "page",
       tableName: "single_page",
       fields: [],
@@ -583,7 +620,7 @@ describe("a Schema Builder change and the storage migration exclude each other",
     // the new vocabulary and leaves `schema_hash` untouched, because its registry step projects only
     // id / fields / config_path. A fixture that moved the hash instead would be testing a state the
     // migration never produces — which is what the first version of this test did.
-    registry.getSingleBySlug.mockResolvedValue({
+    registry.getSingleForWrite.mockResolvedValue({
       slug: "page",
       tableName: "single_page",
       fields: [{ name: "hero", type: "fieldGroup" }],
@@ -620,7 +657,7 @@ describe("a Schema Builder change and the storage migration exclude each other",
     // above, and the refusal would look like coverage while breaking ordinary saves.
     const adapter = makeAdapter({ mainTableExists: true });
     const { service, registry } = makeService(adapter);
-    registry.getSingleBySlug.mockResolvedValue({
+    registry.getSingleForWrite.mockResolvedValue({
       slug: "page",
       tableName: "single_page",
       fields: [],

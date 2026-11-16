@@ -1,0 +1,68 @@
+---
+title: Caching a plugin's data
+description: Tag the cached reads built from a plugin's own data, and expire them when that data changes, on every instance, with no redeploy.
+---
+
+# Caching a plugin's data
+
+> **Alpha (`0.x`) — `@experimental`.** `ctx.cache` and `pluginCacheTag` are new
+> and ship `@experimental`: they work and are tested, but stay experimental
+> until a first-party plugin expires its pages through them. Pin your `nextly`
+> and `@nextlyhq/plugin-sdk` versions while you build on them.
+
+When an entry or a Single changes, Nextly expires the cached reads of it by
+itself. A plugin's own data, such as its settings or a list of redirects, does
+not change through a content write, so a page built from it would stay cached
+until the next deploy. `ctx.cache` closes that gap: tag the reads built from
+your data, and expire the tag when the data changes.
+
+## Tag the read
+
+`ctx.cache.tag(part)` gives the tag for one part of your plugin's data. Give it
+to whatever caches the read:
+
+```ts
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
+import { unstable_cache } from "next/cache";
+
+// Your plugin's own read, from its settings or its own table.
+declare function readDefaults(ctx: PluginContext): Promise<unknown>;
+
+export function siteDefaults(ctx: PluginContext) {
+  return unstable_cache(() => readDefaults(ctx), ["my-plugin", "defaults"], {
+    tags: [ctx.cache.tag("defaults")],
+  })();
+}
+```
+
+A page that renders that read is expired with it. Code that renders your data
+outside your plugin's context, such as a route the app owns, spells the same tag
+with `pluginCacheTag`:
+
+```ts
+import { pluginCacheTag } from "@nextlyhq/plugin-sdk";
+
+const tag = pluginCacheTag("my-plugin", "defaults");
+```
+
+## Expire it when the data changes
+
+```ts
+await saveDefaults(values);
+await ctx.cache.expire("defaults");
+```
+
+`expire` takes any number of parts, and expires each once. It goes through the
+same path as a content write's expiry, so every instance that shares the
+database serves the new value within a few seconds and a request.
+
+## What it guarantees
+
+- **Your own tags only.** Every tag is `nextly:@plugin:{your plugin}:{part}`.
+  A plugin cannot expire a collection's, a Single's or another plugin's cached
+  reads, and no content tag can be spelled like yours.
+- **Never fails your write.** Like the expiry after a content write, it is
+  best-effort: a cache that cannot be reached is logged, and `expire` still
+  resolves. A blank part is refused before anything is expired.
+- **Long parts are hashed** to stay within the length Next.js keeps, the same
+  way on the read and on the expiry.

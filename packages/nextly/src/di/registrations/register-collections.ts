@@ -18,11 +18,15 @@
  * domain is registered.
  */
 
+import { resolve } from "node:path";
+
 import type { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../../domains/dynamic-collections";
+import { collectionMetadataFetcher } from "../../domains/dynamic-collections/services/collection-metadata-fetcher";
 import { releaseVisibilityFor } from "../../domains/releases/release-visibility";
 import { retentionPoliciesFrom } from "../../domains/retention/passes";
+import type { BuilderSaveSetup } from "../../domains/schema/builder-save/collection-save";
 import { CollectionFileManager } from "../../services/collection-file-manager";
 import { CollectionEntryService } from "../../services/collections/collection-entry-service";
 import { CollectionMetadataService } from "../../services/collections/collection-metadata-service";
@@ -31,7 +35,7 @@ import { CollectionRelationshipService } from "../../services/collections/collec
 import { CollectionService } from "../../services/collections/collection-service";
 import { CollectionsHandler } from "../../services/collections-handler";
 import type { FieldGroupDataService } from "../../services/field-groups";
-import { consoleLogger } from "../../shared/types";
+import { DEFAULT_DB_CONFIG } from "../../shared/types/config";
 import { container } from "../container";
 
 import { contentWriteSeams } from "./content-write-seams";
@@ -51,6 +55,12 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
 
   // CollectionService composes file manager, dynamic-collection,
   // metadata, relationship, access control, and entry services.
+  // Read by every service that saves a collection, the `CollectionsHandler`
+  // included, which builds its own.
+  container.registerSingleton<BuilderSaveSetup>("builderSaveSetup", () =>
+    builderSaveSetup(ctx)
+  );
+
   container.registerSingleton<CollectionService>("collectionService", () => {
     // Raw Drizzle instance for non-BaseService classes that need it directly.
     const drizzleDb = adapterDrizzleDb;
@@ -63,50 +73,8 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
     // Runtime schema generation: UI-created collections work without
     // pre-compiled TypeScript schemas.
     fileManager.setAdapter(adapter);
-    fileManager.setMetadataFetcher(
-      async (collectionName: string, executor?: unknown) => {
-        try {
-          // Runs on the caller's transaction connection when supplied so an
-          // uncached runtime-schema load inside a transaction stays on it.
-          const result = await adapter.selectOne<{
-            fields: string;
-            tableName: string;
-            status: boolean | number | null;
-            localized: boolean | number | null;
-          }>(
-            "dynamic_collections",
-            {
-              where: {
-                and: [{ column: "slug", op: "=", value: collectionName }],
-              },
-            },
-            executor
-          );
-
-          if (result) {
-            const fields =
-              typeof result.fields === "string"
-                ? JSON.parse(result.fields)
-                : result.fields;
-            return {
-              fields,
-              tableName: result.tableName,
-              // SQLite returns 0/1 for booleans; PG/MySQL return real booleans.
-              status: result.status === true || result.status === 1,
-              // i18n M4: forward the localized flag so loadCompanionSchema can
-              // build the companion table for localized reads.
-              localized: result.localized === true || result.localized === 1,
-            };
-          }
-        } catch (error) {
-          consoleLogger.error(
-            "[registerCollectionServices] Failed to fetch collection metadata",
-            { error: error }
-          );
-        }
-        return null;
-      }
-    );
+    // Read through the registry row cache outside a transaction (`collectionMetadataFetcher`).
+    fileManager.setMetadataFetcher(collectionMetadataFetcher(adapter, logger));
 
     const dynamicCollectionService = new DynamicCollectionService(
       adapter,
@@ -122,6 +90,11 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       logger,
       fileManager,
       dynamicCollectionService
+    );
+    // A Schema Builder save writes the app's definition file and migrations
+    // folder, as `migrate:create` would, never the dynamic folder above.
+    metadataService.setBuilderSave(
+      container.get<BuilderSaveSetup>("builderSaveSetup")
     );
 
     // Wire PermissionSeedService so new/updated collections auto-seed
@@ -242,4 +215,29 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       return collectionRegistryService;
     }
   );
+}
+
+/**
+ * Where the app's Schema Builder saves write, and with which config: the
+ * config's definition file and migrations folder, under the app's directory,
+ * the folder `nextly migrate` and `migrate:create` use.
+ */
+function builderSaveSetup(ctx: RegistrationContext): BuilderSaveSetup {
+  const { uiSchemaFile, migrationsDir } = ctx.config.db ?? DEFAULT_DB_CONFIG;
+  const db = { uiSchemaFile, migrationsDir };
+  return {
+    config: {
+      collections: ctx.config.collections ?? [],
+      singles: ctx.config.singles ?? [],
+      fieldGroups: ctx.config.fieldGroups ?? [],
+      plugins: ctx.config.plugins ?? [],
+      localization: ctx.config.localization,
+      db,
+    },
+    ...(ctx.deferredExtends === undefined
+      ? {}
+      : { deferredExtends: ctx.deferredExtends }),
+    projectRoot: ctx.basePath,
+    migrationsDir: resolve(ctx.basePath, db.migrationsDir),
+  };
 }

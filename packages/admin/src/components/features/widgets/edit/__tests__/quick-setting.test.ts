@@ -21,7 +21,7 @@ describe("a card's quick setting", () => {
   it("is the one its widget marks quick, when the header can draw it", () => {
     const items: AnyWidgetSetting = { name: "items", type: "number" };
     expect(quickSettingOf([items, range])).toBe(range);
-    // A quick number has no header control; it stays in the sheet.
+    // A quick number has no header control; it is changed in the drawer alone.
     expect(
       quickSettingOf([{ name: "n", type: "number", quick: true }])
     ).toBeUndefined();
@@ -34,5 +34,17 @@ describe("a card's quick setting", () => {
     const mine = { name: "mine", type: "checkbox", quick: true } as const;
     expect(quickValueLabel(mine, true)).toBe("On");
     expect(quickValueLabel(mine, false)).toBe("Off");
+  });
+});
+
+describe("the header's quick setting, among several marked", () => {
+  it("is the first marked one the header can draw, not the first marked", () => {
+    // A quick number is marked first; the header cannot draw it, so the choice after it is drawn.
+    const goal: AnyWidgetSetting = {
+      name: "goal",
+      type: "number",
+      quick: true,
+    };
+    expect(quickSettingOf([goal, range])).toBe(range);
   });
 });

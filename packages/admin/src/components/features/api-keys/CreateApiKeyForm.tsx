@@ -43,6 +43,7 @@ import { Form, FormField } from "@admin/components/ui/form";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import { useRoles } from "@admin/hooks/queries/useRoles";
+import { assignableRoles } from "@admin/lib/roles/assignable";
 
 import { KeySummary } from "./KeySummary";
 
@@ -320,7 +321,7 @@ export function CreateApiKeyForm({
                         />
                       </SelectTrigger>
                       <SelectContent>
-                        {rolesData?.items.map(role => (
+                        {assignableRoles(rolesData?.items ?? []).map(role => (
                           <SelectItem key={role.id} value={role.id}>
                             {role.roleName}
                           </SelectItem>

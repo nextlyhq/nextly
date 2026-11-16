@@ -10,6 +10,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { defineSingle, group, repeater, text } from "../../../config";
 import {
   createTestNextly,
@@ -96,12 +97,17 @@ describe.each(getConfiguredTestDialects())(
           seo: { metaTitle: "Live title" },
           links: [{ label: "Live link" }],
           status: "published",
+          _overwrite: true,
         },
         { overrideAccess: true }
       );
       await singles.update(
         "site-meta",
-        { seo: { metaTitle: "Held title" }, links: [{ label: "Held link" }] },
+        {
+          seo: { metaTitle: "Held title" },
+          links: [{ label: "Held link" }],
+          _overwrite: true,
+        },
         { overrideAccess: true }
       );
 
@@ -114,7 +120,7 @@ describe.each(getConfiguredTestDialects())(
       // Move the draft on, then put the held save back from history.
       await singles.update(
         "site-meta",
-        { seo: { metaTitle: "Later title" } },
+        { seo: { metaTitle: "Later title" }, _overwrite: true },
         { overrideAccess: true }
       );
       await restoreVersion({
@@ -122,11 +128,17 @@ describe.each(getConfiguredTestDialects())(
         slug: "site-meta",
         entryId: held.entryId,
         versionNo: held.versionNo!,
-        user: superAdmin,
+        // Stored, so the update gate the restore asks finds its role: role
+        // names a caller hands in grant nothing.
+        user: {
+          ...superAdmin,
+          id: await superAdminUser(current, superAdmin.id),
+        },
+        version: { _overwrite: true },
       });
       await singles.update(
         "site-meta",
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { overrideAccess: true }
       );
 
@@ -158,6 +170,7 @@ describe.each(getConfiguredTestDialects())(
           siteName: "Live",
           seo: { metaTitle: "Live title" },
           status: "published",
+          _overwrite: true,
         },
         { overrideAccess: true }
       );
@@ -168,7 +181,11 @@ describe.each(getConfiguredTestDialects())(
       // The same values, held: the first held save compares with what is live.
       await singles.update(
         "site-meta",
-        { siteName: "Live", seo: { metaTitle: "Live title" } },
+        {
+          siteName: "Live",
+          seo: { metaTitle: "Live title" },
+          _overwrite: true,
+        },
         { overrideAccess: true }
       );
       const after = (await rowsFor(current, "site-meta")).filter(
@@ -197,17 +214,27 @@ describe.each(getConfiguredTestDialects())(
       const singles = current.getService("singleEntryService");
       await singles.update(
         "home",
-        { heading: "EN live", tagline: "EN tagline", status: "published" },
+        {
+          heading: "EN live",
+          tagline: "EN tagline",
+          status: "published",
+          _overwrite: true,
+        },
         { locale: "en", overrideAccess: true }
       );
       await singles.update(
         "home",
-        { heading: "DE live", tagline: "DE tagline", status: "published" },
+        {
+          heading: "DE live",
+          tagline: "DE tagline",
+          status: "published",
+          _overwrite: true,
+        },
         { locale: "de", overrideAccess: true }
       );
       await singles.update(
         "home",
-        { heading: "DE held" },
+        { heading: "DE held", _overwrite: true },
         { locale: "de", overrideAccess: true }
       );
 
@@ -225,7 +252,7 @@ describe.each(getConfiguredTestDialects())(
 
       await singles.update(
         "home",
-        { status: "published" },
+        { status: "published", _overwrite: true },
         { locale: "de", overrideAccess: true }
       );
       expect(await liveRead(current, "home", "de")).toMatchObject({

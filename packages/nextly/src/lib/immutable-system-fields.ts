@@ -23,11 +23,18 @@
  * @module lib/immutable-system-fields
  */
 
+import { isVirtualField } from "../collections/fields/virtual";
+import { TRANSLATION_OVERVIEW_KEY } from "../domains/i18n/companion-join";
 import { fieldProducesColumn } from "../domains/schema/services/field-column-descriptor";
+import { NextlyError } from "../errors";
+import { addressableFields } from "../shared/addressable-fields";
 import { hiddenColumnMatcher } from "../shared/lib/password-fields";
 
 import { toSnakeCase } from "./case-conversion";
 import {
+  DOCUMENT_OVERWRITE_KEY,
+  DOCUMENT_RESTORED_FROM_KEY,
+  DOCUMENT_VERSION_KEY,
   immutableSystemColumnNames,
   immutableSystemColumnNamesAnyEntity,
   systemColumnNames,
@@ -48,8 +55,20 @@ export type WritableEntityKind = SystemColumnEntity;
 const IMMUTABLE_BY_ENTITY: Readonly<
   Record<WritableEntityKind, ReadonlySet<string>>
 > = {
-  collection: new Set(immutableSystemColumnNames("collection")),
-  single: new Set(immutableSystemColumnNames("single")),
+  // The published version is no column, but a client re-saving what it read sends it, and it is
+  // the server's to decide like every column here. The overwrite choice beside it says how the
+  // version is judged and is never stored either, so a body naming only the status beside them
+  // is still a status-only write ({@link isStatusOnlyWrite}).
+  collection: new Set([
+    ...immutableSystemColumnNames("collection"),
+    DOCUMENT_VERSION_KEY,
+    DOCUMENT_OVERWRITE_KEY,
+  ]),
+  single: new Set([
+    ...immutableSystemColumnNames("single"),
+    DOCUMENT_VERSION_KEY,
+    DOCUMENT_OVERWRITE_KEY,
+  ]),
 };
 
 /**
@@ -58,15 +77,70 @@ const IMMUTABLE_BY_ENTITY: Readonly<
  * For callers that protect both kinds at once rather than one at a time: a restore refuses to
  * carry the owner column back even for a single, where it is not a system column.
  */
-export const IMMUTABLE_SYSTEM_FIELDS_ANY_ENTITY: ReadonlySet<string> = new Set(
-  immutableSystemColumnNamesAnyEntity()
-);
+export const IMMUTABLE_SYSTEM_FIELDS_ANY_ENTITY: ReadonlySet<string> = new Set([
+  ...immutableSystemColumnNamesAnyEntity(),
+  DOCUMENT_VERSION_KEY,
+  DOCUMENT_OVERWRITE_KEY,
+]);
 
 /** The names a client may not write for the given entity. */
 export function immutableSystemFieldsFor(
   entity: WritableEntityKind
 ): ReadonlySet<string> {
   return IMMUTABLE_BY_ENTITY[entity];
+}
+
+/**
+ * The gate a status-only write is judged by: `publish` for `"published"`, the
+ * one value that puts an entry live, and `unpublish` for any other, which can
+ * only take a published entry down.
+ */
+export function statusGate(status: unknown): "publish" | "unpublish" {
+  return status === "published" ? "publish" : "unpublish";
+}
+
+/**
+ * The gate a write is judged by: where its body changes only the status of an
+ * entry with a lifecycle ({@link isStatusOnlyWrite}), the `publish` or
+ * `unpublish` its status names ({@link statusGate}), whether or not the status
+ * moves; otherwise `update`. `hasLifecycle` is asked only for a status-only
+ * body, so an ordinary edit never reads it.
+ */
+export async function writeGateFor(
+  body: Record<string, unknown>,
+  entity: WritableEntityKind,
+  hasLifecycle: () => boolean | Promise<boolean>
+): Promise<"update" | "publish" | "unpublish"> {
+  return isStatusOnlyWrite(body, entity) && (await hasLifecycle())
+    ? statusGate(body.status)
+    : "update";
+}
+
+/**
+ * Whether a write's body changes nothing but the entry's status: it names
+ * `status`, and every other key it names is a system column the write never
+ * stores from a body ({@link immutableSystemFieldsFor}). Such a write is a
+ * publish or an unpublish alone, judged by that permission and rule.
+ *
+ * Judged by the keys the body names, never their values: a body naming any
+ * other field, even at its stored value, edits the entry and needs update. A
+ * declared field with no column of its own counts as an edit too, since hooks
+ * may still read it.
+ */
+export function isStatusOnlyWrite(
+  body: Record<string, unknown>,
+  entity: WritableEntityKind
+): boolean {
+  // Only a key the body owns: a `status` its prototype supplies is no key it
+  // names, and the write reads only its own keys.
+  if (!Object.prototype.hasOwnProperty.call(body, "status")) return false;
+  // A status left `undefined` names none: the write drops it as it drops any
+  // undefined status, so it is judged as the write it is.
+  if (body.status === undefined) return false;
+  const neverStored = immutableSystemFieldsFor(entity);
+  return Object.keys(body).every(
+    key => key === "status" || neverStored.has(key)
+  );
 }
 
 /**
@@ -152,4 +226,119 @@ export function stripImmutableSystemFields(
     out[key] = value;
   }
   return out;
+}
+
+/**
+ * The keys of `data` an update of that entity stores nowhere: those
+ * {@link stripImmutableSystemFields} takes out of its row, except a declared
+ * field the update keeps in a table of its own (a field group's, or a
+ * many-to-many's junction), which the write paths take out of the payload and
+ * write there before the row strip runs. What is left is an immutable system
+ * column, a column schema hooks contributed, or a field stored nowhere (a
+ * virtual one).
+ *
+ * Asked of the strip itself and of {@link fieldProducesColumn}'s own causes,
+ * so neither can drift from this answer: a field it gives no column, and that
+ * is not virtual, keeps its values in its own table.
+ */
+export function keysNoUpdateStores(
+  data: Record<string, unknown>,
+  entity: WritableEntityKind,
+  /** The SQL table the payload is written to. */
+  tableName: string,
+  /** The entity's declared top-level fields. */
+  fields: Iterable<DeclaredField | null | undefined>
+): string[] {
+  const declared = [...fields];
+  const kept = stripImmutableSystemFields(data, entity, tableName, declared);
+  const ownTable = keptInOwnTable(declared);
+  return Object.keys(data).filter(
+    key => !Object.hasOwn(kept, key) && !ownTable.has(key)
+  );
+}
+
+/**
+ * The name of each declared field whose values live in a table of its own,
+ * spelt exactly as declared: the write paths take such a value out of the
+ * payload by `field.name` alone, so any other spelling of it reaches the row
+ * strip and is stored nowhere.
+ */
+function keptInOwnTable(
+  fields: readonly (DeclaredField | null | undefined)[]
+): ReadonlySet<string> {
+  const keys = new Set<string>();
+  for (const field of fields) {
+    if (!field || typeof field.name !== "string") continue;
+    if (fieldProducesColumn(field) || isVirtualField(field)) continue;
+    keys.add(field.name);
+  }
+  return keys;
+}
+
+/**
+ * The keys a read adds to a document of its own (the translation overview, whether the document
+ * shown is a pending change, whether the shared part holds one). A client sending back what it
+ * read sends them too; a write accepts them and stores none.
+ */
+const READ_RESPONSE_KEYS: ReadonlySet<string> = new Set([
+  TRANSLATION_OVERVIEW_KEY,
+  "_isWorkingDraft",
+  "_sharedChangesPending",
+]);
+
+/**
+ * The keys of a write's body that name nothing a write of that entity may carry: no declared
+ * field under its declared name, no system column of the entity, none of the keys that say how
+ * to write (`_rev`, `_overwrite`, `_restoredFrom`) and none a read adds.
+ *
+ * Such a key has nowhere to go but a column of the same name: on the entity's own row, where a
+ * name that is no column fails the statement, or on a language's row, where it would be stored.
+ * A field's column name is no second name for it: field rules, validation and hooks look a field
+ * up by its declared name, so a value under its column's name would pass them by.
+ */
+function undeclaredWriteKeys(
+  data: Record<string, unknown>,
+  entity: WritableEntityKind,
+  /** The entity's declared fields, as configured. */
+  fields: unknown
+): string[] {
+  const allowed = new Set<string>([
+    ...systemColumnNames(column => column.appliesTo.includes(entity)),
+    DOCUMENT_VERSION_KEY,
+    DOCUMENT_OVERWRITE_KEY,
+    DOCUMENT_RESTORED_FROM_KEY,
+    ...READ_RESPONSE_KEYS,
+  ]);
+  for (const field of addressableFields(fields)) {
+    if (typeof field.name === "string") allowed.add(field.name);
+  }
+  return Object.keys(data).filter(key => !allowed.has(key));
+}
+
+/**
+ * A write's body as the write handles it: refused, with one validation issue per key, where it
+ * names a key it may not carry ({@link undeclaredWriteKeys}); otherwise without the keys a read
+ * adds, which say nothing about what to write. Called once the write's access has been judged and
+ * before any hook runs, so nothing of a refused key is ever written.
+ */
+export function writableBodyOf(
+  data: Record<string, unknown>,
+  entity: WritableEntityKind,
+  fields: unknown
+): Record<string, unknown> {
+  const keys = undeclaredWriteKeys(data, entity, fields);
+  if (keys.length > 0) {
+    const kind = entity === "single" ? "Single" : "collection";
+    throw NextlyError.validation({
+      errors: keys.map(key => ({
+        path: key,
+        code: "UNKNOWN_FIELD",
+        message: `"${key}" is not a field of this ${kind}, so a save cannot set it.`,
+      })),
+    });
+  }
+  if (!Object.keys(data).some(key => READ_RESPONSE_KEYS.has(key))) return data;
+  return Object.fromEntries(
+    Object.entries(data).filter(([key]) => !READ_RESPONSE_KEYS.has(key))
+  );
 }

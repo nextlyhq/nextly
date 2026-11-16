@@ -13,6 +13,7 @@ import {
   it,
   expect,
   vi,
+  beforeAll,
 } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
@@ -22,6 +23,13 @@ import {
 } from "../../../../shared/lib/field-level-registry";
 import { CollectionRelationshipService } from "../collection-relationship-service";
 import { TRUSTS_EVERY_COLLECTION } from "../../../../services/collections/trust-grant";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 // Every caller here may read the related row, since what is under test is
 // what is stripped from it. No access-control service is registered in this
@@ -36,6 +44,13 @@ vi.mock("../../../../services/lib/permissions", async importOriginal => ({
   // behind this suite the real lookups refuse, so they answer here.
   listRoleSlugsForUser: vi.fn().mockResolvedValue([]),
   listEffectiveGrants: vi.fn().mockResolvedValue([]),
+  // An anonymous reader is judged by the Public role, which here may read the
+  // related `members`, so what these cases see is the field redaction alone.
+  listPublicGrants: vi
+    .fn()
+    .mockResolvedValue([
+      { slug: "read-members", action: "read", resource: "members" },
+    ]),
 }));
 
 // getSystemEntityTable() resolves the users table via env.DB_DIALECT (not the

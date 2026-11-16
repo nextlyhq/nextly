@@ -1,0 +1,133 @@
+"use client";
+
+/**
+ * The frame both document editors are drawn in: the document bar, the banners
+ * under it, then the row holding the field column and the document panel.
+ *
+ * The bar and the banners span the whole row, panel included, so they are
+ * drawn here ABOVE the row rather than inside the field column, which the
+ * content measure caps. All three share one parent so the bar's stickiness
+ * holds for the editor's whole height.
+ *
+ * The frame is also where the edit page's place draws its blocks, around the
+ * page's own two: `document-bar`, the bar with the banners under it, which
+ * speak for it (a held Save is explained there); and `editor`, the form's
+ * notices with the row of field column and panel. With nothing contributed
+ * the frame holds exactly what it held before.
+ *
+ * @module components/features/entries/EntryForm/DocumentEditorLayout
+ */
+
+import type { JSX, ReactNode } from "react";
+
+import { useInTopBar } from "@admin/components/layout/header/TopBarPlaces";
+import { TargetSlot } from "@admin/components/shared/target-slot";
+import { cn } from "@admin/lib/utils";
+
+import { DOCUMENT_EDITOR_FRAME_ATTRIBUTE } from "./document-bar-height";
+import type { DocumentPanelMode } from "./document-panel-mode";
+import type { DocumentPlace } from "./document-place";
+
+/**
+ * How the document panel's inner column sticks: under the bar rather than
+ * beneath it, and as tall as the scroll area the editor is in, less the bar.
+ * Shared by both editors' panels so they line up with the one bar both draw.
+ *
+ * The bar's height is `--document-bar-height`, which the bar measures and
+ * publishes on this frame (`useDocumentBarHeight`): a bar wrapped to a second
+ * row is taller than one, and a fixed offset would let that row cover the
+ * panel's top. Until the first measurement it is the one-row height, 3.25rem.
+ *
+ * The scroll area's height is `--editor-scrollport`, declared by whatever
+ * scrolls the editor where that is not the page: the translation mode's target
+ * pane, which sits under the mode's own bar as well as the top bar. Where
+ * nothing declares it, the editor scrolls with the page, whose scroll area is
+ * the window less the admin's top bar (`--admin-bar-height`). One rule for both, so the
+ * panel's foot is reachable in either without scrolling the page past it.
+ * Both are layout knobs rather than palette tokens, so they sit outside the
+ * theme's `--nx-*` namespace, as `--sidebar-width` does.
+ */
+export const DOCUMENT_PANEL_STICKY =
+  "@4xl/content:sticky @4xl/content:top-[var(--document-bar-height,3.25rem)] @4xl/content:h-[calc(var(--editor-scrollport,calc(100vh-var(--admin-bar-height)))-var(--document-bar-height,3.25rem))]";
+
+/**
+ * The field column's inset, shared by everything drawn in it above the fields
+ * (the title, the id line, the inline language panel) so each starts where the
+ * fields' card does. An Editor page has no padding of its own, so the column
+ * carries the admin's gutter itself, in the steps the gutter takes with the
+ * content panel's width: 1rem up to 768px, 1.5rem up to 896px (`@4xl`), and
+ * 2rem from there. Utilities rather than `--nx-gutter`, which steps only
+ * inside a page shell or `.nx-page-pad`.
+ */
+export const DOCUMENT_COLUMN_INSET = "px-4 @3xl/content:px-6 @4xl/content:px-8";
+
+export interface DocumentEditorLayoutProps {
+  /** The edit page's place, whose blocks the frame draws around its own. */
+  place: DocumentPlace;
+  /** The document bar. */
+  bar: ReactNode;
+  /** The banners, drawn directly under the bar. */
+  banners: ReactNode;
+  /** Anything else the whole editor says before its fields (a form's errors). */
+  notices?: ReactNode;
+  /** The field column and the document panel, laid out side by side. */
+  children: ReactNode;
+  /**
+   * Measures the frame, whose width decides how the document panel sits
+   * (`useDocumentPanel`). Absent where nothing reads it.
+   */
+  frameRef?: (element: HTMLElement | null) => void;
+  /** That mode, said on the frame for what styles or tests read it. */
+  panelMode?: DocumentPanelMode;
+}
+
+export function DocumentEditorLayout({
+  place,
+  bar,
+  banners,
+  notices,
+  children,
+  frameRef,
+  panelMode,
+}: DocumentEditorLayoutProps): JSX.Element {
+  // Inside the shell the document's bar is drawn in the admin's top bar,
+  // above the scroll area, so nothing here sticks under a bar of its own.
+  const inTopBar = useInTopBar();
+  return (
+    // An Editor page has no padding, so the banners start directly under the
+    // admin's bar and the panel reaches the bottom and the window's edge. The
+    // floor is the scroll area's height (see `DOCUMENT_PANEL_STICKY`).
+    // The frame is also where the bar publishes its height for the panel.
+    <div
+      ref={frameRef}
+      {...{ [DOCUMENT_EDITOR_FRAME_ATTRIBUTE]: "" }}
+      {...(panelMode === undefined ? {} : { "data-panel-mode": panelMode })}
+      className={cn(
+        "flex flex-col min-h-[var(--editor-scrollport,calc(100vh-var(--admin-bar-height)))]",
+        inTopBar && "[--document-bar-height:0px]"
+      )}
+    >
+      <TargetSlot
+        {...place}
+        builtIns={{
+          "document-bar": (
+            <>
+              {bar}
+              {banners}
+            </>
+          ),
+          editor: (
+            <>
+              {notices}
+              {/* `relative`: a floating panel's column spans this row, over
+                  the fields, rather than the page. */}
+              <div className="relative flex flex-1 flex-col items-stretch @4xl/content:flex-row">
+                {children}
+              </div>
+            </>
+          ),
+        }}
+      />
+    </div>
+  );
+}

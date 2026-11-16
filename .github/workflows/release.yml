@@ -115,9 +115,11 @@ jobs:
           # 10.9 could not exchange an OIDC token (the registry answered 404).
           # Both halves of that reasoning are now obsolete.
           node-version-file: .nvmrc
-          cache: pnpm
           # Writes ~/.npmrc with the registry URL for publishing
           registry-url: https://registry.npmjs.org
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       # Scoped to the JOB, which is the part that matters. Six jobs across four
       # workflows cache `.turbo`, they run concurrently on the same commit, and
@@ -151,6 +153,12 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       # A dispatch: the action versions pending changesets into the Version
       # Packages pull request, or publishes when none are pending, which is

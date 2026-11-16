@@ -1,0 +1,126 @@
+/**
+ * The Breakdown card in a browser: set to a collection with a draft and
+ * published lifecycle, it divides the entries by status, each bar labelled as
+ * the entry form names the status and counted as the list counts it.
+ *
+ * Placed by the test through the layout, set to posts and to no grouping, so
+ * the grouping is the one the collection gives it. Other specs add posts to the
+ * shared database, so each count is read back from the list rather than
+ * assumed.
+ */
+import { expect, type Page } from "@playwright/test";
+
+import { gotoAdmin } from "./support/admin";
+import { defaultSizeOf } from "./support/dashboard-sizes";
+import { LOCK } from "./support/locks";
+import { ok } from "./support/releases-api";
+import { test } from "./support/test";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.dashboard] });
+
+const API = "/admin/api";
+const CARD = "core/breakdown";
+
+interface Layout {
+  version: number;
+  scope: string;
+  placements: Array<{ widgetId: string }>;
+}
+
+/** Put one Breakdown card, set to posts and nothing else, on the reader's dashboard. */
+async function placeBreakdown(page: Page): Promise<void> {
+  const layout = await ok<Layout>(
+    await page.request.get(`${API}/dashboard/layout`)
+  );
+  const others = layout.placements.filter(p => p.widgetId !== CARD);
+  await ok(
+    await page.request.put(`${API}/dashboard/layout`, {
+      data: {
+        placements: [
+          {
+            id: "e2e-breakdown",
+            widgetId: CARD,
+            ...(await defaultSizeOf(page, CARD)),
+            removed: false,
+            config: { collection: "posts" },
+          },
+          ...others,
+        ],
+        version: layout.version,
+        scope: layout.scope,
+      },
+    })
+  );
+}
+
+/** How many posts the list holds under `query`, as the card's reader. */
+async function listed(page: Page, query: string): Promise<number> {
+  const { meta } = await ok<{ meta: { total: number } }>(
+    await page.request.get(`${API}/collections/posts/entries?limit=1&${query}`)
+  );
+  return meta.total;
+}
+
+test("the Breakdown card divides a collection with a lifecycle by status", async ({
+  page,
+}) => {
+  const stamp = Date.now().toString(36);
+  for (const status of ["published", "draft"]) {
+    await ok(
+      await page.request.post(`${API}/collections/posts/entries`, {
+        data: {
+          title: `Breakdown e2e ${status} ${stamp}`,
+          slug: `breakdown-e2e-${status}-${stamp}`,
+          status,
+        },
+      })
+    );
+  }
+  await gotoAdmin(page, "/");
+  await placeBreakdown(page);
+  await gotoAdmin(page, "/");
+
+  const card = page.getByTestId(`widget-cell-${CARD}`);
+  await expect(card).toBeVisible();
+  const drawing = card.getByTestId("chart-drawing");
+  await expect(drawing).toBeVisible();
+  // Each drawn row's count by its name: the chart engine writes the names in one column and
+  // the counts in another, a row apart from the next.
+  const rows = await drawing.evaluate(element => {
+    const [names = [], counts = []] = [
+      ...element.querySelectorAll(".recharts-yAxis-tick-labels"),
+    ].map(axis =>
+      [...axis.querySelectorAll("text")].map(text => text.textContent ?? "")
+    );
+    return Object.fromEntries(
+      names.map((name, index) => [name, counts[index] ?? ""])
+    );
+  });
+  // One bar per status, named as the entry form names it, counted as the
+  // list counts it: the grouping came from the collection, not the card.
+  for (const [label, status] of [
+    ["Published", "published"],
+    ["Draft", "draft"],
+  ] as const) {
+    expect(rows[label], `the ${label} row`).toBe(
+      String(await listed(page, `status=${status}`))
+    );
+  }
+
+  // 🔴 The pointer at the bottom edge of the first bar names the first group, not the next: a
+  // row is a band, and its lower half once read as the row below.
+  const first = Object.keys(rows)[0] ?? "";
+  const bar = await drawing
+    .locator(".recharts-bar-rectangle path")
+    .first()
+    .boundingBox();
+  expect(bar, "the first bar is drawn").not.toBeNull();
+  if (bar) {
+    await page.mouse.move(bar.x + bar.width / 2, bar.y - 40);
+    await page.mouse.move(bar.x + bar.width / 2, bar.y + bar.height - 1, {
+      steps: 4,
+    });
+  }
+  await expect(card.getByTestId("chart-tooltip")).toContainText(first);
+});

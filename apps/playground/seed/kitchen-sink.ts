@@ -53,6 +53,33 @@ export const KITCHEN_SINK_TITLE = "Every block, at its defaults";
  */
 const LOCAL_IMAGE = "/next.svg";
 
+/**
+ * The rich-text passage, with a heading of its own so the table of contents
+ * beside it has an entry to link to.
+ */
+const PASSAGE = {
+  root: {
+    type: "root" as const,
+    children: [
+      {
+        type: "heading",
+        tag: "h3",
+        children: [{ type: "text", text: "Formatted text", format: 0 }],
+      },
+      {
+        type: "paragraph",
+        children: [
+          {
+            type: "text",
+            text: "A passage of formatted text, stored as a tree rather than as markup.",
+            format: 0,
+          },
+        ],
+      },
+    ],
+  },
+};
+
 export const KITCHEN_SINK_DOCUMENT: BlockDocument = {
   formatVersion: 1,
   kind: "page",
@@ -229,25 +256,15 @@ export const KITCHEN_SINK_DOCUMENT: BlockDocument = {
             id: "ks-rich",
             type: "core/rich-text",
             version: 1,
-            props: {
-              content: {
-                root: {
-                  type: "root",
-                  children: [
-                    {
-                      type: "paragraph",
-                      children: [
-                        {
-                          type: "text",
-                          text: "A passage of formatted text, stored as a tree rather than as markup.",
-                          format: 0,
-                        },
-                      ],
-                    },
-                  ],
-                },
-              },
-            },
+            props: { content: PASSAGE },
+          },
+          {
+            id: "ks-contents",
+            type: "core/table-of-contents",
+            version: 1,
+            // The same passage as the one above, so each link reaches a
+            // heading drawn on this page.
+            props: { content: PASSAGE },
           },
           {
             id: "ks-list",
@@ -280,6 +297,12 @@ export const KITCHEN_SINK_DOCUMENT: BlockDocument = {
               alt: "A standalone image",
               caption: "An image can carry a caption.",
             },
+          },
+          {
+            id: "ks-icon",
+            type: "core/icon",
+            version: 1,
+            props: { icon: "lucide:star", label: "A star" },
           },
           // A gallery admits only images, which is the asymmetry it documents:
           // `core/image` declares no parent, so an image is placeable anywhere.

@@ -16,7 +16,10 @@
 import { NextlyError } from "../../errors/nextly-error";
 import type { LanguageDirection } from "../../schemas/languages/types";
 
-import type { StoredLanguage } from "./config/stored-languages";
+import {
+  IMPLICIT_LANGUAGE,
+  type StoredLanguage,
+} from "./config/stored-languages";
 import { validateLocalizationConfig } from "./config/validate";
 import { isReservedLocaleCode } from "./locale-selector";
 
@@ -44,17 +47,14 @@ export type LanguageChange =
   | { kind: "remove"; code: string }
   | { kind: "setDefault"; code: string };
 
+/**
+ * The most active languages a site may have: a reorder names every active language, and a request
+ * names at most this many, so a longer list could never be reordered again.
+ */
+export const MAX_ACTIVE_LANGUAGES = 200;
+
 /** The site's one language while nothing is stored. */
-const IMPLICIT_DEFAULT: LanguageRow = {
-  code: "en",
-  label: "English",
-  direction: "ltr",
-  fallback: "[]",
-  position: 0,
-  isDefault: true,
-  active: true,
-  revision: 0,
-};
+const IMPLICIT_DEFAULT: LanguageRow = { ...IMPLICIT_LANGUAGE, revision: 0 };
 
 /**
  * The stored list after `change`, with each changed row's revision raised.
@@ -144,6 +144,15 @@ function addLanguage(
       code,
       "duplicate",
       `"${code}" is already a language of this site.`
+    );
+  }
+  // Counted over the active languages only: an inactive one is kept for its content and is not
+  // named by a reorder.
+  if (list.filter(row => row.active).length >= MAX_ACTIVE_LANGUAGES) {
+    throw refused(
+      code,
+      "too_many_languages",
+      `A site can have at most ${MAX_ACTIVE_LANGUAGES} languages. Remove one before adding another.`
     );
   }
   const fields = {

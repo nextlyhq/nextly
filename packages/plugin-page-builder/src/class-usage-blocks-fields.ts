@@ -36,7 +36,10 @@
  * @module class-usage-blocks-fields
  */
 import { isFieldLocalized } from "nextly/config";
-import { isFieldGroupFieldType } from "nextly/field-group-type";
+import {
+  extractFieldGroupReferences,
+  isFieldGroupFieldType,
+} from "nextly/field-group-type";
 
 import type { BlocksFieldDescriptor } from "./class-usage-subjects";
 import { isBlocksField } from "./fields/blocksHelper";
@@ -179,11 +182,110 @@ export interface BlocksFieldSurvey {
  * computed beside it.
  */
 export function blocksFieldSurvey(
-  collection: BlocksFieldsCollection | null | undefined
+  collection: BlocksFieldsCollection | null | undefined,
+  /** The field groups the site declares, so a reference to one can be read. */
+  fieldGroups?: FieldGroupDefinitions
 ): BlocksFieldSurvey {
+  const reach = blocksFieldReach(collection, undefined, fieldGroups);
+  return {
+    addressable: reach.fields
+      .filter(field => field.path.length === 1)
+      .map(field => field.descriptor),
+    unaddressable:
+      reach.unreachable || reach.fields.some(field => field.path.length > 1),
+  };
+}
+
+/** One blocks field a collection declares, and where its value is stored. */
+export interface ReachedBlocksField {
+  /** The field, named by its own key, and whether it stores per language. */
+  readonly descriptor: BlocksFieldDescriptor;
+  /**
+   * The keys leading to its value in a stored row: `["content"]` for a field at
+   * the top level (or inside a nameless group), `["hero", "body"]` for one
+   * inside the named group `hero`.
+   */
+  readonly path: readonly string[];
+}
+
+/** Every blocks field a collection declares, reached through named groups. */
+export interface BlocksFieldReach {
+  /** The fields whose value a row holds at a fixed path, in declaration order. */
+  readonly fields: readonly ReachedBlocksField[];
+  /**
+   * Whether the collection also declares a blocks field with no fixed path: one
+   * in a repeater, whose values are per row, or behind a reference this cannot
+   * resolve. A reader deciding whether a component is still used treats that
+   * as a possible use.
+   */
+  readonly unreachable: boolean;
+}
+
+/**
+ * Every blocks field a collection declares, at the path its value is stored
+ * under, named groups included.
+ *
+ * The richer view {@link blocksFieldSurvey} is derived from: the usage index
+ * addresses only the top-level fields, and a rewrite of every host reads the
+ * ones under named groups too.
+ */
+export function blocksFieldReach(
+  collection: BlocksFieldsCollection | null | undefined,
+  /** How many containers the walk may expand; see {@link MAX_EXPANSIONS}. */
+  maxExpansions: number = MAX_EXPANSIONS,
+  /**
+   * The field groups whose definitions the site declares, by slug. Given, a
+   * field group a declaration references is read through its definition;
+   * absent, or for a group it does not declare, the reference is unresolved.
+   */
+  fieldGroups?: FieldGroupDefinitions
+): BlocksFieldReach {
   const fields = collection?.fields;
-  if (!Array.isArray(fields)) return { addressable: [], unaddressable: false };
-  return walkDeclarations(fields, collection?.localized === true);
+  if (!Array.isArray(fields)) return { fields: [], unreachable: false };
+  return walkDeclarations(
+    fields,
+    collection?.localized === true,
+    maxExpansions,
+    fieldGroups
+  );
+}
+
+/**
+ * A field group's definition by its slug, as the site's code declares it, or
+ * `undefined` for one it does not (made in the admin, which no plugin surface
+ * lists).
+ */
+export type FieldGroupDefinitions = (
+  slug: string
+) => { readonly fields?: unknown } | undefined;
+
+/**
+ * How deep a chain of named groups the walk follows. A group that lists itself
+ * makes its path grow without end; past this it is reported as unreachable,
+ * which a reader treats as a possible use rather than as none.
+ */
+const MAX_GROUP_DEPTH = 16;
+
+/**
+ * How many containers one walk expands in all. The depth bound alone does not
+ * bound the work: a named group holding several named groups that each list
+ * it back makes a new path on every branch, so the paths below the depth
+ * bound grow exponentially with the branching. Past this many expansions the
+ * walk stops expanding and reports the rest as unreachable, which a reader
+ * treats as a possible use. Far above what a real configuration declares.
+ */
+const MAX_EXPANSIONS = 10_000;
+
+/** Where a frame of the walk is: the path so far, and whether it is fixed. */
+type WalkMode = "fixed" | "hidden";
+
+/** One list of declarations being read, and where its values live. */
+interface WalkFrame {
+  fields: readonly unknown[];
+  index: number;
+  mode: WalkMode;
+  /** The named groups above this list, outermost first. */
+  path: readonly string[];
 }
 
 /**
@@ -194,16 +296,19 @@ export function blocksFieldSurvey(
  */
 function walkDeclarations(
   fields: readonly unknown[],
-  collectionLocalized: boolean
-): BlocksFieldSurvey {
-  let unaddressable = false;
-  const found: BlocksFieldDescriptor[] = [];
+  collectionLocalized: boolean,
+  maxExpansions: number,
+  fieldGroups: FieldGroupDefinitions | undefined
+): BlocksFieldReach {
+  let unreachable = false;
+  const found: ReachedBlocksField[] = [];
   const seen = new Set<string>();
   // Groups already expanded, by identity AND by whether reaching them that way
   // makes what is inside addressable. This is what makes the walk finite,
   // and it is the ONLY thing that does: a group listing itself would otherwise
-  // be re-entered forever. Expanding each group once bounds the visits at the
-  // number of declarations the configuration actually contains.
+  // be re-entered forever. Expanding each group once per place bounds the
+  // visits, with a chain of NAMED groups followed only to MAX_GROUP_DEPTH
+  // because each level is a new place.
   //
   // There is no visit cap beside it, deliberately. A cap terminates a cyclic
   // walk without ever reaching the fields the cycle hides, and on a merely LONG
@@ -212,10 +317,10 @@ function walkDeclarations(
   // is the state that licences deleting a class a page still renders. Nothing
   // validates a field count, so a long list is legal configuration rather than
   // a signal that the config is wrong.
-  const expanded = {
-    reachable: new WeakSet<object>(),
-    hidden: new WeakSet<object>(),
-  };
+  // Keyed by the container AND by the path and mode it was reached under: one
+  // declaration object can appear in two places, and the two store their data
+  // under different keys, so each place is a different reach.
+  const expanded = new WeakMap<object, Set<string>>();
 
   // Depth-first over a stack of CURSORS rather than recursion or a queue of
   // fields. Recursion would let author-supplied nesting exhaust the call stack.
@@ -225,13 +330,11 @@ function walkDeclarations(
   // has committed, where a throw reports a failed save for one that succeeded.
   // A cursor holds each list where it is and reads one field at a time, so no
   // length is ever material.
-  // `addressable` travels with the frame: a nested container's children are
-  // walked only to NOTICE a blocks field there, never to enumerate one.
-  const stack: {
-    fields: readonly unknown[];
-    index: number;
-    addressable: boolean;
-  }[] = [{ fields, index: 0, addressable: true }];
+  // The mode and path travel with the frame: a named group's children are
+  // reached at a fixed path beneath it, and a repeater's children are walked
+  // only to NOTICE a blocks field there, never to reach one.
+  const stack: WalkFrame[] = [{ fields, index: 0, mode: "fixed", path: [] }];
+  const budget = { left: maxExpansions };
 
   while (stack.length > 0) {
     const frame = stack[stack.length - 1];
@@ -242,107 +345,160 @@ function walkDeclarations(
     const field = frame.fields[frame.index];
     frame.index += 1;
 
-    const step = stepFor(field, frame.addressable, collectionLocalized);
-    if (step.kind === "skip") continue;
-    if (step.kind === "unresolved") {
-      unaddressable = true;
-      continue;
+    const step = stepFor(field, frame, collectionLocalized, fieldGroups);
+    const state = { stack, expanded, seen, found, budget };
+    if (!takeStep(step, field, frame, state)) {
+      unreachable = true;
     }
-    if (step.kind === "descend") {
-      // Each container expanded once per addressability — the only thing making
-      // a walk over author-supplied nesting finite, since a group may list
-      // itself.
-      descend(stack, field as object, step, expanded);
-      continue;
-    }
-    if (!step.addressable) {
-      // Found, and unreachable. Recorded as a fact about the collection rather
-      // than as a descriptor: enumerating a scope for it would file rows no
-      // rebuild can reconcile and no sweep can clear.
-      unaddressable = true;
-      continue;
-    }
-    // A duplicate name is one subject, not two. Enumerating it twice would
-    // reconcile the same rows twice in one pass, and the second pass reads the
-    // first one's inserts as rows the document no longer justifies.
-    if (seen.has(step.descriptor.name)) continue;
-    seen.add(step.descriptor.name);
-    found.push(step.descriptor);
   }
 
-  return { addressable: found, unaddressable };
+  return { fields: found, unreachable };
+}
+
+/** What the walk accumulates, handed to each step. */
+interface WalkState {
+  readonly stack: WalkFrame[];
+  readonly expanded: WeakMap<object, Set<string>>;
+  readonly seen: Set<string>;
+  readonly found: ReachedBlocksField[];
+  /** The expansions this walk may still make; see {@link MAX_EXPANSIONS}. */
+  readonly budget: { left: number };
 }
 
 /**
- * Push a container's children onto the cursor stack, once per container.
+ * Act on one declaration's step. Answers false when the declaration may hold
+ * a blocks field the walk cannot reach, which the walk reports as unreachable.
+ */
+function takeStep(
+  step: FieldStep,
+  field: unknown,
+  frame: WalkFrame,
+  state: WalkState
+): boolean {
+  if (step.kind === "skip") return true;
+  if (step.kind === "unresolved") return false;
+  if (step.kind === "groups") {
+    // Each referenced definition's fields, walked where no fixed path
+    // reaches them: a field group's values are stored apart from the row, so
+    // a blocks field inside one is noticed, as unreachable, never reached.
+    for (const definition of step.definitions) {
+      if (frame.path.length >= MAX_GROUP_DEPTH) return false;
+      if (state.budget.left <= 0) return false;
+      state.budget.left -= 1;
+      descend(
+        state.stack,
+        definition,
+        { mode: "hidden", path: [...frame.path, "\u0000group"] },
+        state.expanded
+      );
+    }
+    return true;
+  }
+  if (step.kind === "descend") {
+    // Each container expanded once per place it is reached from, and a chain
+    // of named groups followed only so deep — together the only things making
+    // a walk over author-supplied nesting finite, since a group may list
+    // itself.
+    if (step.frame.path.length > MAX_GROUP_DEPTH) return false;
+    if (state.budget.left <= 0) return false;
+    state.budget.left -= 1;
+    descend(state.stack, field as object, step.frame, state.expanded);
+    return true;
+  }
+  // Found, with no fixed path to it. Recorded as a fact about the collection:
+  // enumerating a scope for it would file rows no rebuild can reconcile and no
+  // sweep can clear.
+  if (frame.mode === "hidden") return false;
+  // A duplicate path is one subject, not two. Enumerating it twice would
+  // reconcile the same rows twice in one pass, and the second pass reads the
+  // first one's inserts as rows the document no longer justifies.
+  const path = [...frame.path, step.descriptor.name];
+  const key = path.join("\u001F");
+  if (!state.seen.has(key)) {
+    state.seen.add(key);
+    state.found.push({ descriptor: step.descriptor, path });
+  }
+  return true;
+}
+
+/**
+ * Push a container's children onto the cursor stack, once per place it is
+ * reached from.
  *
- * Kept out of the walk so the loop reads as a dispatch over the three things a
- * declaration can be. A container already expanded is left alone; the walk moves
- * on either way, which is why this answers nothing.
+ * Kept out of the walk so the loop reads as a dispatch over the things a
+ * declaration can be. A container already expanded from this place is left
+ * alone; the walk moves on either way, which is why this answers nothing.
  */
 function descend(
-  stack: { fields: readonly unknown[]; index: number; addressable: boolean }[],
+  stack: WalkFrame[],
   container: object,
-  step: { fields: readonly unknown[]; addressable: boolean },
-  expanded: { reachable: WeakSet<object>; hidden: WeakSet<object> }
+  next: Omit<WalkFrame, "fields" | "index">,
+  expanded: WeakMap<object, Set<string>>
 ): void {
   // Keyed by the container AND by what reaching it this way means. One
   // declaration object can appear twice in a configuration — a shared nameless
   // group at the top level and again beneath a named one — and the two
   // occurrences store their data under DIFFERENT keys, so the blocks field
-  // inside is addressable through one path and not through the other.
-  //
-  // Keyed by identity alone, the first visit claimed the object and the second
-  // was skipped: the field was enumerated as a scope for the reachable path and
-  // never reported as unreachable for the hidden one, so the survey said nothing
-  // was out of reach while half of that field's content was.
-  //
-  // Two sets rather than a set of pairs, because `addressable` is a boolean and
-  // a WeakSet is what lets a declaration object be garbage collected. Each
-  // container is still expanded at most once PER MODE, so a group that lists
-  // itself terminates — at most twice round instead of once.
-  const seen = step.addressable ? expanded.reachable : expanded.hidden;
-  if (seen.has(container)) return;
-  seen.add(container);
-  stack.push({ fields: step.fields, index: 0, addressable: step.addressable });
+  // inside is reached at one path through one and at another (or not at all)
+  // through the other. Keyed by identity alone, the first visit claimed the
+  // object and the second was skipped silently.
+  const place = `${next.mode}\u001F${next.path.join("\u001F")}`;
+  const places = expanded.get(container) ?? new Set<string>();
+  if (places.has(place)) return;
+  places.add(place);
+  expanded.set(container, places);
+  stack.push({ ...next, fields: fieldsOf(container), index: 0 });
+}
+
+/** The declarations a container lists; the walk only descends into lists. */
+function fieldsOf(container: object): readonly unknown[] {
+  const listed = (container as { fields?: unknown }).fields;
+  return Array.isArray(listed) ? listed : [];
 }
 
 /** What the walk does with one declaration. */
 type FieldStep =
   | {
       kind: "descend";
-      fields: readonly unknown[];
-      /** Whether a blocks field found below can be enumerated. */
-      addressable: boolean;
+      /** Where the container's children are, and whether at a fixed path. */
+      frame: Omit<WalkFrame, "fields" | "index">;
     }
-  | { kind: "field"; descriptor: BlocksFieldDescriptor; addressable: boolean }
+  | { kind: "field"; descriptor: BlocksFieldDescriptor }
   /** A reference whose definition this cannot read, so it may hide a blocks field. */
   | { kind: "unresolved" }
+  /** A reference to field groups the site declares: their definitions. */
+  | { kind: "groups"; definitions: readonly object[] }
   | { kind: "skip" };
 
 /**
- * Which of the three a declaration is, decided in one place.
+ * Which of the things a declaration is, decided in one place.
  *
  * Kept out of the walk so the loop is about the stack and the accumulators. The
- * two descents are different answers to one question and belong beside each
- * other: a PRESENTATIONAL group's children live at the parent path and keep the
- * frame's addressability, while any OTHER container nests its children under its
- * own key — those are walked only so a blocks field inside one is NOTICED, never
- * to enumerate it.
+ * three descents are different answers to one question and belong beside each
+ * other: a PRESENTATIONAL group's children live at the parent path; a NAMED
+ * group's children live beneath its key, at a fixed path; and any OTHER
+ * container (a repeater) stores its children per row — those are walked only
+ * so a blocks field inside one is NOTICED, never to reach it.
  */
 function stepFor(
   field: unknown,
-  addressable: boolean,
-  collectionLocalized: boolean
+  frame: Pick<WalkFrame, "mode" | "path">,
+  collectionLocalized: boolean,
+  fieldGroups: FieldGroupDefinitions | undefined
 ): FieldStep {
-  const children = presentationalChildren(field);
-  if (children !== null) {
-    return { kind: "descend", fields: children, addressable };
+  if (presentationalChildren(field) !== null) {
+    return { kind: "descend", frame: { mode: frame.mode, path: frame.path } };
   }
 
-  const nested = nestedDeclarations(field);
-  if (nested !== null) {
-    return { kind: "descend", fields: nested, addressable: false };
+  if (nestedDeclarations(field) !== null) {
+    const group = namedGroupKey(field);
+    return {
+      kind: "descend",
+      frame:
+        group !== null && frame.mode === "fixed"
+          ? { mode: "fixed", path: [...frame.path, group] }
+          : { mode: "hidden", path: frame.path },
+    };
   }
 
   // A REFERENCE to a definition stored elsewhere. A `fieldGroup` or `component`
@@ -365,14 +521,33 @@ function stepFor(
   // that distinguishes a reference from an ordinary scalar field without knowing
   // the vocabulary, and treating every unrecognised type as unresolvable would
   // mark a text field unreachable.
+  //
+  // Where the site's own declarations are handed in, a reference to a group
+  // the site declares in code is read through that definition: a group
+  // holding no blocks field holds no copy, and one holding a blocks field is
+  // still reported unreachable, since its values are stored apart from the
+  // row. A group the site does not declare (made in the admin) stays
+  // unresolved.
   if (isFieldGroupFieldType((field as { type?: unknown } | null)?.type)) {
-    return { kind: "unresolved" };
+    const definitions =
+      fieldGroups === undefined ? undefined : definitionsOf(field, fieldGroups);
+    return definitions === undefined
+      ? { kind: "unresolved" }
+      : { kind: "groups", definitions };
   }
 
   const descriptor = readBlocksField(field, collectionLocalized);
-  return descriptor === null
-    ? { kind: "skip" }
-    : { kind: "field", descriptor, addressable };
+  return descriptor === null ? { kind: "skip" } : { kind: "field", descriptor };
+}
+
+/**
+ * The key a NAMED group stores its children under, or null for any other
+ * container. A repeater has a name too, but its children are stored per row,
+ * so they have no fixed path.
+ */
+function namedGroupKey(value: unknown): string | null {
+  if ((value as { type?: unknown } | null)?.type !== "group") return null;
+  return fieldName(value);
 }
 
 /**
@@ -387,4 +562,70 @@ function nestedDeclarations(value: unknown): readonly unknown[] | null {
   if (typeof value !== "object" || value === null) return null;
   const field = value as { fields?: unknown };
   return Array.isArray(field.fields) ? field.fields : null;
+}
+
+/**
+ * A Single's declaration, as the usage index reads which of its blocks fields
+ * store per language.
+ *
+ * A Single declared in code states both its switch and each field's flag. One
+ * made in the admin states neither on the surface a plugin can read, so on a
+ * site with languages each of its fields is read as stored per language: a
+ * shared value is then recorded once per language, which counts the Single
+ * once all the same, rather than a translation's components being missed.
+ */
+export function singleUsageDeclaration(single: {
+  readonly fields?: unknown;
+  readonly localized?: boolean;
+  readonly languagesUnknown?: boolean;
+}): BlocksFieldsCollection {
+  if (single.languagesUnknown !== true) {
+    return { fields: single.fields, localized: single.localized === true };
+  }
+  return { fields: everyFieldLocalized(single.fields, 0), localized: true };
+}
+
+/**
+ * A list of declarations with every field in it, and in every container it
+ * holds, marked as stored per language, so a blocks field inside a nameless
+ * group is read per language as a top-level one is. Containers deeper than
+ * the declaration walk reads are left as they are; the walk reports those as
+ * out of reach anyway.
+ */
+function everyFieldLocalized(fields: unknown, depth: number): unknown {
+  if (!Array.isArray(fields) || depth > MAX_GROUP_DEPTH) return fields;
+  return fields.map((field: unknown) => {
+    if (typeof field !== "object" || field === null) return field;
+    const nested = (field as { fields?: unknown }).fields;
+    return {
+      ...field,
+      localized: true,
+      ...(Array.isArray(nested)
+        ? { fields: everyFieldLocalized(nested, depth + 1) }
+        : {}),
+    };
+  });
+}
+
+/**
+ * The definitions of every field group `field` references, each read from the
+ * site's declarations; `undefined` when it names none, or one the site does
+ * not declare as a list of fields, so the reference stays unresolved.
+ */
+function definitionsOf(
+  field: unknown,
+  fieldGroups: FieldGroupDefinitions
+): object[] | undefined {
+  const { single, many } = extractFieldGroupReferences(field);
+  const slugs = [...(single === undefined ? [] : [single]), ...(many ?? [])];
+  if (slugs.length === 0) return undefined;
+  const definitions: object[] = [];
+  for (const slug of slugs) {
+    const definition = fieldGroups(slug);
+    if (definition === undefined || !Array.isArray(definition.fields)) {
+      return undefined;
+    }
+    definitions.push(definition);
+  }
+  return definitions;
 }

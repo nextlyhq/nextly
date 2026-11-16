@@ -13,7 +13,7 @@
  *
  * @module storefront/routes.integration.test
  */
-import { type PluginContext } from "@nextlyhq/plugin-sdk";
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,

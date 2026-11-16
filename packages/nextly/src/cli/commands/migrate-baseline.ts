@@ -23,7 +23,6 @@
  *
  * @module cli/commands/migrate-baseline
  */
-import { createHash } from "node:crypto";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -38,17 +37,32 @@ import {
   COMPANION_STATUS_COLUMN,
   COMPANION_STRUCTURAL_COLUMNS,
 } from "../../domains/i18n/migration/generate-up";
+import { RETAINED_SIZES_COLUMN } from "../../domains/media/retired-image-sizes-constants";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { checksumOf } from "../../domains/schema/migrate/applied-checksums";
 import {
   EMPTY_SNAPSHOT,
   planBaseline,
 } from "../../domains/schema/migrate/baseline";
 import {
+  readOldBuilderLedger,
+  withOldBuilderMarks,
+} from "../../domains/schema/migrate/old-builder-ledger";
+import {
   resolveDeclaredSchema,
   type ResolvedEntity,
 } from "../../domains/schema/migrate/resolved-schema";
+import {
+  compileAppStreamTables,
+  coreTableNames,
+  NO_ELEMENTS,
+  standingContribution,
+  tracking,
+  unexplainedElements,
+  type AppStreamTables,
+} from "../../domains/schema/migrate-create/app-stream";
 import { withCyclicForeignKeysSplit } from "../../domains/schema/migrate-create/cyclic-foreign-keys";
 import {
   formatMigrationFile,
@@ -57,11 +71,16 @@ import {
 } from "../../domains/schema/migrate-create/format-file";
 import {
   loadLatestSnapshot,
+  snapshotPathOf,
   writeSnapshot,
 } from "../../domains/schema/migrate-create/snapshot-io";
 import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
-import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
+import type {
+  ContributedElements,
+  NextlySchemaSnapshot,
+  TableSpec,
+} from "../../domains/schema/pipeline/diff/types";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import {
   isCompanionTable,
@@ -70,17 +89,35 @@ import {
   snapshotComparableTables,
 } from "../../domains/schema/pipeline/managed-tables";
 import { generateStatements } from "../../domains/schema/pipeline/sql-templates/index";
-import { describeError, NextlyError } from "../../errors/index";
-import { STORAGE_FORMAT } from "../../schemas/storage-format";
-import { createContext, type CommandContext } from "../program";
+import { NextlyError } from "../../errors/index";
 import {
-  createCliAdapter,
-  validateDatabaseEnv,
-  type CLIDatabaseAdapter,
-} from "../utils/adapter";
-import { loadConfig } from "../utils/config-loader";
+  RETIRED_ACCESS_RULES_COLUMN,
+  RETIRED_ACCESS_RULES_TABLES,
+} from "../../init/retired-access-rules";
+import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import {
+  projectPath,
+  reportDryRun,
+  type DryRunChange,
+  type DryRunPlan,
+} from "../dry-run";
+import { exitWithError } from "../errors";
+import { createContext, type CommandContext } from "../program";
+import type { CLIDatabaseAdapter } from "../utils/adapter";
+import { openMigrationCommand } from "../utils/command-prerequisites";
+import {
+  readMigrationFolder,
+  type DeclaredNames,
+} from "../utils/migration-discovery";
 
-import { maybeForceUnlock } from "./migrate";
+import {
+  assertAppHistoryHolds,
+  historyRefusalOf,
+  maybeForceUnlock,
+  migrateExitCode,
+} from "./migrate";
+import { DEFAULT_BASELINE_NAME } from "./migrate-baseline.command";
+import { dryRunRefusalOf } from "./migrate-create";
 
 interface BaselineOptions {
   name?: string;
@@ -90,10 +127,9 @@ interface BaselineOptions {
   cwd?: string;
   forceUnlock?: boolean;
   adoptUnknown?: boolean;
+  /** Show the files and the ledger row a run would write; write nothing and take no lock. */
+  dryRun?: boolean;
 }
-
-/** The migration name used when the operator supplies none. */
-const DEFAULT_BASELINE_NAME = "baseline";
 
 /**
  * The tables in the database, as the source of truth for what to adopt.
@@ -104,34 +140,38 @@ const DEFAULT_BASELINE_NAME = "baseline";
  * in it. A permissions error swallowed into `[]` would report "nothing to
  * adopt" and leave the operator believing their schema was already recorded.
  */
-async function listManagedTables(
-  adapter: CLIDatabaseAdapter,
-  knownJunctions: ReadonlySet<string>
-): Promise<string[]> {
-  const names = await (
+async function listTableNames(adapter: CLIDatabaseAdapter): Promise<string[]> {
+  return (
     adapter as unknown as { listTables: () => Promise<string[]> }
   ).listTables();
-  // A custom `options.junctionTable` name need not carry a managed prefix, and
-  // the production DDL uses it verbatim — so filtering on the prefix alone
-  // drops an existing relationship table from adoption entirely, and a fresh
-  // environment rebuilt from the baseline has nowhere to write links.
-  return names.filter(n => isManagedTable(n) || knownJunctions.has(n));
 }
 
 /**
- * The migration files already on disk, earliest first.
+ * The migration files already on disk, earliest first, old Schema Builder
+ * files left out as every reader leaves them out: one is no history.
  *
  * A missing directory is a project that has never generated one, which is the
  * normal state for everything this command exists to adopt.
  */
-async function listMigrationFiles(migrationsDir: string): Promise<string[]> {
+async function listMigrationFiles(
+  migrationsDir: string,
+  dialect: SupportedDialect,
+  declared: DeclaredNames | undefined
+): Promise<string[]> {
+  let entries: string[];
   try {
-    const entries = await readdir(migrationsDir);
-    return entries.filter(f => f.endsWith(".sql")).sort();
+    entries = await readdir(migrationsDir);
   } catch (err) {
     if ((err as { code?: string }).code === "ENOENT") return [];
     throw err;
   }
+  const { oldBuilderFiles } = await readMigrationFolder(
+    migrationsDir,
+    dialect,
+    declared
+  );
+  const ignored = new Set(oldBuilderFiles.map(f => f.file));
+  return entries.filter(f => f.endsWith(".sql") && !ignored.has(f)).sort();
 }
 
 /**
@@ -145,13 +185,23 @@ async function listMigrationFiles(migrationsDir: string): Promise<string[]> {
  */
 async function firstAppliedMigration(
   repo: SchemaEventsRepository,
-  adapter: CLIDatabaseAdapter
+  adapter: CLIDatabaseAdapter,
+  folder: {
+    migrationsDir: string;
+    dialect: SupportedDialect;
+    declared: DeclaredNames | undefined;
+  }
 ): Promise<string | undefined> {
   if (!(await ledgerExists(adapter))) return undefined;
   // Past the existence check, a failure is a real one — permissions, a wrong
   // schema, a broken table. Swallowing it would read as "never migrated" and
   // write a second origin beside whatever history the ledger already holds.
-  const rows = await repo.listFileApplies();
+  const all = await repo.listFileApplies();
+  // An old Schema Builder file's rows are no history (`readOldBuilderLedger`).
+  const { ignoredRows } = await readOldBuilderLedger(folder, repo, all);
+  const rows = all.filter(
+    r => r.filename === null || !ignoredRows.has(r.filename)
+  );
   const names = rows
     .map(r => (r as { filename?: string | null }).filename)
     .filter((n): n is string => typeof n === "string" && n.length > 0)
@@ -358,6 +408,21 @@ export interface BaselineCoreDeps {
    */
   knownJunctions?: ReadonlySet<string>;
   /**
+   * The app's extension schema, compiled exactly as `migrate:create` compiles
+   * it (`compileAppStreamTables`).
+   *
+   * Without it a table the app declares through `db.schema.extend` carries no
+   * managed prefix, so it is neither adopted into the snapshot nor written
+   * into the migration's body — and the next `migrate:create`, which compiles
+   * the stream on its own, re-emits the `CREATE TABLE` for a table that is
+   * already standing. An element the app contributes to another owner's table
+   * has the same failure one step removed: the contribution is recorded
+   * nowhere, so it is diffed as new.
+   */
+  appStream?: AppStreamTables;
+  /** What the declared schema names, which old Builder files are judged against. */
+  declared?: DeclaredNames;
+  /**
    * From `config.db.migrateLockTtlSeconds`.
    *
    * The stored expiry is what every later command reads to decide whether a
@@ -365,6 +430,8 @@ export interface BaselineCoreDeps {
    * project that configured a shorter takeover for far longer than it asked.
    */
   ttlSeconds?: number;
+  /** How long a held schema lock is waited for, in milliseconds. Absent, about a minute. */
+  lockWaitMs?: number;
   /**
    * Adopt a companion holding translated columns the config does not describe.
    *
@@ -376,6 +443,11 @@ export interface BaselineCoreDeps {
   adoptUnknown?: boolean;
   /** Override the clock so a test can predict the filename. */
   now?: Date;
+  /**
+   * Plan the adoption as a run does and write nothing: no file, no ledger table, no ledger row,
+   * and no lock taken. The result names what a run would write.
+   */
+  dryRun?: boolean;
 }
 
 /** A companion holding translated columns the config no longer describes. */
@@ -384,18 +456,476 @@ export interface CompanionMismatch {
   columns: string[];
 }
 
+/**
+ * An owner's table holding elements no declaration explains: what a
+ * contribution left behind when the config withdrew it, whose orphan no
+ * later migration can be derived for.
+ */
+export interface ContributionMismatch {
+  table: string;
+  elements: string[];
+}
+
 export type BaselineCoreResult =
   | { kind: "already-baselined"; snapshotName: string }
   | { kind: "history-not-empty"; filename: string }
   | { kind: "empty-database" }
   | { kind: "companion-mismatch"; mismatches: CompanionMismatch[] }
+  | { kind: "contribution-mismatch"; mismatches: ContributionMismatch[] }
   | {
       kind: "baselined";
       sqlPath: string;
       snapshotPath: string;
       /** How many tables the recorded starting point describes. */
       tableCount: number;
+    }
+  | {
+      kind: "would-baseline";
+      sqlPath: string;
+      snapshotPath: string;
+      /** The ledger row's filename, recorded as applied. */
+      filename: string;
+      /** Whether the run would create the ledger table, which is not there yet. */
+      createsLedger: boolean;
+      tableCount: number;
     };
+
+/** The adoption a run carries out: the migration's text and where it and its snapshot go. */
+interface PlannedAdoption {
+  kind: "adopt";
+  baseName: string;
+  sqlPath: string;
+  sqlContent: string;
+  metaDir: string;
+  snapshot: NextlySchemaSnapshot;
+  /** The app's contributed elements, by table, for the snapshot to record. */
+  contributions: Record<string, ContributedElements>;
+}
+
+/** The outcome of planning: an adoption to carry out, or why there is none. */
+type AdoptionPlan =
+  | PlannedAdoption
+  | Exclude<BaselineCoreResult, { kind: "baselined" | "would-baseline" }>;
+
+/** The outcome of a plan that adopts nothing, as the run reports it. */
+function notAdopting(
+  plan: Exclude<ReturnType<typeof planBaseline>, { kind: "baseline" }>
+): AdoptionPlan {
+  if (plan.kind === "already-baselined") {
+    return { kind: "already-baselined", snapshotName: plan.snapshotName };
+  }
+  if (plan.kind === "history-not-empty") {
+    return { kind: "history-not-empty", filename: plan.filename };
+  }
+  return { kind: "empty-database" };
+}
+
+/**
+ * The statements that rebuild the derived tables the snapshot leaves out: the
+ * junctions, from what the database holds, and the translation tables, from
+ * their columns there and the config's DDL builder, with any columns the
+ * config no longer describes.
+ */
+async function derivedTableStatements(
+  deps: BaselineCoreDeps,
+  junctionTables: ReadonlySet<string>,
+  companionTables: string[]
+): Promise<
+  ReturnType<typeof buildCompanionStatements> & {
+    junctionStatements: string[];
+  }
+> {
+  const { db, dialect } = deps;
+  const junctionLive =
+    junctionTables.size > 0
+      ? await introspectLiveSnapshot(db, dialect, [...junctionTables])
+      : { tables: [] };
+  // Rendered as a list, not per operation: on SQLite a split-out foreign
+  // key becomes a rebuild of its table to what the database holds.
+  const junctionSql = generateStatements(
+    withCyclicForeignKeysSplit(
+      diffSnapshots(EMPTY_SNAPSHOT, junctionLive),
+      dialect,
+      []
+    ),
+    dialect,
+    junctionLive.tables
+  );
+
+  // The companion's own columns, read from the database for the same
+  // reason the junction's are: what is standing there is the schema being
+  // adopted. Only its structure — the composite key and the cascading
+  // foreign key, neither of which a snapshot can hold — comes from the
+  // config's DDL builder.
+  const companionLive =
+    companionTables.length > 0
+      ? await introspectLiveSnapshot(db, dialect, companionTables)
+      : EMPTY_SNAPSHOT;
+
+  const companionSql = buildCompanionStatements({
+    companionTables,
+    liveCompanions: companionLive,
+    entities: deps.localizedEntities ?? [],
+    dialect,
+    defaultLocale: deps.defaultLocale ?? "en",
+    adoptUnknown: deps.adoptUnknown === true,
+  });
+  return { ...companionSql, junctionStatements: junctionSql };
+}
+
+/**
+ * Fold the app's extension schema into the adopted snapshot, and name the
+ * elements that were the app's to migrate.
+ *
+ * A table the app owns is adopted from the database like every other table —
+ * its name reaches the adoption filter, and introspection records it. A table
+ * it only contributes an element to is another owner's — a plugin's or a core
+ * table — so it never enters the adoption SQL, whose lifecycle belongs to the
+ * owner's own stream. But the snapshot still has to record it: the next
+ * `migrate:create` diffs such a table over its owner's current declaration
+ * plus the elements the app's last snapshot credited to it, and a baseline
+ * that recorded neither makes that generation re-emit every element the app
+ * contributed — against a database that already has them.
+ *
+ * What is recorded is what the DATABASE holds, element by element: the
+ * compiled stream says what the app contributes now, and a config edited
+ * since the last push names elements the database never received. Recording
+ * one of those as present would tell every later generation the work was
+ * done, so `standingContribution` keeps an element only when the live table
+ * carries its name, and what has not arrived stays pending — the next
+ * `migrate:create` is what brings it. A table the app contributes to that is
+ * not standing at all is skipped for the same reason.
+ */
+function withAppStreamTables(
+  snapshot: NextlySchemaSnapshot,
+  appStream: AppStreamTables | undefined,
+  live: ReadonlyMap<string, TableSpec>
+): {
+  snapshot: NextlySchemaSnapshot;
+  contributions: Record<string, ContributedElements>;
+  /** The copy each contributed table took in the snapshot, by name. */
+  recordedSpecs: Map<string, TableSpec>;
+} {
+  if (appStream === undefined) {
+    return { snapshot, contributions: {}, recordedSpecs: new Map() };
+  }
+  const present = new Set(snapshot.tables.map(table => table.name));
+  const tables = [...snapshot.tables];
+  const contributions: Record<string, ContributedElements> = {};
+  const recordedSpecs = new Map<string, TableSpec>();
+  for (const [name, entry] of appStream.contributed) {
+    const liveTable = live.get(name);
+    if (liveTable === undefined) continue;
+    const held = standingContribution({ ...entry, live: liveTable });
+    const hasStanding =
+      held.elements.columns.length > 0 ||
+      held.elements.indexes.length > 0 ||
+      held.elements.foreignKeys.length > 0 ||
+      held.elements.checks.length > 0;
+    // Nothing stood in the database yet: keep the foreign table out of both
+    // the snapshot and the contribution record. Recording the table without
+    // crediting any contribution to it would leave `appStreamSnapshots` with no
+    // reason to carry it on the desired side if the pending hook is later
+    // removed, which would plan `DROP TABLE` for the owner's table.
+    if (!hasStanding) continue;
+    // Core tables are already adopted whole by the managed-prefix filter; a
+    // plugin's table is not, and enters here for the first time. Either way
+    // the copy that stands in the snapshot is one the reader can trust.
+    if (!present.has(name)) {
+      tables.push(held.spec);
+      present.add(name);
+    }
+    recordedSpecs.set(name, held.spec);
+    contributions[name] = held.elements;
+  }
+  return { snapshot: { ...snapshot, tables }, contributions, recordedSpecs };
+}
+
+/**
+ * The DDL that brings the app's contributed elements to a fresh environment.
+ *
+ * The adopting database already has them, but this file is also what a fresh
+ * environment rebuilds from — and nothing else can supply them there: the
+ * foreign table arrives from its owner's own migrations, whose generator has
+ * never seen the app's config, and the snapshot this run writes records the
+ * elements as present, so the next `migrate:create` sees no work left. The
+ * body therefore carries the ALTER and INDEX statements for exactly the
+ * recorded contributions — the owner's bare declaration against the copy the
+ * snapshot took, so the file and the record cannot disagree — and never a
+ * CREATE of the foreign table itself.
+ */
+function contributedElementStatements(
+  appStream: AppStreamTables | undefined,
+  folded: { recordedSpecs: ReadonlyMap<string, TableSpec> },
+  dialect: SupportedDialect
+): string[] {
+  if (appStream === undefined) return [];
+  const statements: string[] = [];
+  for (const [name, spec] of folded.recordedSpecs) {
+    const bare = appStream.baselines.get(name);
+    if (bare === undefined) continue;
+    // The bare side is made to track every dimension the recorded side
+    // tracks: the diff skips a dimension either side leaves untracked, and a
+    // CHECK a contributed `col.enum()` carries would otherwise never reach
+    // the file — the same rule `foreignTableSides` holds its two sides to.
+    statements.push(
+      ...generateStatements(
+        diffSnapshots({ tables: [tracking(bare, spec)] }, { tables: [spec] }),
+        dialect,
+        [spec]
+      )
+    );
+  }
+  return statements;
+}
+
+/**
+ * Unexplained live elements standing on owner tables after config withdrew
+ * the contribution that added them.
+ */
+function findContributionMismatches(
+  appStream: AppStreamTables | undefined,
+  ownerLive: ReadonlyMap<string, TableSpec>,
+  dialect: SupportedDialect
+): { table: string; elements: string[] }[] {
+  if (appStream === undefined) return [];
+  const retainedCoreColumns: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+    [
+      ["media", new Set([RETAINED_SIZES_COLUMN.name])],
+      ...RETIRED_ACCESS_RULES_TABLES.map(
+        table => [table, new Set([RETIRED_ACCESS_RULES_COLUMN])] as const
+      ),
+    ]
+  );
+  const core = coreTableNames(dialect);
+  return [...ownerLive.entries()].flatMap(([name, table]) => {
+    const bare = appStream.baselines.get(name);
+    if (bare === undefined) return [];
+    const unexplained = unexplainedElements({
+      bare,
+      elements: appStream.contributed.get(name)?.elements ?? NO_ELEMENTS,
+      live: table,
+      core,
+      retained: retainedCoreColumns,
+    });
+    return unexplained.length === 0
+      ? []
+      : [{ table: name, elements: unexplained }];
+  });
+}
+
+/**
+ * What adopting the database would write, decided from the database and the migrations folder:
+ * the migration's text, where it and its snapshot go, or the reason there is nothing to adopt.
+ * Reads only, so a run calls it under the migrate lock and a dry run calls it alone.
+ */
+async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
+  const { adapter, db, dialect, migrationsDir } = deps;
+  const metaDir = resolve(migrationsDir, "meta");
+  const repo = new SchemaEventsRepository(db, dialect);
+  const latest = await loadLatestSnapshot(metaDir);
+  const existingMigrations = await listMigrationFiles(
+    migrationsDir,
+    dialect,
+    deps.declared
+  );
+
+  const known = deps.knownJunctions ?? new Set<string>();
+  // The app's own extension tables carry no managed prefix, so only the
+  // compiled schema can name them: `db.schema.extend` rides the app's
+  // migration stream, and graduating it is what this command is for.
+  const appOwned = new Set(
+    (deps.appStream?.owned ?? []).map(spec => spec.name)
+  );
+  const names = await listTableNames(adapter);
+  // A custom `options.junctionTable` name need not carry a managed prefix, and
+  // the production DDL uses it verbatim — so filtering on the prefix alone
+  // drops an existing relationship table from adoption entirely, and a fresh
+  // environment rebuilt from the baseline has nowhere to write links.
+  const managed = names.filter(
+    n => isManagedTable(n) || known.has(n) || appOwned.has(n)
+  );
+  // A companion is excluded from the SNAPSHOT for the same reason drift
+  // excludes it: it is derived, never declared by config, and adopting it
+  // as a first-class table would make the next diff want to drop it. It is
+  // NOT excluded from the SQL — see below.
+  const companionTables = managed.filter(isCompanionTable);
+  // Derived tables are kept OUT of the snapshot and put INTO the SQL, for
+  // the same reason in both cases: the config never declares them, so a
+  // diff that saw one would want to drop it, while a fresh environment
+  // still needs it built. The same exclusion runs in `migrate`'s drift
+  // check, from the same helper, because a live snapshot that includes a
+  // junction cannot match a recorded one that never could have held it.
+  // The config's own tables, so a collection — or an app-owned extension
+  // table — whose resolved name happens to look like a junction is not
+  // mistaken for one.
+  const declared = new Set([
+    ...(deps.localizedEntities ?? []).map(e => e.tableName),
+    ...appOwned,
+  ]);
+  const junctionTables = junctionTablesAmong(managed, declared, known);
+  const snapshotTables = snapshotComparableTables(managed, declared, known);
+
+  // The owners' tables standing in the database — every table the compiled
+  // stream knows another owner declares, core and plugin alike. Two questions
+  // need them: whether a standing element nobody explains is an orphan a
+  // withdrawn hook left (`unexplainedElements`), and what the app's own
+  // contributions look like as the database holds them
+  // (`withAppStreamTables`). Standing names only: introspecting a table that
+  // is not there is an error, not an answer.
+  const ownerTables = [...(deps.appStream?.baselines.keys() ?? [])].filter(
+    name => names.includes(name)
+  );
+  const ownerLive = new Map(
+    ownerTables.length > 0
+      ? (await introspectLiveSnapshot(db, dialect, ownerTables)).tables.map(
+          table => [table.name, table] as const
+        )
+      : []
+  );
+
+  const live = await introspectLiveSnapshot(db, dialect, snapshotTables);
+
+  let plan = planBaseline({
+    live,
+    latestSnapshotName: latest?.filename,
+    existingMigrationFile: existingMigrations[0],
+    appliedMigration: await firstAppliedMigration(repo, adapter, {
+      migrationsDir,
+      dialect,
+      declared: deps.declared,
+    }),
+  });
+  // Already-baselined or existing-history projects are settled before orphan
+  // checks: a recorded snapshot already retains any withdrawn contribution so
+  // `migrate:create` can derive its removal, while empty-database projects
+  // still continue to inspect standing contributions on owner tables.
+  if (plan.kind === "already-baselined" || plan.kind === "history-not-empty") {
+    return notAdopting(plan);
+  }
+  // An element standing on an owner's table that neither the owner's
+  // declaration nor any current contribution explains is one a withdrawn
+  // hook left behind. Judged before the empty-database answer, because a
+  // config that withdrew its every contribution is exactly one with nothing
+  // currently standing.
+  const orphans = findContributionMismatches(
+    deps.appStream,
+    ownerLive,
+    dialect
+  );
+  if (orphans.length > 0) {
+    return { kind: "contribution-mismatch", mismatches: orphans };
+  }
+
+  // A project whose extension schema is all CONTRIBUTIONS owns no managed
+  // table of its own, so the plan reads an empty database — but a
+  // CONTRIBUTION actually standing is reason enough to adopt: the fold below
+  // records what the app has added to its owner's table, and the empty plan
+  // simply rebuilds nothing of the app's own. The owners' tables alone are
+  // not: the core ones stand in every database ever pushed, and a project
+  // with no schema at all still has nothing to adopt.
+  const contributedStanding = [
+    ...(deps.appStream?.contributed.keys() ?? []),
+  ].filter(name => names.includes(name));
+  if (plan.kind === "empty-database" && contributedStanding.length > 0) {
+    plan = { kind: "baseline", operations: [], snapshot: EMPTY_SNAPSHOT };
+  }
+
+  if (plan.kind !== "baseline") return notAdopting(plan);
+
+  const name = slugify(deps.name ?? DEFAULT_BASELINE_NAME);
+  const now = deps.now ?? new Date();
+  const baseName = `${formatTimestamp(now)}_${name}`;
+
+  // The body is what would build this schema from nothing. It is never run
+  // against THIS database — it is recorded as applied below — but it is
+  // what lets a new environment, CI, or `migrate:fresh` build the same
+  // schema from the history alone.
+  //
+  // Companions are part of that even though they are not part of the
+  // snapshot. `migrate:create` emits one only when it can see the
+  // transition in the previous snapshot: after a baseline the main table
+  // is recorded already missing its translatable columns, which reads as
+  // "already localized, the companion exists" and emits nothing. So if the
+  // baseline does not carry them, no file ever will, and a fresh
+  // environment gets main tables with nowhere to put translations.
+  //
+  // They are emitted through the production companion DDL rather than
+  // from their introspected shape, because a companion is more than its
+  // columns: it carries a composite key and a foreign key to its main
+  // table with `ON DELETE CASCADE`, and the snapshot model has no concept
+  // of a foreign key. Rebuilt from a snapshot, the cascade is gone and
+  // deleting a document strands its translations.
+  // A junction has no config-derived shape to rebuild it from — unlike a
+  // companion, nothing declares its columns — so it is emitted from what
+  // the database actually has.
+  const companionSql = await derivedTableStatements(
+    deps,
+    junctionTables,
+    companionTables
+  );
+  if (companionSql.undescribed.length > 0) {
+    // Before anything is written. A baseline that silently omitted these
+    // would rebuild the companion without them, so the failure would not
+    // appear until a fresh environment came up missing translations.
+    return {
+      kind: "companion-mismatch",
+      mismatches: companionSql.undescribed,
+    };
+  }
+
+  // The app's extension tables and contributed elements, recorded so the
+  // first `migrate:create` after adoption owes nothing for what the database
+  // already has (`withAppStreamTables`). The owners' tables read above say
+  // what the database holds, so an element the config declares but the last
+  // push never brought stays pending rather than recorded as present.
+  const folded = withAppStreamTables(plan.snapshot, deps.appStream, ownerLive);
+
+  // Companions carry a foreign key to their main table, so every main
+  // table has to exist before any of them runs.
+  const sqlStatements = [
+    // A foreign-key cycle standing in the database has one key split out
+    // of the CREATE TABLEs, as every generated migration does.
+    // Rendered as a list, as every generated migration is: SQLite takes
+    // a split-out key as a rebuild of its table, to the adopted schema.
+    ...generateStatements(
+      withCyclicForeignKeysSplit(plan.operations, dialect, []),
+      dialect,
+      plan.snapshot.tables
+    ),
+    // What the app contributed to other owners' tables, so a fresh
+    // environment receives it from this file (`contributedElementStatements`).
+    ...contributedElementStatements(deps.appStream, folded, dialect),
+    ...companionSql.junctionStatements,
+    ...companionSql.statements,
+  ];
+  const sqlContent = formatMigrationFile({
+    name,
+    dialect,
+    sqlStatements,
+    // No down section: reversing a baseline means dropping the schema it
+    // adopted, which is never what an operator undoing a migration wants.
+    downSqlStatements: [],
+    collections: [],
+    singles: [],
+    components: [],
+    hasUserExt: false,
+    now,
+    // The entity arrays above are empty because this caller does not
+    // compute them, not because the migration changes nothing.
+    entitiesAreScoped: false,
+  });
+
+  return {
+    kind: "adopt",
+    baseName,
+    sqlPath: resolve(migrationsDir, `${baseName}.sql`),
+    sqlContent,
+    metaDir,
+    snapshot: annotateLocalization(folded.snapshot, companionSql.columnsByMain),
+    contributions: folded.contributions,
+  };
+}
 
 /**
  * Adopt the live database, without exiting the process.
@@ -407,169 +937,67 @@ export async function baselineCore(
   deps: BaselineCoreDeps
 ): Promise<BaselineCoreResult> {
   const { adapter, db, dialect, migrationsDir, logger } = deps;
-  const metaDir = resolve(migrationsDir, "meta");
   const repo = new SchemaEventsRepository(db, dialect);
+
+  // A dry run plans as a run does and writes nothing, so it takes no lock: it changes nothing a
+  // concurrent run could see half of.
+  // The app history checks every command that records migrations makes
+  // before its first write (`assertAppHistoryHolds`); a dry run refuses as a
+  // run would, recording no checksum.
+  if (deps.dryRun === true) {
+    // The folder read under the ledger's old Builder marks, as every reader
+    // that has the database reads it.
+    const marked = await withOldBuilderMarks(deps);
+    await assertAppHistoryHolds({
+      ...marked,
+      command: "nextly migrate:baseline",
+      recordChecksums: false,
+    });
+    const planned = await planAdoption(marked);
+    if (planned.kind !== "adopt") return planned;
+    return {
+      kind: "would-baseline",
+      sqlPath: planned.sqlPath,
+      // Where `writeSnapshot` would put it, by the writer's own rule.
+      snapshotPath: snapshotPathOf(planned.metaDir, planned.baseName),
+      filename: `${planned.baseName}.sql`,
+      createsLedger: !(await ledgerExists(adapter)),
+      tableCount: planned.snapshot.tables.length,
+    };
+  }
 
   // The same lock every other migrate command takes: adopting writes a file
   // AND a journal row, and a concurrent `migrate` deciding what to apply must
   // not see one without the other.
   const result = await withMigrateLock<BaselineCoreResult>(
-    db,
+    adapter as unknown as DrizzleAdapter,
     dialect,
     async () => {
-      const latest = await loadLatestSnapshot(metaDir);
-      const existingMigrations = await listMigrationFiles(migrationsDir);
-
-      const known = deps.knownJunctions ?? new Set<string>();
-      const managed = await listManagedTables(adapter, known);
-      // A companion is excluded from the SNAPSHOT for the same reason drift
-      // excludes it: it is derived, never declared by config, and adopting it
-      // as a first-class table would make the next diff want to drop it. It is
-      // NOT excluded from the SQL — see below.
-      const companionTables = managed.filter(isCompanionTable);
-      // Derived tables are kept OUT of the snapshot and put INTO the SQL, for
-      // the same reason in both cases: the config never declares them, so a
-      // diff that saw one would want to drop it, while a fresh environment
-      // still needs it built. The same exclusion runs in `migrate`'s drift
-      // check, from the same helper, because a live snapshot that includes a
-      // junction cannot match a recorded one that never could have held it.
-      // The config's own tables, so a collection whose resolved name happens
-      // to look like a junction is not mistaken for one.
-      const declared = new Set(
-        (deps.localizedEntities ?? []).map(e => e.tableName)
-      );
-      const junctionTables = junctionTablesAmong(managed, declared, known);
-      const snapshotTables = snapshotComparableTables(managed, declared, known);
-
-      const live = await introspectLiveSnapshot(db, dialect, snapshotTables);
-
-      const plan = planBaseline({
-        live,
-        latestSnapshotName: latest?.filename,
-        existingMigrationFile: existingMigrations[0],
-        appliedMigration: await firstAppliedMigration(repo, adapter),
+      // Under the lock, before the plan and the first write, from the ledger
+      // no other run changes now. Read-only: any applied history stops the
+      // adoption anyway, so a refused baseline writes nothing.
+      // The marks read here too, as the ledger holds them under the lock.
+      const marked = await withOldBuilderMarks(deps);
+      await assertAppHistoryHolds({
+        ...marked,
+        command: "nextly migrate:baseline",
+        recordChecksums: false,
       });
-
-      if (plan.kind === "already-baselined") {
-        return { kind: "already-baselined", snapshotName: plan.snapshotName };
-      }
-      if (plan.kind === "history-not-empty") {
-        return { kind: "history-not-empty", filename: plan.filename };
-      }
-      if (plan.kind === "empty-database") {
-        return { kind: "empty-database" };
-      }
-
-      const name = slugify(deps.name ?? DEFAULT_BASELINE_NAME);
-      const now = deps.now ?? new Date();
-      const baseName = `${formatTimestamp(now)}_${name}`;
-
-      // The body is what would build this schema from nothing. It is never run
-      // against THIS database — it is recorded as applied below — but it is
-      // what lets a new environment, CI, or `migrate:fresh` build the same
-      // schema from the history alone.
-      //
-      // Companions are part of that even though they are not part of the
-      // snapshot. `migrate:create` emits one only when it can see the
-      // transition in the previous snapshot: after a baseline the main table
-      // is recorded already missing its translatable columns, which reads as
-      // "already localized, the companion exists" and emits nothing. So if the
-      // baseline does not carry them, no file ever will, and a fresh
-      // environment gets main tables with nowhere to put translations.
-      //
-      // They are emitted through the production companion DDL rather than
-      // from their introspected shape, because a companion is more than its
-      // columns: it carries a composite key and a foreign key to its main
-      // table with `ON DELETE CASCADE`, and the snapshot model has no concept
-      // of a foreign key. Rebuilt from a snapshot, the cascade is gone and
-      // deleting a document strands its translations.
-      // A junction has no config-derived shape to rebuild it from — unlike a
-      // companion, nothing declares its columns — so it is emitted from what
-      // the database actually has.
-      const junctionLive =
-        junctionTables.size > 0
-          ? await introspectLiveSnapshot(db, dialect, [...junctionTables])
-          : { tables: [] };
-      // Rendered as a list, not per operation: on SQLite a split-out foreign
-      // key becomes a rebuild of its table to what the database holds.
-      const junctionSql = generateStatements(
-        withCyclicForeignKeysSplit(
-          diffSnapshots(EMPTY_SNAPSHOT, junctionLive),
-          dialect,
-          []
-        ),
-        dialect,
-        junctionLive.tables
-      );
-
-      // The companion's own columns, read from the database for the same
-      // reason the junction's are: what is standing there is the schema being
-      // adopted. Only its structure — the composite key and the cascading
-      // foreign key, neither of which a snapshot can hold — comes from the
-      // config's DDL builder.
-      const companionLive =
-        companionTables.length > 0
-          ? await introspectLiveSnapshot(db, dialect, companionTables)
-          : EMPTY_SNAPSHOT;
-
-      const companionSql = buildCompanionStatements({
-        companionTables,
-        liveCompanions: companionLive,
-        entities: deps.localizedEntities ?? [],
-        dialect,
-        defaultLocale: deps.defaultLocale ?? "en",
-        adoptUnknown: deps.adoptUnknown === true,
-      });
-      if (companionSql.undescribed.length > 0) {
-        // Before anything is written. A baseline that silently omitted these
-        // would rebuild the companion without them, so the failure would not
-        // appear until a fresh environment came up missing translations.
-        return {
-          kind: "companion-mismatch",
-          mismatches: companionSql.undescribed,
-        };
-      }
-
-      // Companions carry a foreign key to their main table, so every main
-      // table has to exist before any of them runs.
-      const sqlStatements = [
-        // A foreign-key cycle standing in the database has one key split out
-        // of the CREATE TABLEs, as every generated migration does.
-        // Rendered as a list, as every generated migration is: SQLite takes
-        // a split-out key as a rebuild of its table, to the adopted schema.
-        ...generateStatements(
-          withCyclicForeignKeysSplit(plan.operations, dialect, []),
-          dialect,
-          plan.snapshot.tables
-        ),
-        ...junctionSql,
-        ...companionSql.statements,
-      ];
-      const sqlContent = formatMigrationFile({
-        name,
-        dialect,
-        sqlStatements,
-        // No down section: reversing a baseline means dropping the schema it
-        // adopted, which is never what an operator undoing a migration wants.
-        downSqlStatements: [],
-        collections: [],
-        singles: [],
-        components: [],
-        hasUserExt: false,
-        now,
-        // The entity arrays above are empty because this caller does not
-        // compute them, not because the migration changes nothing.
-        entitiesAreScoped: false,
-      });
+      const planned = await planAdoption(marked);
+      if (planned.kind !== "adopt") return planned;
+      const { baseName, sqlContent, sqlPath } = planned;
 
       await mkdir(migrationsDir, { recursive: true });
-      const sqlPath = resolve(migrationsDir, `${baseName}.sql`);
       await writeFile(sqlPath, sqlContent, "utf-8");
       const snapshotPath = await writeSnapshot(
-        metaDir,
+        planned.metaDir,
         baseName,
-        annotateLocalization(plan.snapshot, companionSql.columnsByMain),
-        sqlContent
+        planned.snapshot,
+        sqlContent,
+        // What the app contributed to other owners' tables, as every snapshot
+        // writer records it, so the next diff can tell the app's elements from
+        // the owner's own after this file becomes the latest snapshot.
+        planned.contributions
       );
 
       // The ledger is bootstrapped out of band by `migrate`, which has never
@@ -597,11 +1025,10 @@ export async function baselineCore(
         eventType: "file_apply",
         source: "cli-migrate",
         filename: `${baseName}.sql`,
-        // `migrate:status` compares this against the file's checksum and reads
-        // a missing value as the empty string, so a row recorded without it
-        // reports the file as edited since it was applied — on a project that
-        // has just generated it and touched nothing.
-        sha256: createHash("sha256").update(sqlContent).digest("hex"),
+        // The checksum of the text written, as a run records it, so a later
+        // edit to the baseline stops `nextly migrate` and reads as modified
+        // in `migrate:status`.
+        sha256: checksumOf(sqlContent),
       });
       await repo.markApplied(eventId, {
         statementsExecuted: 0,
@@ -614,13 +1041,19 @@ export async function baselineCore(
         kind: "baselined",
         sqlPath,
         snapshotPath,
-        tableCount: plan.snapshot.tables.length,
+        tableCount: planned.snapshot.tables.length,
       };
     },
-    { ttlSeconds: deps.ttlSeconds }
+    // A held lock is waited for, about a minute, and then the run stops naming its holder.
+    {
+      command: "nextly migrate:baseline",
+      mode: "wait",
+      waitMs: deps.lockWaitMs,
+      ttlSeconds: deps.ttlSeconds,
+    }
   );
 
-  // `withMigrateLock` reports `ran: false` only in "wait" mode. Adoption is
+  // `withMigrateLock` reports `ran: false` only for an `isSettled` wait, which this does not pass. Adoption is
   // never a case where someone else did the work: nobody else is going to
   // baseline this database, so returning here would mean reporting success for
   // a history that was never started.
@@ -642,26 +1075,11 @@ export async function runMigrateBaseline(
   const { logger } = context;
   logger.header("Migrate Baseline");
 
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid || !dbValidation.dialect) {
-    for (const err of dbValidation.errors ?? []) logger.error(err);
-    process.exit(1);
-  }
+  const opened = await openMigrationCommand(options, logger);
+  // A dry run whose database is not there has said so, and ends here.
+  if (opened === undefined) return;
+  const { dbValidation, configResult, cwd, migrationsDir, adapter } = opened;
   const dialect = dbValidation.dialect;
-
-  const configResult = await loadConfig({
-    configPath: options.config,
-    cwd: options.cwd,
-    debug: options.verbose,
-  });
-  const cwd = options.cwd ?? process.cwd();
-  const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
-
-  const adapter: CLIDatabaseAdapter = await createCliAdapter({
-    dialect,
-    databaseUrl: dbValidation.databaseUrl,
-    logger: options.verbose ? logger : undefined,
-  });
 
   try {
     const db = (adapter as unknown as DrizzleAdapter).getDrizzle();
@@ -671,15 +1089,37 @@ export async function runMigrateBaseline(
     // writes a baseline and a ledger row into bookkeeping that `nextly upgrade`
     // is about to consolidate, and the next `migrate` then stops at this gate
     // with the baseline already mixed in.
-    await assertNoLegacyBookkeeping(
-      adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
-    );
+    try {
+      await assertNoLegacyBookkeeping(
+        adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
+      );
+    } catch (error) {
+      // The real run stops here, so a dry run reports it as that run's refusal.
+      const refusal =
+        options.dryRun === true ? dryRunRefusalOf(error) : undefined;
+      if (refusal === undefined) throw error;
+      reportDryRun(logger, { changes: [], refusals: [refusal] });
+      return;
+    }
 
-    await maybeForceUnlock(
-      { forceUnlock: options.forceUnlock === true },
-      db,
-      dialect
-    );
+    // A dry run clears nothing; every report from here on says the run would
+    // clear the lock first, as the real run does whatever it then finds.
+    const unlocks: DryRunChange[] =
+      options.forceUnlock === true
+        ? [{ action: "remove", target: "any migrate lock held" }]
+        : [];
+    const reportPlan = (plan: DryRunPlan): void =>
+      reportDryRun(logger, {
+        ...plan,
+        changes: [...unlocks, ...plan.changes],
+      });
+    if (options.dryRun !== true) {
+      await maybeForceUnlock(
+        { forceUnlock: options.forceUnlock === true },
+        db,
+        dialect
+      );
+    }
 
     const config = configResult.config;
     // Config and the Builder manifest, merged the way generation merges them
@@ -692,6 +1132,19 @@ export async function runMigrateBaseline(
       deferredExtends: configResult.deferredExtends,
     });
 
+    // The app stream's extension schema, compiled exactly as `migrate:create`
+    // and `migrate:check` compile it. The starting point this command records
+    // is the schema the next generation will diff against, so it has to be
+    // built from the same one compiled schema rather than from the entities
+    // alone — otherwise everything the app declared or contributed arrives
+    // after the baseline as pending change.
+    const appStream = await compileAppStreamTables({
+      config,
+      dialect,
+      logger: { warn: m => logger.warn(m) },
+    });
+
+    // A dry run reports a history refusal as the real run's, and exits 0.
     const result = await baselineCore({
       adapter,
       db,
@@ -706,123 +1159,210 @@ export async function runMigrateBaseline(
       defaultLocale: config.localization?.defaultLocale,
       ttlSeconds: config.db.migrateLockTtlSeconds,
       knownJunctions: resolved.knownJunctions,
+      appStream,
+      declared: {
+        junctions: resolved.junctionsByEntity,
+        tables: resolved.declaredTables,
+      },
       adoptUnknown: options.adoptUnknown,
+      dryRun: options.dryRun === true,
+    }).catch((error: unknown) => {
+      const refusal =
+        options.dryRun === true ? historyRefusalOf(error) : undefined;
+      if (refusal === undefined) throw error;
+      reportPlan({ changes: [], refusals: [refusal] });
+      return undefined;
     });
+    if (result === undefined) return;
 
-    if (result.kind === "already-baselined") {
-      logger.info(
-        `This project already has a migration history (${result.snapshotName}).`
-      );
-      logger.info(
-        "Baselining again would give it a second starting point. Nothing was written."
-      );
-      return;
-    }
-
-    if (result.kind === "history-not-empty") {
-      logger.info(
-        `This project already has migrations (${result.filename}), but no starting point.`
-      );
-      logger.info(
-        "Adopting now would put the baseline after them, and a fresh database would"
-      );
-      logger.info(
-        "replay them against tables it has not created yet. Move them aside, baseline,"
-      );
-      logger.info("then re-apply what they did as a new migration.");
-      return;
-    }
-
-    if (result.kind === "companion-mismatch") {
-      logger.info(
-        "Some translation tables hold columns this project no longer describes."
-      );
-      logger.newline();
-      for (const m of result.mismatches) {
-        logger.info(`  ${m.table}: ${m.columns.join(", ")}`);
-      }
-      logger.newline();
-      logger.info(
-        "A baseline records where the schema starts, so it has to describe every"
-      );
-      logger.info(
-        "column that is there. These have no field to say what they hold, and"
-      );
-      logger.info(
-        "adopting without them would rebuild the table missing translations."
-      );
-      logger.newline();
-      logger.info(
-        "Either restore the localized fields to your config, or drop"
-      );
-      logger.info("the columns if the content is no longer needed.");
-      return;
-    }
-
-    if (result.kind === "empty-database") {
-      logger.info("No managed tables found, so there is nothing to adopt.");
-      logger.info(
-        "Create your first migration instead:  pnpm nextly migrate:create --name init"
-      );
-      return;
-    }
-
-    logger.newline();
-    logger.success(`Adopted ${result.tableCount} existing tables.`);
-    logger.info(`  Migration: ${result.sqlPath}`);
-    logger.info(`  Snapshot:  ${result.snapshotPath}`);
-    logger.newline();
-    logger.info("Recorded as applied — it will not run against this database.");
-    logger.info(
-      "Commit both files: they are how another environment builds this schema."
-    );
-    logger.newline();
-    logger.info("Next:  pnpm nextly migrate:create --name <your_change>");
+    reportBaselineOutcome({
+      result,
+      logger,
+      cwd,
+      dryRun: options.dryRun === true,
+      reportPlan,
+    });
   } finally {
     await adapter.disconnect();
   }
 }
 
-export function registerMigrateBaselineCommand(program: Command): void {
-  program
-    .command("migrate:baseline")
-    .description(
-      "Adopt an existing database into the migration history (run once, when graduating from db:sync)"
-    )
-    .option(
-      "--name <name>",
-      `Migration name (default: "${DEFAULT_BASELINE_NAME}")`
-    )
-    .option("-c, --config <path>", "Path to nextly.config.ts")
-    .option(
-      "--force-unlock",
-      "Clear a stale migrate lock before taking it (use after a crashed run)"
-    )
-    .option(
-      "--adopt-unknown",
-      "Adopt translation tables holding columns your config no longer describes, rebuilding them from the database"
-    )
-    .action(async (opts: BaselineOptions, command: Command) => {
-      const globalOpts = command.parent?.opts() ?? {};
-      const context = createContext(globalOpts);
-      try {
-        await runMigrateBaseline(
+/**
+ * Reports the outcome of an adoption attempt to the logger or dry-run plan.
+ */
+function reportBaselineOutcome(args: {
+  result: BaselineCoreResult;
+  logger: CommandContext["logger"];
+  cwd: string;
+  dryRun: boolean;
+  reportPlan: (plan: DryRunPlan) => void;
+}): void {
+  const { result, logger, cwd, dryRun, reportPlan } = args;
+
+  if (result.kind === "would-baseline") {
+    reportPlan({ changes: baselineChanges(result, cwd) });
+    return;
+  }
+
+  if (result.kind === "empty-database") {
+    logger.info("No managed tables found, so there is nothing to adopt.");
+    logger.info(
+      "Create your first migration instead:  pnpm nextly migrate:create --name init"
+    );
+    if (dryRun) reportPlan({ changes: [] });
+    return;
+  }
+
+  if (result.kind !== "baselined") {
+    const refused = refusalLines(result);
+    if (dryRun) {
+      reportPlan({
+        changes: [],
+        refusals: [
+          refused
+            .map(line => line.trim())
+            .filter(line => line !== "")
+            .join(" "),
+        ],
+      });
+      return;
+    }
+    for (const line of refused) {
+      if (line === "") logger.newline();
+      else logger.info(line);
+    }
+    return;
+  }
+
+  logger.newline();
+  logger.success(`Adopted ${result.tableCount} existing tables.`);
+  logger.info(`  Migration: ${result.sqlPath}`);
+  logger.info(`  Snapshot:  ${result.snapshotPath}`);
+  logger.newline();
+  logger.info("Recorded as applied — it will not run against this database.");
+  logger.info(
+    "Your first migration will now record changes made from this point on."
+  );
+  logger.info(
+    "Commit both files: they are how another environment builds this schema."
+  );
+  logger.newline();
+  logger.info("Next:  pnpm nextly migrate:create --name <your_change>");
+}
+
+/**
+ * What an adoption would change after any lock it clears, in the order it changes it: the
+ * migration and its snapshot, the ledger table where there is none, and the ledger row
+ * recording the migration as applied.
+ */
+function baselineChanges(
+  result: Extract<BaselineCoreResult, { kind: "would-baseline" }>,
+  cwd: string
+): DryRunChange[] {
+  return [
+    { action: "write", target: projectPath(cwd, result.sqlPath) },
+    { action: "write", target: projectPath(cwd, result.snapshotPath) },
+    ...(result.createsLedger
+      ? [
           {
-            ...opts,
-            // `nextly --config <path> migrate:baseline` is the documented
-            // global form, and it puts the path only on the parent. Taking the
-            // subcommand's alone would silently load the default config and
-            // write the baseline against a different `migrationsDir`.
-            config: opts.config ?? globalOpts.config,
-            verbose: globalOpts.verbose,
-            quiet: globalOpts.quiet,
-            cwd: globalOpts.cwd,
+            action: "run" as const,
+            target:
+              "the statements that create the ledger table nextly_schema_events",
           },
-          context
-        );
-      } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
-      }
-    });
+        ]
+      : []),
+    {
+      action: "record",
+      target: `${result.filename} as applied in nextly_schema_events`,
+    },
+  ];
+}
+
+/**
+ * The lines a run prints when it refuses to adopt the database, an empty line where it leaves
+ * one. A dry run reports the same words.
+ */
+function refusalLines(
+  result: Extract<
+    BaselineCoreResult,
+    {
+      kind:
+        | "already-baselined"
+        | "history-not-empty"
+        | "companion-mismatch"
+        | "contribution-mismatch";
+    }
+  >
+): string[] {
+  if (result.kind === "history-not-empty") {
+    return [
+      `This project already has migrations (${result.filename}), but no starting point.`,
+      "Adopting now would put the baseline after them, and a fresh database would",
+      "replay them against tables it has not created yet. Move them aside, baseline,",
+      "then re-apply what they did as a new migration.",
+    ];
+  }
+  if (result.kind === "contribution-mismatch") {
+    return [
+      "Some tables hold elements no declaration explains — most likely a",
+      "db.schema.extend contribution the config has since withdrawn.",
+      "",
+      ...result.mismatches.map(m => `  ${m.table}: ${m.elements.join(", ")}`),
+      "",
+      "Nothing records whose a contribution was once it is withdrawn, so a",
+      "baseline can neither carry these to a fresh environment nor schedule",
+      "their removal. Adopting anyway would leave them here and nowhere else.",
+      "",
+      "Either restore the contribution to your config before baselining, or",
+      "drop the elements from the database if they are no longer needed.",
+    ];
+  }
+  if (result.kind === "companion-mismatch") {
+    return [
+      "Some translation tables hold columns this project no longer describes.",
+      "",
+      ...result.mismatches.map(m => `  ${m.table}: ${m.columns.join(", ")}`),
+      "",
+      "A baseline records where the schema starts, so it has to describe every",
+      "column that is there. These have no field to say what they hold, and",
+      "adopting without them would rebuild the table missing translations.",
+      "",
+      "Either restore the localized fields to your config, or drop",
+      "the columns if the content is no longer needed.",
+    ];
+  }
+  return [
+    `This project already has a migration history (${result.snapshotName}).`,
+    "Baselining again would give it a second starting point. Nothing was written.",
+  ];
+}
+
+/**
+ * The action of `nextly migrate:baseline`, loaded when it runs.
+ */
+export async function migrateBaselineAction(
+  opts: BaselineOptions,
+  command: Command
+): Promise<void> {
+  const globalOpts = command.parent?.opts() ?? {};
+  const context = createContext(globalOpts);
+  try {
+    await runMigrateBaseline(
+      {
+        ...opts,
+        // `nextly --config <path> migrate:baseline` is the documented
+        // global form, and it puts the path only on the parent. Taking the
+        // subcommand's alone would silently load the default config and
+        // write the baseline against a different `migrationsDir`.
+        config: opts.config ?? globalOpts.config,
+        verbose: globalOpts.verbose,
+        quiet: globalOpts.quiet,
+        cwd: globalOpts.cwd,
+      },
+      context
+    );
+  } catch (error) {
+    // Exit 2 for an edited applied file, 3 for one the folder lacks.
+    exitWithError(context.logger, error, migrateExitCode(error));
+  }
 }

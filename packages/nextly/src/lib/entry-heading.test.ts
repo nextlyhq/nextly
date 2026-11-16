@@ -40,8 +40,8 @@ describe("entryHeading", () => {
   });
 
   it("walks the SAME conventional names the field-level rule accepts", () => {
-    // 🔴 One question, one answer. The rule that decides which column a list or
-    // a generated card SELECTS accepts `label`, `subject` and `heading` beside
+    // 🔴 One question, one answer. The rule that decides which column a list
+    // card SELECTS accepts `label`, `subject` and `heading` beside
     // `title` and `name`, and this walk has to accept the same set: a
     // collection naming its entries with `subject` takes that field as its
     // title on the dashboard, and a shorter walk answers the activity feed with

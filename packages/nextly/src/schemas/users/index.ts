@@ -16,28 +16,15 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import * as my from "./mysql";
-import * as pg from "./postgres";
-import * as sl from "./sqlite";
-
-export { pg, my, sl };
+import { loadedDialect } from "../../database/dialect-tables";
 
 /**
  * Returns Drizzle table objects for the user identity feature group, for the
  * requested dialect.
  */
 export function userTables(dialect: SupportedDialect) {
-  switch (dialect) {
-    case "postgresql":
-      return { users: pg.users };
-    case "mysql":
-      return { users: my.users };
-    case "sqlite":
-      return { users: sl.users };
-    default: {
-      // Exhaustiveness check — TypeScript flags any missing dialect at compile time.
-      const _exhaustive: never = dialect;
-      throw new Error(`Unsupported dialect: ${String(_exhaustive)}`);
-    }
-  }
+  // The loaded dialect's own tables, so only that dialect's files are
+  // imported; `createAdapter` loads them.
+  const { users } = loadedDialect(dialect).tables;
+  return { users };
 }

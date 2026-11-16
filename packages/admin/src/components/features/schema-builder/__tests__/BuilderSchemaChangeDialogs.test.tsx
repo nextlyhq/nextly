@@ -6,7 +6,7 @@
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { render, screen, within } from "@admin/__tests__/utils";
 import type { SchemaPreviewResponse } from "@admin/services/schemaApi";
 
 import { BuilderSchemaChangeDialogs } from "../BuilderSchemaChangeDialogs";
@@ -47,9 +47,12 @@ function confirmationOf(
     previewId: 1,
     isOpen: true,
     isApplying: false,
+    isBusy: false,
     request: vi.fn(),
     setOpen: vi.fn(),
     settle: vi.fn(),
+    beginPreview: vi.fn(),
+    endPreview: vi.fn(),
     beginApply: vi.fn(),
     endApply: vi.fn(),
     ...overrides,
@@ -59,13 +62,16 @@ function confirmationOf(
 function renderDialogs(
   p: SchemaPreviewResponse | null,
   onConfirm = vi.fn(),
-  overrides: Partial<SchemaChangeConfirmation> = {}
+  overrides: Partial<SchemaChangeConfirmation> = {},
+  creating = false
 ) {
   const result = render(
     <BuilderSchemaChangeDialogs
       confirmation={confirmationOf(p, overrides)}
+      kind="collection"
       entityName="posts"
       onConfirm={onConfirm}
+      creating={creating}
     />
   );
   return { ...result, onConfirm };
@@ -89,6 +95,38 @@ describe("BuilderSchemaChangeDialogs", () => {
   // A rename candidate needs a decision from the user even though nothing is
   // being destroyed, so a "safe" classification alone must not shorten the
   // dialog.
+  // A removal drops its field's column, and the preview's count of the values
+  // in it reads 0 when counting fails, so a preview it calls safe can still be
+  // deleting values. The short confirmation would say it "does not affect
+  // existing data", in the primary colour.
+  it("shows the full dialog, in red, for a safe change that removes a field", () => {
+    renderDialogs(
+      preview({
+        changes: {
+          added: [],
+          removed: [
+            {
+              name: "summary",
+              type: "text",
+              rowCount: 0,
+              classification: "safe",
+            },
+          ],
+          changed: [],
+          unchanged: [],
+        },
+      })
+    );
+    expect(
+      screen.queryByText(/do not affect existing data/i)
+    ).not.toBeInTheDocument();
+    const dialog = screen.getByRole("alertdialog");
+    const buttons = within(dialog).getAllByRole("button");
+    expect(buttons[buttons.length - 1].className).toMatch(
+      /\bbg-destructive-solid\b/
+    );
+  });
+
   it("shows the full dialog for a safe change that carries a rename candidate", () => {
     renderDialogs(
       preview({
@@ -199,6 +237,82 @@ describe("BuilderSchemaChangeDialogs", () => {
     ).toBeInTheDocument();
   });
 
+  // The summary names whose page changes: entries whose shared value comes from another language
+  // show that language's value to their English readers, so the languages are named.
+  it("names the languages entries take their shared value from instead of English", () => {
+    renderDialogs(
+      preview({
+        leavingTranslation: [
+          {
+            name: "heading",
+            column: "heading",
+            entriesWithoutDefault: 3,
+            sharedFrom: { fr: 1, es: 2 },
+            byLocale: { es: 4 },
+            total: 4,
+            defaultLocale: "en",
+            restoreCommand:
+              "nextly i18n:restore --collection posts --field heading",
+          },
+        ],
+      })
+    );
+
+    expect(
+      screen.getByText(
+        "4 Spanish values move to the archive. English becomes the shared value. 3 entries take theirs from another language, which their English readers will see: 2 Spanish and 1 French."
+      )
+    ).toBeInTheDocument();
+  });
+
+  // A field becoming translated moves its values to the default language, and every other
+  // language shows that value until it is translated: the short confirmation's "does not affect
+  // existing data" would hide that, so the full dialog says it.
+  it("shows the full dialog, saying whose values a field becoming translated keeps, for a field joining translation", () => {
+    renderDialogs(
+      preview({
+        joiningTranslation: [
+          {
+            name: "heading",
+            column: "heading",
+            values: 2,
+            defaultLocale: "en",
+          },
+        ],
+      })
+    );
+
+    expect(screen.queryByText(/safe change/i)).not.toBeInTheDocument();
+    expect(screen.getByText("now localized")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "2 values become the English value. Other languages show it until they are translated."
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /save changes/i })).toBeEnabled();
+  });
+
+  it("says a field becoming translated keeps its values as English although they could not be counted", () => {
+    renderDialogs(
+      preview({
+        joiningTranslation: [
+          {
+            name: "heading",
+            column: "heading",
+            values: null,
+            defaultLocale: "en",
+          },
+        ],
+      })
+    );
+
+    expect(
+      screen.getByText(
+        "Its values become the English value; they couldn't be counted. Other languages show it until they are translated."
+      )
+    ).toBeInTheDocument();
+  });
+
   it("names the refusal and does not offer Apply for a field that cannot leave in one change", () => {
     renderDialogs(
       preview({
@@ -238,15 +352,15 @@ describe("BuilderSchemaChangeDialogs", () => {
     ).toEqual(REQUIRED_REFUSAL.steps);
     expect(screen.queryByText(/nextly i18n:restore/)).not.toBeInTheDocument();
     expect(
-      screen.getByText("Schema Change Needs Another Step")
+      screen.getByText("Schema change needs another step")
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/This change cannot be saved to/)
+      screen.getByText(/This change cannot be saved to the collection/)
     ).toBeInTheDocument();
     expect(screen.queryByText(/will be applied to/)).not.toBeInTheDocument();
     // The push's own prompt for the refused field's new column is moot, so it is not asked.
     expect(
-      screen.queryByText(/is required but table has/)
+      screen.queryByText(/A new required field has no value/)
     ).not.toBeInTheDocument();
     // Nothing in the change could be saved, so the only way out is Close.
     expect(screen.getByRole("button", { name: "Close" })).toBeEnabled();
@@ -290,7 +404,7 @@ describe("BuilderSchemaChangeDialogs", () => {
       })
     );
 
-    const save = screen.getByRole("button", { name: "Save Changes" });
+    const save = screen.getByRole("button", { name: "Save changes" });
     expect(save).toBeDisabled();
     expect(save.className).toMatch(/\bbg-primary\b/);
     expect(save.className).not.toMatch(/bg-destructive/);
@@ -339,7 +453,25 @@ describe("BuilderSchemaChangeDialogs", () => {
 
   it("shows the full dialog for a destructive change", () => {
     renderDialogs(
-      preview({ classification: "destructive", hasDestructiveChanges: true })
+      preview({
+        classification: "destructive",
+        hasDestructiveChanges: true,
+        // What a destructive preview carries: a row the server classes as
+        // deleting values, which is what the dialog's colour follows.
+        changes: {
+          added: [],
+          removed: [
+            {
+              name: "body",
+              type: "text",
+              rowCount: 3,
+              classification: "destructive",
+            },
+          ],
+          changed: [],
+          unchanged: [],
+        },
+      })
     );
     expect(screen.queryByText(/safe change/i)).not.toBeInTheDocument();
     expect(
@@ -446,5 +578,56 @@ describe("a rename that keeps the rows but converts their values", () => {
       })
     );
     expect(screen.getByText(/data preserved/i)).toBeInTheDocument();
+  });
+
+  // Saving an entity not created yet is its create. Its review is built in the
+  // browser, not by the server, so it says what will be created and makes no
+  // claim that the change is safe.
+  it("says what saving a new entity creates, with no safety verdict", async () => {
+    const { onConfirm } = renderDialogs(
+      preview({
+        changes: {
+          added: [
+            {
+              name: "headline",
+              type: "text",
+              required: true,
+              hasDefault: false,
+              classification: "safe",
+            },
+          ],
+          removed: [],
+          changed: [],
+          unchanged: [],
+        },
+      }),
+      vi.fn(),
+      {},
+      true
+    );
+    const dialog = screen.getByRole("alertdialog");
+    expect(
+      within(dialog).getByRole("heading", {
+        name: "Create the collection posts?",
+      })
+    ).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(
+      "The collection posts will be created with these fields."
+    );
+    expect(dialog).toHaveTextContent("headline");
+    expect(dialog).not.toHaveTextContent(/safe change/i);
+    expect(dialog).not.toHaveTextContent(/do not affect existing data/i);
+
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Create" })
+    );
+    expect(onConfirm).toHaveBeenCalledWith({}, []);
+  });
+
+  it("says a new entity with no fields is created with none", () => {
+    renderDialogs(preview(), vi.fn(), {}, true);
+    expect(screen.getByRole("alertdialog")).toHaveTextContent(
+      "The collection posts will be created, with no fields yet."
+    );
   });
 });

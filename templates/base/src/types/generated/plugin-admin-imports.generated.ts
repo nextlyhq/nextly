@@ -3,6 +3,7 @@
  * string (pages, settings, views, slots, field-type editors) so they load
  * without manual host imports. */
 
+import { registerComponentMap } from "@nextlyhq/admin";
 import { registeredComponentPaths as listed } from "./plugin-admin-components.generated";
 
 const registered = {};
@@ -29,4 +30,5 @@ if (
   );
 }
 
+registerComponentMap(registered);
 export const registeredComponentPaths = listed;

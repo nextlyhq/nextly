@@ -29,6 +29,7 @@
 import { isVirtualField } from "../../../collections/fields/virtual";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
+  MIGRATE_STEP_COLUMN_NAMES,
   SYSTEM_COLUMNS,
   systemColumnDefaultSql,
   systemColumnDialectType,
@@ -39,7 +40,9 @@ import {
 } from "../../../lib/system-columns";
 import { isBuiltInFieldType } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { addressableFields } from "../../../shared/addressable-fields";
 import { isFieldGroupFieldType } from "../../field-groups/storage/field-group-field-type";
+import { toSnakeCase } from "../field-rules";
 import { getFieldType } from "../field-types/field-type-registry";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
@@ -155,7 +158,9 @@ export type ColumnKind =
 export function columnsThatMayHoldNull(
   fields: readonly { name: string; required?: boolean; type?: string }[]
 ): string[] {
-  return fields
+  // Every column of the row, those of the fields inside a group with no name among them
+  // (`fieldsStoredOnRow`); the group itself has no column to hold anything.
+  return fieldsStoredOnRow(fields)
     .filter(
       field =>
         field.required !== true &&
@@ -164,11 +169,26 @@ export function columnsThatMayHoldNull(
     .map(field => toSnakeCase(field.name));
 }
 
-export function toSnakeCase(name: string): string {
-  return name
-    .replace(/([A-Z])/g, "_$1")
-    .toLowerCase()
-    .replace(/^_/, "");
+// The name-to-column rule lives in the browser-safe field rules, which the
+// Builder reaches too; re-exported so this module stays its home for callers.
+export { toSnakeCase } from "../field-rules";
+
+/**
+ * The fields whose columns sit on one row: those at the top of `fields`, and those inside a group
+ * with no name, at any depth.
+ *
+ * A group with no name only lays fields out. It holds no value and has no name to give a column, and
+ * the fields inside it are stored where it sits: on an entry's row for a collection or a Single, and
+ * on the instance's row (`comp_<slug>`) for a field group. The read and write paths already address
+ * those fields at that level through `addressableFields`, so the builders of a row's columns read
+ * the same walk, and the columns and the data paths cannot disagree about which fields a row holds.
+ *
+ * A named group is kept whole: its fields are stored inside its own value, not on the row.
+ */
+export function fieldsStoredOnRow<F>(fields: readonly F[]): F[] {
+  // The walk keeps each element it returns as it was given: the top-level fields and the fields
+  // the groups with no name hold, which are fields of the same list.
+  return addressableFields(fields) as unknown as F[];
 }
 
 /**
@@ -192,7 +212,8 @@ export function columnsDeclaredBy(
   >
 ): Set<string> {
   const columns = new Set<string>();
-  for (const field of fields) {
+  // The fields inside a group with no name occupy columns on the row too (`fieldsStoredOnRow`).
+  for (const field of fieldsStoredOnRow([...fields])) {
     if (!field || typeof field.name !== "string") continue;
     if (!fieldProducesColumn(field)) continue;
     columns.add(toSnakeCase(field.name));
@@ -306,6 +327,40 @@ export function componentRelationshipStoresJson(field: {
 }
 
 /**
+ * How a relation's column stores its value: `one` id, a `list` of ids, one `{ relationTo, value }`
+ * reference to one of several collections (`targets`), or a list of those (`targetList`).
+ * `undefined` for anything that is not a relation's own column.
+ *
+ * The shape decides which change of it keeps every value. One id and a list of them convert into
+ * each other; a reference naming its collection cannot be made from a bare id, nor turned back into
+ * one, without guessing. A column's type does not always tell the shapes apart (SQLite keeps all
+ * four as text), so the schema records this beside it.
+ *
+ * `component` asks for a component row, where a many-to-many keeps its list on the row
+ * (`componentRelationshipStoresJson`).
+ */
+export function relationStorageShape(
+  field: {
+    type?: unknown;
+    hasMany?: unknown;
+    relationTo?: unknown;
+    options?: unknown;
+  },
+  component = false
+): "one" | "list" | "targets" | "targetList" | undefined {
+  if (field.type !== "relationship" && field.type !== "upload") {
+    return undefined;
+  }
+  if (Array.isArray(field.relationTo)) {
+    return field.hasMany ? "targetList" : "targets";
+  }
+  const list = component
+    ? componentRelationshipHoldsReferenceList(field)
+    : Boolean(field.hasMany);
+  return list ? "list" : "one";
+}
+
+/**
  * Whether a component row's relation column holds a LIST of references: a `hasMany` relationship or
  * a many-to-many.
  *
@@ -313,6 +368,12 @@ export function componentRelationshipStoresJson(field: {
  * that is one `{ relationTo, value }` object, JSON but not a list. Asked when an older scalar column
  * is converted, because the conversion reads every stored value as a list, and reading an object as
  * one would change what it stores.
+ *
+ * Also the rule for which component relation takes no plain index, by the creating SQL and the
+ * desired schema alike, even when the field asks for one: no lookup reads a whole list, MySQL
+ * refuses a plain index on its JSON column, and on PostgreSQL a btree entry over a long list
+ * exceeds the row size and refuses the save. A single polymorphic reference is one object, so an
+ * index it asks for is kept where the dialect can build one.
  */
 export function componentRelationshipHoldsReferenceList(field: {
   type?: unknown;
@@ -321,6 +382,31 @@ export function componentRelationshipHoldsReferenceList(field: {
 }): boolean {
   const isRelation = field.type === "relationship" || field.type === "upload";
   return (isRelation && Boolean(field.hasMany)) || usesJunctionTable(field);
+}
+
+/**
+ * Whether a relationship or upload on a component row references ONE entry, in a scalar column:
+ * it names one collection and does not hold a list of references
+ * (`componentRelationshipHoldsReferenceList`).
+ *
+ * Such a column gets a plain index; a list does not, for the reasons that rule gives. A
+ * many-to-many naming its target in `relationTo` names one collection and is still a list, which
+ * is why this derives from the list rule rather than reading `hasMany` and `relationTo` alone.
+ *
+ * Asked by the creating SQL and by the desired schema the diff compares a component table
+ * against, so the two declare the same indexes.
+ */
+export function componentRelationIsSingleReference(field: {
+  type?: unknown;
+  hasMany?: unknown;
+  relationTo?: unknown;
+  options?: unknown;
+}): boolean {
+  if (field.type !== "relationship" && field.type !== "upload") return false;
+  return (
+    typeof field.relationTo === "string" &&
+    !componentRelationshipHoldsReferenceList(field)
+  );
 }
 
 /**
@@ -351,6 +437,38 @@ export function getComponentRowColumnDescriptor(
   // Nullable whether or not the field is required, as every relationship column is: `required` is
   // enforced when the entry is saved, and both creating routes leave this column nullable.
   return descriptor ? { ...descriptor, nullable: true } : null;
+}
+
+/**
+ * The field as a Single's table stores it: a relationship or upload naming one entry is not
+ * required of the COLUMN, whatever the field says.
+ *
+ * A Single's one entry is created on its first read, from its fields' defaults, and a reference has
+ * none: it starts empty. So its column accepts NULL, and `required` is enforced when the entry is
+ * saved, from the registry's fields, which this never replaces. Every other field keeps its
+ * `required`: each has an empty value of its own kind to start from (`getDefaultValue`).
+ */
+export function asSingleRowColumnField(
+  field: FieldDefinition,
+  builtBy: ColumnOrigin
+): FieldDefinition {
+  return field.required === true &&
+    classifyFieldKind(field, builtBy) === "fkSingle"
+    ? { ...field, required: false }
+    : field;
+}
+
+/** A Single's column for `field` (`asSingleRowColumnField`). */
+export function getSingleRowColumnDescriptor(
+  field: FieldDefinition,
+  dialect: SupportedDialect,
+  builtBy: ColumnOrigin
+): ColumnDescriptor | null {
+  return getColumnDescriptor(
+    asSingleRowColumnField(field, builtBy),
+    dialect,
+    builtBy
+  );
 }
 
 /**
@@ -394,9 +512,10 @@ export function getColumnDescriptor(
   // "skip" covers every column-less field type via fieldProducesColumn: a component
   // and a many-to-many, both of which keep their values in another table.
   const kind = classifyFieldKind(field, builtBy);
-  // FK columns are always created without NOT NULL in the DDL (both generateMigrationSQL
-  // and the Drizzle runtime builder). `required` is enforced at the application layer.
-  const nullable = kind === "fkSingle" ? true : field.required !== true;
+  // A relationship's column follows `required` like any other: the Builder's CREATE makes a
+  // required one NOT NULL, so a migration planned from here does too, and turning `required` on
+  // or off plans the change.
+  const nullable = field.required !== true;
 
   if (kind === "skip") return null;
 
@@ -514,9 +633,18 @@ function textKindFor(
       : "text";
   }
 
+  // A unique field's key needs a bounded column on MySQL, which cannot key TEXT without a prefix
+  // length, and a prefix key would make only the first characters unique. So a Builder field that
+  // states no width and is unique gets the bounded default, as `slug` does: a constraint of the
+  // column. The Builder's creators refused such a field on MySQL rather than make it, so no live
+  // column is described differently by this; the bounded `text` kind is `text` on the other
+  // dialects. The code-first rule already bounds a field that states no width.
+  const keyedUnique = field.unique === true;
+
   switch (builtBy) {
     case "collection":
       if (variant === "short") return "shortText";
+      if (keyedUnique) return "text";
       // Silence is unbounded here, which is the opposite of the code-first default and the reason
       // this argument exists: the same declaration is 65 535 characters on a Builder table and 255
       // on a code-first one, on MySQL.
@@ -532,10 +660,13 @@ function textKindFor(
       // keys are its own, and one that happens to be spelled `maxLength` must not reshape the
       // column — so it builds such a field unbounded. Reading it here bounded a column the creator
       // had just made unbounded, which reports a type change on an untouched column.
-      return isBuiltInFieldType(String(field.type)) &&
+      if (
+        isBuiltInFieldType(String(field.type)) &&
         declaredMaxLength(field, builtBy) !== undefined
-        ? "shortText"
-        : "longText";
+      ) {
+        return "shortText";
+      }
+      return keyedUnique ? "text" : "longText";
 
     case "codeFirst":
       // These four lines ARE the rule this module applied before any builder was named, and that
@@ -584,6 +715,35 @@ export function isTextStorageKind(kind: ColumnKind): boolean {
 }
 
 /**
+ * Whether a number field's values may carry a fraction — the storage the
+ * field opted into, read the one way every consumer asks. Code-first fields
+ * opt into exact fractional storage via `dbType: "decimal"`
+ * (DECIMAL/NUMERIC), the right choice for money; UI-created fields carry
+ * `options.format === "float"` for float storage; without an opt-in a number
+ * is a whole-number field.
+ *
+ * Exported so the entry validator refuses a fraction against the same
+ * declaration the column is built from, rather than keeping a second answer
+ * to the same question beside it — a mapping that gains or renames a
+ * fractional representation would otherwise disagree with the values
+ * validation admits, silently and per dialect.
+ */
+export function numberFieldStoresFractions(field: {
+  /** The storage the field declared; `decimal` stores fractions exactly. */
+  dbType?: unknown;
+  /** Storage options; the UI's float format opts into fractional storage. */
+  options?: unknown;
+}): boolean {
+  if (field.dbType === "decimal") return true;
+  const options = field.options;
+  return (
+    typeof options === "object" &&
+    options !== null &&
+    (options as { format?: unknown }).format === "float"
+  );
+}
+
+/**
  * Maps a field config to a logical column kind. Centralises the
  * field-type to column-kind matrix that used to live in two
  * dialect-specific switches per file. The hasMany / relationTo[]
@@ -610,7 +770,9 @@ export function classifyFieldKind(
     case "text":
       return textKindFor(field, builtBy);
 
+    // An icon id ("lucide:star") is a short string, stored like an email.
     case "email":
+    case "icon":
     case "password":
     case "select":
     case "radio":
@@ -624,15 +786,15 @@ export function classifyFieldKind(
     case "number": {
       // A hasMany number is written as a JSON array (the mutation path
       // stringifies it), so it must be stored as JSON, not a scalar numeric
-      // column, regardless of dbType.
+      // column, regardless of dbType. Its whole-number semantics are judged
+      // on the elements by the entry validator, not here.
       if (field.hasMany) return "json";
-      // Code-first fields opt into exact fractional storage via
-      // `dbType: "decimal"` (DECIMAL/NUMERIC), the right choice for money.
-      if (field.dbType === "decimal") return "decimal";
-      // UI-created fields carry options.format === "float" for float storage;
-      // code-first without dbType defaults to integer, matching the DDL emitted
-      // by dynamic-collection-schema-service.ts.
-      return field.options?.format === "float" ? "double" : "integer";
+      if (numberFieldStoresFractions(field)) {
+        // The two opt-ins name different columns: the exact decimal stores
+        // DECIMAL/NUMERIC, the float format stores a double.
+        return field.dbType === "decimal" ? "decimal" : "double";
+      }
+      return "integer";
     }
 
     case "checkbox":
@@ -991,8 +1153,10 @@ export function systemColumnsForFields(
   }
 ): SystemColumnDescriptor[] {
   const { builtBy, ...set } = opts;
+  // A field inside a group with no name is stored on the row, so it replaces a system column as a
+  // field beside the group does, and the group itself, which has no name, replaces none.
   const declaresColumn = (column: string): boolean =>
-    fields.some(
+    fieldsStoredOnRow(fields).some(
       f =>
         toSnakeCase(f.name) === column &&
         getColumnDescriptor(f, dialect, builtBy) !== null
@@ -1038,6 +1202,24 @@ export function getSystemColumnDescriptors(
 }
 
 /**
+ * The per-document columns — a document's version counter and last changer — as descriptors.
+ *
+ * Every content table carries them, and so does every translation table, whose rows are
+ * versioned one language at a time. Read from here by everything that creates or adds them, so a
+ * translation table, a main table and a column added to an existing table cannot differ in shape.
+ */
+export function migrateStepColumnDescriptors(
+  dialect: SupportedDialect
+): SystemColumnDescriptor[] {
+  return getSystemColumnDescriptors(dialect, {
+    hasTitleField: true,
+    hasSlugField: true,
+    hasStatus: false,
+    isSingle: false,
+  }).filter(descriptor => MIGRATE_STEP_COLUMN_NAMES.includes(descriptor.name));
+}
+
+/**
  * Spell one system-column descriptor as the column definition of a `CREATE TABLE`.
  *
  * The module that owns what the columns ARE owns how they are written, so a DDL generator can
@@ -1074,4 +1256,100 @@ export function renderSystemColumnSql(
   if (!column.nullable) clauses.push("NOT NULL");
 
   return clauses.join(" ");
+}
+
+// ---------------------------------------------------------------------------
+// The tables a collection owns
+// ---------------------------------------------------------------------------
+//
+// Beside `usesJunctionTable`, the rule they rest on: the drop file a delete
+// writes and the check that runs before it must name the same tables, and a
+// check that missed a junction would let the drop take another owner's
+// column with it.
+
+/**
+ * The parts of a stored field that name its junction table. Structural, since
+ * both a Builder field definition and a code-first field config reach here.
+ */
+interface JunctionField {
+  name?: string;
+  type?: unknown;
+  options?: unknown;
+}
+
+/** A field's relationship options, read without trusting their shape. */
+function junctionOptionsOf(field: JunctionField): {
+  junctionTable?: unknown;
+  target?: unknown;
+} {
+  return typeof field.options === "object" && field.options !== null
+    ? field.options
+    : {};
+}
+
+/**
+ * The junction table a many-to-many field's links live in: the author's own
+ * name when the field sets one, else one derived from both tables, sorted so
+ * either side derives the same name, and the field.
+ */
+export function junctionTableNameFor(
+  sourceTableName: string,
+  field: JunctionField,
+  // How a generated name is derived: `junctionTableNameBetween`, unless the
+  // schema service derives it through its own published method of that name.
+  nameBetween: (
+    sourceTable: string,
+    targetTable: string,
+    fieldName: string
+  ) => string = junctionTableNameBetween
+): string {
+  const options = junctionOptionsOf(field);
+  if (typeof options.junctionTable === "string" && options.junctionTable) {
+    return options.junctionTable;
+  }
+  return nameBetween(
+    sourceTableName,
+    `dc_${typeof options.target === "string" ? options.target : ""}`,
+    field.name ?? ""
+  );
+}
+
+/**
+ * The generated name of the junction table between two tables for one
+ * field: both tables sorted, so either side derives the same name, then the
+ * field.
+ */
+export function junctionTableNameBetween(
+  sourceTable: string,
+  targetTable: string,
+  fieldName: string
+): string {
+  const [first, second] = [sourceTable, targetTable].sort();
+  return `${first}_${second}_${fieldName}`;
+}
+
+/** The junction tables of a collection's own many-to-many fields. */
+export function junctionTablesOf(
+  tableName: string,
+  fields: readonly JunctionField[]
+): string[] {
+  return fields
+    .filter(usesJunctionTable)
+    .map(field => junctionTableNameFor(tableName, field));
+}
+
+/**
+ * Every table a collection owns: its own first, then its translation table
+ * (named whether or not it exists, since a delete drops it if it does), then
+ * its junction tables.
+ */
+export function collectionOwnTables(
+  tableName: string,
+  fields: readonly JunctionField[]
+): string[] {
+  return [
+    tableName,
+    `${tableName}_locales`,
+    ...junctionTablesOf(tableName, fields),
+  ];
 }

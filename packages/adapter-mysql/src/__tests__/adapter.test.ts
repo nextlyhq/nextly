@@ -15,6 +15,13 @@ import {
   VERSION,
 } from "../index";
 
+/**
+ * A resolver holding every table under a model that declares no columns, so
+ * these cases assert how the raw statement binds its values, and the insert is
+ * not refused as one to a table the resolver does not hold.
+ */
+const holdsEveryTable = { getTable: () => ({}) };
+
 // ============================================================
 // Mock mysql2/promise
 // ============================================================
@@ -29,13 +36,20 @@ const mockConnection = {
   connection: { config: {} },
 };
 
+// The connection `withSession` opens for itself, outside the pool
+const mockSessionConnection = {
+  query: vi.fn(),
+  destroy: vi.fn(),
+};
+
 // Mock pool with internal structure
 const mockPool = {
   getConnection: vi.fn().mockResolvedValue(mockConnection),
   query: vi.fn(),
   end: vi.fn().mockResolvedValue(undefined),
   // The callback pool under the promise wrapper, as mysql2 gives it: the
-  // adapter bounds the wait in its `getConnection`, and reads its queues.
+  // adapter bounds the wait in its `getConnection`, reads its queues, and
+  // pins the session time zone through its `connection` event.
   pool: {
     _allConnections: { length: 5 },
     _freeConnections: { length: 3 },
@@ -44,6 +58,7 @@ const mockPool = {
     config: {},
     getConnection: vi.fn(),
     once: vi.fn(),
+    on: vi.fn(),
     removeListener: vi.fn(),
   },
 };
@@ -52,8 +67,10 @@ const mockPool = {
 vi.mock("mysql2/promise", () => ({
   default: {
     createPool: vi.fn(() => mockPool),
+    createConnection: vi.fn(async () => mockSessionConnection),
   },
   createPool: vi.fn(() => mockPool),
+  createConnection: vi.fn(async () => mockSessionConnection),
 }));
 
 // ============================================================
@@ -76,6 +93,9 @@ describe("@nextly/adapter-mysql", () => {
     mockPool.getConnection.mockResolvedValue(mockConnection);
     mockPool.query.mockImplementation(() => Promise.resolve([[], []]));
     mockPool.end.mockResolvedValue(undefined);
+    mockSessionConnection.query.mockImplementation(() =>
+      Promise.resolve([[], []])
+    );
   });
 
   // ============================================================
@@ -323,6 +343,66 @@ describe("@nextly/adapter-mysql", () => {
           charset: "utf8mb4",
         })
       );
+    });
+
+    it("pins the session time zone when each pooled connection opens", async () => {
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+
+      await adapter.connect();
+
+      // The pin rides mysql2's `connection` event on the callback pool, which
+      // the promise wrapper does not re-emit — reached, like the queue the
+      // pool wait bounds, through `pool.pool`.
+      expect(mockPool.pool.on).toHaveBeenCalledWith(
+        "connection",
+        expect.any(Function)
+      );
+      const pin = mockPool.pool.on.mock.calls.find(
+        ([event]) => event === "connection"
+      )![1];
+
+      const query = vi.fn((_sql: string, cb: (error: Error | null) => void) =>
+        cb(null)
+      );
+      const destroy = vi.fn();
+      pin({ query, destroy });
+      expect(query).toHaveBeenCalledWith(
+        "SET SESSION time_zone = '+00:00'",
+        expect.any(Function)
+      );
+      // A pinned session goes back to the pool untouched.
+      expect(destroy).not.toHaveBeenCalled();
+
+      // A session the pin could not reach must never be pooled: whatever
+      // zone it answers in would serve shifted values.
+      const failing = vi.fn((_sql: string, cb: (error: Error | null) => void) =>
+        cb(new Error("gone"))
+      );
+      pin({ query: failing, destroy });
+      expect(destroy).toHaveBeenCalled();
+    });
+
+    it("aligns a non-UTC driver zone to the pinned UTC session", async () => {
+      const mysql = await import("mysql2/promise");
+      const warn = vi.fn();
+
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+        timezone: "+05:30",
+        logger: { warn },
+      });
+
+      await adapter.connect();
+
+      // The session is pinned to UTC; a driver parsing in +05:30 beside it
+      // would shift every value a round-trip fails to cancel. Aligned, not
+      // refused, and the caller is told the shift they configured is gone.
+      expect(mysql.default.createPool).toHaveBeenCalledWith(
+        expect.objectContaining({ timezone: "Z" })
+      );
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("+05:30"));
     });
   });
 
@@ -740,6 +820,220 @@ describe("@nextly/adapter-mysql", () => {
   });
 
   // ============================================================
+  // Sessions outside a transaction
+  // ============================================================
+
+  describe("withSession", () => {
+    it("puts a transaction's mode back when the strict SET fails after reaching the server", async () => {
+      // A SET the server applied but whose reply was lost leaves the connection strict; the
+      // mode read before it must still be put back, or the pool hands strict mode to later work.
+      const answer = mockConnection.query.getMockImplementation();
+      mockConnection.query.mockImplementation((statement: string) => {
+        if (statement === "SELECT @@SESSION.sql_mode AS mode") {
+          return Promise.resolve([[{ mode: "" }], []]);
+        }
+        // A server answers this read; on, as most servers start sessions.
+        if (statement === "SELECT @@SESSION.autocommit AS autocommit") {
+          return Promise.resolve([[{ autocommit: 1 }], []]);
+        }
+        if (statement.startsWith("SET SESSION sql_mode = TRIM")) {
+          return Promise.reject(new Error("connection lost"));
+        }
+        return answer?.(statement);
+      });
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      mockConnection.release.mockClear();
+      mockConnection.destroy.mockClear();
+
+      await expect(
+        adapter.transaction(async () => undefined, { strictSqlMode: true })
+      ).rejects.toThrow();
+
+      const restores = mockConnection.query.mock.calls.filter(
+        ([statement]) => statement === "SET SESSION sql_mode = ?"
+      );
+      expect(restores).toEqual([["SET SESSION sql_mode = ?", [""]]]);
+      expect(mockConnection.release).toHaveBeenCalledTimes(1);
+      expect(mockConnection.destroy).not.toHaveBeenCalled();
+      mockConnection.query.mockImplementation(answer);
+    });
+
+    it("is refused inside an open transaction, taking no connection", async () => {
+      const mysql = await import("mysql2/promise");
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      await expect(
+        adapter.transaction(async () => {
+          mockPool.getConnection.mockClear();
+          await adapter.withSession(async () => undefined);
+        })
+      ).rejects.toMatchObject({ code: "NEXTLY_SESSION_INSIDE_TRANSACTION" });
+      expect(mockPool.getConnection).not.toHaveBeenCalled();
+      expect(mysql.default.createConnection).not.toHaveBeenCalled();
+    });
+
+    it("opens a connection of its own with the pool's connection settings, never a pooled one", async () => {
+      const mysql = await import("mysql2/promise");
+      // A pooled connection can hold a transaction an earlier caller left open on a server whose
+      // sessions start with autocommit off; turning autocommit on there would commit it.
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+        pool: { connectionTimeoutMs: 1234 },
+      });
+      await adapter.connect();
+      mockPool.getConnection.mockClear();
+
+      await adapter.withSession(async session => {
+        await session.execute("SELECT 1");
+      });
+
+      expect(mockPool.getConnection).not.toHaveBeenCalled();
+      expect(mysql.default.createConnection).toHaveBeenCalledTimes(1);
+      const [config] = vi.mocked(mysql.default.createConnection).mock
+        .calls[0] as unknown as [Record<string, unknown>];
+      expect(config).toMatchObject({
+        uri: "mysql://localhost:3306/test",
+        connectTimeout: 1234,
+        multipleStatements: false,
+      });
+      expect(config).not.toHaveProperty("connectionLimit");
+      expect(config).not.toHaveProperty("waitForConnections");
+    });
+
+    it("turns autocommit on before its statements, and closes the connection afterwards", async () => {
+      // With autocommit off, as some servers start sessions, a statement waits for a COMMIT
+      // nobody sends.
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+
+      await adapter.withSession(async session => {
+        await session.execute("INSERT INTO t (v) VALUES (1)");
+      });
+
+      const statements = mockSessionConnection.query.mock.calls.map(
+        ([statement]) => statement as string
+      );
+      const on = statements.indexOf("SET SESSION autocommit = 1");
+      const insert = statements.indexOf("INSERT INTO t (v) VALUES (1)");
+      expect(on).toBeGreaterThanOrEqual(0);
+      expect(insert).toBeGreaterThan(on);
+      expect(mockSessionConnection.destroy).toHaveBeenCalledTimes(1);
+    });
+
+    it("pins the session time zone before its statements, as the pool pins its own", async () => {
+      // The connection opened outside the pool never meets the pool's
+      // `connection` listener; its driver already parses in UTC, and a
+      // session still in the server's zone would shift every value a
+      // round-trip fails to cancel.
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+
+      await adapter.withSession(async session => {
+        await session.execute("INSERT INTO t (v) VALUES (1)");
+      });
+
+      const statements = mockSessionConnection.query.mock.calls.map(
+        ([statement]) => statement as string
+      );
+      const pin = statements.indexOf("SET SESSION time_zone = '+00:00'");
+      const insert = statements.indexOf("INSERT INTO t (v) VALUES (1)");
+      expect(pin).toBeGreaterThanOrEqual(0);
+      expect(insert).toBeGreaterThan(pin);
+      expect(mockSessionConnection.destroy).toHaveBeenCalledTimes(1);
+    });
+
+    it("closes a session whose time-zone pin failed, and runs no work on it", async () => {
+      // A session that could not be pinned would serve in whatever zone the
+      // server started it in, beside a driver parsing in UTC - the same
+      // refusal the pool applies to a connection its listener could not pin.
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      mockSessionConnection.query.mockImplementation((statement: string) => {
+        if (statement === "SET SESSION time_zone = '+00:00'") {
+          return Promise.reject(new Error("zone refused"));
+        }
+        return Promise.resolve([[], []]);
+      });
+      mockSessionConnection.destroy.mockClear();
+
+      let workRan = false;
+      await expect(
+        adapter.withSession(async () => {
+          workRan = true;
+        })
+      ).rejects.toThrow();
+      expect(workRan).toBe(false);
+      expect(mockSessionConnection.destroy).toHaveBeenCalledTimes(1);
+    });
+
+    it("is waited for by disconnect, which closes the pool only once the session has ended", async () => {
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      let release: () => void = () => {};
+      const gate = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      const session = adapter.withSession(async s => {
+        await gate;
+        await s.execute("INSERT INTO t (v) VALUES (1)");
+      });
+
+      let closed = false;
+      const closing = adapter.disconnect().then(() => {
+        closed = true;
+      });
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(closed).toBe(false);
+      expect(mockPool.end).not.toHaveBeenCalled();
+
+      release();
+      await session;
+      await closing;
+      expect(mockSessionConnection.destroy).toHaveBeenCalledTimes(1);
+      expect(mockPool.end).toHaveBeenCalledTimes(1);
+    });
+
+    it("is refused once disconnect has begun", async () => {
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      const closing = adapter.disconnect();
+      await expect(adapter.withSession(async () => undefined)).rejects.toThrow(
+        /not connected/
+      );
+      await closing;
+    });
+
+    it("closes the connection when its work throws", async () => {
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+
+      await expect(
+        adapter.withSession(async () => {
+          throw new Error("work failed");
+        })
+      ).rejects.toThrow("work failed");
+      expect(mockSessionConnection.destroy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ============================================================
   // Transaction Retry Logic
   // ============================================================
 
@@ -874,6 +1168,7 @@ describe("@nextly/adapter-mysql", () => {
         url: "mysql://localhost:3306/test",
       });
       await adapter.connect();
+      adapter.setTableResolver(holdsEveryTable);
 
       let result: unknown;
       await adapter.transaction(async tx => {

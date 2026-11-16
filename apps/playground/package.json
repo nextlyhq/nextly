@@ -1,6 +1,6 @@
 {
   "name": "playground",
-  "version": "0.1.2-alpha.12",
+  "version": "0.1.2-alpha.22",
   "description": "Nextly contributor playground (internal — not for end users)",
   "private": true,
   "scripts": {
@@ -9,13 +9,16 @@
     "start": "next start",
     "nextly": "nextly",
     "ci": "nextly migrate && next build",
-    "check-types": "next typegen && tsc --noEmit --incremental false",
+    "check-types": "next typegen && node ../../scripts/tsc.mjs --noEmit --incremental false",
     "env:copy": "cp .env.example .env",
     "db:seed": "tsx --env-file=.env scripts/seed.ts",
+    "db:seed:dev-user": "tsx scripts/seed-dev-admin.ts",
     "plugins:install": "nextly plugins install --all",
     "dev:reset": "tsx --env-file=.env scripts/reset.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "upgrade-gate:record": "tsx upgrade-gate/record.ts"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
@@ -31,6 +34,7 @@
     "@nextlyhq/plugin-form-builder": "workspace:^",
     "@nextlyhq/plugin-page-builder": "workspace:^",
     "@nextlyhq/plugin-sdk": "workspace:^",
+    "@nextlyhq/plugin-seo": "workspace:^",
     "@nextlyhq/ui": "workspace:^",
     "drizzle-orm": "1.0.0-rc.4",
     "mysql2": "^3.23.1",
@@ -53,10 +57,10 @@
     "better-sqlite3": "^12.10.0",
     "culori": "^4.0.2",
     "jsdom": "^27.1.0",
-    "playwright": "^1.61.1",
+    "playwright": "^1.64.1",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.3.2",
-    "typescript": "^7.0.2",
+    "typescript": "7.0.2",
     "vitest": "^5.0.5"
   }
 }

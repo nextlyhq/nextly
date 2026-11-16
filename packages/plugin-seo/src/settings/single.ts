@@ -1,0 +1,205 @@
+/**
+ * The SEO settings Single: one document of site-wide rules. The site's name,
+ * production addresses, default description and share image, the title
+ * pattern of each content type, the brand facts every output reads, what kind
+ * of site it is, what AI tools may do, which optional outputs for AI tools
+ * are switched on, the codes other services verify the site with, whether
+ * pages ask for large image previews, and how far first-time setup got.
+ *
+ * A Single rather than plugin settings because it is content: its text is
+ * kept per language where the site is translated, its images are media
+ * library references, and every write expires the reads made from it.
+ *
+ * @module settings/single
+ */
+import { pluginCacheTag } from "@nextlyhq/plugin-sdk";
+import {
+  checkbox,
+  defineSingle,
+  json,
+  number,
+  select,
+  text,
+  textarea,
+  upload,
+  type SingleConfig,
+} from "nextly/config";
+
+import { holdsManageSeo } from "../permissions";
+
+import { brandDetailsProblem } from "./brand-details";
+import { SEO_PLUGIN_NAME, SEO_SETTINGS_SLUG, SETUP_STEPS } from "./contract";
+import { SEPARATORS } from "./patterns";
+import { productionAddressesProblem } from "./production-addresses";
+import { robotsRulesProblem } from "./robots-rules-stored";
+import {
+  hiddenTypesProblem,
+  typesWithSeoOffProblem,
+  patternsProblem,
+  socialProfilesProblem,
+} from "./stored-values";
+import { structuredDataSettingsProblem } from "./structured-data-choices";
+import { verificationProblem } from "./verification-stored";
+
+/**
+ * The cache tags every read of the SEO settings carries. Each write to the
+ * Single expires them, so a page, the sitemap or any other output built from
+ * the settings is rebuilt on its next request, with no redeploy.
+ */
+export function seoSettingsCacheTags(): string[] {
+  return [pluginCacheTag(SEO_PLUGIN_NAME, "settings")];
+}
+
+/** A field `validate` over one of the problem functions above. */
+const refusing =
+  (problem: (value: unknown) => string | null) =>
+  (value: unknown): string | true =>
+    problem(value) ?? true;
+
+/** The SEO settings Single, as the plugin contributes it. */
+export function seoSettingsSingle(): SingleConfig {
+  return defineSingle({
+    slug: SEO_SETTINGS_SLUG,
+    label: { singular: "SEO settings" },
+    description: "Rules for the whole site. A page's own values always win.",
+    // One value in every language. A plugin's entity kept per language in a
+    // site that declares no languages has storage the runtime cannot write,
+    // and a plugin cannot yet declare one kept per language only where the
+    // site has languages.
+    localized: false,
+    // Edited on the plugin's own SEO settings screen, not the generic form.
+    admin: { hidden: true },
+    // Site-wide SEO: read and changed only with `manage-seo`, beside the
+    // Single's own permission, through every way in. The plugin's own
+    // readers read it as the system.
+    access: { read: holdsManageSeo, update: holdsManageSeo },
+    revalidate: { tags: seoSettingsCacheTags() },
+    fields: [
+      text({ name: "siteName", label: "Site name" }),
+      json({
+        name: "productionAddresses",
+        label: "Production addresses",
+        validate: refusing(productionAddressesProblem),
+      }),
+      select({
+        name: "separator",
+        label: "Between the title and the site name",
+        options: SEPARATORS.map(value => ({ label: value, value })),
+      }),
+      textarea({ name: "description", label: "Default description" }),
+      upload({
+        name: "image",
+        label: "Default share image",
+        relationTo: "media",
+      }),
+      select({
+        name: "siteKind",
+        label: "Kind of site",
+        options: [
+          { label: "A company or product", value: "company" },
+          { label: "A blog or publication", value: "blog" },
+          { label: "An online shop", value: "shop" },
+          { label: "A local business", value: "local" },
+        ],
+      }),
+      select({
+        name: "aiCrawlers",
+        label: "AI tools",
+        options: [
+          { label: "Allow all AI tools", value: "all" },
+          { label: "Allow AI search, not training", value: "search" },
+          { label: "Block all AI tools", value: "block" },
+        ],
+      }),
+      text({ name: "brandName", label: "Brand name" }),
+      text({ name: "brandOtherNames", label: "Other names" }),
+      upload({
+        name: "logo",
+        label: "Logo",
+        relationTo: "media",
+      }),
+      json({
+        name: "socialProfiles",
+        label: "Social profiles",
+        validate: refusing(socialProfilesProblem),
+      }),
+      // The brand's other facts structured data names: what it is, how to
+      // reach it, when it was founded and who owns it. One value, so a fact
+      // added later changes no column.
+      json({
+        name: "brandDetails",
+        label: "Brand details",
+        validate: refusing(brandDetailsProblem),
+      }),
+      json({
+        name: "patterns",
+        label: "Title patterns",
+        validate: refusing(patternsProblem),
+      }),
+      json({
+        name: "hiddenTypes",
+        label: "Content types hidden from search",
+        validate: refusing(hiddenTypesProblem),
+      }),
+      // The content types whose SEO is switched off: a list of keys, a
+      // collection's slug or `single:<slug>`, as `hiddenTypes` keys them.
+      // Off changes no schema and no stored value; every type is on until
+      // listed here.
+      json({
+        name: "typesWithSeoOff",
+        label: "Content types with SEO off",
+        validate: refusing(typesWithSeoOffProblem),
+      }),
+      json({
+        name: "structuredData",
+        label: "Structured data",
+        validate: refusing(structuredDataSettingsProblem),
+      }),
+      // The site's own robots.txt lines, served after the plugin's, and the
+      // person's confirmation of the sitemap pages they block. A line that
+      // would keep every crawler from the whole site is refused here too.
+      json({
+        name: "robotsRules",
+        label: "Your own robots.txt rules",
+        validate: refusing(robotsRulesProblem),
+      }),
+      // The codes other services read from the home page's head to confirm
+      // the site is the owner's: only codes, each checked on the way in.
+      json({
+        name: "verificationCodes",
+        label: "Verification codes",
+        validate: refusing(verificationProblem),
+      }),
+      // The optional connections and outputs, each off until switched on.
+      checkbox({ name: "indexNow", label: "IndexNow" }),
+      checkbox({ name: "llmsTxt", label: "llms.txt" }),
+      // Every listed page's words in one file, beside llms.txt; off until
+      // switched on.
+      checkbox({ name: "llmsFullTxt", label: "llms-full.txt" }),
+      // What the site tells AI tools in its own words, after llms.txt's
+      // summary.
+      textarea({ name: "llmsIntro", label: "What AI tools should know" }),
+      checkbox({
+        name: "plainTextCopies",
+        label: "Plain-text copies of pages",
+      }),
+      // On by default: only a stored `false` turns it off, so a site whose
+      // database has no value for it yet asks for large previews too.
+      checkbox({
+        name: "largeImagePreviews",
+        label: "Large image previews",
+        defaultValue: true,
+      }),
+      number({
+        name: "setupStep",
+        label: "Setup steps done",
+        min: 0,
+        max: SETUP_STEPS,
+      }),
+      checkbox({
+        name: "setupDismissed",
+        label: "Setup closed for later",
+      }),
+    ],
+  });
+}

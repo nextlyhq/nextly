@@ -1,4 +1,9 @@
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
+
+import { test } from "../support/visible";
+
+import { CACHE_COMPONENTS } from "../support/cache-components";
+import { signInWithTheForm } from "../support/production-sign-in";
 
 /**
  * Phase 3's exit demo: a page built in the builder, served to a visitor from a
@@ -29,16 +34,7 @@ test.describe("the production exit demo", () => {
     // 1. Sign in through the real form. Asserting the landing state first,
     //    because a failed sign-in leaves a page that still renders and every
     //    later assertion would fail for the wrong reason.
-    await page.goto("/admin");
-    await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
-    // By ROLE, not by label: `getByLabel(/password/i)` also matches the "Show
-    // password" toggle beside the input, and a locator that resolves to two
-    // elements fails on strict mode rather than on anything about the product.
-    await page
-      .getByRole("textbox", { name: /password/i })
-      .fill(DEV_USER.password);
-    await page.getByRole("button", { name: /sign in|log in/i }).click();
-    await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
+    await signInWithTheForm(page, "", DEV_USER);
 
     // 2. Author a page THROUGH THE API the editor writes with, rather than by
     //    inserting rows: the claim is about what the product serves for content
@@ -62,6 +58,7 @@ test.describe("the production exit demo", () => {
             },
           ],
         },
+        _overwrite: true,
       },
     });
     expect(
@@ -94,6 +91,17 @@ test.describe("the production exit demo", () => {
     // answered 500 on EVERY path, in a production build only. A 404 is the
     // route working; a 500 is the route broken in a way that looks like content.
     const missing = await request.get("/no-such-page-exists-here");
-    expect(missing.status()).toBe(404);
+    if (!CACHE_COMPONENTS) {
+      expect(missing.status()).toBe(404);
+      return;
+    }
+    // Under Cache Components the route streams its static shell before it
+    // knows the page does not exist, so the status is 200 by then, and the
+    // answer is the not-found page marked `noindex`: still the route working,
+    // and not a 500.
+    expect(missing.status()).toBe(200);
+    const html = await missing.text();
+    expect(html).toMatch(/<meta[^>]+name="robots"[^>]+content="noindex"/);
+    expect(html).toMatch(/could not be found/);
   });
 });

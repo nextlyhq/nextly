@@ -470,6 +470,80 @@ function asParts(input: StoryInput): {
   };
 }
 
+/**
+ * The id of the event that recorded each version, by its number: the first
+ * by id, as the server names a version's author. Event ids are time-ordered,
+ * so this says when within its second a version was written. The kinds are
+ * {@link VERSION_EVENTS}, the same as the server's producing kinds: a kind
+ * missing here leaves its versions where they stood before ids were compared.
+ */
+function recordingIds(events: readonly DocumentEvent[]): Map<number, string> {
+  const ids = new Map<number, string>();
+  for (const event of events) {
+    if (event.versionNo === null || !VERSION_EVENTS.has(event.kind)) continue;
+    const known = ids.get(event.versionNo);
+    if (known === undefined || event.id < known) {
+      ids.set(event.versionNo, event.id);
+    }
+  }
+  return ids;
+}
+
+/**
+ * Whether a version row goes above an event row: the newer first, and within
+ * one time (SQLite keeps whole seconds) the one recorded later, as the
+ * time-ordered ids tell. A version whose recording event is gone goes above,
+ * where it stood before ids were compared.
+ */
+function versionFirst(
+  version: StoryVersion,
+  event: StoryEvent | StoryRemoval,
+  recorded: ReadonlyMap<number, string>
+): boolean {
+  if (version.at !== event.at) return version.at > event.at;
+  const id =
+    version.version.versionNo === null
+      ? undefined
+      : recorded.get(version.version.versionNo);
+  return id === undefined || id > event.event.id;
+}
+
+/** Newest first by time alone; a stable sort keeps ties in their order. */
+function byTimeNewestFirst(a: StoryEntry, b: StoryEntry): number {
+  return a.at < b.at ? 1 : a.at > b.at ? -1 : 0;
+}
+
+/**
+ * The version rows and the event rows as one list, newest first. The server
+ * orders a second's versions by number and its events by id, which a sort by
+ * time keeps, so each list is put in time order on its own and the two are
+ * then merged, which compares only a version with an event.
+ */
+function merged(
+  versionRows: readonly StoryVersion[],
+  eventRows: readonly (StoryEvent | StoryRemoval)[],
+  recorded: ReadonlyMap<number, string>
+): StoryEntry[] {
+  const versions = [...versionRows].sort(byTimeNewestFirst);
+  const events = [...eventRows].sort(byTimeNewestFirst);
+  const rows: StoryEntry[] = [];
+  let v = 0;
+  let e = 0;
+  for (;;) {
+    const version = versions[v];
+    const event = events[e];
+    if (version === undefined || event === undefined) break;
+    if (versionFirst(version, event, recorded)) {
+      rows.push(version);
+      v += 1;
+    } else {
+      rows.push(event);
+      e += 1;
+    }
+  }
+  return [...rows, ...versions.slice(v), ...events.slice(e)];
+}
+
 /** The story the History panel tells about a document. */
 export function buildStory(input: StoryInput): Story {
   const { lifecycle, view, filter } = input;
@@ -490,10 +564,11 @@ export function buildStory(input: StoryInput): Story {
     versions.flatMap(v => (v.versionNo === null ? [] : [v.versionNo]))
   );
   const events = ownEvents.filter(e => inView(e.parts, view));
-  const rows: StoryEntry[] = [
-    ...foldSaves(versionEntries),
-    ...eventEntries(events, listed, attached),
-  ].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+  const rows = merged(
+    foldSaves(versionEntries),
+    eventEntries(events, listed, attached),
+    recordingIds(ownEvents)
+  );
   const pinned = lifecycle
     ? pins(versionEntries, versions, events)
     : { drafts: [], published: [] };

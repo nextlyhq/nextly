@@ -26,7 +26,7 @@ import {
 
 import { inlinePropsOfKind } from "./inline-target";
 import { propPatch } from "./inspector";
-import type { BuilderOp } from "./ops";
+import type { BuilderOp } from "./op-vocabulary";
 
 /** One value a canvas may let an author type into. */
 export interface InlineTextTarget {

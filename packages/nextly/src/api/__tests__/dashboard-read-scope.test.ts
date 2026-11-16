@@ -8,13 +8,12 @@
  * by a resolver that only ever looks at permission slugs, which is what this
  * file exists to disprove.
  *
- * A collection may be authorized ENTIRELY in code:
+ * A collection may narrow its grant in code:
  *
  *     defineCollection({ slug: "posts", access: { read: ctx => ... } })
  *
- * `checkAccess` consults that rule BEFORE it falls back to the stored grants,
- * so a slug-only resolver answers a different question from the one the row
- * read answers. Both directions are wrong and only one is visible: a rule that
+ * `checkAccess` asks that rule after the stored grant, so a slug-only resolver
+ * answers a different question from the one the row read answers: a rule that
  * REFUSES a collection the caller holds `posts:read` for made `/stats` disclose
  * that collection's count and `/activity` disclose its entry titles, user names
  * and emails, while `GET /api/collections/posts` correctly returned 403.
@@ -235,11 +234,9 @@ describe("a code-defined access.read rule bounds the dashboard scope", () => {
     expect(scope.has("posts")).toBe(true);
   });
 
-  it("admits a collection authorized ONLY in code, with no stored grant at all", async () => {
-    // The other direction of the same defect. A slug-only resolver drops a
-    // collection whose `read` rule allows it but whose row the permissions
-    // table says nothing about, so the dashboard under-reports what the caller
-    // can actually open.
+  it("leaves out a collection allowed ONLY in code, with no stored grant at all", async () => {
+    // A code rule only narrows the read permission, so a `read` rule that
+    // allows cannot put a collection in scope for a caller without the grant.
     asMock(hasPermission).mockResolvedValue(false);
     asMock(listEffectivePermissions).mockResolvedValue([]);
     rbac.registerCollectionAccess("posts", { read: true });
@@ -247,9 +244,19 @@ describe("a code-defined access.read rule bounds the dashboard scope", () => {
     await getDashboardStats(new Request("http://x/api/dashboard/stats"));
 
     const scope = scopeOf(getStats);
-    expect(scope.has("posts")).toBe(true);
+    expect(scope.has("posts")).toBe(false);
     // `pages` has no rule and no grant, so it must still be refused.
     expect(scope.has("pages")).toBe(false);
+  });
+
+  it("keeps a collection whose code rule allows a caller holding the grant", async () => {
+    // The control: the refusal above is the missing grant's.
+    asMock(hasPermission).mockResolvedValue(true);
+    rbac.registerCollectionAccess("posts", { read: true });
+
+    await getDashboardStats(new Request("http://x/api/dashboard/stats"));
+
+    expect(scopeOf(getStats).has("posts")).toBe(true);
   });
 
   it("applies the same rule to a SINGLE", async () => {

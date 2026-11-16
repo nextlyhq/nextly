@@ -1,0 +1,491 @@
+/**
+ * The same busy database, met by every path that changes a table's structure outside the schema
+ * pipeline, gives the same tries and the same stop: `nextly migrate`'s app file, `migrate:down`'s
+ * down section, a collection's Builder save, the runner Singles' saves apply through, the runner
+ * field groups' saves apply through, a translations table's change in either, and a user field's
+ * column.
+ *
+ * An integration test, not a unit one: what it compares is each path's own seam reaching the
+ * tries against a real held database, which a stand-in for the database could only assume. It runs
+ * on SQLite, where a second connection's open write transaction holds the whole database, so every
+ * path meets the same holder, with short bounds from the environment (1 s a try, 4 s in all, so the second try fits with time to
+ * spare), as a
+ * Builder save reads them. The paths through the schema pipeline (`db:sync`, the development push
+ * and the Builder's schema dialog) join this comparison with the pipeline's own seam.
+ *
+ * Each path is driven at the call that sends its statements, once what it writes before them is
+ * in place: on SQLite the holder blocks every write, so a definition or registry row written
+ * before the statements would meet the holder outside the tries.
+ */
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { sql } from "drizzle-orm";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+
+import { runFileMigrations } from "../../../cli/commands/migrate";
+import { downDatabaseDeps } from "../../../cli/commands/migrate-down";
+import { createLogger } from "../../../cli/utils/logger";
+import { defineConfig } from "../../../config";
+import { createMissingCodeFirstTables } from "../../../di/register";
+import { NextlyError } from "../../../errors/nextly-error";
+import {
+  createTestNextly,
+  type TestNextly,
+} from "../../../plugins/test-nextly";
+import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
+import { clearCachedSnapshot } from "../../../init/schema-snapshot-cache";
+import { _resetEnvCache } from "../../../shared/lib/env";
+import { consoleLogger } from "../../../shared/types";
+import type { ManifestEntry } from "../../field-groups/migration/manifest";
+import { createStorageObserver } from "../../field-groups/migration/observer";
+import { runMigrationSteps } from "../../field-groups/migration/runner";
+import type { MigrationSession } from "../../field-groups/migration/session";
+import { buildMigrationSteps } from "../../field-groups/migration/steps";
+import { applyCompanionStatements } from "../../i18n/migration/held-leaving-drops";
+import type { UserExtSchemaService } from "../../users/services/user-ext-schema-service";
+import type { UserFieldDefinitionService } from "../../users/services/user-field-definition-service";
+import { writeCollectionSave } from "../builder-save/collection-save";
+import { busyTableBounds } from "../busy-table/bounds";
+import { plannedTryStarts } from "../busy-table/schedule";
+import type { DesiredSchema } from "../pipeline/types";
+import { readIdentifierCaseRules } from "../utils/read-identifier-case";
+import {
+  lockWorld,
+  type LockWorld,
+} from "../pipeline/__tests__/helpers/schema-lock-world";
+import {
+  applyMigrationStatements,
+  applyMigrationWhole,
+} from "../services/apply-migration-statements";
+
+const quiet = createLogger({ quiet: true });
+const quietSave = { info: () => {}, warn: () => {}, error: () => {} };
+
+describe("a busy database, met by every path outside the schema pipeline (sqlite)", () => {
+  let world: LockWorld;
+  let adapter: DrizzleAdapter;
+  let holderAdapter: DrizzleAdapter;
+  let handle: TestNextly;
+  let dir: string;
+  let free: () => void = () => {};
+  let holding: Promise<unknown> = Promise.resolve();
+
+  beforeAll(async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "1");
+    vi.stubEnv("NEXTLY_LOCK_TIMEOUT_TOTAL", "4");
+    world = await lockWorld("sqlite", { fresh: true });
+    vi.stubEnv("DB_DIALECT", "sqlite");
+    vi.stubEnv("DATABASE_URL", `file:${world.url}`);
+    _resetEnvCache();
+    adapter = await world.connect();
+    holderAdapter = await world.connect();
+    handle = await createTestNextly({
+      adapter: adapter as never,
+      collections: [],
+    });
+    dir = mkdtempSync(join(tmpdir(), "nextly-busy-parity-"));
+    mkdirSync(join(dir, "migrations"));
+    await adapter.executeQuery("CREATE TABLE btp_hold (id integer)");
+    await adapter.executeQuery("CREATE TABLE btp_target (id integer)");
+  }, 120_000);
+
+  afterEach(async () => {
+    free();
+    await holding.catch(() => {});
+  });
+
+  afterAll(async () => {
+    await holderAdapter?.disconnect();
+    await handle?.destroy();
+    await world?.dispose();
+    rmSync(dir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+    _resetEnvCache();
+  }, 60_000);
+
+  /** A second connection's open write transaction, which holds the whole database, until `free()`. */
+  async function holdTheDatabase(): Promise<void> {
+    let held: () => void = () => {};
+    const isHeld = new Promise<void>(resolve => {
+      held = resolve;
+    });
+    const freed = new Promise<void>(resolve => {
+      free = resolve;
+    });
+    holding = holderAdapter.transaction(async tx => {
+      await tx.queryStatement(
+        sql.raw("INSERT INTO btp_hold (id) VALUES (0) RETURNING id")
+      );
+      held();
+      await freed;
+    });
+    await isHeld;
+  }
+
+  const bounds = () => busyTableBounds({ env: process.env });
+  const notices: string[] = [];
+  const notify = (line: string) => {
+    notices.push(line);
+  };
+
+  /** What each path stopped with, as the tries' error says it. */
+  async function stopOf(run: () => Promise<unknown>): Promise<{
+    code: string | undefined;
+    tries: unknown;
+    outcome: unknown;
+  }> {
+    await holdTheDatabase();
+    const error = await run().then(
+      () => undefined,
+      (e: unknown) => e
+    );
+    free();
+    await holding.catch(() => {});
+    const stop = NextlyError.is(error)
+      ? (
+          error.logContext as {
+            stop?: { tries?: unknown; outcome?: { kind?: unknown } };
+          }
+        )?.stop
+      : undefined;
+    return {
+      code: NextlyError.is(error) ? error.code : String(error),
+      tries: stop?.tries,
+      outcome: stop?.outcome?.kind,
+    };
+  }
+
+  const stops: Record<string, Awaited<ReturnType<typeof stopOf>>> = {};
+
+  it("nextly migrate's app file", async () => {
+    writeFileSync(
+      join(dir, "migrations", "20261113_000001_000_btp_up.sql"),
+      "-- Migration: btp_up\n\n-- UP\nALTER TABLE btp_target ADD COLUMN up_col integer;\n\n-- DOWN\n"
+    );
+    stops.migrate = await stopOf(() =>
+      runFileMigrations({
+        adapter: adapter as unknown as Parameters<
+          typeof runFileMigrations
+        >[0]["adapter"],
+        db: adapter.getDrizzle(),
+        dialect: "sqlite",
+        migrationsDir: join(dir, "migrations"),
+        logger: quiet,
+        busyTable: { bounds: bounds(), notify },
+      })
+    );
+    rmSync(join(dir, "migrations", "20261113_000001_000_btp_up.sql"));
+  }, 30_000);
+
+  it("migrate:down's down section", async () => {
+    const deps = await downDatabaseDeps({
+      adapter,
+      dialect: "sqlite",
+      busyTable: { bounds: bounds(), notify },
+    });
+    stops.down = await stopOf(() =>
+      deps.execDown(
+        ["ALTER TABLE btp_target ADD COLUMN down_col integer"],
+        {
+          source: "20261113_000002_000_btp_down.sql",
+          transaction: true,
+          direction: "down",
+        },
+        async () => {}
+      )
+    );
+  }, 30_000);
+
+  it("a collection's Builder save", async () => {
+    const deps = {
+      adapter,
+      config: defineConfig({
+        collections: [],
+        db: { migrationsDir: "./migrations" },
+      }),
+      projectRoot: dir,
+      migrationsDir: join(dir, "migrations"),
+      applies: true,
+      logger: { ...quietSave, warn: notify },
+    };
+    const posts = (fields: UiSchemaEntity["fields"]) =>
+      ({
+        slug: "btp_posts",
+        labels: { singular: "Post", plural: "Posts" },
+        fields,
+      }) as UiSchemaEntity;
+    const title = {
+      name: "title",
+      type: "text",
+    } as UiSchemaEntity["fields"][number];
+    const body = {
+      name: "body",
+      type: "text",
+    } as UiSchemaEntity["fields"][number];
+    await writeCollectionSave(deps, {
+      slug: "btp_posts",
+      previous: null,
+      entity: posts([title]),
+      change: "create",
+    });
+    stops.collection = await stopOf(() =>
+      writeCollectionSave(deps, {
+        slug: "btp_posts",
+        previous: posts([title]),
+        entity: posts([title, body]),
+        change: "update",
+      })
+    );
+  }, 60_000);
+
+  it("the runner a Single's save applies through", async () => {
+    stops.single = await stopOf(() =>
+      applyMigrationWhole({
+        db: adapter.getDrizzle(),
+        dialect: "sqlite",
+        migrationSQL: "ALTER TABLE btp_target ADD COLUMN single_col integer",
+        entity: "single",
+        busyTable: { adapter, notify },
+      })
+    );
+  }, 30_000);
+
+  it("the runner a field group's save applies through", async () => {
+    stops.fieldGroup = await stopOf(() =>
+      applyMigrationStatements(
+        adapter,
+        "ALTER TABLE btp_target ADD COLUMN group_col integer",
+        {
+          adapter,
+          notify,
+        }
+      )
+    );
+  }, 30_000);
+
+  it("a translations table's change, in a Single's or field group's save", async () => {
+    stops.companion = await stopOf(() =>
+      applyCompanionStatements(
+        adapter,
+        {
+          needsArchive: false,
+          statements: [
+            "ALTER TABLE btp_target ADD COLUMN companion_col integer",
+          ],
+        },
+        { adapter, notify }
+      )
+    );
+  }, 30_000);
+
+  it("a user field's column", async () => {
+    const definitions = handle.getService(
+      "userFieldDefinitionService"
+    ) as unknown as UserFieldDefinitionService;
+    await definitions.createField({
+      name: "btpNickname",
+      label: "Nickname",
+      type: "text",
+    } as never);
+    const schema = handle.getService(
+      "userExtSchemaService"
+    ) as unknown as UserExtSchemaService;
+    await schema.reloadMergedFields();
+    stops.userField = await stopOf(() =>
+      schema.ensureUserExtSchema(adapter.getDrizzle(), {
+        strict: true,
+        busyTable: { adapter, notify },
+      })
+    );
+  }, 30_000);
+
+  // A user field's plan is one change: a stop after its table was made says what of it stayed,
+  // never that nothing changed.
+  it("reports a user field's plan stopped part-way as part-way", async () => {
+    const definitions = handle.getService(
+      "userFieldDefinitionService"
+    ) as unknown as UserFieldDefinitionService;
+    await definitions.createField({
+      name: "btpCode",
+      label: "Code",
+      type: "text",
+      unique: true,
+    } as never);
+    const schema = handle.getService(
+      "userExtSchemaService"
+    ) as unknown as UserExtSchemaService;
+    await schema.reloadMergedFields();
+    await adapter.executeQuery("DROP TABLE IF EXISTS user_ext");
+    // The hold starts once the plan's first statement, the table's CREATE, has committed.
+    const run = adapter.executeQuery.bind(adapter);
+    let held = false;
+    const spy = vi
+      .spyOn(adapter, "executeQuery")
+      .mockImplementation(async (statement, params) => {
+        const rows = await run(statement, params);
+        if (
+          !held &&
+          /^CREATE TABLE IF NOT EXISTS\s+"?user_ext"?/i.test(statement.trim())
+        ) {
+          held = true;
+          await holdTheDatabase();
+        }
+        return rows;
+      });
+    let error: unknown;
+    try {
+      error = await schema
+        .ensureUserExtSchema(adapter.getDrizzle(), {
+          strict: true,
+          busyTable: { adapter, notify },
+        })
+        .then(
+          () => undefined,
+          (e: unknown) => e
+        );
+    } finally {
+      spy.mockRestore();
+      free();
+      await holding.catch(() => {});
+    }
+    expect(held).toBe(true);
+    expect(NextlyError.is(error) ? error.code : error).toBe(
+      "NEXTLY_TABLE_BUSY"
+    );
+    const outcome = (
+      (error as NextlyError).logContext as {
+        stop?: { outcome?: { kind?: unknown } };
+      }
+    )?.stop?.outcome?.kind;
+    expect(outcome).toBe("part-way");
+  }, 30_000);
+
+  it("migrate:field-groups --apply's rename step", async () => {
+    await adapter.executeQuery(
+      "CREATE TABLE btp_fg (id integer, legacy_kind text)"
+    );
+    const identifierCase = await readIdentifierCaseRules(adapter);
+    const entries: ManifestEntry[] = [
+      { kind: "column", table: "btp_fg", from: "legacy_kind", to: "kind" },
+    ];
+    const session = {
+      dialect: "sqlite",
+      inTransaction: work => adapter.transaction(work),
+      lock: { kind: "held", owner: "btp" },
+    } as MigrationSession;
+    // Driven at the steps: the run writes its marker before them, which the holder would block.
+    stops.fieldGroupMigration = await stopOf(() =>
+      runMigrationSteps({
+        session,
+        meta: undefined as never,
+        migrationId: "btp",
+        steps: buildMigrationSteps({
+          entries,
+          identifierCase,
+          observer: createStorageObserver(adapter, identifierCase),
+          ownedDataTables: [],
+        }),
+        fromStep: 1,
+        busyTable: {
+          adapter,
+          bounds: bounds(),
+          notify,
+          command: "nextly migrate:field-groups --apply (up)",
+          direction: "up",
+        },
+      })
+    );
+  }, 30_000);
+
+  // The start creates its tables through the schema pipeline and reports a failure as a warning
+  // rather than throwing, so its stop is read from what it said: the warning names the code and
+  // what changed, and each try after the first sent its notice.
+  it("the development start's creation of a missing code-first table", async () => {
+    clearCachedSnapshot();
+    const warnings: string[] = [];
+    const pipelineNotices: string[] = [];
+    const spy = vi
+      .spyOn(consoleLogger, "warn")
+      .mockImplementation((line: string) => {
+        pipelineNotices.push(line);
+      });
+    const desired: DesiredSchema = {
+      collections: {
+        btp_boot: {
+          slug: "btp_boot",
+          tableName: "btp_boot",
+          fields: [{ name: "title", type: "text" }],
+        },
+      } as unknown as DesiredSchema["collections"],
+      singles: {},
+      components: {},
+    };
+    try {
+      await holdTheDatabase();
+      await createMissingCodeFirstTables(
+        adapter,
+        {
+          ...quietSave,
+          debug: () => {},
+          warn: (line: string) => {
+            warnings.push(line);
+          },
+        },
+        { desired, followUps: [] }
+      );
+    } finally {
+      free();
+      await holding.catch(() => {});
+      spy.mockRestore();
+    }
+    const failure = warnings.find(line =>
+      line.startsWith("Auto-sync tables failed")
+    );
+    const tryNotices = pipelineNotices.filter(line =>
+      line.includes(" is busy, ")
+    );
+    stops.startTables = {
+      code: /\(([A-Z_]+)\)/.exec(failure ?? "")?.[1],
+      tries: tryNotices.length + 1,
+      outcome: failure?.includes("nothing changed")
+        ? "nothing-changed"
+        : failure,
+    };
+  }, 30_000);
+
+  it("stops every one of them the same way, after the same tries", () => {
+    const planned = plannedTryStarts(bounds()).length;
+    expect(Object.keys(stops).sort()).toEqual(
+      [
+        "collection",
+        "companion",
+        "down",
+        "fieldGroup",
+        "fieldGroupMigration",
+        "migrate",
+        "single",
+        "startTables",
+        "userField",
+      ].sort()
+    );
+    for (const [path, stop] of Object.entries(stops)) {
+      expect(stop, path).toEqual({
+        code: "NEXTLY_TABLE_BUSY",
+        tries: planned,
+        outcome: "nothing-changed",
+      });
+    }
+  });
+});

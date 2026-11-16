@@ -1,8 +1,10 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
 
+import type { BuiltInRole } from "./public-role";
 import {
   type CreateRoleOptions,
   RoleMutationService,
@@ -75,36 +77,16 @@ export class RoleService extends BaseService {
 
   /**
    * List all roles with pagination, search, and filtering.
+   * Typed as the query service's own list, which it hands back unchanged:
+   * one definition of what a listed role carries.
    *
    * @param options - Pagination, search, filter, and sort options
    * @returns Paginated list of roles with metadata
    * @throws NextlyError on DB errors.
    */
-  listRoles(options?: {
-    page?: number;
-    limit?: number;
-    search?: string;
-    isSystem?: boolean;
-    levelMin?: number;
-    levelMax?: number;
-    sortBy?: "name" | "level";
-    sortOrder?: "asc" | "desc";
-    includePermissions?: boolean;
-  }): Promise<{
-    data: Array<{
-      id: string;
-      name: string;
-      description: string | null;
-      level: number;
-      isSystem: boolean;
-    }>;
-    meta: {
-      total: number;
-      page: number;
-      limit: number;
-      totalPages: number;
-    };
-  }> {
+  listRoles(
+    options?: Parameters<RoleQueryService["listRoles"]>[0]
+  ): ReturnType<RoleQueryService["listRoles"]> {
     return this.queryService.listRoles(options);
   }
 
@@ -123,6 +105,10 @@ export class RoleService extends BaseService {
     description: string | null;
     level: number;
     isSystem: boolean;
+    /** Whether it may be given to someone or inherited. */
+    assignable: boolean;
+    /** Which built-in role it is, if one. */
+    builtIn?: BuiltInRole;
   }> {
     return this.queryService.getRoleById(roleId);
   }
@@ -154,6 +140,22 @@ export class RoleService extends BaseService {
    */
   ensureSuperAdminRole(): Promise<{ id: string; created: boolean }> {
     return this.mutationService.ensureSuperAdminRole();
+  }
+
+  /**
+   * Ensure a system role exists with this slug on `tx`, a transaction the
+   * caller holds, created holding nothing where it is missing
+   * (`RoleMutationService.ensureSystemRoleOn`).
+   *
+   * @returns Role ID and whether it was newly created
+   */
+  ensureSystemRoleOn(
+    tx: TransactionContext,
+    role: { name: string; slug: string; description: string; level: number }
+  ): Promise<{ id: string; created: boolean }> {
+    // Typed by its class, which the getter returns.
+    const mutations: RoleMutationService = this.mutationService;
+    return mutations.ensureSystemRoleOn(tx, role);
   }
 
   /**

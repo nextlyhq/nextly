@@ -28,14 +28,22 @@ function Suppressor() {
   return null;
 }
 
-function renderPanel({ suppress }: { suppress: boolean }) {
+function renderPanel({
+  suppress,
+  isMobile = false,
+  selectedMain = "settings",
+}: {
+  suppress: boolean;
+  isMobile?: boolean;
+  selectedMain?: string;
+}) {
   return render(
     <ChromeSuppressionProvider>
       {suppress ? <Suppressor /> : null}
       <SubSidebarPanel
-        isMobile={false}
-        selectedMain="settings"
-        visibleMenuItemIds={["settings"]}
+        isMobile={isMobile}
+        selectedMain={selectedMain}
+        visibleMenuItemIds={["dashboard", "settings", "collections", "singles"]}
         isFolderTreeVisible={false}
         standaloneLabel=""
         content={{} as never}
@@ -57,5 +65,92 @@ describe("SubSidebarPanel", () => {
     renderPanel({ suppress: false });
 
     expect(screen.getByRole("link", { name: "API Keys" })).toBeDefined();
+  });
+});
+
+/** The panel's width utilities, which decide where the main column beside it starts. */
+function widthClasses(): string[] {
+  const panel = screen.getByTestId("sub-sidebar");
+  return Array.from(panel.classList).filter(name => /^w-/.test(name));
+}
+
+describe("SubSidebarPanel's track on the wide layout", () => {
+  it("takes width on a section with a panel and none on a page without one", () => {
+    // The separating property: the main column starts where this box ends.
+    // A page with a panel holds its track; the dashboard, which owns none,
+    // draws no empty column beside the rail.
+    renderPanel({ suppress: false, selectedMain: "settings" });
+    expect(widthClasses()).toEqual(["w-64"]);
+    cleanup();
+    renderPanel({ suppress: false, selectedMain: "dashboard" });
+    expect(widthClasses()).toEqual(["w-0"]);
+  });
+
+  it("holds nothing in the track while the selection owns no panel", () => {
+    renderPanel({ suppress: false, selectedMain: "dashboard" });
+    const panel = screen.getByTestId("sub-sidebar");
+
+    // No links, and not the selection's name as a title over an empty panel.
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(panel).not.toHaveTextContent(/dashboard/i);
+    // An empty landmark is noise to assistive technology, so the held track
+    // is out of the accessibility tree until it holds a panel.
+    expect(panel).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("exposes the panel once the selection owns one", () => {
+    // The control for the case above: the same element, holding a panel, is
+    // in the accessibility tree with its links.
+    renderPanel({ suppress: false, selectedMain: "settings" });
+
+    expect(screen.getByTestId("sub-sidebar")).not.toHaveAttribute(
+      "aria-hidden"
+    );
+    expect(screen.getByRole("link", { name: "API Keys" })).toBeDefined();
+  });
+
+  it("gives the width back while a surface has suppressed the panel", () => {
+    // An immersive editor asks for the panel to go to have its width.
+    renderPanel({ suppress: true, selectedMain: "settings" });
+
+    expect(widthClasses()).toEqual(["w-0"]);
+  });
+});
+
+describe("SubSidebarPanel on the narrow layout", () => {
+  it("has width only while open, as the overlay it is there", () => {
+    renderPanel({ suppress: false, isMobile: true, selectedMain: "dashboard" });
+    expect(widthClasses()).toEqual(["w-0"]);
+    cleanup();
+
+    renderPanel({ suppress: false, isMobile: true, selectedMain: "settings" });
+    expect(widthClasses()).toEqual(["w-64"]);
+  });
+});
+
+describe("SubSidebarPanel's title", () => {
+  it("goes to the Content overview from the Content panel, from either kind", () => {
+    renderPanel({ suppress: false, selectedMain: "collections" });
+    expect(screen.getByRole("link", { name: "Content" })).toHaveAttribute(
+      "href",
+      "/admin/content"
+    );
+    cleanup();
+
+    renderPanel({ suppress: false, selectedMain: "singles" });
+    expect(screen.getByRole("link", { name: "Content" })).toHaveAttribute(
+      "href",
+      "/admin/content"
+    );
+  });
+
+  it("only names the other panels", () => {
+    // The control: the title is a link because it is Content's, not because
+    // every title became one.
+    renderPanel({ suppress: false, selectedMain: "settings" });
+    expect(screen.getByText("settings")).not.toHaveAttribute("href");
+    expect(screen.getAllByRole("link").map(link => link.textContent)).toEqual([
+      "API Keys",
+    ]);
   });
 });

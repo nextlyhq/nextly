@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 
+import { restatedColumn } from "../../schema/pipeline/sql-templates/mysql-live-restate";
+
 import {
   buildCompanionCreateOnlySql,
   buildLocalizationUpSql,
@@ -51,6 +53,25 @@ describe("buildLocalizationUpSql", () => {
     });
     expect(sql).toContain("`dc_pages_locales`");
     expect(sql).toContain("`meta` JSON");
+  });
+});
+
+describe("the per-document columns in a translation table's CREATE", () => {
+  it.each(["collection", "single", undefined] as const)(
+    "declares them for a %s's",
+    kind => {
+      const sql = buildCompanionCreateOnlySql({ ...spec("sqlite"), kind });
+      expect(sql).toContain(`"_revision" integer DEFAULT 1 NOT NULL`);
+      expect(sql).toContain(`"_changed_at"`);
+    }
+  );
+
+  it("leaves them out of a field group's, which is no document", () => {
+    const sql = buildCompanionCreateOnlySql({
+      ...spec("sqlite"),
+      kind: "fieldGroup",
+    });
+    expect(sql).not.toMatch(/_revision|_changed_/);
   });
 });
 
@@ -145,11 +166,11 @@ describe("retained columns that were required", () => {
   it("restates the column to relax it on mysql, which has no direct form", () => {
     const statements = buildLocalizationUpStatements(spec("mysql"), options);
 
-    expect(
-      statements.some(
-        s => s.includes("MODIFY COLUMN `title`") && s.endsWith("NULL")
-      )
-    ).toBe(true);
+    // Restated from the database's own description of the column, so its default, comment,
+    // character set and collation stay as they are and only its nullability changes.
+    const restated = restatedColumn("dc_pages", "title", { nullable: true });
+    expect(statements).toEqual(expect.arrayContaining(restated));
+    expect(statements.join("\n")).not.toMatch(/MODIFY COLUMN `title` \w+ NULL/);
   });
 
   it("drops it on sqlite, which cannot change nullability at all", () => {

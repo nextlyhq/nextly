@@ -396,6 +396,18 @@ describe("moving between a document and its own views", () => {
       "/admin/collections/pages/1/builder?field=hero",
       "/admin/collections/pages/1/builder?field=body",
     ],
+    // The entry screen links each of a page's sections to the view, opened at
+    // that section: the same form answers, whichever part it opens at.
+    [
+      "an entry into its view at one section",
+      "/admin/collections/pages/1",
+      "/admin/collections/pages/1/builder?field=body&section=hero-1",
+    ],
+    [
+      "a view at one section back to its entry",
+      "/admin/collections/pages/1/builder?field=body&section=hero-1",
+      "/admin/collections/pages/1",
+    ],
     // History opens beside the document, with the form still mounted.
     [
       "an entry into its history beside it",
@@ -411,6 +423,19 @@ describe("moving between a document and its own views", () => {
       "a Single into a version in its history",
       "/admin/singles/home",
       "/admin/singles/home?history=1&version=4",
+    ],
+    // A new entry has no id yet, and its own address is the create page: a
+    // part of the form it opens there, by the view's own key, is the same
+    // unsaved entry.
+    [
+      "a new entry to one part of itself",
+      "/admin/collections/pages/create",
+      "/admin/collections/pages/create?section=hero-1",
+    ],
+    [
+      "one part of a new entry back to the whole",
+      "/admin/collections/pages/create?section=hero-1",
+      "/admin/collections/pages/create",
     ],
   ])("stays, without asking, from %s", async (_case, from, to) => {
     // The same page answers both addresses and keeps the same form mounted,
@@ -439,6 +464,16 @@ describe("moving between a document and its own views", () => {
       "a view in another language",
       "/admin/collections/pages/1/builder",
       "/admin/collections/pages/1/builder?locale=de",
+    ],
+    [
+      "another collection's new entry",
+      "/admin/collections/pages/create",
+      "/admin/collections/posts/create?section=hero-1",
+    ],
+    [
+      "a new entry in another language",
+      "/admin/collections/pages/create",
+      "/admin/collections/pages/create?locale=de",
     ],
     [
       // Nothing answers it, so the page that does unmounts the form.

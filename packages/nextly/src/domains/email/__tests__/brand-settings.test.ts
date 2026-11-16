@@ -34,6 +34,8 @@ import {
   EARLIER_BUILT_IN_VERSIONS,
 } from "../services/templates";
 
+import { withReadableMutedText } from "./readable-muted-text";
+
 const body = (htmlContent: string): TemplateFields => ({
   subject: "Hi",
   htmlContent,
@@ -90,7 +92,7 @@ describe("core's built-ins before and after brand settings", () => {
   };
 
   it.each(BUILT_IN_TEMPLATES.map(t => [t.slug, t] as const))(
-    "renders %s exactly as core shipped it before brand settings",
+    "renders %s as core shipped it before brand settings, its muted text aside",
     (slug, template) => {
       const fields = fieldsOf(template);
       // What core shipped before: the template's earlier version, in the
@@ -99,10 +101,22 @@ describe("core's built-ins before and after brand settings", () => {
       const earlier = earlierOf(slug);
       expect(earlier.htmlContent).not.toBe(template.htmlContent);
       const layouts = fields.useLayout
-        ? { before: DEFAULT_LAYOUT_BEFORE_BRAND, after: defaultLayoutTemplate }
+        ? {
+            before: {
+              ...DEFAULT_LAYOUT_BEFORE_BRAND,
+              htmlContent: withReadableMutedText(
+                DEFAULT_LAYOUT_BEFORE_BRAND.htmlContent
+              ),
+            },
+            after: defaultLayoutTemplate,
+          }
         : { before: null, after: null };
       const before = renderTemplate(
-        { ...fields, ...earlier },
+        {
+          ...fields,
+          ...earlier,
+          htmlContent: withReadableMutedText(earlier.htmlContent),
+        },
         layouts.before,
         data,
         { appName: "Nextly" }
@@ -115,7 +129,7 @@ describe("core's built-ins before and after brand settings", () => {
     }
   );
 
-  it("is the layout core shipped before, rendered as itself", () => {
+  it("is the layout core shipped before, its muted text aside, rendered as itself", () => {
     const asLayout = (htmlContent: string): TemplateFields => ({
       ...body(htmlContent),
       kind: "layout",
@@ -127,7 +141,9 @@ describe("core's built-ins before and after brand settings", () => {
       })
     ).toEqual(
       renderTemplate(
-        asLayout(DEFAULT_LAYOUT_BEFORE_BRAND.htmlContent),
+        asLayout(
+          withReadableMutedText(DEFAULT_LAYOUT_BEFORE_BRAND.htmlContent)
+        ),
         null,
         data,
         { appName: "Nextly" }

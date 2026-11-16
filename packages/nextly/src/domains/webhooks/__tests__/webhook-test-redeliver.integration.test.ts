@@ -36,7 +36,10 @@ import {
 import { splitStatements } from "../../schema/pipeline/sql-statement-utils";
 import type { DeliverTransport } from "../deliver";
 import { WebhookEndpointService } from "../services/webhook-endpoint-service";
-import { verifySignature } from "../signing";
+import {
+  standardWebhooks,
+  verifyWebhookDelivery,
+} from "../../../plugins/security/inbound-webhooks";
 import type { WebhookEventType } from "../types";
 
 process.env.DB_DIALECT = "sqlite";
@@ -160,14 +163,14 @@ describe("webhook test-ping + redeliver (real SQLite)", () => {
 
       // The signature is valid for the endpoint's real secret.
       expect(
-        verifySignature({
-          id: calls[0].headers["webhook-id"],
-          timestamp: calls[0].headers["webhook-timestamp"],
-          body: calls[0].body,
-          signatureHeader: calls[0].headers["webhook-signature"],
-          secrets: [secret],
-        })
-      ).toBe(true);
+        verifyWebhookDelivery(
+          {
+            headers: new Headers(calls[0].headers),
+            bytes: new TextEncoder().encode(calls[0].body),
+          },
+          { scheme: standardWebhooks, secrets: [secret] }
+        )
+      ).toMatchObject({ verified: true, body: calls[0].body });
 
       // The probe waits the durable drain's per-request budget, so its verdict
       // predicts real deliverability rather than a more lenient library default.

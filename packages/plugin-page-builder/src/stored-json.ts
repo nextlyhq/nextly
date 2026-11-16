@@ -34,3 +34,29 @@ export function readStoredJson(value: unknown): unknown {
     return undefined;
   }
 }
+
+/**
+ * A JSON value with every object's keys in one order, so two values holding
+ * the same thing compare equal however they were stored: Postgres `jsonb`
+ * reorders keys, and an unchanged set sent back by a form must not read as a
+ * change.
+ */
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map(key => [key, canonical((value as Record<string, unknown>)[key])])
+    );
+  }
+  return value;
+}
+
+/** Whether two stored values hold the same thing, whatever their key order. */
+export function sameStoredValue(a: unknown, b: unknown): boolean {
+  return (
+    JSON.stringify(canonical(a ?? null)) ===
+    JSON.stringify(canonical(b ?? null))
+  );
+}

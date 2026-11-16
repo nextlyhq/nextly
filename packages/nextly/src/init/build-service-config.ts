@@ -12,6 +12,7 @@
 
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import type { NextlyServiceConfig } from "../di/register";
+import { NextlyError } from "../errors/nextly-error";
 import { pluginConsentFromConfig } from "../plugins/plugin-consent";
 import { assertNoLegacyFieldGroupKey } from "../shared/legacy-field-group-key";
 import { consoleLogger } from "../shared/types";
@@ -203,6 +204,26 @@ export function buildServiceConfig(
       serviceConfig.auth = nextlyConfig.auth;
     }
 
+    // The app's password hasher, from its config: every start reads the config,
+    // so a hasher named there is used however Nextly starts (a request to the
+    // route handler starts it without `getNextly`'s options). Two different
+    // hashers, one here and one passed to `getNextly`, would leave the scheme
+    // to whichever start came first, so they are refused.
+    const configHasher = nextlyConfig?.auth?.passwordHasher;
+    if (configHasher) {
+      if (
+        serviceConfig.passwordHasher &&
+        serviceConfig.passwordHasher !== configHasher
+      ) {
+        throw NextlyError.configuration({
+          logMessage:
+            "Two password hashers are configured: `auth.passwordHasher` in the config and " +
+            "`passwordHasher` passed to `getNextly`. Keep the one in the config.",
+        });
+      }
+      serviceConfig.passwordHasher = configHasher;
+    }
+
     // Localization (i18n) - carry the normalized block through so the
     // data-layer services (CollectionQueryService / CollectionMutationService /
     // CollectionsHandler) receive it. Without this, ctx.config.localization is
@@ -211,6 +232,12 @@ export function buildServiceConfig(
     // `nextlyConfig` is a SanitizedNextlyConfig, so this is already normalized.
     if (!serviceConfig.localization && nextlyConfig?.localization) {
       serviceConfig.localization = nextlyConfig.localization;
+    }
+
+    // How each language's address is formed, so a page's address in a
+    // language is answered from the app's declaration.
+    if (!serviceConfig.languageAddresses && nextlyConfig?.languageAddresses) {
+      serviceConfig.languageAddresses = nextlyConfig.languageAddresses;
     }
 
     // Webhook retention — carry the resolved policy through so writes can offer
@@ -254,6 +281,15 @@ export function buildServiceConfig(
       nextlyConfig?.webhookAuditEnabled !== undefined
     ) {
       serviceConfig.webhookAuditEnabled = nextlyConfig.webhookAuditEnabled;
+    }
+
+    // Per-language storage, chosen once for the site: carried so registration publishes the
+    // choice the config makes rather than the default.
+    if (
+      serviceConfig.perLanguageStorage === undefined &&
+      nextlyConfig?.perLanguageStorage !== undefined
+    ) {
+      serviceConfig.perLanguageStorage = nextlyConfig.perLanguageStorage;
     }
   }
 

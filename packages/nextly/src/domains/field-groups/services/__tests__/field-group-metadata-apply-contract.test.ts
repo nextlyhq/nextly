@@ -13,7 +13,7 @@
  * Driven through doubles rather than an engine because the case being described is a query failure
  * at one specific moment, which a real database will not reproduce on request.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
 
 /**
  * Every table the runtime was pointed at, in order.
@@ -23,6 +23,38 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  */
 const bound: string[] = [];
 
+// A Builder save's statements run through the busy-table runner, which waits for a table another
+// session holds; those tries are judged against real databases
+// (`busy-table-parity.integration.test.ts`). Here the save runs as one try that never waits,
+// sending each statement through the double's `executeQuery`, so these stay on the statements
+// the save hands over and the outcome it records.
+vi.mock("../../../schema/busy-table/run-unit", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../schema/busy-table/run-unit")
+  >()),
+  runUnitInTries: (
+    await import("../../../schema/busy-table/__tests__/helpers/run-unit-once")
+  ).runUnitOnce,
+}));
+
+// Whether the created table holds every requested column is judged by the comparison a push makes,
+// tested on its own (`created-table-shape.test.ts`); the double here runs no introspection, so the
+// check answers that nothing was left out and these tests stay on what they inject.
+vi.mock("../../../schema/services/created-table-shape", () => ({
+  columnsTheCreateLeftOut: vi.fn(async () => []),
+  describeColumnsLeftOut: vi.fn(() => ""),
+}));
+
+// A registry write's transaction, and the schema version stored in it, are
+// the integration suite's subject (`schema-version-writers.integration.test.ts`):
+// here a registry write runs on the adapter itself, as it did before it had one.
+vi.mock("../../../schema/schema-version", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../../schema/schema-version")>()),
+  writeRegistryRows: (adapter: unknown, work: (tx: unknown) => unknown) =>
+    work(adapter),
+  writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
+}));
+
 vi.mock("../field-group-table-provisioning", () => ({
   registerComponentRuntimeSchema: vi.fn((_a, _d, tableName: string) => {
     bound.push(tableName);
@@ -31,10 +63,16 @@ vi.mock("../field-group-table-provisioning", () => ({
   // is the state the partial-failure tests below are about; the test that cares about the other
   // answer sets it explicitly rather than letting this double decide.
   reconcileComponentCompanion: vi.fn(async () => true),
-  // The update path probes which discriminator column the existing table carries before it moves
-  // anything. Stubbed to the current spelling: these tests are about which field CHANGES are
-  // accepted, and a real probe would make every one of them a test of the catalog instead.
-  resolveComponentTypeColumn: vi.fn(async () => "type"),
+  // The update path probes the existing table before it moves anything: which discriminator column
+  // it carries, and the columns it holds. Stubbed to the current spelling and to no column listing:
+  // these tests are about which field CHANGES are accepted, and a real probe would make every one
+  // of them a test of the catalog instead. `columns: undefined` is the answer that leaves the
+  // runtime table every declared column (`RuntimeSchemaOptions.heldColumns`), so no fixture here
+  // loses a field to a held-column filter it is not about.
+  resolveComponentTableColumns: vi.fn(async () => ({
+    typeColumn: "type",
+    columns: undefined,
+  })),
 }));
 
 // Enabling localization is gated on the app declaring a `localization` block, and that gate runs
@@ -43,6 +81,16 @@ vi.mock("../field-group-table-provisioning", () => ({
 // rejection. Its own behaviour is covered where it lives.
 vi.mock("../../../i18n/config/require-app-config", () => ({
   assertLocalizationConfigured: vi.fn(),
+}));
+
+// A field made translated has its companion column read before anything changes, to refuse one
+// already there that cannot hold its values. These doubles hold no companion, so the read answers
+// none, as a database without one would; the refusal itself is proven against real databases.
+vi.mock("../../../i18n/runtime/companion-io", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../i18n/runtime/companion-io")
+  >()),
+  liveCompanionColumns: vi.fn(async () => []),
 }));
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -58,6 +106,16 @@ import {
   FieldGroupMetadataService,
   type CreateFieldGroupInput,
 } from "../field-group-metadata-service";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+import { judgeAddress } from "../../../../shared/address-rule";
+import { ADDRESS_CASES } from "../../../../shared/__tests__/helpers/address-cases";
+import { resolveComponentTableName } from "../../../schema/utils/resolve-table-name";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 const logger: Logger = {
   debug: vi.fn(),
@@ -83,6 +141,8 @@ const INPUT: CreateFieldGroupInput = {
 function registryDouble() {
   return {
     getAllComponents: vi.fn().mockResolvedValue([]),
+    // No field group stored, so a save's cycle check finds nothing to close a cycle with.
+    getAllFieldLists: vi.fn().mockResolvedValue([]),
     registerComponent: vi.fn(async (row: unknown) => row),
   };
 }
@@ -103,14 +163,29 @@ function adapterDouble(
   // leaves a SQLite TEXT untouched, and a guard tested on one dialect says nothing about the other.
   dialect: "postgresql" | "mysql" | "sqlite" = "postgresql"
 ) {
+  // The parameter is declared even though nothing here reads it: `entityStatements` reads the
+  // recorded calls, and a mock with no declared parameters records them as an empty tuple.
+  const executeQuery = vi.fn(async (_sql: string) => []);
   return withMigrationLockSurface({
     getCapabilities: () => ({ dialect }),
-    // The parameter is declared even though nothing here reads it: `entityStatements` reads the
-    // recorded calls, and a mock with no declared parameters records them as an empty tuple.
-    executeQuery: vi.fn(async (_sql: string) => []),
-    tableExists: vi.fn(async (name: string) =>
-      name === "nextly_meta" ? false : tableExists()
-    ),
+    // The catalog reads a translation toggle asks of each column (`readColumnExtras`) find no
+    // definition of its own: no comment, character set or collation for a move to lose.
+    getDrizzle: () => ({
+      execute: async () => ({ rows: [] }),
+      all: () => [],
+    }),
+    executeQuery,
+    // Recorded so a refusal can be shown to have dropped nothing.
+    dropTable: vi.fn(async (_table: string) => {}),
+    // Before the create's own DDL, its table is not there, so the leftover probe finds nothing to
+    // clear; after it, the supplied answer governs the verification these tests inject.
+    tableExists: vi.fn(async (name: string) => {
+      if (name === "nextly_meta") return false;
+      const built = executeQuery.mock.calls.some(
+        ([sql]) => !isMigrationLockStatement(sql)
+      );
+      return built ? tableExists() : false;
+    }),
   });
 }
 
@@ -193,6 +268,130 @@ describe("a field-group create records its outcome rather than raising it", () =
 
     // Nothing ran and nothing was written. A refusal that has already touched the table would have
     // rebound the existing field group's storage to this request's fields.
+    expect(entityStatements(adapter)).toEqual([]);
+    expect(registry.registerComponent).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A field group's tables are its main table and its `_locales` translations table. A create that
+ * would share one with another field group is refused before anything runs, since building it
+ * would clear or adopt a table that belongs to the other. An address reading as another's
+ * translations table is refused by the address rule itself; a field group stored before that rule
+ * could still hold one, and creating the field group it reads as is refused by name.
+ */
+describe("a field-group create sharing a table with another's family", () => {
+  it("is refused by the address rule when its main table would be another's translations table", async () => {
+    const registry = registryDouble();
+    registry.getAllComponents.mockResolvedValue([
+      { slug: "hero", tableName: "comp_hero" },
+    ]);
+    const adapter = adapterDouble(async () => true);
+
+    await expect(
+      serviceOver(registry, adapter).createFieldGroup({
+        ...INPUT,
+        slug: "hero-locales",
+        tableName: "comp_hero_locales",
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(entityStatements(adapter)).toEqual([]);
+    expect(adapter.dropTable).not.toHaveBeenCalled();
+  });
+
+  it("is refused by name when its translations table is another's main table", async () => {
+    const registry = registryDouble();
+    registry.getAllComponents.mockResolvedValue([
+      { slug: "hero_locales_legacy", tableName: "comp_hero_locales" },
+    ]);
+    const adapter = adapterDouble(async () => true);
+
+    await expect(
+      serviceOver(registry, adapter).createFieldGroup(INPUT)
+    ).rejects.toMatchObject({
+      code: "DUPLICATE",
+      publicMessage: expect.stringContaining('"hero"'),
+    });
+    expect(entityStatements(adapter)).toEqual([]);
+    expect(adapter.dropTable).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Every field-group create (the Builder, the Direct API, the REST route) reaches this service, so it
+ * judges a new address by the one rule every road shares, before the lock's DDL or any of its own.
+ */
+describe("a field-group create judges its address by the one rule", () => {
+  it.each(ADDRESS_CASES.filter(a => judgeAddress("fieldGroup", a) !== null))(
+    "refuses '%s' with the rule's reason, before any DDL",
+    async address => {
+      const registry = registryDouble();
+      const adapter = adapterDouble(async () => true);
+
+      await expect(
+        serviceOver(registry, adapter).createFieldGroup({
+          ...INPUT,
+          slug: address,
+          tableName: resolveComponentTableName(address),
+        })
+      ).rejects.toMatchObject({
+        publicData: {
+          errors: [
+            {
+              path: "slug",
+              message: judgeAddress("fieldGroup", address)?.message,
+            },
+          ],
+        },
+      });
+      expect(entityStatements(adapter)).toEqual([]);
+      expect(registry.registerComponent).not.toHaveBeenCalled();
+    }
+  );
+
+  it("accepts a hyphen, and names the table from the snake_case form", async () => {
+    const registry = registryDouble();
+    const adapter = adapterDouble(async () => true);
+
+    await serviceOver(registry, adapter).createFieldGroup({
+      ...INPUT,
+      slug: "team-updates",
+      tableName: resolveComponentTableName("team-updates"),
+    });
+
+    expect(registry.registerComponent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slug: "team-updates",
+        tableName: "comp_team_updates",
+      })
+    );
+  });
+
+  it("refuses an address with another field group's snake_case form, naming both", async () => {
+    const registry = registryDouble();
+    registry.getAllComponents.mockResolvedValue([
+      { slug: "team-updates", tableName: "comp_team_updates" },
+    ]);
+    const adapter = adapterDouble(async () => true);
+
+    await expect(
+      serviceOver(registry, adapter).createFieldGroup({
+        ...INPUT,
+        slug: "team_updates",
+        tableName: resolveComponentTableName("team_updates"),
+      })
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          {
+            code: "SLUG_SAME_SNAKE_CASE",
+            message: expect.stringMatching(
+              /'team_updates'.*'team_updates'.*field group 'team-updates'/
+            ),
+          },
+        ],
+      },
+    });
     expect(entityStatements(adapter)).toEqual([]);
     expect(registry.registerComponent).not.toHaveBeenCalled();
   });
@@ -381,8 +580,9 @@ describe("a create whose generated names would not fit is refused", () => {
 /**
  * A registry that returns a stored field group, so an UPDATE can be driven through the service.
  *
- * `getComponent` is what the update re-reads inside the exclusion to re-establish its preconditions,
- * so it decides both the old field set the diff is taken against and whether the group is localized.
+ * `getComponentForWrite` is what the update re-reads inside the exclusion to re-establish its
+ * preconditions, so it decides both the old field set the diff is taken against and whether the
+ * group is localized.
  */
 function registryWithGroup(args: {
   fields: { name: string; type: string; localized?: boolean }[];
@@ -398,8 +598,10 @@ function registryWithGroup(args: {
   };
   return {
     getAllComponents: vi.fn().mockResolvedValue([]),
+    // No other field group stored, so a save's cycle check finds nothing to close a cycle with.
+    getAllFieldLists: vi.fn().mockResolvedValue([]),
     registerComponent: vi.fn(async (row: unknown) => row),
-    getComponent: vi.fn().mockResolvedValue(record),
+    getComponentForWrite: vi.fn().mockResolvedValue(record),
     updateComponent: vi.fn(async () => record),
   };
 }
@@ -1003,8 +1205,10 @@ describe("an update whose row write fails after the tables moved", () => {
     return {
       record,
       getAllComponents: vi.fn().mockResolvedValue([]),
+      // No other field group stored, so a save's cycle check finds nothing to close a cycle with.
+      getAllFieldLists: vi.fn().mockResolvedValue([]),
       registerComponent: vi.fn(async (row: unknown) => row),
-      getComponent: vi.fn().mockResolvedValue(record),
+      getComponentForWrite: vi.fn().mockResolvedValue(record),
       // Fails the real write and accepts the narrow status mark that follows it, which is the whole
       // reason the mark is worth attempting: a single-column update survives the failures that
       // realistically break a full row write.
@@ -1150,7 +1354,7 @@ describe("an update whose row write fails after the tables moved", () => {
         { name: "subheading", type: "text", localized: true },
       ] as never);
     })();
-    registry.getComponent = vi.fn().mockResolvedValue({
+    registry.getComponentForWrite = vi.fn().mockResolvedValue({
       ...registry.record,
       schemaHash: settledHash,
     });
@@ -1222,7 +1426,7 @@ describe("an update whose row write fails after the tables moved", () => {
     // cannot settle the question; read 3 (after the conditional write answered "advanced") sees
     // the row the committed write left. That ordering is the scenario, not an artefact.
     let reads = 0;
-    registry.getComponent = vi.fn(async () => {
+    registry.getComponentForWrite = vi.fn(async () => {
       reads += 1;
       return reads >= 3
         ? { ...registry.record, schemaVersion: 2, schemaHash: settledHash }
@@ -1292,7 +1496,7 @@ describe("an update whose row write fails after the tables moved", () => {
   // have — the exact retry this state exists to declare unsafe.
   it("refuses a schema edit on a field group already marked diverged", async () => {
     const registry = registryWhoseWriteFails({});
-    registry.getComponent = vi
+    registry.getComponentForWrite = vi
       .fn()
       .mockResolvedValue({ ...registry.record, migrationStatus: "diverged" });
     const adapter = adapterDouble(async () => true);
@@ -1327,7 +1531,7 @@ describe("an update whose row write fails after the tables moved", () => {
   // so locking it out would make a diverged field group harder to reconcile rather than safer.
   it("still allows a metadata-only edit while diverged", async () => {
     const registry = registryWhoseWriteFails({});
-    registry.getComponent = vi
+    registry.getComponentForWrite = vi
       .fn()
       .mockResolvedValue({ ...registry.record, migrationStatus: "diverged" });
     registry.updateComponent = vi.fn(
@@ -1359,7 +1563,7 @@ describe("an update whose row write fails after the tables moved", () => {
    */
   it("allows a metadata edit that resends the current localized value", async () => {
     const registry = registryWhoseWriteFails({});
-    registry.getComponent = vi.fn().mockResolvedValue({
+    registry.getComponentForWrite = vi.fn().mockResolvedValue({
       ...registry.record,
       localized: false,
       migrationStatus: "diverged",
@@ -1389,7 +1593,7 @@ describe("an update whose row write fails after the tables moved", () => {
    */
   it("still refuses a localization toggle while diverged", async () => {
     const registry = registryWhoseWriteFails({});
-    registry.getComponent = vi.fn().mockResolvedValue({
+    registry.getComponentForWrite = vi.fn().mockResolvedValue({
       ...registry.record,
       localized: false,
       migrationStatus: "diverged",

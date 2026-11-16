@@ -1,10 +1,11 @@
 /**
  * The owner's notice a stop records, and the one connection it may use.
  *
- * The stop is a transaction; the notice is written in it. Whether the notices
- * table exists is asked before the transaction opens, because the question
- * goes through the pool, and a pool whose only connection the transaction
- * holds would wait for a second one forever.
+ * The stop is a transaction; the notice is written in it, with the job that
+ * emails its copy, so neither can stand without the other. Whether the
+ * notices table exists is asked before the transaction opens, because the
+ * question goes through the pool, and a pool whose only connection the
+ * transaction holds would wait for a second one forever.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -17,15 +18,21 @@ import {
   clearNoticeKindsForTests,
   registerNoticeKind,
 } from "../../notices/notice-kinds";
+import { RELEASE_NOTICE_EMAIL_JOB } from "../release-notice-email";
 import { RELEASE_STOPPED_NOTICE } from "../release-stopped-notice";
 import { ReleasesRepository, type ReleasesDbApi } from "../releases-repository";
 
 afterEach(() => clearNoticeKindsForTests());
 
-/** A database whose pool refuses every question while a transaction is open. */
-function oneConnection(tablePresent = true) {
+/**
+ * A database whose pool refuses every question while a transaction is open.
+ * `kept`, when given, is the id of a notice already standing for the stop.
+ */
+function oneConnection(tablePresent = true, kept?: string) {
   let inTransaction = false;
   const poolAskedInside = vi.fn();
+  /** The jobs written, each with whether a transaction was open. */
+  const jobs: Array<{ row: Record<string, unknown>; inside: boolean }> = [];
   const tx = {
     lockRow: async () => {},
     select: async (
@@ -39,10 +46,13 @@ function oneConnection(tablePresent = true) {
       return [{ title: "Launch", createdBy: "owner" }];
     },
     updateCount: async () => 1,
-    insert: async () => undefined,
+    insert: async (table: string, row: Record<string, unknown>) => {
+      if (table === "nextly_jobs") jobs.push({ row, inside: inTransaction });
+      return undefined;
+    },
     delete: async () => 0,
     upsert: vi.fn(async (_table: string, row: Record<string, unknown>) => ({
-      id: row.id,
+      id: kept ?? row.id,
     })),
   };
   const db = {
@@ -60,7 +70,7 @@ function oneConnection(tablePresent = true) {
       }
     },
   };
-  return { db: db as unknown as ReleasesDbApi, tx, poolAskedInside };
+  return { db: db as unknown as ReleasesDbApi, tx, poolAskedInside, jobs };
 }
 
 describe("stopping a release tells its owner", () => {
@@ -81,6 +91,38 @@ describe("stopping a release tells its owner", () => {
       subjectId: "r1",
       occurrence: "4",
     });
+  });
+
+  it("hands the notice's email on in the stop's transaction", async () => {
+    registerNoticeKind(RELEASE_STOPPED_NOTICE);
+    const { db, tx, jobs } = oneConnection();
+
+    await new ReleasesRepository(db).blockReleases([
+      { id: "r1", scheduledAt: new Date("2020-01-01T00:00:00Z") },
+    ]);
+
+    const noticeId = tx.upsert.mock.calls[0][1].id;
+    expect(jobs).toEqual([
+      {
+        row: expect.objectContaining({
+          slug: RELEASE_NOTICE_EMAIL_JOB,
+          input: { noticeId },
+          state: "pending",
+        }),
+        inside: true,
+      },
+    ]);
+  });
+
+  it("hands no second email on when the stop's notice already stands", async () => {
+    registerNoticeKind(RELEASE_STOPPED_NOTICE);
+    const { db, jobs } = oneConnection(true, "an-earlier-notice");
+
+    await new ReleasesRepository(db).blockReleases([
+      { id: "r1", scheduledAt: new Date("2020-01-01T00:00:00Z") },
+    ]);
+
+    expect(jobs).toEqual([]);
   });
 });
 

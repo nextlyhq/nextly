@@ -61,6 +61,10 @@ type Timeseries = {
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    // The timeline is read as a checked visitor, judged by the Public role a
+    // real boot makes, which reads the collection by its rule. A visitor reads
+    // published rows only, the bound these cases already read under.
+    seedPublic: true,
     collections: [
       defineCollection({
         slug: SLUG,
@@ -77,7 +81,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
 async function draftInScheduledRelease(t: TestNextly): Promise<void> {
   const handler = t.getService("collectionsHandler") as CollectionsHandler;
   const created = await handler.createEntry(
-    { collectionName: SLUG },
+    { collectionName: SLUG, overrideAccess: true },
     { title: "pending", status: "draft", occurredAt: OCCURRED }
   );
   const id = (created.data as { id?: string } | undefined)?.id;

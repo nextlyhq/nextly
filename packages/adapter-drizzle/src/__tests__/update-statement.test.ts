@@ -58,6 +58,7 @@ function build(
     tableObj: pages,
     data: {},
     where: byId("p1"),
+    dialect: "postgresql",
     bindUnmodeled: tagged,
     ...overrides,
   });
@@ -156,6 +157,7 @@ describe("buildUpdateStatement — which columns are written", () => {
         tableObj: posts,
         data: { slug: "a" },
         where: byId("p1"),
+        dialect: "postgresql",
         bindUnmodeled: tagged,
       })!
     );
@@ -230,6 +232,7 @@ describe("buildUpdateStatement — how a declared column binds", () => {
         tableObj: counted,
         data: { slug: "a" },
         where: byId("p1"),
+        dialect: "postgresql",
         bindUnmodeled: tagged,
       })!
     );
@@ -252,6 +255,7 @@ describe("buildUpdateStatement — how a declared column binds", () => {
         tableObj: counted,
         data: { slug: undefined },
         where: byId("p1"),
+        dialect: "postgresql",
         bindUnmodeled: tagged,
       })
     ).toBeNull();
@@ -263,6 +267,7 @@ describe("buildUpdateStatement — how a declared column binds", () => {
         tableObj: counted,
         data: { revision: 1 },
         where: byId("p1"),
+        dialect: "postgresql",
         bindUnmodeled: tagged,
       })!
     );

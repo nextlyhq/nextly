@@ -27,7 +27,7 @@ import {
   versionActor,
   type PartsLabel,
 } from "./history-story-text";
-import { StoryActorName } from "./HistoryStoryRows";
+import { StoryActorName } from "./StoryActorName";
 
 export interface HistoryPinsProps {
   scope: VersionScope;

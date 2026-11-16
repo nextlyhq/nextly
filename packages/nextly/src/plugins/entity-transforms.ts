@@ -116,6 +116,32 @@ export function runEntityTransforms(
   entities: readonly TransformableEntity[],
   contributions: readonly TransformContribution[]
 ): TransformableEntity[] {
+  return transformWithLedgers(entities, contributions).entities;
+}
+
+/** The entities as every transform left them, and who declared their fields. */
+export interface TransformedEntities {
+  entities: TransformableEntity[];
+  /**
+   * `<kind>\u0000<slug>` → field name path (`group.child`) → the plugin that
+   * declared the field, by `extend` or a transform; `undefined` for the
+   * app's own. The ownership ledgers' own record, as the last transform left
+   * it, so what a plugin added can be told without re-running anything.
+   */
+  fieldContributors: ReadonlyMap<
+    string,
+    ReadonlyMap<string, string | undefined>
+  >;
+}
+
+/**
+ * `runEntityTransforms`, with the field ownership the ledgers carried
+ * through it: the one run both answers come from.
+ */
+export function transformWithLedgers(
+  entities: readonly TransformableEntity[],
+  contributions: readonly TransformContribution[]
+): TransformedEntities {
   const bySlug = new Map(
     entities.map(entity => [
       `${entity.kind}\u0000${entity.slug}`,
@@ -136,7 +162,12 @@ export function runEntityTransforms(
     }
   }
 
-  return [...bySlug.values()];
+  return {
+    entities: [...bySlug.values()],
+    fieldContributors: new Map(
+      [...ledgers].map(([key, ledger]) => [key, ledger.fields])
+    ),
+  };
 }
 
 /** The entities one transform targets, or a refusal naming the missing slug. */

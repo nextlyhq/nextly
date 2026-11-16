@@ -9,8 +9,8 @@
 # touching this workflow.
 #
 # Reviews post as `nextly-review-bot[bot]`, a GitHub App of the bot's own, whose
-# key the `review-bot` environment holds for `main` alone. Only this workflow as
-# `main` has it can reach that environment, so nothing a branch runs can post as
+# key the `review-bot` environment holds for `main` and `dev` alone. Only this
+# workflow as those branches have it can reach that environment, so nothing a branch runs can post as
 # the bot, which is what lets the merge queue count its review as the standby's
 # when Codex is held up. The agent itself never holds a token that can write,
 # and never shares a runner with one: it runs in the `review` job, which hands
@@ -156,7 +156,11 @@ jobs:
           # filters enforce is re-checked rather than assumed.
           [ "$state" = open ] || { echo "::error::PR #$NUMBER is $state"; exit 1; }
           [ "$draft" = false ] || { echo "::error::PR #$NUMBER is a draft"; exit 1; }
-          [ "$base" = main ] || { echo "::error::PR #$NUMBER targets $base, not main"; exit 1; }
+          # Pull requests merge into `dev`; promotions and releases go to `main`.
+          case "$base" in
+            main | dev) ;;
+            *) echo "::error::PR #$NUMBER targets $base, not main or dev"; exit 1 ;;
+          esac
           [ "$head_repo" = "$REPO" ] || { echo "::error::PR #$NUMBER comes from a fork"; exit 1; }
           {
             echo "number=$NUMBER"
@@ -218,7 +222,7 @@ jobs:
   # through the same API, needs the second (measured by `code-hygiene.yml`'s
   # post step). The agent never runs in this job, and it checks out the
   # workflow's own gateway alone. The App's key comes from the environment
-  # that admits `main` only, as for `post`.
+  # that admits `main` and `dev` only, as for `post`.
   acknowledge:
     needs: gate
     if: github.event_name == 'issue_comment' && needs.gate.outputs.asked == 'true'
@@ -281,8 +285,9 @@ jobs:
           # the code at a specific head SHA and reports findings against it.
           ref: ${{ needs.gate.outputs.sha }}
           # Full history: the protocol distinguishes PR-introduced defects from
-          # pre-existing ones by comparing against main, and materializing every
-          # ref here means the agent never needs a network-capable git command.
+          # pre-existing ones by comparing against the base branch, and
+          # materializing every ref here means the agent never needs a
+          # network-capable git command.
           fetch-depth: 0
           persist-credentials: false
 
@@ -334,6 +339,9 @@ jobs:
           git ls-files -z | { grep -zE "$instructions" || true; } | xargs -0 -r rm -f --
           git ls-tree -r -z --name-only "origin/$BASE" | { grep -zE "$instructions" || true; } |
             xargs -0 -r git checkout "origin/$BASE" --
+          # The gateway's `base-file` and `line-history base` read the pull
+          # request's own base branch from this ref.
+          git update-ref refs/review/base "origin/$BASE"
           links=$(find . -path ./.git -prune -o -type l -print | wc -l | tr -d ' ')
           if [ "$links" -ne 0 ]; then
             echo "::error::$links symbolic links are still in the checkout"
@@ -357,8 +365,8 @@ jobs:
       #
       # Beside them, in `law/`, go the same commit's copies of the rules the
       # protocol's Phase 1 reads, read-only. A pull request is judged by the
-      # rules as `main` has them, never by a version it rewrote; the change it
-      # makes to a rule is reviewed as a change.
+      # rules as the workflow's own branch has them, never by a version it
+      # rewrote; the change it makes to a rule is reviewed as a change.
       - name: Materialize the reviewer's tooling outside the tree
         env:
           TOOLING: ${{ runner.temp }}/nextly-review-bot
@@ -439,7 +447,7 @@ jobs:
             jq -r '.[] | "diff --git a/\(.previous_filename // .filename) b/\(.filename)",
               (if .status == "added" then "--- /dev/null" else "--- a/\(.previous_filename // .filename)" end),
               (if .status == "removed" then "+++ /dev/null" else "+++ b/\(.filename)" end),
-              (.patch // if .status == "removed" then "GitHub shows no patch for this deleted file: read it as main has it, with base-file" else "GitHub shows no patch for this file (binary, or too large to show): read it with file-at" end)' \
+              (.patch // if .status == "removed" then "GitHub shows no patch for this deleted file: read it as the base branch has it, with base-file" else "GitHub shows no patch for this file (binary, or too large to show): read it with file-at" end)' \
               "$dir/files.json" > "$dir/diff.patch"
           fi
           chmod -R a-w "$dir"
@@ -550,7 +558,7 @@ jobs:
             - Prefetch folder, read-only, fetched just before you started:
               ${{ runner.temp }}/nextly-review-bot/pr/ (pr.json, reviews.json,
               threads.json, diff.patch, files.json)
-            - Law folder, read-only, `main`'s copies of the rules Phase 1
+            - Law folder, read-only, the default branch's copies of the rules Phase 1
               reads: ${{ runner.temp }}/nextly-review-bot/law/
 
             Write the review payload to .nextly-review/review.json, and any
@@ -698,8 +706,8 @@ jobs:
   post:
     needs: [gate, review]
     # The App's key is here and in the two jobs that react, and the environment
-    # admits `main` only: a dispatch from any other branch is refused before a
-    # step runs.
+    # admits `main` and `dev` only: a dispatch from any other branch is refused
+    # before a step runs.
     environment: review-bot
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -882,7 +890,7 @@ jobs:
   # nothing, so the job runs then too, and reacts if the comment asked. As the
   # acknowledgement: the review bot's identity, minted for the same two writes
   # alone, in a job that runs no agent, with the key from the environment that
-  # admits `main` only.
+  # admits `main` and `dev` only.
   report:
     needs: [gate, review, post]
     if: always() && github.event_name == 'issue_comment' && (needs.gate.outputs.run == 'true' || needs.gate.result == 'failure')

@@ -28,6 +28,12 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { classifyForMode } from "../../../domains/schema/pipeline/classifier/modes";
 import type { AddColumnOp } from "../../../domains/schema/pipeline/diff/types";
 import { getCoreSchema } from "../../index";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads while it is collected, before any
+// hook runs; the unit setup loads only the run's own dialect, as an app's
+// adapter would.
+await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
 

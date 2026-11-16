@@ -23,6 +23,14 @@ export interface PageShellProps extends HTMLAttributes<HTMLDivElement> {
    * full-width page is still inset from the panel's edge.
    */
   width?: "form" | "wide" | "full";
+  /**
+   * Where a bounded column sits on a wide screen. `start` (the default) keeps
+   * it under the page's left edge, where the header, the panel and every list
+   * begin, so moving between a list and its form shifts nothing sideways.
+   * `center` balances it between equal gutters. A `full` column fills the row
+   * either way.
+   */
+  align?: "start" | "center";
 }
 
 /**
@@ -154,7 +162,10 @@ export const SHELL_MEASURE: Record<
 export const PageShell: ForwardRefExoticComponent<
   PropsWithoutRef<PageShellProps> & RefAttributes<HTMLDivElement>
 > = forwardRef<HTMLDivElement, PageShellProps>(
-  ({ width = "form", className, children, style, ...props }, ref) => {
+  (
+    { width = "form", align = "start", className, children, style, ...props },
+    ref
+  ) => {
     // The shell's own handle on its node, kept alongside whatever ref the
     // caller passed so the development check below can read the rendered DOM
     // without taking the ref away from them.
@@ -162,11 +173,9 @@ export const PageShell: ForwardRefExoticComponent<
     const attachRef = useCallback(
       (node: HTMLDivElement | null) => {
         shellRef.current = node;
-        // A callback ref's RETURN is the caller's cleanup under React 19, and
-        // React runs it instead of calling the ref again with null. Discarding
-        // it here would silently drop, say, an observer's disconnect. Passing it
-        // straight through is also correct under the React 18 half of this
-        // package's peer range, where such a ref returns nothing.
+        // A callback ref's RETURN is the caller's cleanup, and React runs it
+        // instead of calling the ref again with null. Discarding it here would
+        // silently drop, say, an observer's disconnect.
         if (typeof ref === "function") return ref(node);
         if (ref) ref.current = node;
       },
@@ -249,6 +258,9 @@ export const PageShell: ForwardRefExoticComponent<
         <div
           ref={attachRef}
           data-slot="page-shell"
+          // The grid template reads this: a start-aligned shell gives the
+          // surplus width to the trailing track only.
+          data-align={align}
           // The measure travels as a custom property rather than as a utility
           // class because the grid template reads it: one `grid-template-columns`
           // serves all three widths, instead of three near-identical templates

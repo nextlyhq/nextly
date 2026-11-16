@@ -19,6 +19,7 @@ import {
   applyExtendClauses,
   type BuilderEntities,
   type DeferredExtend,
+  type LeftAloneExtend,
   type SchemaEntityLike,
 } from "./apply-contributions";
 
@@ -67,6 +68,8 @@ export interface ReconcileResult {
   entities: Required<BuilderEntities>;
   /** Targets that are neither code/plugin nor a Builder entity (real typos). */
   unresolved: { target: string; owner: string }[];
+  /** Builder types a scope left as they were, having a field of that name. */
+  leftAlone: LeftAloneExtend[];
 }
 
 /**
@@ -107,5 +110,6 @@ export function reconcileBuilderContributions(
       components: r.fieldGroups,
     },
     unresolved: r.deferred.map(d => ({ target: d.target, owner: d.owner })),
+    leftAlone: r.leftAlone,
   };
 }

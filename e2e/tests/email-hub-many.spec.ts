@@ -10,51 +10,73 @@ import {
   type Page,
 } from "@playwright/test";
 
-import { STORAGE_STATE } from "../global-setup";
-
 import { gotoAdmin } from "./support/admin";
 import { expectOk } from "./support/runtime-collection";
-import { test } from "./support/test";
+import { fileAccount, test } from "./support/test";
+import { LOCK } from "./support/locks";
 
 const COUNT = 200;
 const RUN = Date.now().toString(36);
 const nameOf = (i: number) => `Bulk ${RUN} ${String(i).padStart(3, "0")}`;
 
 // One seeding for the whole file.
-test.describe.configure({ mode: "serial" });
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ mode: "serial", lock: [LOCK.email, LOCK.heavy] });
+
+/**
+ * Seats of this file's account the seeding is spread over. Two hundred creates
+ * and as many deletes are more writes than one account's budget a minute, so
+ * each seat makes and later removes a share of them, well inside it.
+ */
+const SEEDING_SEATS = 4;
 
 let context: BrowserContext;
 let page: Page;
-let api: APIRequestContext;
-const created: string[] = [];
+/** Each seat's request context, with the ids it made. */
+const seeders: Array<{ api: APIRequestContext; created: string[] }> = [];
 
-test.beforeAll(async ({ browser }, testInfo) => {
+test.beforeAll(async ({ browser, playwright }, testInfo) => {
   // Two hundred creates through a dev server.
   test.setTimeout(300_000);
   const baseURL = testInfo.project.use.baseURL;
   if (baseURL === undefined) throw new Error("[e2e] No baseURL configured.");
-  context = await browser.newContext({ baseURL, storageState: STORAGE_STATE });
+  context = await browser.newContext({
+    baseURL,
+    storageState: await fileAccount(baseURL, testInfo),
+  });
   page = await context.newPage();
   await gotoAdmin(page, "");
-  api = page.request;
-  // In batches, so the seeding stays quick without flooding the dev server.
+  for (let seat = 1; seat <= SEEDING_SEATS; seat += 1) {
+    seeders.push({
+      api: await playwright.request.newContext({
+        baseURL,
+        storageState: await fileAccount(baseURL, testInfo, seat),
+      }),
+      created: [],
+    });
+  }
+  // In batches, so the seeding stays quick without flooding the server, each
+  // email through the next seat in turn.
   for (let start = 0; start < COUNT; start += 20) {
     const batch = await Promise.all(
       Array.from({ length: Math.min(20, COUNT - start) }, (_, k) => {
         const i = start + k;
-        return api.post("/admin/api/email-templates", {
-          data: {
-            name: nameOf(i),
-            slug: `bulk-${RUN}-${i}`,
-            subject: `Bulk ${i}`,
-            htmlContent: `<p>Bulk ${i}</p>`,
-          },
-        });
+        const seeder = seeders[i % SEEDING_SEATS];
+        return seeder.api
+          .post("/admin/api/email-templates", {
+            data: {
+              name: nameOf(i),
+              slug: `bulk-${RUN}-${i}`,
+              subject: `Bulk ${i}`,
+              htmlContent: `<p>Bulk ${i}</p>`,
+            },
+          })
+          .then(response => ({ response, seeder }));
       })
     );
-    for (const response of batch) {
+    for (const { response, seeder } of batch) {
       await expectOk(response, "create an email");
-      created.push(
+      seeder.created.push(
         ((await response.json()) as { item: { id: string } }).item.id
       );
     }
@@ -62,15 +84,18 @@ test.beforeAll(async ({ browser }, testInfo) => {
 });
 
 test.afterAll(async () => {
-  for (const id of created) {
-    await api.delete(`/admin/api/email-templates/${id}`);
+  for (const { api, created } of seeders) {
+    for (const id of created) {
+      await api.delete(`/admin/api/email-templates/${id}`);
+    }
+    await api.dispose();
   }
   await context?.close();
 });
 
 test("draws two hundred emails promptly, grouped by owner", async () => {
   const started = Date.now();
-  await gotoAdmin(page, "/email");
+  await gotoAdmin(page, "/settings/email");
   const table = page.getByRole("table", { name: "Emails" });
   await expect(table.getByText(nameOf(COUNT - 1))).toBeVisible({
     timeout: 30_000,
@@ -94,7 +119,7 @@ test("draws two hundred emails promptly, grouped by owner", async () => {
 });
 
 test("search finds any one of them at once", async () => {
-  await gotoAdmin(page, "/email");
+  await gotoAdmin(page, "/settings/email");
   const table = page.getByRole("table", { name: "Emails" });
   await expect(table.getByText(nameOf(0))).toBeVisible({ timeout: 30_000 });
 
@@ -108,7 +133,7 @@ test("search finds any one of them at once", async () => {
 });
 
 test("the owner filter keeps only that owner's emails", async () => {
-  await gotoAdmin(page, "/email");
+  await gotoAdmin(page, "/settings/email");
   const table = page.getByRole("table", { name: "Emails" });
   await expect(table.getByText(nameOf(0))).toBeVisible({ timeout: 30_000 });
 

@@ -8,7 +8,7 @@ import { z } from "zod";
 
 import { PasswordStrengthIndicator } from "@admin/components/shared";
 import { AuthPasswordInput } from "@admin/components/shared/auth/AuthPasswordInput";
-import { passwordSchema } from "@admin/lib/validation";
+import { passwordSchema } from "@admin/lib/password-schema";
 
 /**
  * The form shape behind {@link AuthNewPasswordFields}.

@@ -205,3 +205,36 @@ export function intervalAfter(start: Date, interval: TimeseriesInterval): Date {
 export function bucketStartToDbText(start: Date): string {
   return start.toISOString().replace("T", " ").slice(0, 19);
 }
+
+/**
+ * Where the rows a window counts end, and the interval whose rows its last
+ * interval takes in beside its own.
+ *
+ * A window's intervals end at the start of the interval after its last
+ * (`end`). A caller reading a window that ends now keeps the whole second it is
+ * read in (`rowsEnd`, the widget batch's `openWindowEnd`): a row written in the
+ * last fraction of a second before an interval boundary is stored by MySQL
+ * rounded to that boundary, in the next interval, and would otherwise be kept
+ * by the row filter and dropped by the series. Such a row is counted in the
+ * window's last interval, where a dialect keeping milliseconds counts it.
+ *
+ * `rowsEnd` past `end` moves the rows' end to it, never past the interval after
+ * `end`, and names that interval as the one folded into the last
+ * (`foldedStart`). At or before `end`, or absent, the rows end at `end` and
+ * nothing is folded.
+ */
+export function windowRowsEnd(
+  lastStart: Date,
+  interval: TimeseriesInterval,
+  rowsEnd: Date | undefined
+): { end: Date; foldedStart?: Date } {
+  const end = intervalAfter(lastStart, interval);
+  if (rowsEnd === undefined || rowsEnd.getTime() <= end.getTime()) {
+    return { end };
+  }
+  const cap = intervalAfter(end, interval);
+  return {
+    end: new Date(Math.min(rowsEnd.getTime(), cap.getTime())),
+    foldedStart: end,
+  };
+}

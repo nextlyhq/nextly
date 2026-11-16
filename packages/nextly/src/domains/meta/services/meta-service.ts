@@ -2,10 +2,8 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, sql, type Column, type SQL } from "drizzle-orm";
 
+import { loadedDialect } from "../../../database/dialect-tables";
 import { NextlyError } from "../../../errors/nextly-error";
-import { nextlyMeta as nextlyMetaMysql } from "../../../schemas/nextly-meta/mysql";
-import { nextlyMeta as nextlyMetaPg } from "../../../schemas/nextly-meta/postgres";
-import { nextlyMeta as nextlyMetaSqlite } from "../../../schemas/nextly-meta/sqlite";
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
 import { affectedRowCount } from "../../auth/services/auth-service";
@@ -63,9 +61,9 @@ export class MetaService extends BaseService {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private get table(): any {
     const d = this.dialect;
-    if (d === "postgresql") return nextlyMetaPg;
-    if (d === "mysql") return nextlyMetaMysql;
-    return nextlyMetaSqlite;
+    // The loaded dialect's own table, so only that dialect's file is
+    // imported; `createAdapter` loads it.
+    return loadedDialect(d).tables.nextlyMeta;
   }
 
   // Drizzle handle. BaseService already exposes `this.db` via its
@@ -78,6 +76,15 @@ export class MetaService extends BaseService {
   }
 
   /**
+   * The handle a statement runs on: a transaction's own Drizzle executor where
+   * the caller is inside one, so the statement commits or rolls back with it
+   * and runs on its connection, else the pooled one.
+   */
+  private on(executor?: unknown): MetaService["drizzle"] {
+    return executor ?? this.drizzle;
+  }
+
+  /**
    * Read a key together with whether a row for it exists at all.
    *
    * `get` collapses three different situations onto `null`: no row, a row whose
@@ -85,13 +92,26 @@ export class MetaService extends BaseService {
    * Callers for which "absent" and "present but carrying nothing readable" mean
    * different things must use this instead, because for them the difference
    * decides whether it is safe to proceed.
+   *
+   * With `lock`, on a transaction's `executor`, the row is read locked for
+   * update on PostgreSQL and MySQL (SQLite has one writer), so a caller that
+   * decides from the value and then writes it is not overtaken by another
+   * transaction doing the same. A missing row locks nothing.
    */
-  async getEntry<T = unknown>(key: string): Promise<MetaEntry<T>> {
-    const rows = await this.drizzle
+  async getEntry<T = unknown>(
+    key: string,
+    executor?: unknown,
+    options: { lock?: boolean } = {}
+  ): Promise<MetaEntry<T>> {
+    const query = this.on(executor)
       .select()
       .from(this.table)
       .where(eq(this.table.key, key))
       .limit(1);
+    const rows =
+      options.lock === true && this.dialect !== "sqlite"
+        ? await query.for("update")
+        : await query;
     if (rows.length === 0) return { present: false };
     const raw = rows[0].value as string | null;
     if (raw === null || raw === undefined)
@@ -106,27 +126,33 @@ export class MetaService extends BaseService {
 
   // Delegates so there is one query and one decoding path; an absent row and a
   // row carrying no value both read as `null`, as callers of `get` expect.
-  async get<T = unknown>(key: string): Promise<T | null> {
-    const entry = await this.getEntry<T>(key);
+  async get<T = unknown>(key: string, executor?: unknown): Promise<T | null> {
+    const entry = await this.getEntry<T>(key, executor);
     return entry.present ? entry.value : null;
   }
 
-  async set(key: string, value: unknown): Promise<void> {
+  /**
+   * Store `value` under `key`, on `executor` where given (a transaction's own
+   * Drizzle handle, so the write commits or rolls back with it), else on the
+   * pooled one.
+   */
+  async set(key: string, value: unknown, executor?: unknown): Promise<void> {
     const serialised = JSON.stringify(value);
     const now = new Date();
-    const existing = await this.drizzle
+    const db = this.on(executor);
+    const existing = await db
       .select({ key: this.table.key })
       .from(this.table)
       .where(eq(this.table.key, key))
       .limit(1);
 
     if (existing.length > 0) {
-      await this.drizzle
+      await db
         .update(this.table)
         .set({ value: serialised, updatedAt: now })
         .where(eq(this.table.key, key));
     } else {
-      await this.drizzle
+      await db
         .insert(this.table)
         .values({ key, value: serialised, updatedAt: now });
     }
@@ -150,8 +176,12 @@ export class MetaService extends BaseService {
    * Says nothing about who won, deliberately. A caller that needs to know reads the row afterwards
    * and decides from its contents, which also covers losing to a caller that wrote the same value.
    */
-  async insertIfAbsent(key: string, value: unknown): Promise<void> {
-    const insert = this.drizzle
+  async insertIfAbsent(
+    key: string,
+    value: unknown,
+    executor?: unknown
+  ): Promise<void> {
+    const insert = this.on(executor)
       .insert(this.table)
       .values({ key, value: JSON.stringify(value), updatedAt: new Date() });
     if (typeof insert.onConflictDoNothing === "function") {
@@ -193,14 +223,15 @@ export class MetaService extends BaseService {
   async compareAndSet(
     key: string,
     expected: unknown,
-    next: unknown
+    next: unknown,
+    executor?: unknown
   ): Promise<boolean> {
     const holdsExpected = metaValueEquals(
       this.table,
       JSON.stringify(expected),
       this.dialect
     );
-    const result = await this.drizzle
+    const result = await this.on(executor)
       .update(this.table)
       .set({ value: JSON.stringify(next), updatedAt: new Date() })
       .where(and(eq(this.table.key, key), holdsExpected));

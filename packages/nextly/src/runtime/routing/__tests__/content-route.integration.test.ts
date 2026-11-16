@@ -2,7 +2,7 @@
  * `createContentRoute` against a real boot: `generateStaticParams` lists
  * published paths (segmented, drafts excluded), the page renders a resolved
  * entry, a genuine miss and a reserved path trigger `notFound`, and
- * `generateMetadata` maps the resolved entry.
+ * `generateMetadata` maps the resolved entry and answers a miss as not found.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -14,10 +14,15 @@ import {
 import { createContentRoute, createPublicContentRoute } from "../content-route";
 import type { ContentEntry } from "../resolve-content";
 
+/**
+ * Content anyone may read: its read rule answers `true`, so boot seeding
+ * grants the Public role its read, which a visitor's page read needs.
+ */
 const pages = () =>
   defineCollection({
     slug: "pages",
     status: true,
+    access: { read: () => true },
     fields: [text({ name: "slug" }), text({ name: "title" })],
   });
 
@@ -72,11 +77,15 @@ describe("createContentRoute (integration)", () => {
     // `pages` has the lifecycle (filtered to published); `docs` is status-less
     // with its OWN `status` field. The lifecycle-aware `status` scope filters
     // `pages` but is a no-op on `docs`, so both are served correctly by one route.
+    // The access-enforced route reads as a visitor, judged by the Public role
+    // a real boot makes, which reads both collections by their rules.
     current = await createTestNextly({
+      seedPublic: true,
       collections: [
         pages(),
         defineCollection({
           slug: "docs",
+          access: { read: () => true },
           fields: [
             text({ name: "slug" }),
             text({ name: "title" }),
@@ -191,7 +200,12 @@ describe("createContentRoute (integration)", () => {
   });
 
   it("renders a resolved entry via the render callback", async () => {
-    current = await createTestNextly({ collections: [pages()] });
+    // The access-enforced route reads as a visitor, judged by the Public
+    // role a real boot makes, which reads `pages` by its rule.
+    current = await createTestNextly({
+      collections: [pages()],
+      seedPublic: true,
+    });
     await seed(current.nextly);
 
     const rendered = await route(current.nextly).ContentPage({
@@ -201,7 +215,12 @@ describe("createContentRoute (integration)", () => {
   });
 
   it("awaits an async render callback (no nested promise)", async () => {
-    current = await createTestNextly({ collections: [pages()] });
+    // The access-enforced route reads as a visitor, judged by the Public
+    // role a real boot makes, which reads `pages` by its rule.
+    current = await createTestNextly({
+      collections: [pages()],
+      seedPublic: true,
+    });
     await seed(current.nextly);
     // An async render must resolve to the awaited value, not a Promise of one.
     const rendered = await createContentRoute({
@@ -230,16 +249,23 @@ describe("createContentRoute (integration)", () => {
     ).rejects.toThrow();
   });
 
-  it("maps the resolved entry in generateMetadata, and returns {} on a miss", async () => {
-    current = await createTestNextly({ collections: [pages()] });
+  it("maps the resolved entry in generateMetadata, and answers a miss as not found", async () => {
+    // The access-enforced route reads as a visitor, judged by the Public
+    // role a real boot makes, which reads `pages` by its rule.
+    current = await createTestNextly({
+      collections: [pages()],
+      seedPublic: true,
+    });
     await seed(current.nextly);
     const { generateMetadata } = route(current.nextly);
 
     expect(await generateMetadata({ params: { slug: ["about"] } })).toEqual({
       title: "About",
     });
-    expect(await generateMetadata({ params: { slug: ["missing"] } })).toEqual(
-      {}
-    );
+    // A miss answers its head as not found, so a crawler, answered once the
+    // head is ready, gets a 404 rather than a 200 with a not-found body.
+    await expect(
+      generateMetadata({ params: { slug: ["missing"] } })
+    ).rejects.toThrow(/NEXT_HTTP_ERROR_FALLBACK;404/);
   });
 });

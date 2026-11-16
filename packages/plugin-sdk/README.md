@@ -41,12 +41,12 @@ discoverable, and declare a `nextly` core-compatibility range (see below).
 
 ## Entry points
 
-| Import                         | Use it for                                                                                                         | Needs React?        |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------ | ------------------- |
-| `@nextlyhq/plugin-sdk`         | `definePlugin`, the `contributes`/`ctx`/hook/event/filter types, `PermissionSlug`/`EventName`, `secret()`          | No (Node-safe)      |
-| `@nextlyhq/plugin-sdk/testing` | `createTestNextly` — boot a real Nextly on in-memory SQLite for integration tests                                  | No                  |
-| `@nextlyhq/plugin-sdk/client`  | `useCan` / `<Can>` — client-side permission gating in admin components                                             | Yes (optional peer) |
-| `@nextlyhq/plugin-sdk/admin`   | `registerComponent(s)` / `registerKnownPlugin` — register the React components your `contributes.admin` references | Yes (optional peer) |
+| Import                         | Use it for                                                                                                                       | Needs React?        |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| `@nextlyhq/plugin-sdk`         | `definePlugin`, the `contributes`/`ctx`/hook/event/filter types, `PermissionSlug`/`EventName`, `secret()`                        | No (Node-safe)      |
+| `@nextlyhq/plugin-sdk/testing` | `createTestNextly` — boot a real Nextly on in-memory SQLite for integration tests                                                | No                  |
+| `@nextlyhq/plugin-sdk/client`  | `useCan` / `<Can>` — client-side permission gating in admin components                                                           | Yes (optional peer) |
+| `@nextlyhq/plugin-sdk/admin`   | `registerComponent(s)` — register the React components your `contributes.admin` references (`registerKnownPlugin` is deprecated) | Yes (optional peer) |
 
 The default `.` entry is React-free, so a plugin with no admin UI never pulls
 React into a Node context.

@@ -10,7 +10,11 @@
  */
 
 import { runWithAccessMemo } from "../../auth/access/request-memo";
-import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import { readsAsVisitor } from "../../auth/access/resolve-actor";
+import {
+  scopeHoldsSuperAdmin,
+  type AuthenticatedScope,
+} from "../../auth/authenticated-scope";
 import {
   authorizeCaller,
   authorizeCallerForAny,
@@ -18,17 +22,27 @@ import {
   type AuthContext,
 } from "../../auth/middleware";
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
+import { refusedInsideNamedQuery } from "../../auth/named-query-scope";
 import { runAsPrincipal } from "../../auth/principal-scope";
 import type { RequestActor } from "../../auth/request-actor";
+import { visitorReadsSystemResource } from "../../auth/resource-readable";
+import {
+  builtInMarkOf,
+  isAssignableRole,
+} from "../../domains/auth/services/public-role";
 import {
   roleChangeCallerFor,
   runAsRoleChangeCaller,
 } from "../../domains/auth/services/role-change-caller";
-import type { RouteGrant } from "../../domains/auth/system-write-policy";
+import {
+  SYSTEM_READ_POLICY,
+  type RouteGrant,
+} from "../../domains/auth/system-write-policy";
 import { withCurrentLanguages } from "../../domains/i18n/configured-locales";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
 import { assertRunnableAsPrincipal } from "../../plugins/principals/run-as";
+import { withCurrentSchema } from "../../route-handler/schema-version";
 import type { TrustBound } from "../../services/collections/trust-grant";
 import type { RequestContext } from "../../shared/types/index";
 import type {
@@ -83,6 +97,9 @@ export async function runAsCaller<
   args: A,
   operation: (args: A) => Promise<R>
 ): Promise<R> {
+  // The definitions follow the stored schema version first, as a REST
+  // request's do, so a process that serves no requests still reads a field
+  // added elsewhere (`withCurrentSchema`).
   // One language list for the whole call, as a REST request has: the list is
   // brought up to date first, so a process that serves no requests still sees
   // a language added elsewhere, and a change made while the call runs reaches
@@ -91,14 +108,21 @@ export async function runAsCaller<
   // One memo of access lookups for the call, so a list whose field rules ask
   // about the caller on every row looks the caller up once. A call made inside
   // a request shares that request's memo.
-  return withCurrentLanguages(() =>
-    runWithAccessMemo(() => runAsCallerInMemo(defaultConfig, args, operation))
+  // Inside a page builder named query's run, no call is made: the query
+  // reads only through the reader it is handed, whose reads leave the frame.
+  const refused = refusedInsideNamedQuery("a collection or Single operation");
+  if (refused !== undefined) throw refused;
+  return withCurrentSchema(() =>
+    withCurrentLanguages(() =>
+      runWithAccessMemo(() => runAsCallerInMemo(defaultConfig, args, operation))
+    )
   );
 }
 
 /**
- * `namespace` with each of its methods run under one language list (`withCurrentLanguages`), as
- * `runAsCaller` runs a collection or Single call: for a namespace whose calls reach content
+ * `namespace` with each of its methods run under one language list (`withCurrentLanguages`), and
+ * on definitions that follow the stored schema version (`withCurrentSchema`), as `runAsCaller`
+ * runs a collection or Single call: for a namespace whose calls reach content
  * without passing through `runAsCaller`, such as a form submission or a field group's change.
  */
 export function withLanguagesPinned<N extends object>(namespace: N): N {
@@ -106,16 +130,28 @@ export function withLanguagesPinned<N extends object>(namespace: N): N {
   return Object.fromEntries(
     members.map(([name, member]) => [
       name,
-      typeof member === "function"
-        ? (...args: unknown[]) =>
-            // Every method of these namespaces returns a promise; wrapped, a value one returned
-            // directly still reaches the caller as a resolved promise.
-            withCurrentLanguages(() =>
-              Promise.resolve(member.apply(namespace, args))
-            )
-        : member,
+      // A namespace inside a namespace (`media.folders`) is pinned the same way.
+      isPlainNamespace(member)
+        ? withLanguagesPinned(member)
+        : typeof member === "function"
+          ? (...args: unknown[]) =>
+              // Every method of these namespaces returns a promise; wrapped, a value one returned
+              // directly still reaches the caller as a resolved promise.
+              withCurrentSchema(() =>
+                withCurrentLanguages(() =>
+                  Promise.resolve(member.apply(namespace, args))
+                )
+              )
+          : member,
     ])
   ) as N;
+}
+
+/** Whether `value` is a plain object of methods, as a namespace inside a namespace is. */
+function isPlainNamespace(value: unknown): value is object {
+  if (typeof value !== "object" || value === null) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function runAsCallerInMemo<A extends DirectAPIConfig & RunAsPrincipal, R>(
@@ -274,6 +310,9 @@ function asRouteCaller(userId: string, access: AccessOptions): AuthContext {
       permissions: [...scope.permissions],
       ...(scope.grants ? { grants: scope.grants } : {}),
       roles: [...(scope.roles ?? [])],
+      // Only a scope authentication made for a super-admin's full-access key
+      // carries that authority; one built by hand or narrowed carries none.
+      keyHoldsSuperAdmin: scopeHoldsSuperAdmin(scope),
     };
   }
   return {
@@ -344,8 +383,10 @@ export async function authorizeChecked(
 ): Promise<void> {
   const decision =
     "anyOf" in grant
-      ? await authorizeCallerForAny(caller, [...grant.anyOf])
+      ? await authorizeCallerForAny(caller, [...grant.anyOf], grant.names)
       : await authorizeCaller(caller, grant.action, grant.resource);
+  // Converting records the refusal: a Direct API call has no route boundary
+  // to log the refusal it throws.
   if (isErrorResponse(decision)) throw toNextlyAuthError(decision);
 }
 
@@ -370,6 +411,34 @@ export async function checkWrite(
  * is read and a trusted one is untouched.
  */
 export const checkRead = checkWrite;
+
+/**
+ * The check a read of media runs first. A checked call naming no user and no
+ * key is a visitor's: judged by the one decision with the Public role's grants
+ * (`read-media`), as REST's media routes judge a request with no credential,
+ * and refused as a call naming nobody is, since signing in could grant it.
+ * Any other call is checked as {@link checkRead} checks it.
+ */
+export async function checkMediaRead(
+  defaultConfig: DirectAPIConfig,
+  args: DirectAPIConfig
+): Promise<void> {
+  const access = accessOptions(
+    mergeConfig(defaultConfig, suppliedByCall(args))
+  );
+  if (
+    access.overrideAccess === false &&
+    access.authenticatedScope === undefined &&
+    readsAsVisitor({ overrideAccess: false, user: access.user?.id })
+  ) {
+    const { resource } = SYSTEM_READ_POLICY.media.read;
+    if (await visitorReadsSystemResource(resource)) return;
+    throw NextlyError.authRequired({
+      logContext: { reason: "visitor-lacks-read-media" },
+    });
+  }
+  await checkRead(defaultConfig, args, SYSTEM_READ_POLICY.media.read);
+}
 
 /**
  * A write that may change who holds which role, run as REST runs it: checked
@@ -629,6 +698,10 @@ export function mapRole(role: RawRoleRecord): Role {
     description: role.description ?? null,
     level: role.level,
     isSystem: Boolean(role.isSystem),
+    // Derived here rather than carried from the read, so a role a create or
+    // update returns says it as a listed one does.
+    assignable: isAssignableRole(role),
+    ...builtInMarkOf(role),
   };
 }
 

@@ -29,7 +29,7 @@ vi.mock("../../../auth/handlers/deps-bridge", () => ({
   }),
 }));
 
-vi.mock("../../../di/register", () => ({ getService: () => ({}) }));
+vi.mock("../../../di/service-access", () => ({ getService: () => ({}) }));
 vi.mock("../../../utils/proxy-trust", () => ({
   readProxyTrustSettings: () => ({ trustProxy: false, trustedProxyIps: [] }),
 }));

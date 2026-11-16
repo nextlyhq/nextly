@@ -37,11 +37,16 @@ import { NextlyError } from "../../errors";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import { entityPermissionSpelling } from "../auth/services/entity-permission-spelling";
-import { documentOfReleaseEvent } from "../releases/release-events";
+import { MIGRATION_TARGET } from "../field-groups/migration/target";
+import {
+  DOCUMENT_EVENT_KINDS,
+  documentOfReleaseEvent,
+} from "../releases/release-events";
 import { releaseMemberKey } from "../releases/release-member-key";
 import { versionPinKey } from "../versions/version-pins";
 import { versionViewKey } from "../versions/version-views";
 import { workingDraftKey } from "../versions/working-draft-key";
+import { reviewStateKey } from "../workflows/review-state-repository";
 
 /** What can be renamed: a collection or a Single. */
 export type RenamedEntityKind = "collection" | "single";
@@ -144,6 +149,11 @@ export interface JsonSlugColumn {
    * entity.
    */
   onlyWhereEqual?: Readonly<Record<string, string>>;
+  /**
+   * Columns that must hold one of these values for a row to be read at all,
+   * in the same statement, for the same reason.
+   */
+  onlyWhereIn?: Readonly<Record<string, readonly string[]>>;
   /** Further columns `names` and `rewrite` are handed, by SQL name. */
   reads?: readonly string[];
   /** The kinds whose slugs the value can name. */
@@ -388,6 +398,28 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     },
   },
   {
+    // A workflow's review state, per document and part. Its key is a digest over the slug, so it
+    // is derived again under the new one.
+    table: "nextly_review_states",
+    slugColumn: "scope_slug",
+    kind: { column: "scope_kind", values: SCOPE_KINDS },
+    onRename: "follow",
+    derived: {
+      rowId: "id",
+      columns: ["part_key"],
+      sources: ["entry_id", "part"],
+      derive: (row, slug) => ({
+        part_key: reviewStateKey({
+          scopeKind:
+            textOf(row, "scope_kind") === "single" ? "single" : "collection",
+          scopeSlug: slug,
+          entryId: textOf(row, "entry_id"),
+          part: textOrNullOf(row, "part"),
+        }),
+      }),
+    },
+  },
+  {
     // The record of content events. Each event's parts are keyed by the
     // event's id, so they move with it.
     table: "nextly_content_events",
@@ -420,6 +452,29 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     table: "nextly_schema_events",
     slugColumn: "scope_slug",
     kind: { column: "scope_kind", values: SCOPE_KINDS },
+    onRename: "follow",
+  },
+  {
+    // Readers' pins of the entity on their dashboards. A pin follows its
+    // target, so every reader keeps what they pinned under the new name.
+    table: "nextly_dashboard_pins",
+    slugColumn: "target_slug",
+    kind: {
+      column: "target_type",
+      values: { collection: ["collection"], single: ["single"] },
+    },
+    onRename: "follow",
+  },
+  {
+    // Which media items the entity's documents use. A row follows its
+    // document, so the item's "Used in" names the entity by its new slug.
+    // An email template's rows carry kind "email-template" and are not moved.
+    table: "nextly_media_usage",
+    slugColumn: "subject_slug",
+    kind: {
+      column: "subject_kind",
+      values: { collection: ["collection"], single: ["single"] },
+    },
     onRename: "follow",
   },
   {
@@ -497,13 +552,6 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     },
   },
   {
-    table: "user_permission_cache",
-    slugColumn: "resource",
-    onRename: "end",
-    reason:
-      'Kept answers to "may this person act on <slug>". Ones about the old slug answer for nothing once it is gone, and would answer for whatever is created there next.',
-  },
-  {
     // Endpoints whose filter lists the collection. A Single never feeds the
     // `collections` filter, so only a collection's rename touches it.
     table: "nextly_webhooks",
@@ -525,11 +573,13 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     // document, so it follows the rename: release history keeps showing the
     // document under its new name and its own access, and an entity later
     // created under the old name is never judged in its place. Only release
-    // events are read.
+    // events about a document are read, by the kinds the history reads them
+    // by.
     table: "nextly_content_events",
     jsonColumn: "payload",
     rowId: "id",
     onlyWhereEqual: { subject_kind: "release" },
+    onlyWhereIn: { kind: [...DOCUMENT_EVENT_KINDS] },
     reads: ["kind"],
     renames: ["collection", "single"],
     onRename: "follow-json",
@@ -616,6 +666,55 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     reason: "A job's own slug.",
   },
 ];
+
+/**
+ * A registry whose rows store field configurations, in its `fields` column: what a relationship
+ * names as its target is a slug inside it (`relationTo`, the Builder shape's `options.target`).
+ * A rename rewrites those targets (`relationship-targets`), and the test that reads the core
+ * schema asks this list about every table with a `fields` column, so a new store of field
+ * configurations can't be left out.
+ */
+export interface StoredFieldConfiguration {
+  table: string;
+  /**
+   * The name the registry takes once its storage is migrated, where it can have another: read
+   * under whichever of the two the database has, as the registry's own storage resolver does.
+   */
+  migratedTable?: string;
+  /** Who made each row: `ui` for the Schema Builder, whose rows a rename may rewrite. */
+  sourceColumn: "source";
+  fieldsColumn: "fields";
+}
+
+/** Every name a declared registry can have: its own, and the one its storage migration gives it. */
+export function storedFieldConfigurationTables(): string[] {
+  return STORED_FIELD_CONFIGURATIONS.flatMap(registry =>
+    registry.migratedTable === undefined
+      ? [registry.table]
+      : [registry.table, registry.migratedTable]
+  );
+}
+
+/** Every registry that stores field configurations: collections, Singles and field groups. */
+export const STORED_FIELD_CONFIGURATIONS: readonly StoredFieldConfiguration[] =
+  [
+    {
+      table: "dynamic_collections",
+      sourceColumn: "source",
+      fieldsColumn: "fields",
+    },
+    {
+      table: "dynamic_singles",
+      sourceColumn: "source",
+      fieldsColumn: "fields",
+    },
+    {
+      table: STORAGE_FORMAT.registryTable,
+      migratedTable: MIGRATION_TARGET.registryTable,
+      sourceColumn: "source",
+      fieldsColumn: "fields",
+    },
+  ];
 
 /** The declared columns a rename moves or deletes rows by, in order. */
 export function renamedSlugColumns(): RenamedSlugColumn[] {

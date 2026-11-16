@@ -18,10 +18,20 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { defineCollection, text } from "../../../config";
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
+import {
+  defineCollection,
+  defineFieldGroup,
+  fieldGroup,
+  text,
+} from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { container } from "../../../di/container";
-import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
+import { decide } from "../../../auth/access/decide";
+import { actorForUser } from "../../../auth/access/resolve-actor";
 import {
   refreshEndpointPresence,
   setWebhookAuditEnabled,
@@ -61,6 +71,11 @@ const BEFOREOP_SLUG = "poolreentrybeforeop";
 // transaction — the binding this fixture exercises. Its teardown also drops the
 // companion table (see `drop`).
 const LOCALIZED_DELETE_SLUG = "poolreentrylocdel";
+// A delete limited by a rule's filter on a field-group value: matching the
+// entry against it resolves the field group's table, which must be read on
+// the caller's transaction too. Its field group is torn down with it.
+const FILTERED_DELETE_SLUG = "poolreentryfiltdel";
+const FILTERED_DELETE_GROUP = "poolreentryseo";
 // A write whose outbox recording gate reads endpoint presence from a
 // synchronous out-of-band flag, never the database, so it takes no connection
 // inside the write transaction.
@@ -78,6 +93,7 @@ const SLUGS = [
   BEFOREOP_SLUG,
   LOCALIZED_DELETE_SLUG,
   GATE_SLUG,
+  FILTERED_DELETE_SLUG,
 ];
 
 type TestAdapter = Awaited<ReturnType<typeof createAdapter>>;
@@ -121,6 +137,19 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+/**
+ * Destroy `handle` within the bound the work had. A transaction the timeout
+ * abandoned can still hold the pool's only connection, and destroying the
+ * handle ends the pool, which waits for that connection: unbounded, the
+ * teardown of a run that already failed would hang it.
+ */
+async function destroyWithin(
+  handle: TestNextly | undefined,
+  ms = 15_000
+): Promise<void> {
+  if (handle) await withTimeout(handle.destroy(), ms);
+}
+
 // A collection whose create/read/update/publish are all allowed for a session
 // editor. Judging each of those still reads the RBAC and metadata tables — the
 // reads that must run on the transaction's own connection.
@@ -137,6 +166,27 @@ function openCollection(slug: string) {
     },
     fields: [text({ name: "title" })],
   });
+}
+
+/**
+ * The editor of one case. Named after its collection, so cases on this shared
+ * database never insert the same user twice; `drop` removes it.
+ */
+function editorOf(slug: string): string {
+  return `editor-${slug}`;
+}
+
+/**
+ * Stores the case's editor. A code rule only narrows the permission, so the
+ * editor holds every action `openCollection` allows on `slug`.
+ */
+async function seatEditor(t: TestNextly, slug: string): Promise<string> {
+  const editor = editorOf(slug);
+  await userWhoMay(t, editor, "create", [slug]);
+  for (const action of ["read", "update", "delete", "publish"]) {
+    await grantTo(t, editor, action, [slug]);
+  }
+  return editor;
 }
 
 const describePg = describe.skipIf(!POSTGRES_URL);
@@ -166,6 +216,9 @@ describePg(
           `DROP TABLE IF EXISTS dc_${slug}_locales`,
           `DROP TABLE IF EXISTS dc_${slug}`,
           `DELETE FROM dynamic_collections WHERE slug = '${slug}'`,
+          // The case's editor and its roles; their grants go with them.
+          `DELETE FROM roles WHERE id IN (SELECT role_id FROM user_roles WHERE user_id = '${editorOf(slug)}')`,
+          `DELETE FROM users WHERE id = '${editorOf(slug)}'`,
         ]) {
           try {
             await boot.executeQuery(stmt);
@@ -184,6 +237,7 @@ describePg(
           adapter,
           collections: [openCollection(GATE_SLUG)],
         });
+        const editor = await seatEditor(handle, GATE_SLUG);
         // Turn the harness's audit default off so the recording gate consults
         // endpoint presence. It reads a synchronous, out-of-band-refreshed flag —
         // NOT the database — so the write never checks out a second connection.
@@ -208,7 +262,7 @@ describePg(
           handle.adapter.transaction(tx =>
             entries.createEntriesInTransaction(
               tx,
-              { collectionName: GATE_SLUG, user: { id: "editor" } },
+              { collectionName: GATE_SLUG, user: { id: editor } },
               [{ title: "t" }]
             )
           ),
@@ -226,7 +280,7 @@ describePg(
         ).length;
         expect(after).toBe(before);
       } finally {
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
 
@@ -244,22 +298,21 @@ describePg(
             }),
           ],
         });
-        const rbac = handle.getService<RBACAccessControlService>(
-          "rbacAccessControlService"
-        );
-
         // Judge a publish transition from INSIDE a caller-owned transaction,
-        // passing the transaction's executor. The RBAC reads run on that
-        // connection; a pooled read would block forever on the second checkout.
+        // reading the user with the transaction's executor, as a gate inside
+        // one does. The role and grant reads run on that connection; a pooled
+        // read would block forever on the second checkout.
         const allowed = await withTimeout(
-          handle.adapter.transaction(tx =>
-            rbac.checkAccess({
-              userId: "editor",
-              operation: "publish",
-              resource: RBAC_SLUG,
+          handle.adapter.transaction(async tx => {
+            const actor = await actorForUser("editor", {
               executor: tx.getDrizzle(),
-            })
-          ),
+            });
+            const decision = await decide(actor, "publish", {
+              kind: "collection",
+              slug: RBAC_SLUG,
+            });
+            return decision.allowed;
+          }),
           15_000
         );
 
@@ -267,7 +320,7 @@ describePg(
         // so publish is denied — the point is the decision was REACHED on the tx.
         expect(allowed).toBe(false);
       } finally {
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
 
@@ -279,6 +332,7 @@ describePg(
           adapter,
           collections: [openCollection(BULK_CREATE_SLUG)],
         });
+        const editor = await seatEditor(handle, BULK_CREATE_SLUG);
         const entries = handle
           .getService<CollectionsHandler>("collectionsHandler")
           .getEntryService() as CollectionEntryService;
@@ -287,7 +341,7 @@ describePg(
           handle.adapter.transaction(tx =>
             entries.createEntriesInTransaction(
               tx,
-              { collectionName: BULK_CREATE_SLUG, user: { id: "editor" } },
+              { collectionName: BULK_CREATE_SLUG, user: { id: editor } },
               [{ title: "t", status: "published" }]
             )
           ),
@@ -302,7 +356,7 @@ describePg(
         );
         expect(row?.status).toBe("published");
       } finally {
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
 
@@ -314,6 +368,7 @@ describePg(
           adapter,
           collections: [openCollection(BULK_UPDATE_SLUG)],
         });
+        const editor = await seatEditor(handle, BULK_UPDATE_SLUG);
         const h = handle.getService<CollectionsHandler>("collectionsHandler");
         const entries = h.getEntryService() as CollectionEntryService;
         const created = await h.createEntry(
@@ -326,8 +381,19 @@ describePg(
           handle.adapter.transaction(tx =>
             entries.updateEntriesInTransaction(
               tx,
-              { collectionName: BULK_UPDATE_SLUG, user: { id: "editor" } },
-              [{ id, data: { title: "changed", status: "published" } }]
+              { collectionName: BULK_UPDATE_SLUG, user: { id: editor } },
+              // Over whatever is stored: what this pins is where the write's
+              // reads run, not the version it was made from.
+              [
+                {
+                  id,
+                  data: {
+                    title: "changed",
+                    status: "published",
+                    _overwrite: true,
+                  },
+                },
+              ]
             )
           ),
           15_000
@@ -341,7 +407,7 @@ describePg(
         );
         expect(row?.status).toBe("published");
       } finally {
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
 
@@ -353,6 +419,7 @@ describePg(
           adapter,
           collections: [openCollection(DIRECT_CREATE_SLUG)],
         });
+        const editor = await seatEditor(handle, DIRECT_CREATE_SLUG);
         const entries = handle
           .getService<CollectionsHandler>("collectionsHandler")
           .getEntryService() as CollectionEntryService;
@@ -361,7 +428,7 @@ describePg(
           handle.adapter.transaction(tx =>
             entries.createEntryInTransaction(
               tx,
-              { collectionName: DIRECT_CREATE_SLUG, user: { id: "editor" } },
+              { collectionName: DIRECT_CREATE_SLUG, user: { id: editor } },
               { title: "t", status: "published" }
             )
           ),
@@ -375,7 +442,7 @@ describePg(
         );
         expect(row?.status).toBe("published");
       } finally {
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
 
@@ -387,6 +454,7 @@ describePg(
           adapter,
           collections: [openCollection(DIRECT_UPDATE_SLUG)],
         });
+        const editor = await seatEditor(handle, DIRECT_UPDATE_SLUG);
         const h = handle.getService<CollectionsHandler>("collectionsHandler");
         const entries = h.getEntryService() as CollectionEntryService;
         const created = await h.createEntry(
@@ -402,9 +470,10 @@ describePg(
               {
                 collectionName: DIRECT_UPDATE_SLUG,
                 entryId: id,
-                user: { id: "editor" },
+                user: { id: editor },
               },
-              { title: "changed", status: "published" }
+              // Over whatever is stored, as in the bulk case above.
+              { title: "changed", status: "published", _overwrite: true }
             )
           ),
           15_000
@@ -417,7 +486,7 @@ describePg(
         );
         expect(row?.status).toBe("published");
       } finally {
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
 
@@ -429,6 +498,7 @@ describePg(
           adapter,
           collections: [openCollection(HOOK_SLUG)],
         });
+        const editor = await seatEditor(handle, HOOK_SLUG);
         // Configure the built-in `unique-validation` stored hook on `title`. It
         // runs on `beforeChange` and calls `context.queryDatabase`, which reads
         // the collection to check for a duplicate — the read that must run on
@@ -463,7 +533,7 @@ describePg(
           handle.adapter.transaction(tx =>
             entries.createEntriesInTransaction(
               tx,
-              { collectionName: HOOK_SLUG, user: { id: "editor" } },
+              { collectionName: HOOK_SLUG, user: { id: editor } },
               [{ title: "fresh", status: "draft" }]
             )
           ),
@@ -473,7 +543,7 @@ describePg(
         expect(result.successful).toBe(1);
         expect(result.failed).toBe(0);
       } finally {
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
 
@@ -499,6 +569,7 @@ describePg(
           adapter,
           collections: [openCollection(AFTER_HOOK_SLUG)],
         });
+        const editor = await seatEditor(handle, AFTER_HOOK_SLUG);
         // Registered AFTER boot: createTestNextly resets the hook registry on
         // startup, and the running services share that same singleton registry.
         registerHook("afterCreate", AFTER_HOOK_SLUG, afterHook);
@@ -510,7 +581,7 @@ describePg(
           handle.adapter.transaction(tx =>
             entries.createEntriesInTransaction(
               tx,
-              { collectionName: AFTER_HOOK_SLUG, user: { id: "editor" } },
+              { collectionName: AFTER_HOOK_SLUG, user: { id: editor } },
               [{ title: "t", status: "draft" }]
             )
           ),
@@ -521,7 +592,7 @@ describePg(
         expect(result.failed).toBe(0);
       } finally {
         unregisterHook("afterCreate", AFTER_HOOK_SLUG, afterHook);
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
 
@@ -545,6 +616,7 @@ describePg(
           adapter,
           collections: [openCollection(DELETE_SLUG)],
         });
+        const editor = await seatEditor(handle, DELETE_SLUG);
         registerHook("beforeDelete", DELETE_SLUG, beforeDeleteHook);
         const h = handle.getService<CollectionsHandler>("collectionsHandler");
         const entries = h.getEntryService() as CollectionEntryService;
@@ -558,7 +630,7 @@ describePg(
           handle.adapter.transaction(tx =>
             entries.deleteEntriesInTransaction(
               tx,
-              { collectionName: DELETE_SLUG, user: { id: "editor" } },
+              { collectionName: DELETE_SLUG, user: { id: editor } },
               [id]
             )
           ),
@@ -569,7 +641,82 @@ describePg(
         expect(result.failed).toBe(0);
       } finally {
         unregisterHook("beforeDelete", DELETE_SLUG, beforeDeleteHook);
-        await handle?.destroy();
+        await destroyWithin(handle);
+      }
+    }, 30_000);
+
+    it("completes, refused, a delete its rule's filter limits by a field-group value, inside a caller-owned transaction", async () => {
+      const adapter = await connectSingleConnection();
+      let handle: TestNextly | undefined;
+      try {
+        // The rule's filter names a field-group path, so preparing the match
+        // resolves that group's table: on a pooled read it would wait here for
+        // the one connection the transaction holds. Such a filter is then
+        // refused as one that is not well formed, so the delete answers, and
+        // refuses, rather than hanging.
+        const metaTitleIsMine = () =>
+          ({
+            "seo.metaTitle": { equals: "mine" },
+          }) as unknown as boolean;
+        handle = await createTestNextly({
+          adapter,
+          fieldGroups: [
+            defineFieldGroup({
+              slug: FILTERED_DELETE_GROUP,
+              fields: [text({ name: "metaTitle" })],
+            }),
+          ],
+          collections: [
+            defineCollection({
+              slug: FILTERED_DELETE_SLUG,
+              access: {
+                read: () => true,
+                delete: metaTitleIsMine,
+              },
+              fields: [
+                text({ name: "title" }),
+                fieldGroup({ name: "seo", component: FILTERED_DELETE_GROUP }),
+              ],
+            }),
+          ],
+        });
+        const editor = await seatEditor(handle, FILTERED_DELETE_SLUG);
+        const h = handle.getService<CollectionsHandler>("collectionsHandler");
+        const entries = h.getEntryService() as CollectionEntryService;
+        const created = await h.createEntry(
+          { collectionName: FILTERED_DELETE_SLUG, overrideAccess: true },
+          { title: "doomed", seo: { metaTitle: "mine" } }
+        );
+        const id = (created.data as { id: string }).id;
+
+        const result = await withTimeout(
+          handle.adapter.transaction(tx =>
+            entries.deleteEntryInTransaction(tx, {
+              collectionName: FILTERED_DELETE_SLUG,
+              entryId: id,
+              user: { id: editor },
+            })
+          ),
+          15_000
+        );
+
+        // Refused in words: the caller may read the entry, and the filter
+        // matches nothing.
+        expect(result.success).toBe(false);
+        expect(result.statusCode).toBe(403);
+      } finally {
+        await destroyWithin(handle);
+        for (const stmt of [
+          `DROP TABLE IF EXISTS comp_${FILTERED_DELETE_GROUP}`,
+          `DELETE FROM dynamic_components WHERE slug = '${FILTERED_DELETE_GROUP}'`,
+          `DELETE FROM dynamic_field_groups WHERE slug = '${FILTERED_DELETE_GROUP}'`,
+        ]) {
+          try {
+            await boot?.executeQuery(stmt);
+          } catch {
+            // Best-effort: a registry this database does not carry.
+          }
+        }
       }
     }, 30_000);
 
@@ -581,6 +728,7 @@ describePg(
           adapter,
           collections: [openCollection(DIRECT_DELETE_SLUG)],
         });
+        const editor = await seatEditor(handle, DIRECT_DELETE_SLUG);
         const h = handle.getService<CollectionsHandler>("collectionsHandler");
         const entries = h.getEntryService() as CollectionEntryService;
         const created = await h.createEntry(
@@ -596,7 +744,7 @@ describePg(
             entries.deleteEntryInTransaction(tx, {
               collectionName: DIRECT_DELETE_SLUG,
               entryId: id,
-              user: { id: "editor" },
+              user: { id: editor },
             })
           ),
           15_000
@@ -606,7 +754,7 @@ describePg(
           true
         );
       } finally {
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
 
@@ -628,6 +776,7 @@ describePg(
           adapter,
           collections: [openCollection(BEFOREOP_SLUG)],
         });
+        const editor = await seatEditor(handle, BEFOREOP_SLUG);
         registerBeforeOperationHook(BEFOREOP_SLUG, beforeOpHook);
         const entries = handle
           .getService<CollectionsHandler>("collectionsHandler")
@@ -637,7 +786,7 @@ describePg(
           handle.adapter.transaction(tx =>
             entries.createEntriesInTransaction(
               tx,
-              { collectionName: BEFOREOP_SLUG, user: { id: "editor" } },
+              { collectionName: BEFOREOP_SLUG, user: { id: editor } },
               [{ title: "t", status: "draft" }]
             )
           ),
@@ -648,7 +797,7 @@ describePg(
         expect(result.failed).toBe(0);
       } finally {
         unregisterBeforeOperationHook(BEFOREOP_SLUG, beforeOpHook);
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
 
@@ -680,6 +829,7 @@ describePg(
           ],
           localization: { locales: ["en", "de"], defaultLocale: "en" },
         });
+        const editor = await seatEditor(handle, LOCALIZED_DELETE_SLUG);
         const h = handle.getService<CollectionsHandler>("collectionsHandler");
         const entries = h.getEntryService() as CollectionEntryService;
         const created = await h.createEntry(
@@ -696,7 +846,7 @@ describePg(
           handle.adapter.transaction(tx =>
             entries.deleteEntriesInTransaction(
               tx,
-              { collectionName: LOCALIZED_DELETE_SLUG, user: { id: "editor" } },
+              { collectionName: LOCALIZED_DELETE_SLUG, user: { id: editor } },
               [id]
             )
           ),
@@ -706,7 +856,7 @@ describePg(
         expect(result.successful).toBe(1);
         expect(result.failed).toBe(0);
       } finally {
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
   }

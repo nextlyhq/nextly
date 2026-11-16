@@ -17,6 +17,7 @@ import {
   useEmailTemplate,
   useUpdateEmailTemplate,
 } from "@admin/hooks/queries/useEmailTemplates";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useRouter } from "@admin/hooks/useRouter";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
@@ -52,6 +53,8 @@ export default function EditEmailTemplatePage(): JSX.Element {
     isLoading,
     error: fetchError,
   } = useEmailTemplate(templateId || undefined);
+  // The tab names the email being edited once it has arrived.
+  useDocumentTitle(template?.name);
 
   const { mutate: updateTemplate, isPending } = useUpdateEmailTemplate();
 

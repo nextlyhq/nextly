@@ -183,11 +183,15 @@ const CommandDialog = ({
           {...contentProps}
           data-slot="command-content"
           className={cn(
-            // Position
-            "fixed left-[50%] top-[50%] z-[100] translate-x-[-50%] translate-y-[-50%]",
+            // Position: pinned near the top rather than centred, so the search
+            // box stays where the eye is as the results grow and shrink. A
+            // centred dialog re-centres on every keystroke and moves the input
+            // out from under the cursor.
+            "fixed left-[50%] top-[13vh] z-[100] translate-x-[-50%]",
             // Size - responsive
             "w-full max-w-lg",
-            "max-h-[85vh]", // Slightly shorter than design spec to ensure safe area
+            // What is left below the pinned top, less a margin at the bottom.
+            "max-h-[80vh]",
             // Mobile adjustments
             "sm:max-w-lg", // 512px on desktop
             "max-w-full", // Full width on mobile
@@ -200,7 +204,7 @@ const CommandDialog = ({
             "data-[state=open]:animate-in data-[state=closed]:animate-out",
             "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
             "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
-            "data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-top-[48%]"
+            "data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2"
           )}
         >
           <Command
@@ -407,9 +411,12 @@ const CommandItem: ForwardRefExoticComponent<
         "transition-all duration-200 ease-(--ease-premium)",
         // Hover state - shared dashboard hover treatment
         "hover-unified",
-        // Selected/focused state (keyboard navigation)
-        "aria-selected:bg-primary/5 aria-selected:text-primary",
-        "data-[selected=true]:bg-primary/5 data-[selected=true]:text-primary",
+        // Selected/focused state (keyboard navigation): the primary's tint
+        // marks it and the label stays the foreground colour, because the
+        // primary is a fill colour and a mid-tone brand primary falls short of
+        // AA as small text.
+        "aria-selected:bg-primary/5 aria-selected:text-foreground",
+        "data-[selected=true]:bg-primary/5 data-[selected=true]:text-foreground",
         // Disabled state
         "data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50",
         className

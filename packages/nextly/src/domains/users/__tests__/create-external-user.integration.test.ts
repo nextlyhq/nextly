@@ -15,6 +15,8 @@ import { z } from "zod";
 import { NextlyError } from "../../../errors";
 import { CreateLocalUserSchema } from "../../../schemas/_zod/user";
 import { ServiceContainer } from "../../../services/index";
+import { consoleLogger } from "../../../shared/types";
+import { RoleMutationService } from "../../auth/services/role/role-mutation-service";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -265,6 +267,32 @@ describe.each(getConfiguredTestDialects())(
       ).rejects.toSatisfy(NextlyError.is);
 
       expect(await userRow(t, "escalate@example.com")).toBeUndefined();
+    });
+
+    it("refuses the Public role", async () => {
+      // The role every visitor is judged by is never anyone's own role.
+      const t = await boot(dialect);
+      await seedFirstUser(t);
+      const { id: publicId } = await new RoleMutationService(
+        t.adapter,
+        consoleLogger
+      ).ensurePublicRole();
+
+      await expect(
+        services(t).users.createExternalUser(
+          {
+            email: "visitor@example.com",
+            name: "Visitor",
+            roleIds: [publicId],
+            emailVerifiedAt: new Date(),
+          },
+          SYSTEM_CONTEXT
+        )
+      ).rejects.toMatchObject({
+        publicMessage: "This role is built in, so it can't be assigned.",
+      });
+
+      expect(await userRow(t, "visitor@example.com")).toBeUndefined();
     });
 
     it("refuses an empty role list", async () => {

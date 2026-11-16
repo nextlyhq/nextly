@@ -9,9 +9,16 @@
 import { renderHook } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { docSpy, storedSpy } = vi.hoisted(() => ({
+const { docSpy, storedSpy, mayReadTranslations } = vi.hoisted(() => ({
   docSpy: vi.fn(),
   storedSpy: vi.fn(),
+  /** Whether the server lets the user read every language's state. */
+  mayReadTranslations: { current: true },
+}));
+
+vi.mock("@admin/hooks/useCanRequest", () => ({
+  useCanRequest: (_slug: string, request: string) =>
+    request === "readTranslations" ? mayReadTranslations.current : false,
 }));
 
 vi.mock("../useSingles", () => ({
@@ -51,7 +58,30 @@ const storedRead = () =>
   storedSpy.mock.calls[0]?.[1] as Record<string, unknown>;
 
 describe("useSingleEditorDocument", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mayReadTranslations.current = true;
+  });
+
+  it("asks for every language's state only where the server lets the user read them", () => {
+    const read = () =>
+      renderHook(() =>
+        useSingleEditorDocument({
+          slug: "homepage",
+          localizationEnabled: true,
+          draftsEnabled: false,
+          fields: undefined,
+        })
+      );
+    read();
+    expect(editRead().translationStatus).toBe(true);
+    // A user who may read only some languages gets the Single without the
+    // overview, rather than a read the server refuses.
+    vi.clearAllMocks();
+    mayReadTranslations.current = false;
+    read();
+    expect(editRead().translationStatus).toBe(false);
+  });
 
   it("asks for the pending change when the split applies", () => {
     renderHook(() =>

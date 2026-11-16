@@ -111,7 +111,7 @@ describe("document status-transition events (integration)", () => {
     const seen = recordEvents(current);
     await handler.updateEntry(
       { collectionName: "posts", entryId: id, overrideAccess: true },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
 
     expect(seen).toContain("document.statusChanged");
@@ -177,7 +177,7 @@ describe("document status-transition events (integration)", () => {
         locale: "de",
         overrideAccess: true,
       },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
 
     expect(payloads["document.statusTransition"]).toMatchObject({
@@ -241,7 +241,7 @@ describe("document status-transition events (integration)", () => {
         locale: "de",
         overrideAccess: true,
       },
-      { title: "de" }
+      { title: "de", _overwrite: true }
     );
 
     const publishedLocales: (string | undefined)[] = [];
@@ -256,6 +256,7 @@ describe("document status-transition events (integration)", () => {
       collectionName: "pages",
       entryId: id,
       overrideAccess: true,
+      data: { _overwrite: true },
     });
 
     // Both companion locales' draft->published changes reached the workflow
@@ -315,7 +316,7 @@ describe("document status-transition events (integration)", () => {
         locale: "de",
         overrideAccess: true,
       },
-      { status: "published" }
+      { status: "published", _overwrite: true }
     );
 
     expect(seen).toEqual([]);

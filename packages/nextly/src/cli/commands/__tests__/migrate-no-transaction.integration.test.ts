@@ -204,17 +204,21 @@ describe.each(getConfiguredTestDialects())(
         false
       );
 
-      // The driver's own error for the missing table, rethrown as it was:
+      // The driver's own error for the missing table, named with its file:
       // not the partial-failure error, which only a marked file raises.
       const error = await migrate().catch((thrown: unknown) => thrown);
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).message).toMatch(MISSING_TABLE);
+      expect((error as Error).message).toContain("20261001_000001_marks");
       expect(error).not.toMatchObject({
         code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
       });
-      expect(await ledgerStatus("20261001_000001_marks.sql")).toEqual([
-        "failed",
-      ]);
+      // On MySQL the attempt was recorded before its first statement, which
+      // committed on its own; elsewhere it was written inside the
+      // transaction, and rolled back with it.
+      expect(await ledgerStatus("20261001_000001_marks.sql")).toEqual(
+        dialect === "mysql" ? ["failed"] : []
+      );
 
       expect(await marks()).toEqual([]);
       expect(warnings.join("\n")).not.toContain("outside a transaction");
@@ -235,6 +239,80 @@ describe.each(getConfiguredTestDialects())(
       expect(await marks()).toEqual([]);
       // Refused before the ledger records an attempt.
       expect(await ledgerStatus("20261001_000001_bracketed.sql")).toEqual([]);
+    });
+
+    it("refuses an unmarked file's COMMIT part-way through, before anything runs, naming it and the marker", async () => {
+      writeMigration(
+        migrationsDir,
+        "20261001_000001_commits_early",
+        [
+          "INSERT INTO nt_marks (id) VALUES ('first')",
+          "COMMIT",
+          "INSERT INTO nt_marks (id) VALUES ('second')",
+        ],
+        false
+      );
+
+      await expect(migrate()).rejects.toThrow(
+        /20261001_000001_commits_early\.sql was refused, and nothing in it ran\. "COMMIT": a migration file runs as one transaction, and this COMMIT would end the runner's transaction early.*`-- nextly:no-transaction`/
+      );
+
+      expect(await marks()).toEqual([]);
+      expect(await ledgerStatus("20261001_000001_commits_early.sql")).toEqual(
+        []
+      );
+    });
+
+    it("refuses an unmarked file's BEGIN part-way through, before anything runs", async () => {
+      writeMigration(
+        migrationsDir,
+        "20261001_000001_opens_late",
+        [
+          "INSERT INTO nt_marks (id) VALUES ('first')",
+          "BEGIN",
+          "INSERT INTO nt_marks (id) VALUES ('second')",
+        ],
+        false
+      );
+
+      await expect(migrate()).rejects.toThrow(
+        /20261001_000001_opens_late\.sql was refused, and nothing in it ran\. "BEGIN": .*would open a transaction inside the one the runner holds/
+      );
+      expect(await marks()).toEqual([]);
+    });
+
+    it("runs an unmarked file wrapped whole in BEGIN and COMMIT as its one transaction", async () => {
+      // The control: the wrapper asks for what the runner does anyway.
+      writeMigration(
+        migrationsDir,
+        "20261001_000001_wrapped",
+        ["BEGIN", "INSERT INTO nt_marks (id) VALUES ('kept')", "COMMIT"],
+        false
+      );
+
+      await migrate();
+
+      expect(await marks()).toEqual(["kept"]);
+      expect(await ledgerStatus("20261001_000001_wrapped.sql")).toEqual([
+        "applied",
+      ]);
+    });
+
+    it("refuses a module's COMMIT part-way through, before anything runs, naming transaction: false", async () => {
+      await expect(
+        migratePlugin([
+          module("0001_commits_early", [
+            "INSERT INTO nt_marks (id) VALUES ('first')",
+            "COMMIT",
+            "INSERT INTO nt_marks (id) VALUES ('second')",
+          ]),
+        ])
+      ).rejects.toThrow(
+        /plugin:ntx\/0001_commits_early was refused, and nothing in it ran\. "COMMIT": a migration module runs as one transaction.*A module with `transaction: false`/
+      );
+
+      expect(await marks()).toEqual([]);
+      expect(await ledgerStatus("plugin:ntx/0001_commits_early")).toEqual([]);
     });
 
     it("refuses a savepoint in a module marked transaction: false, before anything runs", async () => {

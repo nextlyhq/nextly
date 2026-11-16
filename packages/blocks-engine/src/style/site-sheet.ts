@@ -13,7 +13,12 @@
 //
 // @module style/site-sheet
 
-import type { BlockDocument, BreakpointSet, NodeStyles } from "../document";
+import type {
+  BlockDocument,
+  BlockPart,
+  BreakpointSet,
+  NodeStyles,
+} from "../document";
 import type { ValidationIssue } from "../validation";
 
 import { compilePageCss } from "./compile-page";
@@ -28,6 +33,7 @@ import {
   resolveTokenPrefix,
   tokenIdentity,
 } from "./site-tokens";
+import type { SpacingMode } from "./spacing-mode";
 
 /** Everything the shared sheet is built from. All of it is site configuration, not document content. */
 export interface SiteSheetInput {
@@ -83,6 +89,14 @@ export interface SiteSheetInput {
    * all. The tiers split across two sheets; the option must not.
    */
   previewStates?: boolean;
+  /**
+   * The site's spacing model, carried beside the other site inputs so a
+   * renderer handed this record compiles the page under the model the site
+   * chose. This sheet writes nothing different for it: block defaults reach
+   * it only when a caller states them, already resolved for the model. See
+   * `style/spacing-mode`.
+   */
+  spacingMode?: SpacingMode;
 }
 
 /** The shared sheet and the name it is addressed by. */
@@ -395,7 +409,21 @@ export function compileSiteTokenSheet(
  * then the named classes. A page's own sheet is appended after this one, which is what lets a
  * node's own value beat a class and a class beat a block default.
  */
-export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
+export function compileSiteSheet(
+  input: SiteSheetInput,
+  /**
+   * The parts of the block types the page draws, keyed by type, as the page's
+   * own sheet reads them. Read only for the root properties a part takes from
+   * a wrapping root, so the classes written here route them as the page sheet
+   * does; no part's defaults are written here. Required, and apart from the
+   * site's inputs, because a sheet compiled without them still succeeds and
+   * styles a wrapped image's box where its picture was meant: `{}` says the
+   * page draws no such part.
+   *
+   * @experimental
+   */
+  parts: Readonly<Record<string, Readonly<Record<string, BlockPart>>>>
+): SiteSheetArtifact {
   const { blocks, warnings, tokenPrefix } =
     compileBreakpointIndependentTiers(input);
 
@@ -404,6 +432,10 @@ export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
     breakpoints: input.breakpoints,
     blockBases,
     namedClasses: input.classes ?? [],
+    // A class here styles a node's root as the page's own sheet does, so it
+    // routes what a part takes from a wrapping root the same way. The parts'
+    // own defaults stay in the page sheet: this document draws none of them.
+    blockParts: parts,
     ...(tokenPrefix === undefined ? {} : { tokenPrefix }),
     ...(input.mayFetchUrl === undefined
       ? {}

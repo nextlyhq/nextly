@@ -8,7 +8,7 @@
   //
   // Commands:
   //   - pnpm fallow       = full-repo report, apps/playground included.
-  //   - pnpm fallow:audit = the diff, against origin/main. Same check the
+  //   - pnpm fallow:audit = the diff, against origin/dev. Same check the
   //                         agent gate runs before a commit.
   //
   // In CI, .github/workflows/code-hygiene.yml runs a changed-files audit
@@ -49,13 +49,36 @@
     "**/*.test.mjs",
     // Spawned by the webServer command in e2e/playwright.config.ts.
     "e2e/scripts/*.mjs",
+    // Loaded into the production server with `node --import` by
+    // e2e/admin-speed/measure.mjs, which names it only as a path.
+    "e2e/admin-speed/preload.mjs",
     // Handed to the Tailwind CLI by packages/ui/scripts/build-css.mjs.
     "packages/ui/src/styles/index.css",
     // Passed as an argv path to the admin-css bin by its integration test.
     "packages/admin-css/__fixtures__/**",
     // Handed to oxlint by the templates pass in scripts/lint.mjs.
     "oxlint.templates.config.mjs",
+    // Type-level tests, compiled by each package's `check-types` rather than
+    // run by Vitest, so no test runner names them as entries.
+    "**/*.test-d.ts",
+    // The playground's "use cache" read function, imported by its root layout
+    // for its side effect: `cachedRead` is exported as the app-side file every
+    // template ships it, and registered by the file itself, not imported. Its
+    // Cache Components off variant is reached only through the alias
+    // apps/playground/next.config.ts sets when that setting is off.
+    "apps/playground/src/nextly/cached-read.ts",
+    "apps/playground/src/nextly/cached-read.cache-components-off.ts",
   ],
+
+  // A lazy import, an `import()` inside a function, loads nothing when the
+  // importing module loads, so it cannot take part in a load-order cycle; it
+  // is how a module that needs a heavy one on first use stays out of its
+  // import graph. Cycle detection skips those edges. A static import is still
+  // an edge, so a static cycle through the same files is still an error, as
+  // is a top-level `await import()`, which loads before the module finishes.
+  "circularDependencies": {
+    "ignoreLazyImports": true,
+  },
 
   // Specifiers tsc and Node both resolve, and fallow does not.
   //
@@ -207,10 +230,19 @@
   // It is deliberately generated from `main`, never from a branch: a branch
   // that baselines its own findings has written itself a pass.
   "audit": {
-    "healthBaseline": "fallow-health-baseline.json"
+    "healthBaseline": "fallow-health-baseline.json",
   },
 
   "duplicates": {
+    // Generated plugin migration modules. `nextly migrate:create --plugin`
+    // writes each with the whole schema snapshotted per dialect, so every
+    // new module repeats the tables the earlier ones created, by design: the
+    // next generation diffs against the latest snapshot. They are never edited
+    // by hand (a hand edit fails the module's own checksum), so there is no
+    // shared code to extract, and a clone key would change with every module
+    // generated. A glob is the honest form here, scoped to exactly these
+    // generated directories.
+    "ignore": ["packages/*/src/schema/migrations/*.ts"],
     "ignoredClones": [
       // collections/services/collection-mutation-service.ts — 17 lines shared
       // by `createEntryWrite` and `updateEntryWrite`: the closing lines of the
@@ -243,6 +275,14 @@
       // so a cached build would survive an edit to how it is built. Six small
       // copies that turbo can see are the safer repetition.
       "dup:aecdfbd0:6",
+
+      // apps/playground/src/nextly/cached-read.ts and
+      // e2e/multi-instance/fixture/nextly/cached-read.cache-components.ts —
+      // the 20-line "use cache" read function an app compiles. Each is its own
+      // app's file: Next.js compiles the directive only in code the app itself
+      // builds, so neither can import the other's, and both copy the
+      // templates' file, which a create-nextly-app test holds them to.
+      "dup:12d5e42b:2",
     ],
   },
 }
