@@ -38,21 +38,17 @@
  * lands where the rectangles say. **Not** handled: content that reflows during a
  * drag, such as a lazily-loaded image resizing above the pointer.
  *
+ * ## Where the parts live
+ *
+ * This module is the hook, `useCanvasDrag`, and the entry for the rest: the
+ * shapes it hands its callers are in `canvas-drag-types.ts`, one gesture's
+ * record and the questions asked of it in `canvas-drag-gesture.ts`, and the
+ * drop line in `drop-indicator.tsx`. Every name it exported, it still exports.
+ *
  * @module canvas-drag
  */
 
-import {
-  type BlockNode,
-  type ComponentLookup,
-  type NestingSource,
-  COMPONENT_INSTANCE_TYPE,
-  declaredSlotNames,
-  findNode,
-  type PlacedNode,
-  type PlacementSources,
-} from "@nextlyhq/blocks-engine";
-import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
-import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
+import { findNode } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import {
@@ -60,12 +56,33 @@ import {
   AUTOSCROLL_ZONE_PX,
   autoscrollStep,
 } from "./autoscroll";
+import { nodeIdFromEvent } from "./canvas";
 import {
-  CANVAS_ROOT_CLASS,
-  isOutermostForAddress,
-  nodeAddressOf,
-  nodeIdFromEvent,
-} from "./canvas";
+  admitsPress,
+  builtOnce,
+  canvasClientPoint,
+  committedTarget,
+  drawnSubject,
+  frameLoopOf,
+  type Gesture,
+  gestureOwnedBy,
+  handScaleOf,
+  type HeldPress,
+  listenOn,
+  releaseCapture,
+  slotsOfNode,
+  snapshotRects,
+  withLockVerdict,
+} from "./canvas-drag-gesture";
+import {
+  type CanvasDrag,
+  type CanvasDragState,
+  DEFAULT_ACTIVATION_PX,
+  DEFAULT_SWITCH_PX,
+  type DragSubject,
+  type InsertDragEntry,
+  type UseCanvasDragOptions,
+} from "./canvas-drag-types";
 import {
   inputDocuments,
   useCanvasFrame,
@@ -76,569 +93,33 @@ import {
   movingSubtree,
   placementSources,
   resolveDrop,
-  type DropRefusal,
-  type DropRegion,
-  type DropResolution,
-  type DropTarget,
-  type RectSource,
-  type RegionVerdicts,
 } from "./drop-targets";
-import type { EditorState } from "./editor-state";
-import type { Point, Rect } from "./geometry";
 import {
   canvasContentPoint,
-  canvasContentRect,
   canvasPointerPoints,
   canvasScroller,
   containerEdges,
-  framePaintedScale,
-  hostPointInFrame,
-  overlaySpaceOf,
   type CanvasPointerPoints,
 } from "./geometry-dom";
-import { placementTypesOf, type SlotSource } from "./inserter";
-import {
-  layersLockFacts,
-  type LockDropRefusal,
-  type LockRefusalFacts,
-} from "./lock-refusal";
+import { placementTypesOf } from "./inserter";
+import { layersLockFacts } from "./lock-refusal";
 import { lockBlockingMove } from "./locking";
 import type { OpPosition } from "./op-vocabulary";
-import {
-  nextTargetSwitchState,
-  NO_TARGET,
-  type TargetSwitchState,
-} from "./target-switch";
+import { nextTargetSwitchState, NO_TARGET } from "./target-switch";
 
-/**
- * How far the pointer travels before a press becomes a drag.
- *
- * Large enough that the hand-shake in a deliberate click never reaches it, small
- * enough that a short drag still starts. The same order as the field's other
- * editors; the exact figure is not load-bearing, because the threshold only has
- * to separate a click from an intent to move.
- */
-export const DEFAULT_ACTIVATION_PX = 4;
-
-/**
- * How far a rival target must be held before it replaces the committed one.
- *
- * Measured as pointer TRAVEL rather than as a property of the blocks, which is
- * the whole reason this canvas can have hysteresis at all: `core/spacer` takes
- * its height from an author-set prop with no lower bound and `core/divider`
- * renders one pixel tall, so any rule keyed on a block's size makes some
- * authored block impossible to drop beside. Travel is a property of the gesture
- * and treats a 1px divider and a 900px hero identically.
- */
-export const DEFAULT_SWITCH_PX = 8;
-
-/**
- * What a drag is carrying: a node the document already holds, or a block type
- * that has no node yet.
- *
- * The two differ in exactly two places — whether anything is being detached,
- * and what the release commits — and are identical everywhere between. Holding
- * that as a payload rather than a second hook is what makes "one engine"
- * checkable rather than aspirational: `resolveDrop`, the switch rule,
- * autoscroll and the indicator cannot tell the kinds apart, because they are
- * never given the chance to.
- *
- * An insert builds its node from a THUNK the caller supplies rather than
- * resolving the type here. The palette reads its definitions from one snapshot
- * per mount and a block arrives with the children it declares, so resolving
- * again at drop would answer from a second reading — and the row the author
- * dragged could differ from the subtree that lands.
- */
-export type DragSubject =
-  | { readonly kind: "move"; readonly nodeId: string }
-  | {
-      readonly kind: "insert";
-      readonly blockName: string;
-      readonly makeNode: () => BlockNode | null;
-      /**
-       * Notified with the node that landed, after a drop the editor accepted.
-       *
-       * Carried on the subject so the two ways a palette inserts report the
-       * same event. The panel already tells its host about a click insert, and
-       * a host reacting to that — scrolling to the block, opening its settings
-       * — would silently miss every insert made by dragging.
-       */
-      readonly onInserted?: (node: BlockNode) => void;
-    };
-
-/**
- * What a palette hands the drag when a row is pressed.
- *
- * Named rather than written inline at both the type and the implementation:
- * the two used to state it separately, and adding a field to one left the
- * other rejecting it.
- */
-export interface InsertDragEntry {
-  /** The block type in flight, which the drop position is resolved for. */
-  blockName: string;
-  /** Builds the node at the release, from the palette's own snapshot. */
-  makeNode: () => BlockNode | null;
-  /** Notified with the node that landed, after a drop the editor accepted. */
-  onInserted?: (node: BlockNode) => void;
-}
-
-/** What a drag is doing right now, for the canvas to draw. */
-export interface CanvasDragState {
-  /**
-   * The node being dragged, or null when no MOVE-drag is in flight.
-   *
-   * Null for the whole of an insert-drag as well as between drags: the block
-   * has no node until the release makes one, and minting an id early to fill
-   * this would hand the canvas an id addressing nothing in the document.
-   */
-  readonly draggingId: string | null;
-  /**
-   * The block type in flight, whichever kind of drag it is, or null when none
-   * is.
-   *
-   * This is the field to ask "is a drag happening", because it is the only one
-   * that does not assume the subject has a node. Anything gated on the id
-   * instead is blind to a drag from the palette.
-   */
-  readonly draggingBlockName: string | null;
-  /** Where a drop would land, or null when nowhere would accept it. */
-  readonly target: DropTarget | null;
-  /**
-   * Why the region under the pointer will not take the block, or null.
-   *
-   * Distinct from a null target: the author has aimed at something, and saying
-   * nothing tells them the editor did not notice.
-   */
-  readonly refusal: DropRefusal | LockDropRefusal | null;
-}
-
-/** The handlers the canvas root must carry for a drag to work. */
-export interface CanvasDragHandlers {
-  readonly onPointerDown: React.PointerEventHandler<HTMLElement>;
-  readonly onPointerMove: React.PointerEventHandler<HTMLElement>;
-  readonly onPointerUp: React.PointerEventHandler<HTMLElement>;
-  readonly onPointerCancel: React.PointerEventHandler<HTMLElement>;
-}
-
-export interface CanvasDrag extends CanvasDragState {
-  readonly handlers: CanvasDragHandlers;
-  /**
-   * Begin a drag whose subject is not in the document yet.
-   *
-   * Called from a PALETTE row's own `onPointerDown`, which is why it cannot be
-   * {@link CanvasDragHandlers.onPointerDown}: that one takes the canvas root
-   * from `event.currentTarget`, and for a press on a palette row the current
-   * target is the row.
-   *
-   * Does nothing when no canvas root was supplied, which leaves the press
-   * exactly as it was — the row's click still inserts, and that click is the
-   * non-drag route WCAG 2.2 SC 2.5.7 requires. This only ever supplements it.
-   */
-  readonly beginInsertDrag: (
-    event: React.PointerEvent<HTMLElement>,
-    entry: InsertDragEntry
-  ) => void;
-}
-
-export interface UseCanvasDragOptions {
-  /** The editor whose document a drop edits. */
-  editor: EditorState;
-  /** Which child regions each block type declares. */
-  slots: SlotSource;
-  /** The nesting rule, asked before any position is offered. */
-  nesting: NestingSource;
-  /**
-   * The definitions the canvas draws instances from, so a MOVED instance is
-   * judged by the roots of the definition it draws rather than by its own
-   * type, which the nesting rule cannot restrict. Absent, an instance moves
-   * anywhere — the posture of a host that resolves nothing.
-   */
-  definitions?: ComponentLookup;
-  /**
-   * The canvas root, for a drag that begins outside it.
-   *
-   * Optional, and its absence means only that {@link CanvasDrag.beginInsertDrag}
-   * does nothing: a host that never drags from a palette has no use for the
-   * ref, and requiring it would make every existing caller supply a value to
-   * satisfy a feature it does not mount.
-   */
-  canvasRoot?: React.RefObject<HTMLElement | null>;
-  activationPx?: number;
-  switchPx?: number;
-}
-
-/**
- * Hand the pointer back, when this transport is the one holding it.
- *
- * A node-origin drag captures on the canvas root; a palette drag captures
- * nowhere and passes `null`. Asked of the element rather than tracked, because
- * the browser releases capture itself on some endings and a flag would then
- * describe a capture that is already gone.
- */
-function releaseCapture(host: HTMLElement | null, pointerId: number): void {
-  if (host !== null && host.hasPointerCapture(pointerId)) {
-    host.releasePointerCapture(pointerId);
-  }
-}
-
-/**
- * The target a release would commit to, or `undefined` when there is none.
- *
- * ONE absent value, not two. Written as `null` for "nothing committed" and
- * `undefined` for "committed to something no longer drawable", the caller
- * would have to exclude both — and excluding one reads as complete, so a drag
- * released over no target would reach `target.at`.
- */
-function committedTarget(drag: Gesture): DropTarget | undefined {
-  const committed = drag.switchState.committed;
-  return committed === null ? undefined : drag.targets.get(committed);
-}
-
-/**
- * The gesture this pointer owns, or `null` when it owns none.
- *
- * The one answer to "may this event drive the drag", asked by every transport:
- * the canvas's React handlers for a pointer over the canvas, and the document
- * listeners for one anywhere else. Written once because it was written three
- * times — move, release and cancel each compared the id themselves, and a
- * change to what ownership means would have had to find all three.
- */
-function gestureOwnedBy(
-  current: Gesture | null,
-  pointerId: number
-): Gesture | null {
-  if (current === null) return null;
-  return current.owner === pointerId ? current : null;
-}
-
-/**
- * Whether a press may begin a gesture.
- *
- * A drag ALREADY IN FLIGHT keeps the pointer that started it: a second finger
- * must not take it over, or the first gesture is left with no ending of its own
- * — its release unheard, its click never suppressed.
- *
- * An INACTIVE gesture is a different thing and must not block anything. It is a
- * press that has not yet travelled far enough to mean a drag, and one can be
- * stranded: a press beginning within the activation threshold of the canvas
- * edge takes no capture, so if the pointer leaves the root its move and release
- * are delivered somewhere these handlers never see. Refusing later presses
- * because of it would lock dragging until the host unmounted, and there is
- * nothing to protect — no drag was in progress.
- */
-function admitsPress(current: Gesture | null): boolean {
-  return current === null || !current.active;
-}
-
-/** Where the pointer aims, with a target the locks refuse turned into a refusal. */
-type AimResolution =
-  | DropResolution
-  | { readonly kind: "refused"; readonly refusal: LockDropRefusal };
-
-/**
- * A resolved target the editor's locks refuse, answered as a refusal that says
- * so. Asked of the editor's own `lockRefusalFor`, the question its apply asks,
- * so the indicator never offers a drop the release would then refuse.
- */
-function withLockVerdict(
-  drag: Gesture,
-  editor: Pick<EditorState, "lockRefusalFor">,
-  resolution: DropResolution
-): AimResolution {
-  if (resolution.kind !== "target") return resolution;
-  const target = resolution.target;
-  let verdict = drag.lockVerdicts.get(target.id);
-  if (verdict === undefined) {
-    verdict = lockVerdictAt(drag.subject, target.at, editor) ?? null;
-    drag.lockVerdicts.set(target.id, verdict);
-  }
-  if (verdict === null) return resolution;
-  return {
-    kind: "refused",
-    refusal: {
-      regionId: target.regionId,
-      ...(target.at.parentId === undefined
-        ? {}
-        : { parentId: target.at.parentId }),
-      lock: verdict,
-    },
-  };
-}
-
-/**
- * A thunk that builds its node on the first call and hands back that node
- * after, so one gesture judges and inserts one node. Building twice would
- * judge one subtree and insert another, with ids of its own.
- */
-function builtOnce(make: () => BlockNode | null): () => BlockNode | null {
-  let built: { node: BlockNode | null } | undefined;
-  return () => (built ??= { node: make() }).node;
-}
-
-/** The lock break dropping the subject at `at` would add. */
-function lockVerdictAt(
-  subject: DragSubject,
-  at: OpPosition,
-  editor: Pick<EditorState, "lockRefusalFor">
-): LockRefusalFacts | undefined {
-  if (subject.kind === "move") {
-    return editor.lockRefusalFor([
-      { kind: "move", id: subject.nodeId, to: at },
-    ]);
-  }
-  // The node an insert would place, starting blocks and all: a block whose
-  // own slots are locked is judged as it would land, not as an empty shell.
-  const node = subject.makeNode();
-  return node === null
-    ? undefined
-    : editor.lockRefusalFor([{ kind: "insert", node, at }]);
-}
-
-/**
- * A press on a block a Layers lock holds in place: whose pointer, where it
- * began, the block, the lock's facts, and whether its reason is drawn.
- */
-interface HeldPress {
-  readonly owner: number;
-  readonly originClient: { readonly x: number; readonly y: number };
-  readonly nodeId: string;
-  readonly blockName: string;
-  readonly lock: LockRefusalFacts;
-  shown: boolean;
-}
-
-/** What a drag needs to remember, none of which renders. */
-interface Gesture {
-  readonly subject: DragSubject;
-  /**
-   * The pointer that began this gesture, and the only one that may drive it.
-   *
-   * A node-origin drag takes pointer capture, which retargets one pointer and
-   * leaves the rest alone — so this is redundant there and costs nothing. A
-   * palette drag deliberately takes no capture, because the browser resolves a
-   * click against the capturing element and the row must keep inserting on
-   * click. Its events therefore arrive by two transports, the canvas's own
-   * React handlers and the document listeners, and BOTH see every active
-   * pointer on a touch device.
-   *
-   * Kept on the gesture rather than checked in each transport's closure: the
-   * two entry points below are where every pointer event of either transport
-   * converges, so enforcing it there covers a route a closure check would
-   * miss — a second finger moving over the CANVAS reaches the React handler,
-   * not the document listener.
-   */
-  readonly owner: number;
-  readonly origin: Point;
-  /**
-   * Where the press landed in CLIENT pixels.
-   *
-   * Kept beside {@link origin} rather than derived from it, because the two
-   * answer different questions and a scaled canvas separates them. `origin` is
-   * in the canvas's own content coordinates, which is what a hit test needs;
-   * the thresholds below are about how far a HAND moved, which is a fact about
-   * the person and not about the document's coordinate system.
-   *
-   * Measured in content pixels they shrink with the canvas: at a canvas painted
-   * to 71%, the 4px that separates a click from a drag needs only 2.85px of
-   * real movement, so ordinary click jitter starts committing moves — and the
-   * target hysteresis loosens by the same factor at the same time.
-   *
-   * In the canvas document's client coordinates, like every later point of
-   * the gesture, and turned into the author's pixels by {@link handScale}.
-   */
-  readonly originClient: Point;
-  /**
-   * How many of the author's on-screen pixels one of the canvas document's
-   * client pixels is: `1` in the editor's own document, the frame's painted
-   * scale in a frame. The host paints a frame scaled, and nothing read inside
-   * the frame shows it, so a distance measured there is multiplied by this
-   * before any threshold about the hand is applied to it. Read once at the
-   * press: the scale does not change during a gesture.
-   */
-  readonly handScale: number;
-  readonly regions: readonly DropRegion[];
-  readonly rects: RectSource;
-  readonly forbiddenParents: ReadonlySet<string>;
-  readonly blockName: string;
-  /**
-   * What the placement is judged by: the block's own type, or an instance's
-   * resolved roots. Computed once at the press — the definitions a drag
-   * resolves against do not change mid-gesture.
-   */
-  readonly blockNames: readonly string[];
-  /**
-   * The blocks being placed, with everything inside them, which the one
-   * placement rule judges. Asked only when a region is judged, because an
-   * insert's answer is the node its palette builds, the very node the release
-   * inserts. Empty when the palette builds nothing; the name rules then judge
-   * `blockNames` as before.
-   */
-  readonly placing: () => readonly PlacedNode[];
-  /**
-   * The placement rule's answer for each region, asked once for the gesture's
-   * life, as the lock verdicts are: the document, the blocks and the regions
-   * do not change mid-drag, and every pointer move and autoscroll frame
-   * resolves the drop again.
-   */
-  readonly placementVerdicts: RegionVerdicts;
-  /** False until the pointer has travelled far enough to mean a drag. */
-  active: boolean;
-  switchState: TargetSwitchState;
-  /** Targets by id, so the committed id resolves back to something drawable. */
-  targets: Map<string, DropTarget>;
-  /**
-   * Each target's lock verdict, asked once for the gesture's life: the document
-   * does not change mid-drag, and asking per pointer move would apply the edit
-   * speculatively on every frame.
-   */
-  lockVerdicts: Map<string, LockRefusalFacts | null>;
-  /**
-   * The canvas root, kept so a frame with no pointer event still has it.
-   *
-   * Autoscroll runs between moves — a pointer resting in the edge band produces
-   * no events at all — so the element cannot come from `event.currentTarget`
-   * the way every other read here does.
-   */
-  readonly root: HTMLElement;
-  /**
-   * The element that actually scrolls, or `null` when nothing does.
-   *
-   * Resolved once at drag start rather than per frame: it is a walk up the tree
-   * reading computed styles, and the answer cannot change mid-gesture.
-   */
-  readonly scroller: Element | null;
-  /** The last pointer position, in the canvas document's CLIENT coordinates. */
-  clientX: number;
-  clientY: number;
-  /** The scheduled frame, or `null` when no loop is running. */
-  frame: number | null;
-}
-
-/**
- * The identity half of {@link CanvasDragState}, for whichever subject is in
- * flight.
- *
- * Derived in one place rather than spelled out at each `setState`, so the two
- * fields cannot drift into disagreeing about whether a drag is happening: an
- * insert has no `draggingId`, and a site that set the id alone would report no
- * drag at all to everything gated on the block name.
- */
-function drawnSubject(drag: Gesture): {
-  draggingId: string | null;
-  draggingBlockName: string;
-} {
-  return {
-    draggingId: drag.subject.kind === "move" ? drag.subject.nodeId : null,
-    draggingBlockName: drag.blockName,
-  };
-}
-
-/**
- * Every rendered node's rectangle, read once.
- *
- * Compared in JavaScript rather than matched with a selector built from an id:
- * a node id reaches this from stored data, and interpolating it into
- * `querySelector` makes any character CSS treats specially either throw or,
- * worse, match a different element.
- */
-function snapshotRects(root: HTMLElement): RectSource {
-  const measured = new Map<string, Rect>();
-  // `forEach` rather than `for…of`: a `NodeList` is only iterable under a lib
-  // that declares its iterator, and this package compiles without one.
-  root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
-    // The ADDRESS a drag asks by, not the raw attribute. `collectRegions`
-    // requests rectangles by the id the document holds, and a definition-owned
-    // element carries a re-minted one — so keying by the attribute leaves every
-    // child of a component unmeasured. `targetsInRegion` then reads a root with
-    // no measured children and collapses it to one index-0 midpoint, so
-    // releasing a drag moves the component to the start whatever was under the
-    // pointer.
-    //
-    // Reachable only since the hit test began answering with instance ids: the
-    // drag used to bail before this, because `findNode` could not resolve the
-    // re-minted id. Making that path work is what exposed this.
-    const id = nodeAddressOf(element);
-    // OUTERMOST only, so an instance is measured as its own box rather than as
-    // whichever element its definition contributed last. A node a block
-    // rendered more than once still measures every copy, because sibling copies
-    // are each outermost — the last one wins there exactly as it did before.
-    if (id !== null && isOutermostForAddress(element, id, root)) {
-      measured.set(id, canvasContentRect(element, root));
-    }
-  });
-  // The canvas's own box, measured through the SAME reader as the blocks
-  // inside it. `scrollWidth`/`scrollHeight` describe the whole content rather
-  // than the part on screen, and mixing them with a rectangle read means the
-  // region and its children answer to two different measurements — which is
-  // the disagreement this package keeps its geometry in one place to avoid.
-  //
-  // The visible box is also the correct extent for what it is used for: it
-  // decides whether the POINTER is inside the canvas, and a pointer cannot be
-  // over content that is scrolled out of view.
-  const rootRect: Rect = canvasContentRect(root, root);
-  return {
-    rectOf: id => measured.get(id),
-    rootRect: () => rootRect,
-  };
-}
-
-/**
- * Listen for one event type on every document given, in the capture phase.
- *
- * Returns the function that removes exactly the listeners added, so a caller
- * holding it cannot remove from one document and leave the other listening.
- */
-function listenOn<K extends keyof DocumentEventMap>(
-  documents: readonly Document[],
-  type: K,
-  listener: (event: DocumentEventMap[K]) => void
-): () => void {
-  for (const doc of documents) doc.addEventListener(type, listener, true);
-  return () => {
-    for (const doc of documents) doc.removeEventListener(type, listener, true);
-  };
-}
-
-/**
- * The window the canvas root's frame loop runs in.
- *
- * The ROOT's, because a frame's animation callbacks are paced by that frame's
- * own rendering, and a loop scheduled on another window's clock scrolls the
- * frame out of step with what it paints. `null` for a root whose document has
- * no window, where there is no frame to schedule on.
- */
-function frameLoopOf(drag: Gesture): Window | null {
-  return drag.root.ownerDocument.defaultView;
-}
-
-/**
- * How many of the author's on-screen pixels one canvas client pixel is.
- *
- * See {@link Gesture.handScale}.
- */
-function handScaleOf(canvas: CanvasFrame): number {
-  return canvas.frame === null ? 1 : framePaintedScale(canvas.frame);
-}
-
-/**
- * A point delivered to `doc`, in the canvas document's client coordinates.
- *
- * The canvas's own document, and every document while there is no frame,
- * already reports in them. The editor's document reports in its own, which are
- * carried into the frame's: every rectangle of the canvas is read inside the
- * frame, so a point from the panels means nothing there until it is mapped.
- */
-function canvasClientPoint(
-  canvas: CanvasFrame,
-  doc: Document,
-  clientX: number,
-  clientY: number
-): Point {
-  const point = { x: clientX, y: clientY };
-  return canvas.frame === null || doc === canvas.document
-    ? point
-    : hostPointInFrame(canvas.frame, point);
-}
+// The public shapes, one gesture's record and the drop line live in modules of
+// their own beside this hook; every name this module exported still is.
+export {
+  type CanvasDrag,
+  type CanvasDragHandlers,
+  type CanvasDragState,
+  DEFAULT_ACTIVATION_PX,
+  DEFAULT_SWITCH_PX,
+  type DragSubject,
+  type InsertDragEntry,
+  type UseCanvasDragOptions,
+} from "./canvas-drag-types";
+export { DropIndicator, type DropIndicatorProps } from "./drop-indicator";
 
 /**
  * Wire pointer events on the canvas root to the drop rules.
@@ -1616,83 +1097,4 @@ export function useCanvasDrag({
       },
     },
   };
-}
-
-export interface DropIndicatorProps {
-  /** Where a drop would land, or null to draw nothing. */
-  target: DropTarget | null;
-}
-
-/**
- * The line showing where a dropped block will go.
- *
- * The target is in the canvas root's content coordinates, which is what the
- * rectangles were measured in. Where the line is drawn in those coordinates
- * depends on where it is drawn: inside the root over a canvas sharing the
- * editor's document, or in the layer over the canvas's frame, where they are
- * scaled to the frame's zoom while the line keeps its own thickness. Asked of
- * the line's own element, through `overlaySpaceOf`, the one mapping every
- * piece of chrome uses.
- *
- * Written to the element's style before paint rather than rendered: the
- * mapping needs the element in the document, and a render to apply it would
- * draw the line at the unmapped position for a frame on every pointer move.
- *
- * `aria-hidden`, and deliberately: the equivalent keyboard move announces its
- * own outcome through the editor's one live region, and a second element
- * describing the same pointer gesture would be read alongside it. A pointer drag
- * is also self-describing to anyone who can see the line.
- */
-export function DropIndicator({
-  target,
-}: DropIndicatorProps): React.JSX.Element | null {
-  const line = React.useRef<HTMLDivElement | null>(null);
-  // A zoom, or the frame's page arriving, moves the line on screen while the
-  // target stays where it was.
-  const canvasFrame = useCanvasFrame();
-  useIsomorphicLayoutEffect(() => {
-    const element = line.current;
-    if (element === null || target === null) return;
-    // The line is drawn ACROSS the axis children are separated along: a
-    // region stacking its children downward gets a horizontal rule, a row
-    // gets a vertical one.
-    const span = target.to - target.from;
-    const rect: Rect =
-      target.axis === "y"
-        ? { x: target.from, y: target.line, width: span, height: 0 }
-        : { x: target.line, y: target.from, width: 0, height: span };
-    const space = overlaySpaceOf(element, CANVAS_ROOT_CLASS);
-    const at = space === null ? rect : space.place(rect);
-    element.style.left = `${String(at.x)}px`;
-    element.style.top = `${String(at.y)}px`;
-    // The other dimension is the stylesheet's, so a line that changes axis
-    // does not keep the length it had along the old one.
-    element.style.width = target.axis === "y" ? `${String(at.width)}px` : "";
-    element.style.height = target.axis === "x" ? `${String(at.height)}px` : "";
-  }, [target, canvasFrame]);
-
-  if (target === null) return null;
-
-  return (
-    <div
-      ref={line}
-      className="nx-drop-indicator"
-      data-axis={target.axis}
-      aria-hidden="true"
-    />
-  );
-}
-
-/**
- * The slots a component placement exposes, which its type alone cannot say.
- * Every other block answers undefined, so its regions come from the caller's
- * `slots` source, the one this hook documents as each type's child regions.
- */
-function slotsOfNode(
-  sources: PlacementSources
-): (node: BlockNode) => readonly string[] | undefined {
-  return node =>
-    node.type === COMPONENT_INSTANCE_TYPE
-      ? declaredSlotNames(node, sources)
-      : undefined;
 }
