@@ -248,6 +248,35 @@ describe("a Builder definition whose relationship target is missing", () => {
   });
 });
 
+describe("a Builder field of a type no plugin offers", () => {
+  const MANIFEST = {
+    collections: [
+      { slug: "reviews", fields: [{ name: "score", type: "acme-rating" }] },
+    ],
+    singles: [],
+    components: [],
+  };
+
+  it("is refused by both commands with the same message, a dry run included", async () => {
+    useDialect("sqlite");
+    await writeDefinitions(MANIFEST);
+
+    const checked = await check(EMPTY);
+    const created = await create(EMPTY);
+    const dry = await create(EMPTY, "builder", { dryRun: true });
+
+    const refusal = checked.printed.join("\n");
+    expect(checked.code).toBe(1);
+    expect(refusal).toContain("CONFIG_INVALID");
+    expect(refusal).toContain("acme-rating");
+    for (const ran of [created, dry]) {
+      expect(ran.code).toBe(1);
+      expect(ran.printed.join("\n")).toBe(refusal);
+    }
+    expect(sqlFiles()).toEqual([]);
+  });
+});
+
 describe("a shadowed Builder entry whose relationship target is missing", () => {
   it("is ignored with the rest of the entry, by both commands", async () => {
     useDialect("sqlite");
@@ -441,8 +470,12 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
 
     it("a Builder entity the configuration now declares is not refused", async () => {
       useDialect(dialect);
+      // A number field: its column is the same by the Builder's rule and the code-first one, so
+      // moving the collection into code changes no column. A text field would (unbounded by the
+      // Builder, `varchar(255)` in code), which `migrate:create` rightly asks consent for.
+      const rating = { name: "rating", type: "number" } as const;
       await writeDefinitions({
-        collections: [{ slug: "cases", fields: [field] }],
+        collections: [{ slug: "cases", fields: [rating] }],
         singles: [],
         components: [],
       });
@@ -450,15 +483,20 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       await rm(join(dir, "ui-schema.json"));
       // Moved into code: the configuration declares it, so nothing was lost.
       const moved = defineConfig({
-        collections: [defineCollection({ slug: "cases", fields: [field] })],
+        collections: [defineCollection({ slug: "cases", fields: [rating] })],
         db: { migrationsDir: "./migrations" },
       });
 
       const created = await create(moved, "moved");
+      const checked = await check(moved);
 
-      expect(created.printed.join("\n")).not.toContain(
-        "BUILDER_DEFINITION_MISSING"
-      );
+      // Neither command fails at all: an exit of 0 ("No changes detected") or none is a run that
+      // reached the end. The cases above are the control, the same project with `EMPTY` instead
+      // of `moved`, refused at the same check.
+      for (const ran of [created, checked]) {
+        expect(ran.printed.join("\n")).toBe("");
+        expect([undefined, 0]).toContain(ran.code);
+      }
     });
   }
 );

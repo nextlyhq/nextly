@@ -704,11 +704,15 @@ export async function runMigrateCreate(
       logger,
     });
   } catch (error) {
+    // A field declaration Nextly cannot use ends the run as `migrate:check`
+    // ends it, a dry run included, so one definition ends both commands with
+    // one message. It is a validation error too, so it is read before the
+    // plan refusals below, which would otherwise take it.
+    const declaration = configDeclarationError(error);
+    if (declaration !== undefined) exitWithError(logger, declaration);
     stopOnPlanError(error, logger, options.dryRun, () => {
       if (dryRunRefusalOf(error) !== undefined) throw error;
-      // A field declaration Nextly cannot use reads as `migrate:check` reads
-      // it, so one definition ends both commands with one message.
-      exitWithError(logger, configDeclarationError(error) ?? error);
+      exitWithError(logger, error);
     });
   }
   const {

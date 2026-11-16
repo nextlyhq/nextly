@@ -976,10 +976,10 @@ than something production generates.
   leave the `localized` registry value behind, because the upsert is filtered by the same
   touched-table set the companion file does not populate. Check the registry row after toggling
   localization on an existing entity.
-- **A deletion leaves the registry row behind.** Deleting a Collection in the Builder writes a
-  migration that drops its table. Deleting a Single or a Field Group writes none: the Builder drops
-  the development table and removes the manifest entry, and the next `migrate:create` finds that
-  table in the previous snapshot but not in the manifest and writes the `DROP TABLE`. Either way the
+- **A deletion leaves the registry row behind.** Deleting a Collection, a Single or a Field Group
+  in the Builder writes the migration that drops its table, with a snapshot that no longer records
+  the entity, so the next `migrate:create` and `migrate:check` find nothing lost. Removing the
+  entry from `ui-schema.json` by hand is not a deletion: both commands refuse it, as above. The
   table goes. Its registry row does not: `migrate:create`
   builds registry upserts only for entities still in the manifest, and nothing on the
   `nextly migrate` path removes a row. The other environment keeps a row describing a table that no
