@@ -32,3 +32,5 @@
 The Schema Builder checks a field's name where it is set, by the rule its save refuses a name by. The field settings panel shows what is wrong under Name as the name is typed or follows the label: a spelling the save refuses, a column longer than 63 characters, a built-in column, a Draft/Published name while drafts are on, or a name a sibling already has (in other letter case or as the same column too, a field deleted but not yet saved included). A saved field's own name is never flagged.
 
 The field picker gives a derived name that is taken the next free number (`status_2` while drafts are on), and refuses to add a field whose name could never be saved, by button or by Enter.
+
+`@nextlyhq/plugin-sdk/admin` widens two experimental types, additively: `FieldSettingsSurface` takes an optional `checkName`, and `FieldPickerConfig` an optional `nameProblem`, each answering why a name cannot be saved on that surface. A surface that sets neither behaves as before.
