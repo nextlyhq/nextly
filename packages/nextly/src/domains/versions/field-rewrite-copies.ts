@@ -38,7 +38,14 @@ import {
   type FieldRewriteCopy,
   type FieldRewriteValue,
 } from "./field-rewrite";
-import { combinedDraft, draftsKeptByPart, findPartDrafts } from "./part-drafts";
+import {
+  combinedDraft,
+  draftSlotParts,
+  draftsKeptByPart,
+  findPartDrafts,
+  partKeysOf,
+  partsWritten,
+} from "./part-drafts";
 import {
   outOfDateSharedFields,
   recordSharedBase,
@@ -366,6 +373,12 @@ export async function saveRewrittenDraft(
     snapshot,
     replaces,
     createdBy: draft.rewrittenBy,
+    // The one field rewritten, in the part of the draft that holds it.
+    changedParts: partsWritten({
+      locale: slot.locale,
+      touched: new Set([field]),
+      keys: await partKeysOf(draft.fields),
+    }),
     maxPerDoc: draft.maxPerDoc,
     storeWorkingDraft: repo =>
       repo.upsertWorkingDraft({
@@ -373,6 +386,7 @@ export async function saveRewrittenDraft(
         locale: slot.locale,
         snapshot: patched,
         createdBy: slot.createdBy,
+        parts: draftSlotParts(slot.locale),
       }),
   });
   return versionNo;

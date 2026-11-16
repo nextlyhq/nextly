@@ -55,6 +55,12 @@ import {
 } from "./move-refusal";
 import type { BuilderOp } from "./op-vocabulary";
 import {
+  offerSignal,
+  useSelectionOffer,
+  type OfferSignal,
+  type SelectionOffer,
+} from "./selection-offer";
+import {
   isRefusal,
   selectionDeletion,
   selectionDuplication,
@@ -62,13 +68,11 @@ import {
 } from "./selection-ops";
 import type { SharedStyleOffer } from "./shared-style-target";
 import {
-  depthMoveActions,
   patternSaveRefusal,
   SAVE_PATTERN_GRANT_REFUSAL,
   toolbarActions,
   turnIntoChoice,
   type ComponentVerbsOffer,
-  type DepthMoveAction,
   type MoveJudge,
   type MovePosition,
   type ToolbarAction,
@@ -266,7 +270,7 @@ const NestingContext = React.createContext<NestingSource | null>(null);
  * Published from here because this is the one place above all three that
  * already holds the editor and the rules they must agree about.
  */
-const SelectionActionsContext = React.createContext<ToolbarAction[] | null>(
+const SelectionActionsContext = React.createContext<SelectionOffer | null>(
   null
 );
 
@@ -297,16 +301,9 @@ function lockSentence(
     : refusalAnnouncement(lockRefusalWording(found));
 }
 
-export function useSelectionActionsContext(): ToolbarAction[] | null {
+export function useSelectionActionsContext(): SelectionOffer | null {
   return React.useContext(SelectionActionsContext);
 }
-
-/**
- * Move in and Move out for the current selection, judged by the provider with
- * the position function its move verb runs, component definitions included.
- * Empty outside a provider, where there is no verb to run them.
- */
-const DepthMovesContext = React.createContext<readonly DepthMoveAction[]>([]);
 
 const ToolbarFocusContext = React.createContext<ToolbarFocusSlot | null>(null);
 
@@ -316,11 +313,6 @@ const ToolbarFocusContext = React.createContext<ToolbarFocusSlot | null>(null);
  */
 export function useToolbarFocusSlot(): ToolbarFocusSlot | null {
   return React.useContext(ToolbarFocusContext);
-}
-
-/** The provider's Move in and Move out, for the block menu. */
-export function useDepthMoveActions(): readonly DepthMoveAction[] {
-  return React.useContext(DepthMovesContext);
 }
 
 /**
@@ -372,7 +364,12 @@ export function useNestingSource(): NestingSource {
  * that menu to the toolbar's verdicts and verbs rather than a second copy.
  */
 export interface SharedBlockVerbs {
+  /** What to show while no menu is open: the locks are not asked. */
   readonly actions: readonly ToolbarAction[];
+  /** The same verbs with the locks asked, for a menu as it opens. */
+  readonly withLocks: () => readonly ToolbarAction[];
+  /** Listen for a change to what `withLocks` would answer; optional. */
+  readonly subscribe?: OfferSignal["subscribe"];
   readonly run: (id: ToolbarActionId) => void;
 }
 
@@ -548,14 +545,14 @@ export interface BlockKeyboardActionsResult {
    * and why not. Returned so the provider publishes the same list it built
    * rather than each surface rebuilding it — and rebuilding it is not cheap,
    * because deciding whether a selection can be saved builds the document a
-   * save would store.
+   * save would store. Its depth moves are judged with the position function
+   * the move verb itself runs; its locks are asked only by a menu that opens.
    */
+  readonly offer: SelectionOffer;
+  /** `offer.actions`, as this result has always carried it. */
   readonly selectionActions: ToolbarAction[];
-  /**
-   * Move in and Move out, judged with the position function the move verb
-   * itself runs, so an item is offered exactly when pressing it would move.
-   */
-  readonly depthMoves: readonly DepthMoveAction[];
+  /** `offer.depthMoves`, as this result has always carried it. */
+  readonly depthMoves: SelectionOffer["depthMoves"];
   /**
    * Where this editor's block toolbar puts the call that finds its tab stop,
    * for Alt+F10 to focus. Held per editor rather than looked up in the
@@ -1278,50 +1275,37 @@ export function useBlockKeyboardActions({
     [sharedLibrary, sharedMayChange]
   );
 
-  // What the lock view is read from, so the list below depends on them alone.
+  // What the lock view is read from, so the offer depends on them alone.
   const { composed, lockDefinitions } = editor;
+  // With the editor's lock view, the source the save dialog judges by, so an
+  // area locked to its content dims the verb here too.
+  const sharedStyleOffer = React.useMemo(
+    () =>
+      sharedOffer === undefined
+        ? undefined
+        : { ...sharedOffer, view: lockViewOf({ composed, lockDefinitions }) },
+    [sharedOffer, composed, lockDefinitions]
+  );
 
   /*
-   * The verb list, computed ONCE for every surface below.
-   *
-   * See {@link SelectionActionsContext}: the save preflight builds the document
-   * a save would store, so three surfaces asking separately made an ordinary
-   * edit copy and walk the selection three times.
+   * The verb list, computed ONCE for every surface below, without asking the
+   * locks; a menu asks them as it opens (`selection-offer`). See
+   * {@link SelectionActionsContext}.
    */
-  const selectionActions = React.useMemo(
-    () =>
-      toolbarActions(
-        editor.document,
-        editor.selectedId,
-        editor.selection.ids,
-        nestingSource,
-        mayCreatePattern,
-        editor.lockRefusalFor,
-        componentOffer,
-        onEditComponent !== undefined,
-        // With the editor's lock view, the source the save dialog judges by,
-        // so an area locked to its content dims the verb here too.
-        sharedOffer === undefined
-          ? undefined
-          : {
-              ...sharedOffer,
-              view: lockViewOf({ composed, lockDefinitions }),
-            }
-      ),
-    [
-      editor.document,
-      editor.selectedId,
-      editor.selection.ids,
-      nestingSource,
-      mayCreatePattern,
-      editor.lockRefusalFor,
-      onEditComponent,
-      componentOffer,
-      sharedOffer,
-      composed,
-      lockDefinitions,
-    ]
-  );
+  const offer = useSelectionOffer({
+    document: editor.document,
+    selectedId: editor.selectedId,
+    selectedIds: editor.selection.ids,
+    nesting: nestingSource,
+    mayCreatePattern,
+    lockRefusalFor: editor.lockRefusalFor,
+    components: componentOffer,
+    offersEditComponent: onEditComponent !== undefined,
+    sharedStyles: sharedStyleOffer,
+    movePosition,
+    placementRefusal,
+  });
+  const selectionActions = offer.actions;
   /*
    * "Save as shared style…", refused in words before the host is asked, as
    * the component verbs are: a dimmed verb stays focusable in the toolbar.
@@ -1366,32 +1350,13 @@ export function useBlockKeyboardActions({
     ]
   );
 
-  const depthMoves = React.useMemo(
-    () =>
-      depthMoveActions(
-        editor.document,
-        editor.selectedId,
-        editor.selection.ids,
-        editor.lockRefusalFor,
-        movePosition,
-        placementRefusal
-      ),
-    [
-      editor.document,
-      editor.selectedId,
-      editor.selection.ids,
-      editor.lockRefusalFor,
-      movePosition,
-      placementRefusal,
-    ]
-  );
-
   return {
     announcement,
     actions,
     nesting: nestingSource,
-    selectionActions,
-    depthMoves,
+    offer,
+    selectionActions: offer.actions,
+    depthMoves: offer.depthMoves,
     toolbarFocus,
     canvasFrame: latestFrame,
   };
@@ -1480,8 +1445,7 @@ export function BlockKeyboardActions({
     announcement,
     actions,
     nesting: rules,
-    selectionActions: offered,
-    depthMoves,
+    offer,
     toolbarFocus,
     canvasFrame,
   } = useBlockKeyboardActions(options);
@@ -1499,20 +1463,27 @@ export function BlockKeyboardActions({
    * verbs close over beside the editor (they already read the live editor).
    */
   const latestVerbs = React.useRef(actions);
+  const latestOffer = React.useRef(offer);
+  const [offerChanged] = React.useState(offerSignal);
   const sharedOffer = React.useRef<string | null>(null);
   useIsomorphicLayoutEffect(() => {
     latestVerbs.current = actions;
+    latestOffer.current = offer;
+    offerChanged.notify();
     if (onShareVerbs === undefined) return;
-    const offer = offered
+    const offered = offer.actions
       .map(each => `${each.id}:${each.enabled}:${each.reason ?? ""}`)
       .join("|");
-    if (offer === sharedOffer.current) return;
-    sharedOffer.current = offer;
+    if (offered === sharedOffer.current) return;
+    sharedOffer.current = offered;
     onShareVerbs({
-      actions: offered,
+      actions: offer.actions,
+      // Through the ref, as `run`: a menu opened later asks of that moment.
+      withLocks: () => latestOffer.current.withLocks().actions,
+      subscribe: offerChanged.subscribe,
       run: id => blockActionRunners(latestVerbs.current)[id](),
     });
-  }, [onShareVerbs, actions, offered]);
+  }, [onShareVerbs, actions, offer, offerChanged]);
   useIsomorphicLayoutEffect(
     () => () => {
       sharedOffer.current = null;
@@ -1531,18 +1502,16 @@ export function BlockKeyboardActions({
   // has nothing it was already watching.
   return (
     <NestingContext.Provider value={rules}>
-      <SelectionActionsContext.Provider value={offered}>
-        <DepthMovesContext.Provider value={depthMoves}>
-          <BlockActionsContext.Provider value={actions}>
-            <ToolbarFocusContext.Provider value={toolbarFocus}>
-              <CanvasFrameReader into={canvasFrame} />
-              <p aria-live="polite" role="status" className="nx-sr-only">
-                {announcement}
-              </p>
-              {children}
-            </ToolbarFocusContext.Provider>
-          </BlockActionsContext.Provider>
-        </DepthMovesContext.Provider>
+      <SelectionActionsContext.Provider value={offer}>
+        <BlockActionsContext.Provider value={actions}>
+          <ToolbarFocusContext.Provider value={toolbarFocus}>
+            <CanvasFrameReader into={canvasFrame} />
+            <p aria-live="polite" role="status" className="nx-sr-only">
+              {announcement}
+            </p>
+            {children}
+          </ToolbarFocusContext.Provider>
+        </BlockActionsContext.Provider>
       </SelectionActionsContext.Provider>
     </NestingContext.Provider>
   );

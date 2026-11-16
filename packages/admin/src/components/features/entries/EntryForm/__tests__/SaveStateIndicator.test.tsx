@@ -224,6 +224,7 @@ describe("changes from the last visit, offered in the chip", () => {
     savedAt: NOW,
     restore: vi.fn(),
     dismiss: vi.fn(),
+    discard: vi.fn(),
   };
   const waiting = { ...noRecovery, pendingOfferAt: NOW };
 
@@ -249,14 +250,15 @@ describe("changes from the last visit, offered in the chip", () => {
     ).toBeInTheDocument();
   });
 
-  it("offers Save, which runs the document's Save, and Discard, which stops offering", async () => {
+  it("offers Save, which runs the document's Save, and Discard, which stops offering for good", async () => {
     const run = vi.fn();
     const dismiss = vi.fn();
+    const discard = vi.fn();
     render(
       <SaveStateIndicator
         saveState={{ kind: "saved", at: null }}
         recovery={waiting}
-        offer={{ ...offer, dismiss }}
+        offer={{ ...offer, dismiss, discard }}
         save={{ run }}
       />
     );
@@ -267,13 +269,15 @@ describe("changes from the last visit, offered in the chip", () => {
     await userEvent.click(chip);
     await userEvent.click(await screen.findByRole("button", { name: "Save" }));
     expect(run).toHaveBeenCalledTimes(1);
-    expect(dismiss).not.toHaveBeenCalled();
+    expect(discard).not.toHaveBeenCalled();
 
     await userEvent.click(chip);
     await userEvent.click(
       await screen.findByRole("button", { name: "Discard" })
     );
-    expect(dismiss).toHaveBeenCalledTimes(1);
+    // Discard lasts: not the session-only Not now.
+    expect(discard).toHaveBeenCalledTimes(1);
+    expect(dismiss).not.toHaveBeenCalled();
     expect(run).toHaveBeenCalledTimes(1);
   });
 
@@ -314,6 +318,26 @@ describe("changes from the last visit, offered in the chip", () => {
     expect(
       screen.getByRole("button", { name: "Unsaved changes: restore options" })
     ).toBeInTheDocument();
+  });
+
+  it("puts the restore offer off with Not now, for this session only", async () => {
+    const dismiss = vi.fn();
+    const discard = vi.fn();
+    render(
+      <SaveStateIndicator
+        saveState={{ kind: "unsaved" }}
+        recovery={waiting}
+        offer={{ ...offer, dismiss, discard }}
+      />
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Unsaved changes: restore options" })
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Not now" })
+    );
+    expect(dismiss).toHaveBeenCalledTimes(1);
+    expect(discard).not.toHaveBeenCalled();
   });
 
   it("keeps the restore offer's words where no Save is given with the offer", () => {
