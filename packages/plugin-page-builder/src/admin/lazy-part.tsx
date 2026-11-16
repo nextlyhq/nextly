@@ -20,9 +20,11 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/lazy-part
  */
+import { useBeforeDocumentAction } from "@nextlyhq/plugin-sdk/admin";
 import { Button } from "@nextlyhq/ui";
 import {
   useEffect,
+  useRef,
   useState,
   type ComponentType,
   type JSX,
@@ -31,6 +33,30 @@ import {
 
 /** The props the wrapper passes through, untouched, to the part it draws. */
 type PassedProps = Record<string, unknown>;
+
+/** How a part takes part in the document actions while it is fetched. */
+interface LazyPartOptions {
+  /**
+   * The document actions, by id, that the part asks about before they store
+   * (the blocks field asks about the components and Layout a page needs
+   * before a publish). The part's own handler registers only once it is
+   * drawn, so the wrapper holds these actions while the code is on its way:
+   * once the part is drawn they run again with its handler among them, and
+   * once its fetch has failed they are refused, so the question is never
+   * skipped. Other actions are not held.
+   */
+  readonly holdsActions?: ReadonlySet<string>;
+}
+
+/** A held action, told whether the part was drawn or left the screen. */
+interface HeldAction {
+  readonly resolve: (drawn: boolean) => void;
+  readonly reject: (error: Error) => void;
+}
+
+/** Why an action held for a part whose code could not be fetched is refused. */
+const NOT_LOADED =
+  "Part of this page could not be loaded, so nothing was published. Check your connection and try again.";
 
 /**
  * A component drawing the part `load` fetches, with the props it is given.
@@ -43,8 +69,10 @@ type PassedProps = Record<string, unknown>;
  * signature included.
  */
 export function lazyPart<Part extends (props: never) => ReactNode>(
-  load: () => Promise<Part>
+  load: () => Promise<Part>,
+  options: LazyPartOptions = {}
 ): Part {
+  const holds = options.holdsActions;
   let loaded: ComponentType<PassedProps> | null = null;
   let pending: Promise<ComponentType<PassedProps>> | null = null;
 
@@ -66,12 +94,13 @@ export function lazyPart<Part extends (props: never) => ReactNode>(
     return pending;
   }
 
-  function LazyPart(props: PassedProps): ReactNode {
+  /** The part's state on this screen, fetching while it is loading. */
+  function usePartState(): [PartState, (next: PartState) => void] {
     // Held as `{ part }`: a component is a function, which `useState` would
     // call as an initialiser or an updater.
-    const [state, setState] = useState<
-      { part: ComponentType<PassedProps> } | "loading" | "failed"
-    >(() => (loaded ? { part: loaded } : "loading"));
+    const [state, setState] = useState<PartState>(() =>
+      loaded ? { part: loaded } : "loading"
+    );
 
     // Fetches while the part is loading: on the first draw, and again after
     // "Try again" sets the state back to loading. A failure ends it here.
@@ -91,22 +120,93 @@ export function lazyPart<Part extends (props: never) => ReactNode>(
       };
     }, [state]);
 
-    if (typeof state === "object") {
-      const Part = state.part;
-      return <Part {...props} />;
-    }
-    if (state === "failed") {
-      return <PartLoadError onRetry={() => setState("loading")} />;
-    }
-    // Nothing while the code is on its way: an admin surface that hides a
-    // section with an empty body keeps it hidden, and a part that arrives
-    // quickly does not flash a loading mark.
-    return null;
+    return [state, setState];
+  }
+
+  function LazyPart(props: PassedProps): ReactNode {
+    const [state, setState] = usePartState();
+    return drawPart(state, setState, props);
+  }
+
+  // A separate component rather than a hook called on a condition: only a
+  // part that holds actions registers with the document's actions.
+  function HoldingLazyPart(props: PassedProps): ReactNode {
+    const [state, setState] = usePartState();
+    useHeldActions(state, holds ?? new Set());
+    return drawPart(state, setState, props);
   }
 
   // The wrapper takes `Part`'s props and draws `Part` with them, so it stands
   // for `Part`; the checker cannot relate it to a generic signature.
-  return LazyPart as unknown as Part;
+  return (holds === undefined ? LazyPart : HoldingLazyPart) as unknown as Part;
+}
+
+/** Where a part's fetch stands on one screen. */
+type PartState = { part: ComponentType<PassedProps> } | "loading" | "failed";
+
+/** The part once fetched, the way to fetch it again, or nothing meanwhile. */
+function drawPart(
+  state: PartState,
+  setState: (next: PartState) => void,
+  props: PassedProps
+): ReactNode {
+  if (typeof state === "object") {
+    const Part = state.part;
+    return <Part {...props} />;
+  }
+  if (state === "failed") {
+    return <PartLoadError onRetry={() => setState("loading")} />;
+  }
+  // Nothing while the code is on its way: an admin surface that hides a
+  // section with an empty body keeps it hidden, and a part that arrives
+  // quickly does not flash a loading mark.
+  return null;
+}
+
+/**
+ * Holds the actions `holds` names while the part's code is on its way (see
+ * `LazyPartOptions.holdsActions`).
+ */
+function useHeldActions(state: PartState, holds: ReadonlySet<string>): void {
+  // Whether the part is drawn, its fetch has failed, and the actions held
+  // meanwhile; read by the handler below, which runs outside a render.
+  const drawn = useRef(false);
+  const failed = useRef(false);
+  const held = useRef(new Set<HeldAction>());
+
+  // After the part's own effects (a child's run first), so its handler is
+  // registered by the time a held action runs the handlers again.
+  useEffect(() => {
+    drawn.current = typeof state === "object";
+    failed.current = state === "failed";
+    if (state === "loading") return;
+    for (const action of held.current) {
+      if (failed.current) action.reject(new Error(NOT_LOADED));
+      else action.resolve(true);
+    }
+    held.current.clear();
+  }, [state]);
+
+  // A part that leaves the screen asks nothing: what it held goes ahead.
+  useEffect(() => {
+    const waiting = held.current;
+    return () => {
+      drawn.current = false;
+      for (const action of waiting) action.resolve(false);
+      waiting.clear();
+    };
+  }, []);
+
+  useBeforeDocumentAction(async (action, store) => {
+    if (!holds.has(action) || drawn.current) return;
+    if (failed.current) throw new Error(NOT_LOADED);
+    const wasDrawn = await new Promise<boolean>((resolve, reject) => {
+      held.current.add({ resolve, reject });
+    });
+    // The handlers this action ran were read before the part registered its
+    // own: a check that fails runs them all again, the part's with them.
+    if (wasDrawn) store.checkBeforeWrite(() => false);
+  });
 }
 
 /**

@@ -57,6 +57,7 @@ import { registerEntryDesignColumn } from "./entry-design-column";
 import type { EntryDesignSection as EntryDesignSectionPart } from "./EntryDesignSection";
 import { lazyPart, withEditorStylesheet } from "./lazy-part";
 import type { PageBuilderOverview as PageBuilderOverviewPart } from "./overview/PageBuilderOverview";
+import { PUBLISHING_ACTIONS } from "./publishing-actions";
 import type { RemoveLayoutToolbarSlot as RemoveLayoutToolbarSlotPart } from "./RemoveLayoutAction";
 import type { TemplateAddressField as TemplateAddressFieldPart } from "./TemplateAddressField";
 import type { TemplateCollectionField as TemplateCollectionFieldPart } from "./TemplateCollectionField";
@@ -82,8 +83,11 @@ const BindingsToFixCard: typeof BindingsToFixCardPart = lazyPart(() =>
 const BindingsToFixPage: typeof BindingsToFixPagePart = lazyPart(() =>
   import("./bindings-report/BindingsToFixPage").then(m => m.BindingsToFixPage)
 );
-const BlocksField: typeof BlocksFieldPart = lazyPart(() =>
-  withEditorStylesheet(import("./BlocksField")).then(m => m.BlocksField)
+// Asks about the components and Layout a page needs before it is published,
+// so a publish waits for its code, and is refused if that never arrives.
+const BlocksField: typeof BlocksFieldPart = lazyPart(
+  () => withEditorStylesheet(import("./BlocksField")).then(m => m.BlocksField),
+  { holdsActions: PUBLISHING_ACTIONS }
 );
 const BlocksSummary: typeof BlocksSummaryPart = lazyPart(() =>
   import("./BlocksSummary").then(m => m.BlocksSummary)
