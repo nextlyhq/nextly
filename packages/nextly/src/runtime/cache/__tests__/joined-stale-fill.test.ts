@@ -60,6 +60,15 @@ function fill(text: string, tags: string[], begunAt: number) {
 
 const page = (text: string) => ({ kind: "APP_PAGE", html: text });
 
+/**
+ * What Next.js hands `set` with a page: its tags, and the cache control it
+ * derives the page's revalidation from.
+ */
+const asNextStoresIt = (tags: string[], revalidate = 900) => ({
+  tags,
+  cacheControl: { revalidate, expire: 3600 },
+});
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(T0);
@@ -111,7 +120,7 @@ describe("a page that joined a fill begun before a write", () => {
     vi.advanceTimersByTime(10);
 
     // 5. The page, drawn from that old value, is stored.
-    await pages.set("/cached-page", page("old"), { tags: [tag] });
+    await pages.set("/cached-page", page("old"), asNextStoresIt([tag]));
     vi.advanceTimersByTime(10);
 
     // The next visitor must not be served it: it is rendered again, afresh.
@@ -134,7 +143,7 @@ describe("a page that joined a fill begun before a write", () => {
       Promise.resolve(fill("new", [tag], fillBegan))
     );
     vi.advanceTimersByTime(10);
-    await pages.set("/cached-page", page("new"), { tags: [tag] });
+    await pages.set("/cached-page", page("new"), asNextStoresIt([tag]));
     vi.advanceTimersByTime(10);
 
     // A fresh fill re-expires nothing, so the page stands.
@@ -170,7 +179,7 @@ describe("a page that joined a fill begun before a write", () => {
       vi.advanceTimersByTime(5);
       await finishOne();
       vi.advanceTimersByTime(5);
-      await pages.set("/cached-page", page("old"), { tags: [tag] });
+      await pages.set("/cached-page", page("old"), asNextStoresIt([tag]));
       vi.advanceTimersByTime(5);
       expect(await new IncrementalHandler().get("/cached-page")).toBeNull();
     }
@@ -182,7 +191,7 @@ describe("a page that joined a fill begun before a write", () => {
     const began = Date.now();
     vi.advanceTimersByTime(5);
     await useCacheHandler.set("a", Promise.resolve(fill("new", [tag], began)));
-    await pages.set("/cached-page", page("new"), { tags: [tag] });
+    await pages.set("/cached-page", page("new"), asNextStoresIt([tag]));
     for (let visit = 0; visit < 20; visit += 1) {
       vi.advanceTimersByTime(5);
       expect(await new IncrementalHandler().get("/cached-page")).not.toBeNull();
@@ -210,9 +219,11 @@ describe("a page render overtaken by a later read of the same page", () => {
       expect(await new IncrementalHandler().get("/cached-page")).toBeNull();
       vi.advanceTimersByTime(10);
       // 4. The first render, drawn before the write, is stored.
-      await new IncrementalHandler().set("/cached-page", page("old"), {
-        tags: [tag],
-      });
+      await new IncrementalHandler().set(
+        "/cached-page",
+        page("old"),
+        asNextStoresIt([tag])
+      );
       vi.advanceTimersByTime(10);
 
       // It began before the write, so the next visitor gets a new render.
@@ -224,9 +235,11 @@ describe("a page render overtaken by a later read of the same page", () => {
     const tag = "nextly:components:id:c1";
     // The page is stored, and a visitor is served it: that read started no
     // render.
-    await new IncrementalHandler().set("/cached-page", page("old"), {
-      tags: [tag],
-    });
+    await new IncrementalHandler().set(
+      "/cached-page",
+      page("old"),
+      asNextStoresIt([tag])
+    );
     vi.advanceTimersByTime(10);
     expect(await new IncrementalHandler().get("/cached-page")).not.toBeNull();
     vi.advanceTimersByTime(10);
@@ -235,12 +248,117 @@ describe("a page render overtaken by a later read of the same page", () => {
     vi.advanceTimersByTime(10);
     expect(await new IncrementalHandler().get("/cached-page")).toBeNull();
     vi.advanceTimersByTime(10);
-    await new IncrementalHandler().set("/cached-page", page("new"), {
-      tags: [tag],
-    });
+    await new IncrementalHandler().set(
+      "/cached-page",
+      page("new"),
+      asNextStoresIt([tag])
+    );
     vi.advanceTimersByTime(10);
 
     // That render began after the write, so it is kept: rendered once.
     expect(await new IncrementalHandler().get("/cached-page")).not.toBeNull();
+  });
+});
+
+describe("expiring again after a stale fill ends", () => {
+  /** A `use cache` fill begun now and held open until `finish` is called. */
+  function held(key: string, tag: string) {
+    const began = Date.now();
+    let release: (entry: ReturnType<typeof fill>) => void = () => {};
+    const storing = useCacheHandler.set(
+      key,
+      new Promise<ReturnType<typeof fill>>(resolve => {
+        release = resolve;
+      })
+    );
+    return {
+      finish: async () => {
+        release(fill(key, [tag], began));
+        await storing;
+      },
+    };
+  }
+
+  it("ends under steady traffic: fills of a shared tag, always overlapping, are stored again", async () => {
+    // Every detail read carries its collection's tag, so after a publish the
+    // fills of every page share it, and under steady traffic one always
+    // begins before the last ends.
+    const tag = "nextly:pages";
+    let running = held("fill-0", tag);
+    vi.advanceTimersByTime(5);
+    await expireTags([tag]);
+    const stored: boolean[] = [];
+    for (let next = 1; next <= 8; next += 1) {
+      vi.advanceTimersByTime(5);
+      const overlapping = held(`fill-${next}`, tag);
+      vi.advanceTimersByTime(5);
+      await running.finish();
+      stored.push(
+        (await useCacheHandler.get(`fill-${next - 1}`, [])) !== undefined
+      );
+      running = overlapping;
+    }
+    // The stale fill and those that may have drawn it, a few levels deep, are
+    // refused; then fills are stored again, every one after.
+    const firstStored = stored.indexOf(true);
+    expect(firstStored).toBeGreaterThan(0);
+    expect(firstStored).toBeLessThanOrEqual(4);
+    expect(stored.slice(firstStored).every(Boolean)).toBe(true);
+  });
+
+  it("does not expire again for a stale `expire: 0` fill, which no kept page draws", async () => {
+    const tag = "nextly:components:id:c1";
+    const began = Date.now();
+    let release: (entry: ReturnType<typeof fill>) => void = () => {};
+    const storing = useCacheHandler.set(
+      "dynamic",
+      new Promise<ReturnType<typeof fill>>(resolve => {
+        release = resolve;
+      })
+    );
+    vi.advanceTimersByTime(10);
+    await expireTags([tag]);
+    vi.advanceTimersByTime(10);
+    const pages = new IncrementalHandler();
+    expect(await pages.get("/cached-page")).toBeNull();
+    vi.advanceTimersByTime(10);
+    release({ ...fill("old", [tag], began), expire: 0 });
+    await storing;
+    vi.advanceTimersByTime(10);
+    await pages.set("/cached-page", page("new"), asNextStoresIt([tag]));
+    vi.advanceTimersByTime(10);
+
+    // The page began after the write and drew no stale entry it could keep.
+    expect(await new IncrementalHandler().get("/cached-page")).not.toBeNull();
+  });
+});
+
+describe("a page served while Next.js revalidates it", () => {
+  it("dates the background render from the read that set it off", async () => {
+    const tag = "nextly:components:id:c1";
+    // Stored with a one-second revalidate, and served after it: Next.js
+    // serves it and renders it again in the background, from the old value.
+    await new IncrementalHandler().set(
+      "/cached-page",
+      page("old"),
+      asNextStoresIt([tag], 1)
+    );
+    vi.advanceTimersByTime(2_000);
+    expect(await new IncrementalHandler().get("/cached-page")).not.toBeNull();
+    vi.advanceTimersByTime(10);
+    // A write lands while that render runs; the next visitor misses.
+    await expireTags([tag]);
+    vi.advanceTimersByTime(10);
+    expect(await new IncrementalHandler().get("/cached-page")).toBeNull();
+    vi.advanceTimersByTime(10);
+    // The background render, begun before the write, is stored.
+    await new IncrementalHandler().set(
+      "/cached-page",
+      page("old"),
+      asNextStoresIt([tag], 1)
+    );
+    vi.advanceTimersByTime(10);
+
+    expect(await new IncrementalHandler().get("/cached-page")).toBeNull();
   });
 });

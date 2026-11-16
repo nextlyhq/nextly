@@ -157,9 +157,10 @@ function rememberRead(key: string): RememberedRead | undefined {
   remembered.delete(key);
   if (remembered.size >= MAX_REMEMBERED_READS) {
     // Reads past the window mark no fill still running, so they go first.
+    // Not in time order: a read that holds an earlier one's start is put
+    // back last with that start, so every entry is looked at.
     for (const [old, { at }] of remembered) {
-      if (now - at <= FILL_WINDOW_MS) break;
-      remembered.delete(old);
+      if (now - at > FILL_WINDOW_MS) remembered.delete(old);
     }
   }
   if (remembered.size >= MAX_REMEMBERED_READS) {
@@ -171,6 +172,31 @@ function rememberRead(key: string): RememberedRead | undefined {
   }
   remembered.set(key, read);
   return read;
+}
+
+/**
+ * Whether Next.js will fill `stored` again in the background as it serves it:
+ * its revalidate time (the route's cache control, or a cached fetch's own) has
+ * passed. When that time cannot be read it is taken as passed, so the read
+ * holds its start: at worst one render more after an expiry, never a stale
+ * one kept.
+ */
+function dueForRevalidation(stored: StoredEntry): boolean {
+  const seconds =
+    revalidateOf(stored.cacheControl) ?? revalidateOf(stored.value);
+  if (seconds === false) return false;
+  if (seconds === undefined) return true;
+  return Date.now() - stored.lastModified >= seconds * 1000;
+}
+
+/** The `revalidate` an object carries: seconds, `false` for never, or `undefined`. */
+function revalidateOf(holder: unknown): number | false | undefined {
+  if (typeof holder !== "object" || holder === null) return undefined;
+  if (!("revalidate" in holder)) return undefined;
+  const { revalidate } = holder;
+  return typeof revalidate === "number" || revalidate === false
+    ? revalidate
+    : undefined;
 }
 
 /**
@@ -260,9 +286,9 @@ export default class NextlyIncrementalCacheHandler {
       return null;
     }
     // A stored entry past its revalidate time is served while Next.js fills
-    // it again in the background; that fill is dated from this read, which a
-    // later read then moves, as before. Only a miss's fill holds its start.
-    markAnswer(read, "served");
+    // it again in the background, from this read: that read holds its start
+    // as a miss does. One within its time started no render.
+    markAnswer(read, dueForRevalidation(stored) ? "missed" : "served");
     return {
       lastModified: stored.lastModified,
       value: stored.value,

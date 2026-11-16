@@ -79,19 +79,22 @@ const useCacheHandler = {
   set(cacheKey: string, pendingEntry: Promise<CacheEntry>): Promise<void> {
     const write = (async () => {
       const { value, ...entry } = await pendingEntry;
+      // Outside development an `expire: 0` entry is dynamic: Next.js
+      // regenerates it on every read and never serves the stored copy, so it
+      // is not stored, and an entry already there is left as it was. In
+      // development (`next dev`) it is kept, as Next.js's own handler does.
+      // Skipped before the staleness check below: a page drawing a dynamic
+      // entry is rendered per request and never kept, so a stale one need
+      // expire nothing again, and costs no ledger read.
+      if (process.env.NODE_ENV !== "development" && entry.expire === 0) {
+        return;
+      }
       // A fill that began before one of its tags expired holds the old value.
       // It is not stored, and its tags are expired again as it finishes, so a
       // page that joined it while rendering is refused rather than kept.
       await refreshTagExpiries(entry.tags);
       if (expireAgainAfterStaleFill(entry.tags, entry.timestamp)) {
         await value.cancel();
-        return;
-      }
-      // Outside development an `expire: 0` entry is dynamic: Next.js
-      // regenerates it on every read and never serves the stored copy, so it
-      // is not stored, and an entry already there is left as it was. In
-      // development (`next dev`) it is kept, as Next.js's own handler does.
-      if (process.env.NODE_ENV !== "development" && entry.expire === 0) {
         return;
       }
       const chunks: Uint8Array[] = [];
