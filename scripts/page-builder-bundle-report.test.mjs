@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   breaches,
   fetchableStylesheets,
+  GROUPS,
   judge,
   REGISTRATION_BUDGET_KB,
   SCREENS,
@@ -34,6 +35,7 @@ function screen(name, groups = {}, fetchable = [EDITOR_SHEET]) {
     groups: {
       "page builder": empty,
       "block engine": empty,
+      "block engine beyond its contrast entry": empty,
       "builder editor": empty,
       "CSS parser": empty,
       "site-code section": empty,
@@ -108,6 +110,33 @@ describe("breaches", () => {
       "sign-in: holds the builder editor (1 modules, e.g. packages/builder/src/canvas.tsx)",
       "sign-in: holds the CSS parser (1 modules, e.g. node_modules/css-tree/lib/index.js)",
     ]);
+  });
+
+  it("names block engine code beyond its contrast entry on a screen that draws no part", () => {
+    expect(
+      breaches(
+        [
+          screen("dashboard", {
+            "block engine beyond its contrast entry": {
+              gzippedBytes: 1,
+              sources: ["packages/blocks-engine/src/document.ts"],
+            },
+          }),
+        ],
+        []
+      )
+    ).toEqual([
+      "dashboard: holds the block engine beyond its contrast entry (1 modules, e.g. packages/blocks-engine/src/document.ts)",
+    ]);
+  });
+
+  it("fails the CSS parser on the sign-in page or the dashboard: no known miss excuses it", () => {
+    const found = [
+      "sign-in: holds the CSS parser (76 modules, e.g. node_modules/css-tree/lib/index.js)",
+      "dashboard: holds the CSS parser (76 modules, e.g. node_modules/css-tree/lib/index.js)",
+      "dashboard, parts drawn: holds the CSS parser (76 modules, e.g. node_modules/css-tree/lib/index.js)",
+    ];
+    expect(judge(found)).toEqual(found);
   });
 
   it("names a part the builder holds before it opens", () => {
@@ -248,5 +277,38 @@ describe("sourceLengths", () => {
         ["packages/b.ts", 4],
       ])
     );
+  });
+});
+
+describe("the block engine beyond its contrast entry", () => {
+  const group = GROUPS.find(
+    candidate => candidate.name === "block engine beyond its contrast entry"
+  );
+
+  it("leaves out the contrast entry and the modules it reads, as source or as built", () => {
+    for (const source of [
+      "packages/blocks-engine/src/contrast.ts",
+      "packages/blocks-engine/src/style/contrast.ts",
+      "packages/blocks-engine/src/style/css-identifier.ts",
+      "packages/blocks-engine/dist/contrast.mjs",
+      "packages/blocks-engine/dist/contrast-CTtMvkyT.mjs",
+    ]) {
+      expect(group?.matches(source), source).toBe(false);
+    }
+  });
+
+  it("counts every other module of the engine", () => {
+    for (const source of [
+      "packages/blocks-engine/src/document.ts",
+      "packages/blocks-engine/src/style/css-value-syntax.ts",
+      "packages/blocks-engine/src/index.ts",
+      "packages/blocks-engine/dist/index.mjs",
+    ]) {
+      expect(group?.matches(source), source).toBe(true);
+    }
+  });
+
+  it("CONTROL: counts nothing outside the engine", () => {
+    expect(group?.matches("packages/builder/src/canvas.tsx")).toBe(false);
   });
 });

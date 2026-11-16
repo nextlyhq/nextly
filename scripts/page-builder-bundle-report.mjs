@@ -12,11 +12,13 @@
  *
  * - the sign-in page and the dashboard: the page builder's code there is its
  *   registration alone, at most `REGISTRATION_BUDGET_KB` gzipped, and holds no
- *   module of the builder editor or the block engine's CSS parser; the editor
- *   stylesheet is not among the stylesheets every admin screen links;
+ *   module of the builder editor, of the block engine beyond its contrast
+ *   entry (core checks colours with that, on every screen), or of the
+ *   engine's CSS parser; the editor stylesheet is not among the stylesheets
+ *   every admin screen links;
  * - the dashboard with the plugin's parts it draws without a click (the
  *   Bindings to fix card, the header's delete tools): held to the same
- *   budget, and no editor or CSS parser either;
+ *   budget, and none of those modules either;
  * - the builder, opened directly: the site's code section, the fonts panel
  *   and the icon set arrive when their panel or control opens, so none is in
  *   its set, and its chunks can fetch the editor stylesheet.
@@ -69,7 +71,7 @@ const ADMIN_PAGES = "packages/admin/src/";
  * The screens, each by the modules whose loaders run on the way to it: the
  * admin's route, then the plugin's parts on that route. An `editorFree`
  * screen is held to `REGISTRATION_BUDGET_KB` with no module of the builder
- * editor or the CSS parser.
+ * editor, of the block engine beyond its contrast entry, or of the CSS parser.
  */
 export const SCREENS = [
   {
@@ -119,9 +121,21 @@ export const GROUPS = [
       /^packages\/(plugin-page-builder|builder|blocks-react)\//.test(source),
   },
   {
-    // Measured, not budgeted: core imports it too (see `KNOWN_MISSES`).
+    // Measured, not budgeted: its contrast entry is on every screen, as core's
+    // colour helpers check contrast with it.
     name: "block engine",
     matches: source => source.startsWith("packages/blocks-engine/"),
+  },
+  {
+    // Judged on a screen that draws no part: the engine less its contrast
+    // entry and the modules that entry reads, as source or as built (the
+    // entry, and the chunk it shares with the root, are named after it).
+    name: "block engine beyond its contrast entry",
+    matches: source =>
+      source.startsWith("packages/blocks-engine/") &&
+      !/^packages\/blocks-engine\/(src\/(contrast|style\/contrast|style\/css-identifier)\.ts|dist\/contrast(-[\w-]+)?\.mjs)$/.test(
+        source
+      ),
   },
   {
     name: "builder editor",
@@ -165,28 +179,10 @@ const EDITOR_STYLESHEET =
   /^packages\/plugin-page-builder\/(dist|src)\/styles\/editor\.css$/;
 
 /**
- * Breaches known today, each with why, by the start of its sentence.
- *
- * The block engine and its CSS parser reach every admin screen through core,
- * not the page builder: `packages/nextly/src/utils/color-utils.ts` imports
- * `checkContrast` from the engine's root, `nextly/config` imports it, and the
- * admin's routes import `nextly/config`. The engine ships as one module, so
- * that one function brings the whole of it.
+ * Breaches known today, each with why, by the start of its sentence. None:
+ * each breach fails the run.
  */
-export const KNOWN_MISSES = [
-  {
-    starts: "sign-in: holds the CSS parser",
-    why: "core's color-utils imports checkContrast from the block engine's root",
-  },
-  {
-    starts: "dashboard: holds the CSS parser",
-    why: "core's color-utils imports checkContrast from the block engine's root",
-  },
-  {
-    starts: "dashboard, parts drawn: holds the CSS parser",
-    why: "core's color-utils imports checkContrast from the block engine's root",
-  },
-];
+export const KNOWN_MISSES = [];
 
 /**
  * How much of a chunk's code each source accounts for, in characters: the
@@ -296,7 +292,11 @@ function editorFreeBreaches(screen) {
       `${screen.name}: the page builder's code is ${kb.toFixed(1)} KB gzipped, over its budget of ${REGISTRATION_BUDGET_KB} KB`
     );
   }
-  for (const group of ["builder editor", "CSS parser"]) {
+  for (const group of [
+    "builder editor",
+    "block engine beyond its contrast entry",
+    "CSS parser",
+  ]) {
     const sources = screen.groups[group].sources;
     if (sources.length > 0) {
       found.push(
