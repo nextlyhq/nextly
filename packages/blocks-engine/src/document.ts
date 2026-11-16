@@ -266,6 +266,18 @@ export interface BlockNode {
   /** CSS id applied to the node's root element. */
   cssId?: string;
   /**
+   * The author's own CSS class names for the node's root element: text, the
+   * names separated by spaces, as written. Drawn after the classes Nextly
+   * generates, so a site's own stylesheet can target the block.
+   *
+   * Apart from {@link BlockNode.classes}, which holds the ids of shared styles
+   * the site's class library defines and counts. These are free text no library
+   * holds. Each name has to be a CSS identifier and may not start with `nx-`
+   * (see `cssClassNameRefusal`); a save refuses a node holding one that isn't,
+   * naming it.
+   */
+  cssClasses?: string;
+  /**
    * "Never quote this": the node's root element carries `data-nosnippet`, so
    * search engines that read it, Google's among them, show none of its text
    * in a result's snippet. Stored only while on. Google reads the attribute
