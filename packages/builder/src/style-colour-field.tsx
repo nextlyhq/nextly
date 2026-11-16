@@ -315,11 +315,13 @@ export function ColourField({
    * dismisses the picker, and the close reads `pending.current` to decide what
    * the gesture produced — so clearing it first leaves that close with nothing
    * to write, and the discrete choice is the only edit. One rule expressed
-   * once: a second expression of it is what drifts.
+   * once: a second expression of it is what drifts. A recent colour is one
+   * such choice, and joins the front of Recent colours again; a variable or
+   * a clear is no colour of its own and is not remembered.
    */
   const commitInstead = (value: StyleValue | null): void => {
     pending.current = null;
-    onCommit(value);
+    commitColour(value);
   };
   /*
    * The picker closed, whichever outcome that close had.
@@ -459,10 +461,7 @@ export function ColourField({
           onToken={identity => commitInstead({ $token: identity })}
           recent={recentColours}
           // So is a recent colour, written as it is listed.
-          onRecent={colour => {
-            pending.current = null;
-            commitColour(colour);
-          }}
+          onRecent={commitInstead}
         />
         {reference === null ? (
           // The SAME field every other text control uses, rather than one
@@ -671,11 +670,9 @@ function ColourPicker({
         />
         <RecentColourChoices
           colours={recent}
-          onPick={colour => {
-            // One discrete choice, as a variable is.
-            onRecent(colour);
-            setOpen(false);
-          }}
+          onPick={onRecent}
+          // One discrete choice, as a variable is: the picker closes.
+          onPicked={setOpen}
         />
         <CustomColour
           open={custom}
@@ -715,9 +712,12 @@ function useRememberedCommit(
 function RecentColourChoices({
   colours,
   onPick,
+  onPicked,
 }: {
   colours: readonly string[];
   onPick: (colour: string) => void;
+  /** Called with `false` once a colour is picked, to close the picker. */
+  onPicked: (open: false) => void;
 }): React.JSX.Element {
   const headingId = React.useId();
   return (
@@ -745,7 +745,10 @@ function RecentColourChoices({
               // A colour written as a value paints the same anywhere, so it
               // is painted as it is listed; no variable is ever listed here.
               style={{ "--nx-swatch": colour } as React.CSSProperties}
-              onClick={() => onPick(colour)}
+              onClick={() => {
+                onPick(colour);
+                onPicked(false);
+              }}
             />
           ))}
         </div>

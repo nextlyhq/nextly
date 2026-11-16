@@ -406,6 +406,13 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
   };
 }
 
+/** The author's Recent colours, for every colour picker in the editor. */
+function useRecentColoursStore(
+  userId: string | null
+): PreferenceStore | undefined {
+  return useMemo(() => recentColoursStore(userId), [userId]);
+}
+
 /**
  * The panels' side of the editor: what the rail offers, the entry's own
  * fields, the getting-started card, the offered library and the requests.
@@ -458,11 +465,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     () => designFoldsStoreFor(mount.userId),
     [mount.userId]
   );
-  // The author's Recent colours, for every colour picker in the editor.
-  const recentColours = useMemo(
-    () => recentColoursStore(mount.userId),
-    [mount.userId]
-  );
+  const recentColours = useRecentColoursStore(mount.userId);
   const identity = useDocumentIdentity();
   const checklist = useBuilderChecklist({
     document: editor.document,
